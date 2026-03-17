@@ -212,6 +212,9 @@ export async function loadConfig() {
       ? Number(env.environmentBlockerCooldownMinutes)
       : Number(fileConfig?.runtime?.environmentBlockerCooldownMinutes ?? 180),
     workerMaxFilesChanged: Number(fileConfig?.runtime?.workerMaxFilesChanged ?? 20),
+    workerTimeoutMinutes: env.workerTimeoutMinutes
+      ? Number(env.workerTimeoutMinutes)
+      : Number(fileConfig?.runtime?.workerTimeoutMinutes ?? 15),
     workerForbiddenPathPrefixes: Array.isArray(fileConfig?.runtime?.workerForbiddenPathPrefixes)
       ? fileConfig.runtime.workerForbiddenPathPrefixes.map((item) => String(item))
       : []
