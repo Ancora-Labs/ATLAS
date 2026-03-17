@@ -252,7 +252,7 @@ async function saveSessions(stateDir, sessions) {
 
 // ── Moses AI Decision ────────────────────────────────────────────────────────
 
-async function mosesDecideNextActions(config, jesusDirective, trumpPlans, sessions, currentResults) {
+async function mosesDecideNextActions(config, jesusDirective, trumpPlans, sessions, currentResults, completedTasksSoFar = []) {
   const stateDir = config.paths?.stateDir || "state";
   const registry = getRoleRegistry(config);
   const mosesName = registry?.leadWorker?.name || "Moses";
@@ -316,6 +316,10 @@ ${trumpExecutionStrategy}
 
 Honor dependency order. Prefer large coherent assignments. Do not wake downstream workers early.
 Dispatch policy: avoid report-only re-dispatch if worker already produced recent done result.
+
+## COMPLETED WAVES/TASKS
+${completedTasksSoFar.length > 0 ? completedTasksSoFar.map(t => `  ✅ ${t}`).join("\n") : "  None yet"}
+IMPORTANT: Do NOT re-dispatch workers for completed waves. Move to the NEXT pending wave.
 
 ## CURRENT WORKER SESSIONS
 ${sessionSummary}
@@ -400,7 +404,7 @@ export async function runMosesCycle(config, jesusDirective, trumpPlans) {
   const sessions = await loadSessions(stateDir);
 
   // Moses decides what each worker should do
-  const mosesPlan = await mosesDecideNextActions(config, jesusDirective, activeTrumpPlans, sessions, []);
+  const mosesPlan = await mosesDecideNextActions(config, jesusDirective, activeTrumpPlans, sessions, [], previousCompletedTasks);
   let completedTasks = mergeCompletedTasks(previousCompletedTasks, mosesPlan.completedTasks || []);
 
   chatLog(stateDir, mosesName, `Plan: ${mosesPlan.summary || "no summary"}`);
@@ -653,7 +657,7 @@ export async function runMosesCycle(config, jesusDirective, trumpPlans) {
     }
 
     chatLog(stateDir, mosesName, "Workers reported results — deciding follow-up tasks...");
-    const followUpPlan = await mosesDecideNextActions(config, jesusDirective, activeTrumpPlans, sessions, workerResults);
+    const followUpPlan = await mosesDecideNextActions(config, jesusDirective, activeTrumpPlans, sessions, workerResults, completedTasks);
     completedTasks = mergeCompletedTasks(completedTasks, followUpPlan.completedTasks || []);
 
     const followUps = Array.isArray(followUpPlan.workerInstructions)
