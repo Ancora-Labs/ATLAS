@@ -258,18 +258,15 @@ async function mosesDecideNextActions(config, jesusDirective, trumpPlans, sessio
     .map(([kind, w]) => `  - "${w.name}" (kind: ${kind})`)
     .join("\n");
 
-  // Pass FULL Trump plans to Moses — not truncated summaries.
-  // Moses must relay the complete plan to each worker so they have a detailed checklist.
-  const trumpPlansFull = trumpPlans?.plans
+  // Show COMPACT plan summaries to Moses (no context field — it's too large for cmd-line).
+  // Full Trump context is injected into worker instructions AFTER Moses dispatches.
+  const trumpPlansCompact = trumpPlans?.plans
     ? trumpPlans.plans.slice(0, 10).map((p, i) => {
         const substeps = Array.isArray(p.substeps) ? p.substeps.map((s, j) => `    ${j + 1}. ${s}`).join("\n") : "";
-        const verification = Array.isArray(p.verification) ? p.verification.map((v, j) => `    ${j + 1}. ${v}`).join("\n") : "";
         return [
           `### PLAN ${i + 1} [Priority ${p.priority}] — ${p.role} (${p.kind || "general"})`,
           `Task: ${p.task}`,
-          p.context ? `Context:\n${p.context}` : "",
           substeps ? `Substeps:\n${substeps}` : "",
-          verification ? `Verification:\n${verification}` : "",
           p.dependsOn ? `Depends on: ${Array.isArray(p.dependsOn) ? p.dependsOn.join(", ") : p.dependsOn}` : "",
           p.preparesFor ? `Prepares for: ${Array.isArray(p.preparesFor) ? p.preparesFor.join(", ") : p.preparesFor}` : "",
           p.estimatedComplexity ? `Complexity: ${p.estimatedComplexity}` : ""
@@ -286,41 +283,35 @@ async function mosesDecideNextActions(config, jesusDirective, trumpPlans, sessio
     ? currentResults.map(r => `  ${r.role}: ${r.status} — ${String(r.summary || "").slice(0, 200)}`).join("\n")
     : "  No results yet";
 
-  // English context: include Jesus's FULL thinking so Moses understands WHY, not just what
-  const jesusFullThinking = jesusDirective?.thinking || "";
+  // Truncate Jesus thinking to keep prompt within Windows cmd-line limit
+  const jesusThinkingTruncated = String(jesusDirective?.thinking || "").slice(0, 2000);
   const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
 
-## JESUS'S COMPLETE STRATEGIC ANALYSIS
-${jesusFullThinking ? jesusFullThinking : "(No detailed thinking available — use briefForMoses below)"}
+## JESUS'S STRATEGIC ANALYSIS (truncated)
+${jesusThinkingTruncated || "(No detailed thinking available)"}
 
-## JESUS'S DIRECTIVE FOR MOSES
+## JESUS'S DIRECTIVE
 Decision: ${jesusDirective?.decision || "tactical"}
-System Health: ${jesusDirective?.systemHealth || "unknown"}
+Health: ${jesusDirective?.systemHealth || "unknown"}
 Brief: ${jesusDirective?.briefForMoses || "Continue with standard tasks"}
 Priorities: ${(jesusDirective?.priorities || []).join(", ") || "none specified"}
 
-Jesus's work items:
+Work items:
 ${(jesusDirective?.workItems || []).map((w, i) => `  ${i+1}. [${w.taskKind || "task"}] P${w.priority || "?"}: ${w.task}`).join("\n") || "  none"}
 
-## TRUMP'S FULL ANALYSIS
-${trumpPlans?.analysis ? `Analysis: ${String(trumpPlans.analysis).slice(0, 2000)}` : "No Trump analysis available"}
-${trumpPlans?.strategicNarrative ? `\nStrategic Narrative: ${String(trumpPlans.strategicNarrative).slice(0, 3000)}` : ""}
+## TRUMP ANALYSIS SUMMARY
+${trumpPlans?.analysis ? String(trumpPlans.analysis).slice(0, 1000) : "No analysis"}
 
-## TRUMP'S DETAILED PLANS — PASS THESE TO WORKERS
-IMPORTANT: Each plan below contains a complete implementation checklist that Trump prepared.
-When you dispatch a worker, you MUST include the FULL plan text (task + context + substeps + verification) in the worker's task field.
-Do NOT summarize or compress Trump's plans. The worker needs every detail to work autonomously in a single request.
-Copy-paste the relevant plan section into each worker's "task" field verbatim. Workers work best with exhaustive checklists.
+## TRUMP PLANS (compact — full context auto-injected into workers)
+IMPORTANT: Dispatch workers by role as shown below. The full Trump plan context will be AUTOMATICALLY injected into each worker's task. You just need to specify the correct role and include the plan task + substeps.
 
-${trumpPlansFull}
+${trumpPlansCompact}
 
 ## TRUMP EXECUTION STRATEGY
 ${trumpExecutionStrategy}
 
-Honor Trump's dependency order. Prefer large coherent assignments, do not wake downstream workers early, and avoid same-cycle follow-up chatter unless absolutely necessary.
-Hardening policy: bundle same-area micro-fixes into a single hardening batch PR whenever safe. Avoid opening tiny single-purpose PRs when they can be combined without increasing risk.
-Dispatch policy: avoid report-only re-dispatch if the worker already produced a recent done result with concrete evidence.
-⚠️ CRITICAL: Each worker must receive a MASSIVE task description — hundreds of words minimum — containing the full plan, all substeps, all file paths, all verification steps. Workers that receive tiny 1-line tasks produce tiny incomplete work.
+Honor dependency order. Prefer large coherent assignments. Do not wake downstream workers early.
+Dispatch policy: avoid report-only re-dispatch if worker already produced recent done result.
 
 ## CURRENT WORKER SESSIONS
 ${sessionSummary}
@@ -414,6 +405,29 @@ export async function runMosesCycle(config, jesusDirective, trumpPlans) {
   const instructions = Array.isArray(mosesPlan.workerInstructions)
     ? mosesPlan.workerInstructions.filter(i => i.action !== "skip" && i.action !== "complete")
     : [];
+
+  // ── Inject full Trump plan context into each worker instruction ─────────────
+  // Moses only saw compact summaries (to stay within cmd-line limits).
+  // Here we match each dispatched worker to its Trump plan by role name and
+  // inject the full context + verification into the task field so workers get
+  // the exhaustive checklist they need.
+  if (activeTrumpPlans?.plans) {
+    for (const instr of instructions) {
+      const matchingPlan = activeTrumpPlans.plans.find(
+        p => p.role && instr.role && p.role.toLowerCase() === instr.role.toLowerCase()
+      );
+      if (matchingPlan?.context) {
+        const verification = Array.isArray(matchingPlan.verification)
+          ? "\n\nVERIFICATION CHECKLIST:\n" + matchingPlan.verification.map((v, j) => `${j + 1}. ${v}`).join("\n")
+          : "";
+        const substeps = Array.isArray(matchingPlan.substeps)
+          ? "\n\nSUBSTEPS:\n" + matchingPlan.substeps.map((s, j) => `${j + 1}. ${s}`).join("\n")
+          : "";
+        // Prepend the full Trump context to the task
+        instr.task = `${instr.task}\n\n## TRUMP'S DETAILED IMPLEMENTATION CONTEXT\n${matchingPlan.context}${substeps}${verification}`;
+      }
+    }
+  }
 
   // Moses dispatches all workers it plans — no artificial cap
   // Moses's own reasoning determines parallelism
@@ -641,6 +655,24 @@ export async function runMosesCycle(config, jesusDirective, trumpPlans) {
     const followUps = Array.isArray(followUpPlan.workerInstructions)
       ? followUpPlan.workerInstructions.filter(i => i.isFollowUp && i.action !== "skip" && i.action !== "complete")
       : [];
+
+    // Inject full Trump plan context into follow-up instructions (same as initial dispatch)
+    if (activeTrumpPlans?.plans) {
+      for (const instr of followUps) {
+        const matchingPlan = activeTrumpPlans.plans.find(
+          p => p.role && instr.role && p.role.toLowerCase() === instr.role.toLowerCase()
+        );
+        if (matchingPlan?.context && !String(instr.task).includes("TRUMP'S DETAILED")) {
+          const verification = Array.isArray(matchingPlan.verification)
+            ? "\n\nVERIFICATION CHECKLIST:\n" + matchingPlan.verification.map((v, j) => `${j + 1}. ${v}`).join("\n")
+            : "";
+          const substeps = Array.isArray(matchingPlan.substeps)
+            ? "\n\nSUBSTEPS:\n" + matchingPlan.substeps.map((s, j) => `${j + 1}. ${s}`).join("\n")
+            : "";
+          instr.task = `${instr.task}\n\n## TRUMP'S DETAILED IMPLEMENTATION CONTEXT\n${matchingPlan.context}${substeps}${verification}`;
+        }
+      }
+    }
 
     const followUpCap = Math.min(maxWorkers, executionStrategy.dispatchCap);
     const validFollowUps = executionStrategy.allowSameCycleFollowUps
