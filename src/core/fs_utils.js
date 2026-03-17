@@ -24,12 +24,17 @@ export function spawnAsync(command, args, options) {
   return new Promise((resolve) => {
     const stdoutChunks = [];
     const stderrChunks = [];
+    const stdinInput = options.input || null;
     const child = spawn(command, args, {
       env: options.env,
       cwd: options.cwd,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"]
+      stdio: [stdinInput ? "pipe" : "ignore", "pipe", "pipe"]
     });
+    if (stdinInput) {
+      child.stdin.write(stdinInput);
+      child.stdin.end();
+    }
     child.stdout.on("data", (chunk) => {
       stdoutChunks.push(chunk);
       if (options.onStdout) options.onStdout(chunk);

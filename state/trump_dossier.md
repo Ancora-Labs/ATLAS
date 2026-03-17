@@ -1,242 +1,257 @@
-## Executive Strategic Dossier — `CanerDoqdu/markus-ruhl-23`
+## Executive Strategic Dossier (Markus-Ruhl-23)
 
-This repo is a Next.js App Router marketing site with a single sensitive backend surface (`app/api/contact/route.ts`) and high-visual frontend complexity (motion + 3D + shader pipeline). The architecture is cleanly segmented (`app`, `components`, `lib`, `types`), but the risk profile is asymmetric: one API endpoint can break trust/security, while shader/build fragility can break deploys and UX.
+This repository is a **Next.js 15 TypeScript monolith** centered on a marketing/brand site with one critical transactional surface: `POST /api/contact`. Architecture is cleanly segmented (`app/`, `components/`, `lib/`, `docs/`), and recent merged PRs show a serious hardening sprint across accessibility, performance, security, observability, and CI.
 
-The most important finding is a **state mismatch** between commit history and snapshot content. Recent commits claim Redis sliding-window limiter and CSRF/CORS hardening were merged, but the provided `app/api/contact/route.ts` still shows an **in-memory limiter** (“Replace with Redis for multi-instance setups”). That is either (a) stale snapshot capture, or (b) partial merge/regression. This must be resolved first because it invalidates previous “fixed” conclusions.
+The key strategic reality: most high-risk domains were just addressed (PRs #53, #58, #59, #65, #67, #69, #70, #71), so the highest leverage now is **consistency, regression prevention, and governance cleanup**, not broad new feature work. The one open issue/PR (`#68`) appears to overlap merged work (`#67`), which is a process-risk signal: if planning metadata drifts from code truth, worker cycles get wasted.
 
-No open issues/PRs is good for operational cleanliness, but with recent high-velocity security/backend merges, it more likely indicates backlog reset than true production certainty. The next phase must re-baseline with evidence before adding frontend tests/E2E/motion regression.
-
----
-
-## Architecture Reading and What It Implies
-
-The structure signals a modern, mostly disciplined codebase:
-
-- Frontend pages under `app/(site)/*` and reusable UI in `components/*`.
-- API contracts abstracted in `lib/api/response.ts` and `lib/api/validation.ts` (good consistency pattern).
-- Dedicated mail and rate-limit modules (`lib/contact/mail.ts`, `lib/rate-limit.ts`) indicate intent to separate policy from route handlers.
-- Shader support wired in `next.config.js` (`asset/source`) and typed declarations in `types/shaders.d.ts`, `types/shaders/index.d.ts`.
-
-However, current production risk clusters around three boundaries:
-
-1. **API reliability boundary**: contact route validation/rate-limiting/CORS/mail failure handling.
-2. **Build/runtime asset boundary**: shader imports and WebGL assets (`.glsl/.vert/.frag`, GLB).
-3. **Verification boundary**: tests exist (`app/api/contact/route.test.ts`, `lib/rate-limit.test.ts`) but broader frontend regression and E2E are still a gap.
-
-Also important: `tsconfig.json` excludes test files from type-checking (`**/*.test.ts[x]`), which reduces confidence in test correctness drift.
+Because the provided content snapshot includes only 10 file contents (with truncation), full file-by-file certainty is not possible; where details are absent, I mark **insufficient context provided**. Still, enough evidence exists to define a safe, low-burn execution plan.
 
 ---
 
-## Reality Check vs Recent Merges (Critical)
+## Architecture Reading and Quality Posture
 
-### 1) Redis rate limiter claim vs route implementation
-- Evidence: recent commits `813c1ea8`, `4a4f3666`, `750c6570` claim Redis sliding-window limiter work.
-- Counter-evidence: snapshot `app/api/contact/route.ts` shows in-memory Map limiter comment and logic.
-- Interpretation: **insufficient context provided** to confirm whether route currently imports `lib/rate-limit.ts` or retained fallback only. Requires immediate full-file verification.
+The project appears to follow a strong “thin routes + shared contracts” model:
 
-### 2) CSRF/CORS hardening
-- Evidence: commits `2fb5698e`, `3ac75a55`, `45312dee`; tests mention OPTIONS/POST and CORS checks in `app/api/contact/route.test.ts`.
-- Risk: test appears to include source-regex assertions (from snapshot snippet), which can become brittle and pass without behavioral guarantees if wording changes.
-- Need: ensure behavioral assertions dominate over static source heuristics.
+- API contracts and validation are centralized in `lib/api/response.ts` and `lib/api/validation.ts`.
+- Contact route (`app/api/contact/route.ts`) includes sanitization, validation, rate limiting, and timeout controls.
+- Security headers are set globally in `next.config.js`.
+- Observability route exists in `app/api/health/route.ts`.
+- CI pipeline exists in `.github/workflows/ci.yml` with install/lint/build/type-check/test/audit.
 
-### 3) Mail failure-path resilience
-- Evidence: commits `af1b4836`, `76557079`, `48ccedde`, `818f3de3`, `067f9481`; closed issues #60/#61/#62/#63.
-- Positive: repeated focus indicates reliability investment.
-- Remaining risk: without complete current route/mail module context, cannot prove all failure classes map to stable HTTP and response envelope.
+This is good production structure. However, one consistency gap is visible: `lib/api/response.ts` explicitly says all API routes should use standardized helpers, while `app/api/health/route.ts` returns raw `NextResponse.json`. That is not a breach by itself, but it weakens contract uniformity and downstream reliability for clients and monitors.
 
----
+Testing posture is mixed-strong:
 
-## Production Readiness Coverage (Explicit Domain Classification)
-
-- **Backend correctness**: **Missing and required**.  
-  Evidence: route snapshot still in-memory rate limiter despite Redis merge claims (`app/api/contact/route.ts`, commits above).
-
-- **API contract consistency**: **Already adequate (pattern), but needs revalidation**.  
-  Evidence: standardized helper layer in `lib/api/response.ts`; route adherence must be reconfirmed.
-
-- **Input validation / abuse controls**: **Partially adequate, still missing proof**.  
-  Evidence: `lib/api/validation.ts`, contact tests; mismatch on limiter implementation.
-
-- **Auth/session management**: **Not applicable for current architecture**.  
-  Evidence: marketing site with contact endpoint; no user accounts/session files in snapshot.
-
-- **Token rotation / secret lifecycle**: **Missing and required (operationally)**.  
-  Evidence: env-based mail/redis implied (`.env.example`, `.env.local.example` present), but no runbook/policy evidence provided.
-
-- **Platform security headers / CORS / CSRF**: **Partially adequate, verification required**.  
-  Evidence: security commits and tests exist; must confirm live route behavior.
-
-- **Observability (logs, metrics, tracing, alertability)**: **Missing and required**.  
-  Evidence: no telemetry modules/workflows surfaced in snapshot.
-
-- **Anomaly detection / abuse monitoring**: **Missing and required**.  
-  Evidence: no signals for threshold alerting on contact abuse.
-
-- **Frontend UX/accessibility**: **Partially adequate**.  
-  Evidence: closed issue #55 suggests hardening done; no broad frontend test suite evidence provided.
-
-- **Motion safety / reduced-motion regression controls**: **Missing and required for next phase**.  
-  Evidence: heavy motion components (`components/motion/*`) with no stated regression harness.
-
-- **Performance budgets**: **Missing and required**.  
-  Evidence: no explicit budget artifacts/config in snapshot.
-
-- **SEO/indexability**: **Already adequate baseline**.  
-  Evidence: `app/robots.ts`, `app/sitemap.ts`, App Router layout/pages.  
-  Caveat: metadata completeness **insufficient context provided**.
-
-- **Deployment safety / rollback strategy**: **Missing and required**.  
-  Evidence: CI exists (`.github/workflows/ci.yml`) but no rollout/rollback workflow evidence.
-
-- **CI/CD health**: **Adequate baseline, improvement required**.  
-  Evidence: install/lint/build/type-check/test/audit pipeline exists; audit appears critical-only gate.
+- Contact API has substantial test investment (`app/api/contact/route.test.ts`).
+- But visible test logic uses source-regex assertions (`readFileSync(...route.ts)` + `HAS_RATE_LIMIT`, `HAS_CSRF`, etc.), which is implementation-coupled and brittle against refactors.
+- **insufficient context provided** on health endpoint tests and broader component/e2e depth.
 
 ---
 
-## Dependency Ordering and Execution Logic
+## Production Risk and Opportunity Model
 
-Critical path is: **ground-truth scan → backend/security reconciliation → test expansion + CI gating → final QA baseline**.
+### Immediate Risks
 
-You should not start frontend/E2E broadening before the API/security baseline is proven, because test matrix design depends on final behavior contracts and headers.
+1. **Governance drift / duplicate planning**
+   - Evidence: Open issue + PR `#68` “observability” while equivalent work was merged in `#67` and listed closed.
+   - Risk: repeated activations and confusing backlog truth.
 
-Parallelism should be limited to truly independent tracks:
-- Shader/build fragility analysis can run in parallel with backend reconciliation.
-- E2E/motion tests should wait until both backend and frontend contracts stabilize.
+2. **API contract inconsistency**
+   - Evidence: `lib/api/response.ts` mandates helper usage; `app/api/health/route.ts` uses direct `NextResponse.json`.
+   - Risk: fragmented monitoring/client assumptions and inconsistent error envelopes.
 
----
+3. **Brittle regression tests**
+   - Evidence: `app/api/contact/route.test.ts` introspects route source text for controls.
+   - Risk: false failures and noisy maintenance; weaker confidence in behavior-level guarantees.
 
-## Worker Activation Strategy (Minimum Safe Count)
+### Opportunities
 
-Use **6 workers** total; this is the minimum safe count that preserves role purity and avoids rework loops:
-
-1. `Issachar` (scan) — single source of truth scan packet.
-2. `Aaron` (api) — contact route + limiter + mail-path implementation consistency.
-3. `Elijah` (security) — hardening verification and abuse model.
-4. `Esther` (frontend) — shader import fragility + motion-safe testability hooks.
-5. `Samuel` (test) — integration + E2E + regression coverage.
-6. `Noah` (devops) — CI wiring for new checks and rollback safety gates.
-
-`Isaiah` QA can be skipped initially to reduce request burn; Samuel + Noah can provide sufficient acceptance artifacts if packets are strict.
+- Convert hardening sprint into durable guardrails (contract tests + CI policy + docs alignment).
+- Use one disciplined follow-up cycle instead of broad rework.
+- Keep worker activations minimal and coherent.
 
 ---
 
-## Phased Execution Plan (Large Coherent Packets)
+## Production-Readiness Coverage (explicit domain classification)
 
-### Wave 1 — Ground-Truth Re-baseline (Prerequisite Wave)
-**Worker: Issachar (scan)**  
-**Goal:** produce definitive code-state map against merged commits and closed issues.  
-**Packet includes:**
-- Verify contact route currently used limiter path (`app/api/contact/route.ts`, `lib/rate-limit.ts`, imports/call graph).
-- Validate CSRF/CORS behavior actually implemented (OPTIONS handling, origin policy, credentials policy, allowed methods/headers).
-- Confirm mail failure mapping in `lib/contact/mail.ts` + route boundary.
-- Audit shader usage/import paths across components and any `.glsl/.vert/.frag` references.
-- Enumerate test coverage by critical path (contact API, rate limiter, motion components, shader runtime paths).
-- Identify outdated README claims versus implemented behavior (`README.md`).
-**Verification output:** evidence log with file anchors and diff-ready recommendations.  
-**Handoff contract:** downstream workers treat this as authoritative baseline.
+- **Backend correctness** — **already adequate (with minor consistency gap)**  
+  Evidence: `app/api/contact/route.ts`, `lib/api/validation.ts`, `lib/api/response.ts`, merged PRs #52, #57, #58.
 
----
+- **Frontend UX/accessibility** — **already adequate**  
+  Evidence: merged PRs #55, #64, #69, #70, #71; docs `docs/accessibility-audit-wave4.md`.
 
-### Wave 2 — Core Remediation and Stability
-**Workers: Aaron (api), Esther (frontend), Elijah (security)**  
-**Depends on:** Wave 1 report.
+- **Performance budgets** — **missing and required**  
+  Evidence: `docs/performance-baseline.md` exists, but no explicit CI budget gate shown in `.github/workflows/ci.yml`. Baseline without enforcement is fragile.
 
-#### Aaron Packet (API owner)
-- Reconcile rate limiter implementation with intended Redis sliding-window design.
-- Ensure deterministic fallback behavior if Redis unavailable (must be explicit and observable).
-- Harden contact route error taxonomy to always use `lib/api/response.ts` envelopes.
-- Confirm `OPTIONS` + CORS header behavior and no unsafe GET handler.
-- Verify try/catch boundaries include mail call site and map transport timeout/DNS/network failures deterministically.
-**Evidence anchors:** `app/api/contact/route.ts`, `lib/rate-limit.ts`, `lib/contact/mail.ts`, `app/api/contact/route.test.ts`, commits #58/#57/#59/#60-#63 lineage.
-**Downstream handoff:** stable API contract + headers + failure semantics for test authoring.
+- **SEO** — **already adequate**  
+  Evidence: `app/robots.ts`, `app/sitemap.ts`, merged PR #71.
 
-#### Esther Packet (Frontend owner)
-- Resolve shader import fragility with a permanent, typed strategy.
-- Validate `next.config.js` shader loader and declaration alignment in `types/shaders*.d.ts`.
-- Add minimal runtime guardrails where shader assets may fail (without masking failures silently).
-- Prepare motion components for deterministic testing hooks (`components/motion/*`, high-motion sections).
-**Alternative paths to evaluate:**
-- Path A (preferred permanent): keep `asset/source`, tighten import conventions + type declarations + smoke tests.
-- Path B (temporary): fallback static material/visual path when shader import fails, with explicit logging.
-**Impact analysis:**  
-Path A lower correctness risk, moderate scope, clean rollback (single config revert).  
-Path B lower immediate breakage risk but can hide visual regressions; acceptable only temporary.
+- **Security (platform/app)** — **already adequate**  
+  Evidence: `next.config.js` security headers; merged PRs #53 and #59; rate limiting in `lib/rate-limit.ts`; sanitization and timeout handling in contact route.
 
-#### Elijah Packet (Security owner)
-- Re-audit CORS/CSRF assumptions against actual route behavior and test intent.
-- Check for overly broad trust boundaries (e.g., permissive origin handling).
-- Validate no secret leakage in error responses/logs.
-- Review `next.config.js` remote image policy (`hostname: '**'`) for abuse surface.
-**Downstream handoff:** signed security assertions and required policy edits.
+- **Observability** — **missing and required (partially implemented)**  
+  Evidence: `app/api/health/route.ts` exists and PR #67 merged, but no alerting/SLI/error-budget mechanism visible in snapshot; structured logging claims exist via PR title but details are **insufficient context provided**.
+
+- **Deployment safety** — **missing and required**  
+  Evidence: CI exists, but deployment workflow/canary/auto-rollback logic not visible; **insufficient context provided** on hosting-level safeguards.
+
+- **Rollback safety** — **missing and required**  
+  Evidence: no rollback runbook or versioned release procedure visible in provided files.
+
+- **Auth/session management** — **not applicable for current architecture**  
+  Evidence: no user auth/session files or protected user data flows visible in snapshot.
+
+- **Token/secret rotation** — **missing and required (ops policy)**  
+  Evidence: env usage implied (`CONTACT_MAIL_TIMEOUT_MS`, Redis/mail integration), but no rotation procedure documentation visible.
+
+- **Anomaly detection** — **missing and required**  
+  Evidence: health endpoint present, but anomaly detection/alert thresholds are not visible.
 
 ---
 
-### Wave 3 — Verification Expansion and CI Enforcement
-**Workers: Samuel (test), Noah (devops)**  
-**Depends on:** Wave 2 completion.
+## Dependency Ordering and Worker Activation Strategy
 
-#### Samuel Packet (Test owner)
-- Replace brittle source-regex assertions with behavior-first tests where possible (`app/api/contact/route.test.ts`).
-- Expand negative-path coverage for contact endpoint: malformed content type, origin mismatch, rate-limit breach, mail timeout/DNS failure.
-- Add frontend regression tests for motion-safe behavior and critical render guards.
-- Introduce E2E happy path + failure path for contact flow (if Playwright setup exists; otherwise mark **insufficient context provided** and scaffold minimally).
-**Handoff contract:** reproducible confidence suite that protects recently fixed areas from regression.
+Use **fewest-workers mode** with large coherent packets and strict wave dependencies.
 
-#### Noah Packet (DevOps owner)
-- Integrate new tests into `.github/workflows/ci.yml` without exploding runtime.
-- Preserve existing order (lint/build/type-check/test/audit) while adding E2E stage with sane gating.
-- Add rollback-safety checks/documented release guardrails (e.g., fail-fast rules, artifact retention policy).
-- Revisit audit threshold strategy (critical-only may be too weak for internet-facing form endpoint).
-**Handoff contract:** CI becomes enforceable protection layer, not advisory.
+### Wave 1 (parallel, prerequisite wave)
+Goal: establish code-truth and planning-truth, prevent wasted downstream requests.
+
+#### Worker 1: **Issachar** (scan)
+Ownership: full repository verification dossier.
+
+Packet:
+- Perform complete code scan (all 87 files) and map:
+  - route contracts and envelope consistency,
+  - test coverage matrix by critical path,
+  - CI/deploy gaps,
+  - security control placement.
+- Confirm whether `app/api/health/route.ts` has tests and whether `checkRedisHealth` failure mode is deterministic.
+- Verify whether playwright config files referenced by scripts exist (`package.json`) or are stale.  
+  If absent, flag as actionable drift.
+- Produce evidence anchors with file paths and exact line ranges.
+
+Verification:
+- Deliver a ranked gap list (P0/P1/P2) with direct file references.
+- Explicitly mark each previously merged domain as “already covered” to avoid re-planning.
+
+Handoff contract:
+- Aaron and Samuel receive exact implementation scope only; no rediscovery needed.
+
+Avoid doing:
+- No code edits.
+
+#### Worker 2: **Joseph** (integration)
+Ownership: backlog/PR state integrity and execution guardrails.
+
+Packet:
+- Reconcile open issue/PR #68 against merged #67 and closed issue #67.
+- Produce a “planning hygiene” patchset:
+  - close/retarget stale issue/PR artifacts,
+  - align README/docs pointers if observability status text is outdated.
+- Define merge gating expectations for future waves (required checks, ownership tags).
+
+Verification:
+- All active issues/PRs map to unresolved code reality.
+- No duplicate open workstream for already merged domains.
+
+Handoff contract:
+- Moses can trust tracker state before dispatching implementation waves.
+
+Avoid doing:
+- No backend or test code edits unless documentation sync is required.
 
 ---
 
-## Evidence-Mapped Top Priorities
+### Wave 2 (sequential: API then tests)
+Goal: remove contract drift and harden regression confidence.
 
-1. **Reconcile route implementation with Redis-limiter security claims**  
-   Anchors: `app/api/contact/route.ts`, `lib/rate-limit.ts`, commits `813c1ea8`, `4a4f3666`, issue #58.
+#### Worker 3: **Aaron** (api/backend)
+Ownership: API consistency and observability contract hardening.
 
-2. **Revalidate CSRF/CORS hardening behaviorally (not textually)**  
-   Anchors: `app/api/contact/route.test.ts`, commits `2fb5698e`, `3ac75a55`, `45312dee`, issue #59.
+Packet:
+- Normalize `app/api/health/route.ts` to shared response conventions from `lib/api/response.ts` (or formally document justified exception).
+- Ensure health endpoint behavior under Redis failure is explicit and deterministic (degraded vs failure contract), aligned with merged intent from #67.
+- Keep behavior backward-compatible for consumers when possible.
 
-3. **Stabilize shader import pipeline and testing hooks**  
-   Anchors: `next.config.js`, `types/shaders.d.ts`, `types/shaders/index.d.ts`, 3D components under `components/sections/home/*`.
+Verification:
+- Contract shape is explicit and stable.
+- No broad error swallowing; failure signaling is deliberate.
+- Existing CI/test suite remains green.
 
-4. **Close production-readiness blind spots (observability, rollback, anomaly detection)**  
-   Anchors: absence in provided files; CI only in `.github/workflows/ci.yml`.
+Handoff contract:
+- Samuel can write black-box tests against finalized contract with no further API shape changes.
+
+Avoid doing:
+- No frontend/UI work.
+
+#### Worker 4: **Samuel** (test)
+Ownership: behavior-driven API regression suite.
+
+Packet:
+- Add/expand tests for `app/api/health/route.ts`:
+  - happy path,
+  - Redis degraded/unavailable path,
+  - envelope/fields invariants.
+- Refactor brittle source-regex assertions in `app/api/contact/route.test.ts` toward behavior checks where feasible.
+- Preserve deterministic isolation and include negative path coverage per critical flow.
+
+Verification:
+- Tests validate behavior, not source text patterns.
+- CI test pass remains stable.
+- No reliance on implementation internals.
+
+Handoff contract:
+- Isaiah/QA can run regression confidently without bespoke interpretation.
+
+Avoid doing:
+- No non-test refactors unrelated to endpoint behavior.
 
 ---
 
-## Premium Request Budget (Conservative)
+### Wave 3 (single worker, optional-but-recommended hardening)
+Goal: close production operations gaps that are currently non-blocking but required.
 
-Estimated total: **56 premium requests**.
+#### Worker 5: **Noah** (devops)
+Ownership: operational guardrails and rollback discipline.
 
-### By wave
-- **Wave 1:** 10  
-  One deep scan activation, one consolidated evidence report, likely one correction pass.
-- **Wave 2:** 24  
-  Three workers with implementation + self-validation + one retry risk each.
-- **Wave 3:** 22  
-  Test and CI work typically incurs higher retry due flaky assumptions and pipeline wiring.
+Packet:
+- Upgrade CI/deploy guardrails:
+  - add performance budget enforcement hook if absent (aligned to `docs/performance-baseline.md`),
+  - codify rollback procedure and release safety checks in repo docs/workflow notes.
+- Add minimal anomaly detection entry criteria (what triggers action from health/log signals).
 
-### By role
-- **Issachar (scan): 10**  
-  Comprehensive baseline report and evidence mapping.
-- **Aaron (api): 12**  
-  Core backend correctness with regression-sensitive changes.
-- **Elijah (security): 8**  
-  Focused hardening review and policy corrections.
-- **Esther (frontend): 10**  
-  Shader/motion stabilization plus testability prep.
-- **Samuel (test): 10**  
-  Behavioral test expansion and E2E pathing.
-- **Noah (devops): 6**  
-  CI integration and gating refinements.
+Verification:
+- CI contains enforceable, non-optional production gates beyond baseline docs.
+- Rollback and alerting playbook exists and is referenced from README/ops docs.
 
-Why this is efficient: few workers, large coherent packets, strict wave dependencies, and no same-cycle follow-ups reduce churn and repeated context loading.
+Handoff contract:
+- Future feature waves inherit stable operational guardrails.
+
+Avoid doing:
+- No app feature development.
+
+---
+
+## Alternative Path (lower request burn, higher risk)
+
+If Moses must minimize requests further, combine Wave 2 + Wave 3 into one worker (**Aaron**) with test follow-up by **Samuel** only.  
+Impact analysis:
+
+- Correctness risk: medium (devops concerns may be under-specified by API specialist).
+- Scope risk: medium-high (single worker context-switching across API + CI + ops docs).
+- Rollback strategy: safe (all changes are additive/config/docs, can revert per-file).
+- Nature: temporary optimization; not ideal as permanent operating model.
+
+---
+
+## Premium Request Budget (conservative)
+
+Total estimated premium requests: **32** (confidence: medium)
+
+Drivers: three waves, five activations, one scan-heavy packet, two validation-heavy packets, and no same-cycle follow-ups.
+
+- **Wave 1:** 12  
+  - Issachar: 8 (full scan synthesis + evidence indexing)  
+  - Joseph: 4 (tracker reconciliation + docs alignment)
+
+- **Wave 2:** 14  
+  - Aaron: 6 (API contract hardening + compatibility validation)  
+  - Samuel: 8 (test refactor + new endpoint coverage + stabilization)
+
+- **Wave 3:** 6  
+  - Noah: 6 (CI/rollback/anomaly-detection policy integration)
+
+By role:
+- Issachar 8
+- Joseph 4
+- Aaron 6
+- Samuel 8
+- Noah 6
 
 ---
 
 ## Final Recommendation to Moses
 
-Run this as a **dependency-disciplined 3-wave campaign** with **6 total workers**. Do not skip Wave 1 re-baseline; current evidence shows likely drift between commit narrative and live code state. Prioritize backend/security truth first, then frontend shader stability, then test/CI enforcement. That sequence gives the cleanest foundation for your next phase (frontend tests, E2E, motion regression) with the lowest rework risk and controlled premium-request burn.
+Run the plan exactly as dependency-ordered above. Do **not** awaken frontend/security workers unless Wave 1 scan evidence identifies unresolved defects in those domains. The repo’s core hardening is likely already merged; the highest ROI is to eliminate governance drift, enforce contract consistency, and convert recent sprint wins into durable automated guardrails.
+
+This is the minimum safe worker set that preserves role purity and avoids premium-request churn.

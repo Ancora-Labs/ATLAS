@@ -184,9 +184,9 @@ async function buildLocalRepoSnapshot(config) {
   const repoSignals = await buildRepoSignals(localRepoDir, candidateFiles);
   const sortedFiles = [...candidateFiles].sort((a, b) => scoreFileForSnapshot(b) - scoreFileForSnapshot(a));
 
-  const maxFiles = 12;
-  const maxTotalChars = 8000;
-  const maxCharsPerFile = 900;
+  const maxFiles = 8;
+  const maxTotalChars = 5000;
+  const maxCharsPerFile = 700;
   const selected = [];
   let totalChars = 0;
 
@@ -446,11 +446,11 @@ ${jesusDecision?.trumpReason || "Full strategic analysis required — project ne
 Design the plan so that upstream workers prepare downstream prerequisites whenever practical. If frontend/API/backend/auth work is related, sequence it deliberately instead of waking everyone at once.
 
 ## REPO FILE STRUCTURE (${context.fileTree.length} files)
-${context.fileTree.slice(0, 150).join("\n")}
-${context.fileTree.length > 150 ? `... and ${context.fileTree.length - 150} more files` : ""}
+${context.fileTree.slice(0, 80).join("\n")}
+${context.fileTree.length > 80 ? `... and ${context.fileTree.length - 80} more files` : ""}
 
 ## OPEN ISSUES (${context.issues.length})
-${context.issues.length > 0 ? context.issues.map(i => `  #${i.number} [${i.labels.join(", ") || "no labels"}]: ${i.title}\n  ${i.body ? i.body.slice(0, 200) : "no description"}`).join("\n\n") : "No open issues"}
+${context.issues.length > 0 ? context.issues.map(i => `  #${i.number} [${i.labels.join(", ") || "no labels"}]: ${i.title}`).join("\n") : "No open issues"}
 
 ## OPEN PULL REQUESTS (${context.pullRequests.length})
 ${context.pullRequests.length > 0 ? context.pullRequests.map(p => `  #${p.number} [${p.draft ? "DRAFT" : "ready"}]: ${p.title}`).join("\n") : "No open PRs"}
@@ -515,7 +515,7 @@ IMPORTANT CONSTRAINTS:
 Write a substantial senior-level narrative before the final JSON. The final JSON should still be rich, with large task packets, substeps, verification, dependency reasoning, and worker handoff contracts.
 
 ## PRIOR DOSSIER
-${dossierText ? dossierText.slice(0, 12000) : "No prior dossier generated."}
+${dossierText ? dossierText.slice(0, 5000) : "No prior dossier generated."}
 
 IMPORTANT CONSTRAINTS:
 - You have NO direct tool access in this run.

@@ -111,7 +111,8 @@ export function buildAgentArgs({ agentSlug, prompt, model, allowAll = true }) {
     }
   }
 
-  args.push("-p", String(prompt));
+  const promptText = String(prompt);
+  args.push("-p", promptText);
   return args;
 }
 
