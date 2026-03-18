@@ -65,18 +65,28 @@ export async function runDaemon(config) {
   const jesusDirective = await readJson(path.join(stateDir, "jesus_directive.json"), null);
 
   // Reset zombie workers that were "working" when daemon died (stale > 2× timeout)
+  // Must check BOTH aggregate (worker_sessions.json) AND per-worker files (worker_*.json)
+  // because Moses loadSessions overlays per-worker files on top of aggregate.
   const workerTimeoutMs = Number(liveConfig.runtime?.workerTimeoutMinutes || 30) * 60 * 1000;
   const staleThresholdMs = workerTimeoutMs * 2;
   const now = Date.now();
   let zombieReset = false;
-  for (const [name, s] of Object.entries(sessions)) {
-    if (s?.status === "working" && s?.startedAt) {
-      const age = now - new Date(s.startedAt).getTime();
+  const knownRoles = ["King David", "Esther", "Aaron", "Joseph", "Samuel", "Isaiah", "Noah", "Elijah", "Issachar", "Ezra"];
+  for (const roleName of knownRoles) {
+    const perWorkerPath = path.join(stateDir, `worker_${roleName.toLowerCase().replace(/\s+/g, "_")}.json`);
+    const perWorker = await readJson(perWorkerPath, null);
+    if (perWorker?.status === "working" && perWorker?.startedAt) {
+      const age = now - new Date(perWorker.startedAt).getTime();
       if (age > staleThresholdMs) {
-        s.status = "idle";
-        s.startedAt = null;
+        perWorker.status = "idle";
+        perWorker.startedAt = null;
+        await writeJson(perWorkerPath, perWorker);
+        if (sessions[roleName]) {
+          sessions[roleName].status = "idle";
+          sessions[roleName].startedAt = null;
+        }
         zombieReset = true;
-        await appendProgress(liveConfig, `[STARTUP] Reset zombie worker ${name} (stale ${Math.round(age / 60000)}min)`);
+        await appendProgress(liveConfig, `[STARTUP] Reset zombie worker ${roleName} (stale ${Math.round(age / 60000)}min)`);
       }
     }
   }
