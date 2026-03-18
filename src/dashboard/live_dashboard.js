@@ -2655,20 +2655,23 @@ function renderHtml() {
 
       document.getElementById("m-pf").textContent = String(data.tasks.totals.passed || 0) + ' / ' + String(data.tasks.totals.failed || 0);
 
-      // Premium request estimate card — show REMAINING estimate, not total
+      // Premium request card — show ACTUAL usage from premium_usage_log, with Trump estimate for context
       var pre = data.premiumRequestEstimate || {};
       var preEstimated = Number(pre.estimatedTotal || 0);
       var preUsed = Number(pre.used || 0);
       var preAfter = Number(pre.afterProject || 0);
       var completedTasks = Number(data.tasks.totals.passed || 0);
       var totalTasks = Number(data.tasks.total || 0);
-      var remainingEstimate = totalTasks > 0 ? Math.max(0, Math.round(preEstimated * (1 - completedTasks / totalTasks))) : preEstimated;
-      if (preEstimated > 0) {
-        document.getElementById("m-premium").textContent = '~' + formatRequestCount(remainingEstimate) + ' left';
-        document.getElementById("m-premium-sub").textContent = 'total ~' + formatRequestCount(preEstimated) + ' | done: ' + completedTasks + '/' + totalTasks + ' tasks';
+      var actualPremiumUsed = Number((data.premiumUsageByWorker && data.premiumUsageByWorker.totalRequests) || 0);
+      if (actualPremiumUsed > 0 || preEstimated > 0) {
+        document.getElementById("m-premium").textContent = String(actualPremiumUsed) + ' used';
+        var subParts = [];
+        if (preEstimated > 0) subParts.push('budget: ~' + formatRequestCount(preEstimated));
+        subParts.push('done: ' + completedTasks + '/' + totalTasks + ' tasks');
+        document.getElementById("m-premium-sub").textContent = subParts.join(' | ');
       } else {
         document.getElementById("m-premium").textContent = '-';
-        document.getElementById("m-premium-sub").textContent = 'no estimate available';
+        document.getElementById("m-premium-sub").textContent = 'no usage data';
       }
 
       var copilotRemaining = Number(data.usage.copilot.monthly.remainingRequests || 0);

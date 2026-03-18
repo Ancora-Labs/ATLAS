@@ -134,6 +134,34 @@ function buildConversationContext(history, instruction, sessionState = {}, confi
     parts.push("");
   }
 
+  // Inject knowledge memory lessons relevant to this worker
+  try {
+    const kmPath = path.join(config.paths?.stateDir || "state", "knowledge_memory.json");
+    if (existsSync(kmPath)) {
+      const km = JSON.parse(readFileSync(kmPath, "utf8"));
+      const promptHints = Array.isArray(km.promptHints)
+        ? km.promptHints.filter(h => {
+            const target = String(h.targetAgent || "").toLowerCase();
+            return target === "all" || target === "workers" || target === String(workerKind || "").toLowerCase();
+          })
+        : [];
+      const recentLessons = Array.isArray(km.lessons) ? km.lessons.slice(-5) : [];
+
+      if (promptHints.length > 0 || recentLessons.length > 0) {
+        parts.push("## SYSTEM LEARNINGS (from previous cycles)");
+        for (const hint of promptHints) {
+          parts.push(`- [HINT] ${hint.hint} (reason: ${hint.reason})`);
+        }
+        for (const lesson of recentLessons) {
+          if (lesson.severity === "critical" || lesson.severity === "warning") {
+            parts.push(`- [${lesson.severity.toUpperCase()}] ${lesson.lesson}`);
+          }
+        }
+        parts.push("");
+      }
+    }
+  } catch { /* knowledge memory not available yet — no-op */ }
+
   // Loop detection — inject a visible warning before history if the worker is stuck
   const myMessages = history.filter(m => m.from !== "moses");
   const recentOwn = myMessages.slice(-3);

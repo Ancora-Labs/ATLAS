@@ -21,6 +21,7 @@ import { loadConfig } from "../config.js";
 import { runJesusCycle } from "./jesus_supervisor.js";
 import { runTrumpAnalysis } from "./trump.js";
 import { runMosesCycle } from "./moses_coordinator.js";
+import { runSelfImprovementCycle } from "./self_improvement.js";
 import { warn } from "./logger.js";
 import { readJson, writeJson } from "./fs_utils.js";
 
@@ -216,6 +217,91 @@ async function waitForWorkersAndFinalize(config) {
   }
 }
 
+// ── Post-completion cleanup ──────────────────────────────────────────────────
+
+async function postCompletionCleanup(config) {
+  const repo = config.env?.targetRepo;
+  const token = config.env?.githubToken;
+  if (!repo || !token) return;
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "BOX/1.0"
+  };
+  const base = `https://api.github.com/repos/${repo}`;
+
+  try {
+    // 1. Close duplicate/stale open PRs created by BOX workers
+    const prsRes = await fetch(`${base}/pulls?state=open&per_page=50`, { headers });
+    if (prsRes.ok) {
+      const openPrs = await prsRes.json();
+      const mergedRes = await fetch(`${base}/pulls?state=closed&per_page=50&sort=updated&direction=desc`, { headers });
+      const closedPrs = mergedRes.ok ? await mergedRes.json() : [];
+      const mergedTitles = closedPrs
+        .filter(p => p.merged_at)
+        .map(p => String(p.title || "").toLowerCase().trim());
+
+      for (const pr of openPrs) {
+        const title = String(pr.title || "").toLowerCase().trim();
+        const isDuplicate = mergedTitles.some(mt => mt === title || (title.includes("wave") && mt.includes("wave") && title.slice(0, 30) === mt.slice(0, 30)));
+        if (isDuplicate) {
+          await fetch(`${base}/pulls/${pr.number}`, {
+            method: "PATCH",
+            headers: { ...headers, "Content-Type": "application/json" },
+            body: JSON.stringify({ state: "closed" })
+          });
+          // Add close comment
+          await fetch(`${base}/issues/${pr.number}/comments`, {
+            method: "POST",
+            headers: { ...headers, "Content-Type": "application/json" },
+            body: JSON.stringify({ body: "Duplicate of an already-merged PR. Auto-closed by BOX post-completion cleanup." })
+          });
+          await appendProgress(config, `[CLEANUP] Closed duplicate PR #${pr.number}: ${pr.title}`);
+        }
+      }
+    }
+
+    // 2. Delete remote branches created by BOX that are already merged
+    const branchesRes = await fetch(`${base}/branches?per_page=100`, { headers });
+    if (branchesRes.ok) {
+      const branches = await branchesRes.json();
+      for (const branch of branches) {
+        const name = branch.name;
+        if (name === "main" || name === "master" || name === "develop") continue;
+        if (!name.startsWith("box/") && !name.startsWith("wave") && !name.startsWith("pr-") && !name.startsWith("qa/")) continue;
+
+        // Check if this branch's HEAD is merged into default branch
+        try {
+          const mergeCheckRes = await fetch(`${base}/compare/main...${encodeURIComponent(name)}`, { headers });
+          if (mergeCheckRes.ok) {
+            const comparison = await mergeCheckRes.json();
+            if (comparison.status === "behind" || comparison.status === "identical" || comparison.ahead_by === 0) {
+              const deleteRes = await fetch(`${base}/git/refs/heads/${encodeURIComponent(name)}`, {
+                method: "DELETE",
+                headers
+              });
+              if (deleteRes.ok) {
+                await appendProgress(config, `[CLEANUP] Deleted merged remote branch: ${name}`);
+              }
+            }
+          }
+        } catch { /* non-fatal */ }
+      }
+    }
+
+    // 3. Enable auto-delete head branches on merge (idempotent)
+    await fetch(base, {
+      method: "PATCH",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ delete_branch_on_merge: true })
+    });
+  } catch (err) {
+    warn(`[orchestrator] post-completion cleanup error: ${String(err?.message || err)}`);
+  }
+}
+
 // ── Startup cycle: Jesus → Trump? → Moses (only called on first-ever run or escalation) ──
 async function runStartupCycle(config) {
   try {
@@ -380,7 +466,16 @@ async function mainLoop(config) {
         continue;
       }
 
-      // All work done — system sleeps until stop or escalation. NO Jesus re-trigger.
+      // All work done — run post-completion cleanup and self-improvement, then system sleeps.
+      await postCompletionCleanup(config);
+
+      // Run self-improvement analysis (AI-driven, reads cycle outcomes)
+      try {
+        await runSelfImprovementCycle(config);
+      } catch (err) {
+        warn(`[orchestrator] self-improvement error: ${String(err?.message || err)}`);
+      }
+
       await appendProgress(config, `[LOOP] All work complete (${dedupedCompletedCount}/${totalPlans}). System idle — waiting for stop request or escalation.`);
       await sleep(RE_EVAL_SLEEP_MS);
     }

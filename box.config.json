@@ -46,10 +46,7 @@
     "workerMaxFilesChanged": 0,
     "workerForbiddenPathPrefixes": [
       ".next/",
-      "node_modules/",
-      ".github/workflows/",
-      "infra/",
-      "security/"
+      "node_modules/"
     ],
     "plannerMaxGenerations": 3,
     "maxTacticalCycles": 6,

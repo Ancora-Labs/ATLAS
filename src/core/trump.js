@@ -220,9 +220,9 @@ async function buildLocalRepoSnapshot(config) {
     const truncationNote = entry.truncated ? "\n# NOTE: content truncated for prompt budget" : "";
     return [
       `### FILE: ${entry.relPath}`,
-      `\`\`\`${language}`,
+      "```" + language,
       `${entry.content}${truncationNote}`,
-      "\`\`\`",
+      "```",
       ""
     ].join("\n");
   });
@@ -411,30 +411,101 @@ export async function runTrumpAnalysis(config, jesusDecision) {
     ? context.closedIssues.map(i => `  #${i.number}: ${i.title}`).join("\n")
     : "  No closed issues available";
 
+  // Build knowledge memory context if available
+  const knowledgeMemoryPath = path.join(stateDir, "knowledge_memory.json");
+  let knowledgeSection = "";
+  try {
+    const km = JSON.parse(await fs.readFile(knowledgeMemoryPath, "utf8"));
+    const lessons = Array.isArray(km?.lessons) ? km.lessons.slice(-10) : [];
+    if (lessons.length > 0) {
+      knowledgeSection = `\n## LESSONS FROM PREVIOUS CYCLES (knowledge memory)\n${lessons.map(l => `- [${l.source || "system"}] ${l.lesson}`).join("\n")}\nUse these lessons to avoid repeating past mistakes and to build on what worked.\n`;
+    }
+  } catch { /* no knowledge memory yet */ }
+
   const sharedContext = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
 ${context.repoInfo ? `Project: ${context.repoInfo.name} | Language: ${context.repoInfo.language} | Topics: ${context.repoInfo.topics.join(", ")}` : ""}
 
-## ⛔ ALREADY-DONE WORK — SKIP & AUDIT RULE
-The following PRs are MERGED and the following issues are CLOSED.
-BEFORE planning ANY task for ANY worker, cross-reference the task against every item below.
+## YOUR MISSION — FULL PRODUCTION READINESS
+You are the deep strategic analyst for this repository. Your job is to make this project **fully production-ready**
+at a **senior engineer level**. This means you must evaluate and plan work across ALL of the following dimensions:
 
-### SKIP vs REGRESSION-FIX decision:
-For each merged PR, check the LOCAL FILE CONTENT SNAPSHOT below. If the code shows the feature was
-implemented COMPLETELY and correctly → SKIP (do not re-plan).
-But if the local snapshot reveals that a merged PR's work is INCOMPLETE, BROKEN, or HALF-DONE
-(e.g. responsive PR merged but breakpoints are missing, accessibility PR merged but aria labels absent,
-performance PR merged but images still unoptimized) → plan it as kind: "regression-fix" (not "new").
-A regression-fix task costs fewer requests because the foundation exists — just the gaps need filling.
+### 1. NEW FEATURES & CAPABILITIES
+- What features are missing for a complete product?
+- What libraries, tools, or dependencies should be added?
+- What functionality gaps exist compared to a production-grade project in this category?
 
-MERGED PULL REQUESTS (verify quality against local snapshot before skipping):
+### 2. SECURITY (OWASP Top 10 + beyond)
+- Input validation, sanitization, injection prevention (SQL, XSS, command)
+- Auth/authz, session management, CSRF/CORS
+- Secret management, env var security, key rotation
+- Dependency vulnerability audit, supply chain security
+- Security headers, CSP, rate limiting, abuse prevention
+
+### 3. PERFORMANCE & OPTIMIZATION
+- Bundle size, code splitting, lazy loading
+- Image optimization, caching strategies
+- Database query optimization, connection pooling
+- Core Web Vitals (LCP, FID, CLS), performance budgets
+- SSR/SSG optimization where applicable
+
+### 4. UI/UX & ACCESSIBILITY
+- Responsive design across all breakpoints
+- WCAG 2.1 AA compliance, aria labels, keyboard navigation
+- Error states, loading states, empty states
+- User feedback, form validation UX, animations
+
+### 5. RELIABILITY & ERROR HANDLING
+- Error boundaries, graceful degradation
+- Retry logic, circuit breakers, timeout handling
+- Logging, structured error reporting
+- Health checks, readiness probes
+
+### 6. TESTING
+- Unit tests for all business logic
+- Integration tests for API routes
+- E2E tests for critical user flows
+- Test coverage targets, testing infrastructure
+
+### 7. CI/CD & DEVOPS
+- GitHub Actions workflow completeness
+- Build optimization, caching, parallelization
+- Deployment pipeline, staging/production environments
+- Rollback strategy, release tagging
+
+### 8. GITHUB REPO SETTINGS & CONFIGURATION
+- Branch protection rules, required reviews
+- Auto-delete head branches after merge ✓ (enabled)
+- Issue/PR templates, labels, milestones
+- Secret and variable management
+- Dependabot, code scanning, security alerts
+
+### 9. DOCUMENTATION
+- README completeness, setup instructions
+- API documentation, architecture docs
+- Contributing guide, code of conduct
+- Changelog, versioning strategy
+
+### 10. OBSERVABILITY & MONITORING
+- Structured logging, log levels
+- Error tracking (Sentry or equivalent)
+- Uptime monitoring, alerting
+- Analytics, user behavior tracking
+
+## ALREADY-DONE WORK — AUDIT & DECIDE
+The following PRs are MERGED and issues CLOSED. For each:
+- If COMPLETE and correct in the local snapshot → SKIP
+- If INCOMPLETE, BROKEN, or HALF-DONE → plan as "regression-fix"
+- If the area needs NEW work beyond what was merged → plan as "new"
+
+MERGED PULL REQUESTS:
 ${mergedPRsSummary}
 
-RECENT MERGED COMMITS (cross-reference before planning):
+RECENT MERGED COMMITS:
 ${mergedCommitsSummary}
 
-CLOSED ISSUES (verify resolution quality — if poorly resolved, plan a regression-fix):
+CLOSED ISSUES:
 ${closedIssueSummary}
-
+${knowledgeSection}
 ## WHY JESUS CALLED YOU
 ${jesusDecision?.trumpReason || "Full strategic analysis required — project needs comprehensive scan"}
 
@@ -448,6 +519,9 @@ ${jesusDecision?.trumpReason || "Full strategic analysis required — project ne
 - Preserve role purity. Do not assign backend/security/test ownership to frontend roles unless the repo structure truly demands it.
 - All output must be in English only.
 - You must estimate premium request usage for the proposed execution plan.
+- Workers CAN install npm packages, add new files, create new components, write new tests, add new libraries.
+- Workers CAN and SHOULD add missing tooling: testing frameworks, linters, monitoring, analytics, etc.
+- The goal is a COMPLETE production-ready project, not just fixing existing code.
 
 Design the plan so that upstream workers prepare downstream prerequisites whenever practical. If frontend/API/backend/auth work is related, sequence it deliberately instead of waking everyone at once.
 
@@ -473,9 +547,23 @@ DOSSIER MODE
 
 Produce a long-form senior-staff execution dossier for this repository.
 Do not emit JSON.
-Write substantial sections covering architecture reading, production risk and opportunity model, dependency ordering, worker activation strategy, role ownership, and a detailed phased execution plan.
+Write substantial sections covering:
+1. Architecture reading and technology stack assessment
+2. FULL production readiness gap analysis across ALL 10 dimensions listed in YOUR MISSION above
+3. New features, libraries, and tooling that should be added — not just fixing existing code
+4. Security audit findings and remediation plan
+5. Performance optimization opportunities
+6. UI/UX and accessibility gaps
+7. Testing strategy and coverage plan (including what testing frameworks/tools to add)
+8. CI/CD and GitHub repo configuration improvements
+9. Documentation gaps
+10. Observability and monitoring plan
+11. Dependency ordering and worker activation strategy
+12. Role ownership and detailed phased execution plan
+13. Premium request budget section with total, by-wave, and by-role estimates
+
 Each recommended worker should receive a large work packet with prerequisites, substeps, verification, and downstream handoff expectations.
-Include a dedicated premium request budget section with total estimate, by-wave estimate, and by-role estimate.
+Workers SHOULD install new packages, add new files, create new components, and add missing tooling. This is NOT just a regression audit — it is a full production readiness transformation.
 
 IMPORTANT CONSTRAINTS:
 - You have NO direct tool access in this run.
@@ -484,11 +572,10 @@ IMPORTANT CONSTRAINTS:
 - Base analysis only on the provided repository context and local file snapshot.
 - If a detail is missing, state "insufficient context provided" instead of guessing.
 - Do NOT provide speculative time/hour estimates for workers.
-- Do NOT lock into static checklist headings. Discover the most important production-level dimensions for THIS target repo and go beyond baseline depth.
-- Review the full production-readiness surface, but never force irrelevant categories into the plan. For each major domain, state whether it is already adequate, missing and required, or not applicable for this repository.
-- Do not silently skip common production domains such as auth/session management, token rotation, anomaly detection, SEO, performance budgets, observability, rollback safety, and platform security. Mark them as covered, missing, or not applicable with evidence.
-- For every major recommendation, include explicit evidence mapping: file paths, commits, issues, PRs, or snapshot indicators that justify it.
-- If proposing an alternative path, include impact analysis (correctness risk, scope risk, rollback, and whether it is permanent or temporary).
+- Discover the most important production-level dimensions for THIS target repo and go beyond baseline depth.
+- Review the full production-readiness surface. For each major domain, state whether it is already adequate, missing and required, or not applicable.
+- Do not silently skip common production domains such as auth/session management, token rotation, anomaly detection, SEO, performance budgets, observability, rollback safety, and platform security.
+- For every recommendation, include explicit evidence mapping: file paths, commits, issues, PRs, or snapshot indicators.
 - Estimate premium request usage conservatively based on worker activations, validation passes, likely retries, and wave count.
 - Write in English only.`;
 
@@ -528,8 +615,10 @@ IMPORTANT CONSTRAINTS:
 - Never claim command execution or tool failures.
 - Use only supplied context and snapshot evidence.
 - No speculative hour/time estimates.
-- No fixed canned sectioning; discover repo-specific production priorities.
-- Evaluate the full production-readiness surface and explicitly classify major domains as already adequate, missing and required, or not applicable for this repo.
+- Discover repo-specific production priorities across ALL 10 dimensions in YOUR MISSION.
+- This is NOT just a regression audit. Plan NEW features, NEW libraries, NEW tooling, NEW tests, NEW infrastructure that the project needs to be production-ready.
+- Workers CAN install npm packages, create new files, add new libraries, write new components, add monitoring/analytics/testing tools.
+- Evaluate the full production-readiness surface and explicitly classify major domains as already adequate, missing and required, or not applicable.
 - Do not silently omit common production domains such as auth/session management, token rotation, anomaly detection, SEO, performance, observability, rollback safety, and deployment/platform security.
 - Every plan item must include evidence anchors from provided context.
 - If evidence is missing, explicitly write "insufficient context provided".
@@ -540,8 +629,9 @@ IMPORTANT CONSTRAINTS:
 - Include a \`productionReadinessCoverage\` array that states for each relevant production domain whether it is adequate, missing, or not applicable, with evidence-based justification.
 - Premium request estimates must reflect likely worker activations and validation cycles, not arbitrary round numbers.
 - Workers must receive large, complete task packets. Each worker must do substantial production-quality work (hundreds to thousands of lines) in a single request. Never assign trivial 10-line tasks.
-- CRITICAL: The \"context\" field in each plan is what the worker will literally receive as their task description. Write it as an exhaustive implementation checklist: every file to modify, every function to add/change, every edge case to handle, every test to write. The worker will use this as their reference and checklist — they will work through it item by item. Make it EXTREMELY detailed (500-2000 words per worker plan). The more detail here, the higher quality the worker output.
-- Include in each plan's context: the EXACT current state of the code (from the snapshot), what's wrong with it, what the fix should be, which files to create/modify, which patterns to follow from the existing codebase, what the verification steps are.
+- Workers SHOULD add new npm packages, create new files, add testing frameworks, add monitoring tools, add missing libraries. This is full production readiness, not just fixing existing code.
+- CRITICAL: The "context" field in each plan is what the worker will literally receive as their task description. Write it as an exhaustive implementation checklist: every file to modify, every function to add/change, every edge case to handle, every test to write, every npm package to install. The worker will use this as their reference and checklist — they will work through it item by item. Make it EXTREMELY detailed (500-2000 words per worker plan). The more detail here, the higher quality the worker output.
+- Include in each plan's context: the EXACT current state of the code (from the snapshot), what's wrong with it, what the fix should be, which files to create/modify, which patterns to follow from the existing codebase, what the verification steps are, which npm packages to install.
 - Think of each plan's context as a senior engineer's handoff document: if a new hire received this, they could execute perfectly without asking a single question.`;
 
   chatLog(stateDir, trumpName, "Calling AI for deep repository analysis (this may take a while)...");
