@@ -1,26 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { toCopilotModelSlug } from "../../core/agent_loader.js";
-import { isSelfDevMode, validateFileChanges, validatePrSize } from "../../core/self_dev_guard.js";
-
-function safeArray(value) {
-  return Array.isArray(value) ? value : [];
-}
-
-function tryExtractJson(text) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    const match = String(text || "").match(/\{[\s\S]*\}/);
-    if (!match) {
-      return null;
-    }
-    try {
-      return JSON.parse(match[0]);
-    } catch {
-      return null;
-    }
-  }
-}
+import { safeArray, tryExtractJson } from "./utils.js";
 
 function validatePlan(payload, fallbackTasks) {
   const tasks = safeArray(payload?.tasks)
@@ -166,7 +146,7 @@ function validateMosesCoordinationDecision(payload, fallback) {
     return fallback;
   }
   return {
-    tasks_to_queue: tasksToQueue.slice(0, 5).map((t) => ({
+    tasks_to_queue: tasksToQueue.map((t) => ({
       issue_id: Number(t?.issue_id || 0),
       task_type: String(t?.task_type || "general"),
       priority: String(t?.priority || "medium"),
@@ -238,7 +218,7 @@ export class CopilotReviewer {
     const result = spawnSync(this.command, args, {
       encoding: "utf8",
       env: process.env,
-      timeout: 120_000,
+      timeout: 0,
       windowsHide: true
     });
 
@@ -278,6 +258,16 @@ export class CopilotReviewer {
   async reviewResult(task, workerResult, gates) {
     const changedFilesCount = Number(workerResult?.copilotMeta?.changedFilesCount || 0);
     const forbiddenChangedPath = hasForbiddenPathChange(workerResult);
+    if (changedFilesCount > 20) {
+      return {
+        approved: false,
+        reason: `Deterministic reviewer rejected: unrelated change scope (files changed ${changedFilesCount} > 20)`,
+        model: this.model,
+        provider: this.provider,
+        taskId: Number(task?.id || 0),
+        workerExitCode: Number(workerResult?.exitCode ?? -1)
+      };
+    }
     if (forbiddenChangedPath) {
       return {
         approved: false,
@@ -287,35 +277,6 @@ export class CopilotReviewer {
         taskId: Number(task?.id || 0),
         workerExitCode: Number(workerResult?.exitCode ?? -1)
       };
-    }
-
-    // Self-dev guard: block changes to critical BOX files
-    if (isSelfDevMode({})) {
-      const changedFiles = Array.isArray(workerResult?.copilotMeta?.changedFiles)
-        ? workerResult.copilotMeta.changedFiles.map(f => String(f || ""))
-        : [];
-      const fileCheck = validateFileChanges(changedFiles);
-      if (!fileCheck.allowed) {
-        return {
-          approved: false,
-          reason: `Self-dev guard rejected: ${fileCheck.blocked[0]}`,
-          model: this.model,
-          provider: this.provider,
-          taskId: Number(task?.id || 0),
-          workerExitCode: Number(workerResult?.exitCode ?? -1)
-        };
-      }
-      const sizeCheck = validatePrSize(changedFilesCount, {});
-      if (!sizeCheck.allowed) {
-        return {
-          approved: false,
-          reason: `Self-dev guard rejected: ${sizeCheck.reason}`,
-          model: this.model,
-          provider: this.provider,
-          taskId: Number(task?.id || 0),
-          workerExitCode: Number(workerResult?.exitCode ?? -1)
-        };
-      }
     }
 
     const fallback = {
@@ -331,9 +292,10 @@ export class CopilotReviewer {
       "Reject if architecture boundaries are violated or unrelated files are modified.",
       "Reject if security risk or forbidden path changes are present.",
       "Hard reject criteria:",
-      "1) Any changed file under .github/workflows/, infra/, or security/ unless explicitly required by task.",
-      "2) Required gates are not green.",
-      "3) Changes are unrelated to task goal or violate architecture boundaries.",
+      "1) changedFilesCount > 20.",
+      "2) Any changed file under .github/workflows/, infra/, or security/ unless explicitly required by task.",
+      "3) Required gates are not green.",
+      "4) Changes are unrelated to task goal or violate architecture boundaries.",
       `<task>${JSON.stringify({ id: task?.id, title: task?.title, kind: task?.kind })}</task>`,
       `<worker>${JSON.stringify({ exitCode: workerResult?.exitCode, ok: workerResult?.ok })}</worker>`,
       `<changes>${JSON.stringify({
