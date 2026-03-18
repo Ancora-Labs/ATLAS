@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Repo-agnostic autonomous engineering orchestrator starter",
   "scripts": {
+    "lint": "eslint src/",
     "box:start": "node src/cli.js start",
     "box:once": "node src/cli.js once",
     "worker:run": "node src/workers/run_task.js",
@@ -15,5 +16,10 @@
   },
   "dependencies": {
     "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "globals": "^15.0.0"
   }
 }
