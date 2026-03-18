@@ -652,6 +652,62 @@ async function fetchFullRepoContext(config) {
   };
 }
 
+// ── Simplified retry prompt for JSON-only extraction ─────────────────────────
+// When the full JSON call fails, we send a focused prompt with just the dossier
+// and ask the model to produce ONLY the JSON. This avoids tool-use confusion.
+
+function buildRetryJsonPrompt(dossierText, workersList, config, planningPolicy, projectClassification) {
+  return `You are Trump — BOX's deep project analyst. A prior call already produced a full dossier.
+Your ONLY job now is to produce the structured JSON output based on that dossier.
+
+TARGET REPO: ${config.env?.targetRepo || "unknown"}
+PROJECT TYPE: ${projectClassification.type} (${projectClassification.confidence})
+
+## PRIOR DOSSIER (use this as your source of truth)
+${dossierText ? dossierText.slice(0, 8000) : "No dossier available."}
+
+## AVAILABLE WORKERS
+${workersList}
+
+## EXECUTION POLICY
+- Max workers per wave: ${planningPolicy.maxWorkersPerWave}
+- Prefer fewest workers: ${planningPolicy.preferFewestWorkers ? "YES" : "NO"}
+- Dependency-aware waves: ${planningPolicy.requireDependencyAwareWaves ? "YES" : "NO"}
+
+## YOUR ONLY TASK
+Based on the dossier above, produce your analysis as structured JSON.
+Do NOT use any tools. Do NOT read any files. Just convert the dossier into the JSON format below.
+Write a brief narrative first, then the JSON block.
+
+===DECISION===
+{
+  "analysis": "<comprehensive summary from dossier>",
+  "strategicNarrative": "<execution strategy narrative>",
+  "projectHealth": "good | needs-work | critical",
+  "keyFindings": "<top 3-5 findings>",
+  "productionReadinessCoverage": [{"domain": "...", "status": "adequate|missing|not-applicable", "why": "..."}],
+  "dependencyModel": {"criticalPath": [...], "parallelizableTracks": [...], "blockedBy": [...]},
+  "executionStrategy": {"waves": [{"id": "wave-1", "workers": [...], "gate": "...", "estimatedRequests": 0}]},
+  "requestBudget": {"estimatedPremiumRequestsTotal": 0, "errorMarginPercent": 20, "hardCapTotal": 0, "confidence": "medium", "byWave": [], "byRole": []},
+  "plans": [
+    {
+      "role": "<worker name>",
+      "kind": "<worker kind>",
+      "priority": 1,
+      "wave": "wave-1",
+      "task": "<short task description>",
+      "context": "<detailed 500-2000 word implementation checklist for the worker>",
+      "verification": "<how to verify completion>",
+      "dependencies": [],
+      "downstream": "<what this enables>"
+    }
+  ]
+}
+===END===
+
+CRITICAL: You MUST wrap the JSON between ===DECISION=== and ===END=== markers exactly as shown above. This is how the system parses your output.`;
+}
+
 // ── Main Trump Cycle ─────────────────────────────────────────────────────────
 
 export async function runTrumpAnalysis(config, jesusDecision) {
@@ -979,26 +1035,40 @@ IMPORTANT CONSTRAINTS:
 - Think of each plan's context as a senior engineer's handoff document: if a new hire received this, they could execute perfectly without asking a single question.`;
 
   chatLog(stateDir, trumpName, "Calling AI for deep repository analysis (this may take a while)...");
-  const aiResult = await callCopilotAgent(command, "trump", contextPrompt);
-  const finalModelFallback = detectModelFallback(aiResult?.combinedRaw || aiResult?.raw || "");
-  if (finalModelFallback) {
-    const warningMessage = `Trump model fallback detected: requested=${finalModelFallback.requestedModel}, active=${finalModelFallback.fallbackModel}`;
-    await appendProgress(config, `[TRUMP][WARN] ${warningMessage}`);
-    try {
-      await appendAlert(config, {
-        severity: "warning",
-        source: "trump",
-        title: "Trump model fallback",
-        message: warningMessage
-      });
-    } catch {
-      // Non-fatal alert path.
+
+  // ── JSON call with retry logic ───────────────────────────────────────────
+  const MAX_JSON_RETRIES = 2;
+  let aiResult = null;
+  for (let attempt = 0; attempt <= MAX_JSON_RETRIES; attempt++) {
+    const isRetry = attempt > 0;
+    const promptForAttempt = isRetry
+      ? buildRetryJsonPrompt(dossierText, workersList, config, planningPolicy, projectClassification)
+      : contextPrompt;
+
+    if (isRetry) {
+      await appendProgress(config, `[TRUMP] JSON retry attempt ${attempt}/${MAX_JSON_RETRIES} — using simplified prompt`);
+      chatLog(stateDir, trumpName, `JSON retry ${attempt}/${MAX_JSON_RETRIES}...`);
     }
+
+    aiResult = await callCopilotAgent(command, "trump", promptForAttempt);
+    const fallback = detectModelFallback(aiResult?.combinedRaw || aiResult?.raw || "");
+    if (fallback) {
+      const warningMessage = `Trump model fallback detected: requested=${fallback.requestedModel}, active=${fallback.fallbackModel}`;
+      await appendProgress(config, `[TRUMP][WARN] ${warningMessage}`);
+      try {
+        await appendAlert(config, { severity: "warning", source: "trump", title: "Trump model fallback", message: warningMessage });
+      } catch { /* non-fatal */ }
+    }
+
+    if (aiResult.ok && aiResult.parsed) break;
+
+    await appendProgress(config, `[TRUMP] JSON attempt ${attempt + 1} failed — ${aiResult.error || "no valid JSON in output"}`);
+    chatLog(stateDir, trumpName, `JSON attempt ${attempt + 1} failed: ${aiResult.error || "no parseable JSON"}`);
   }
 
-  if (!aiResult.ok || !aiResult.parsed) {
-    await appendProgress(config, `[TRUMP] AI call failed — ${aiResult.error || "no JSON"}`);
-    chatLog(stateDir, trumpName, `Analysis failed: ${aiResult.error || "response could not be parsed"}`);
+  if (!aiResult?.ok || !aiResult?.parsed) {
+    await appendProgress(config, `[TRUMP] All ${MAX_JSON_RETRIES + 1} JSON attempts failed — Trump analysis returning null`);
+    chatLog(stateDir, trumpName, `Analysis failed after ${MAX_JSON_RETRIES + 1} attempts — no valid JSON produced`);
     return null;
   }
 

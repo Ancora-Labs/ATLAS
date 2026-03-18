@@ -327,7 +327,15 @@ async function runStartupCycle(config) {
     let trumpPlans = null;
     if (jesusDecision.callTrump === true) {
       await appendProgress(config, "[STARTUP] Trump activated for deep project analysis");
+      // Retry Trump once if it fails
       trumpPlans = await runTrumpAnalysis(config, jesusDecision);
+      if (!trumpPlans) {
+        await appendProgress(config, "[STARTUP] Trump analysis failed — retrying once");
+        trumpPlans = await runTrumpAnalysis(config, jesusDecision);
+        if (!trumpPlans) {
+          await appendProgress(config, "[STARTUP] Trump analysis failed twice — proceeding without Trump plans");
+        }
+      }
     }
 
     if (jesusDecision.wakeMoses !== false) {
