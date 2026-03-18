@@ -63,6 +63,27 @@ export async function runDaemon(config) {
   const sessions = await readJson(path.join(stateDir, "worker_sessions.json"), {});
   const mosesState = await readJson(path.join(stateDir, "moses_coordination.json"), {});
   const jesusDirective = await readJson(path.join(stateDir, "jesus_directive.json"), null);
+
+  // Reset zombie workers that were "working" when daemon died (stale > 2× timeout)
+  const workerTimeoutMs = Number(liveConfig.runtime?.workerTimeoutMinutes || 30) * 60 * 1000;
+  const staleThresholdMs = workerTimeoutMs * 2;
+  const now = Date.now();
+  let zombieReset = false;
+  for (const [name, s] of Object.entries(sessions)) {
+    if (s?.status === "working" && s?.startedAt) {
+      const age = now - new Date(s.startedAt).getTime();
+      if (age > staleThresholdMs) {
+        s.status = "idle";
+        s.startedAt = null;
+        zombieReset = true;
+        await appendProgress(liveConfig, `[STARTUP] Reset zombie worker ${name} (stale ${Math.round(age / 60000)}min)`);
+      }
+    }
+  }
+  if (zombieReset) {
+    await writeJson(path.join(stateDir, "worker_sessions.json"), sessions);
+  }
+
   const activeWorkers = Object.entries(sessions)
     .filter(([, s]) => s?.status === "working")
     .map(([name]) => name);
