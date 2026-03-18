@@ -897,7 +897,8 @@ async function collectDashboardData() {
     jesusDirective,
     trumpAnalysis,
     alertsData,
-    premiumUsageLog
+    premiumUsageLog,
+    completedProjects
   ] = await Promise.all([
     readJsonSafe(path.join(ROOT, "box.config.json"), {}),
     readTailLines(path.join(STATE_DIR, "progress.txt"), 80),
@@ -908,7 +909,8 @@ async function collectDashboardData() {
     readJsonSafe(path.join(STATE_DIR, "jesus_directive.json"), {}),
     readJsonSafe(path.join(STATE_DIR, "trump_analysis.json"), {}),
     readJsonSafe(path.join(STATE_DIR, "alerts.json"), { entries: [] }),
-    readJsonSafe(path.join(STATE_DIR, "premium_usage_log.json"), [])
+    readJsonSafe(path.join(STATE_DIR, "premium_usage_log.json"), []),
+    readJsonSafe(path.join(STATE_DIR, "completed_projects.json"), [])
   ]);
 
   const [daemonStatus, prDeltaResult] = await Promise.all([getDaemonStatus(), getHourlyPrDeltaStats()]);
@@ -953,15 +955,26 @@ async function collectDashboardData() {
   const copilotUsedPercent = copilotQuota > 0 ? (copilotUsedRequests / copilotQuota) * 100 : 0;
   const trumpPlanBoard = buildTrumpPlanBoard(trumpAnalysis, workerSessions, mosesCoordination);
 
-  // 3-state system status: offline / idle / working
+  // Check if current target repo is in the completion ledger
+  const completedEntry = Array.isArray(completedProjects)
+    ? completedProjects.find(e => e.repo === TARGET_REPO)
+    : null;
+
+  // 4-state system status: offline / completed / idle / working
   const hasWorkingWorkers = Object.values(workerSessions || {}).some(s => s?.status === "working");
   let systemStatus, systemStatusText;
-  if (!daemonStatus.running) {
+  if (!daemonStatus.running && completedEntry) {
+    systemStatus = "completed";
+    systemStatusText = "Project Completed";
+  } else if (!daemonStatus.running) {
     systemStatus = "offline";
     systemStatusText = "System Offline";
   } else if (hasWorkingWorkers) {
     systemStatus = "working";
     systemStatusText = "Workers Active";
+  } else if (completedEntry) {
+    systemStatus = "completed";
+    systemStatusText = "Project Completed";
   } else {
     systemStatus = "idle";
     systemStatusText = "System Idle";
@@ -1076,7 +1089,14 @@ async function collectDashboardData() {
         lastOutput: REBASE_STATE.lastOutput
       }
     },
-    logs: progressTail
+    logs: progressTail,
+    projectCompleted: completedEntry ? {
+      repo: completedEntry.repo,
+      completionTag: completedEntry.completionTag || null,
+      releaseUrl: completedEntry.releaseUrl || null,
+      totalMergedPrs: completedEntry.totalMergedPrs || 0,
+      completedAt: completedEntry.completedAt || null
+    } : null
   };
 }
 
@@ -1224,6 +1244,25 @@ function renderHtml() {
     .hero-live.is-idle::after {
       background: #7dc4ff;
       box-shadow: 0 0 0 0 rgba(125, 196, 255, 0.8);
+    }
+    .hero-live.is-completed {
+      color: #d3ffec;
+      border: 1px solid rgba(0, 204, 128, 0.75);
+      background:
+        linear-gradient(115deg, rgba(8, 60, 42, 0.92), rgba(12, 100, 68, 0.84)),
+        radial-gradient(120% 180% at 15% 20%, rgba(100, 255, 180, 0.35), transparent 55%);
+      box-shadow:
+        inset 0 1px 0 rgba(180, 255, 220, 0.34),
+        inset 0 -8px 14px rgba(0, 0, 0, 0.28),
+        0 10px 18px rgba(8, 80, 50, 0.34);
+    }
+    .hero-live.is-completed::before {
+      background: linear-gradient(90deg, rgba(0,200,128,0.02), rgba(100,255,180,0.4), rgba(0,200,128,0.02));
+    }
+    .hero-live.is-completed::after {
+      background: #5cffa8;
+      box-shadow: 0 0 0 0 rgba(92, 255, 168, 0.8);
+      animation: none;
     }
     .hero-live span {
       position: relative;
@@ -2252,6 +2291,34 @@ function renderHtml() {
     function renderCelebration(data) {
       var banner = document.getElementById('celebration-banner');
       if (!banner) return;
+
+      // Project completion from ledger takes priority
+      var pc = data.projectCompleted;
+      if (pc) {
+        banner.style.display = 'block';
+        banner.style.background = 'linear-gradient(135deg,#0a1a2a 0%,#0d2033 40%,#1a3a4e 100%)';
+        banner.style.borderColor = '#00aaff';
+        document.getElementById('celebration-emoji').textContent = '\u2705';
+        document.getElementById('celebration-title').textContent = 'PROJECT COMPLETED';
+        document.getElementById('celebration-title').style.color = '#00ccff';
+        document.getElementById('celebration-repo').textContent = pc.repo || '—';
+        document.getElementById('celebration-repo').style.color = '#b0d8ff';
+        var detailParts = [];
+        if (pc.totalMergedPrs) detailParts.push(pc.totalMergedPrs + ' PRs merged');
+        if (pc.completionTag) detailParts.push('tag: ' + pc.completionTag);
+        if (pc.completedAt) detailParts.push('completed: ' + pc.completedAt.slice(0, 10));
+        detailParts.push('Waiting for next project...');
+        document.getElementById('celebration-detail').textContent = detailParts.join(' | ');
+        document.getElementById('celebration-detail').style.color = '#7aa9c9';
+        if (!celebrationAnimated) {
+          celebrationAnimated = true;
+          banner.style.animation = 'none';
+          void banner.offsetHeight;
+          banner.style.animation = 'celebrationPulse 2s ease-in-out';
+        }
+        return;
+      }
+
       var tasks = data.tasks || {};
       var totals = tasks.totals || {};
       var total = Number(tasks.total || 0);
@@ -2266,11 +2333,18 @@ function renderHtml() {
         return;
       }
       banner.style.display = 'block';
+      banner.style.background = 'linear-gradient(135deg,#0a2a1a 0%,#0d3320 40%,#1a4a2e 100%)';
+      banner.style.borderColor = '#00ff88';
+      document.getElementById('celebration-emoji').textContent = '\uD83C\uDF89';
+      document.getElementById('celebration-title').textContent = 'TARGET REPO READY';
+      document.getElementById('celebration-title').style.color = '#00ff88';
       var repo = (data.runtime && data.runtime.targetRepo) || '—';
       document.getElementById('celebration-repo').textContent = repo;
+      document.getElementById('celebration-repo').style.color = '#b0ffd0';
       document.getElementById('celebration-detail').textContent =
         passed + '/' + total + ' tasks completed | ' +
         String(Number((data.codeDelta || {}).projectLinesAdded || 0)) + ' lines added';
+      document.getElementById('celebration-detail').style.color = '#7ac9a0';
       if (!celebrationAnimated) {
         celebrationAnimated = true;
         banner.style.animation = 'none';
@@ -2650,8 +2724,10 @@ function renderHtml() {
       var statusText = String((data.runtime && data.runtime.systemStatusText) || "System Offline");
       if (heroLive && heroLiveText) {
         heroLiveText.textContent = statusText;
-        heroLive.classList.remove("is-offline", "is-workers-active", "is-idle");
-        if (runtimeStatus === "offline") {
+        heroLive.classList.remove("is-offline", "is-workers-active", "is-idle", "is-completed");
+        if (runtimeStatus === "completed") {
+          heroLive.classList.add("is-completed");
+        } else if (runtimeStatus === "offline") {
           heroLive.classList.add("is-offline");
         } else if (runtimeStatus === "working") {
           heroLive.classList.add("is-workers-active");
@@ -2815,6 +2891,7 @@ function renderHtml() {
 
       var forceBtn = document.getElementById("force-rebase-btn");
       if (forceBtn) {
+        var guardianRunning = !!(data.guardian && data.guardian.rebase && data.guardian.rebase.running);
         forceBtn.disabled = guardianRunning;
         forceBtn.textContent = guardianRunning ? 'Rebase Running...' : 'Force Rebase';
       }
