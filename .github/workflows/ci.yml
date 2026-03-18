@@ -1,0 +1,35 @@
+# CI — lint and test gate on every PR and push to main.
+# No test script exists yet in package.json; the test step uses --if-present
+# so it is a no-op until a test suite is added.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        # --if-present is a no-op when no "test" script is defined.
+        # Remove the flag once a real test suite is added to package.json.
+        run: npm run test --if-present
