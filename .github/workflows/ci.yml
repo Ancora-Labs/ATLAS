@@ -5,9 +5,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, box/devops-ci-workflow]
   pull_request:
     branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   build-and-test:
