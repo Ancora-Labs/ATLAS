@@ -6,6 +6,7 @@
   "description": "Repo-agnostic autonomous engineering orchestrator starter",
   "scripts": {
     "lint": "eslint src/",
+    "test": "echo No tests yet",
     "box:start": "node src/cli.js start",
     "box:once": "node src/cli.js once",
     "worker:run": "node src/workers/run_task.js",
