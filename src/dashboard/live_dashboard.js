@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import http from "node:http";
+import crypto from "node:crypto";
 import { execSync, spawn } from "node:child_process";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -31,6 +32,11 @@ const GITHUB_API_VERSION = process.env.BOX_GITHUB_API_VERSION || "2022-11-28";
 const COPILOT_USAGE_REFRESH_MS = Number(process.env.BOX_COPILOT_USAGE_REFRESH_MS || "3600000");
 const PR_DELTA_REFRESH_MS = Number(process.env.BOX_PR_DELTA_REFRESH_MS || "3600000");
 const DASHBOARD_PROJECT_LABEL = String(process.env.BOX_DASHBOARD_PROJECT_LABEL || "").trim();
+const DASHBOARD_TOKEN = String(process.env.BOX_DASHBOARD_TOKEN || "").trim();
+
+if (!DASHBOARD_TOKEN) {
+  console.warn("[DASHBOARD AUTH] WARNING: BOX_DASHBOARD_TOKEN is not set. Mutation endpoints (daemon start/stop, rebase) are unprotected. Set BOX_DASHBOARD_TOKEN in your .env to enable auth.");
+}
 
 const COST_CACHE = {
   value: null,
@@ -215,6 +221,36 @@ function buildTrumpPlanBoard(trumpAnalysis, workerSessions, mosesCoordination) {
     active,
     history: TRUMP_PLAN_HISTORY
   };
+}
+
+/**
+ * Checks Bearer token auth for mutation endpoints.
+ * Returns true if auth passes (or no token is configured — backward compat).
+ * Writes a 401 response and returns false on auth failure.
+ */
+function authenticateMutationRequest(req, res) {
+  if (!DASHBOARD_TOKEN) return true;
+
+  const authHeader = String(req.headers["authorization"] || "");
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+
+  let authorized = false;
+  if (token) {
+    try {
+      const tokenBuf = Buffer.from(DASHBOARD_TOKEN, "utf8");
+      const inputBuf = Buffer.from(token, "utf8");
+      authorized = tokenBuf.length === inputBuf.length && crypto.timingSafeEqual(tokenBuf, inputBuf);
+    } catch {
+      authorized = false;
+    }
+  }
+
+  if (!authorized) {
+    res.writeHead(401, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ error: "Unauthorized: valid Bearer token required for mutation endpoints" }));
+    return false;
+  }
+  return true;
 }
 
 function runRebaseCommand() {
@@ -3059,6 +3095,8 @@ async function serve(req, res) {
       return;
     }
 
+    if (!authenticateMutationRequest(req, res)) return;
+
     if (REBASE_STATE.running) {
       res.writeHead(409, { "content-type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ ok: false, error: "rebase-already-running" }));
@@ -3100,6 +3138,7 @@ async function serve(req, res) {
       res.end(JSON.stringify({ ok: false, error: "method-not-allowed" }));
       return;
     }
+    if (!authenticateMutationRequest(req, res)) return;
     const status = await getDaemonStatus();
     if (status.running) {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
@@ -3120,6 +3159,7 @@ async function serve(req, res) {
       res.end(JSON.stringify({ ok: false, error: "method-not-allowed" }));
       return;
     }
+    if (!authenticateMutationRequest(req, res)) return;
     const result = await stopDaemon();
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(result));

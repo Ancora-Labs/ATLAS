@@ -6,6 +6,7 @@
   "description": "Repo-agnostic autonomous engineering orchestrator starter",
   "scripts": {
     "lint": "eslint src/",
+    "test": "vitest run",
     "box:on": "node src/cli.js on",
     "box:off": "node src/cli.js off",
     "box:up": "pwsh -NoProfile -File scripts/box-up.ps1",
@@ -28,6 +29,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.0.3",
-    "globals": "^17.4.0"
+    "globals": "^17.4.0",
+    "vitest": "^4.1.0"
   }
 }

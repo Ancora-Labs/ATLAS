@@ -78,7 +78,8 @@ export async function loadConfig() {
     securityFamilyFailureMaxCount: process.env.BOX_SECURITY_FAMILY_FAILURE_MAX_COUNT?.trim() || null,
     securityFamilyFailureWindowMinutes: process.env.BOX_SECURITY_FAMILY_FAILURE_WINDOW_MINUTES?.trim() || null,
     securityFamilyCooldownMinutes: process.env.BOX_SECURITY_FAMILY_COOLDOWN_MINUTES?.trim() || null,
-    environmentBlockerCooldownMinutes: process.env.BOX_ENVIRONMENT_BLOCKER_COOLDOWN_MINUTES?.trim() || null
+    environmentBlockerCooldownMinutes: process.env.BOX_ENVIRONMENT_BLOCKER_COOLDOWN_MINUTES?.trim() || null,
+    dashboardToken: process.env.BOX_DASHBOARD_TOKEN?.trim() || null
   };
 
   const claude = {
@@ -377,7 +378,10 @@ export async function loadConfig() {
       policyFile: path.join(rootDir, fileConfig.policyFile || "policy.json"),
       workspaceDir: path.join(rootDir, fileConfig.workspaceDir || ".box-work"),
       stateDir: path.join(rootDir, "state"),
-      roadmapFile: path.join(rootDir, "state", "roadmap.json")
+      roadmapFile: path.join(rootDir, "state", "roadmap.json"),
+      budgetFile: path.join(rootDir, fileConfig.paths?.budgetFile || "state/budget.json"),
+      testsStateFile: path.join(rootDir, "state", "tests_state.json"),
+      repoStateFile: path.join(rootDir, "state", "repo_state.json")
     }
   };
 }
