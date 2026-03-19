@@ -53,7 +53,7 @@ npm run box:stop
 - `box:once`: run one startup cycle.
 - `box:rebase`: compatibility command (currently returns not-applicable result).
 - `box:dashboard`: run live dashboard process.
-- `worker:run`: currently points to `src/workers/run_task.js`; verify/restore this entry file before using.
+- `worker:run`: runs `src/workers/run_task.js` — the containerised worker entry point. Requires env vars `WORKER_ROLE`, `TASK_PAYLOAD`, `TARGET_REPO`, `GITHUB_TOKEN`. See `docker/worker/Dockerfile` for the container contract.
 - `doctor`: checks basic tool and env readiness.
 
 ## Environment variables
