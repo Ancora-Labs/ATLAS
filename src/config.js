@@ -78,7 +78,10 @@ export async function loadConfig() {
     securityFamilyFailureMaxCount: process.env.BOX_SECURITY_FAMILY_FAILURE_MAX_COUNT?.trim() || null,
     securityFamilyFailureWindowMinutes: process.env.BOX_SECURITY_FAMILY_FAILURE_WINDOW_MINUTES?.trim() || null,
     securityFamilyCooldownMinutes: process.env.BOX_SECURITY_FAMILY_COOLDOWN_MINUTES?.trim() || null,
-    environmentBlockerCooldownMinutes: process.env.BOX_ENVIRONMENT_BLOCKER_COOLDOWN_MINUTES?.trim() || null
+    environmentBlockerCooldownMinutes: process.env.BOX_ENVIRONMENT_BLOCKER_COOLDOWN_MINUTES?.trim() || null,
+    // Dashboard bearer token — required for POST mutation endpoints on the live dashboard.
+    // Must be a long random string. If unset, mutation endpoints return 403.
+    dashboardToken: process.env.BOX_DASHBOARD_TOKEN?.trim() || null
   };
 
   const claude = {
