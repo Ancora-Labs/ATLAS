@@ -814,6 +814,63 @@ function getDockerSummary() {
   };
 }
 
+function getGitActivity() {
+  try {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    // Commits today
+    const todayLog = execSync(
+      `git log --since="${todayStr}T00:00:00" --format="%H|%s|%ai" --no-merges`,
+      { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8", windowsHide: true, timeout: 5000 }
+    ).trim();
+    const todayCommits = todayLog ? todayLog.split(/\r?\n/).filter(Boolean) : [];
+
+    // Lines changed today
+    let linesAdded = 0;
+    let linesDeleted = 0;
+    let filesChanged = 0;
+    try {
+      const shortstat = execSync(
+        `git diff --shortstat HEAD~${Math.max(1, todayCommits.length)} HEAD`,
+        { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8", windowsHide: true, timeout: 5000 }
+      ).trim();
+      const filesMatch = shortstat.match(/(\d+) file/);
+      const addMatch = shortstat.match(/(\d+) insertion/);
+      const delMatch = shortstat.match(/(\d+) deletion/);
+      filesChanged = filesMatch ? Number(filesMatch[1]) : 0;
+      linesAdded = addMatch ? Number(addMatch[1]) : 0;
+      linesDeleted = delMatch ? Number(delMatch[1]) : 0;
+    } catch { /* shallow clone or no commits */ }
+
+    // Total commits on branch
+    let totalCommits = 0;
+    try {
+      totalCommits = Number(execSync(
+        "git rev-list --count HEAD",
+        { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8", windowsHide: true, timeout: 5000 }
+      ).trim()) || 0;
+    } catch { /* optional */ }
+
+    // Recent commit messages (last 5)
+    const recentMessages = todayCommits.slice(0, 5).map(line => {
+      const [hash, ...rest] = line.split("|");
+      const msg = rest.slice(0, -1).join("|") || "";
+      const time = rest[rest.length - 1] || "";
+      return { hash: (hash || "").slice(0, 7), message: msg.trim(), time: time.trim() };
+    });
+
+    return {
+      commitsToday: todayCommits.length,
+      totalCommits,
+      linesAdded,
+      linesDeleted,
+      filesChanged,
+      recentMessages
+    };
+  } catch {
+    return { commitsToday: 0, totalCommits: 0, linesAdded: 0, linesDeleted: 0, filesChanged: 0, recentMessages: [] };
+  }
+}
+
 function getMonthKey() {
   const d = new Date();
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -964,7 +1021,7 @@ async function collectDashboardData() {
     readJsonSafe(path.join(STATE_DIR, "completed_projects.json"), [])
   ]);
 
-  const [daemonStatus, prDeltaResult] = await Promise.all([getDaemonStatus(), getHourlyPrDeltaStats()]);
+  const [daemonStatus, prDeltaResult, gitActivity] = await Promise.all([getDaemonStatus(), getHourlyPrDeltaStats(), Promise.resolve(getGitActivity())]);
 
   // Read last thinking snippet from each worker's debug file
   const thinkingMap = {};
@@ -1098,6 +1155,23 @@ async function collectDashboardData() {
       projectLinesAdded: (prDeltaResult && prDeltaResult.prCount > 0) ? prDeltaResult.additions : 0,
       projectLinesDeleted: (prDeltaResult && prDeltaResult.prCount > 0) ? prDeltaResult.deletions : 0,
       source: (prDeltaResult && prDeltaResult.prCount > 0) ? prDeltaResult.source : "no-data"
+    },
+    activityPulse: {
+      git: gitActivity,
+      requestsSpent: {
+        premium: Array.isArray(premiumUsageLog) ? premiumUsageLog.length : 0,
+        copilotUsedPct: Number(copilotUsedPercent.toFixed(2)),
+        copilotUsed: copilotUsedRequests,
+        copilotQuota: Number(copilotQuota),
+        copilotRemaining: copilotRemainingRequests
+      },
+      workersActive: Object.entries(workerSessions || {}).filter(([, s]) => s?.status === "working").map(([name, s]) => ({
+        name,
+        task: String(s.lastTask || "").slice(0, 80),
+        since: s.lastActiveAt || null
+      })),
+      daemonPid: daemonStatus.pid,
+      daemonRunning: daemonStatus.running
     },
     premiumUsageByWorker: derivePremiumUsageByWorker(premiumUsageLog),
     workerActivity: (function() {
@@ -1786,6 +1860,77 @@ function renderHtml() {
       .lp-arrow-line { width: 3px; height: 20px; }
       .lp-arrow-tip { transform: rotate(90deg); }
     }
+
+    /* ── Activity Pulse ────────────────────────────────────────── */
+    .pulse-panel { margin-bottom: 12px; overflow: hidden; }
+    .pulse-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px; border-bottom: 1px solid var(--line);
+    }
+    .pulse-header h2 {
+      margin: 0; font-size: 13px; text-transform: uppercase;
+      font-family: "IBM Plex Mono", Consolas, monospace;
+    }
+    .pulse-header .pulse-live-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: #22c27e;
+      animation: pulseDot 1.6s ease-in-out infinite; margin-right: 6px; display: inline-block;
+    }
+    @keyframes pulseDot { 0%,100% { opacity: .5; transform: scale(.85); } 50% { opacity: 1; transform: scale(1.15); } }
+    .pulse-grid {
+      display: grid; gap: 0;
+      grid-template-columns: repeat(5, 1fr);
+      padding: 0;
+    }
+    @media (max-width: 900px) { .pulse-grid { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 560px) { .pulse-grid { grid-template-columns: 1fr 1fr; } }
+    .pulse-cell {
+      padding: 14px 16px; border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line); position: relative;
+    }
+    .pulse-cell:last-child { border-right: none; }
+    .pulse-cell-label {
+      font-family: "IBM Plex Mono", Consolas, monospace;
+      font-size: 10px; text-transform: uppercase; color: var(--muted);
+      letter-spacing: 0.06em; margin-bottom: 4px;
+    }
+    .pulse-cell-value {
+      font-size: 28px; font-weight: 800; line-height: 1.1;
+      font-family: "Space Grotesk", sans-serif; color: var(--ink);
+    }
+    .pulse-cell-value .plus { color: #1e8a5f; }
+    .pulse-cell-value .minus { color: #b34040; }
+    .pulse-cell-value .dim { font-size: 14px; font-weight: 500; color: var(--muted); }
+    .pulse-cell-sub {
+      margin-top: 3px; font-size: 10px; color: var(--muted);
+      font-family: "IBM Plex Mono", Consolas, monospace; line-height: 1.3;
+    }
+    .pulse-workers {
+      padding: 10px 14px; border-top: 1px solid var(--line);
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    }
+    .pulse-worker-chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 10px; border-radius: 999px; font-size: 11px;
+      font-family: "IBM Plex Mono", Consolas, monospace;
+      background: rgba(34,194,126,0.12); border: 1px solid rgba(34,194,126,0.3); color: #1a6b47;
+    }
+    .pulse-worker-chip .pw-dot {
+      width: 6px; height: 6px; border-radius: 50%; background: #22c27e;
+      animation: pulseDot 1.6s ease-in-out infinite;
+    }
+    .pulse-worker-chip.idle { background: rgba(120,140,160,0.1); border-color: rgba(120,140,160,0.25); color: var(--muted); }
+    .pulse-worker-chip.idle .pw-dot { background: #8a9daa; animation: none; }
+    .pulse-commits {
+      padding: 8px 14px 10px; border-top: 1px solid var(--line);
+      display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    .pulse-commit {
+      font-size: 10px; font-family: "IBM Plex Mono", Consolas, monospace;
+      color: var(--muted); background: rgba(222,237,247,0.6);
+      padding: 3px 8px; border-radius: 6px; border: 1px solid rgba(89,124,148,0.12);
+      max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .pulse-commit strong { color: var(--ink); font-weight: 600; }
   </style>
 </head>
 <body>
@@ -1801,6 +1946,43 @@ function renderHtml() {
         <span id="daemon-status-text" class="muted" style="font-size:12px"></span>
       </div>
       <p id="meta">Connecting...</p>
+    </section>
+
+    <!-- Activity Pulse — Real-time simplified view -->
+    <section class="panel pulse-panel" id="pulse-panel">
+      <div class="pulse-header">
+        <h2><span class="pulse-live-dot"></span> Activity Pulse</h2>
+        <span style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace" id="pulse-updated">—</span>
+      </div>
+      <div class="pulse-grid">
+        <div class="pulse-cell">
+          <div class="pulse-cell-label">Commits Today</div>
+          <div class="pulse-cell-value" id="pulse-commits">0</div>
+          <div class="pulse-cell-sub" id="pulse-commits-sub">total: 0</div>
+        </div>
+        <div class="pulse-cell">
+          <div class="pulse-cell-label">Lines Written</div>
+          <div class="pulse-cell-value" id="pulse-lines"><span class="plus">+0</span> <span class="dim">/</span> <span class="minus">-0</span></div>
+          <div class="pulse-cell-sub" id="pulse-files-sub">0 files changed</div>
+        </div>
+        <div class="pulse-cell">
+          <div class="pulse-cell-label">Premium Requests</div>
+          <div class="pulse-cell-value" id="pulse-premium">0</div>
+          <div class="pulse-cell-sub" id="pulse-premium-sub">this month</div>
+        </div>
+        <div class="pulse-cell">
+          <div class="pulse-cell-label">Copilot Remaining</div>
+          <div class="pulse-cell-value" id="pulse-copilot">0</div>
+          <div class="pulse-cell-sub" id="pulse-copilot-sub">used: 0%</div>
+        </div>
+        <div class="pulse-cell">
+          <div class="pulse-cell-label">Workers</div>
+          <div class="pulse-cell-value" id="pulse-workers-count">0 <span class="dim">active</span></div>
+          <div class="pulse-cell-sub" id="pulse-workers-sub">idle</div>
+        </div>
+      </div>
+      <div class="pulse-workers" id="pulse-workers-list"></div>
+      <div class="pulse-commits" id="pulse-recent-commits"></div>
     </section>
 
     <!-- Celebration Banner (hidden until all tasks pass) -->
@@ -3206,6 +3388,101 @@ function renderHtml() {
         })();
     }
 
+    function renderActivityPulse(data) {
+      var pulse = (data && data.activityPulse) || {};
+      var git = pulse.git || {};
+      var reqs = pulse.requestsSpent || {};
+      var workers = Array.isArray(pulse.workersActive) ? pulse.workersActive : [];
+
+      // Update timestamp
+      var updEl = document.getElementById('pulse-updated');
+      if (updEl) updEl.textContent = 'live · ' + new Date().toLocaleTimeString();
+
+      // Commits today
+      var commitsEl = document.getElementById('pulse-commits');
+      if (commitsEl) commitsEl.textContent = String(git.commitsToday || 0);
+      var commitsSub = document.getElementById('pulse-commits-sub');
+      if (commitsSub) commitsSub.textContent = 'total: ' + String(git.totalCommits || 0);
+
+      // Lines written
+      var linesEl = document.getElementById('pulse-lines');
+      if (linesEl) {
+        linesEl.innerHTML =
+          '<span class="plus">+' + String(git.linesAdded || 0) + '</span>' +
+          ' <span class="dim">/</span> ' +
+          '<span class="minus">-' + String(git.linesDeleted || 0) + '</span>';
+      }
+      var filesSub = document.getElementById('pulse-files-sub');
+      if (filesSub) filesSub.textContent = String(git.filesChanged || 0) + ' files changed';
+
+      // Premium requests
+      var premEl = document.getElementById('pulse-premium');
+      if (premEl) premEl.textContent = String(reqs.premium || 0);
+      var premSub = document.getElementById('pulse-premium-sub');
+      if (premSub) premSub.textContent = 'this month';
+
+      // Copilot remaining
+      var copilotEl = document.getElementById('pulse-copilot');
+      if (copilotEl) {
+        copilotEl.textContent = formatRequestCount(reqs.copilotRemaining || 0);
+      }
+      var copilotSub = document.getElementById('pulse-copilot-sub');
+      if (copilotSub) copilotSub.textContent = 'used: ' + String(Number(reqs.copilotUsedPct || 0).toFixed(1)) + '% of ' + formatRequestCount(reqs.copilotQuota || 0);
+
+      // Workers active count
+      var wcountEl = document.getElementById('pulse-workers-count');
+      if (wcountEl) {
+        wcountEl.innerHTML = String(workers.length) + ' <span class="dim">active</span>';
+      }
+      var wsub = document.getElementById('pulse-workers-sub');
+      if (wsub) {
+        wsub.textContent = workers.length > 0
+          ? workers.map(function(w) { return w.name; }).join(', ')
+          : 'all idle';
+      }
+
+      // Worker chips
+      var wListEl = document.getElementById('pulse-workers-list');
+      if (wListEl) {
+        var wa = data && data.workerActivity ? data.workerActivity : {};
+        var emojis = {
+          'King David': '👑', 'Esther': '💎', 'Aaron': '🔌', 'Joseph': '🔗',
+          'Samuel': '🧪', 'Isaiah': '🔍', 'Noah': '🚢', 'Elijah': '🛡️',
+          'Issachar': '📊', 'Ezra': '📝'
+        };
+        var chipHtml = '';
+        var allNames = Object.keys(wa);
+        if (allNames.length > 0) {
+          chipHtml = allNames.map(function(name) {
+            var st = String((wa[name] || {}).status || 'idle').toLowerCase();
+            var isActive = st === 'working';
+            var chipClass = isActive ? '' : ' idle';
+            var task = String((wa[name] || {}).lastTask || '').slice(0, 50);
+            var emoji = emojis[name] || '🤖';
+            return '<span class="pulse-worker-chip' + chipClass + '" title="' + esc(task) + '">' +
+              '<span class="pw-dot"></span>' + emoji + ' ' + esc(name) +
+              (isActive ? ' — ' + esc(task) : '') + '</span>';
+          }).join('');
+        } else {
+          chipHtml = '<span style="font-size:11px;color:var(--muted)">No workers registered</span>';
+        }
+        wListEl.innerHTML = chipHtml;
+      }
+
+      // Recent commits
+      var rcEl = document.getElementById('pulse-recent-commits');
+      if (rcEl) {
+        var msgs = Array.isArray(git.recentMessages) ? git.recentMessages : [];
+        if (msgs.length > 0) {
+          rcEl.innerHTML = msgs.map(function(c) {
+            return '<span class="pulse-commit"><strong>' + esc(c.hash) + '</strong> ' + esc(c.message) + '</span>';
+          }).join('');
+        } else {
+          rcEl.innerHTML = '<span style="font-size:10px;color:var(--muted)">No commits today</span>';
+        }
+      }
+    }
+
     function applyState(data) {
       latestState = data;
 
@@ -3407,6 +3684,7 @@ function renderHtml() {
       renderWorkerGrid(data);
       renderPremiumUsagePanel(data);
       renderCelebration(data);
+      renderActivityPulse(data);
       renderTaskDetail();
 
       var recoveryText = data.guardian && data.guardian.lastRecovery
