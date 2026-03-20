@@ -2446,7 +2446,7 @@ function renderHtml() {
 
     // ── Leadership Pipeline + Change Detection ─────────────────────────
     function detectLeadershipChanges(data) {
-      var changes = { jesusNew: false, trumpNew: false, mosesNew: false, newWorkers: [], reqFlashes: [] };
+      var changes = { jesusNew: false, trumpNew: false, mosesNew: false, newWorkers: [], reqFlashes: [], newMessages: [] };
       var jesus = (data && data.leadership && data.leadership.jesus) || {};
       var trump = (data && data.leadership && data.leadership.trump) || {};
       var moses = (data && data.leadership && data.leadership.moses) || {};
@@ -2457,13 +2457,15 @@ function renderHtml() {
       if (jesus.decidedAt && jesus.decidedAt !== prevJesusDecidedAt) {
         changes.jesusNew = true;
         if (prevJesusDecidedAt) {
-          leadershipMessages.unshift({
+          var newMsg = {
             icon: '⚡', from: 'Jesus', to: jesus.callTrump ? 'Trump' : 'Moses',
             text: jesus.callTrump
               ? 'Activate Trump for deep analysis: ' + String(jesus.trumpReason || jesus.briefForMoses || '').slice(0, 100)
               : 'Directive to Moses: ' + String(jesus.briefForMoses || jesus.decision || '').slice(0, 100),
             time: jesus.decidedAt, isNew: true
-          });
+          };
+          leadershipMessages.unshift(newMsg);
+          changes.newMessages.push(newMsg);
         }
         prevJesusDecidedAt = jesus.decidedAt;
       }
@@ -2473,11 +2475,13 @@ function renderHtml() {
         changes.trumpNew = true;
         if (prevTrumpAnalyzedAt) {
           var planCount = Array.isArray(trump.plans) ? trump.plans.length : 0;
-          leadershipMessages.unshift({
+          var newMsg = {
             icon: '📊', from: 'Trump', to: 'Moses',
             text: planCount + ' plans created, health: ' + String(trump.projectHealth || '?') + ' — ' + String(trump.analysis || '').slice(0, 80),
             time: trump.analyzedAt, isNew: true
-          });
+          };
+          leadershipMessages.unshift(newMsg);
+          changes.newMessages.push(newMsg);
         }
         prevTrumpAnalyzedAt = trump.analyzedAt;
       }
@@ -2487,11 +2491,13 @@ function renderHtml() {
         changes.mosesNew = true;
         if (prevMosesCoordinatedAt) {
           var activeSess = Number(moses.activeSessions || 0);
-          leadershipMessages.unshift({
+          var newMsg = {
             icon: '📋', from: 'Moses', to: 'Workers',
             text: 'Dispatched ' + activeSess + ' workers: ' + String(moses.summary || moses.statusReport || '').slice(0, 100),
             time: moses.coordinatedAt, isNew: true
-          });
+          };
+          leadershipMessages.unshift(newMsg);
+          changes.newMessages.push(newMsg);
         }
         prevMosesCoordinatedAt = moses.coordinatedAt;
       }
@@ -2502,11 +2508,13 @@ function renderHtml() {
         var prevSt = prevWorkerStatuses[name] || 'idle';
         if (st === 'working' && prevSt !== 'working') {
           changes.newWorkers.push(name);
-          leadershipMessages.unshift({
+          var newMsg = {
             icon: '👷', from: 'Moses', to: name,
             text: 'Task assigned: ' + String((wa[name] || {}).lastTask || '').slice(0, 100),
             time: (wa[name] || {}).lastActiveAt || new Date().toISOString(), isNew: true
-          });
+          };
+          leadershipMessages.unshift(newMsg);
+          changes.newMessages.push(newMsg);
         }
         prevWorkerStatuses[name] = st;
       });
@@ -2654,20 +2662,49 @@ function renderHtml() {
         if (changes.newWorkers.length > 0) { workersNode.classList.remove('flash'); void workersNode.offsetWidth; workersNode.classList.add('flash'); }
       }
 
-      // Message feed
+      // Message feed — append-only (no full re-render)
       var feedEl = document.getElementById('lp-feed');
-      if (feedEl && leadershipMessages.length > 0) {
-        feedEl.innerHTML = leadershipMessages.map(function(m) {
-          var cls = m.isNew ? 'lp-msg new' : 'lp-msg';
-          return '<div class="' + cls + '">' +
-            '<span class="lp-msg-icon">' + esc(m.icon) + '</span>' +
-            '<span class="lp-msg-from">' + esc(m.from) + ' → ' + esc(m.to) + '</span>' +
-            '<span class="lp-msg-text">' + esc(m.text) + '</span>' +
-            '<span class="lp-msg-time">' + esc(relativeTime(m.time)) + '</span>' +
-            '</div>';
-        }).join('');
-      } else if (feedEl && leadershipMessages.length === 0) {
-        feedEl.innerHTML = '<div class="muted" style="font-size:11px;text-align:center">Waiting for leadership activity...</div>';
+      if (feedEl) {
+        // Remove 'new' class from any old messages after rendering
+        if (changes.newMessages && changes.newMessages.length > 0) {
+          // Only render new messages once, then just toggle classes
+          changes.newMessages.forEach(function(msg, idx) {
+            var div = document.createElement('div');
+            div.className = 'lp-msg new';
+            div.innerHTML =
+              '<span class="lp-msg-icon">' + esc(msg.icon) + '</span>' +
+              '<span class="lp-msg-from">' + esc(msg.from) + ' → ' + esc(msg.to) + '</span>' +
+              '<span class="lp-msg-text">' + esc(msg.text) + '</span>' +
+              '<span class="lp-msg-time">' + esc(relativeTime(msg.time)) + '</span>';
+            // Prepend (oldest messages at bottom)
+            if (feedEl.firstChild) {
+              feedEl.insertBefore(div, feedEl.firstChild);
+            } else {
+              feedEl.appendChild(div);
+            }
+          });
+        }
+        // Remove 'new' class from any old messages
+        var msgEls = feedEl.querySelectorAll('.lp-msg.new');
+        msgEls.forEach(function(el) {
+          if (!el.classList.contains('keep-new')) {
+            el.classList.remove('new');
+          }
+        });
+        // Clear 'keep-new' marker after 6 seconds
+        msgEls.forEach(function(el) {
+          if (el.classList.contains('keep-new')) {
+            setTimeout(function() {
+              el.classList.remove('keep-new');
+              el.classList.remove('new');
+            }, 6000);
+          }
+        });
+      } else if (feedEl && feedEl.children.length === 0) {
+        // Only show empty state if no messages ever existed
+        if (!feedEl.hasAttribute('data-had-messages')) {
+          feedEl.innerHTML = '<div class="muted" style="font-size:11px;text-align:center">Waiting for leadership activity...</div>';
+        }
       }
 
       // Request flashes
