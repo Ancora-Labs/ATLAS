@@ -16,7 +16,7 @@ const STATE_DIR = path.join(ROOT, "state");
 const PORT = Number(process.env.BOX_DASHBOARD_PORT || "8787");
 const TARGET_REPO = process.env.TARGET_REPO || "";
 const CLAUDE_CREDIT_USD = Number(process.env.BOX_CLAUDE_CREDIT_USD || "5");
-const COPILOT_TIER1_MONTHLY_REQUESTS = Number(process.env.BOX_COPILOT_TIER1_MONTHLY_REQUESTS || process.env.BOX_COPILOT_MONTHLY_QUOTA || "2500");
+const COPILOT_TIER1_MONTHLY_REQUESTS = Number(process.env.BOX_COPILOT_TIER1_MONTHLY_REQUESTS || process.env.BOX_COPILOT_MONTHLY_QUOTA || "1500");
 const CLAUDE_PLATFORM_TOTAL_COST_USD = process.env.BOX_CLAUDE_PLATFORM_TOTAL_COST_USD;
 const COPILOT_SOURCE_ACCOUNT = process.env.BOX_COPILOT_SOURCE_ACCOUNT || "CanerDoqdu";
 const CLAUDE_ADMIN_API_KEY = process.env.CLAUDE_ADMIN_API_KEY || process.env.ANTHROPIC_ADMIN_API_KEY || "";
@@ -421,6 +421,35 @@ function parseCopilotUsageFromSummary(payload) {
   return { quota, used: normalizedUsed, remaining };
 }
 
+/**
+ * Fetch premium request quota snapshot from copilot_internal/user endpoint.
+ * Returns { entitlement, used, remaining, percentRemaining } or null on failure.
+ */
+async function fetchCopilotInternalQuota() {
+  if (!GITHUB_BILLING_TOKEN) return null;
+  try {
+    const r = await fetch("https://api.github.com/copilot_internal/user", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${GITHUB_BILLING_TOKEN}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        "user-agent": "BOX/1.0"
+      }
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const snap = j?.quota_snapshots?.premium_interactions;
+    if (!snap || typeof snap.entitlement !== "number") return null;
+    const entitlement = snap.entitlement;
+    const remaining = Number(snap.quota_remaining ?? snap.remaining ?? 0);
+    const used = entitlement - remaining;
+    return { entitlement, used, remaining, percentRemaining: snap.percent_remaining ?? null };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchOneTimeCopilotUsage() {
   if (!GITHUB_BILLING_TOKEN || !GITHUB_BILLING_SUMMARY_URL) {
     return {
@@ -493,12 +522,19 @@ async function fetchOneTimeCopilotUsage() {
       };
     }
 
+    // Prefer copilot_internal/user quota snapshot for accurate premium request tracking.
+    // The billing API grossQuantity differs from actual premium interaction units.
+    const internalQuota = await fetchCopilotInternalQuota();
+    const usedRequests = internalQuota ? internalQuota.used : parsed.used;
+    const quotaRequests = internalQuota ? internalQuota.entitlement : parsed.quota;
+    const remainingRequests = internalQuota ? internalQuota.remaining : parsed.remaining;
+
     return {
-      quotaRequests: parsed.quota,
-      usedRequests: parsed.used,
-      remainingRequests: parsed.remaining,
+      quotaRequests,
+      usedRequests,
+      remainingRequests,
       byModel: parsed.byModel || null,
-      source: "github-billing-usage-summary",
+      source: internalQuota ? "copilot-internal-quota" : "github-billing-usage-summary",
       fetchedAt: new Date().toISOString(),
       lastError: null
     };
@@ -1977,7 +2013,7 @@ function renderHtml() {
         </div>
         <div class="pulse-cell">
           <div class="pulse-cell-label">Copilot Used</div>
-          <div class="pulse-cell-value" id="pulse-copilot">0 <span class="dim">/ 2500</span></div>
+          <div class="pulse-cell-value" id="pulse-copilot">0 <span class="dim">/ 1500</span></div>
           <div class="pulse-cell-sub" id="pulse-copilot-sub">loading...</div>
         </div>
         <div class="pulse-cell">
@@ -3430,7 +3466,7 @@ function renderHtml() {
       var copilotEl = document.getElementById('pulse-copilot');
       if (copilotEl) {
         var used = Math.round(Number(reqs.copilotUsed || 0));
-        var quota = Number(reqs.copilotQuota || 2500);
+        var quota = Number(reqs.copilotQuota || 1500);
         copilotEl.innerHTML = String(used) + ' <span class="dim">/ ' + formatRequestCount(quota) + '</span>';
       }
       var copilotSub = document.getElementById('pulse-copilot-sub');
