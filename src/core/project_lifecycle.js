@@ -24,6 +24,10 @@ import path from "node:path";
 import { readJson, writeJson } from "./fs_utils.js";
 import { appendProgress } from "./state_tracker.js";
 import { warn } from "./logger.js";
+import {
+  normalizePostmortemVerdict,
+  POSTMORTEM_PARSE_REASON
+} from "./athena_reviewer.js";
 
 // ── GitHub API helpers ───────────────────────────────────────────────────────
 
@@ -132,20 +136,44 @@ export async function capturePreWorkBaseline(config) {
 /**
  * Collect a summary of all work BOX did on the project.
  * Used for the GitHub release body and the completion record.
+ *
+ * Return schema (all fields required):
+ *   projectType        {string}   - from Prometheus analysis
+ *   projectHealth      {string}   - from Prometheus analysis
+ *   baselineTag        {string|null}
+ *   baselineSha        {string|null}
+ *   totalMergedPrs     {number}
+ *   mergedPrs          {Array}    - [{ number, title, mergedAt, branch }]
+ *   completedTasks     {string[]} - workerNames with recommendation==="proceed" postmortems
+ *   workerOutcomes     {Array}    - [{ worker, prsDelivered, filesChanged, errors, successes }]
+ *   completedAt        {string}   - ISO timestamp
  */
-async function collectWorkSummary(config) {
+export async function collectWorkSummary(config) {
   const stateDir = config.paths?.stateDir || "state";
   const token = config.env?.githubToken;
   const repo = config.env?.targetRepo;
 
-  const trumpAnalysis = await readJson(path.join(stateDir, "trump_analysis.json"), null);
-  const mosesState = await readJson(path.join(stateDir, "moses_coordination.json"), {});
+  const prometheusAnalysis = await readJson(path.join(stateDir, "prometheus_analysis.json"), null);
+  const athenaPostmortems = await readJson(path.join(stateDir, "athena_postmortems.json"), []);
   const baseline = await readJson(path.join(stateDir, "project_baseline.json"), {});
 
-  const projectType = trumpAnalysis?.projectType || "unknown";
-  const projectHealth = trumpAnalysis?.projectHealth || "unknown";
-  const completedTasks = Array.isArray(mosesState?.completedTasks)
-    ? mosesState.completedTasks
+  const projectType = prometheusAnalysis?.projectType || "unknown";
+  const projectHealth = prometheusAnalysis?.projectHealth || "unknown";
+
+  // Normalize postmortem records on read — supports both new schema
+  // (recommendation field) and legacy schema (verdict field).
+  // Records with neither field degrade explicitly; no silent pass-through.
+  const completedTasks = Array.isArray(athenaPostmortems)
+    ? athenaPostmortems
+        .map(pm => {
+          const normalized = normalizePostmortemVerdict(pm);
+          if (normalized.reason !== POSTMORTEM_PARSE_REASON.OK) {
+            warn(`[lifecycle] Postmortem for "${pm?.workerName || "unknown"}" skipped — ${normalized.reason}`);
+          }
+          return { pm, ...normalized };
+        })
+        .filter(({ pass }) => pass)
+        .map(({ pm }) => pm.workerName)
     : [];
 
   // Collect merged PRs from GitHub
@@ -254,6 +282,12 @@ async function createCompletionRelease(config, summary) {
       .map(w => `| ${w.worker} | ${w.successes} | ${w.errors} | ${w.prsDelivered.length} |`)
       .join("\n");
 
+    // Completed tasks are derived from Athena postmortems with recommendation==="proceed".
+    // This is the canonical field (new schema) with legacy fallback (verdict==="pass").
+    const completedTasksList = Array.isArray(summary.completedTasks) && summary.completedTasks.length > 0
+      ? summary.completedTasks.map(name => `- ${name}`).join("\n")
+      : "_No tasks recorded as completed by Athena_";
+
     const body = [
       `## BOX Automated Delivery — Project Complete`,
       ``,
@@ -261,6 +295,10 @@ async function createCompletionRelease(config, summary) {
       `**Baseline (before BOX):** \`${summary.baselineTag || "not captured"}\` → \`${summary.baselineSha?.slice(0, 7) || "n/a"}\``,
       `**Completion:** \`${tagName}\` → \`${sha.slice(0, 7)}\``,
       `**Total PRs merged:** ${summary.totalMergedPrs}`,
+      `**Athena-verified completed tasks:** ${(summary.completedTasks || []).length}`,
+      ``,
+      `### Completed Tasks (Athena postmortem: recommendation=proceed)`,
+      completedTasksList,
       ``,
       `### Merged Pull Requests`,
       prList || "_No BOX PRs detected_",
