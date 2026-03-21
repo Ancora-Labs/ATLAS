@@ -24,6 +24,8 @@ import { chatLog, warn } from "./logger.js";
 import { normalizeDecisionQualityLabel, DECISION_QUALITY_LABEL } from "./athena_reviewer.js";
 import { extractPostmortemEntries, migrateData, STATE_FILE_TYPE } from "./schema_registry.js";
 import { loadRegistry, getRunningExperimentsForPath } from "./experiment_registry.js";
+import { getCanaryConfig, startCanary, processRunningCanaries } from "./canary_engine.js";
+import { runShadowEvaluation, SHADOW_STATUS } from "./shadow_policy_evaluator.js";
 
 // ── Decision Quality Weights ──────────────────────────────────────────────────
 
@@ -431,6 +433,60 @@ async function applyConfigSuggestions(config, suggestions) {
   const coreProtected = config.selfImprovement?.coreProtectedModules || [];
   const stateDir = config.paths?.stateDir || "state";
 
+  // ── Shadow policy evaluation before applying any changes (T-017) ──────────
+  // Map auto-apply suggestions to shadow change descriptors.
+  const shadowChanges = suggestions
+    .filter(s => s?.autoApply)
+    .map(s => ({
+      type:     "config",
+      path:     String(s.path || ""),
+      oldValue: s.currentValue,
+      newValue: s.suggestedValue,
+    }));
+
+  let shadowEvalResult = null;
+  if (shadowChanges.length > 0) {
+    try {
+      const shadowPolicy  = config.selfImprovement?.shadowPolicy  || {};
+      const currentPolicy = await import("./policy_engine.js").then(m => m.loadPolicy(config));
+      shadowEvalResult = await runShadowEvaluation(currentPolicy, shadowChanges, {
+        stateDir,
+        threshold:   typeof shadowPolicy.threshold   === "number" ? shadowPolicy.threshold   : undefined,
+        cycleWindow: typeof shadowPolicy.cycleWindow === "number" ? shadowPolicy.cycleWindow : undefined,
+        owner:       "self-improvement",
+      });
+
+      const shadowStatus = shadowEvalResult.status;
+      if (shadowStatus === SHADOW_STATUS.BLOCKED) {
+        warn(`[self-improvement] shadow policy evaluation blocked config promotion — blockReason=${shadowEvalResult.blockReason} delta=${shadowEvalResult.delta}`);
+        // Record all candidate changes as shadow-blocked (explicit status, no silent fallback).
+        for (const s of suggestions.filter(s => s?.autoApply)) {
+          applied.push({
+            path:        String(s.path || ""),
+            status:      "shadow-blocked",
+            blockReason: shadowEvalResult.blockReason,
+            shadowEval:  {
+              delta:          shadowEvalResult.delta,
+              confidence:     shadowEvalResult.confidence,
+              sampleSize:     shadowEvalResult.sampleSize,
+              successCriteria: shadowEvalResult.successCriteria,
+            },
+            suggestedValue: s.suggestedValue,
+            reason:         s.reason,
+          });
+        }
+        return applied;
+      }
+
+      if (shadowStatus === SHADOW_STATUS.DEGRADED) {
+        warn(`[self-improvement] shadow policy evaluation degraded — degradedReason=${shadowEvalResult.degradedReason} — proceeding with soft enforcement`);
+      }
+    } catch (err) {
+      // Shadow eval is advisory — a thrown error must not block config application.
+      warn(`[self-improvement] shadow policy evaluation error (non-fatal): ${String(err?.message || err)}`);
+    }
+  }
+
   // AC1: load registry once; mode is "soft" unless explicitly set to "hard"
   const enforcementMode = config.selfImprovement?.experimentEnforcement === "hard" ? "hard" : "soft";
   let registry;
@@ -440,6 +496,9 @@ async function applyConfigSuggestions(config, suggestions) {
     // Registry not yet initialised — treat as empty; soft mode continues normally
     registry = { schemaVersion: 1, experiments: [] };
   }
+
+  // AC1: determine if canary routing is enabled for staged config changes
+  const canaryConfig = getCanaryConfig(config);
 
   for (const suggestion of suggestions) {
     if (!suggestion.autoApply) continue;
@@ -482,7 +541,53 @@ async function applyConfigSuggestions(config, suggestions) {
       warn(`[self-improvement] no experiment covers config path ${configKey} — applying without experiment tag (soft enforcement)`);
     }
 
-    // Apply the change
+    // AC1 / T-022: route through canary when enabled (staged rollout before global promotion)
+    if (canaryConfig.enabled) {
+      // Resolve current (control) value from the in-memory boxConfig for provenance
+      const keys = configKey.split(".");
+      let   ctrl = boxConfig;
+      for (const k of keys) {
+        ctrl = (ctrl && typeof ctrl === "object") ? ctrl[k] : undefined;
+      }
+      const controlValue = ctrl;
+
+      const primaryExperimentId = experimentIds.length > 0 ? experimentIds[0] : null;
+      try {
+        const canaryResult = await startCanary(
+          config, configKey, controlValue, suggestion.suggestedValue, primaryExperimentId
+        );
+        if (canaryResult.ok) {
+          applied.push({
+            path:          configKey,
+            status:        "canary_started",
+            canaryId:      canaryResult.canaryId,
+            controlValue,
+            canaryValue:   suggestion.suggestedValue,
+            reason:        suggestion.reason,
+            experimentIds
+          });
+          continue;
+        }
+        // If canary is ALREADY_RUNNING for this path, fall through to direct apply
+        if (canaryResult.status !== "ALREADY_RUNNING") {
+          warn(`[self-improvement] canary start failed for ${configKey}: ${canaryResult.status}`);
+          applied.push({
+            path:         configKey,
+            status:       "canary_start_failed",
+            failReason:   canaryResult.status,
+            experimentIds,
+            suggestedValue: suggestion.suggestedValue,
+            reason:       suggestion.reason
+          });
+          continue;
+        }
+      } catch (err) {
+        warn(`[self-improvement] canary routing error for ${configKey}: ${String(err?.message || err)}`);
+        // Fall through to direct apply on unexpected error
+      }
+    }
+
+    // Direct apply (canary disabled, or canary already running for this path)
     const keys = configKey.split(".");
     let target = boxConfig;
     for (let i = 0; i < keys.length - 1; i++) {
@@ -504,7 +609,13 @@ async function applyConfigSuggestions(config, suggestions) {
         oldValue,
         newValue: suggestion.suggestedValue,
         reason: suggestion.reason,
-        experimentIds
+        experimentIds,
+        shadowEval: shadowEvalResult ? {
+          delta:           shadowEvalResult.delta,
+          confidence:      shadowEvalResult.confidence,
+          sampleSize:      shadowEvalResult.sampleSize,
+          successCriteria: shadowEvalResult.successCriteria,
+        } : null,
       });
     }
   }
@@ -612,9 +723,22 @@ export async function runSelfImprovementCycle(config) {
     }
   }
 
+  // 5a. Process running canary experiments — record metrics and advance state
+  let canaryResults = [];
+  try {
+    canaryResults = await processRunningCanaries(config, outcomes, `si-${Date.now()}`);
+    if (canaryResults.length > 0) {
+      const summary = canaryResults.map(r => `${r.canaryId}→${r.action}`).join(", ");
+      await appendProgress(config, `[SELF-IMPROVEMENT] Canary cycle results: ${summary}`);
+    }
+  } catch (err) {
+    warn(`[self-improvement] canary processing error: ${String(err?.message || err)}`);
+  }
+
   // 6. Save improvement report
   const appliedCount = appliedChanges.filter(c => c.status === "applied").length;
   const blockedCount = appliedChanges.filter(c => c.status === "blocked").length;
+  const canaryStartedCount = appliedChanges.filter(c => c.status === "canary_started").length;
   const report = {
     cycleAt: new Date().toISOString(),
     outcomes: {
@@ -638,11 +762,13 @@ export async function runSelfImprovementCycle(config) {
       capabilityGapsCount: newGaps.length,
       configChangesApplied: appliedCount,
       configChangesBlocked: blockedCount,
+      configChangesCanaryStarted: canaryStartedCount,
       nextCyclePriorities: analysis.nextCyclePriorities || [],
       workerFeedback: analysis.workerFeedback || [],
       capabilityGaps: newGaps
     },
-    appliedChanges
+    appliedChanges,
+    canaryResults
   };
 
   // Append to reports log
@@ -659,7 +785,7 @@ export async function runSelfImprovementCycle(config) {
   const healthScore = analysis.systemHealthScore || 0;
   const lessonsStr = newLessons.map(l => `[${l.severity}] ${l.lesson}`).join("; ").slice(0, 300);
   await appendProgress(config,
-    `[SELF-IMPROVEMENT] Analysis complete — health=${healthScore}/100 | lessons=${newLessons.length} | config-changes=${appliedCount} | config-blocked=${blockedCount} | ${lessonsStr}`
+    `[SELF-IMPROVEMENT] Analysis complete — health=${healthScore}/100 | lessons=${newLessons.length} | config-changes=${appliedCount} | config-blocked=${blockedCount} | canary-started=${canaryStartedCount} | ${lessonsStr}`
   );
 
   chatLog(stateDir, "SelfImprovement",
