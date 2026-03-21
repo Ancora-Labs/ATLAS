@@ -1089,8 +1089,24 @@ async function collectDashboardData() {
     readJsonSafe(path.join(STATE_DIR, "completed_projects.json"), [])
   ]);
 
-  // Read pipeline progress authoritatively — no heuristic inference of stage.
-  const pipelineProgress = await readPipelineProgress({ paths: { stateDir: STATE_DIR } });
+  // Read pipeline progress, orchestrator health, and SLO metrics in parallel.
+  // orchestrator_health.json is written by writeOrchestratorHealth() on any status change.
+  // slo_metrics.json is written by persistSloMetrics() after each completed cycle.
+  const [pipelineProgress, orchestratorHealth, sloMetrics] = await Promise.all([
+    readPipelineProgress({ paths: { stateDir: STATE_DIR } }),
+    readJsonSafe(path.join(STATE_DIR, "orchestrator_health.json"), {
+      orchestratorStatus: "operational",
+      reason: null,
+      details: null,
+      recordedAt: null,
+    }),
+    readJsonSafe(path.join(STATE_DIR, "slo_metrics.json"), {
+      schemaVersion: 1,
+      lastCycle: null,
+      history: [],
+      updatedAt: null,
+    }),
+  ]);
 
   const [daemonStatus, prDeltaResult, gitActivity] = await Promise.all([getDaemonStatus(), getHourlyPrDeltaStats(), Promise.resolve(getGitActivity())]);
 
@@ -1139,8 +1155,10 @@ async function collectDashboardData() {
     ? completedProjects.find(e => e.repo === TARGET_REPO)
     : null;
 
-  // 4-state system status: offline / completed / idle / working
+  // 5-state system status: offline / completed / degraded / idle / working
+  // "degraded" fires when orchestratorStatus=degraded in orchestrator_health.json (e.g. SLO breach).
   const hasWorkingWorkers = Object.values(workerSessions || {}).some(s => s?.status === "working");
+  const isOrchestratorDegraded = String(orchestratorHealth?.orchestratorStatus || "").toLowerCase() === "degraded";
   let systemStatus, systemStatusText;
   if (!daemonStatus.running && completedEntry) {
     systemStatus = "completed";
@@ -1148,6 +1166,9 @@ async function collectDashboardData() {
   } else if (!daemonStatus.running) {
     systemStatus = "offline";
     systemStatusText = "System Offline";
+  } else if (isOrchestratorDegraded) {
+    systemStatus = "degraded";
+    systemStatusText = `System Degraded — ${orchestratorHealth?.reason || "see health file"}`;
   } else if (hasWorkingWorkers) {
     systemStatus = "working";
     systemStatusText = "Workers Active";
@@ -1297,7 +1318,14 @@ async function collectDashboardData() {
       releaseUrl: completedEntry.releaseUrl || null,
       totalMergedPrs: completedEntry.totalMergedPrs || 0,
       completedAt: completedEntry.completedAt || null
-    } : null
+    } : null,
+    slo: {
+      orchestratorStatus: String(orchestratorHealth?.orchestratorStatus || "operational"),
+      orchestratorReason: orchestratorHealth?.reason || null,
+      orchestratorRecordedAt: orchestratorHealth?.recordedAt || null,
+      lastCycle: sloMetrics?.lastCycle || null,
+      sloUpdatedAt: sloMetrics?.updatedAt || null,
+    },
   };
 }
 
@@ -1464,6 +1492,24 @@ function renderHtml() {
       background: #5cffa8;
       box-shadow: 0 0 0 0 rgba(92, 255, 168, 0.8);
       animation: none;
+    }
+    .hero-live.is-degraded {
+      color: #fff0d0;
+      border: 1px solid rgba(220, 130, 20, 0.75);
+      background:
+        linear-gradient(115deg, rgba(90, 50, 5, 0.94), rgba(165, 100, 10, 0.86)),
+        radial-gradient(120% 180% at 15% 20%, rgba(255, 190, 80, 0.35), transparent 55%);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 220, 140, 0.34),
+        inset 0 -8px 14px rgba(0, 0, 0, 0.3),
+        0 10px 18px rgba(130, 70, 8, 0.34);
+    }
+    .hero-live.is-degraded::before {
+      background: linear-gradient(90deg, rgba(220, 130, 20, 0.02), rgba(255, 200, 80, 0.4), rgba(220, 130, 20, 0.02));
+    }
+    .hero-live.is-degraded::after {
+      background: #ffb84d;
+      box-shadow: 0 0 0 0 rgba(255, 184, 77, 0.8);
     }
     .hero-live span {
       position: relative;
@@ -3592,11 +3638,13 @@ function renderHtml() {
       var statusText = String((data.runtime && data.runtime.systemStatusText) || "System Offline");
       if (heroLive && heroLiveText) {
         heroLiveText.textContent = statusText;
-        heroLive.classList.remove("is-offline", "is-workers-active", "is-idle", "is-completed");
+        heroLive.classList.remove("is-offline", "is-workers-active", "is-idle", "is-completed", "is-degraded");
         if (runtimeStatus === "completed") {
           heroLive.classList.add("is-completed");
         } else if (runtimeStatus === "offline") {
           heroLive.classList.add("is-offline");
+        } else if (runtimeStatus === "degraded") {
+          heroLive.classList.add("is-degraded");
         } else if (runtimeStatus === "working") {
           heroLive.classList.add("is-workers-active");
         } else {
