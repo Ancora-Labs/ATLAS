@@ -175,7 +175,7 @@ Analyze the cycle outcomes and produce a JSON response with these fields:
 
 Respond with ONLY valid JSON. No markdown, no explanation before or after.`;
 
-  const args = buildAgentArgs({ agentSlug: "issachar", prompt });
+  const args = buildAgentArgs({ agentSlug: "issachar", prompt, allowAll: true, noAskUser: true });
   const result = await spawnAsync(command, args, { env: process.env });
   const stdout = String(result?.stdout || "");
   const stderr = String(result?.stderr || "");
