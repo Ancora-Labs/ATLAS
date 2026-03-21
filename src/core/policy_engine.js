@@ -18,11 +18,13 @@ function matchPathPattern(targetPath, pattern) {
   const patternNorm = normalizePath(pattern);
   if (!pathNorm || !patternNorm) return false;
 
+  // Support prefix globs like "src/core/**"
   if (patternNorm.endsWith("/**")) {
     const prefix = patternNorm.slice(0, -3);
     return pathNorm === prefix || pathNorm.startsWith(`${prefix}/`);
   }
 
+  // Support suffix globs like "**/*.test.js"
   if (patternNorm.startsWith("**/")) {
     const suffix = patternNorm.slice(3);
     return pathNorm.endsWith(suffix);
@@ -72,6 +74,37 @@ function getRolePolicy(policy, roleName) {
   return null;
 }
 
+function matchesAnyPattern(text, patterns) {
+  const normalized = String(text || "").toLowerCase();
+  return patterns.some((item) => normalized.includes(String(item).toLowerCase()));
+}
+
+export function validateRoleInstruction(policy, roleName, taskText) {
+  const rolePolicy = getRolePolicy(policy, roleName);
+  if (!rolePolicy) return { ok: true };
+
+  const blockedTaskPatterns = Array.isArray(rolePolicy?.blockedTaskPatterns)
+    ? rolePolicy.blockedTaskPatterns
+    : [];
+  if (blockedTaskPatterns.length > 0 && matchesAnyPattern(taskText, blockedTaskPatterns)) {
+    return {
+      ok: false,
+      reason: `role policy blocked task for ${roleName}`
+    };
+  }
+
+  const requiredTaskPatterns = Array.isArray(rolePolicy?.requiredTaskPatterns)
+    ? rolePolicy.requiredTaskPatterns
+    : [];
+  if (requiredTaskPatterns.length > 0 && !matchesAnyPattern(taskText, requiredTaskPatterns)) {
+    return {
+      ok: false,
+      reason: `role policy missing required task intent for ${roleName}`
+    };
+  }
+
+  return { ok: true };
+}
 export function getRolePathViolations(policy, roleName, filePaths) {
   const rolePolicy = getRolePolicy(policy, roleName);
   const files = Array.isArray(filePaths) ? filePaths : [];
