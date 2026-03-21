@@ -28,8 +28,10 @@ import { runSelfImprovementCycle } from "./self_improvement.js";
 import { capturePreWorkBaseline, runProjectCompletion, isProjectAlreadyCompleted } from "./project_lifecycle.js";
 import { warn } from "./logger.js";
 import { readJson, readJsonSafe, writeJson, cleanupStaleTempFiles, READ_JSON_REASON } from "./fs_utils.js";
-import { updatePipelineProgress } from "./pipeline_progress.js";
+import { updatePipelineProgress, readPipelineProgress } from "./pipeline_progress.js";
 import { loadEscalationQueue, sortEscalationQueue } from "./escalation_queue.js";
+import { computeCycleSLOs, persistSloMetrics } from "./slo_checker.js";
+import { computeCycleAnalytics, persistCycleAnalytics, CYCLE_PHASE } from "./cycle_analytics.js";
 import {
   addSchemaVersion,
   migrateData,
@@ -47,8 +49,8 @@ export const ORCHESTRATOR_STATUS = Object.freeze({
   DEGRADED: "degraded"
 });
 
-/** Write orchestrator health record to state/orchestrator_health.json. */
-async function writeOrchestratorHealth(stateDir, status, reason, details = null) {
+/** Write orchestrator health record to state/orchestrator_health.json. Exported for downstream use. */
+export async function writeOrchestratorHealth(stateDir, status, reason, details = null) {
   await writeJson(path.join(stateDir, "orchestrator_health.json"), {
     orchestratorStatus: status,
     reason,
@@ -685,6 +687,76 @@ async function runSingleCycle(config) {
     workersTotal: plans.length,
     workersDone: plans.length
   });
+
+  // ── SLO check: compute and persist cycle-level SLO metrics ─────────────────
+  // cycle_id = pipeline_progress.startedAt (the canonical cycle identifier).
+  // All latency inputs are read from pipeline_progress.json.stageTimestamps.
+  // This runs after cycle_complete so all stage timestamps are present.
+  try {
+    const progress = await readPipelineProgress(config);
+    const cycleRecord = computeCycleSLOs(
+      config,
+      progress.stageTimestamps || {},
+      progress.startedAt || null,
+      progress.completedAt || new Date().toISOString()
+    );
+    await persistSloMetrics(config, cycleRecord);
+
+    if (cycleRecord.sloBreaches.length > 0) {
+      const breachSummary = cycleRecord.sloBreaches
+        .map(b => `${b.metric}=${b.actual}ms threshold=${b.threshold}ms severity=${b.severity}`)
+        .join("; ");
+      await appendProgress(config, `[SLO] Cycle SLO breaches detected: ${breachSummary}`);
+
+      for (const breach of cycleRecord.sloBreaches) {
+        await appendAlert(config, {
+          severity: breach.severity === "critical" ? ALERT_SEVERITY.CRITICAL : ALERT_SEVERITY.HIGH,
+          source: "slo_checker",
+          title: `SLO breach: ${breach.metric}`,
+          message: `actual=${breach.actual}ms threshold=${breach.threshold}ms cycleId=${cycleRecord.cycleId || "unknown"} reason=${breach.reason}`
+        });
+      }
+
+      // Write degraded health when SLO breaches are detected (AC3/AC14 — must call writeOrchestratorHealth, not just appendAlert)
+      if (config?.slo?.degradedOnBreach !== false) {
+        await writeOrchestratorHealth(stateDir, ORCHESTRATOR_STATUS.DEGRADED, "slo_breach",
+          cycleRecord.sloBreaches.map(b => `${b.metric}: actual=${b.actual}ms threshold=${b.threshold}ms severity=${b.severity}`)
+        );
+      }
+    } else {
+      await appendProgress(config, `[SLO] Cycle SLO check passed — all metrics within thresholds (cycleId=${cycleRecord.cycleId || "unknown"})`);
+    }
+  } catch (err) {
+    // SLO check is advisory — never block orchestration
+    warn(`[orchestrator] SLO check failed (non-fatal): ${String(err?.message || err)}`);
+    await appendProgress(config, `[SLO] SLO check failed (non-fatal): ${String(err?.message || err)}`);
+  }
+
+  // ── Cycle analytics: compute and persist KPIs, confidence, and causal links ─
+  // Advisory — never blocks orchestration. Runs after SLO so sloRecord is available.
+  // Risk note (Athena AC19): per-cycle file I/O on hot path, wrapped in try/catch.
+  try {
+    const progressForAnalytics = await readPipelineProgress(config);
+    // Re-read the SLO record that was just persisted to get the computed values.
+    // Import here to avoid a circular reference — slo_checker has no dep on cycle_analytics.
+    const { readSloMetrics } = await import("./slo_checker.js");
+    const sloState = await readSloMetrics(config);
+    const sloRecord = sloState?.lastCycle ?? null;
+
+    const analyticsRecord = computeCycleAnalytics(config, {
+      sloRecord,
+      pipelineProgress: progressForAnalytics,
+      workerResults: null,   // worker result details not aggregated at this call site
+      planCount: Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans.length : null,
+      phase: CYCLE_PHASE.COMPLETED,
+    });
+    await persistCycleAnalytics(config, analyticsRecord);
+    await appendProgress(config, `[ANALYTICS] Cycle analytics written — confidence=${analyticsRecord.confidence.level} sloStatus=${analyticsRecord.kpis.sloStatus} phase=${analyticsRecord.phase}`);
+  } catch (err) {
+    // Analytics are advisory — never block orchestration
+    warn(`[orchestrator] Cycle analytics failed (non-fatal): ${String(err?.message || err)}`);
+    await appendProgress(config, `[ANALYTICS] Cycle analytics failed (non-fatal): ${String(err?.message || err)}`);
+  }
 }
 
 // ── Main loop: Jesus → Prometheus → Athena → Worker → Athena → repeat ──────
