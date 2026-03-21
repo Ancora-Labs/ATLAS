@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { readPipelineProgress } from "../core/pipeline_progress.js";
 import { parseTypedEvent } from "../core/event_schema.js";
+import { readCycleAnalytics } from "../core/cycle_analytics.js";
 
 dotenv.config();
 
@@ -97,6 +98,53 @@ export function isTypedEventForDomain(raw, domain) {
   if (!result.ok) return false;
   if (domain !== undefined && result.event.domain !== domain) return false;
   return true;
+}
+
+// ── Decision Quality Trend ───────────────────────────────────────────────────
+
+/**
+ * Compute the decision quality trend from persisted postmortem entries.
+ *
+ * Returns trendData — an array of objects with shape:
+ *   { timestamp: string (ISO-8601), label: string, count: number }
+ *
+ * Each element represents one postmortem bucket grouped by (day, label).
+ * Legacy entries without decisionQualityLabel are counted as "inconclusive".
+ *
+ * @param {string} [stateDir] — optional override for STATE_DIR
+ * @returns {Promise<{ trendData: Array<{timestamp: string, label: string, count: number}>, total: number }>}
+ */
+export async function getDecisionQualityTrend(stateDir) {
+  const dir = stateDir || STATE_DIR;
+  let entries = [];
+  try {
+    const raw = JSON.parse(await fs.readFile(path.join(dir, "athena_postmortems.json"), "utf8"));
+    // Support both v0 (plain array) and v1 ({ schemaVersion, entries: [] })
+    if (Array.isArray(raw)) {
+      entries = raw;
+    } else if (raw && Array.isArray(raw.entries)) {
+      entries = raw.entries;
+    }
+  } catch { /* file absent or corrupt — return empty trend */ }
+
+  // Bucket by (date, label)
+  const VALID_LABELS = new Set(["correct", "delayed-correct", "incorrect", "inconclusive"]);
+  const buckets = {};
+  for (const pm of entries) {
+    if (!pm || typeof pm !== "object") continue;
+    const ts = pm.reviewedAt || pm.timestamp || null;
+    const dateKey = ts ? String(ts).slice(0, 10) : "unknown";
+    const rawLabel = pm.decisionQualityLabel;
+    const label = (rawLabel && VALID_LABELS.has(rawLabel)) ? rawLabel : "inconclusive";
+    const key = `${dateKey}::${label}`;
+    if (!buckets[key]) {
+      buckets[key] = { timestamp: dateKey, label, count: 0 };
+    }
+    buckets[key].count++;
+  }
+
+  const trendData = Object.values(buckets).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  return { trendData, total: entries.length };
 }
 
 function normalizeText(value) {
@@ -1089,8 +1137,24 @@ async function collectDashboardData() {
     readJsonSafe(path.join(STATE_DIR, "completed_projects.json"), [])
   ]);
 
-  // Read pipeline progress authoritatively — no heuristic inference of stage.
-  const pipelineProgress = await readPipelineProgress({ paths: { stateDir: STATE_DIR } });
+  // Read pipeline progress, orchestrator health, and SLO metrics in parallel.
+  // orchestrator_health.json is written by writeOrchestratorHealth() on any status change.
+  // slo_metrics.json is written by persistSloMetrics() after each completed cycle.
+  const [pipelineProgress, orchestratorHealth, sloMetrics] = await Promise.all([
+    readPipelineProgress({ paths: { stateDir: STATE_DIR } }),
+    readJsonSafe(path.join(STATE_DIR, "orchestrator_health.json"), {
+      orchestratorStatus: "operational",
+      reason: null,
+      details: null,
+      recordedAt: null,
+    }),
+    readJsonSafe(path.join(STATE_DIR, "slo_metrics.json"), {
+      schemaVersion: 1,
+      lastCycle: null,
+      history: [],
+      updatedAt: null,
+    }),
+  ]);
 
   const [daemonStatus, prDeltaResult, gitActivity] = await Promise.all([getDaemonStatus(), getHourlyPrDeltaStats(), Promise.resolve(getGitActivity())]);
 
@@ -1139,8 +1203,10 @@ async function collectDashboardData() {
     ? completedProjects.find(e => e.repo === TARGET_REPO)
     : null;
 
-  // 4-state system status: offline / completed / idle / working
+  // 5-state system status: offline / completed / degraded / idle / working
+  // "degraded" fires when orchestratorStatus=degraded in orchestrator_health.json (e.g. SLO breach).
   const hasWorkingWorkers = Object.values(workerSessions || {}).some(s => s?.status === "working");
+  const isOrchestratorDegraded = String(orchestratorHealth?.orchestratorStatus || "").toLowerCase() === "degraded";
   let systemStatus, systemStatusText;
   if (!daemonStatus.running && completedEntry) {
     systemStatus = "completed";
@@ -1148,6 +1214,9 @@ async function collectDashboardData() {
   } else if (!daemonStatus.running) {
     systemStatus = "offline";
     systemStatusText = "System Offline";
+  } else if (isOrchestratorDegraded) {
+    systemStatus = "degraded";
+    systemStatusText = `System Degraded — ${orchestratorHealth?.reason || "see health file"}`;
   } else if (hasWorkingWorkers) {
     systemStatus = "working";
     systemStatusText = "Workers Active";
@@ -1155,6 +1224,8 @@ async function collectDashboardData() {
     systemStatus = "idle";
     systemStatusText = completedEntry ? "System Idle (last project completed)" : "System Idle";
   }
+
+  const decisionQualityTrend = await getDecisionQualityTrend(STATE_DIR);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -1290,6 +1361,7 @@ async function collectDashboardData() {
         lastOutput: REBASE_STATE.lastOutput
       }
     },
+    decisionQualityTrend,
     logs: progressTail,
     projectCompleted: completedEntry ? {
       repo: completedEntry.repo,
@@ -1297,7 +1369,14 @@ async function collectDashboardData() {
       releaseUrl: completedEntry.releaseUrl || null,
       totalMergedPrs: completedEntry.totalMergedPrs || 0,
       completedAt: completedEntry.completedAt || null
-    } : null
+    } : null,
+    slo: {
+      orchestratorStatus: String(orchestratorHealth?.orchestratorStatus || "operational"),
+      orchestratorReason: orchestratorHealth?.reason || null,
+      orchestratorRecordedAt: orchestratorHealth?.recordedAt || null,
+      lastCycle: sloMetrics?.lastCycle || null,
+      sloUpdatedAt: sloMetrics?.updatedAt || null,
+    },
   };
 }
 
@@ -1464,6 +1543,24 @@ function renderHtml() {
       background: #5cffa8;
       box-shadow: 0 0 0 0 rgba(92, 255, 168, 0.8);
       animation: none;
+    }
+    .hero-live.is-degraded {
+      color: #fff0d0;
+      border: 1px solid rgba(220, 130, 20, 0.75);
+      background:
+        linear-gradient(115deg, rgba(90, 50, 5, 0.94), rgba(165, 100, 10, 0.86)),
+        radial-gradient(120% 180% at 15% 20%, rgba(255, 190, 80, 0.35), transparent 55%);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 220, 140, 0.34),
+        inset 0 -8px 14px rgba(0, 0, 0, 0.3),
+        0 10px 18px rgba(130, 70, 8, 0.34);
+    }
+    .hero-live.is-degraded::before {
+      background: linear-gradient(90deg, rgba(220, 130, 20, 0.02), rgba(255, 200, 80, 0.4), rgba(220, 130, 20, 0.02));
+    }
+    .hero-live.is-degraded::after {
+      background: #ffb84d;
+      box-shadow: 0 0 0 0 rgba(255, 184, 77, 0.8);
     }
     .hero-live span {
       position: relative;
@@ -3592,11 +3689,13 @@ function renderHtml() {
       var statusText = String((data.runtime && data.runtime.systemStatusText) || "System Offline");
       if (heroLive && heroLiveText) {
         heroLiveText.textContent = statusText;
-        heroLive.classList.remove("is-offline", "is-workers-active", "is-idle", "is-completed");
+        heroLive.classList.remove("is-offline", "is-workers-active", "is-idle", "is-completed", "is-degraded");
         if (runtimeStatus === "completed") {
           heroLive.classList.add("is-completed");
         } else if (runtimeStatus === "offline") {
           heroLive.classList.add("is-offline");
+        } else if (runtimeStatus === "degraded") {
+          heroLive.classList.add("is-degraded");
         } else if (runtimeStatus === "working") {
           heroLive.classList.add("is-workers-active");
         } else {
@@ -4058,6 +4157,34 @@ async function serve(req, res) {
     const result = await stopDaemon();
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(result));
+    return;
+  }
+
+  if (url.pathname === "/api/cycle-analytics") {
+    // Expose the latest cycle analytics snapshot for dashboard consumers (AC5).
+    // Returns lastCycle and a trimmed history (up to 10 entries) to keep response small.
+    try {
+      const configModule = await import("../config.js");
+      const cfg = configModule.loadConfig ? configModule.loadConfig() : {};
+      const data = await readCycleAnalytics(cfg);
+      if (!data) {
+        res.writeHead(204, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: true, data: null, reason: "NO_DATA_YET" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({
+        ok: true,
+        schemaVersion: data.schemaVersion,
+        lastCycle: data.lastCycle,
+        recentHistory: Array.isArray(data.history) ? data.history.slice(0, 10) : [],
+        updatedAt: data.updatedAt,
+        generatedAt: new Date().toISOString(),
+      }));
+    } catch (err) {
+      res.writeHead(500, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: false, error: String(err?.message || err) }));
+    }
     return;
   }
 

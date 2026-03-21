@@ -17,10 +17,83 @@
 
 import path from "node:path";
 import fs from "node:fs/promises";
-import { readJson, writeJson, spawnAsync } from "./fs_utils.js";
+import { readJson, readJsonSafe, READ_JSON_REASON, writeJson, spawnAsync } from "./fs_utils.js";
 import { appendProgress } from "./state_tracker.js";
 import { buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
 import { chatLog, warn } from "./logger.js";
+import { normalizeDecisionQualityLabel, DECISION_QUALITY_LABEL } from "./athena_reviewer.js";
+import { extractPostmortemEntries, migrateData, STATE_FILE_TYPE } from "./schema_registry.js";
+import { loadRegistry, getRunningExperimentsForPath } from "./experiment_registry.js";
+
+// ── Decision Quality Weights ──────────────────────────────────────────────────
+
+/**
+ * Explicit weights for each decision quality label.
+ * Used to compute a weighted quality score from recent postmortems.
+ *
+ * correct         = 1.0  — plan succeeded exactly as expected
+ * delayed-correct = 0.6  — plan succeeded after an extra iteration
+ * incorrect       = 0.0  — plan was executed but result was rolled back
+ * inconclusive    = 0.3  — outcome was unknown (timeout, missing data)
+ */
+export const DECISION_QUALITY_WEIGHTS = Object.freeze({
+  [DECISION_QUALITY_LABEL.CORRECT]:         1.0,
+  [DECISION_QUALITY_LABEL.DELAYED_CORRECT]: 0.6,
+  [DECISION_QUALITY_LABEL.INCORRECT]:       0.0,
+  [DECISION_QUALITY_LABEL.INCONCLUSIVE]:    0.3
+});
+
+/**
+ * Compute a weighted decision quality score from an array of postmortem entries.
+ * Returns a value in [0, 1] or null if no entries with labels are present.
+ *
+ * @param {Array<object>} postmortems
+ * @returns {{ score: number|null, labelCounts: Record<string, number>, total: number }}
+ */
+export function computeWeightedDecisionScore(postmortems) {
+  if (!Array.isArray(postmortems) || postmortems.length === 0) {
+    return { score: null, labelCounts: {}, total: 0 };
+  }
+  const labelCounts = {};
+  for (const label of Object.values(DECISION_QUALITY_LABEL)) {
+    labelCounts[label] = 0;
+  }
+  let weightedSum = 0;
+  let count = 0;
+  for (const pm of postmortems) {
+    const label = normalizeDecisionQualityLabel(pm);
+    labelCounts[label] = (labelCounts[label] || 0) + 1;
+    weightedSum += DECISION_QUALITY_WEIGHTS[label] ?? DECISION_QUALITY_WEIGHTS[DECISION_QUALITY_LABEL.INCONCLUSIVE];
+    count++;
+  }
+  return {
+    score: count > 0 ? weightedSum / count : null,
+    labelCounts,
+    total: count
+  };
+}
+
+// ── Outcome Degraded Reason Codes ────────────────────────────────────────────
+
+/**
+ * Machine-readable reason codes for degraded outcome collection.
+ * Returned in the `degradedReason` field of collectCycleOutcomes when `degraded: true`.
+ *
+ * Distinguishes missing input (ABSENT) from invalid input (INVALID).
+ *
+ *   PROMETHEUS_ABSENT   — prometheus_analysis.json not found (ENOENT)
+ *   PROMETHEUS_INVALID  — prometheus_analysis.json found but fails structure validation
+ *   EVOLUTION_ABSENT    — evolution_progress.json not found (ENOENT)
+ *   EVOLUTION_INVALID   — evolution_progress.json found but fails structure validation
+ *   NO_ACTIVE_DATA      — both prometheus plans and evolution progress are empty
+ */
+export const OUTCOME_DEGRADED_REASON = Object.freeze({
+  PROMETHEUS_ABSENT:  "PROMETHEUS_ABSENT",
+  PROMETHEUS_INVALID: "PROMETHEUS_INVALID",
+  EVOLUTION_ABSENT:   "EVOLUTION_ABSENT",
+  EVOLUTION_INVALID:  "EVOLUTION_INVALID",
+  NO_ACTIVE_DATA:     "NO_ACTIVE_DATA"
+});
 
 // ── Knowledge Memory ─────────────────────────────────────────────────────────
 
@@ -40,54 +113,172 @@ async function saveKnowledgeMemory(stateDir, memory) {
 
 // ── Cycle Outcome Collector ──────────────────────────────────────────────────
 
-async function collectCycleOutcomes(config) {
+/**
+ * Normalized outcome collector — Athena-gated architecture.
+ *
+ * Primary state sources (replaces stale Moses artifacts):
+ *   prometheus_analysis.json  — plans, projectHealth, requestBudget, waves
+ *                               (replaces trump_analysis.json)
+ *   evolution_progress.json   — completed task IDs
+ *                               (replaces moses_coordination.completedTasks)
+ *   worker_sessions.json      — per-worker status (unchanged)
+ *   worker_${role}.json       — per-worker activityLog → dispatches
+ *                               (replaces moses_coordination.dispatchLog)
+ *
+ * Legacy adapter:
+ *   moses_coordination.json   — read and merged when present; absent on Athena-gated runs.
+ *   Rollback: re-enable adapter-only mode by removing the prometheus/evolution reads above.
+ *
+ * Return contract:
+ *   { totalPlans, completedCount, projectHealth, workerOutcomes, waves, dispatches,
+ *     requestBudget, decisionQuality, timestamp, metricsSource, degraded, degradedReason }
+ *
+ *   degraded:      true when a critical source file is absent or invalid.
+ *   degradedReason: OUTCOME_DEGRADED_REASON code or null.
+ *   metricsSource: pipe-joined list of files that contributed data.
+ *
+ * @param {object} config
+ * @returns {Promise<object>}
+ */
+export async function collectCycleOutcomes(config) {
   const stateDir = config.paths?.stateDir || "state";
-  const trumpAnalysis = await readJson(path.join(stateDir, "trump_analysis.json"), null);
-  const mosesState = await readJson(path.join(stateDir, "moses_coordination.json"), {});
+
+  // ── Primary state sources (Athena-gated architecture) ────────────────────
+  // Use readJsonSafe to distinguish MISSING (ENOENT) from INVALID (parse error).
+  const [prometheusResult, evolutionResult] = await Promise.all([
+    readJsonSafe(path.join(stateDir, "prometheus_analysis.json")),
+    readJsonSafe(path.join(stateDir, "evolution_progress.json"))
+  ]);
   const workerSessions = await readJson(path.join(stateDir, "worker_sessions.json"), {});
 
-  const plans = Array.isArray(trumpAnalysis?.plans) ? trumpAnalysis.plans : [];
-  const completedTasks = Array.isArray(mosesState?.completedTasks) ? mosesState.completedTasks : [];
-  const dispatches = Array.isArray(mosesState?.dispatchLog) ? mosesState.dispatchLog : [];
+  // ── Legacy adapter: moses_coordination.json ──────────────────────────────
+  // Merged when present for backward-compatibility; absent on Athena-gated runs.
+  const mosesState = await readJson(path.join(stateDir, "moses_coordination.json"), null);
 
-  // Per-worker outcome analysis
+  // ── Input validation — distinguish missing vs invalid ─────────────────────
+  let degraded = false;
+  let degradedReason = null;
+
+  let plans = [];
+  let projectHealth = "unknown";
+  let requestBudget = {};
+  let waves = [];
+
+  if (!prometheusResult.ok) {
+    degraded = true;
+    degradedReason = prometheusResult.reason === READ_JSON_REASON.MISSING
+      ? OUTCOME_DEGRADED_REASON.PROMETHEUS_ABSENT
+      : OUTCOME_DEGRADED_REASON.PROMETHEUS_INVALID;
+  } else if (!Array.isArray(prometheusResult.data?.plans)) {
+    // File present but missing required `plans` array — treat as invalid structure.
+    degraded = true;
+    degradedReason = OUTCOME_DEGRADED_REASON.PROMETHEUS_INVALID;
+  } else {
+    plans = prometheusResult.data.plans;
+    projectHealth = prometheusResult.data.projectHealth || "unknown";
+    requestBudget = prometheusResult.data.requestBudget || {};
+    waves = Array.isArray(prometheusResult.data.executionStrategy?.waves)
+      ? prometheusResult.data.executionStrategy.waves
+      : [];
+  }
+
+  // Derive completed task IDs from evolution_progress.tasks.
+  let completedFromEvolution = [];
+  if (!evolutionResult.ok) {
+    if (!degraded) {
+      degraded = true;
+      degradedReason = evolutionResult.reason === READ_JSON_REASON.MISSING
+        ? OUTCOME_DEGRADED_REASON.EVOLUTION_ABSENT
+        : OUTCOME_DEGRADED_REASON.EVOLUTION_INVALID;
+    }
+  } else if (evolutionResult.data?.tasks !== null && typeof evolutionResult.data?.tasks !== "object") {
+    if (!degraded) {
+      degraded = true;
+      degradedReason = OUTCOME_DEGRADED_REASON.EVOLUTION_INVALID;
+    }
+  } else {
+    const taskMap = evolutionResult.data?.tasks || {};
+    completedFromEvolution = Object.entries(taskMap)
+      .filter(([, t]) => t.status === "completed" || t.status === "done")
+      .map(([id]) => id);
+  }
+
+  // Legacy adapter: merge Moses completedTasks when file is present.
+  const legacyCompleted = Array.isArray(mosesState?.completedTasks)
+    ? mosesState.completedTasks
+    : [];
+  const completedTasks = legacyCompleted.length > 0
+    ? [...new Set([...completedFromEvolution, ...legacyCompleted])]
+    : completedFromEvolution;
+
+  // ── Determine metrics source ──────────────────────────────────────────────
+  const sourceFiles = ["worker_sessions"];
+  if (prometheusResult.ok) sourceFiles.unshift("prometheus_analysis");
+  if (evolutionResult.ok)  sourceFiles.push("evolution_progress");
+  if (mosesState !== null)  sourceFiles.push("moses_coordination(legacy)");
+  const metricsSource = sourceFiles.join("+");
+
+  // ── Per-worker outcome analysis ───────────────────────────────────────────
   const workerOutcomes = [];
+  const workerActivityByRole = {};
+
   for (const [role, session] of Object.entries(workerSessions)) {
     const workerFile = await readJson(
       path.join(stateDir, `worker_${role.replace(/\s+/g, "_")}.json`),
       null
     );
     const activityLog = Array.isArray(workerFile?.activityLog) ? workerFile.activityLog : [];
-    const lastEntry = activityLog[activityLog.length - 1];
+    workerActivityByRole[role] = activityLog;
 
-    const timeouts = activityLog.filter(e => e.status === "timeout").length;
-    const failures = activityLog.filter(e => e.status === "error" || e.status === "failed").length;
+    const lastEntry = activityLog[activityLog.length - 1];
+    const timeouts  = activityLog.filter(e => e.status === "timeout").length;
+    const failures  = activityLog.filter(e => e.status === "error" || e.status === "failed").length;
     const successes = activityLog.filter(e => e.status === "done").length;
     const totalDispatches = activityLog.length;
     const hasPR = Boolean(lastEntry?.pr);
 
     workerOutcomes.push({
       role,
-      status: String(session?.status || lastEntry?.status || "unknown"),
+      status:          String(session?.status || lastEntry?.status || "unknown"),
       totalDispatches,
       timeouts,
       failures,
       successes,
       hasPR,
-      pr: lastEntry?.pr || null,
+      pr:        lastEntry?.pr || null,
       lastError: activityLog.filter(e => e.error).pop()?.error || null
     });
   }
 
-  // Wave analysis
-  const waves = Array.isArray(trumpAnalysis?.executionStrategy?.waves)
-    ? trumpAnalysis.executionStrategy.waves
-    : [];
+  // ── Build dispatch log from worker activityLog entries ───────────────────
+  // Replaces moses_coordination.dispatchLog — each worker's activityLog is the source.
+  const allActivityEntries = [];
+  for (const [role, activityLog] of Object.entries(workerActivityByRole)) {
+    for (const entry of activityLog) {
+      allActivityEntries.push({ role, ...entry });
+    }
+  }
+  // Legacy adapter: merge Moses dispatchLog when present.
+  const legacyDispatches = Array.isArray(mosesState?.dispatchLog) ? mosesState.dispatchLog : [];
+  const dispatches = [...allActivityEntries, ...legacyDispatches].slice(-20);
+
+  // ── Decision quality from recent postmortems ──────────────────────────────
+  let decisionQuality = { score: null, labelCounts: {}, total: 0 };
+  try {
+    const rawPostmortems = await readJson(path.join(stateDir, "athena_postmortems.json"), null);
+    if (rawPostmortems !== null) {
+      const migrated = migrateData(rawPostmortems, STATE_FILE_TYPE.ATHENA_POSTMORTEMS);
+      if (migrated.ok) {
+        const entries = extractPostmortemEntries(migrated.data);
+        decisionQuality = computeWeightedDecisionScore(entries.slice(-20));
+      }
+    }
+  } catch { /* no postmortem data — degrade gracefully */ }
 
   return {
-    totalPlans: plans.length,
-    completedCount: completedTasks.length,
-    projectHealth: trumpAnalysis?.projectHealth || "unknown",
+    totalPlans:      plans.length,
+    completedCount:  completedTasks.length,
+    projectHealth,
     workerOutcomes,
     waves: waves.map(w => ({
       id: w.id,
@@ -96,9 +287,14 @@ async function collectCycleOutcomes(config) {
         String(t).toLowerCase().includes(String(w.id).toLowerCase())
       )
     })),
-    dispatches: dispatches.slice(-20),
-    requestBudget: trumpAnalysis?.requestBudget || {},
-    timestamp: new Date().toISOString()
+    dispatches,
+    requestBudget,
+    decisionQuality,
+    timestamp: new Date().toISOString(),
+    // Athena-gated metadata fields
+    metricsSource,
+    degraded,
+    degradedReason
   };
 }
 
@@ -128,6 +324,15 @@ automation cycle and produce actionable improvements for the next cycle.
 
 ## CYCLE OUTCOMES
 ${JSON.stringify(outcomes, null, 2)}
+
+## DECISION QUALITY SIGNALS (weighted)
+Score: ${outcomes.decisionQuality?.score !== null ? (outcomes.decisionQuality.score * 100).toFixed(1) + "%" : "N/A"}
+Label counts: ${JSON.stringify(outcomes.decisionQuality?.labelCounts || {})}
+Total postmortems analyzed: ${outcomes.decisionQuality?.total || 0}
+Weight table: correct=1.0, delayed-correct=0.6, incorrect=0.0, inconclusive=0.3
+
+Use the decision quality score as a weighted signal in your health assessment and next-cycle priorities.
+A score below 0.5 (50%) signals systematic execution problems; incorrect labels deserve root-cause analysis.
 
 ## PREVIOUS LESSONS LEARNED
 ${previousLessons}
@@ -175,7 +380,7 @@ Analyze the cycle outcomes and produce a JSON response with these fields:
 
 Respond with ONLY valid JSON. No markdown, no explanation before or after.`;
 
-  const args = buildAgentArgs({ agentSlug: "issachar", prompt });
+  const args = buildAgentArgs({ agentSlug: "issachar", prompt, allowAll: true, noAskUser: true });
   const result = await spawnAsync(command, args, { env: process.env });
   const stdout = String(result?.stdout || "");
   const stderr = String(result?.stderr || "");
@@ -199,6 +404,18 @@ Respond with ONLY valid JSON. No markdown, no explanation before or after.`;
 
 // ── Apply Safe Improvements ──────────────────────────────────────────────────
 
+/**
+ * Apply auto-approved config suggestions and tag each change with active experiment IDs.
+ *
+ * AC1 enforcement modes:
+ *   soft (default): changes are applied and tagged with experiment IDs when available;
+ *     a warning is logged if no experiment covers the path, but the change is NOT blocked.
+ *   hard: changes are blocked (skipped with explicit warning) if no running experiment
+ *     covers the config path. Enable via selfImprovement.experimentEnforcement = "hard".
+ *
+ * Applied change objects include `experimentIds: string[]` for traceability.
+ * Blocked changes include `status: "blocked"` and `blockReason` for observability.
+ */
 async function applyConfigSuggestions(config, suggestions) {
   if (!Array.isArray(suggestions)) return [];
   const applied = [];
@@ -212,6 +429,17 @@ async function applyConfigSuggestions(config, suggestions) {
   }
 
   const coreProtected = config.selfImprovement?.coreProtectedModules || [];
+  const stateDir = config.paths?.stateDir || "state";
+
+  // AC1: load registry once; mode is "soft" unless explicitly set to "hard"
+  const enforcementMode = config.selfImprovement?.experimentEnforcement === "hard" ? "hard" : "soft";
+  let registry;
+  try {
+    registry = await loadRegistry(stateDir);
+  } catch {
+    // Registry not yet initialised — treat as empty; soft mode continues normally
+    registry = { schemaVersion: 1, experiments: [] };
+  }
 
   for (const suggestion of suggestions) {
     if (!suggestion.autoApply) continue;
@@ -232,6 +460,28 @@ async function applyConfigSuggestions(config, suggestions) {
     ];
     if (!safeConfigPaths.some(safe => configKey.includes(safe))) continue;
 
+    // AC1: tag with running experiment IDs covering this config path
+    const experimentIds = getRunningExperimentsForPath(registry, configKey);
+
+    if (enforcementMode === "hard" && experimentIds.length === 0) {
+      // Hard mode: block the change and record it with an explicit status
+      warn(`[self-improvement] hard enforcement blocked config change at ${configKey} — no running experiment covers this path`);
+      applied.push({
+        path: configKey,
+        status: "blocked",
+        blockReason: "NO_EXPERIMENT_COVERAGE",
+        experimentIds: [],
+        suggestedValue: suggestion.suggestedValue,
+        reason: suggestion.reason
+      });
+      continue;
+    }
+
+    if (experimentIds.length === 0) {
+      // Soft mode: log warning but apply
+      warn(`[self-improvement] no experiment covers config path ${configKey} — applying without experiment tag (soft enforcement)`);
+    }
+
     // Apply the change
     const keys = configKey.split(".");
     let target = boxConfig;
@@ -250,14 +500,17 @@ async function applyConfigSuggestions(config, suggestions) {
       target[lastKey] = suggestion.suggestedValue;
       applied.push({
         path: configKey,
+        status: "applied",
         oldValue,
         newValue: suggestion.suggestedValue,
-        reason: suggestion.reason
+        reason: suggestion.reason,
+        experimentIds
       });
     }
   }
 
-  if (applied.length > 0) {
+  const actuallyApplied = applied.filter(c => c.status === "applied");
+  if (actuallyApplied.length > 0) {
     await fs.writeFile(configPath, JSON.stringify(boxConfig, null, 2) + "\n", "utf8");
   }
 
@@ -276,8 +529,17 @@ export async function runSelfImprovementCycle(config) {
 
   // 1. Collect cycle outcomes
   const outcomes = await collectCycleOutcomes(config);
-  if (outcomes.totalPlans === 0) {
-    await appendProgress(config, "[SELF-IMPROVEMENT] No plans found — skipping analysis");
+
+  // Log degraded state explicitly — no silent fallback for critical state.
+  if (outcomes.degraded) {
+    warn(`[self-improvement] outcome collection degraded: ${outcomes.degradedReason} — source=${outcomes.metricsSource}`);
+    await appendProgress(config,
+      `[SELF-IMPROVEMENT] Degraded outcome collection: reason=${outcomes.degradedReason} source=${outcomes.metricsSource}`
+    );
+  }
+
+  if (outcomes.totalPlans === 0 && outcomes.completedCount === 0) {
+    await appendProgress(config, "[SELF-IMPROVEMENT] No plans or progress found — skipping analysis");
     return null;
   }
 
@@ -351,6 +613,8 @@ export async function runSelfImprovementCycle(config) {
   }
 
   // 6. Save improvement report
+  const appliedCount = appliedChanges.filter(c => c.status === "applied").length;
+  const blockedCount = appliedChanges.filter(c => c.status === "blocked").length;
   const report = {
     cycleAt: new Date().toISOString(),
     outcomes: {
@@ -362,13 +626,18 @@ export async function runSelfImprovementCycle(config) {
         timeouts: w.timeouts,
         failures: w.failures,
         hasPR: w.hasPR
-      }))
+      })),
+      decisionQuality: outcomes.decisionQuality,
+      metricsSource: outcomes.metricsSource,
+      degraded: outcomes.degraded,
+      degradedReason: outcomes.degradedReason
     },
     analysis: {
       systemHealthScore: analysis.systemHealthScore || 0,
       lessonsCount: newLessons.length,
       capabilityGapsCount: newGaps.length,
-      configChangesApplied: appliedChanges.length,
+      configChangesApplied: appliedCount,
+      configChangesBlocked: blockedCount,
       nextCyclePriorities: analysis.nextCyclePriorities || [],
       workerFeedback: analysis.workerFeedback || [],
       capabilityGaps: newGaps
@@ -390,11 +659,11 @@ export async function runSelfImprovementCycle(config) {
   const healthScore = analysis.systemHealthScore || 0;
   const lessonsStr = newLessons.map(l => `[${l.severity}] ${l.lesson}`).join("; ").slice(0, 300);
   await appendProgress(config,
-    `[SELF-IMPROVEMENT] Analysis complete — health=${healthScore}/100 | lessons=${newLessons.length} | config-changes=${appliedChanges.length} | ${lessonsStr}`
+    `[SELF-IMPROVEMENT] Analysis complete — health=${healthScore}/100 | lessons=${newLessons.length} | config-changes=${appliedCount} | config-blocked=${blockedCount} | ${lessonsStr}`
   );
 
   chatLog(stateDir, "SelfImprovement",
-    `Cycle analysis: health=${healthScore}/100, lessons=${newLessons.length}, applied=${appliedChanges.length}`
+    `Cycle analysis: health=${healthScore}/100, lessons=${newLessons.length}, applied=${appliedCount}, blocked=${blockedCount}`
   );
 
   return report;
