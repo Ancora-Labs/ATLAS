@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { readPipelineProgress } from "../core/pipeline_progress.js";
 import { parseTypedEvent } from "../core/event_schema.js";
+import { readCycleAnalytics } from "../core/cycle_analytics.js";
 
 dotenv.config();
 
@@ -4106,6 +4107,34 @@ async function serve(req, res) {
     const result = await stopDaemon();
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(result));
+    return;
+  }
+
+  if (url.pathname === "/api/cycle-analytics") {
+    // Expose the latest cycle analytics snapshot for dashboard consumers (AC5).
+    // Returns lastCycle and a trimmed history (up to 10 entries) to keep response small.
+    try {
+      const configModule = await import("../config.js");
+      const cfg = configModule.loadConfig ? configModule.loadConfig() : {};
+      const data = await readCycleAnalytics(cfg);
+      if (!data) {
+        res.writeHead(204, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: true, data: null, reason: "NO_DATA_YET" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({
+        ok: true,
+        schemaVersion: data.schemaVersion,
+        lastCycle: data.lastCycle,
+        recentHistory: Array.isArray(data.history) ? data.history.slice(0, 10) : [],
+        updatedAt: data.updatedAt,
+        generatedAt: new Date().toISOString(),
+      }));
+    } catch (err) {
+      res.writeHead(500, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: false, error: String(err?.message || err) }));
+    }
     return;
   }
 
