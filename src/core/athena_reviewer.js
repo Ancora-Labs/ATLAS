@@ -21,6 +21,71 @@ import { getRoleRegistry } from "./role_registry.js";
 import { buildAgentArgs, parseAgentOutput, logAgentThinking } from "./agent_loader.js";
 import { chatLog } from "./logger.js";
 
+// ── Canonical postmortem schema ──────────────────────────────────────────────
+
+/**
+ * Canonical values for Athena's postmortem `recommendation` field.
+ * New schema (written by runAthenaPostmortem since BOX v1).
+ *
+ * @enum {string}
+ */
+export const POSTMORTEM_RECOMMENDATION = Object.freeze({
+  PROCEED: "proceed",   // task succeeded — count toward completedTasks
+  REWORK:  "rework",    // task needs another attempt
+  ESCALATE: "escalate"  // task needs human intervention
+});
+
+/**
+ * Reason codes returned by normalizePostmortemVerdict.
+ * Callers must check this field before trusting `pass`.
+ *
+ * @enum {string}
+ */
+export const POSTMORTEM_PARSE_REASON = Object.freeze({
+  OK: "OK",
+  /** Neither `recommendation` nor legacy `verdict` field is present. */
+  MISSING_VERDICT: "MISSING_VERDICT",
+  /** `recommendation` is present but not a known POSTMORTEM_RECOMMENDATION value. */
+  INVALID_RECOMMENDATION: "INVALID_RECOMMENDATION"
+});
+
+/** All valid recommendation strings as a Set for O(1) lookup. */
+const VALID_RECOMMENDATIONS = new Set(Object.values(POSTMORTEM_RECOMMENDATION));
+
+/**
+ * Normalize a postmortem record's pass/fail status.
+ *
+ * Strategy: normalize on read (no silent fallback for critical state).
+ *   - New schema  (has `recommendation`): pass iff recommendation === "proceed"
+ *   - Legacy schema (has `verdict`, no `recommendation`): pass iff verdict === "pass"
+ *   - Unknown (neither field): degrade — pass=false, reason=MISSING_VERDICT
+ *
+ * @param {object} pm - postmortem record from athena_postmortems.json
+ * @returns {{ pass: boolean, schema: "new"|"legacy"|"unknown", reason: string }}
+ */
+export function normalizePostmortemVerdict(pm) {
+  if (!pm || typeof pm !== "object") {
+    return { pass: false, schema: "unknown", reason: POSTMORTEM_PARSE_REASON.MISSING_VERDICT };
+  }
+
+  // New schema: recommendation field takes precedence
+  if ("recommendation" in pm) {
+    const rec = pm.recommendation;
+    if (!VALID_RECOMMENDATIONS.has(rec)) {
+      return { pass: false, schema: "new", reason: POSTMORTEM_PARSE_REASON.INVALID_RECOMMENDATION };
+    }
+    return { pass: rec === POSTMORTEM_RECOMMENDATION.PROCEED, schema: "new", reason: POSTMORTEM_PARSE_REASON.OK };
+  }
+
+  // Legacy schema fallback: verdict field (backward compatibility)
+  if ("verdict" in pm) {
+    return { pass: pm.verdict === "pass", schema: "legacy", reason: POSTMORTEM_PARSE_REASON.OK };
+  }
+
+  // Neither field present — degrade explicitly, never silent
+  return { pass: false, schema: "unknown", reason: POSTMORTEM_PARSE_REASON.MISSING_VERDICT };
+}
+
 // ── AI call (single-prompt, 1 request) ──────────────────────────────────────
 
 async function callCopilotAgent(command, agentSlug, contextPrompt, config, model) {
