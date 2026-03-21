@@ -13,6 +13,42 @@
 import { getVerificationProfile } from "./verification_profiles.js";
 
 /**
+ * Apply config-based gate overrides to a verification profile.
+ * Gates config can upgrade optional evidence fields to required.
+ *
+ * Mapping:
+ *   requireBuild: true        → build "optional"    → "required"
+ *   requireTests: true        → tests "optional"    → "required"
+ *   requireSecurityScan: true → security "optional" → "required"
+ *
+ * Exempt fields are never upgraded — exempt means not applicable for the role.
+ *
+ * @param {object} profile — profile from getVerificationProfile()
+ * @param {object} gatesConfig — config.gates from box.config.json
+ * @returns {object} — new profile with evidence overrides applied (original is not mutated)
+ */
+export function applyConfigOverrides(profile, gatesConfig) {
+  if (!gatesConfig) return profile;
+
+  const evidence = { ...profile.evidence };
+
+  // Map config gate flags to their corresponding evidence field names
+  const fieldMap = {
+    requireBuild: "build",
+    requireTests: "tests",
+    requireSecurityScan: "security"
+  };
+
+  for (const [configKey, evidenceField] of Object.entries(fieldMap)) {
+    if (gatesConfig[configKey] === true && evidence[evidenceField] === "optional") {
+      evidence[evidenceField] = "required";
+    }
+  }
+
+  return { ...profile, evidence };
+}
+
+/**
  * Parse VERIFICATION_REPORT from worker output.
  * Expected format: VERIFICATION_REPORT: BUILD=pass; TESTS=fail; RESPONSIVE=n/a; ...
  */
@@ -83,10 +119,13 @@ export function parseResponsiveMatrix(output) {
  *
  * @param {string} workerKind — the role kind from box.config.json (e.g. "frontend", "backend")
  * @param {object} parsedResponse — output from parseWorkerResponse() in worker_runner.js
+ * @param {object} [options] — optional overrides
+ * @param {object} [options.gatesConfig] — config.gates to upgrade optional fields to required
  * @returns {{ passed: boolean, gaps: string[], evidence: object }}
  */
-export function validateWorkerContract(workerKind, parsedResponse) {
-  const profile = getVerificationProfile(workerKind);
+export function validateWorkerContract(workerKind, parsedResponse, options = {}) {
+  const baseProfile = getVerificationProfile(workerKind);
+  const profile = options.gatesConfig ? applyConfigOverrides(baseProfile, options.gatesConfig) : baseProfile;
   const output = parsedResponse?.fullOutput || parsedResponse?.summary || "";
   const report = parseVerificationReport(output);
   const responsiveMatrix = parseResponsiveMatrix(output);
