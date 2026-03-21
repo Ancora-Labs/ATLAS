@@ -424,9 +424,6 @@ You are Prometheus — BOX Self-Evolution Engine & Key Planner. Your job is to:
 ## OPERATOR OBJECTIVE
 ${userPrompt}
 
-## AVAILABLE WORKERS
-${workersList}
-
 ## GROUNDED INPUT SOURCE
   - BOX already exported the full repository into chunk files using direct filesystem access.
   - Read manifest first: ${repoExport.manifestPath}
