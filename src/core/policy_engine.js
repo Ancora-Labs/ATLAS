@@ -1,5 +1,9 @@
 import { readJson } from "./fs_utils.js";
 import { runShadowEvaluation } from "./shadow_policy_evaluator.js";
+import {
+  validateGovernanceContract,
+  GovernanceContractError
+} from "./governance_contract.js";
 
 export async function loadPolicy(config) {
   return readJson(config.paths.policyFile, {
@@ -9,6 +13,38 @@ export async function loadPolicy(config) {
     rolePolicies: {}
   });
 }
+
+/**
+ * Load policy and validate the embedded governance contract.
+ *
+ * On governance validation failure, throws GovernanceContractError with:
+ *   - message format: "[governance] <errorCode>: <detail>"
+ *   - err.errorCode : one of GOVERNANCE_ERROR_CODE values
+ *   - err.exitCode  : GOVERNANCE_STARTUP_EXIT_CODE (1)
+ *
+ * Callers at startup SHOULD catch GovernanceContractError and call process.exit(err.exitCode).
+ *
+ * Recovery path: fix policy.json governanceContract section and restart.
+ *
+ * @param {object} config
+ * @returns {Promise<object>} loaded and governance-validated policy
+ * @throws {GovernanceContractError} when governance contract is missing or invalid
+ */
+export async function loadPolicyWithGovernance(config) {
+  const policy = await loadPolicy(config);
+  const result = validateGovernanceContract(policy);
+  if (!result.ok) {
+    throw new GovernanceContractError(result.errorCode, result.message.replace(`[governance] ${result.errorCode}: `, ""));
+  }
+  return policy;
+}
+
+// Re-export governance contract utilities for callers that import from policy_engine
+export {
+  validateGovernanceContract,
+  GovernanceContractError,
+  GOVERNANCE_STARTUP_EXIT_CODE
+} from "./governance_contract.js";
 
 function normalizePath(value) {
   return String(value || "").replace(/\\/g, "/").replace(/^\.\//, "").trim();
