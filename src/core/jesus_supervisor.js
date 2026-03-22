@@ -16,10 +16,15 @@
 
 import path from "node:path";
 import { readJson, writeJson, spawnAsync } from "./fs_utils.js";
-import { appendProgress } from "./state_tracker.js";
+import { appendProgress, appendAlert, ALERT_SEVERITY } from "./state_tracker.js";
 import { getRoleRegistry } from "./role_registry.js";
 import { buildAgentArgs, parseAgentOutput, logAgentThinking } from "./agent_loader.js";
 import { chatLog } from "./logger.js";
+import {
+  validateLeadershipContract,
+  LEADERSHIP_CONTRACT_TYPE,
+  TRUST_BOUNDARY_ERROR,
+} from "./trust_boundary.js";
 
 async function callCopilotAgent(command, agentSlug, contextPrompt) {
   const args = buildAgentArgs({ agentSlug, prompt: contextPrompt, allowAll: true, noAskUser: true });
@@ -404,6 +409,45 @@ ${workersList}`;
   }
 
   logAgentThinking(stateDir, jesusName, aiResult.thinking);
+
+  // ── Trust boundary validation ────────────────────────────────────────────
+  const tbMode = config?.runtime?.trustBoundaryMode === "warn" ? "warn" : "enforce";
+  const trustCheck = validateLeadershipContract(
+    LEADERSHIP_CONTRACT_TYPE.SUPERVISOR, aiResult.parsed, { mode: tbMode }
+  );
+  if (!trustCheck.ok && tbMode === "enforce") {
+    const tbErrors = trustCheck.errors.map(e => `${e.payloadPath}: ${e.message}`).join(" | ");
+    await appendProgress(config, `[JESUS][TRUST_BOUNDARY] Supervisor output failed contract validation — class=${TRUST_BOUNDARY_ERROR} reasonCode=${trustCheck.reasonCode} errors=${tbErrors}`);
+    try {
+      await appendAlert(config, {
+        severity: ALERT_SEVERITY.CRITICAL,
+        source: "jesus_supervisor",
+        title: "Supervisor output failed trust-boundary validation",
+        message: `class=${TRUST_BOUNDARY_ERROR} reasonCode=${trustCheck.reasonCode} errors=${tbErrors}`
+      });
+    } catch { /* non-fatal */ }
+    // Degrade to safe fallback directive; never silently pass invalid output
+    const needsTrump = trumpAgeHours > 6;
+    return {
+      wait: false,
+      wakeMoses: true,
+      callTrump: needsTrump,
+      trumpReason: needsTrump ? "Trust-boundary violation in supervisor output and no recent Trump analysis" : undefined,
+      decision: "tactical",
+      systemHealth: "unknown",
+      thinking: aiResult.thinking,
+      fullOutput: aiResult.raw || "",
+      briefForMoses: `Check GitHub issues and activate appropriate workers. Target repo: ${config.env?.targetRepo}`,
+      priorities: [],
+      workerSuggestions: [],
+      _trustBoundaryViolation: true,
+      _trustBoundaryErrors: tbErrors
+    };
+  }
+  if (trustCheck.errors.length > 0 && tbMode === "warn") {
+    const tbErrors = trustCheck.errors.map(e => `${e.payloadPath}: ${e.message}`).join(" | ");
+    await appendProgress(config, `[JESUS][TRUST_BOUNDARY][WARN] Contract violations (warn mode, not blocking): ${tbErrors}`);
+  }
 
   const d = aiResult.parsed;
 

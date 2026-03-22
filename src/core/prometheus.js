@@ -28,6 +28,11 @@ import {
   persistGraphDiagnostics,
   GRAPH_STATUS,
 } from "./dependency_graph_resolver.js";
+import {
+  validateLeadershipContract,
+  LEADERSHIP_CONTRACT_TYPE,
+  TRUST_BOUNDARY_ERROR,
+} from "./trust_boundary.js";
 
 export function detectModelFallback(rawText) {
   const text = String(rawText || "");
@@ -602,6 +607,36 @@ CRITICAL: Any plan with riskLevel=high MUST include a fully-populated premortem 
     }
 
     await appendProgress(config, `[PROMETHEUS] Read coverage OK: ${coverage.matchedCount}/${coverage.totalTargets} (${(coverage.coverage * 100).toFixed(1)}%)`);
+
+    // ── Trust boundary validation (must pass before accepting result) ────────
+    const tbMode = config?.runtime?.trustBoundaryMode === "warn" ? "warn" : "enforce";
+    const trustCheck = validateLeadershipContract(
+      LEADERSHIP_CONTRACT_TYPE.PLANNER, aiResult.parsed, { mode: tbMode }
+    );
+    if (!trustCheck.ok && tbMode === "enforce") {
+      const tbErrors = trustCheck.errors.map(e => `${e.payloadPath}: ${e.message}`).join(" | ");
+      await appendProgress(config, `[PROMETHEUS][TRUST_BOUNDARY] Attempt ${attempt}/${maxAttempts} failed contract validation — class=${TRUST_BOUNDARY_ERROR} errors=${tbErrors}`);
+      try {
+        await appendAlert(config, {
+          severity: "critical",
+          source: "prometheus",
+          title: "Planner output failed trust-boundary validation",
+          message: `class=${TRUST_BOUNDARY_ERROR} reasonCode=${trustCheck.reasonCode} errors=${tbErrors}`
+        });
+      } catch { /* non-fatal */ }
+      if (attempt >= maxAttempts) {
+        await appendProgress(config, `[PROMETHEUS] Analysis failed — trust-boundary gate not satisfied after ${maxAttempts} attempts`);
+        chatLog(stateDir, prometheusName, `Trust-boundary gate failed: ${tbErrors}`);
+        return null;
+      }
+      rejectionHint = `## PREVIOUS ATTEMPT REJECTED — TRUST BOUNDARY VIOLATION\n- class: ${TRUST_BOUNDARY_ERROR}\n- Errors: ${tbErrors}\n- Fix: ensure all required fields are present and valid in the JSON output.`;
+      continue;
+    }
+    if (trustCheck.errors.length > 0 && tbMode === "warn") {
+      const tbErrors = trustCheck.errors.map(e => `${e.payloadPath}: ${e.message}`).join(" | ");
+      await appendProgress(config, `[PROMETHEUS][TRUST_BOUNDARY][WARN] Contract violations (warn mode, not blocking): ${tbErrors}`);
+    }
+
     accepted = { aiResult, coverage };
     break;
   }

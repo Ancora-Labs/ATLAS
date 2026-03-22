@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Leadership contract schemas for BOX provider outputs. Used by src/core/trust_boundary.js. Bump schemaVersion on any breaking field change.",
+  "schemaVersion": 1,
+  "contracts": {
+    "planner": {
+      "$comment": "Prometheus planner output contract. Required fields that MUST be present and valid before downstream execution.",
+      "requiredFields": ["plans", "analysis", "projectHealth", "executionStrategy", "requestBudget"],
+      "fields": {
+        "plans": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Array of worker plan objects; each must have role, task, priority, wave, verification"
+        },
+        "analysis": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Comprehensive analysis narrative"
+        },
+        "projectHealth": {
+          "type": "string",
+          "enum": ["good", "needs-work", "critical"],
+          "description": "Project health classification"
+        },
+        "executionStrategy": {
+          "type": "object",
+          "description": "Wave-based execution strategy object"
+        },
+        "requestBudget": {
+          "type": "object",
+          "description": "Request budget object with estimatedPremiumRequestsTotal"
+        }
+      },
+      "planItemRequiredFields": ["role", "task", "priority", "wave", "verification"],
+      "planItemFields": {
+        "role":         { "type": "string",  "minLength": 1 },
+        "task":         { "type": "string",  "minLength": 1 },
+        "priority":     { "type": "number"                  },
+        "wave":         { "type": "string",  "minLength": 1 },
+        "verification": { "type": "string",  "minLength": 1 }
+      }
+    },
+    "reviewer": {
+      "$comment": "Athena plan-review output contract.",
+      "requiredFields": ["approved", "corrections", "planReviews"],
+      "fields": {
+        "approved": {
+          "type": "boolean",
+          "description": "Whether the plan is approved for execution"
+        },
+        "corrections": {
+          "type": "array",
+          "description": "List of mandatory corrections before execution"
+        },
+        "planReviews": {
+          "type": "array",
+          "description": "Per-plan review results"
+        }
+      }
+    },
+    "supervisor": {
+      "$comment": "Jesus supervisor directive output contract.",
+      "requiredFields": ["decision", "wakeMoses", "callTrump", "briefForMoses", "systemHealth"],
+      "fields": {
+        "decision": {
+          "type": "string",
+          "enum": ["wait", "strategic", "tactical", "emergency"],
+          "description": "Strategic decision for the current cycle"
+        },
+        "wakeMoses": {
+          "type": "boolean",
+          "description": "Whether Moses should be activated this cycle"
+        },
+        "callTrump": {
+          "type": "boolean",
+          "description": "Whether Trump repo scan should be triggered"
+        },
+        "briefForMoses": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Instructions for Moses on what to execute"
+        },
+        "systemHealth": {
+          "type": "string",
+          "description": "System health assessment string"
+        }
+      }
+    }
+  }
+}

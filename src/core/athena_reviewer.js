@@ -28,6 +28,11 @@ import {
   STATE_FILE_TYPE,
   MIGRATION_REASON
 } from "./schema_registry.js";
+import {
+  validateLeadershipContract,
+  LEADERSHIP_CONTRACT_TYPE,
+  TRUST_BOUNDARY_ERROR,
+} from "./trust_boundary.js";
 
 // ── Rubric calibration ───────────────────────────────────────────────────────
 
@@ -762,6 +767,31 @@ Respond with your assessment, then:
   }
 
   logAgentThinking(stateDir, athenaName, aiResult.thinking);
+
+  // ── Trust boundary validation ────────────────────────────────────────────
+  const tbMode = config?.runtime?.trustBoundaryMode === "warn" ? "warn" : "enforce";
+  const trustCheck = validateLeadershipContract(
+    LEADERSHIP_CONTRACT_TYPE.REVIEWER, aiResult.parsed, { mode: tbMode }
+  );
+  if (!trustCheck.ok && tbMode === "enforce") {
+    const tbErrors = trustCheck.errors.map(e => `${e.payloadPath}: ${e.message}`).join(" | ");
+    const reason = {
+      code: "TRUST_BOUNDARY_VIOLATION",
+      message: `Reviewer output failed contract validation — class=${TRUST_BOUNDARY_ERROR} reasonCode=${trustCheck.reasonCode}: ${tbErrors}`
+    };
+    await appendProgress(config, `[ATHENA][TRUST_BOUNDARY] Reviewer output blocked — ${reason.message}`);
+    await appendAlert(config, {
+      severity: ALERT_SEVERITY.CRITICAL,
+      source: "athena_reviewer",
+      title: "Reviewer output failed trust-boundary validation — plan blocked",
+      message: `code=${reason.code} errors=${tbErrors}`
+    });
+    return { approved: false, reason, corrections: [] };
+  }
+  if (trustCheck.errors.length > 0 && tbMode === "warn") {
+    const tbErrors = trustCheck.errors.map(e => `${e.payloadPath}: ${e.message}`).join(" | ");
+    await appendProgress(config, `[ATHENA][TRUST_BOUNDARY][WARN] Contract violations (warn mode, not blocking): ${tbErrors}`);
+  }
 
   const d = aiResult.parsed;
   const approved = d.approved !== false;
