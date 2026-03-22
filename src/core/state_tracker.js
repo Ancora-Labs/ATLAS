@@ -347,6 +347,58 @@ export async function loadInterventionOptimizerLog(config) {
  * @param {object} entry  — optimizer result from runInterventionOptimizer
  * @returns {Promise<void>}
  */
+// ── Monthly Postmortem Persistence ────────────────────────────────────────────
+
+/**
+ * Persist a monthly postmortem to state/monthly_postmortem_{monthKey}.json.
+ *
+ * Validates all required schema fields before writing.
+ * Distinguishes missing input (postmortem is null) from invalid input
+ * (postmortem present but fails schema validation) with explicit reason codes.
+ *
+ * Never silently drops data — write errors return ok=false with an explicit reason.
+ *
+ * @param {object} config
+ * @param {object} postmortem — output of generateMonthlyPostmortem().postmortem
+ * @returns {Promise<{ ok: boolean, filePath?: string, reason?: string }>}
+ */
+export async function persistMonthlyPostmortem(config, postmortem) {
+  if (postmortem === null || postmortem === undefined) {
+    return { ok: false, reason: "MISSING_INPUT: postmortem is null or undefined" };
+  }
+  if (typeof postmortem !== "object" || Array.isArray(postmortem)) {
+    return { ok: false, reason: "INVALID_INPUT: postmortem must be a non-array object" };
+  }
+
+  const REQUIRED = [
+    "schemaVersion", "monthKey", "generatedAt", "status",
+    "cycleCount", "experimentOutcomes", "compoundingEffects",
+    "decisionQualityTrend", "seedQuestion"
+  ];
+
+  for (const field of REQUIRED) {
+    if (!(field in postmortem)) {
+      return { ok: false, reason: `INVALID_INPUT: missing required field "${field}"` };
+    }
+  }
+
+  const monthKey = String(postmortem.monthKey || "");
+  if (!/^\d{4}-\d{2}$/.test(monthKey)) {
+    return { ok: false, reason: `INVALID_INPUT: monthKey must be "YYYY-MM", got "${monthKey}"` };
+  }
+
+  const stateDir  = config?.paths?.stateDir || "state";
+  const filePath  = path.join(stateDir, `monthly_postmortem_${monthKey}.json`);
+
+  try {
+    await ensureParent(filePath);
+    await writeJson(filePath, postmortem);
+    return { ok: true, filePath };
+  } catch (err) {
+    return { ok: false, reason: `WRITE_FAILED: ${String(err?.message || err)}` };
+  }
+}
+
 export async function appendInterventionOptimizerEntry(config, entry) {
   const logFile = path.join(config.paths.stateDir, "intervention_optimizer_log.json");
   const state = await readJson(logFile, {

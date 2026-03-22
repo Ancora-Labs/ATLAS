@@ -771,6 +771,604 @@ async function applyConfigSuggestions(config, suggestions) {
 
 // ── Main Self-Improvement Cycle ──────────────────────────────────────────────
 
+// ── Monthly Postmortem Generator ─────────────────────────────────────────────
+
+/**
+ * Risk: MEDIUM (mislabeled "low" in original task brief).
+ * A faulty postmortem that corrupts next-quarter strategy seeds is a medium-risk outcome.
+ * All generated output is validated before write; status="degraded" when data is partial.
+ */
+
+/**
+ * Status values for a monthly postmortem document.
+ * @enum {string}
+ */
+export const MONTHLY_POSTMORTEM_STATUS = Object.freeze({
+  OK:                "ok",
+  INSUFFICIENT_DATA: "insufficient_data",
+  DEGRADED:          "degraded"
+});
+
+/**
+ * Decision quality trend values for a monthly postmortem.
+ * Computed deterministically from first-half vs second-half weighted scores.
+ * @enum {string}
+ */
+export const POSTMORTEM_DECISION_TREND = Object.freeze({
+  IMPROVING:         "improving",
+  STABLE:            "stable",
+  DEGRADING:         "degrading",
+  INSUFFICIENT_DATA: "insufficient_data"
+});
+
+/**
+ * Severity weights used in the compounding-effect score formula.
+ * score = occurrences × severityWeight × recencyFactor
+ * @type {Readonly<Record<string, number>>}
+ */
+export const COMPOUNDING_SEVERITY_WEIGHT = Object.freeze({
+  critical: 3,
+  warning:  2,
+  info:     1
+});
+
+/**
+ * Canonical schema for monthly_postmortem_YYYY-MM.json.
+ *
+ * Required top-level fields, enum values, counterfactual template fields,
+ * and seed question format rules are all specified here for machine-checkable
+ * validation (Athena AC1–AC5 resolved).
+ *
+ * Output file: state/monthly_postmortem_{monthKey}.json
+ */
+export const MONTHLY_POSTMORTEM_SCHEMA = Object.freeze({
+  schemaVersion: 1,
+
+  /** Minimum recorded cycles before status="ok" is set (vs "insufficient_data"). */
+  minCycleCount: 3,
+
+  /** Maximum compounding effects returned. */
+  maxCompoundingEffects: 5,
+
+  /** Time window for decision quality trend (days). */
+  trendTimeWindowDays: 30,
+
+  required: Object.freeze([
+    "schemaVersion", "monthKey", "generatedAt", "status",
+    "cycleCount", "experimentOutcomes", "compoundingEffects",
+    "decisionQualityTrend", "seedQuestion"
+  ]),
+
+  statusEnum:                      Object.freeze(["ok", "insufficient_data", "degraded"]),
+  trendEnum:                       Object.freeze(["improving", "stable", "degrading", "insufficient_data"]),
+  confidenceLevelEnum:             Object.freeze(["high", "medium", "low"]),
+  compoundingEffectSeverityEnum:   Object.freeze(["critical", "warning", "info"]),
+
+  /** Required fields on each counterfactual note (Athena AC3 resolved). */
+  counterfactualRequiredFields: Object.freeze([
+    "experimentId", "hypothesis", "failureReason", "alternative", "preventionStrategy"
+  ]),
+
+  /** Required fields on the seedQuestion object (Athena AC5 resolved). */
+  seedQuestionRequiredFields: Object.freeze(["question", "rationale", "dataPoints"]),
+
+  /** Confidence level thresholds based on total postmortem count. */
+  trendConfidenceThresholds: Object.freeze({ HIGH: 10, MEDIUM: 5 }),
+
+  /**
+   * Minimum score delta (absolute) required to classify trend as improving/degrading.
+   * Below this threshold → "stable".
+   */
+  trendDeltaThreshold: 0.05,
+
+  /** Seed question format rule: must end in "?" and have >= this many characters. */
+  seedQuestionMinLength: 20
+});
+
+// ── Compounding Effect Scoring ─────────────────────────────────────────────────
+
+/**
+ * Compute recency factor for a lesson based on its addedAt timestamp
+ * relative to the end of the given month.
+ *
+ * recencyFactor:
+ *   1.0 — within last 7 days of the month
+ *   0.7 — 8–14 days before end of month
+ *   0.5 — older than 14 days before end of month
+ *
+ * @param {string|null|undefined} addedAt — ISO timestamp
+ * @param {Date} monthEnd
+ * @returns {number}
+ */
+function computeRecencyFactor(addedAt, monthEnd) {
+  if (!addedAt) return 0.5;
+  const ts = new Date(addedAt).getTime();
+  if (!Number.isFinite(ts)) return 0.5;
+  const daysDiff = (monthEnd.getTime() - ts) / (1000 * 60 * 60 * 24);
+  if (daysDiff <= 7)  return 1.0;
+  if (daysDiff <= 14) return 0.7;
+  return 0.5;
+}
+
+/**
+ * Compute top-N compounding effects from monthly improvement reports.
+ *
+ * Scoring formula (Athena AC2 resolved):
+ *   score = occurrences × severityWeight × recencyFactor
+ *   severityWeight : critical=3, warning=2, info=1  (COMPOUNDING_SEVERITY_WEIGHT)
+ *   recencyFactor  : 1.0 last 7 days of month, 0.7 8–14 days, 0.5 older
+ *
+ * Grouping: lessons are grouped by their `category` field.
+ * Pattern = "<category>: <most common lesson text in that group>" (capped at 200 chars).
+ * Evidence = array of report cycleAt timestamps where the category appeared (capped at 10).
+ *
+ * @param {object[]} reports — improvement_reports entries for the month
+ * @param {string}   monthKey — "YYYY-MM"
+ * @param {number}   [maxN]
+ * @returns {object[]}
+ */
+export function computeCompoundingEffects(reports, monthKey, maxN = MONTHLY_POSTMORTEM_SCHEMA.maxCompoundingEffects) {
+  if (!Array.isArray(reports) || reports.length === 0) return [];
+
+  const [year, month] = monthKey.split("-").map(Number);
+  const monthEnd = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+
+  /** @type {Map<string, { occurrences: number, severity: string, evidence: string[], lessonTexts: string[], scoreSum: number }>} */
+  const categoryMap = new Map();
+
+  for (const report of reports) {
+    const cycleAt = String(report?.cycleAt || "");
+    const lessons = Array.isArray(report?.analysis?.lessons) ? report.analysis.lessons : [];
+
+    for (const lesson of lessons) {
+      const category     = String(lesson?.category || "unknown");
+      const severity     = String(lesson?.severity  || "info");
+      const lessonText   = String(lesson?.lesson    || "");
+      const addedAt      = lesson?.addedAt || cycleAt;
+      const recency      = computeRecencyFactor(addedAt, monthEnd);
+      const severityW    = COMPOUNDING_SEVERITY_WEIGHT[severity] ?? COMPOUNDING_SEVERITY_WEIGHT.info;
+      const itemScore    = severityW * recency;
+
+      if (!categoryMap.has(category)) {
+        categoryMap.set(category, {
+          occurrences: 0, severity, evidence: [], lessonTexts: [], scoreSum: 0
+        });
+      }
+
+      const entry = categoryMap.get(category);
+      entry.occurrences += 1;
+      entry.scoreSum    += itemScore;
+
+      if (cycleAt && !entry.evidence.includes(cycleAt)) entry.evidence.push(cycleAt);
+      if (lessonText && !entry.lessonTexts.includes(lessonText)) entry.lessonTexts.push(lessonText);
+
+      // Promote to highest severity seen in this category
+      const existingW = COMPOUNDING_SEVERITY_WEIGHT[entry.severity] ?? 1;
+      if (severityW > existingW) entry.severity = severity;
+    }
+  }
+
+  const effects = [];
+  for (const [category, data] of categoryMap) {
+    const domSeverityW = COMPOUNDING_SEVERITY_WEIGHT[data.severity] ?? 1;
+    const avgRecency   = data.occurrences > 0
+      ? data.scoreSum / (data.occurrences * domSeverityW)
+      : 0.5;
+    const score = data.occurrences * domSeverityW * avgRecency;
+
+    effects.push({
+      pattern:     `${category}: ${data.lessonTexts[0] || "No details"}`.slice(0, 200),
+      score:       Math.round(score * 100) / 100,
+      occurrences: data.occurrences,
+      severity:    data.severity,
+      recentAt:    data.evidence[data.evidence.length - 1] || null,
+      evidence:    data.evidence.slice(-10)
+    });
+  }
+
+  effects.sort((a, b) => b.score - a.score || b.occurrences - a.occurrences);
+  return effects.slice(0, maxN);
+}
+
+// ── Counterfactual Notes ───────────────────────────────────────────────────────
+
+/**
+ * Build counterfactual notes for rolled-back experiments.
+ *
+ * Template fields (Athena AC3 resolved — any string no longer satisfies criterion):
+ *   experimentId       — stable experiment ID
+ *   hypothesis         — hypothesisId of what we expected to be true
+ *   failureReason      — statusReason from the experiment record, or "UNKNOWN"
+ *   alternative        — deterministically derived counterfactual statement
+ *   preventionStrategy — deterministically derived prevention advice
+ *
+ * @param {object[]} experiments
+ * @returns {object[]}
+ */
+export function buildCounterfactuals(experiments) {
+  if (!Array.isArray(experiments)) return [];
+
+  return experiments
+    .filter(e => e.status === "rolled_back")
+    .map(exp => {
+      const failureReason  = String(exp.statusReason || "UNKNOWN");
+      const hypo           = String(exp.hypothesisId  || "unknown-hypothesis");
+
+      const alternative = failureReason === "UNKNOWN"
+        ? `Test "${hypo}" with a narrower interventionScope limited to a single config key`
+        : `Instead of "${hypo}", address the root cause (${failureReason.slice(0, 80)}) first, then re-test`;
+
+      const preventionStrategy = failureReason === "UNKNOWN"
+        ? "Define explicit stop conditions and measurable success criteria before starting next experiment"
+        : `Resolve "${failureReason.slice(0, 100)}" before attempting a similar intervention`;
+
+      return {
+        experimentId:       String(exp.experimentId || ""),
+        hypothesis:         hypo,
+        failureReason,
+        alternative,
+        preventionStrategy
+      };
+    });
+}
+
+// ── Decision Quality Trend for Month ──────────────────────────────────────────
+
+/**
+ * Compute decision quality trend for a given calendar month.
+ *
+ * Time window: all postmortems whose timestamp falls within the month (AC4 resolved).
+ *
+ * Trend computation:
+ *   Split postmortems at day 15 (month midpoint).
+ *   scoreBefore = weighted score of entries in days 1–14.
+ *   scoreAfter  = weighted score of entries in days 15–end.
+ *   trend = "improving"        if scoreAfter  > scoreBefore + trendDeltaThreshold
+ *           "degrading"        if scoreBefore > scoreAfter  + trendDeltaThreshold
+ *           "stable"           otherwise (both halves present, delta within threshold)
+ *           "insufficient_data" if < 2 postmortems in window
+ *
+ * Confidence scale (AC4 resolved):
+ *   "high"   — ≥ 10 postmortems in window
+ *   "medium" — 5–9
+ *   "low"    — 1–4
+ *
+ * @param {object[]} postmortems — athena postmortem entries
+ * @param {string}   monthKey    — "YYYY-MM"
+ * @returns {object}
+ */
+export function computeDecisionQualityTrendForMonth(postmortems, monthKey) {
+  const timeWindowDays  = MONTHLY_POSTMORTEM_SCHEMA.trendTimeWindowDays;
+  const deltaThreshold  = MONTHLY_POSTMORTEM_SCHEMA.trendDeltaThreshold;
+  const { HIGH, MEDIUM } = MONTHLY_POSTMORTEM_SCHEMA.trendConfidenceThresholds;
+
+  const empty = (trend) => ({
+    trend,
+    confidence: "low",
+    timeWindowDays,
+    scoreBefore: null,
+    scoreAfter:  null,
+    totalPostmortems: 0
+  });
+
+  if (!Array.isArray(postmortems) || postmortems.length === 0) {
+    return empty(POSTMORTEM_DECISION_TREND.INSUFFICIENT_DATA);
+  }
+
+  const [year, month] = monthKey.split("-").map(Number);
+  const monthStart = new Date(Date.UTC(year, month - 1, 1));
+  const monthEnd   = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+  const midpoint   = new Date(Date.UTC(year, month - 1, 15));
+
+  function pmTimestamp(pm) {
+    const raw = pm?.timestamp || pm?.reviewedAt || pm?.addedAt || null;
+    if (!raw) return null;
+    const t = new Date(raw).getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+
+  const inMonth = postmortems.filter(pm => {
+    const t = pmTimestamp(pm);
+    return t !== null && t >= monthStart.getTime() && t <= monthEnd.getTime();
+  });
+
+  const total      = inMonth.length;
+  const confidence = total >= HIGH ? "high" : total >= MEDIUM ? "medium" : "low";
+
+  if (total < 2) {
+    return { ...empty(POSTMORTEM_DECISION_TREND.INSUFFICIENT_DATA), confidence, totalPostmortems: total };
+  }
+
+  const midMs     = midpoint.getTime();
+  const firstHalf = inMonth.filter(pm => pmTimestamp(pm) <  midMs);
+  const secHalf   = inMonth.filter(pm => pmTimestamp(pm) >= midMs);
+
+  const { score: scoreBefore } = computeWeightedDecisionScore(firstHalf);
+  const { score: scoreAfter  } = computeWeightedDecisionScore(secHalf);
+
+  let trend;
+  if (scoreBefore === null && scoreAfter === null) {
+    trend = POSTMORTEM_DECISION_TREND.INSUFFICIENT_DATA;
+  } else if (scoreBefore !== null && scoreAfter !== null) {
+    if      (scoreAfter  > scoreBefore + deltaThreshold) trend = POSTMORTEM_DECISION_TREND.IMPROVING;
+    else if (scoreBefore > scoreAfter  + deltaThreshold) trend = POSTMORTEM_DECISION_TREND.DEGRADING;
+    else                                                  trend = POSTMORTEM_DECISION_TREND.STABLE;
+  } else {
+    // One half has no labeled postmortems — not enough data to call direction
+    trend = POSTMORTEM_DECISION_TREND.STABLE;
+  }
+
+  return {
+    trend,
+    confidence,
+    timeWindowDays,
+    scoreBefore: scoreBefore !== null ? Math.round(scoreBefore * 10000) / 10000 : null,
+    scoreAfter:  scoreAfter  !== null ? Math.round(scoreAfter  * 10000) / 10000 : null,
+    totalPostmortems: total
+  };
+}
+
+// ── Seed Question Generator ────────────────────────────────────────────────────
+
+/**
+ * Generate a next-cycle strategy seed question from computed postmortem data.
+ *
+ * Format rules (Athena AC5 resolved — distinguishes from static no-op strings):
+ *   - question must end in "?"
+ *   - question must be >= MONTHLY_POSTMORTEM_SCHEMA.seedQuestionMinLength characters
+ *   - dataPoints must contain >= 1 entry referencing an actual computed value
+ *   - rationale must explain why this specific question was generated
+ *
+ * Priority order:
+ *   1. Degrading decision quality  → ask about root cause of the regression
+ *   2. Top compounding effect       → ask about structural fix for the pattern
+ *   3. Rolled-back experiments      → ask about the best counterfactual intervention
+ *   4. Default throughput question  → ask about cycle completion rate improvement
+ *
+ * @param {object[]} compoundingEffects
+ * @param {object}   decisionQualityTrend
+ * @param {object}   experimentOutcomes
+ * @param {string}   monthKey
+ * @returns {{ question: string, rationale: string, dataPoints: string[] }}
+ */
+export function generateSeedQuestion(compoundingEffects, decisionQualityTrend, experimentOutcomes, monthKey) {
+  const minLen    = MONTHLY_POSTMORTEM_SCHEMA.seedQuestionMinLength;
+  const topEffect = Array.isArray(compoundingEffects) ? compoundingEffects[0] : null;
+  const trend     = decisionQualityTrend?.trend;
+  const rolledBackCount = Array.isArray(experimentOutcomes?.counterfactuals)
+    ? experimentOutcomes.counterfactuals.length
+    : 0;
+
+  let question;
+  let rationale;
+  const dataPoints = [];
+
+  if (trend === POSTMORTEM_DECISION_TREND.DEGRADING
+      && decisionQualityTrend.scoreBefore !== null
+      && decisionQualityTrend.scoreAfter  !== null) {
+    const pct1 = (decisionQualityTrend.scoreBefore * 100).toFixed(1);
+    const pct2 = (decisionQualityTrend.scoreAfter  * 100).toFixed(1);
+    question   = `What specific failure mode caused decision quality to degrade from ${pct1}% to ${pct2}% in ${monthKey}?`;
+    rationale  = `Decision quality trended ${trend} (scoreBefore=${pct1}%, scoreAfter=${pct2}%); root-cause identification is highest priority for next quarter.`;
+    dataPoints.push(
+      `decisionQualityTrend.scoreBefore=${pct1}%`,
+      `decisionQualityTrend.scoreAfter=${pct2}%`,
+      `trend=${trend}`
+    );
+  } else if (topEffect) {
+    const patSnip = topEffect.pattern.slice(0, 80);
+    question  = `What structural change would eliminate the "${patSnip}" pattern that recurred ${topEffect.occurrences} time(s) in ${monthKey}?`;
+    rationale = `Top compounding effect "${topEffect.pattern.slice(0, 60)}" scored ${topEffect.score} (occurrences=${topEffect.occurrences}, severity=${topEffect.severity}); structural remediation is the priority.`;
+    dataPoints.push(
+      `compoundingEffects[0].pattern=${topEffect.pattern.slice(0, 60)}`,
+      `compoundingEffects[0].occurrences=${topEffect.occurrences}`,
+      `compoundingEffects[0].score=${topEffect.score}`
+    );
+  } else if (rolledBackCount > 0) {
+    const first = experimentOutcomes.counterfactuals[0];
+    const frSnip = String(first.failureReason || "UNKNOWN").slice(0, 60);
+    question  = `Given that experiment "${first.experimentId}" failed due to "${frSnip}", what alternative intervention should be trialled next quarter?`;
+    rationale = `${rolledBackCount} experiment(s) were rolled back in ${monthKey}; counterfactual analysis indicates alternative approach required.`;
+    dataPoints.push(
+      `experimentOutcomes.counterfactuals[0].experimentId=${first.experimentId}`,
+      `experimentOutcomes.counterfactuals[0].failureReason=${frSnip}`,
+      `experimentOutcomes.rolled_back=${rolledBackCount}`
+    );
+  } else {
+    const completed = Number(experimentOutcomes?.completed ?? 0);
+    const total     = Number(experimentOutcomes?.total     ?? 0);
+    const pct       = total > 0 ? Math.round((completed / total) * 100) : 0;
+    question  = `What process improvement would increase the ${monthKey} experiment completion rate beyond ${pct}%?`;
+    rationale = `No degrading quality trend or compounding effects detected; default throughput question generated for ${monthKey}.`;
+    dataPoints.push(
+      `experimentOutcomes.completed=${completed}`,
+      `experimentOutcomes.total=${total}`,
+      `monthKey=${monthKey}`
+    );
+  }
+
+  // Enforce format rules
+  if (!question.endsWith("?")) question = `${question}?`;
+  if (question.length < minLen) {
+    question = `${question} (${monthKey})`;
+    if (!question.endsWith("?")) question = `${question}?`;
+  }
+
+  return { question, rationale, dataPoints };
+}
+
+// ── Main Monthly Postmortem Generator ─────────────────────────────────────────
+
+/**
+ * Generate a monthly evolution postmortem for the specified month.
+ *
+ * Scope: BUILD step — this generator did not previously exist in self_improvement.js
+ * or state_tracker.js (Athena missing item #1 resolved).
+ *
+ * Reads:
+ *   state/improvement_reports.json  — cycle lessons and analytics
+ *   state/experiment_registry.json  — experiments (for counterfactuals)
+ *   state/athena_postmortems.json   — decision quality postmortems
+ *
+ * Returns a structured result; caller must pass postmortem to persistMonthlyPostmortem
+ * to write state/monthly_postmortem_{monthKey}.json.
+ *
+ * Status values:
+ *   "ok"               — sufficient data, full report generated
+ *   "insufficient_data" — cycleCount < minCycleCount (3); stub returned, no write recommended
+ *   "degraded"          — generated with partial data; degradedSources lists affected fields
+ *
+ * Validation: missing vs invalid input produces distinct reason codes (degradedSources).
+ * No silent fallback: degraded state sets explicit status + degradedSources array.
+ *
+ * @param {object}  config
+ * @param {string}  [monthKey] — "YYYY-MM"; defaults to current month
+ * @returns {Promise<{ ok: boolean, status: string, postmortem: object|null, reason?: string }>}
+ */
+export async function generateMonthlyPostmortem(config, monthKey) {
+  const stateDir          = config?.paths?.stateDir || "state";
+  const now               = new Date();
+  const defaultMonthKey   = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const resolvedMonthKey  = monthKey || defaultMonthKey;
+
+  const [reportsRaw, registryRaw, postmortemsRaw] = await Promise.all([
+    readJsonSafe(path.join(stateDir, "improvement_reports.json")),
+    readJsonSafe(path.join(stateDir, "experiment_registry.json")),
+    readJsonSafe(path.join(stateDir, "athena_postmortems.json"))
+  ]);
+
+  const degradedSources = [];
+
+  // ── Improvement reports ────────────────────────────────────────────────────
+  let allReports = [];
+  if (!reportsRaw.ok) {
+    degradedSources.push(
+      reportsRaw.reason === READ_JSON_REASON.MISSING
+        ? "IMPROVEMENT_REPORTS_ABSENT"
+        : "IMPROVEMENT_REPORTS_INVALID"
+    );
+  } else {
+    allReports = Array.isArray(reportsRaw.data?.reports) ? reportsRaw.data.reports : [];
+  }
+
+  // Filter to the target month
+  const [year, month] = resolvedMonthKey.split("-").map(Number);
+  const monthStart    = new Date(Date.UTC(year, month - 1, 1));
+  const monthEnd      = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+
+  const monthlyReports = allReports.filter(r => {
+    if (!r?.cycleAt) return false;
+    const ts = new Date(r.cycleAt).getTime();
+    return Number.isFinite(ts) && ts >= monthStart.getTime() && ts <= monthEnd.getTime();
+  });
+
+  const cycleCount = monthlyReports.length;
+
+  // ── Insufficient data check (Athena missing item #7 resolved) ─────────────
+  const minCycles = MONTHLY_POSTMORTEM_SCHEMA.minCycleCount;
+  if (cycleCount < minCycles) {
+    const insufficiencyReason =
+      `INSUFFICIENT_CYCLES:${cycleCount}_recorded_minimum_${minCycles}_required`;
+    const stub = {
+      schemaVersion:       MONTHLY_POSTMORTEM_SCHEMA.schemaVersion,
+      monthKey:            resolvedMonthKey,
+      generatedAt:         new Date().toISOString(),
+      status:              MONTHLY_POSTMORTEM_STATUS.INSUFFICIENT_DATA,
+      insufficiencyReason,
+      cycleCount,
+      experimentOutcomes:  { total: 0, completed: 0, rolled_back: 0, counterfactuals: [] },
+      compoundingEffects:  [],
+      decisionQualityTrend: {
+        trend:            POSTMORTEM_DECISION_TREND.INSUFFICIENT_DATA,
+        confidence:       "low",
+        timeWindowDays:   MONTHLY_POSTMORTEM_SCHEMA.trendTimeWindowDays,
+        scoreBefore:      null,
+        scoreAfter:       null,
+        totalPostmortems: 0
+      },
+      seedQuestion: null
+    };
+    return { ok: true, status: MONTHLY_POSTMORTEM_STATUS.INSUFFICIENT_DATA, postmortem: stub };
+  }
+
+  // ── Experiment outcomes and counterfactuals ────────────────────────────────
+  let allExperiments = [];
+  if (!registryRaw.ok) {
+    degradedSources.push(
+      registryRaw.reason === READ_JSON_REASON.MISSING
+        ? "EXPERIMENT_REGISTRY_ABSENT"
+        : "EXPERIMENT_REGISTRY_INVALID"
+    );
+  } else {
+    allExperiments = Array.isArray(registryRaw.data?.experiments) ? registryRaw.data.experiments : [];
+  }
+
+  const monthlyExperiments = allExperiments.filter(e => {
+    const ts = new Date(e?.createdAt || e?.startedAt || 0).getTime();
+    return Number.isFinite(ts) && ts >= monthStart.getTime() && ts <= monthEnd.getTime();
+  });
+
+  const counterfactuals = buildCounterfactuals(monthlyExperiments);
+  const experimentOutcomes = {
+    total:          monthlyExperiments.length,
+    completed:      monthlyExperiments.filter(e => e.status === "completed").length,
+    rolled_back:    monthlyExperiments.filter(e => e.status === "rolled_back").length,
+    counterfactuals
+  };
+
+  // ── Compounding effects ────────────────────────────────────────────────────
+  const compoundingEffects = computeCompoundingEffects(monthlyReports, resolvedMonthKey);
+
+  // ── Decision quality trend ─────────────────────────────────────────────────
+  let postmortems = [];
+  if (!postmortemsRaw.ok) {
+    degradedSources.push(
+      postmortemsRaw.reason === READ_JSON_REASON.MISSING
+        ? "ATHENA_POSTMORTEMS_ABSENT"
+        : "ATHENA_POSTMORTEMS_INVALID"
+    );
+  } else {
+    try {
+      const migrated = migrateData(postmortemsRaw.data, STATE_FILE_TYPE.ATHENA_POSTMORTEMS);
+      if (migrated.ok) {
+        postmortems = extractPostmortemEntries(migrated.data);
+      } else {
+        degradedSources.push("ATHENA_POSTMORTEMS_MIGRATION_FAILED");
+      }
+    } catch {
+      degradedSources.push("ATHENA_POSTMORTEMS_MIGRATION_ERROR");
+    }
+  }
+
+  const decisionQualityTrend = computeDecisionQualityTrendForMonth(postmortems, resolvedMonthKey);
+
+  // ── Seed question ──────────────────────────────────────────────────────────
+  const seedQuestion = generateSeedQuestion(
+    compoundingEffects, decisionQualityTrend, experimentOutcomes, resolvedMonthKey
+  );
+
+  // ── Final status ───────────────────────────────────────────────────────────
+  const status = degradedSources.length > 0
+    ? MONTHLY_POSTMORTEM_STATUS.DEGRADED
+    : MONTHLY_POSTMORTEM_STATUS.OK;
+
+  const postmortem = {
+    schemaVersion:       MONTHLY_POSTMORTEM_SCHEMA.schemaVersion,
+    monthKey:            resolvedMonthKey,
+    generatedAt:         new Date().toISOString(),
+    status,
+    insufficiencyReason: null,
+    ...(degradedSources.length > 0 ? { degradedSources } : {}),
+    cycleCount,
+    experimentOutcomes,
+    compoundingEffects,
+    decisionQualityTrend,
+    seedQuestion
+  };
+
+  return { ok: true, status, postmortem };
+}
+
 export async function runSelfImprovementCycle(config) {
   const siConfig = config.selfImprovement || {};
   if (!siConfig.enabled) return null;
