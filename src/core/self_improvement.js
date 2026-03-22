@@ -26,6 +26,11 @@ import { extractPostmortemEntries, migrateData, STATE_FILE_TYPE } from "./schema
 import { loadRegistry, getRunningExperimentsForPath } from "./experiment_registry.js";
 import { getCanaryConfig, startCanary, processRunningCanaries } from "./canary_engine.js";
 import { runShadowEvaluation, SHADOW_STATUS } from "./shadow_policy_evaluator.js";
+import {
+  enforceGovernance,
+  recordApprovalEvidence,
+  GOVERNANCE_CONTRACT_VERSION
+} from "./governance_contract.js";
 
 // ── Decision Quality Weights ──────────────────────────────────────────────────
 
@@ -628,6 +633,16 @@ async function applyConfigSuggestions(config, suggestions) {
     }
   }
 
+  // ── Governance contract enforcement (T-031) ───────────────────────────────
+  // Load policy once for governance classification of all config changes.
+  let governancePolicy;
+  try {
+    governancePolicy = await import("./policy_engine.js").then(m => m.loadPolicy(config));
+  } catch {
+    // Non-fatal: policy unavailable → governance classification uses safe defaults
+    governancePolicy = {};
+  }
+
   // AC1: load registry once; mode is "soft" unless explicitly set to "hard"
   const enforcementMode = config.selfImprovement?.experimentEnforcement === "hard" ? "hard" : "soft";
   let registry;
@@ -659,6 +674,29 @@ async function applyConfigSuggestions(config, suggestions) {
       "systemGuardian.cooldownMinutes"
     ];
     if (!safeConfigPaths.some(safe => configKey.includes(safe))) continue;
+
+    // ── Governance enforcement gate (T-031) ─────────────────────────────────
+    // Classify risk and hard-block high/critical changes without dual approval.
+    const governanceChange = {
+      riskScore:    0.3, // config suggestions via self-improvement are generally low/medium risk
+      changeType:   "config",
+      filesChanged: [configPath]
+    };
+    const approvalEvidence = suggestion.approvalEvidence || {};
+    const govResult = enforceGovernance(governanceChange, approvalEvidence, governancePolicy);
+    if (!govResult.ok) {
+      // Hard-block — no silent fallback (AC3, AC10 resolved)
+      warn(`[self-improvement] governance contract hard-blocked config change at ${configKey} — ${govResult.blockReason}`);
+      applied.push({
+        path:        configKey,
+        status:      "governance-blocked",
+        blockReason: govResult.blockReason,
+        riskLevel:   govResult.riskLevel,
+        suggestedValue: suggestion.suggestedValue,
+        reason:      suggestion.reason
+      });
+      continue;
+    }
 
     // AC1: tag with running experiment IDs covering this config path
     const experimentIds = getRunningExperimentsForPath(registry, configKey);
@@ -744,19 +782,36 @@ async function applyConfigSuggestions(config, suggestions) {
       const lastKey = keys[keys.length - 1];
       const oldValue = target[lastKey];
       target[lastKey] = suggestion.suggestedValue;
-      applied.push({
+
+      const appliedEntry = {
         path: configKey,
         status: "applied",
         oldValue,
         newValue: suggestion.suggestedValue,
         reason: suggestion.reason,
         experimentIds,
+        riskLevel: govResult.riskLevel,
         shadowEval: shadowEvalResult ? {
           delta:           shadowEvalResult.delta,
           confidence:      shadowEvalResult.confidence,
           sampleSize:      shadowEvalResult.sampleSize,
           successCriteria: shadowEvalResult.successCriteria,
         } : null,
+      };
+      applied.push(appliedEntry);
+
+      // Record approval evidence for audit (T-031 AC4)
+      const evidence = {
+        changeId:        `si-${Date.now()}-${configKey.replace(/[^a-z0-9]/gi, "_")}`,
+        changedBy:       "self-improvement",
+        changedAt:       new Date().toISOString(),
+        riskLevel:       govResult.riskLevel,
+        filesChanged:    [configPath],
+        approvals:       Array.isArray(approvalEvidence.approvals) ? approvalEvidence.approvals : [],
+        contractVersion: GOVERNANCE_CONTRACT_VERSION
+      };
+      recordApprovalEvidence(evidence, config).catch(err => {
+        warn(`[self-improvement] approval evidence record failed (non-fatal): ${String(err?.message || err)}`);
       });
     }
   }
