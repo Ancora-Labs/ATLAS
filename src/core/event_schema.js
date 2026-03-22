@@ -56,6 +56,7 @@ export const EVENTS = Object.freeze({
   ORCHESTRATION_HEALTH_DEGRADED:     "box.v1.orchestration.healthDegraded",
   ORCHESTRATION_HEALTH_RECOVERED:    "box.v1.orchestration.healthRecovered",
   ORCHESTRATION_ALERT_EMITTED:       "box.v1.orchestration.alertEmitted",
+  ORCHESTRATION_CATASTROPHE_DETECTED: "box.v1.orchestration.catastropheDetected",
 
   // Planning domain — Prometheus/Athena plan lifecycle
   PLANNING_ANALYSIS_STARTED:         "box.v1.planning.analysisStarted",

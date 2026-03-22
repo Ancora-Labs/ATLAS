@@ -39,6 +39,7 @@ import {
   STATE_FILE_TYPE,
   MIGRATION_REASON
 } from "./schema_registry.js";
+import { runCatastropheDetection } from "./catastrophe_detector.js";
 
 /**
  * Orchestrator health status enum.
@@ -756,6 +757,59 @@ async function runSingleCycle(config) {
     // Analytics are advisory — never block orchestration
     warn(`[orchestrator] Cycle analytics failed (non-fatal): ${String(err?.message || err)}`);
     await appendProgress(config, `[ANALYTICS] Cycle analytics failed (non-fatal): ${String(err?.message || err)}`);
+  }
+
+  // ── Catastrophe detection: scan for systemic failure patterns each cycle ──
+  // Advisory — never blocks orchestration. Failure sets explicit status=degraded.
+  // Risk level: HIGH — reads orchestration state directly.
+  try {
+    // Build cycle data from available in-cycle metrics
+    const now = Date.now();
+    const jesusDirectivePath    = path.join(stateDir, "jesus_directive.json");
+    const prometheusAnalysisPath = path.join(stateDir, "prometheus_analysis.json");
+
+    const jesusDirectiveRaw     = await readJson(jesusDirectivePath, null);
+    const prometheusAnalysisRaw = await readJson(prometheusAnalysisPath, null);
+
+    const jesusDirectiveAgeMs = jesusDirectiveRaw?.decidedAt
+      ? now - new Date(jesusDirectiveRaw.decidedAt).getTime()
+      : 0;
+    const prometheusAnalysisAgeMs = prometheusAnalysisRaw?.analyzedAt
+      ? now - new Date(prometheusAnalysisRaw.analyzedAt).getTime()
+      : 0;
+
+    // Read SLO state to determine if this cycle had a breach
+    const { readSloMetrics } = await import("./slo_checker.js");
+    const sloState = await readSloMetrics(config);
+    const hadSloBreachThisCycle = Array.isArray(sloState?.lastCycle?.sloBreaches)
+      && sloState.lastCycle.sloBreaches.length > 0;
+
+    const cycleData = {
+      retryCount:              0,                          // no per-cycle retry counter yet; 0 is safe
+      totalTasks:              Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans.length : 0,
+      blockedTasks:            0,                          // blocking is tracked per-worker, not aggregated here
+      jesusDirectiveAgeMs:     Math.max(0, jesusDirectiveAgeMs),
+      prometheusAnalysisAgeMs: Math.max(0, prometheusAnalysisAgeMs),
+      parseFailureCount:       0,                          // accumulated in persistent state across calls
+      hadBudgetBreach:         false,                      // budget controller doesn't surface per-cycle breach yet
+      hadSloBreach:            hadSloBreachThisCycle,
+    };
+
+    const catastropheResult = await runCatastropheDetection(config, cycleData);
+    if (catastropheResult.detections.length > 0) {
+      await appendProgress(config,
+        `[CATASTROPHE] ${catastropheResult.detections.length} scenario(s) detected: ${catastropheResult.detections.map(d => d.scenarioId).join(", ")}`
+      );
+    } else {
+      await appendProgress(config, "[CATASTROPHE] No catastrophe patterns detected this cycle");
+    }
+    if (!catastropheResult.ok) {
+      warn(`[orchestrator] Catastrophe detection degraded: ${catastropheResult.reason || "unknown"}`);
+    }
+  } catch (err) {
+    // Advisory — never blocks orchestration
+    warn(`[orchestrator] Catastrophe detection error (non-fatal): ${String(err?.message || err)}`);
+    await appendProgress(config, `[CATASTROPHE] Detection error (non-fatal): ${String(err?.message || err)}`);
   }
 }
 
