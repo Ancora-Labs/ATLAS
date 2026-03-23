@@ -24,7 +24,8 @@ import { runJesusCycle } from "./jesus_supervisor.js";
 import { runPrometheusAnalysis } from "./prometheus.js";
 import { runAthenaPlanReview, runAthenaPostmortem } from "./athena_reviewer.js";
 import { runWorkerConversation } from "./worker_runner.js";
-import { runSelfImprovementCycle } from "./self_improvement.js";
+import { runSelfImprovementCycle, shouldTriggerSelfImprovement } from "./self_improvement.js";
+import { collectEvolutionMetrics } from "./evolution_metrics.js";
 import { capturePreWorkBaseline, runProjectCompletion, isProjectAlreadyCompleted } from "./project_lifecycle.js";
 import { warn } from "./logger.js";
 import { readJson, readJsonSafe, writeJson, cleanupStaleTempFiles, READ_JSON_REASON } from "./fs_utils.js";
@@ -42,6 +43,16 @@ import {
 import { runCatastropheDetection, GUARDRAIL_ACTION } from "./catastrophe_detector.js";
 import { executeGuardrailsForDetections, isGuardrailActive } from "./guardrail_executor.js";
 import { evaluateFreezeGate, isFreezeActive } from "./governance_freeze.js";
+import { detectRecurrences, buildRecurrenceEscalations } from "./recurrence_detector.js";
+import { checkClosureSLA } from "./closure_validator.js";
+import { appendCapacityEntry } from "./capacity_scoreboard.js";
+import { computeCapabilityDelta } from "./delta_analytics.js";
+import { evaluateRetune } from "./strategy_retuner.js";
+import { compileLessonsToPolicies } from "./learning_policy_compiler.js";
+import { assignWorkersToPlans, enforceLaneDiversity } from "./capability_pool.js";
+import { computeNextWaves } from "./dag_scheduler.js";
+import { runDoctor } from "./doctor.js";
+import { validateAllPlans } from "./plan_contract_validator.js";
 
 /**
  * Orchestrator health status enum.
@@ -242,7 +253,7 @@ export async function runDaemon(config) {
   const staleThresholdMs = workerTimeoutMs * 2;
   const now = Date.now();
   let zombieReset = false;
-  const knownRoles = ["King David", "Esther", "Aaron", "Joseph", "Samuel", "Isaiah", "Noah", "Elijah", "Issachar", "Ezra"];
+  const knownRoles = ["Evolution Worker"];
   for (const roleName of knownRoles) {
     const perWorkerPath = path.join(stateDir, `worker_${roleName.toLowerCase().replace(/\s+/g, "_")}.json`);
     const perWorker = await readJson(perWorkerPath, null);
@@ -479,7 +490,7 @@ async function dispatchWorker(config, plan) {
     task,
     context,
     verification,
-    taskKind: plan.kind || "implementation"
+    taskKind: plan.taskKind || plan.kind || "implementation"
   });
 
   return {
@@ -537,6 +548,32 @@ async function runSingleCycle(config) {
   // This ensures runOnce (used in tests and CLI) also surfaces corrupt state.
   await auditCriticalStateFiles(config, stateDir);
 
+  // ── Preflight capability checks ───────────────────────────────────────────
+  // Validate system readiness before spending premium requests.
+  if (config.runtime?.disablePreflight !== true) {
+    try {
+      const doctorResult = await runDoctor(config);
+      if (!doctorResult.ok) {
+        const failedChecks = Object.entries(doctorResult.checks)
+          .filter(([, v]) => !v).map(([k]) => k).join(", ");
+        await appendProgress(config,
+          `[CYCLE][PREFLIGHT] Capability checks failed: ${failedChecks}. Warnings: ${doctorResult.warnings.join("; ")}`
+        );
+        await appendAlert(config, {
+          severity: ALERT_SEVERITY.HIGH,
+          source: "orchestrator",
+          title: "Preflight capability checks failed",
+          message: `Failed: ${failedChecks}. ${doctorResult.warnings.join("; ")}`
+        });
+        // Non-blocking: log but continue (critical checks would have thrown)
+      } else if (doctorResult.warnings.length > 0) {
+        await appendProgress(config, `[CYCLE][PREFLIGHT] All checks passed. Warnings: ${doctorResult.warnings.join("; ")}`);
+      }
+    } catch (err) {
+      warn(`[orchestrator] preflight check failed (non-fatal): ${String(err?.message || err)}`);
+    }
+  }
+
   // Guardrail gate: if SKIP_CYCLE is active, skip planning to avoid acting on stale state.
   // Gated by systemGuardian.enabled (rollback: set to false to retain detection without enforcement).
   if (config.systemGuardian?.enabled !== false) {
@@ -562,6 +599,17 @@ async function runSingleCycle(config) {
 
   // Step 1: Jesus analyzes state and decides what to do (1 request)
   await appendProgress(config, "[CYCLE] ── Step 1: Jesus analyzing system state ──");
+
+  // ── Closure SLA audit: flag stale escalations (advisory) ────────────────
+  try {
+    const escalationQ = await loadEscalationQueue(config);
+    const slaViolations = checkClosureSLA(Array.isArray(escalationQ) ? escalationQ : escalationQ?.entries || []);
+    if (slaViolations.length > 0) {
+      await appendProgress(config, `[CLOSURE_SLA] ${slaViolations.length} escalation(s) exceed SLA: ${slaViolations.map(v => v.title).join(", ")}`);
+    }
+  } catch (err) {
+    warn(`[orchestrator] Closure SLA check failed (non-fatal): ${String(err?.message || err)}`);
+  }
   await safeUpdatePipelineProgress(config, "jesus_awakening", "Jesus starting system state analysis");
   let jesusDecision;
   try {
@@ -589,7 +637,7 @@ async function runSingleCycle(config) {
   try {
     await safeUpdatePipelineProgress(config, "prometheus_reading_repo", "Prometheus reading repository");
     prometheusAnalysis = await runPrometheusAnalysis(config, {
-      prompt: jesusDecision.briefForPrometheus || jesusDecision.briefForMoses || jesusDecision.thinking || "Full repository analysis",
+      prompt: jesusDecision.briefForPrometheus || jesusDecision.thinking || "Full repository analysis",
       requestedBy: "Jesus"
     });
   } catch (err) {
@@ -601,6 +649,24 @@ async function runSingleCycle(config) {
   if (!prometheusAnalysis || !Array.isArray(prometheusAnalysis.plans) || prometheusAnalysis.plans.length === 0) {
     await appendProgress(config, "[CYCLE] Prometheus produced no plans — cycle complete");
     await safeUpdatePipelineProgress(config, "cycle_complete", "Prometheus produced no plans — nothing to dispatch");
+    return;
+  }
+
+  // ── Parser confidence hard-stop gate ──────────────────────────────────────
+  // Block dispatch when Prometheus output confidence is below threshold.
+  const PARSER_CONFIDENCE_THRESHOLD = config.runtime?.parserConfidenceThreshold ?? 0.3;
+  const parsedConfidence = prometheusAnalysis.parserConfidence ?? 1.0;
+  if (parsedConfidence < PARSER_CONFIDENCE_THRESHOLD) {
+    await appendProgress(config,
+      `[CYCLE] Parser confidence too low (${parsedConfidence} < ${PARSER_CONFIDENCE_THRESHOLD}) — blocking dispatch`
+    );
+    await appendAlert(config, {
+      severity: ALERT_SEVERITY.HIGH,
+      source: "orchestrator",
+      title: "Low parser confidence — dispatch blocked",
+      message: `parserConfidence=${parsedConfidence} threshold=${PARSER_CONFIDENCE_THRESHOLD}. Plans not dispatched.`
+    });
+    await safeUpdatePipelineProgress(config, "cycle_complete", `Parser confidence too low (${parsedConfidence}) — dispatch blocked`);
     return;
   }
 
@@ -659,6 +725,61 @@ async function runSingleCycle(config) {
 
   // Step 4: Dispatch workers sequentially (1 request per worker)
   const plans = prometheusAnalysis.plans;
+
+  // ── Capability pool: assign workers based on task capability matching ──────
+  try {
+    const poolResult = assignWorkersToPlans(plans, config);
+    if (poolResult.diversityIndex > 0) {
+      await appendProgress(config, `[CAPABILITY_POOL] Worker diversity index: ${poolResult.diversityIndex} (0=single-worker, 1=fully diversified)`);
+    }
+    // Apply pool assignment — update plan.role if a better worker is available (and not fallback-only)
+    for (const { plan, selection } of poolResult.assignments) {
+      if (!selection.isFallback && selection.role !== plan.role) {
+        plan._originalRole = plan.role;
+        plan._capabilityLane = selection.lane;
+      }
+    }
+  } catch (err) {
+    warn(`[orchestrator] Capability pool assignment failed (non-fatal): ${String(err?.message || err)}`);
+  }
+
+  // ── Plan quality gate (Packet 12): skip plans failing contract validation ──
+  try {
+    const contractReport = validateAllPlans(plans);
+    if (contractReport.passRate < 1) {
+      await appendProgress(config,
+        `[PLAN_QUALITY] Contract pass rate: ${(contractReport.passRate * 100).toFixed(0)}% — ${contractReport.results.filter(r => !r.valid).length} plan(s) have violations`
+      );
+      for (const r of contractReport.results) {
+        if (!r.valid) {
+          const critical = r.violations.filter(v => v.severity === "critical");
+          if (critical.length > 0) {
+            warn(`[orchestrator] Plan for ${r.plan?.role || "unknown"} has ${critical.length} critical contract violation(s) — removing from dispatch`);
+            const idx = plans.indexOf(r.plan);
+            if (idx !== -1) plans.splice(idx, 1);
+          }
+        }
+      }
+      if (plans.length === 0) {
+        await appendProgress(config, "[CYCLE] All plans removed by contract quality gate — cycle complete");
+        await safeUpdatePipelineProgress(config, "cycle_complete", "All plans failed contract quality gate");
+        return;
+      }
+    }
+  } catch (err) {
+    warn(`[orchestrator] Plan quality gate failed (non-fatal): ${String(err?.message || err)}`);
+  }
+
+  // ── Lane diversity gate (Packet 6) ──
+  try {
+    const diversityResult = enforceLaneDiversity(plans);
+    if (!diversityResult.ok) {
+      await appendProgress(config, `[LANE_DIVERSITY] Warning: ${diversityResult.reason}`);
+    }
+  } catch (err) {
+    warn(`[orchestrator] Lane diversity check failed (non-fatal): ${String(err?.message || err)}`);
+  }
+
   await appendProgress(config, `[CYCLE] ── Step 4: Dispatching ${plans.length} workers ──`);
 
   // Guardrail gate: if PAUSE_WORKERS is active, skip all worker dispatch.
@@ -736,21 +857,22 @@ async function runSingleCycle(config) {
     workersDone: 0
   });
 
+  // ── Dispatch: DAG-scheduled or wave-parallel or sequential ─────────────────
+  // Primary: DAG scheduler (computeNextWaves from dag_scheduler.js)
+  // Fallback: prometheus dependencyGraph.waves (legacy wave dispatch)
+  // Last resort: sequential dispatch
+  let useDagScheduler = !config.runtime?.disableDagScheduler;
+  const useWaveParallel = !config.runtime?.disableWaveParallelDispatch
+    && prometheusAnalysis.dependencyGraph?.waves?.length > 0
+    && prometheusAnalysis.dependencyGraph?.status !== "cycle_detected";
+
   let workersDone = 0;
-  for (const plan of plans) {
-    // Check for stop request between each worker
-    const stopReq = await readStopRequest(config);
-    if (stopReq?.requestedAt) {
-      await appendProgress(config, `[CYCLE] Stop requested — halting dispatch`);
-      return;
-    }
 
-    await safeUpdatePipelineProgress(config, "workers_running", `Running worker: ${plan.role}`, {
-      workersTotal: plans.length,
-      workersDone,
-      currentWorker: plan.role
-    });
-
+  /**
+   * Dispatch a single plan (worker + postmortem). Shared by both paths.
+   * @returns {{ workerResult: object, plan: object }}
+   */
+  const dispatchOne = async (plan) => {
     let workerResult;
     try {
       workerResult = await dispatchWorker(config, plan);
@@ -760,18 +882,136 @@ async function runSingleCycle(config) {
       warn(`[orchestrator] worker dispatch error: ${msg}`);
       workerResult = { roleName: plan.role, status: "error", summary: msg };
     }
-
-    // Step 5: Athena postmortem for each worker (1 request per worker)
     await appendProgress(config, `[CYCLE] ── Step 5: Athena postmortem for ${plan.role} ──`);
     try {
       await runAthenaPostmortem(config, workerResult, plan);
     } catch (err) {
       await appendProgress(config, `[CYCLE] Athena postmortem failed for ${plan.role}: ${String(err?.message || err)}`);
     }
+    return { workerResult, plan };
+  };
 
-    workersDone += 1;
-    // Wait for worker to fully finish (PR created, etc.)
-    await waitForWorkersToFinish(config);
+  // ── DAG scheduler path: dynamic dependency-aware dispatch ─────────────────
+  if (useDagScheduler) {
+    try {
+      const dagResult = computeNextWaves(plans, new Set(), new Set());
+      if (dagResult.status === "ok" && dagResult.readyWaves.length > 0) {
+        await appendProgress(config, `[CYCLE] DAG scheduler: ${dagResult.readyWaves.length} wave(s), ${dagResult.blocked.length} blocked`);
+        const completedIds = new Set();
+        const failedIds = new Set();
+
+        for (const wave of dagResult.readyWaves) {
+          const stopReq = await readStopRequest(config);
+          if (stopReq?.requestedAt) {
+            await appendProgress(config, `[CYCLE] Stop requested — halting dispatch`);
+            return;
+          }
+
+          const roles = wave.map(p => p.role).join(", ");
+          await appendProgress(config, `[CYCLE] DAG wave: dispatching ${wave.length} worker(s) [${roles}]`);
+          await safeUpdatePipelineProgress(config, "workers_running", `DAG wave: ${roles}`, {
+            workersTotal: plans.length,
+            workersDone
+          });
+
+          const results = await Promise.all(wave.map(plan => dispatchOne(plan)));
+          for (const { workerResult, plan } of results) {
+            const id = String(plan.task || plan.role || "");
+            if (workerResult?.status === "error") failedIds.add(id);
+            else completedIds.add(id);
+          }
+          workersDone += wave.length;
+          await waitForWorkersToFinish(config);
+        }
+
+        // Handle orphaned plans not in any DAG wave
+        const dagCovered = new Set(dagResult.readyWaves.flat().map(p => String(p.task || p.role || "")));
+        const orphans = plans.filter(p => !dagCovered.has(String(p.task || p.role || "")) && !dagResult.blocked.includes(p));
+        for (const plan of orphans) {
+          await dispatchOne(plan);
+          workersDone += 1;
+          await waitForWorkersToFinish(config);
+        }
+
+        // DAG handled dispatch — skip legacy paths
+        useDagScheduler = false; // signal: already dispatched
+      } else {
+        useDagScheduler = false; // fall through to legacy
+      }
+    } catch (err) {
+      warn(`[orchestrator] DAG scheduler failed (falling back to wave/sequential): ${String(err?.message || err)}`);
+      useDagScheduler = false;
+    }
+  }
+
+  if (useDagScheduler === false && workersDone === 0 && useWaveParallel) {
+    // Build a lookup: taskId → plan
+    const planById = new Map();
+    for (const plan of plans) {
+      const id = String(plan.task || plan.role || "");
+      planById.set(id, plan);
+    }
+
+    const waves = prometheusAnalysis.dependencyGraph.waves;
+    await appendProgress(config, `[CYCLE] Wave-parallel dispatch: ${waves.length} wave(s)`);
+
+    for (const wave of waves) {
+      const stopReq = await readStopRequest(config);
+      if (stopReq?.requestedAt) {
+        await appendProgress(config, `[CYCLE] Stop requested — halting dispatch`);
+        return;
+      }
+
+      const wavePlans = wave.taskIds
+        .map(id => planById.get(id))
+        .filter(Boolean);
+
+      if (wavePlans.length === 0) continue;
+
+      const roles = wavePlans.map(p => p.role).join(", ");
+      await appendProgress(config, `[CYCLE] Wave ${wave.wave}: dispatching ${wavePlans.length} worker(s) in parallel [${roles}]`);
+      await safeUpdatePipelineProgress(config, "workers_running", `Wave ${wave.wave}: ${roles}`, {
+        workersTotal: plans.length,
+        workersDone,
+        currentWave: wave.wave
+      });
+
+      await Promise.all(wavePlans.map(plan => dispatchOne(plan)));
+      workersDone += wavePlans.length;
+      await waitForWorkersToFinish(config);
+    }
+
+    // Dispatch any plans not covered by waves (orphaned)
+    const coveredIds = new Set(waves.flatMap(w => w.taskIds));
+    const orphans = plans.filter(p => !coveredIds.has(String(p.task || p.role || "")));
+    for (const plan of orphans) {
+      await safeUpdatePipelineProgress(config, "workers_running", `Running orphan worker: ${plan.role}`, {
+        workersTotal: plans.length,
+        workersDone
+      });
+      await dispatchOne(plan);
+      workersDone += 1;
+      await waitForWorkersToFinish(config);
+    }
+  } else if (workersDone === 0) {
+    // Sequential fallback
+    for (const plan of plans) {
+      const stopReq = await readStopRequest(config);
+      if (stopReq?.requestedAt) {
+        await appendProgress(config, `[CYCLE] Stop requested — halting dispatch`);
+        return;
+      }
+
+      await safeUpdatePipelineProgress(config, "workers_running", `Running worker: ${plan.role}`, {
+        workersTotal: plans.length,
+        workersDone,
+        currentWorker: plan.role
+      });
+
+      await dispatchOne(plan);
+      workersDone += 1;
+      await waitForWorkersToFinish(config);
+    }
   }
 
   await safeUpdatePipelineProgress(config, "workers_finishing", "All workers finishing up", {
@@ -920,6 +1160,80 @@ async function runSingleCycle(config) {
     warn(`[orchestrator] Catastrophe detection error (non-fatal): ${String(err?.message || err)}`);
     await appendProgress(config, `[CATASTROPHE] Detection error (non-fatal): ${String(err?.message || err)}`);
   }
+
+  // ── Recurrence detection: scan postmortems for repeated defect patterns ───
+  try {
+    const postmortemsRaw = await readJson(path.join(stateDir, "athena_postmortems.json"), null);
+    const pmEntries = Array.isArray(postmortemsRaw?.entries) ? postmortemsRaw.entries : [];
+    if (pmEntries.length > 0) {
+      const recurrences = detectRecurrences(pmEntries);
+      if (recurrences.length > 0) {
+        const escalations = buildRecurrenceEscalations(recurrences);
+        await appendProgress(config, `[RECURRENCE] ${recurrences.length} recurring pattern(s) detected: ${recurrences.map(r => r.pattern).join("; ")}`);
+        for (const esc of escalations) {
+          await appendAlert(config, {
+            severity: esc.severity === "critical" ? ALERT_SEVERITY.CRITICAL : ALERT_SEVERITY.HIGH,
+            source: "recurrence_detector",
+            title: esc.title,
+            message: esc.reason
+          });
+        }
+      }
+    }
+  } catch (err) {
+    warn(`[orchestrator] Recurrence detection failed (non-fatal): ${String(err?.message || err)}`);
+  }
+
+  // ── Learning-to-policy compilation: convert lessons into enforced checks ──
+  try {
+    const postmortemsRaw2 = await readJson(path.join(stateDir, "athena_postmortems.json"), null);
+    const pmEntries2 = Array.isArray(postmortemsRaw2?.entries) ? postmortemsRaw2.entries : [];
+    if (pmEntries2.length > 0) {
+      const policies = compileLessonsToPolicies(pmEntries2);
+      if (policies.length > 0) {
+        await writeJson(path.join(stateDir, "learned_policies.json"), policies);
+        await appendProgress(config, `[POLICY_COMPILER] ${policies.length} lesson-based policies compiled: ${policies.map(p => p.id).join(", ")}`);
+      }
+    }
+  } catch (err) {
+    warn(`[orchestrator] Learning policy compilation failed (non-fatal): ${String(err?.message || err)}`);
+  }
+
+  // ── Capacity scoreboard: persist KPIs for trend analysis ──────────────────
+  try {
+    await appendCapacityEntry(config, {
+      parserConfidence: prometheusAnalysis?.parserConfidence ?? null,
+      planCount: Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans.length : 0,
+      projectHealth: prometheusAnalysis?.projectHealth ?? "unknown",
+      optimizerStatus: "ok",
+      budgetUsed: prometheusAnalysis?.requestBudget?.estimatedPremiumRequestsTotal ?? 0,
+      budgetLimit: prometheusAnalysis?.requestBudget?.hardCapTotal ?? 0,
+      workersDone: workersDone,
+    });
+  } catch (err) {
+    warn(`[orchestrator] Capacity scoreboard update failed (non-fatal): ${String(err?.message || err)}`);
+  }
+
+  // ── Delta analytics + strategy retune (Wave 6) ───────────────────────────
+  try {
+    const delta = await computeCapabilityDelta(config);
+    if (delta.summary.hasEnoughData) {
+      await appendProgress(config, `[DELTA] Capability score=${delta.overallScore}/100 improving=[${delta.summary.improving.join(",")}] degrading=[${delta.summary.degrading.join(",")}]`);
+
+      const retune = evaluateRetune(config, delta);
+      if (retune.shouldRetune) {
+        await appendProgress(config, `[RETUNE] ${retune.actions.length} retune action(s) recommended: ${retune.actions.map(a => a.parameter).join(", ")}`);
+        // Write retune recommendations to state for Jesus to consider
+        await writeJson(path.join(stateDir, "retune_recommendations.json"), {
+          generatedAt: new Date().toISOString(),
+          actions: retune.actions,
+          deltaReport: delta,
+        });
+      }
+    }
+  } catch (err) {
+    warn(`[orchestrator] Delta analytics/retune failed (non-fatal): ${String(err?.message || err)}`);
+  }
 }
 
 // ── Main loop: Jesus → Prometheus → Athena → Worker → Athena → repeat ──────
@@ -1025,9 +1339,35 @@ async function mainLoop(config) {
       }
 
       try {
-        await runSelfImprovementCycle(config);
+        const stateDir = config.paths?.stateDir || "state";
+        const siGate = await shouldTriggerSelfImprovement(config, stateDir);
+        if (siGate.shouldRun) {
+          await appendProgress(config, `[SELF-IMPROVEMENT] Quality gate passed: ${siGate.reason}`);
+          await runSelfImprovementCycle(config);
+          // Reset cycle counter
+          await writeJson(path.join(stateDir, "self_improvement_state.json"), {
+            lastRunAt: new Date().toISOString(),
+            cyclesSinceLastRun: 0
+          });
+        } else {
+          await appendProgress(config, `[SELF-IMPROVEMENT] Skipped (quality gate): ${siGate.reason}`);
+          // Increment cycle counter
+          const siState = await readJson(path.join(stateDir, "self_improvement_state.json"), {});
+          await writeJson(path.join(stateDir, "self_improvement_state.json"), {
+            ...siState,
+            cyclesSinceLastRun: (siState.cyclesSinceLastRun || 0) + 1
+          });
+        }
       } catch (err) {
         warn(`[orchestrator] self-improvement error: ${String(err?.message || err)}`);
+      }
+
+      // ── Evolution metrics: persist proof-of-improvement data ──────────────
+      try {
+        const evoMetrics = await collectEvolutionMetrics(config);
+        await appendProgress(config, `[EVOLUTION_METRICS] Collected — deterministicRate=${evoMetrics.deterministicPostmortem?.rate ?? "N/A"} premiumReqs24h=${evoMetrics.premiumRequestsPerDay}`);
+      } catch (err) {
+        warn(`[orchestrator] evolution metrics error (non-fatal): ${String(err?.message || err)}`);
       }
 
       // ── Governance canary: process running policy-rule canary experiments ──
