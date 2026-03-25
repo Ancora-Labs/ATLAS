@@ -323,4 +323,14 @@ describe("verification_gate — SHA + raw npm output enforced across done-capabl
       `expected SHA gap; got: [${result.gaps.join("; ")}]`
     );
   });
+
+  it("scan role done is not gated by post-merge artifact requirements", () => {
+    const result = validateWorkerContract("scanA", {
+      status: "done",
+      fullOutput: "read-only scan finished"
+    });
+    assert.equal(result.passed, true);
+    assert.equal(result.gaps.length, 0);
+    assert.match(String(result.reason || ""), /exempt/i);
+  });
 });

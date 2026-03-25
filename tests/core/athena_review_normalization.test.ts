@@ -94,4 +94,22 @@ describe("normalizeAthenaReviewPayload", () => {
     assert.ok(normalized.synthesizedFields.includes("corrections"));
     assert.ok(normalized.synthesizedFields.includes("planReviews"));
   });
+
+  it("fails closed when reviewer status is blocked, even if summary text sounds positive", () => {
+    const normalized = normalizeAthenaReviewPayload({
+      status: "blocked",
+      planReviews: [
+        {
+          planIndex: 0,
+          role: "evolution-worker",
+          measurable: true,
+          issues: []
+        }
+      ],
+      summary: "Looks good overall."
+    }, BASE_PLANS);
+
+    assert.equal(normalized.payload.approved, false);
+    assert.deepEqual(normalized.payload.corrections, []);
+  });
 });

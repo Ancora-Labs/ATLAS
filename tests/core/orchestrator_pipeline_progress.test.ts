@@ -145,6 +145,20 @@ describe("orchestrator governance pre-dispatch gate", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  it("allows dispatch when guardrail, freeze, lineage, and canary gates are all clear", async () => {
+    const plans = [
+      { id: "T1", task: "task one", role: "backend", dependsOn: [], filesInScope: ["src/core/a.ts"] },
+      { id: "T2", task: "task two", role: "test", dependsOn: ["T1"], filesInScope: ["tests/core/a.test.ts"] }
+    ];
+
+    const result = await evaluatePreDispatchGovernanceGate(config, plans, "clear-gate-cycle-1");
+
+    assert.equal(result.blocked, false, "dispatch must proceed when no pre-dispatch governance gate is active");
+    assert.equal(result.reason, null);
+    assert.ok(result.graphResult, "graphResult must exist for successful lineage resolution");
+    assert.equal(result.graphResult.status, "ok");
+  });
+
   // ── Task 4 ────────────────────────────────────────────────────────────────
   it("should block dispatch when lineage graph status is cycle_detected", async () => {
     // Two plans with a mutual dependency — creates a cycle in the graph
