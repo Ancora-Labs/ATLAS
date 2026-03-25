@@ -469,7 +469,7 @@ function buildPrometheusPlanBoard(prometheusAnalysis: Record<string, any>, worke
 
 function runRebaseCommand() {
   return new Promise((resolve) => {
-    const child = execFile("node", ["src/cli.js", "rebase"], { cwd: ROOT, windowsHide: true }, (error, stdout, stderr) => {
+    const child = execFile("node", ["--import", "tsx", "src/cli.ts", "rebase"], { cwd: ROOT, windowsHide: true }, (error, stdout, stderr) => {
       const output = [String(stdout || "").trim(), String(stderr || "").trim()].filter(Boolean).join("\n");
       if (error) {
         resolve({ ok: false, exitCode: Number(error?.code || 1), output });
@@ -489,7 +489,7 @@ function runRebaseCommand() {
 function startDaemonDetached() {
   return new Promise((resolve) => {
     try {
-      const child = spawn("node", ["src/cli.js", "start"], {
+      const child = spawn("node", ["--import", "tsx", "src/cli.ts", "start"], {
         cwd: ROOT,
         detached: true,
         stdio: "ignore",
@@ -4467,8 +4467,9 @@ export function startDashboard(opts: { port?: number } = {}): http.Server | null
   return _server;
 }
 
-// Auto-start when run directly (node src/dashboard/live_dashboard.js)
+// Auto-start when run directly (node src/dashboard/live_dashboard.ts)
 const _isDirectRun = process.argv[1] && (
+  process.argv[1].endsWith("live_dashboard.ts") ||
   process.argv[1].endsWith("live_dashboard.js") ||
   process.argv[1].endsWith("live_dashboard")
 );

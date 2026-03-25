@@ -405,9 +405,10 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     maxContinues: undefined
   });
 
-  // Compute timeout: config.runtime.workerTimeoutMinutes → ms, fallback to spawnAsync default (45min)
+  // Compute timeout: config.runtime.workerTimeoutMinutes → ms.
+  // 0 or negative means no timeout for worker execution.
   const workerTimeoutMinutes = Number(config?.runtime?.workerTimeoutMinutes || 0);
-  const workerTimeoutMs = workerTimeoutMinutes > 0 ? workerTimeoutMinutes * 60 * 1000 : undefined;
+  const workerTimeoutMs = workerTimeoutMinutes > 0 ? workerTimeoutMinutes * 60 * 1000 : null;
   const liveLogPath = getLiveLogPath(config, roleName);
 
   await appendLiveWorkerLog(

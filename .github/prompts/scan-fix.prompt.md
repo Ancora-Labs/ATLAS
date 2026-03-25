@@ -11,7 +11,7 @@ Every task MUST result in at least one changed source file. Reports without chan
 
 <scope>
 - All source files: src/**/*.js, src/**/*.ts
-- Test files: tests/**, **/*.test.js
+- Test files: tests/**, **/*.test.ts
 - DO NOT edit: .github/workflows/**, docker/**, state/**
 </scope>
 
