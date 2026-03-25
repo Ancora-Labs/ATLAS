@@ -2,9 +2,9 @@
   "extends": "markdownlint/style/relaxed",
   "no-hard-tabs": false,
   "line-length": {
-    "line_length": 120,
-    "heading_line_length": 120,
-    "headers": true,
+    "line_length": 200,
+    "heading_line_length": 200,
+    "headers": false,
     "code_blocks": false,
     "code_fence": false,
     "tables": false
@@ -12,10 +12,7 @@
   "no-inline-html": false,
   "no-bare-urls": false,
   "no-space-in-code": false,
-  "blanks-around-headings": {
-    "lines_above": 1,
-    "lines_below": 0
-  },
+  "blanks-around-headings": false,
   "blanks-around-lists": false,
   "list-item-indent": {
     "indent": 2
