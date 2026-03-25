@@ -53,6 +53,9 @@ import { assignWorkersToPlans, enforceLaneDiversity } from "./capability_pool.js
 import { computeNextWaves } from "./dag_scheduler.js";
 import { runDoctor } from "./doctor.js";
 import { validateAllPlans } from "./plan_contract_validator.js";
+import { resolveDependencyGraph, GRAPH_STATUS } from "./dependency_graph_resolver.js";
+import { isGovernanceCanaryBreachActive } from "./governance_canary.js";
+import { executeRollback, ROLLBACK_LEVEL, ROLLBACK_TRIGGER } from "./rollback_engine.js";
 
 /**
  * Orchestrator health status enum.
@@ -71,6 +74,103 @@ export async function writeOrchestratorHealth(stateDir, status, reason, details 
     details: details || null,
     recordedAt: new Date().toISOString()
   });
+}
+
+/**
+ * Evaluate pre-dispatch governance gates without starting worker execution.
+ * Exported for integration tests and any callers that need the dispatch decision
+ * surface without running a full orchestration cycle.
+ */
+export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycleId = "") {
+  const stateDir = config?.paths?.stateDir || "state";
+
+  if (config?.systemGuardian?.enabled !== false) {
+    try {
+      const pauseActive = await isGuardrailActive(config, GUARDRAIL_ACTION.PAUSE_WORKERS);
+      if (pauseActive) {
+        return {
+          blocked: true,
+          reason: "guardrail_pause_workers_active",
+          action: undefined,
+          graphResult: null,
+          cycleId
+        };
+      }
+    } catch (err) {
+      warn(`[orchestrator] pre-dispatch guardrail check failed: ${String(err?.message || err)}`);
+    }
+  }
+
+  const freezeStatus = isFreezeActive(config);
+  if (freezeStatus.active) {
+    return {
+      blocked: true,
+      reason: `governance_freeze_active:${freezeStatus.reason}`,
+      action: undefined,
+      graphResult: null,
+      cycleId
+    };
+  }
+
+  const graphInput = Array.isArray(plans)
+    ? plans.map((plan, index) => ({
+        id: String(plan?.id || plan?.task || plan?.role || `plan-${index + 1}`),
+        dependsOn: Array.isArray(plan?.dependsOn) ? plan.dependsOn : [],
+        filesInScope: Array.isArray(plan?.filesInScope) ? plan.filesInScope : []
+      }))
+    : [];
+
+  const graphResult = resolveDependencyGraph(graphInput);
+  if (graphResult.status === GRAPH_STATUS.CYCLE_DETECTED) {
+    return {
+      blocked: true,
+      reason: `lineage_cycle_detected:${graphResult.reasonCode}`,
+      action: undefined,
+      graphResult,
+      cycleId
+    };
+  }
+
+  const canaryBreach = await isGovernanceCanaryBreachActive(config);
+  if (canaryBreach.breachActive) {
+    const rollbackConfig = {
+      ...config,
+      rollbackEngine: {
+        ...(config?.rollbackEngine || {}),
+        incidentLogPath: config?.rollbackEngine?.incidentLogPath || path.join(stateDir, "rollback_incidents.jsonl"),
+        lockFilePath: config?.rollbackEngine?.lockFilePath || path.join(stateDir, "rollback_lock.json")
+      }
+    };
+
+    const rollbackResult = await executeRollback({
+      level: ROLLBACK_LEVEL.CONFIG_ONLY,
+      trigger: ROLLBACK_TRIGGER.CANARY_ROLLBACK,
+      evidence: {
+        controlValue: config?.rollbackEngine?.controlValue || {},
+        cycleId,
+        breachReason: canaryBreach.reason || "GOVERNANCE_CANARY_BREACH"
+      },
+      config: rollbackConfig,
+      stateDir
+    });
+
+    return {
+      blocked: true,
+      reason: `governance_canary_breach:${canaryBreach.reason || "GOVERNANCE_CANARY_BREACH"}`,
+      action: "rollback",
+      graphResult,
+      rollbackResult,
+      cycleId
+    };
+  }
+
+  return {
+    blocked: false,
+    reason: null,
+    action: undefined,
+    graphResult,
+    cycleId
+  };
 }
 
 /**
