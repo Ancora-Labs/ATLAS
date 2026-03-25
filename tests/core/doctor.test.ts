@@ -1,4 +1,4 @@
-import { describe, it, afterEach } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,7 +6,11 @@ import os from "node:os";
 import { runDoctor } from "../../src/core/doctor.js";
 
 describe("doctor", () => {
-  const originalTargetRepo = process.env.TARGET_REPO;
+  let originalTargetRepo: string | undefined;
+
+  beforeEach(() => {
+    originalTargetRepo = process.env.TARGET_REPO;
+  });
 
   afterEach(async () => {
     if (originalTargetRepo === undefined) {

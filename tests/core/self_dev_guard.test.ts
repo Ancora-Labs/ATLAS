@@ -17,7 +17,7 @@ describe("self_dev_guard", () => {
   it("validates blocked and caution file changes", () => {
     const result = validateFileChanges([
       "src/core/orchestrator.ts",
-      "src/core/prometheus.js"
+      "box.config.json"
     ]);
     assert.equal(result.allowed, false);
     assert.ok(result.blocked.some((b) => b.includes("critical system file")));
