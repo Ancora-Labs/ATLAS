@@ -850,15 +850,15 @@ async function runSingleCycle(config) {
       await appendProgress(config,
         `[PLAN_QUALITY] Contract pass rate: ${(contractReport.passRate * 100).toFixed(0)}% — ${contractReport.results.filter(r => !r.valid).length} plan(s) have violations`
       );
-      for (const r of contractReport.results) {
-        if (!r.valid) {
-          const critical = r.violations.filter(v => v.severity === "critical");
-          if (critical.length > 0) {
-            warn(`[orchestrator] Plan for ${(r as any).plan?.role || "unknown"} has ${critical.length} critical contract violation(s) — removing from dispatch`);
-            const idx = plans.indexOf((r as any).plan);
-            if (idx !== -1) plans.splice(idx, 1);
-          }
-        }
+      // Collect indices with critical violations; sort descending to preserve splice indices
+      const toRemove = contractReport.results
+        .filter(r => !r.valid && r.violations.some(v => v.severity === "critical"))
+        .map(r => r.planIndex)
+        .sort((a, b) => b - a);
+      for (const idx of toRemove) {
+        const plan = plans[idx];
+        warn(`[orchestrator] Plan "${String((plan as any)?.task || "unknown").slice(0, 60)}" has critical contract violation(s) — removing from dispatch`);
+        plans.splice(idx, 1);
       }
       if (plans.length === 0) {
         await appendProgress(config, "[CYCLE] All plans removed by contract quality gate — cycle complete");

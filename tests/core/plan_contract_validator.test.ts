@@ -143,5 +143,31 @@ describe("plan_contract_validator", () => {
       assert.equal(result.passRate, 1);
       assert.equal(result.invalidCount, 0);
     });
+
+    it("planIndex correctly identifies critical-violation plans for removal", () => {
+      const plans = [
+        { task: "Valid plan with enough chars", role: "worker", wave: 1, verification: "npm test", dependencies: [], acceptance_criteria: ["ok"] },
+        { task: "X", role: "", wave: -1, verification: "" }, // critical violations
+        { task: "Another valid plan here", role: "worker", wave: 2, verification: "npm test", dependencies: [], acceptance_criteria: ["ok"] },
+      ];
+      const result = validateAllPlans(plans);
+
+      // Collect indices with critical violations (as orchestrator does)
+      const toRemove = result.results
+        .filter(r => !r.valid && r.violations.some(v => v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL))
+        .map(r => r.planIndex)
+        .sort((a, b) => b - a);
+
+      assert.deepEqual(toRemove, [1], "only index 1 should be flagged for removal");
+
+      // Simulate splice in reverse order (as orchestrator does)
+      const filtered = [...plans];
+      for (const idx of toRemove) {
+        filtered.splice(idx, 1);
+      }
+      assert.equal(filtered.length, 2, "critical-violation plan should be removed");
+      assert.equal(filtered[0].task, "Valid plan with enough chars");
+      assert.equal(filtered[1].task, "Another valid plan here");
+    });
   });
 });
