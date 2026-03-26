@@ -673,17 +673,17 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     });
 
     // Evidence snapshot for audit (AC#4 defined schema)
-    const verificationEvidence = {
-      profile: validationResult.evidence?.profile || workerKind,
-      hasReport: validationResult.evidence?.hasReport || false,
+    const verificationEvidence: VerificationEvidence = {
+      profile: String(validationResult.evidence?.profile || workerKind),
+      hasReport: Boolean(validationResult.evidence?.hasReport),
       report: validationResult.evidence?.report || {},
       responsiveMatrix: validationResult.evidence?.responsiveMatrix || {},
-      prUrl: validationResult.evidence?.prUrl || null,
+      prUrl: (validationResult.evidence?.prUrl as string | null) ?? null,
       gaps: validationResult.gaps,
       passed: validationResult.passed,
       attempt: currentAttempt,
       validatedAt: new Date().toISOString(),
-      roleName,
+      roleName: String(roleName),
       taskSnippet: String(instruction.task || "").slice(0, 100)
     };
 

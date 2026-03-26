@@ -405,6 +405,8 @@ export function validateLeadershipContract(contractType: string, payload: unknow
   }
 
   // ── Load schema ────────────────────────────────────────────────────────────
+  // After null/type checks above, payload is a non-null plain object — safe to index.
+  const payloadObj = payload as Record<string, unknown>;
   let schema;
   try {
     schema = loadSchema();
@@ -449,7 +451,7 @@ export function validateLeadershipContract(contractType: string, payload: unknow
 
   // ── Check required fields ──────────────────────────────────────────────────
   for (const field of requiredFields) {
-    if (!(field in payload)) {
+    if (!(field in payloadObj)) {
       errors.push({
         field,
         reasonCode: TRUST_BOUNDARY_REASON.MISSING_FIELD,
@@ -462,14 +464,14 @@ export function validateLeadershipContract(contractType: string, payload: unknow
 
     const descriptor = fieldDescriptors[field];
     if (descriptor) {
-      const result = validateField(field, payload[field], descriptor, basePath);
+      const result = validateField(field, payloadObj[field], descriptor, basePath);
       errors.push(...result.errors.map(e => ({ ...e, sourceFile })));
     }
   }
 
   // ── Validate plan items for planner contracts ──────────────────────────────
-  if (contractType === LEADERSHIP_CONTRACT_TYPE.PLANNER && Array.isArray(payload.plans)) {
-    const planErrors = validatePlanItems(payload.plans, contract);
+  if (contractType === LEADERSHIP_CONTRACT_TYPE.PLANNER && Array.isArray(payloadObj.plans)) {
+    const planErrors = validatePlanItems(payloadObj.plans, contract);
     errors.push(...planErrors.map(e => ({ ...e, sourceFile })));
   }
 
