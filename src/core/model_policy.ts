@@ -41,6 +41,30 @@ const OPUS_MIN_ESTIMATED_LINES = 3000;
 const OPUS_MIN_DURATION_MINUTES = 120;
 const OPUS_ALLOWED_COMPLEXITIES = new Set(["critical", "massive", "high"]);
 
+// ── Typed interfaces for decision branches ────────────────────────────────────
+
+/** Hints describing a task's estimated scope, used for model selection decisions. */
+export interface TaskHints {
+  estimatedLines?: number;
+  estimatedDurationMinutes?: number;
+  complexity?: string;
+  /** Expected quality gain — used by uncertainty-aware routing (Packet 14). */
+  expectedQualityGain?: number;
+}
+
+/** Available model tiers for complexity-based routing. */
+export interface ModelOptions {
+  defaultModel?: string;
+  strongModel?: string;
+  efficientModel?: string;
+}
+
+/** Historical ROI data for uncertainty-aware routing. */
+export interface RoutingHistory {
+  /** Recent ROI value for the current task type (0–∞; 0 means no history). */
+  recentROI?: number;
+}
+
 /**
  * Check if a model is absolutely banned.
  * @param {string} modelName - Model name or slug
@@ -76,7 +100,7 @@ export function isOpusTier(modelName) {
  * @param {{ estimatedLines?: number, estimatedDurationMinutes?: number, complexity?: string }} taskHints
  * @returns {{ allowed: boolean, reason: string }}
  */
-export function isOpusJustified(taskHints: any = {}) {
+export function isOpusJustified(taskHints: TaskHints = {}) {
   const lines = Number(taskHints.estimatedLines || 0);
   const duration = Number(taskHints.estimatedDurationMinutes || 0);
   const complexity = String(taskHints.complexity || "").toLowerCase();
@@ -129,7 +153,7 @@ export const COMPLEXITY_TIER = Object.freeze({
  * @param {{ estimatedLines?: number, estimatedDurationMinutes?: number, complexity?: string }} taskHints
  * @returns {{ tier: string, reason: string, maxContinuations: number }}
  */
-export function classifyComplexityTier(taskHints: any = {}) {
+export function classifyComplexityTier(taskHints: TaskHints = {}) {
   const lines = Number(taskHints.estimatedLines || 0);
   const duration = Number(taskHints.estimatedDurationMinutes || 0);
   const complexity = String(taskHints.complexity || "").toLowerCase();
@@ -156,7 +180,7 @@ export function classifyComplexityTier(taskHints: any = {}) {
  * @param {{ defaultModel?: string, strongModel?: string, efficientModel?: string }} modelOptions
  * @returns {{ model: string, tier: string, reason: string }}
  */
-export function routeModelByComplexity(taskHints = {}, modelOptions: any = {}) {
+export function routeModelByComplexity(taskHints: TaskHints = {}, modelOptions: ModelOptions = {}) {
   const defaultModel = modelOptions.defaultModel || "Claude Sonnet 4.6";
   const strongModel = modelOptions.strongModel || defaultModel;
   const efficientModel = modelOptions.efficientModel || defaultModel;
@@ -260,7 +284,7 @@ export function computeTokenROI(entry) {
  * @param {{ recentROI?: number }} history — historical ROI for this task type
  * @returns {{ model: string, tier: string, reason: string, uncertainty: string }}
  */
-export function routeModelWithUncertainty(taskHints = {}, modelOptions: any = {}, history: any = {}) {
+export function routeModelWithUncertainty(taskHints: TaskHints = {}, modelOptions: ModelOptions = {}, history: RoutingHistory = {}) {
   const base = routeModelByComplexity(taskHints, modelOptions);
   const recentROI = Number(history.recentROI || 0);
 

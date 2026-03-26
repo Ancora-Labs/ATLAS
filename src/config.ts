@@ -82,6 +82,7 @@ export async function loadConfig(): Promise<Config> {
     securityFamilyFailureWindowMinutes: process.env.BOX_SECURITY_FAMILY_FAILURE_WINDOW_MINUTES?.trim() || null,
     securityFamilyCooldownMinutes: process.env.BOX_SECURITY_FAMILY_COOLDOWN_MINUTES?.trim() || null,
     environmentBlockerCooldownMinutes: process.env.BOX_ENVIRONMENT_BLOCKER_COOLDOWN_MINUTES?.trim() || null,
+    workerTimeoutMinutes: process.env.BOX_WORKER_TIMEOUT_MINUTES?.trim() || null,
     // Dashboard bearer token — required for POST mutation endpoints on the live dashboard.
     // Must be a long random string. If unset, mutation endpoints return 403.
     dashboardToken: process.env.BOX_DASHBOARD_TOKEN?.trim() || null
@@ -207,8 +208,8 @@ export async function loadConfig(): Promise<Config> {
       ? Number(env.environmentBlockerCooldownMinutes)
       : Number(fileConfig?.runtime?.environmentBlockerCooldownMinutes ?? 180),
     workerMaxFilesChanged: Number(fileConfig?.runtime?.workerMaxFilesChanged ?? 20),
-    workerTimeoutMinutes: (env as any).workerTimeoutMinutes
-      ? Number((env as any).workerTimeoutMinutes)
+    workerTimeoutMinutes: env.workerTimeoutMinutes
+      ? Number(env.workerTimeoutMinutes)
       : Number(fileConfig?.runtime?.workerTimeoutMinutes ?? 15),
     workerForbiddenPathPrefixes: Array.isArray(fileConfig?.runtime?.workerForbiddenPathPrefixes)
       ? fileConfig.runtime.workerForbiddenPathPrefixes.map((item) => String(item))

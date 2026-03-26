@@ -206,6 +206,23 @@ export function getRolePathViolations(policy, roleName, filePaths) {
   };
 }
 
+// ── Typed interfaces for decision branches ────────────────────────────────────
+
+/** Options forwarded to runShadowEvaluation for policy promotion gating. */
+export interface ShadowEvaluationOptions {
+  stateDir?: string;
+  threshold?: number;
+  owner?: string;
+  [key: string]: unknown;
+}
+
+/** Inputs for the composed governance decision (guardrail > freeze > canary). */
+export interface GovernanceDecisionInputs {
+  guardrailActive?: boolean;
+  freezeActive?: boolean;
+  canaryBreachActive?: boolean;
+}
+
 /**
  * Gate a policy promotion through shadow evaluation.
  *
@@ -215,10 +232,10 @@ export function getRolePathViolations(policy, roleName, filePaths) {
  *
  * @param {object}   currentPolicy    The currently loaded policy.
  * @param {object[]} proposedChanges  Proposed changes (see shadow_policy_evaluator.js schema).
- * @param {object}   [options]        Forwarded to runShadowEvaluation (stateDir, threshold, owner).
+ * @param {ShadowEvaluationOptions}   [options]        Forwarded to runShadowEvaluation (stateDir, threshold, owner).
  * @returns {Promise<object>}         Shadow evaluation result (schemaVersion: 1).
  */
-export async function evaluatePolicyPromotion(currentPolicy, proposedChanges, options: any = {}) {
+export async function evaluatePolicyPromotion(currentPolicy, proposedChanges, options: ShadowEvaluationOptions = {}) {
   return runShadowEvaluation(currentPolicy, proposedChanges, options);
 }
 
@@ -233,14 +250,14 @@ export async function evaluatePolicyPromotion(currentPolicy, proposedChanges, op
  * All three inputs are booleans; the caller is responsible for resolving their
  * true/false status from the respective sub-systems before calling this function.
  *
- * @param {{ guardrailActive?: boolean, freezeActive?: boolean, canaryBreachActive?: boolean }} inputs
+ * @param {GovernanceDecisionInputs} inputs
  * @returns {{ blocked: boolean, reason: string, precedenceLevel: number }}
  */
 export function applyGovernanceDecision({
   guardrailActive    = false,
   freezeActive       = false,
   canaryBreachActive = false
-}: any = {}) {
+}: GovernanceDecisionInputs = {}) {
   if (guardrailActive) {
     return { blocked: true,  reason: "guardrail:active",      precedenceLevel: 1 };
   }

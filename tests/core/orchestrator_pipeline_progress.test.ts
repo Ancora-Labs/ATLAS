@@ -328,7 +328,7 @@ describe("orchestrator governance pre-dispatch gate", () => {
   });
 
   // ── Task 7 ────────────────────────────────────────────────────────────────
-  it("should enforce guardrail>freeze>canary precedence and invoke rollback on canary breach in one cycle", async () => {
+  it("should enforce guardrail > freeze > canary precedence and invoke rollback on canary breach in one cycle", async () => {
     // Set up canary breach in state
     const ledger = {
       schemaVersion: 1,

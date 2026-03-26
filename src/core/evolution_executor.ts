@@ -27,7 +27,7 @@ import { appendProgress } from "./state_tracker.js";
 import { buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
 import { spawnAsync } from "./fs_utils.js";
 import { getRoleRegistry } from "./role_registry.js";
-import { checkPostMergeArtifact } from "./verification_gate.js";
+import { checkPostMergeArtifact, ARTIFACT_GAP, ARTIFACT_GATE_ERROR_PREFIX } from "./verification_gate.js";
 
 type EvolutionTask = {
   task_id?: string;
@@ -904,10 +904,10 @@ export async function runEvolutionLoop(config, options: { fromTaskId?: string; d
       const artifact = checkPostMergeArtifact(workerResult.fullOutput || workerResult.summary || "");
       if (!artifact.hasArtifact) {
         const gaps: string[] = [];
-        if (!artifact.hasSha) gaps.push("post-merge git SHA missing from worker output");
-        if (!artifact.hasTestOutput) gaps.push("raw npm test output block missing from worker output");
+        if (!artifact.hasSha) gaps.push(ARTIFACT_GAP.MISSING_SHA);
+        if (!artifact.hasTestOutput) gaps.push(ARTIFACT_GAP.MISSING_TEST_OUTPUT);
         taskState.status = "rework";
-        taskState.error = `artifact-gate: ${gaps.join("; ")}`;
+        taskState.error = `${ARTIFACT_GATE_ERROR_PREFIX}: ${gaps.join("; ")}`;
         await appendProgress(config, `[EVO] ${task.task_id} — artifact gate failed: ${gaps.join("; ")}`);
         await saveProgress(stateDir, progress);
         console.warn(`[evolution] Artifact gate failed — scheduling rework (${gaps.join(", ")})`);

@@ -26,6 +26,20 @@ const NPM_TEST_OUTPUT_PATTERN = /(?:passing|failing|tests?\s+\d|✓|✗|#\s+test
 export const POST_MERGE_PLACEHOLDER = "POST_MERGE_TEST_OUTPUT";
 
 /**
+ * Canonical artifact-gate gap reason strings.
+ * Shared by worker_runner and evolution_executor so failure reasons are identical
+ * regardless of which finalization path triggers the artifact check.
+ */
+export const ARTIFACT_GAP = Object.freeze({
+  UNFILLED_PLACEHOLDER: "POST_MERGE_TEST_OUTPUT placeholder is still unfilled — replace it with actual test output",
+  MISSING_SHA:          "Post-merge git SHA missing — run 'git rev-parse HEAD' on merged state and include the SHA",
+  MISSING_TEST_OUTPUT:  "Post-merge raw npm test output missing — run 'npm test' on merged state and paste raw stdout",
+});
+
+/** Prefix used in taskState.error when the artifact gate fails. */
+export const ARTIFACT_GATE_ERROR_PREFIX = "artifact-gate";
+
+/**
  * Check if worker output contains the required post-merge verification artifact.
  * The artifact is: a git SHA + raw npm test stdout block.
  *
@@ -210,13 +224,13 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
     const artifact = checkPostMergeArtifact(output);
     evidence.postMergeArtifact = artifact;
     if (artifact.hasUnfilledPlaceholder) {
-      gaps.push("POST_MERGE_TEST_OUTPUT placeholder is still unfilled — replace it with actual test output");
+      gaps.push(ARTIFACT_GAP.UNFILLED_PLACEHOLDER);
     }
     if (!artifact.hasSha) {
-      gaps.push("Post-merge git SHA missing — run 'git rev-parse HEAD' on merged state and include the SHA");
+      gaps.push(ARTIFACT_GAP.MISSING_SHA);
     }
     if (!artifact.hasTestOutput) {
-      gaps.push("Post-merge raw npm test output missing — run 'npm test' on merged state and paste raw stdout");
+      gaps.push(ARTIFACT_GAP.MISSING_TEST_OUTPUT);
     }
   }
 
