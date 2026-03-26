@@ -851,14 +851,23 @@ async function postCompletionCleanup(config) {
 
 const IMPLEMENTATION_WORKER = "evolution-worker";
 
+// Roles that have agent files but lack implementation tools (read/edit/execute).
+// Implementation tasks assigned to these roles must be redirected to evolution-worker.
+const ANALYSIS_ONLY_ROLES = new Set(["athena", "prometheus", "jesus"]);
+
 function resolveWorkerRole(logicalRole, taskKind) {
   const role = String(logicalRole || "").toLowerCase().trim();
-  // If the role already has a dedicated agent file, use it as-is
+  const kind = String(taskKind || "").toLowerCase();
+  const isImplementation = !kind || kind === "implementation";
+
+  // Analysis-only roles cannot execute implementation tasks — redirect to evolution-worker
+  if (isImplementation && ANALYSIS_ONLY_ROLES.has(role)) return IMPLEMENTATION_WORKER;
+
+  // If the role has a dedicated agent file with full tools, use it as-is
   const slug = nameToSlug(role);
   if (slug && agentFileExists(slug)) return logicalRole;
-  // For implementation tasks without an agent file, fall back to evolution-worker
-  const kind = String(taskKind || "").toLowerCase();
-  if (!kind || kind === "implementation") return IMPLEMENTATION_WORKER;
+
+  // Fallback: all implementation tasks without a matching agent go to evolution-worker
   return IMPLEMENTATION_WORKER;
 }
 
