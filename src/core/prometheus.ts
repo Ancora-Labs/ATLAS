@@ -489,6 +489,9 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
   return {
     ...src,
     role: String(src.role || "evolution-worker").trim() || "evolution-worker",
+    // owner is a required packet field (ACTIONABLE IMPROVEMENT PACKET FORMAT).
+    // Preserve the explicit owner when provided; fall back to role.
+    owner: String(src.owner || src.role || "evolution-worker").trim() || "evolution-worker",
     task: taskText,
     priority: Number.isFinite(Number(src.priority)) ? Number(src.priority) : index + 1,
     wave,
@@ -512,6 +515,18 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
       : [],
     riskLevel,
     premortem,
+    // leverage_rank: which EQUAL DIMENSION SET dimensions this task improves.
+    // Preserved from source when provided; defaults to empty array.
+    leverage_rank: Array.isArray(src.leverage_rank)
+      ? src.leverage_rank.map(v => String(v || "").trim()).filter(Boolean)
+      : [],
+    // waveDepends: numeric wave numbers this wave depends on.
+    // Propagated from the wave object by buildPlansFromAlternativeShape /
+    // buildPlansFromBottlenecksShape so downstream schedulers can honour
+    // wave-level ordering without re-parsing executionStrategy.
+    waveDepends: Array.isArray(src.waveDepends)
+      ? (src.waveDepends as any[]).map(Number).filter(n => Number.isFinite(n))
+      : [],
   };
 }
 
@@ -529,14 +544,26 @@ function buildPlansFromAlternativeShape(input: any = {}) {
   }
 
   const waveByTaskIndex = new Map();
+  const waveDependsByTaskIndex = new Map();
   const waves = Array.isArray(input.waves) ? input.waves : [];
   for (let i = 0; i < waves.length; i++) {
     const waveObj = (waves[i] && typeof waves[i] === "object") ? waves[i] : {};
     const waveValue = normalizeWaveValue(waveObj.wave, i + 1 as any);
+    // Capture wave-level dependency numbers so they survive plan normalization.
+    const waveDepends: number[] = Array.isArray(waveObj.dependsOn)
+      ? (waveObj.dependsOn as any[]).map(Number).filter(n => Number.isFinite(n))
+      : Array.isArray(waveObj.dependsOnWaves)
+        ? (waveObj.dependsOnWaves as any[]).map(Number).filter(n => Number.isFinite(n))
+        : [];
     const waveTasks = Array.isArray(waveObj.tasks) ? waveObj.tasks : [];
     for (const waveTask of waveTasks) {
       if (waveTask && typeof waveTask === "object") {
-        const asTask = normalizePlanFromTask(waveTask, tasks.length, waveValue as any);
+        // Merge wave-level dependsOn into the task object before normalizing so
+        // waveDepends is preserved through normalizePlanFromTask's ...src spread.
+        const taskWithMeta = waveDepends.length > 0
+          ? { waveDepends, ...waveTask }
+          : waveTask;
+        const asTask = normalizePlanFromTask(taskWithMeta, tasks.length, waveValue as any);
         tasks.push(asTask);
         const idx = tasks.length - 1;
         taskIndexByKey.set(asTask.task_id, idx);
@@ -546,12 +573,33 @@ function buildPlansFromAlternativeShape(input: any = {}) {
       const key = String(waveTask || "").trim();
       if (!key) continue;
       const idx = taskIndexByKey.get(key);
-      if (Number.isInteger(idx)) waveByTaskIndex.set(idx, waveValue);
+      if (Number.isInteger(idx)) {
+        waveByTaskIndex.set(idx, waveValue);
+        if (waveDepends.length > 0) waveDependsByTaskIndex.set(idx, waveDepends);
+      } else {
+        // Unmatched string task: synthesize a stub plan rather than silently
+        // dropping it.  The full plan fields are filled by normalizePlanFromTask.
+        const stubIdx = tasks.length;
+        const stub: Record<string, any> = { task: key, task_id: key, title: key };
+        if (waveDepends.length > 0) stub.waveDepends = waveDepends;
+        tasks.push(stub);
+        taskIndexByKey.set(key, stubIdx);
+        waveByTaskIndex.set(stubIdx, waveValue);
+        if (waveDepends.length > 0) waveDependsByTaskIndex.set(stubIdx, waveDepends);
+      }
     }
   }
 
   if (tasks.length > 0) {
-    return tasks.map((task, i) => normalizePlanFromTask(task, i, waveByTaskIndex.get(i) || 1));
+    return tasks.map((task, i) => {
+      const waveDepends = waveDependsByTaskIndex.get(i);
+      // Merge wave depends into the task object so normalizePlanFromTask sees it
+      // via ...src and emits it as waveDepends on the output plan.
+      const taskWithMeta = waveDepends && !task.waveDepends
+        ? { waveDepends, ...task }
+        : task;
+      return normalizePlanFromTask(taskWithMeta, i, waveByTaskIndex.get(i) || 1);
+    });
   }
 
   return [];
@@ -572,6 +620,12 @@ function buildPlansFromBottlenecksShape(input) {
   for (const waveObj of waves) {
     if (!waveObj || typeof waveObj !== "object") continue;
     const waveNum = normalizeWaveValue(waveObj.wave, 1);
+    // Preserve wave-level dependency numbers for downstream schedulers.
+    const waveDepends: number[] = Array.isArray(waveObj.dependsOn)
+      ? (waveObj.dependsOn as any[]).map(Number).filter(n => Number.isFinite(n))
+      : Array.isArray(waveObj.dependsOnWaves)
+        ? (waveObj.dependsOnWaves as any[]).map(Number).filter(n => Number.isFinite(n))
+        : [];
     const taskStrings = Array.isArray(waveObj.tasks) ? waveObj.tasks : [];
 
     for (const taskStr of taskStrings) {
@@ -594,7 +648,7 @@ function buildPlansFromBottlenecksShape(input) {
       }) || "npm test";
 
       const severity = matchedBn?.severity || "medium";
-      plans.push({
+      const plan: Record<string, any> = {
         role: "evolution-worker",
         task: taskText,
         priority: SEVERITY_PRIORITY[severity] ?? plans.length + 1,
@@ -607,7 +661,9 @@ function buildPlansFromBottlenecksShape(input) {
         acceptance_criteria: [],
         dependencies: [],
         _fromBottleneck: matchedBn?.id || null,
-      });
+      };
+      if (waveDepends.length > 0) plan.waveDepends = waveDepends;
+      plans.push(plan);
     }
   }
 

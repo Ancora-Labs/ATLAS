@@ -491,3 +491,141 @@ describe("computeDriftConfidencePenalty (Task 4)", () => {
     assert.ok(result.reason.includes("3"), "reason must encode total count (3)");
   });
 });
+
+// ── Batch/wave packet field preservation (current task) ───────────────────────
+
+describe("normalizePrometheusParsedOutput — batch/wave packet field preservation", () => {
+  it("preserves explicit owner field from a capability-aware plan", () => {
+    const parsed = {
+      projectHealth: "good",
+      plans: [
+        {
+          task: "Harden trust boundary",
+          role: "evolution-worker",
+          owner: "orchestrator",
+          wave: 1,
+        }
+      ]
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.equal(result.plans[0].owner, "orchestrator", "owner must be preserved from source plan");
+  });
+
+  it("synthesizes owner from role when owner is absent", () => {
+    const parsed = {
+      projectHealth: "good",
+      plans: [{ task: "Fix parser", role: "governance-worker", wave: 1 }]
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.equal(result.plans[0].owner, "governance-worker", "owner should fall back to role");
+  });
+
+  it("defaults owner to evolution-worker when both owner and role are absent", () => {
+    const parsed = {
+      projectHealth: "good",
+      plans: [{ task: "Fix something", wave: 1 }]
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.equal(result.plans[0].owner, "evolution-worker", "owner must default to evolution-worker");
+  });
+
+  it("preserves explicit leverage_rank array from a capability-aware plan", () => {
+    const parsed = {
+      projectHealth: "good",
+      plans: [
+        {
+          task: "Improve wave dispatch",
+          role: "evolution-worker",
+          leverage_rank: ["speed", "task-quality"],
+          wave: 1,
+        }
+      ]
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.deepEqual(result.plans[0].leverage_rank, ["speed", "task-quality"],
+      "leverage_rank must be preserved from source plan");
+  });
+
+  it("defaults leverage_rank to empty array when absent", () => {
+    const parsed = {
+      projectHealth: "good",
+      plans: [{ task: "Fix something", wave: 1 }]
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.deepEqual(result.plans[0].leverage_rank, [],
+      "leverage_rank must default to empty array when absent");
+  });
+
+  it("synthesizes stub plans for string wave tasks that have no matching task entry", () => {
+    // tasks[] has T-001 but waves[] also references T-999 which does not exist.
+    // T-999 must NOT be silently dropped.
+    const parsed = {
+      tasks: [
+        { task_id: "T-001", title: "Known task", wave: 1 }
+      ],
+      waves: [
+        { wave: 1, tasks: ["T-001", "T-999"] }
+      ]
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.equal(result.plans.length, 2, "unmatched wave task T-999 must produce a stub plan");
+    const taskTexts = result.plans.map(p => p.task);
+    assert.ok(taskTexts.includes("T-999"), "stub plan task must equal the unmatched task id string");
+    assert.equal(result.plans.find(p => p.task === "T-999")?.wave, 1,
+      "stub plan must have the correct wave assignment");
+    assert.equal(result.plans.find(p => p.task === "T-999")?.role, "evolution-worker",
+      "stub plan must be assigned a role");
+  });
+
+  it("propagates wave dependsOn to plan waveDepends via buildPlansFromAlternativeShape", () => {
+    const parsed = {
+      tasks: [
+        { task_id: "T-001", title: "Foundation task" }
+      ],
+      waves: [
+        { wave: 1, tasks: ["T-001"] },
+        { wave: 2, dependsOn: [1], tasks: ["T-002"] }
+      ]
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    const wave2Plan = result.plans.find(p => p.wave === 2);
+    assert.ok(wave2Plan, "wave 2 plan must exist");
+    assert.deepEqual(wave2Plan.waveDepends, [1],
+      "wave 2 plan must carry waveDepends: [1] from the wave dependsOn field");
+  });
+
+  it("propagates wave dependsOn to plan waveDepends via buildPlansFromBottlenecksShape", () => {
+    const parsed = {
+      topBottlenecks: [
+        { id: "BN-1", title: "Slow dispatch", severity: "high", evidence: "orchestrator.js:740" }
+      ],
+      waves: [
+        { wave: 1, tasks: ["Fix-1: slow dispatch fix"], workerSlots: 1 },
+        { wave: 2, dependsOn: [1], tasks: ["Fix-2: follow-up validation"], workerSlots: 1 }
+      ]
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    const wave2Plan = result.plans.find(p => p.wave === 2);
+    assert.ok(wave2Plan, "wave 2 plan must exist");
+    assert.deepEqual(wave2Plan.waveDepends, [1],
+      "wave 2 plan must carry waveDepends: [1] from the wave dependsOn field");
+  });
+
+  it("plans with no batch/wave metadata normalize correctly (negative path)", () => {
+    // A plain plan with no owner, leverage_rank, or waveDepends — must normalize
+    // without throwing and must emit sensible defaults for all packet fields.
+    const parsed = {
+      projectHealth: "good",
+      plans: [{ task: "Basic task" }]
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.equal(result.plans.length, 1);
+    assert.equal(typeof result.plans[0].owner, "string");
+    assert.ok(result.plans[0].owner.length > 0, "owner must be a non-empty string");
+    assert.ok(Array.isArray(result.plans[0].leverage_rank), "leverage_rank must be an array");
+    assert.ok(Array.isArray(result.plans[0].waveDepends), "waveDepends must be an array");
+    assert.equal(result.plans[0].waveDepends.length, 0,
+      "waveDepends must be empty when not provided");
+  });
+});
+
