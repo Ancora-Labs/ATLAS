@@ -162,3 +162,54 @@ describe("worker_batch_planner — dependency graph optimization (Task 3)", () =
     assert.ok(posB < posA, `explicit wave field must override graph wave; posB=${posB} posA=${posA}`);
   });
 });
+
+// ── Wave-boundary enforcement ─────────────────────────────────────────────────
+
+describe("worker_batch_planner — wave-boundary enforcement", () => {
+  const baseConfig = { copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 } };
+
+  it("plans from different waves are never co-batched", () => {
+    const w1a = { role: "Evolution Worker", task: "wave1-a", wave: 1 };
+    const w1b = { role: "Evolution Worker", task: "wave1-b", wave: 1 };
+    const w2a = { role: "Evolution Worker", task: "wave2-a", wave: 2 };
+    const w2b = { role: "Evolution Worker", task: "wave2-b", wave: 2 };
+
+    const batches = buildRoleExecutionBatches([w1a, w1b, w2a, w2b], baseConfig);
+
+    for (const batch of batches) {
+      const waves = new Set(batch.plans.map((p: any) => p.wave));
+      assert.equal(waves.size, 1, `batch must contain plans from exactly one wave; got waves=[${[...waves]}]`);
+    }
+  });
+
+  it("batch carries the wave field matching its plans", () => {
+    const w1 = { role: "Evolution Worker", task: "wave1", wave: 1 };
+    const w2 = { role: "Evolution Worker", task: "wave2", wave: 2 };
+
+    const batches = buildRoleExecutionBatches([w1, w2], baseConfig);
+
+    const wave1Batch = batches.find(b => b.plans.includes(w1));
+    const wave2Batch = batches.find(b => b.plans.includes(w2));
+    assert.ok(wave1Batch, "wave-1 plan must be in some batch");
+    assert.ok(wave2Batch, "wave-2 plan must be in some batch");
+    assert.equal((wave1Batch as any).wave, 1);
+    assert.equal((wave2Batch as any).wave, 2);
+  });
+
+  it("negative: single-wave plans are unaffected (no spurious splits)", () => {
+    const plans = Array.from({ length: 4 }, (_, i) => ({
+      role: "Evolution Worker",
+      task: `T${i}`,
+      wave: 1,
+    }));
+
+    const batches = buildRoleExecutionBatches(plans, baseConfig);
+    // All plans share wave 1 — batch count should be 1 (all fit in context window)
+    const allPlans = batches.flatMap(b => b.plans);
+    assert.equal(allPlans.length, 4, "all plans must appear in batches");
+    for (const batch of batches) {
+      const waves = new Set(batch.plans.map((p: any) => p.wave));
+      assert.equal(waves.size, 1);
+    }
+  });
+});

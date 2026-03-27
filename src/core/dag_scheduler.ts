@@ -146,16 +146,75 @@ export function computeFrontier(allPlans, completedTaskIds = new Set(), failedTa
 }
 
 /**
+ * Compute the critical path length from a resolved dependency graph.
+ *
+ * The critical path length equals the maximum wave number, since each wave
+ * represents one mandatory serial stage of execution. Tasks within the same
+ * wave can run concurrently; tasks in later waves must wait.
+ *
+ * @param graph — result from resolveDependencyGraph (or any object with a waves array)
+ * @returns the critical path length (max wave number, minimum 1)
+ */
+export function computeCriticalPathLength(graph: { waves?: Array<{ wave: number; taskIds: string[] }> }): number {
+  if (!graph || !Array.isArray(graph.waves) || graph.waves.length === 0) return 1;
+  return Math.max(...graph.waves.map(w => w.wave));
+}
+
+/**
+ * Compute a safe maxConcurrent bound based on the DAG critical path.
+ *
+ * Formula: ceil(totalTasks / criticalPathLength), clamped to [min, max].
+ *
+ * Rationale: the critical path serializes execution into `criticalPathLength`
+ * serial stages. Distributing `totalTasks` evenly across those stages gives the
+ * average wave width — the natural parallelism the DAG supports. Running more
+ * concurrent tasks than this bound wastes capacity on tasks whose dependencies
+ * have not been satisfied in practice.
+ *
+ * @param totalTasks         — number of tasks in the current wave/frontier
+ * @param criticalPathLength — result of computeCriticalPathLength
+ * @param opts               — optional { min?: number, max?: number }
+ * @returns safe maxConcurrent value
+ */
+export function computeWaveParallelismBound(
+  totalTasks: number,
+  criticalPathLength: number,
+  opts: { min?: number; max?: number } = {}
+): number {
+  const min = opts.min ?? 1;
+  const max = opts.max ?? 8;
+  if (totalTasks <= 0 || criticalPathLength <= 0) return min;
+  const bound = Math.ceil(totalTasks / criticalPathLength);
+  return Math.max(min, Math.min(max, bound));
+}
+
+/**
  * Create bounded micro-batches from the frontier.
  * Ensures no more than `maxConcurrent` tasks are dispatched simultaneously.
  *
+ * Concurrency resolution order (first match wins):
+ *   1. `opts.maxConcurrent`       — explicit cap, always used as-is
+ *   2. `opts.criticalPathLength`  — derive safe cap from DAG structure via
+ *                                   computeWaveParallelismBound()
+ *   3. static default (3)         — conservative fallback when no graph info
+ *                                   is available, preserving original behaviour
+ *
  * @param {object[]} frontier — tasks ready for dispatch
- * @param {{ maxConcurrent?: number }} opts
+ * @param {{ maxConcurrent?: number, criticalPathLength?: number }} opts
  * @returns {object[][]} — array of micro-batches
  */
 export function microBatch(frontier, opts: any = {}) {
-  const maxConcurrent = opts.maxConcurrent || 3;
   if (!Array.isArray(frontier) || frontier.length === 0) return [];
+
+  let maxConcurrent: number;
+  if (opts.maxConcurrent !== undefined) {
+    maxConcurrent = Number(opts.maxConcurrent);
+  } else if (opts.criticalPathLength !== undefined) {
+    maxConcurrent = computeWaveParallelismBound(frontier.length, Number(opts.criticalPathLength));
+  } else {
+    // Conservative static default — matches original behaviour when no graph info is provided
+    maxConcurrent = 3;
+  }
 
   const batches = [];
   for (let i = 0; i < frontier.length; i += maxConcurrent) {

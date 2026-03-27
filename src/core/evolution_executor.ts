@@ -100,6 +100,59 @@ export type ScopeConformanceResult = {
   recoveryInstruction: string;
 };
 
+// ── Evidence envelope ─────────────────────────────────────────────────────────
+// Types are defined in evidence_envelope.ts to avoid circular imports
+// (evolution_executor ↔ athena_reviewer). Re-exported here for callers that
+// already import from evolution_executor.
+
+export type { VerificationEvidence, EvidenceEnvelope, PrChecksSnapshot } from "./evidence_envelope.js";
+import type { VerificationEvidence, EvidenceEnvelope } from "./evidence_envelope.js";
+
+/**
+ * Map raw verification command results to the canonical VerificationEvidence
+ * slots.  Heuristics (in precedence order):
+ *   - /npm run build|tsc\b/          → build slot
+ *   - /npm run lint|eslint\b/        → lint slot
+ *   - everything else (npm test,
+ *     node --test, etc.)             → tests slot
+ *
+ * A slot set to "n/a" means no command mapped to it in this run.
+ * When multiple commands map to the same slot, "fail" wins over "pass".
+ *
+ * @param results — array of { cmd, passed } from runVerificationCommands
+ * @returns VerificationEvidence
+ */
+export function buildVerificationEvidence(
+  results: Array<{ cmd: string; passed: boolean }>
+): VerificationEvidence {
+  let build: "pass" | "fail" | "n/a" = "n/a";
+  let tests: "pass" | "fail" | "n/a" = "n/a";
+  let lint:  "pass" | "fail" | "n/a" = "n/a";
+
+  const merge = (
+    current: "pass" | "fail" | "n/a",
+    passed: boolean
+  ): "pass" | "fail" | "n/a" => {
+    const next: "pass" | "fail" = passed ? "pass" : "fail";
+    // "fail" is sticky — once any command fails the slot is failed
+    if (current === "n/a") return next;
+    if (current === "fail") return "fail";
+    return next;
+  };
+
+  for (const { cmd, passed } of results) {
+    if (/npm\s+run\s+build\b|tsc\b/.test(cmd)) {
+      build = merge(build, passed);
+    } else if (/npm\s+run\s+lint\b|eslint\b/.test(cmd)) {
+      lint = merge(lint, passed);
+    } else {
+      tests = merge(tests, passed);
+    }
+  }
+
+  return { build, tests, lint };
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const PROGRESS_FILE = "state/evolution_progress.json";
@@ -1032,7 +1085,7 @@ export async function runEvolutionLoop(config, options: { fromTaskId?: string; d
       // complete evidence: what the worker said, what files changed,
       // what the verification commands returned, and what the pre-review flagged.
       console.log(`[evolution] Running Athena postmortem...`);
-      const athenaInput = {
+      const athenaInput: EvidenceEnvelope = {
         roleName: EVOLUTION_WORKER_SLUG,
         status: workerResult.status,
         prUrl: workerResult.prUrl,
@@ -1047,6 +1100,8 @@ export async function runEvolutionLoop(config, options: { fromTaskId?: string; d
         // Local verification command results (npm test output, etc.)
         verificationOutput: verification.summary,
         verificationPassed: verification.passed,
+        // Slot-level evidence — enables Athena's deterministic fast-path for clean passes
+        verificationEvidence: buildVerificationEvidence(verification.results),
         prChecks,
         // Athena's own pre-review notes — closes the feedback loop
         preReviewAssessment: preReview.reason || null,
