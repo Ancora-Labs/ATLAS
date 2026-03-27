@@ -60,6 +60,46 @@ export function validatePlanContract(plan) {
     violations.push({ field: "acceptance_criteria", message: "Acceptance criteria must be a non-empty array — plans without measurable AC are rejected", severity: PLAN_VIOLATION_SEVERITY.CRITICAL });
   }
 
+  // Measurable capacity delta — expected change in system capacity if plan succeeds.
+  // Required recommended field: finite number ∈ [-1.0, 1.0].
+  // Enforced as WARNING so existing plan batches continue to flow while emitters are upgraded.
+  if (!("capacityDelta" in plan)) {
+    violations.push({
+      field: "capacityDelta",
+      message: "capacityDelta is missing — plans must declare the expected measurable change in system capacity (number ∈ [-1.0, 1.0])",
+      severity: PLAN_VIOLATION_SEVERITY.WARNING
+    });
+  } else {
+    const cd = Number(plan.capacityDelta);
+    if (!Number.isFinite(cd) || cd < -1 || cd > 1) {
+      violations.push({
+        field: "capacityDelta",
+        message: `capacityDelta must be a finite number ∈ [-1.0, 1.0]; got: ${plan.capacityDelta}`,
+        severity: PLAN_VIOLATION_SEVERITY.WARNING
+      });
+    }
+  }
+
+  // Request ROI — expected return-on-investment for the premium request consumed.
+  // Required recommended field: positive finite number (dimensionless gain ratio).
+  // Enforced as WARNING consistent with other recommended fields.
+  if (!("requestROI" in plan)) {
+    violations.push({
+      field: "requestROI",
+      message: "requestROI is missing — plans must declare the expected return-on-investment for the premium request consumed (positive finite number)",
+      severity: PLAN_VIOLATION_SEVERITY.WARNING
+    });
+  } else {
+    const roi = Number(plan.requestROI);
+    if (!Number.isFinite(roi) || roi <= 0) {
+      violations.push({
+        field: "requestROI",
+        message: `requestROI must be a positive finite number; got: ${plan.requestROI}`,
+        severity: PLAN_VIOLATION_SEVERITY.WARNING
+      });
+    }
+  }
+
   // Forbidden verification command gate (Packet 5) — uses centralized registry.
   // Check all command-bearing fields: verification (string) and
   // verification_commands (array) so Windows false-fails can't slip through
@@ -86,7 +126,6 @@ export function validatePlanContract(plan) {
   const criticalCount = violations.filter(v => v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL).length;
   return { valid: criticalCount === 0, violations };
 }
-
 /**
  * Validate all plans in a batch and compute aggregate pass rate.
  *

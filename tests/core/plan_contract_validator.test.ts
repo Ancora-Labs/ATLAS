@@ -16,6 +16,8 @@ describe("plan_contract_validator", () => {
         verification: "npm test",
         dependencies: [],
         acceptance_criteria: ["All tests pass"],
+        capacityDelta: 0.1,
+        requestROI: 2.0,
       };
       const result = validatePlanContract(plan);
       assert.equal(result.valid, true);
@@ -156,6 +158,123 @@ describe("plan_contract_validator", () => {
       const result = validatePlanContract(plan);
       assert.equal(result.valid, false);
       assert.ok(result.violations.some(v => v.field === "verification_commands[0]" && v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL));
+    });
+  });
+
+  describe("validatePlanContract — capacityDelta and requestROI (measurable packet scoring)", () => {
+    it("warns when capacityDelta is missing", () => {
+      const plan = {
+        task: "Implement something long enough",
+        role: "worker",
+        wave: 1,
+        verification: "npm test",
+        dependencies: [],
+        acceptance_criteria: ["pass"],
+        requestROI: 1.5,
+      };
+      const result = validatePlanContract(plan);
+      assert.ok(result.violations.some(v => v.field === "capacityDelta" && v.severity === PLAN_VIOLATION_SEVERITY.WARNING));
+    });
+
+    it("warns when requestROI is missing", () => {
+      const plan = {
+        task: "Implement something long enough",
+        role: "worker",
+        wave: 1,
+        verification: "npm test",
+        dependencies: [],
+        acceptance_criteria: ["pass"],
+        capacityDelta: 0.1,
+      };
+      const result = validatePlanContract(plan);
+      assert.ok(result.violations.some(v => v.field === "requestROI" && v.severity === PLAN_VIOLATION_SEVERITY.WARNING));
+    });
+
+    it("accepts valid capacityDelta at boundaries", () => {
+      for (const delta of [-1.0, 0, 0.5, 1.0]) {
+        const plan = {
+          task: "Implement something long enough",
+          role: "worker",
+          wave: 1,
+          verification: "npm test",
+          dependencies: [],
+          acceptance_criteria: ["pass"],
+          capacityDelta: delta,
+          requestROI: 2.0,
+        };
+        const result = validatePlanContract(plan);
+        assert.ok(
+          !result.violations.some(v => v.field === "capacityDelta"),
+          `capacityDelta=${delta} should be accepted`
+        );
+      }
+    });
+
+    it("warns when capacityDelta is out of range", () => {
+      const plan = {
+        task: "Implement something long enough",
+        role: "worker",
+        wave: 1,
+        verification: "npm test",
+        dependencies: [],
+        acceptance_criteria: ["pass"],
+        capacityDelta: 1.5,
+        requestROI: 1.0,
+      };
+      const result = validatePlanContract(plan);
+      assert.ok(result.violations.some(v => v.field === "capacityDelta" && v.severity === PLAN_VIOLATION_SEVERITY.WARNING));
+    });
+
+    it("warns when requestROI is zero or negative (not measurable)", () => {
+      for (const roi of [0, -0.5, -1]) {
+        const plan = {
+          task: "Implement something long enough",
+          role: "worker",
+          wave: 1,
+          verification: "npm test",
+          dependencies: [],
+          acceptance_criteria: ["pass"],
+          capacityDelta: 0.1,
+          requestROI: roi,
+        };
+        const result = validatePlanContract(plan);
+        assert.ok(
+          result.violations.some(v => v.field === "requestROI" && v.severity === PLAN_VIOLATION_SEVERITY.WARNING),
+          `requestROI=${roi} should produce a warning`
+        );
+      }
+    });
+
+    it("does not produce capacityDelta or requestROI warnings for fully-specified packets", () => {
+      const plan = {
+        task: "Implement something long enough",
+        role: "worker",
+        wave: 1,
+        verification: "npm test",
+        dependencies: [],
+        acceptance_criteria: ["pass"],
+        capacityDelta: 0.2,
+        requestROI: 3.0,
+      };
+      const result = validatePlanContract(plan);
+      assert.ok(!result.violations.some(v => v.field === "capacityDelta"), "no capacityDelta warning expected");
+      assert.ok(!result.violations.some(v => v.field === "requestROI"), "no requestROI warning expected");
+    });
+
+    it("missing capacityDelta/requestROI does not make an otherwise-valid plan invalid (WARNING not CRITICAL)", () => {
+      const plan = {
+        task: "Implement something long enough",
+        role: "worker",
+        wave: 1,
+        verification: "npm test",
+        dependencies: [],
+        acceptance_criteria: ["pass"],
+        // no capacityDelta or requestROI
+      };
+      const result = validatePlanContract(plan);
+      assert.equal(result.valid, true, "plan should still be valid — these are WARNINGs not CRITICALs");
+      assert.ok(result.violations.some(v => v.field === "capacityDelta"));
+      assert.ok(result.violations.some(v => v.field === "requestROI"));
     });
   });
 
