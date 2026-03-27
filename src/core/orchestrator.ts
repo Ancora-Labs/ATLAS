@@ -34,7 +34,7 @@ import { readJson, readJsonSafe, writeJson, cleanupStaleTempFiles, READ_JSON_REA
 import { updatePipelineProgress, readPipelineProgress } from "./pipeline_progress.js";
 import { loadEscalationQueue, sortEscalationQueue } from "./escalation_queue.js";
 import { computeCycleSLOs, persistSloMetrics } from "./slo_checker.js";
-import { computeCycleAnalytics, persistCycleAnalytics, CYCLE_PHASE } from "./cycle_analytics.js";
+import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealth, CYCLE_PHASE } from "./cycle_analytics.js";
 import { computeBaselineRecoveryState, persistBaselineMetrics, PARSER_CONFIDENCE_RECOVERY_THRESHOLD } from "./parser_baseline_recovery.js";
 import {
   addSchemaVersion,
@@ -1677,7 +1677,14 @@ async function runSingleCycle(config) {
       },
     });
     await persistCycleAnalytics(config, analyticsRecord);
-    await appendProgress(config, `[ANALYTICS] Cycle analytics written — confidence=${analyticsRecord.confidence.level} sloStatus=${analyticsRecord.kpis.sloStatus} phase=${analyticsRecord.phase}`);
+
+    // ── Health channel: degrade signals only, separate from KPI semantics ──
+    // cycle_health.json changes only when the system genuinely degrades,
+    // not when metric definitions change (dual-channel contract).
+    const healthRecord = computeCycleHealth(analyticsRecord);
+    await persistCycleHealth(config, healthRecord);
+
+    await appendProgress(config, `[ANALYTICS] Cycle analytics written — confidence=${analyticsRecord.confidence.level} sloStatus=${analyticsRecord.kpis.sloStatus} phase=${analyticsRecord.phase} health=${healthRecord.healthScore}`);
   } catch (err) {
     // Analytics are advisory — never block orchestration
     warn(`[orchestrator] Cycle analytics failed (non-fatal): ${String(err?.message || err)}`);

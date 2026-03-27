@@ -543,3 +543,182 @@ export async function readCycleAnalytics(config) {
   const data = await readJson(filePath, null);
   return data;
 }
+
+// ── Dual analytics channels ────────────────────────────────────────────────────
+//
+// WHY TWO CHANNELS:
+//   cycle_analytics.json  — performance/semantic channel.  Contains KPI timings,
+//     funnel counts, outcomes, and confidence.  Values here change whenever the
+//     metric definition or pipeline behaviour changes.
+//
+//   cycle_health.json     — degradation channel.  Contains ONLY threshold-relative
+//     signals: SLO breach status, anomaly flags from causal links, and a derived
+//     health score.  This file changes exclusively when the system is degrading —
+//     not when metric semantics are updated.
+//
+//   Keeping the channels separate ensures that:
+//     • a change in metric definition (semantic) does not look like degradation,
+//     • genuine runtime degradation is always surfaced in cycle_health.json, and
+//     • consumers can subscribe to cycle_health.json alone for alert routing.
+
+/** Derived runtime health score for a cycle. */
+export const HEALTH_SCORE = Object.freeze({
+  /** No SLO breach and no causal-link threshold anomalies. */
+  HEALTHY:  "healthy",
+  /** At least one causal-link anomaly OR an SLO breach. */
+  DEGRADED: "degraded",
+  /** SLO status is "degraded" AND two or more causal-link anomalies. */
+  CRITICAL: "critical",
+});
+
+/**
+ * Canonical schema for cycle_health.json.
+ *
+ * This is the degradation channel.  It is written alongside cycle_analytics.json
+ * and reflects only threshold-relative runtime signals — not raw latency values.
+ */
+export const CYCLE_HEALTH_SCHEMA = Object.freeze({
+  schemaVersion: 1,
+  required: ["schemaVersion", "lastCycle", "history", "updatedAt"],
+  healthRecord: Object.freeze({
+    required: [
+      "cycleId",
+      "generatedAt",
+      "sloStatus",
+      "sloBreachCount",
+      "anomalyCount",
+      "anomalies",
+      "healthScore",
+      "healthReason",
+    ],
+    healthScoreEnum: Object.freeze([...Object.values(HEALTH_SCORE)]),
+  }),
+  /** Same default cap as cycle_analytics — configurable via config.cycleAnalytics.maxHistoryEntries. */
+  defaultMaxHistoryEntries: 50,
+});
+
+// ── Internal path helper ──────────────────────────────────────────────────────
+
+function cycleHealthPath(config) {
+  const stateDir = config?.paths?.stateDir || "state";
+  return path.join(stateDir, "cycle_health.json");
+}
+
+// ── Health-score derivation ───────────────────────────────────────────────────
+
+function deriveHealthScore(sloStatus: string, anomalyCount: number): string {
+  if (sloStatus === "degraded" && anomalyCount >= 2) return HEALTH_SCORE.CRITICAL;
+  if (sloStatus === "degraded" || anomalyCount >= 1) return HEALTH_SCORE.DEGRADED;
+  return HEALTH_SCORE.HEALTHY;
+}
+
+function deriveHealthReason(
+  healthScore: string,
+  sloStatus: string,
+  anomalyCount: number,
+): string {
+  if (healthScore === HEALTH_SCORE.CRITICAL) {
+    return `SLO status is "${sloStatus}" and ${anomalyCount} causal-link anomaly(ies) detected`;
+  }
+  if (healthScore === HEALTH_SCORE.DEGRADED) {
+    const parts: string[] = [];
+    if (sloStatus === "degraded") parts.push(`SLO status is "degraded"`);
+    if (anomalyCount >= 1) parts.push(`${anomalyCount} causal-link anomaly(ies) detected`);
+    return parts.join("; ");
+  }
+  return "all SLO checks passed and no causal-link anomalies detected";
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────────
+
+/**
+ * Extract runtime health/degradation signals from a cycle analytics record.
+ *
+ * Pure function — no file I/O.  The result is written to cycle_health.json via
+ * persistCycleHealth() and is intentionally kept free of raw latency values so
+ * that metric-semantic changes do not pollute the degradation channel.
+ *
+ * @param {object} analyticsRecord — output of computeCycleAnalytics()
+ * @returns {object} Health record conforming to CYCLE_HEALTH_SCHEMA.healthRecord
+ */
+export function computeCycleHealth(analyticsRecord: any) {
+  const sloStatus     = analyticsRecord?.kpis?.sloStatus     ?? "unknown";
+  const sloBreachCount = typeof analyticsRecord?.kpis?.sloBreachCount === "number"
+    ? analyticsRecord.kpis.sloBreachCount
+    : 0;
+
+  const causalLinks: any[] = Array.isArray(analyticsRecord?.causalLinks)
+    ? analyticsRecord.causalLinks
+    : [];
+
+  const anomalies = causalLinks
+    .filter(l => l.anomaly === true)
+    .map(l => ({
+      metric:        l.metric        ?? null,
+      cause:         l.cause         ?? null,
+      effect:        l.effect        ?? null,
+      latencyMs:     l.latencyMs     ?? null,
+      anomalyReason: l.anomalyReason ?? null,
+    }));
+
+  const anomalyCount  = anomalies.length;
+  const healthScore   = deriveHealthScore(sloStatus, anomalyCount);
+  const healthReason  = deriveHealthReason(healthScore, sloStatus, anomalyCount);
+
+  return {
+    cycleId:        analyticsRecord?.cycleId  ?? null,
+    generatedAt:    new Date().toISOString(),
+    sloStatus,
+    sloBreachCount,
+    anomalyCount,
+    anomalies,
+    healthScore,
+    healthReason,
+  };
+}
+
+/**
+ * Persist a computed cycle health record to state/cycle_health.json.
+ * Maintains the same rolling-history semantics as persistCycleAnalytics.
+ *
+ * @param {object} config
+ * @param {object} healthRecord — output of computeCycleHealth()
+ */
+export async function persistCycleHealth(config, healthRecord) {
+  const filePath  = cycleHealthPath(config);
+  const maxEntries = Number(
+    config?.cycleAnalytics?.maxHistoryEntries
+    || CYCLE_HEALTH_SCHEMA.defaultMaxHistoryEntries,
+  );
+
+  const existing = await readJson(filePath, {
+    schemaVersion: CYCLE_HEALTH_SCHEMA.schemaVersion,
+    lastCycle: null,
+    history: [],
+    updatedAt: null,
+  });
+
+  const history = Array.isArray(existing.history) ? existing.history : [];
+  history.unshift(healthRecord);
+  if (history.length > maxEntries) {
+    history.length = maxEntries;
+  }
+
+  await writeJson(filePath, {
+    schemaVersion: CYCLE_HEALTH_SCHEMA.schemaVersion,
+    lastCycle:     healthRecord,
+    history,
+    updatedAt:     new Date().toISOString(),
+  });
+}
+
+/**
+ * Read the current cycle_health.json snapshot.
+ * Returns the parsed object or null if the file does not exist yet.
+ *
+ * @param {object} config
+ * @returns {Promise<object|null>}
+ */
+export async function readCycleHealth(config) {
+  return readJson(cycleHealthPath(config), null);
+}

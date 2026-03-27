@@ -22,12 +22,17 @@ import {
   computeCycleAnalytics,
   persistCycleAnalytics,
   readCycleAnalytics,
+  computeCycleHealth,
+  persistCycleHealth,
+  readCycleHealth,
   CYCLE_PHASE,
   CYCLE_OUTCOME_STATUS,
   CONFIDENCE_LEVEL,
   MISSING_DATA_REASON,
   MISSING_DATA_IMPACT,
   CYCLE_ANALYTICS_SCHEMA,
+  CYCLE_HEALTH_SCHEMA,
+  HEALTH_SCORE,
   CANONICAL_EVENT_NAMES,
 } from "../../src/core/cycle_analytics.js";
 
@@ -724,5 +729,283 @@ describe("computeCycleAnalytics — funnel (Task 1)", () => {
     assert.equal(record.funnel.approvalRate,   1);
     assert.equal(record.funnel.dispatchRate,   1);
     assert.equal(record.funnel.completionRate, 1);
+  });
+});
+
+// ── Dual analytics channels ────────────────────────────────────────────────────
+//
+// Verifies that cycle_health.json (degradation channel) is cleanly separated
+// from cycle_analytics.json (performance/semantic channel).
+
+describe("CYCLE_HEALTH_SCHEMA", () => {
+  it("exports schemaVersion 1", () => {
+    assert.equal(CYCLE_HEALTH_SCHEMA.schemaVersion, 1);
+  });
+
+  it("required top-level fields are present", () => {
+    for (const f of ["schemaVersion", "lastCycle", "history", "updatedAt"]) {
+      assert.ok(CYCLE_HEALTH_SCHEMA.required.includes(f), `missing required top-level field: ${f}`);
+    }
+  });
+
+  it("healthRecord.required contains all expected fields", () => {
+    for (const f of ["cycleId", "generatedAt", "sloStatus", "sloBreachCount", "anomalyCount", "anomalies", "healthScore", "healthReason"]) {
+      assert.ok(CYCLE_HEALTH_SCHEMA.healthRecord.required.includes(f), `healthRecord.required missing: ${f}`);
+    }
+  });
+
+  it("healthScoreEnum contains all HEALTH_SCORE values", () => {
+    for (const v of Object.values(HEALTH_SCORE)) {
+      assert.ok(CYCLE_HEALTH_SCHEMA.healthRecord.healthScoreEnum.includes(v), `healthScoreEnum missing: ${v}`);
+    }
+  });
+
+  it("defaultMaxHistoryEntries is 50", () => {
+    assert.equal(CYCLE_HEALTH_SCHEMA.defaultMaxHistoryEntries, 50);
+  });
+});
+
+describe("HEALTH_SCORE enum", () => {
+  it("exports healthy, degraded, critical", () => {
+    assert.equal(HEALTH_SCORE.HEALTHY,  "healthy");
+    assert.equal(HEALTH_SCORE.DEGRADED, "degraded");
+    assert.equal(HEALTH_SCORE.CRITICAL, "critical");
+  });
+});
+
+describe("computeCycleHealth — required fields", () => {
+  it("returns all required health record fields", () => {
+    const config = makeConfig("state");
+    const analytics = computeCycleAnalytics(config, {
+      sloRecord: makeSloRecord(),
+      pipelineProgress: makePipelineProgress(),
+    });
+    const health = computeCycleHealth(analytics);
+    for (const f of CYCLE_HEALTH_SCHEMA.healthRecord.required) {
+      assert.ok(f in health, `health record missing required field: ${f}`);
+    }
+  });
+
+  it("cycleId is inherited from the analytics record", () => {
+    const config = makeConfig("state");
+    const progress = makePipelineProgress();
+    const analytics = computeCycleAnalytics(config, { pipelineProgress: progress });
+    const health = computeCycleHealth(analytics);
+    assert.equal(health.cycleId, progress.startedAt);
+  });
+
+  it("generatedAt is a valid ISO string", () => {
+    const health = computeCycleHealth({});
+    assert.ok(!isNaN(new Date(health.generatedAt).getTime()), "generatedAt must be a valid ISO string");
+  });
+
+  it("anomalies is always an array", () => {
+    const health = computeCycleHealth({});
+    assert.ok(Array.isArray(health.anomalies));
+  });
+
+  it("healthScore is always a valid enum value", () => {
+    const config = makeConfig("state");
+    const analytics = computeCycleAnalytics(config, {});
+    const health = computeCycleHealth(analytics);
+    assert.ok(Object.values(HEALTH_SCORE).includes(health.healthScore));
+  });
+});
+
+describe("computeCycleHealth — health score derivation", () => {
+  it("healthy when sloStatus=ok and no anomalies", () => {
+    const config = makeConfig("state");
+    const analytics = computeCycleAnalytics(config, {
+      sloRecord: makeSloRecord({ status: "ok", sloBreaches: [] }),
+      pipelineProgress: makePipelineProgress(),
+    });
+    const health = computeCycleHealth(analytics);
+    assert.equal(health.healthScore, HEALTH_SCORE.HEALTHY);
+    assert.equal(health.anomalyCount, 0);
+    assert.equal(health.sloBreachCount, 0);
+    assert.equal(health.sloStatus, "ok");
+  });
+
+  it("degraded when sloStatus=degraded (negative path)", () => {
+    const config = makeConfig("state");
+    const analytics = computeCycleAnalytics(config, {
+      sloRecord: makeSloRecord({ status: "degraded", sloBreaches: [{ metric: "decisionLatencyMs" }] }),
+    });
+    const health = computeCycleHealth(analytics);
+    assert.equal(health.healthScore, HEALTH_SCORE.DEGRADED);
+    assert.equal(health.sloStatus, "degraded");
+    assert.equal(health.sloBreachCount, 1);
+  });
+
+  it("degraded when one causal-link anomaly exists (negative path)", () => {
+    const config = makeConfig("state");
+    const ts = validTimestamps();
+    // Push decision beyond the 120s threshold
+    ts.jesus_decided = makeTs(200_000);
+    const analytics = computeCycleAnalytics(config, {
+      sloRecord: makeSloRecord({ status: "ok" }),
+      pipelineProgress: makePipelineProgress({ stageTimestamps: ts }),
+    });
+    const health = computeCycleHealth(analytics);
+    assert.equal(health.healthScore, HEALTH_SCORE.DEGRADED);
+    assert.ok(health.anomalyCount >= 1);
+    assert.ok(health.anomalies.length >= 1);
+  });
+
+  it("critical when sloStatus=degraded and ≥2 causal-link anomalies", () => {
+    const config = makeConfig("state");
+    const ts = validTimestamps();
+    // Exceed decision AND dispatch thresholds
+    ts.jesus_decided      = makeTs(200_000); // > 120 000 ms threshold
+    ts.workers_dispatching = makeTs(250_000); // 50 000 ms after athena_approved at 10 000 ms → > 30 000 ms threshold
+    const analytics = computeCycleAnalytics(config, {
+      sloRecord: makeSloRecord({ status: "degraded", sloBreaches: [{ metric: "decisionLatencyMs" }, { metric: "dispatchLatencyMs" }] }),
+      pipelineProgress: makePipelineProgress({ stageTimestamps: ts }),
+    });
+    const health = computeCycleHealth(analytics);
+    assert.equal(health.healthScore, HEALTH_SCORE.CRITICAL);
+    assert.ok(health.anomalyCount >= 2);
+  });
+
+  it("healthReason is a non-empty string for every score level", () => {
+    const config = makeConfig("state");
+    for (const [label, opts] of [
+      ["healthy", { sloRecord: makeSloRecord(), pipelineProgress: makePipelineProgress() }],
+      ["degraded_slo", { sloRecord: makeSloRecord({ status: "degraded" }), pipelineProgress: makePipelineProgress() }],
+    ] as const) {
+      const analytics = computeCycleAnalytics(config, opts as any);
+      const health = computeCycleHealth(analytics);
+      assert.ok(typeof health.healthReason === "string" && health.healthReason.length > 0,
+        `healthReason must be a non-empty string for ${label}`);
+    }
+  });
+
+  it("does NOT include raw latency values (semantic-clean degradation channel)", () => {
+    const config = makeConfig("state");
+    const analytics = computeCycleAnalytics(config, {
+      sloRecord: makeSloRecord(),
+      pipelineProgress: makePipelineProgress(),
+    });
+    const health = computeCycleHealth(analytics);
+    // Health record should not contain KPI timing fields
+    assert.ok(!("decisionLatencyMs" in health), "health record must not contain decisionLatencyMs");
+    assert.ok(!("dispatchLatencyMs" in health), "health record must not contain dispatchLatencyMs");
+    assert.ok(!("verificationCompletionMs" in health), "health record must not contain verificationCompletionMs");
+    assert.ok(!("kpis" in health), "health record must not embed the full kpis block");
+  });
+
+  it("handles null/missing analytics record gracefully (negative path)", () => {
+    assert.doesNotThrow(() => computeCycleHealth(null));
+    assert.doesNotThrow(() => computeCycleHealth(undefined));
+    assert.doesNotThrow(() => computeCycleHealth({}));
+  });
+
+  it("handles missing causalLinks gracefully", () => {
+    const health = computeCycleHealth({ kpis: { sloStatus: "ok", sloBreachCount: 0 } });
+    assert.equal(health.anomalyCount, 0);
+    assert.deepEqual(health.anomalies, []);
+    assert.equal(health.healthScore, HEALTH_SCORE.HEALTHY);
+  });
+});
+
+describe("persistCycleHealth and readCycleHealth", () => {
+  let tmpDir: string;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-health-test-"));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("creates cycle_health.json with correct schema on first write", async () => {
+    const config = makeConfig(tmpDir);
+    const analytics = computeCycleAnalytics(config, {
+      sloRecord: makeSloRecord(),
+      pipelineProgress: makePipelineProgress(),
+    });
+    const health = computeCycleHealth(analytics);
+    await persistCycleHealth(config, health);
+
+    const data = await readCycleHealth(config);
+    assert.ok(data !== null);
+    assert.equal(data.schemaVersion, CYCLE_HEALTH_SCHEMA.schemaVersion);
+    assert.ok("lastCycle" in data);
+    assert.ok(Array.isArray(data.history));
+    assert.ok("updatedAt" in data);
+  });
+
+  it("append-only: second write prepends to history", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "box-health-append-"));
+    try {
+      const config = makeConfig(dir);
+      const a1 = computeCycleAnalytics(config, { pipelineProgress: makePipelineProgress({ startedAt: makeTs(0) }) });
+      await persistCycleHealth(config, computeCycleHealth(a1));
+      const a2 = computeCycleAnalytics(config, { pipelineProgress: makePipelineProgress({ startedAt: makeTs(1000) }) });
+      await persistCycleHealth(config, computeCycleHealth(a2));
+
+      const data = await readCycleHealth(config);
+      assert.equal(data.history.length, 2);
+      assert.equal(data.lastCycle.cycleId, a2.cycleId);
+      assert.equal(data.history[0].cycleId, a2.cycleId);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("retention policy: caps history at maxHistoryEntries", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "box-health-cap-"));
+    try {
+      const config = { ...makeConfig(dir), cycleAnalytics: { maxHistoryEntries: 3 } };
+      for (let i = 0; i < 5; i++) {
+        const a = computeCycleAnalytics(config, { pipelineProgress: makePipelineProgress({ startedAt: makeTs(i * 1000) }) });
+        await persistCycleHealth(config, computeCycleHealth(a));
+      }
+      const data = await readCycleHealth(config);
+      assert.ok(data.history.length <= 3, `health history should be capped at 3, got ${data.history.length}`);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("readCycleHealth returns null when file does not exist", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "box-health-empty-"));
+    try {
+      const config = makeConfig(dir);
+      const data = await readCycleHealth(config);
+      assert.equal(data, null);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("cycle_health.json and cycle_analytics.json are written to separate files", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "box-dual-channel-"));
+    try {
+      const config = makeConfig(dir);
+      const analytics = computeCycleAnalytics(config, {
+        sloRecord: makeSloRecord(),
+        pipelineProgress: makePipelineProgress(),
+      });
+      await persistCycleAnalytics(config, analytics);
+      await persistCycleHealth(config, computeCycleHealth(analytics));
+
+      const analyticsFile = path.join(dir, "cycle_analytics.json");
+      const healthFile    = path.join(dir, "cycle_health.json");
+      await fs.access(analyticsFile);
+      await fs.access(healthFile);
+      // Confirm they are distinct files with distinct content structures
+      const analyticsData = JSON.parse(await fs.readFile(analyticsFile, "utf8"));
+      const healthData    = JSON.parse(await fs.readFile(healthFile,    "utf8"));
+      assert.ok("lastCycle" in analyticsData && "kpis" in analyticsData.lastCycle,
+        "analytics file must have kpis");
+      assert.ok("lastCycle" in healthData && !("kpis" in healthData.lastCycle),
+        "health file must not have kpis");
+      assert.ok("healthScore" in healthData.lastCycle,
+        "health file must have healthScore");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });
