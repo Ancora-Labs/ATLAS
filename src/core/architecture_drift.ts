@@ -73,6 +73,105 @@ export interface ArchitectureDriftReport {
 }
 
 /**
+ * A ranked remediation packet candidate derived from architecture drift findings.
+ * Used as planning input for Prometheus: each candidate represents one actionable
+ * doc-cleanup or token-replacement task that can be directly serialized into a plan.
+ */
+export interface RemediationCandidate {
+  /** Whether this finding is a missing file reference or a deprecated API token. */
+  type: "stale_ref" | "deprecated_token";
+  /** Document containing the finding. */
+  docPath: string;
+  /** Repo-local file path that no longer exists (stale_ref only). */
+  referencedPath?: string;
+  /** The deprecated token string found (deprecated_token only). */
+  token?: string;
+  /** Replacement guidance for the deprecated token (deprecated_token only). */
+  hint?: string;
+  /** 1-based line number in docPath. */
+  line: number;
+  /**
+   * Remediation priority:
+   *   high   — stale ref to a core infrastructure file (src/core/)
+   *   medium — stale ref to any other src/ file, or any deprecated token
+   *   low    — stale ref to docs, docker, scripts, or other non-src paths
+   */
+  priority: "high" | "medium" | "low";
+  /** Human-readable reason explaining the priority assignment. */
+  reason: string;
+  /** Ready-to-use task description string for the Prometheus planning prompt. */
+  suggestedTask: string;
+}
+
+/**
+ * Assign a remediation priority to a stale file reference based on the path prefix.
+ *
+ * Rationale:
+ *   src/core/ files are active infrastructure — stale refs here block safe refactoring.
+ *   Other src/ files are product code — medium blast radius.
+ *   Everything else (docs, docker, scripts) has low blast radius.
+ */
+function prioritizeStaleRef(referencedPath: string): "high" | "medium" | "low" {
+  if (referencedPath.startsWith("src/core/")) return "high";
+  if (referencedPath.startsWith("src/")) return "medium";
+  return "low";
+}
+
+/**
+ * Transform an ArchitectureDriftReport into a ranked list of RemediationCandidates
+ * suitable for direct input to the Prometheus planning prompt.
+ *
+ * Ordering: high priority first, then medium, then low.
+ * Within the same priority, candidates are sorted by docPath for determinism.
+ * Stale references and deprecated token findings are interleaved by priority.
+ *
+ * Returns an empty array when the report has no findings.
+ *
+ * @param report - result of checkArchitectureDrift
+ * @returns sorted RemediationCandidate array, highest priority first
+ */
+export function rankStaleRefsAsRemediationCandidates(
+  report: ArchitectureDriftReport
+): RemediationCandidate[] {
+  const candidates: RemediationCandidate[] = [];
+
+  for (const ref of report.staleReferences) {
+    const priority = prioritizeStaleRef(ref.referencedPath);
+    candidates.push({
+      type: "stale_ref",
+      docPath: ref.docPath,
+      referencedPath: ref.referencedPath,
+      line: ref.line,
+      priority,
+      reason: `File \`${ref.referencedPath}\` referenced in \`${ref.docPath}\` does not exist`,
+      suggestedTask: `Remove or update stale reference to \`${ref.referencedPath}\` in \`${ref.docPath}\` (line ${ref.line})`,
+    });
+  }
+
+  for (const ref of report.deprecatedTokenRefs) {
+    candidates.push({
+      type: "deprecated_token",
+      docPath: ref.docPath,
+      token: ref.token,
+      hint: ref.hint,
+      line: ref.line,
+      priority: "medium",
+      reason: `Deprecated token \`${ref.token}\` in \`${ref.docPath}\` — ${ref.hint}`,
+      suggestedTask: `Replace deprecated \`${ref.token}\` in \`${ref.docPath}\` (line ${ref.line}): ${ref.hint}`,
+    });
+  }
+
+  const PRIORITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  candidates.sort((a, b) => {
+    const pDiff = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+    if (pDiff !== 0) return pDiff;
+    return a.docPath.localeCompare(b.docPath);
+  });
+
+  return candidates;
+}
+
+/**
  * Recurse into a directory, yielding relative paths (from rootDir) for all .md files.
  * Handles nested subdirectory trees.
  */

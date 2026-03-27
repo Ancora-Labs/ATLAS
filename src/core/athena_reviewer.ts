@@ -35,6 +35,7 @@ import {
   LEADERSHIP_CONTRACT_TYPE,
   TRUST_BOUNDARY_ERROR,
 } from "./trust_boundary.js";
+import { checkForbiddenCommands } from "./verification_command_registry.js";
 import type { EvidenceEnvelope } from "./evidence_envelope.js";
 
 // ── Rubric calibration ───────────────────────────────────────────────────────
@@ -961,6 +962,110 @@ export function normalizePatchedPlansForDispatch(plans: unknown[]): Record<strin
   });
 }
 
+/**
+ * Reason code returned by revalidatePatchedPlansAfterNormalization when all plans pass.
+ * Callers must check `valid` before trusting plan content.
+ */
+export const PATCHED_PLAN_REVALIDATION_REASON = Object.freeze({
+  OK: "OK",
+  FAILED: "PATCHED_PLAN_CONTRACT_FAILED",
+});
+
+/**
+ * Run deterministic contract re-validation on normalized patched plans.
+ *
+ * Called after normalizePatchedPlansForDispatch to ensure that the normalization
+ * step did not silently produce plans that violate dispatch-critical constraints.
+ * Fails closed: any violation returns valid=false with an explicit reason code and
+ * a human-readable list of per-plan violations.
+ *
+ * Checks (deterministic, no AI):
+ *   - task  : non-empty string, ≥ 5 chars
+ *   - role  : non-empty string (normalization defaults to "evolution-worker")
+ *   - wave  : finite integer ≥ 1
+ *   - target_files : non-empty array after normalization
+ *   - scope : non-empty string
+ *   - acceptance_criteria : non-empty array
+ *   - verification : absent or not a forbidden command
+ *
+ * @param plans - normalized output of normalizePatchedPlansForDispatch
+ * @returns { valid, violations, code }
+ */
+export function revalidatePatchedPlansAfterNormalization(
+  plans: Record<string, unknown>[]
+): { valid: boolean; violations: string[]; code: string } {
+  if (!Array.isArray(plans) || plans.length === 0) {
+    return { valid: true, violations: [], code: PATCHED_PLAN_REVALIDATION_REASON.OK };
+  }
+
+  const allViolations: string[] = [];
+
+  for (let i = 0; i < plans.length; i++) {
+    const p = plans[i];
+    if (!p || typeof p !== "object") {
+      allViolations.push(`plan[${i}]: not an object`);
+      continue;
+    }
+
+    const planViolations: string[] = [];
+
+    // task: must be a non-empty string of at least 5 characters
+    if (!p.task || String(p.task).trim().length < 5) {
+      planViolations.push("task is missing or too short (< 5 chars)");
+    }
+
+    // role: must be non-empty after normalization
+    if (!p.role || String(p.role).trim().length === 0) {
+      planViolations.push("role is empty after normalization");
+    }
+
+    // wave: must be a finite integer >= 1 after normalization
+    const wave = Number(p.wave);
+    if (!Number.isFinite(wave) || wave < 1) {
+      planViolations.push(`wave must be >= 1 after normalization, got: ${p.wave}`);
+    }
+
+    // target_files: must be a non-empty array after normalization
+    const targetFiles = Array.isArray(p.target_files) ? p.target_files : [];
+    if (targetFiles.length === 0) {
+      planViolations.push("target_files is empty after normalization");
+    }
+
+    // scope: must be a non-empty string
+    if (!p.scope || String(p.scope).trim().length === 0) {
+      planViolations.push("scope is empty after normalization");
+    }
+
+    // acceptance_criteria: must be a non-empty array
+    const ac = Array.isArray(p.acceptance_criteria) ? p.acceptance_criteria : [];
+    if (ac.length === 0) {
+      planViolations.push("acceptance_criteria is empty after normalization");
+    }
+
+    // verification: if present, must not be a forbidden command
+    if (p.verification) {
+      const forbidden = checkForbiddenCommands(String(p.verification));
+      if (forbidden.forbidden) {
+        for (const v of forbidden.violations) {
+          planViolations.push(`verification contains forbidden command: ${v.reason}`);
+        }
+      }
+    }
+
+    if (planViolations.length > 0) {
+      const label = String(p.task || `plan ${i}`).slice(0, 60);
+      allViolations.push(`plan[${i}] "${label}": ${planViolations.join("; ")}`);
+    }
+  }
+
+  const valid = allViolations.length === 0;
+  return {
+    valid,
+    violations: allViolations,
+    code: valid ? PATCHED_PLAN_REVALIDATION_REASON.OK : PATCHED_PLAN_REVALIDATION_REASON.FAILED,
+  };
+}
+
 
 const EXPLICIT_APPROVAL_STATUS_VALUES = new Set([
   "approved", "approve", "pass", "passed", "accept", "accepted",
@@ -1440,6 +1545,33 @@ IMPORTANT: Always include "patchedPlans" with the FULL corrected plan array. Eve
   // consumed by the orchestrator. This is idempotent: applying twice is safe.
   if (Array.isArray(result.patchedPlans) && result.patchedPlans.length > 0) {
     result.patchedPlans = normalizePatchedPlansForDispatch(result.patchedPlans);
+
+    // ── Post-normalization contract re-validation ─────────────────────────
+    // Deterministic re-validation runs after normalization to catch cases where
+    // normalization silently applied defaults that violate dispatch constraints
+    // (e.g., empty target_files, forbidden verification commands). Fail-closed:
+    // any violation blocks approval with an explicit machine-readable reason.
+    const contractCheck = revalidatePatchedPlansAfterNormalization(result.patchedPlans);
+    if (!contractCheck.valid) {
+      const blockReason = {
+        code: contractCheck.code,
+        message: `Normalized patched plans failed contract re-validation: ${contractCheck.violations.join(" | ")}`
+      };
+      await appendProgress(config, `[ATHENA] Patched plan contract re-validation FAILED — ${blockReason.message}`);
+      chatLog(stateDir, athenaName, `Contract re-validation failed: ${contractCheck.violations.join(" | ")}`);
+      await appendAlert(config, {
+        severity: ALERT_SEVERITY.CRITICAL,
+        source: "athena_reviewer",
+        title: "Patched plans failed contract re-validation after normalization",
+        message: `code=${blockReason.code} violations=${contractCheck.violations.slice(0, 3).join(" | ")}`
+      });
+      return {
+        ...result,
+        approved: false,
+        corrections: [...corrections, ...contractCheck.violations],
+        reason: blockReason,
+      };
+    }
   }
 
   await writeJson(path.join(stateDir, "athena_plan_review.json"), result);

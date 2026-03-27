@@ -28,7 +28,7 @@ import { buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
 import { spawnAsync } from "./fs_utils.js";
 import { getRoleRegistry } from "./role_registry.js";
 import { checkPostMergeArtifact, collectArtifactGaps, ARTIFACT_GATE_ERROR_PREFIX, isArtifactGateRequired } from "./verification_gate.js";
-import { VERIFICATION_DEFAULTS, rewriteVerificationCommand } from "./verification_command_registry.js";
+import { VERIFICATION_DEFAULTS, rewriteVerificationCommand, checkForbiddenCommands } from "./verification_command_registry.js";
 import { isNonSpecificVerification } from "./plan_contract_validator.js";
 
 type EvolutionTask = {
@@ -784,6 +784,71 @@ export function buildVerificationTargets(
   }
 
   return targets;
+}
+
+/**
+ * Validate a list of verification commands for portability and specificity.
+ *
+ * Portability check: identifies commands that use forbidden patterns (shell globs,
+ * bash/sh, daemon invocations) that fail on Windows or wake the agent stack.
+ *
+ * Specificity evidence: each command is categorized as "specific" (references an
+ * explicit test file or assertion) or "generic" (bare CLI command like `npm test`),
+ * providing machine-checkable evidence that the task verification is non-trivially
+ * traceable to named test targets.
+ *
+ * This function is pure — no side effects, fully deterministic.
+ *
+ * @param commands - verification_commands array from the evolution task
+ * @returns portability report with rewrites, violations, and specificity evidence
+ */
+export function validateVerificationPortability(commands: string[]): {
+  portable: boolean;
+  rewrites: Array<{ original: string; rewritten: string; reason: string }>;
+  violations: string[];
+  hasSpecificTarget: boolean;
+  specificCommands: string[];
+} {
+  if (!Array.isArray(commands) || commands.length === 0) {
+    return { portable: true, rewrites: [], violations: [], hasSpecificTarget: false, specificCommands: [] };
+  }
+
+  const rewrites: Array<{ original: string; rewritten: string; reason: string }> = [];
+  const violations: string[] = [];
+  const specificCommands: string[] = [];
+
+  for (const cmd of commands) {
+    const text = String(cmd || "").trim();
+    if (!text) continue;
+
+    // Portability: check for forbidden patterns
+    const forbidden = checkForbiddenCommands(text);
+    if (forbidden.forbidden) {
+      for (const v of forbidden.violations) {
+        violations.push(`"${text}": ${v.reason}`);
+      }
+    }
+
+    // Rewrite: record what rewriteVerificationCommand would produce
+    const rewritten = rewriteVerificationCommand(text);
+    if (rewritten !== text) {
+      const reason = forbidden.violations[0]?.reason ?? "non-portable command rewritten to canonical form";
+      rewrites.push({ original: text, rewritten, reason });
+    }
+
+    // Specificity: does this command reference a named test file or assertion?
+    if (!isNonSpecificVerification(text)) {
+      specificCommands.push(text);
+    }
+  }
+
+  return {
+    portable: violations.length === 0,
+    rewrites,
+    violations,
+    hasSpecificTarget: specificCommands.length > 0,
+    specificCommands,
+  };
 }
 
 function runVerificationCommands(task) {

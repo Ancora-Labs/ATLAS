@@ -7,6 +7,8 @@ import {
   PREMORTEM_RISK_LEVEL,
   validatePatchedPlan,
   normalizePatchedPlansForDispatch,
+  revalidatePatchedPlansAfterNormalization,
+  PATCHED_PLAN_REVALIDATION_REASON,
 } from "../../src/core/athena_reviewer.js";
 
 const BASE_PLANS = [
@@ -360,3 +362,174 @@ describe("normalizePatchedPlansForDispatch", () => {
   });
 });
 
+// ── Task 3: revalidatePatchedPlansAfterNormalization ─────────────────────────
+
+describe("revalidatePatchedPlansAfterNormalization (Task 3)", () => {
+  it("returns valid=true and code=OK for empty plans array", () => {
+    const result = revalidatePatchedPlansAfterNormalization([]);
+    assert.equal(result.valid, true);
+    assert.equal(result.code, PATCHED_PLAN_REVALIDATION_REASON.OK);
+    assert.deepEqual(result.violations, []);
+  });
+
+  it("passes a fully valid normalized plan", () => {
+    const result = revalidatePatchedPlansAfterNormalization([
+      {
+        task: "Implement deterministic dispatch verification",
+        role: "evolution-worker",
+        wave: 1,
+        target_files: ["src/core/orchestrator.ts"],
+        scope: "src/core/",
+        acceptance_criteria: ["Verification passes"],
+        verification: "npm test",
+        dependencies: [],
+      }
+    ]);
+    assert.equal(result.valid, true);
+    assert.equal(result.code, PATCHED_PLAN_REVALIDATION_REASON.OK);
+    assert.deepEqual(result.violations, []);
+  });
+
+  it("fails when task is missing or too short", () => {
+    const result = revalidatePatchedPlansAfterNormalization([
+      {
+        task: "bad",
+        role: "evolution-worker",
+        wave: 1,
+        target_files: ["src/core/foo.ts"],
+        scope: "src/",
+        acceptance_criteria: ["done"],
+      }
+    ]);
+    assert.equal(result.valid, false);
+    assert.equal(result.code, PATCHED_PLAN_REVALIDATION_REASON.FAILED);
+    assert.ok(result.violations.some(v => /task.*short/i.test(v)));
+  });
+
+  it("fails when target_files is empty after normalization", () => {
+    const result = revalidatePatchedPlansAfterNormalization([
+      {
+        task: "Fix the scheduler contract validation",
+        role: "evolution-worker",
+        wave: 1,
+        target_files: [],
+        scope: "src/core/",
+        acceptance_criteria: ["Validation passes"],
+      }
+    ]);
+    assert.equal(result.valid, false);
+    assert.ok(result.violations.some(v => /target_files.*empty/i.test(v)));
+  });
+
+  it("fails when scope is empty after normalization", () => {
+    const result = revalidatePatchedPlansAfterNormalization([
+      {
+        task: "Fix the scheduler contract",
+        role: "evolution-worker",
+        wave: 1,
+        target_files: ["src/core/foo.ts"],
+        scope: "",
+        acceptance_criteria: ["passes"],
+      }
+    ]);
+    assert.equal(result.valid, false);
+    assert.ok(result.violations.some(v => /scope.*empty/i.test(v)));
+  });
+
+  it("fails when acceptance_criteria is empty after normalization", () => {
+    const result = revalidatePatchedPlansAfterNormalization([
+      {
+        task: "Fix the scheduler contract",
+        role: "evolution-worker",
+        wave: 1,
+        target_files: ["src/core/foo.ts"],
+        scope: "src/core/",
+        acceptance_criteria: [],
+      }
+    ]);
+    assert.equal(result.valid, false);
+    assert.ok(result.violations.some(v => /acceptance_criteria.*empty/i.test(v)));
+  });
+
+  it("fails when verification field is a forbidden command (shell glob)", () => {
+    const result = revalidatePatchedPlansAfterNormalization([
+      {
+        task: "Fix the scheduler contract validation",
+        role: "evolution-worker",
+        wave: 1,
+        target_files: ["src/core/foo.ts"],
+        scope: "src/core/",
+        acceptance_criteria: ["CI passes"],
+        verification: "node --test tests/**/*.test.ts",
+      }
+    ]);
+    assert.equal(result.valid, false);
+    assert.ok(result.violations.some(v => /forbidden command/i.test(v)));
+  });
+
+  it("fails when verification field is a bash script invocation", () => {
+    const result = revalidatePatchedPlansAfterNormalization([
+      {
+        task: "Fix the scheduler contract validation",
+        role: "evolution-worker",
+        wave: 1,
+        target_files: ["src/core/foo.ts"],
+        scope: "src/core/",
+        acceptance_criteria: ["CI passes"],
+        verification: "bash scripts/run_tests.sh",
+      }
+    ]);
+    assert.equal(result.valid, false);
+    assert.ok(result.violations.some(v => /forbidden command/i.test(v)));
+  });
+
+  it("collects violations from multiple failing plans", () => {
+    const result = revalidatePatchedPlansAfterNormalization([
+      {
+        task: "ok",  // too short
+        role: "evolution-worker",
+        wave: 1,
+        target_files: ["src/a.ts"],
+        scope: "src/",
+        acceptance_criteria: ["done"],
+      },
+      {
+        task: "Another valid task description",
+        role: "evolution-worker",
+        wave: 1,
+        target_files: [],  // empty
+        scope: "src/",
+        acceptance_criteria: ["done"],
+      }
+    ]);
+    assert.equal(result.valid, false);
+    assert.equal(result.violations.length, 2, "each failing plan must produce one violation entry");
+  });
+
+  it("exports PATCHED_PLAN_REVALIDATION_REASON with OK and FAILED codes", () => {
+    assert.equal(PATCHED_PLAN_REVALIDATION_REASON.OK, "OK");
+    assert.equal(PATCHED_PLAN_REVALIDATION_REASON.FAILED, "PATCHED_PLAN_CONTRACT_FAILED");
+  });
+
+  it("negative path: non-object plan entry is flagged as violation", () => {
+    const result = revalidatePatchedPlansAfterNormalization(["not-an-object"] as any[]);
+    assert.equal(result.valid, false);
+    assert.ok(result.violations.some(v => /not an object/i.test(v)));
+  });
+
+  it("passes when verification field is absent (optional field)", () => {
+    const result = revalidatePatchedPlansAfterNormalization([
+      {
+        task: "Implement deterministic plan dispatch",
+        role: "evolution-worker",
+        wave: 2,
+        target_files: ["src/core/orchestrator.ts"],
+        scope: "src/core/",
+        acceptance_criteria: ["Dispatch succeeds"],
+        dependencies: ["T-001"],
+        // verification is intentionally absent
+      }
+    ]);
+    assert.equal(result.valid, true, "absent verification field must not cause a violation");
+  });
+});

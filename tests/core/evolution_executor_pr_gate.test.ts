@@ -10,6 +10,7 @@ import {
   checkScopeConformance,
   buildVerificationTargets,
   inferVerificationFromFilesHint,
+  validateVerificationPortability,
 } from "../../src/core/evolution_executor.js";
 
 describe("assessStatusCheckRollup", () => {
@@ -470,5 +471,86 @@ describe("buildVerificationEvidence", () => {
     const ev = buildVerificationEvidence([{ cmd: "npm run build", passed: true }]);
     const fullGreen = ev.build === "pass" && ev.tests === "pass";
     assert.equal(fullGreen, false, "tests slot is n/a, so full green must be false");
+  });
+});
+
+// ── validateVerificationPortability — Task 2 ─────────────────────────────────
+
+describe("validateVerificationPortability", () => {
+  it("returns portable=true for canonical commands", () => {
+    const result = validateVerificationPortability(["npm test", "npm run lint", "npm run build"]);
+    assert.equal(result.portable, true);
+    assert.deepEqual(result.violations, []);
+    assert.deepEqual(result.rewrites, []);
+  });
+
+  it("detects shell-glob node --test as non-portable", () => {
+    const result = validateVerificationPortability(["node --test tests/**/*.test.ts"]);
+    assert.equal(result.portable, false);
+    assert.ok(result.violations.length > 0, "violation must be reported");
+    assert.ok(result.violations[0].includes("Glob patterns"), "violation must mention glob");
+  });
+
+  it("detects bash script invocation as non-portable", () => {
+    const result = validateVerificationPortability(["bash scripts/run_tests.sh"]);
+    assert.equal(result.portable, false);
+    assert.ok(result.violations.length > 0);
+  });
+
+  it("detects sh script invocation as non-portable", () => {
+    const result = validateVerificationPortability(["sh run.sh"]);
+    assert.equal(result.portable, false);
+    assert.ok(result.violations.length > 0);
+  });
+
+  it("includes rewrite entry when command would be rewritten", () => {
+    const result = validateVerificationPortability(["node --test tests/**/*.test.ts"]);
+    assert.ok(result.rewrites.length > 0, "rewrite entry must be present for non-portable command");
+    const rw = result.rewrites[0];
+    assert.ok(typeof rw.original === "string");
+    assert.ok(typeof rw.rewritten === "string");
+    assert.ok(typeof rw.reason === "string");
+    assert.ok(rw.rewritten !== rw.original, "rewritten must differ from original");
+  });
+
+  it("identifies specific commands (with test file reference) as hasSpecificTarget=true", () => {
+    const result = validateVerificationPortability(["node --test tests/core/foo.test.ts"]);
+    assert.equal(result.hasSpecificTarget, true);
+    assert.ok(result.specificCommands.includes("node --test tests/core/foo.test.ts"));
+  });
+
+  it("marks generic-only commands as hasSpecificTarget=false", () => {
+    const result = validateVerificationPortability(["npm test", "npm run lint"]);
+    assert.equal(result.hasSpecificTarget, false);
+    assert.deepEqual(result.specificCommands, []);
+  });
+
+  it("handles mixed portable and non-portable commands — reports all violations", () => {
+    const result = validateVerificationPortability(["npm test", "bash scripts/test.sh"]);
+    assert.equal(result.portable, false);
+    assert.equal(result.violations.length, 1);
+    assert.ok(result.violations[0].includes("bash"));
+  });
+
+  it("returns portable=true and empty arrays for empty input", () => {
+    const result = validateVerificationPortability([]);
+    assert.equal(result.portable, true);
+    assert.deepEqual(result.violations, []);
+    assert.deepEqual(result.rewrites, []);
+    assert.equal(result.hasSpecificTarget, false);
+  });
+
+  it("negative path: all forbidden commands produce portable=false with at least one violation each", () => {
+    const cmds = [
+      "node --test tests/**/*.test.ts",
+      "bash scripts/deploy.sh",
+      "sh run.sh",
+    ];
+    const result = validateVerificationPortability(cmds);
+    assert.equal(result.portable, false);
+    // Each command must produce at least one violation (node --test glob may produce 2)
+    assert.ok(result.violations.length >= cmds.length,
+      `Expected at least ${cmds.length} violations, got ${result.violations.length}`);
+    assert.equal(result.rewrites.length, 3);
   });
 });

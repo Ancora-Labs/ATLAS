@@ -8,6 +8,8 @@ import {
   normalizeAliasPath,
   detectDeprecatedTokensInContent,
   DEPRECATED_TOKENS,
+  rankStaleRefsAsRemediationCandidates,
+  type ArchitectureDriftReport,
 } from "../../src/core/architecture_drift.js";
 
 describe("architecture_drift", () => {
@@ -369,5 +371,139 @@ describe("architecture_drift — deprecated token detection (Task 5)", () => {
     assert.ok(verdictRef, "governance_verdict ref must be in report");
     assert.equal(verdictRef!.line, 3, "line number must be 3 for governance_verdict");
     assert.ok(verdictRef!.docPath.includes("stale.md"), "docPath must reference stale.md");
+  });
+});
+
+// ── rankStaleRefsAsRemediationCandidates (Task 1 planning bridge) ─────────────
+
+describe("rankStaleRefsAsRemediationCandidates", () => {
+  it("returns empty array for empty report", () => {
+    const report: ArchitectureDriftReport = {
+      scannedDocs: [],
+      presentCount: 0,
+      staleCount: 0,
+      staleReferences: [],
+      deprecatedTokenCount: 0,
+      deprecatedTokenRefs: [],
+    };
+    const candidates = rankStaleRefsAsRemediationCandidates(report);
+    assert.deepEqual(candidates, []);
+  });
+
+  it("assigns high priority to stale src/core/ references", () => {
+    const report: ArchitectureDriftReport = {
+      scannedDocs: ["docs/arch.md"],
+      presentCount: 0,
+      staleCount: 1,
+      staleReferences: [{ docPath: "docs/arch.md", referencedPath: "src/core/orchestrator.ts", line: 3 }],
+      deprecatedTokenCount: 0,
+      deprecatedTokenRefs: [],
+    };
+    const candidates = rankStaleRefsAsRemediationCandidates(report);
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].priority, "high");
+    assert.equal(candidates[0].type, "stale_ref");
+    assert.ok(candidates[0].referencedPath === "src/core/orchestrator.ts");
+  });
+
+  it("assigns medium priority to stale src/ (non-core) references", () => {
+    const report: ArchitectureDriftReport = {
+      scannedDocs: ["docs/arch.md"],
+      presentCount: 0,
+      staleCount: 1,
+      staleReferences: [{ docPath: "docs/arch.md", referencedPath: "src/config.ts", line: 5 }],
+      deprecatedTokenCount: 0,
+      deprecatedTokenRefs: [],
+    };
+    const candidates = rankStaleRefsAsRemediationCandidates(report);
+    assert.equal(candidates[0].priority, "medium");
+  });
+
+  it("assigns low priority to stale docker/scripts/docs references", () => {
+    const report: ArchitectureDriftReport = {
+      scannedDocs: ["docs/ops.md"],
+      presentCount: 0,
+      staleCount: 1,
+      staleReferences: [{ docPath: "docs/ops.md", referencedPath: "docker/worker.Dockerfile", line: 2 }],
+      deprecatedTokenCount: 0,
+      deprecatedTokenRefs: [],
+    };
+    const candidates = rankStaleRefsAsRemediationCandidates(report);
+    assert.equal(candidates[0].priority, "low");
+  });
+
+  it("assigns medium priority to all deprecated token findings", () => {
+    const report: ArchitectureDriftReport = {
+      scannedDocs: ["docs/legacy.md"],
+      presentCount: 0,
+      staleCount: 0,
+      staleReferences: [],
+      deprecatedTokenCount: 1,
+      deprecatedTokenRefs: [{ docPath: "docs/legacy.md", token: "governance_verdict", hint: "use governance_contract", line: 7 }],
+    };
+    const candidates = rankStaleRefsAsRemediationCandidates(report);
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].priority, "medium");
+    assert.equal(candidates[0].type, "deprecated_token");
+    assert.ok(candidates[0].token === "governance_verdict");
+    assert.ok(candidates[0].hint === "use governance_contract");
+  });
+
+  it("sorts high before medium before low", () => {
+    const report: ArchitectureDriftReport = {
+      scannedDocs: ["docs/a.md"],
+      presentCount: 0,
+      staleCount: 3,
+      staleReferences: [
+        { docPath: "docs/a.md", referencedPath: "docker/worker.Dockerfile", line: 1 },   // low
+        { docPath: "docs/a.md", referencedPath: "src/core/policy_engine.ts", line: 2 },  // high
+        { docPath: "docs/a.md", referencedPath: "src/config.ts", line: 3 },              // medium
+      ],
+      deprecatedTokenCount: 0,
+      deprecatedTokenRefs: [],
+    };
+    const candidates = rankStaleRefsAsRemediationCandidates(report);
+    assert.equal(candidates[0].priority, "high");
+    assert.equal(candidates[1].priority, "medium");
+    assert.equal(candidates[2].priority, "low");
+  });
+
+  it("each candidate has suggestedTask, reason, docPath, and line", () => {
+    const report: ArchitectureDriftReport = {
+      scannedDocs: ["docs/arch.md"],
+      presentCount: 0,
+      staleCount: 1,
+      staleReferences: [{ docPath: "docs/arch.md", referencedPath: "src/core/missing.ts", line: 12 }],
+      deprecatedTokenCount: 0,
+      deprecatedTokenRefs: [],
+    };
+    const [c] = rankStaleRefsAsRemediationCandidates(report);
+    assert.ok(typeof c.suggestedTask === "string" && c.suggestedTask.length > 0, "suggestedTask must be non-empty");
+    assert.ok(typeof c.reason === "string" && c.reason.length > 0, "reason must be non-empty");
+    assert.equal(c.docPath, "docs/arch.md");
+    assert.equal(c.line, 12);
+  });
+
+  it("negative path: interleaves stale refs and deprecated tokens by priority (medium mixed)", () => {
+    const report: ArchitectureDriftReport = {
+      scannedDocs: ["docs/a.md"],
+      presentCount: 0,
+      staleCount: 1,
+      staleReferences: [
+        // low priority
+        { docPath: "docs/a.md", referencedPath: "scripts/deploy.sh", line: 1 },
+      ],
+      deprecatedTokenCount: 1,
+      deprecatedTokenRefs: [
+        // medium priority — should come before the low ref
+        { docPath: "docs/a.md", token: "resume_dispatch", hint: "use runResumeDispatch", line: 4 },
+      ],
+    };
+    const candidates = rankStaleRefsAsRemediationCandidates(report);
+    assert.equal(candidates.length, 2);
+    assert.equal(candidates[0].priority, "medium", "deprecated token (medium) must sort before stale scripts ref (low)");
+    assert.equal(candidates[0].type, "deprecated_token");
+    assert.equal(candidates[1].priority, "low");
+    assert.equal(candidates[1].type, "stale_ref");
   });
 });
