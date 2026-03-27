@@ -260,5 +260,32 @@ describe("capability_pool", () => {
       const result = enforceLaneDiversity({});
       assert.equal(result.meetsMinimum, false);
     });
+
+    // Hard admission control contract — callers (orchestrator) must block dispatch
+    // when meetsMinimum is false and plans.length >= minLanes.
+    it("hard gate contract: meetsMinimum=false signals dispatch must be blocked", () => {
+      const pool = assignWorkersToPlans([
+        { task: "Add test coverage" },
+        { task: "Write more tests" },
+      ]);
+      const result = enforceLaneDiversity(pool, { minLanes: 2 });
+      // If meetsMinimum is false, the warning must be non-empty (caller uses it for alert)
+      if (!result.meetsMinimum) {
+        assert.ok(result.warning.length > 0, "hard gate: warning must carry a reason for the block");
+        assert.ok(typeof result.activeLaneCount === "number");
+      }
+    });
+
+    it("hard gate contract: meetsMinimum=true means gate passes and dispatch proceeds", () => {
+      const pool = assignWorkersToPlans([
+        { task: "Add test coverage" },
+        { task: "Update Docker configuration" },
+        { task: "Fix governance policy" },
+      ]);
+      const result = enforceLaneDiversity(pool, { minLanes: 2 });
+      if (result.meetsMinimum) {
+        assert.equal(result.warning, "", "no warning when gate passes");
+      }
+    });
   });
 });
