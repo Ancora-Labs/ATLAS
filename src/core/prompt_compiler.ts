@@ -31,7 +31,10 @@ export function section(name, content) {
  * With section-level caps (Packet 8): each section can have a maxTokens limit.
  * If a section exceeds its cap, it is truncated from the end.
  *
- * @param {Array<{ name: string, content: string, maxTokens?: number }>} sections
+ * Required-field retention: sections marked `required: true` are always included
+ * regardless of the global token budget. Optional sections fill remaining budget.
+ *
+ * @param {Array<{ name: string, content: string, maxTokens?: number, required?: boolean }>} sections
  * @param {{ separator?: string, includeHeaders?: boolean, tokenBudget?: number }} opts
  * @returns {string}
  */
@@ -40,9 +43,11 @@ export function compilePrompt(sections, opts: any = {}) {
   const includeHeaders = opts.includeHeaders || false;
   const budget = opts.tokenBudget || 0;
 
-  let pieces = sections
-    .filter(s => s && s.content && s.content.length > 0)
-    .map(s => {
+  // Pair each non-empty section with its original index for stable ordering
+  const tagged = sections
+    .map((s, idx) => ({ s, idx }))
+    .filter(({ s }) => s && s.content && s.content.length > 0)
+    .map(({ s, idx }) => {
       let content = s.content;
       // Section-level cap: truncate if section exceeds its own maxTokens
       if (s.maxTokens && s.maxTokens > 0) {
@@ -52,20 +57,35 @@ export function compilePrompt(sections, opts: any = {}) {
           content = content.slice(0, maxChars) + "\n[...truncated to section budget]";
         }
       }
-      return includeHeaders ? `## ${s.name}\n${content}` : content;
+      const piece = includeHeaders ? `## ${s.name}\n${content}` : content;
+      return { piece, idx, required: s.required === true };
     });
 
-  // If a global token budget is specified, truncate sections from the end to fit
+  let pieces: string[];
+
+  // If a global token budget is specified, required sections are always kept;
+  // optional sections fill remaining budget in original order.
   if (budget > 0) {
-    let totalTokens = 0;
-    const kept = [];
-    for (const piece of pieces) {
-      const t = estimateTokens(piece);
-      if (totalTokens + t > budget) break;
-      kept.push(piece);
-      totalTokens += t;
+    const requiredItems = tagged.filter(t => t.required);
+    const optionalItems = tagged.filter(t => !t.required);
+
+    const requiredTokens = requiredItems.reduce((sum, t) => sum + estimateTokens(t.piece), 0);
+    let remainingBudget = budget - requiredTokens;
+
+    const keptOptional: typeof tagged = [];
+    for (const item of optionalItems) {
+      const t = estimateTokens(item.piece);
+      if (remainingBudget - t < 0) break;
+      keptOptional.push(item);
+      remainingBudget -= t;
     }
-    pieces = kept;
+
+    // Merge required + kept optional, preserving original section order
+    pieces = [...requiredItems, ...keptOptional]
+      .sort((a, b) => a.idx - b.idx)
+      .map(t => t.piece);
+  } else {
+    pieces = tagged.map(t => t.piece);
   }
 
   return pieces.join(sep);
@@ -170,6 +190,7 @@ export function compileTieredPrompt(sections, opts: any = {}) {
 
   let processed = sections;
   if (tier.antiFluff) {
+    // Preserve all section properties (including `required`) when stripping fluff
     processed = sections.map(s => ({
       ...s,
       content: stripFluff(s.content),

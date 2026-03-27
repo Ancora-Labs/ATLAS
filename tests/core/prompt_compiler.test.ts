@@ -58,6 +58,24 @@ describe("prompt_compiler", () => {
       assert.equal(result, "hello\n\nworld");
     });
 
+    it("retains required sections even when they push past the token budget", () => {
+      const longText = "x".repeat(400); // ~100 tokens
+      const req = { ...section("required", "MUST_KEEP"), required: true };
+      const result = compilePrompt(
+        [section("optional", longText), req],
+        { tokenBudget: 10 }
+      );
+      assert.ok(result.includes("MUST_KEEP"), "required section must be retained despite budget");
+    });
+
+    it("drops optional sections when budget exhausted by required ones", () => {
+      const req = { ...section("req", "R".repeat(200)), required: true }; // ~50 tokens
+      const opt = section("opt", "optional text");
+      const result = compilePrompt([opt, req], { tokenBudget: 50 });
+      // optional should not fit — required alone may already fill the budget
+      assert.ok(result.includes("R".repeat(200)), "required section must be present");
+    });
+
     it("truncates section content when maxTokens is set on section", () => {
       const longContent = "a".repeat(200); // ~50 tokens worth
       const s = section("limited", longContent);
@@ -194,6 +212,35 @@ describe("prompt_compiler", () => {
         [section("a", "short text")],
       );
       assert.ok(result.includes("short text"));
+    });
+
+    it("retains required sections even when token budget is exceeded", () => {
+      const longText = "x".repeat(4000); // ~1000 tokens — exceeds T1 budget of 800
+      const requiredSection = { ...section("footer", "REQUIRED_FOOTER"), required: true };
+      const result = compileTieredPrompt(
+        [section("big", longText), requiredSection],
+        { tier: "T1" },
+      );
+      assert.ok(result.includes("REQUIRED_FOOTER"), "required section must survive budget truncation");
+    });
+
+    it("drops non-required sections when budget is tight but preserves required ones", () => {
+      // budget: T1 = 800 tokens. optional section is ~1000 tokens, required is tiny.
+      const bigOptional = section("optional", "o".repeat(4000)); // ~1000 tokens
+      const tiny = { ...section("must", "KEEP_ME"), required: true };
+      const result = compileTieredPrompt([bigOptional, tiny], { tier: "T1" });
+      assert.ok(result.includes("KEEP_ME"), "required section must be present");
+    });
+
+    it("preserves original section order when required sections are interspersed", () => {
+      const s1 = { ...section("first", "AAA"), required: true };
+      const s2 = section("second", "BBB");
+      const s3 = { ...section("third", "CCC"), required: true };
+      const result = compileTieredPrompt([s1, s2, s3], { tier: "T3", tokenBudget: 10000 });
+      const posA = result.indexOf("AAA");
+      const posB = result.indexOf("BBB");
+      const posC = result.indexOf("CCC");
+      assert.ok(posA < posB && posB < posC, "order must be preserved");
     });
   });
 });
