@@ -29,6 +29,7 @@ import { spawnAsync } from "./fs_utils.js";
 import { getRoleRegistry } from "./role_registry.js";
 import { checkPostMergeArtifact, ARTIFACT_GAP, ARTIFACT_GATE_ERROR_PREFIX, isArtifactGateRequired } from "./verification_gate.js";
 import { VERIFICATION_DEFAULTS, rewriteVerificationCommand } from "./verification_command_registry.js";
+import { isNonSpecificVerification } from "./plan_contract_validator.js";
 
 type EvolutionTask = {
   task_id?: string;
@@ -254,14 +255,46 @@ function normalizeScope(scope, title = "") {
   return `Implement ${title || "the task"} with deterministic acceptance criteria and verifiable output.`;
 }
 
+/**
+ * Infer specific verification commands from a task's files_hint.
+ * When a task only lists generic CLI commands (e.g. "npm test"), this function
+ * derives specific `node --test <file>` commands for any test files found in
+ * files_hint so that the verification_targets are non-trivially traceable.
+ *
+ * Only test files that already exist in files_hint (i.e. explicitly declared
+ * by Prometheus) are used — we never invent file paths that may not exist.
+ *
+ * @param filesHint - the task's files_hint array
+ * @returns array of specific node --test commands, or empty array if none found
+ */
+export function inferVerificationFromFilesHint(filesHint: string[]): string[] {
+  if (!Array.isArray(filesHint) || filesHint.length === 0) return [];
+  const testFiles = filesHint.filter(f => /\.(test|spec)\.(ts|js|tsx|jsx)$/i.test(f));
+  return testFiles.slice(0, 3).map(f => `node --test ${f}`);
+}
+
 export function repairPrometheusTask(task: EvolutionTask = {}): PreparedEvolutionTask {
+  const filesHint = normalizeStringList(task.files_hint);
+  const rawCommands = normalizeStringList(task.verification_commands);
+  let verificationCommands = normalizeVerificationCommands(rawCommands);
+
+  // If all normalized commands are still non-specific (all just "npm test" / "node --test"),
+  // and the files_hint explicitly names test files, inject those as specific targets.
+  const allNonSpecific = verificationCommands.every(cmd => isNonSpecificVerification(cmd));
+  if (allNonSpecific && filesHint.length > 0) {
+    const inferred = inferVerificationFromFilesHint(filesHint);
+    if (inferred.length > 0) {
+      verificationCommands = [...inferred, ...verificationCommands];
+    }
+  }
+
   const repaired = {
     ...task,
     title: String(task.title || task.task_id || "Untitled task").trim(),
     scope: normalizeScope(task.scope, task.title),
-    files_hint: normalizeStringList(task.files_hint),
+    files_hint: filesHint,
     acceptance_criteria: normalizeAcceptanceCriteria(normalizeStringList(task.acceptance_criteria)),
-    verification_commands: normalizeVerificationCommands(normalizeStringList(task.verification_commands))
+    verification_commands: verificationCommands
   };
 
   if (repaired.acceptance_criteria.length === 0) {

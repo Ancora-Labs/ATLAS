@@ -8,6 +8,8 @@ import {
   PROMETHEUS_STATIC_SECTIONS,
   computeDriftConfidencePenalty,
   DRIFT_REMEDIATION_THRESHOLD,
+  computeBottleneckCoverage,
+  BOTTLENECK_COVERAGE_FLOOR,
 } from "../../src/core/prometheus.js";
 import { compilePrompt } from "../../src/core/prompt_compiler.js";
 
@@ -306,6 +308,129 @@ describe("normalizePrometheusParsedOutput — confidence components", () => {
       assert.ok(typeof p.component === "string" && p.component.length > 0, "penalty must have component");
       assert.ok(typeof p.delta === "number" && p.delta < 0, "penalty delta must be a negative number");
     }
+  });
+
+  it("emits bottleneckCoverage=1.0 component when no topBottlenecks declared", () => {
+    const parsed = {
+      projectHealth: "good",
+      plans: [{ task: "Fix verification harness", role: "evolution-worker" }],
+      requestBudget: { estimatedPremiumRequestsTotal: 1, errorMarginPercent: 15, hardCapTotal: 2 },
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.equal(result.parserConfidenceComponents.bottleneckCoverage, 1.0);
+    assert.ok(!result.parserConfidencePenalties.some(p => p.component === "bottleneckCoverage"));
+  });
+
+  it("applies bottleneckCoverage penalty when topBottlenecks are undercovered", () => {
+    const parsed = {
+      projectHealth: "good",
+      topBottlenecks: [
+        { id: "BN-1", title: "Sequential worker dispatch ignores wave infrastructure", severity: "high" },
+        { id: "BN-2", title: "Trust boundary contract missing enforcement gate", severity: "critical" },
+        { id: "BN-3", title: "Parser fence handling drops multiline blocks", severity: "medium" },
+      ],
+      // plans that only address BN-1 — BN-2 and BN-3 uncovered
+      plans: [
+        { task: "Fix sequential worker dispatch for wave infrastructure", role: "evolution-worker", _fromBottleneck: "BN-1" },
+      ],
+      requestBudget: { estimatedPremiumRequestsTotal: 1, errorMarginPercent: 15, hardCapTotal: 2 },
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    assert.ok(result.parserConfidenceComponents.bottleneckCoverage < 1.0,
+      "bottleneckCoverage component must be below 1.0 when bottlenecks are uncovered");
+    const penalty = result.parserConfidencePenalties.find(p => p.component === "bottleneckCoverage");
+    assert.ok(penalty, "must have a bottleneckCoverage penalty");
+    assert.ok(penalty.delta < 0, "penalty delta must be negative");
+    assert.ok(result.bottleneckCoverage, "must emit bottleneckCoverage field on result");
+    assert.equal(result.bottleneckCoverage.total, 3);
+    assert.ok(result.bottleneckCoverage.uncovered.length >= 1);
+  });
+
+  it("does not apply bottleneckCoverage penalty when all topBottlenecks are covered", () => {
+    const parsed = {
+      projectHealth: "good",
+      topBottlenecks: [
+        { id: "BN-1", title: "Sequential worker dispatch ignores wave infrastructure", severity: "high" },
+        { id: "BN-2", title: "Trust boundary contract enforcement missing", severity: "critical" },
+      ],
+      plans: [
+        { task: "Fix sequential worker dispatch wave infrastructure", role: "evolution-worker", _fromBottleneck: "BN-1" },
+        { task: "Add trust boundary contract enforcement gate", role: "evolution-worker", _fromBottleneck: "BN-2" },
+      ],
+      requestBudget: { estimatedPremiumRequestsTotal: 2, errorMarginPercent: 15, hardCapTotal: 3 },
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    assert.equal(result.parserConfidenceComponents.bottleneckCoverage, 1.0);
+    assert.ok(!result.parserConfidencePenalties.some(p => p.component === "bottleneckCoverage"));
+  });
+});
+
+describe("computeBottleneckCoverage", () => {
+  it("returns coverage=1.0 when bottlenecks array is empty", () => {
+    const result = computeBottleneckCoverage([], []);
+    assert.equal(result.coverage, 1.0);
+    assert.equal(result.total, 0);
+  });
+
+  it("returns coverage=1.0 when all bottlenecks are covered by _fromBottleneck reference", () => {
+    const plans = [
+      { task: "Fix BN-1", _fromBottleneck: "BN-1" },
+      { task: "Fix BN-2", _fromBottleneck: "BN-2" },
+    ];
+    const bottlenecks = [
+      { id: "BN-1", title: "Sequential worker dispatch ignores wave" },
+      { id: "BN-2", title: "Trust boundary contract missing" },
+    ];
+    const result = computeBottleneckCoverage(plans, bottlenecks);
+    assert.equal(result.coverage, 1.0);
+    assert.equal(result.covered.length, 2);
+    assert.equal(result.uncovered.length, 0);
+  });
+
+  it("returns partial coverage when some bottlenecks are not covered", () => {
+    const plans = [
+      { task: "Fix trust boundary contract enforcement", _fromBottleneck: "BN-2" },
+    ];
+    const bottlenecks = [
+      { id: "BN-1", title: "Sequential dispatch ignores wave infrastructure" },
+      { id: "BN-2", title: "Trust boundary contract missing" },
+      { id: "BN-3", title: "Parser fence handling drops multiline blocks" },
+    ];
+    const result = computeBottleneckCoverage(plans, bottlenecks);
+    assert.ok(result.coverage < 1.0);
+    assert.equal(result.covered.length, 1);
+    assert.equal(result.uncovered.length, 2);
+    assert.equal(result.total, 3);
+  });
+
+  it("covers bottleneck by keyword overlap when no _fromBottleneck reference", () => {
+    const plans = [
+      { task: "Fix sequential worker dispatch for wave infrastructure ordering", title: "Fix wave dispatch" },
+    ];
+    const bottlenecks = [
+      { id: "BN-1", title: "Sequential worker dispatch ignores wave infrastructure" },
+    ];
+    const result = computeBottleneckCoverage(plans, bottlenecks);
+    assert.equal(result.coverage, 1.0, "keyword overlap should cover the bottleneck");
+  });
+
+  it("does not cover bottleneck with only 1 matching keyword (requires ≥2)", () => {
+    const plans = [
+      { task: "Fix dispatch logic", title: "Fix dispatch" },
+    ];
+    const bottlenecks = [
+      { id: "BN-1", title: "Sequential worker dispatch ignores wave infrastructure" },
+    ];
+    const result = computeBottleneckCoverage(plans, bottlenecks);
+    // Only "dispatch" matches (1 word), not enough for coverage
+    assert.equal(result.uncovered.length, 1);
+  });
+
+  it("returns BOTTLENECK_COVERAGE_FLOOR as a number between 0 and 1", () => {
+    assert.ok(typeof BOTTLENECK_COVERAGE_FLOOR === "number");
+    assert.ok(BOTTLENECK_COVERAGE_FLOOR > 0 && BOTTLENECK_COVERAGE_FLOOR < 1);
   });
 });
 

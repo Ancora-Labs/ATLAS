@@ -107,6 +107,17 @@ export const COMMON_SECTIONS = Object.freeze({
     "no-vague-goals",
     "Every goal must be measurable and specific. Do NOT use vague verbs like 'improve', 'optimize', or 'enhance' without a concrete metric."
   ),
+  leverageRankedAlternatives: section(
+    "leverage-ranked-alternatives",
+    [
+      "LEVERAGE-RANKED ALTERNATIVES (required for every proposed change):",
+      "For each improvement you propose, provide at least 2 concrete alternatives ranked by leverage",
+      "(capacity increase per unit effort). State which you recommend and why.",
+      "Format each alternative as: [RANK N] <approach> — leverage: <high|medium|low> — rationale: <why>.",
+      "Do NOT propose only a single approach. The highest-leverage option must address the system bottleneck directly.",
+      "Alternatives that merely re-order existing behavior without measurable capacity gain are NOT valid."
+    ].join("\n")
+  ),
 });
 
 /**

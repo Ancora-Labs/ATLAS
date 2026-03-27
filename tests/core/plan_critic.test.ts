@@ -51,6 +51,38 @@ describe("plan_critic", () => {
       const result = critiquePlan(plan);
       assert.equal(result.dimensions[CRITIC_DIMENSION.HAS_CLEAR_SCOPE], 1.0);
     });
+
+    it("scores HAS_LEVERAGE_RANK=1.0 when leverage_rank is non-empty", () => {
+      const plan = {
+        task: "Add validation to src/core/config.js",
+        verification: "npm test passes",
+        leverage_rank: ["task-quality", "architecture"],
+      };
+      const result = critiquePlan(plan);
+      assert.equal(result.dimensions[CRITIC_DIMENSION.HAS_LEVERAGE_RANK], 1.0);
+      assert.ok(!result.issues.some(i => /leverage_rank/i.test(i)));
+    });
+
+    it("scores HAS_LEVERAGE_RANK=0.3 when leverage_rank is missing", () => {
+      const plan = {
+        task: "Add validation to src/core/config.js",
+        verification: "npm test passes",
+        // no leverage_rank
+      };
+      const result = critiquePlan(plan);
+      assert.equal(result.dimensions[CRITIC_DIMENSION.HAS_LEVERAGE_RANK], 0.3);
+      assert.ok(result.issues.some(i => /leverage_rank/i.test(i)));
+    });
+
+    it("scores HAS_LEVERAGE_RANK=0.3 when leverage_rank is an empty array", () => {
+      const plan = {
+        task: "Add validation to src/core/config.js",
+        verification: "npm test passes",
+        leverage_rank: [],
+      };
+      const result = critiquePlan(plan);
+      assert.equal(result.dimensions[CRITIC_DIMENSION.HAS_LEVERAGE_RANK], 0.3);
+    });
   });
 
   describe("runCriticPass", () => {

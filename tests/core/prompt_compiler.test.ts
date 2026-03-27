@@ -135,6 +135,22 @@ describe("prompt_compiler", () => {
       assert.ok(COMMON_SECTIONS.jsonOutputMarkers);
       assert.ok(COMMON_SECTIONS.noVagueGoals);
     });
+
+    it("has leverageRankedAlternatives section with required keywords", () => {
+      assert.ok(COMMON_SECTIONS.leverageRankedAlternatives, "leverageRankedAlternatives must exist");
+      const content = COMMON_SECTIONS.leverageRankedAlternatives.content;
+      assert.ok(/leverage/i.test(content), "must mention leverage");
+      assert.ok(/alternative/i.test(content), "must mention alternatives");
+      assert.ok(/rank/i.test(content), "must mention ranking");
+    });
+
+    it("leverageRankedAlternatives is usable as a prompt section", () => {
+      const compiled = compilePrompt([
+        section("role", "You are Prometheus."),
+        COMMON_SECTIONS.leverageRankedAlternatives,
+      ]);
+      assert.ok(compiled.includes("leverage"), "compiled prompt should include leverage content");
+    });
   });
 
   describe("PROMPT_TIERS (Packet 18)", () => {

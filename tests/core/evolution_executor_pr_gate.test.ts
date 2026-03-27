@@ -9,6 +9,7 @@ import {
   shouldRetryAthenaPreReview,
   checkScopeConformance,
   buildVerificationTargets,
+  inferVerificationFromFilesHint,
 } from "../../src/core/evolution_executor.js";
 
 describe("assessStatusCheckRollup", () => {
@@ -327,5 +328,76 @@ describe("buildVerificationTargets", () => {
   it("returns empty array for empty requested commands list", () => {
     const targets = buildVerificationTargets([], [], []);
     assert.deepEqual(targets, []);
+  });
+});
+
+// ── inferVerificationFromFilesHint — specific verification inference ──────────
+
+describe("inferVerificationFromFilesHint", () => {
+  it("returns empty array for empty files_hint", () => {
+    assert.deepEqual(inferVerificationFromFilesHint([]), []);
+  });
+
+  it("returns empty array when files_hint has no test files", () => {
+    const result = inferVerificationFromFilesHint(["src/core/foo.ts", "src/core/bar.ts"]);
+    assert.deepEqual(result, []);
+  });
+
+  it("returns node --test commands for test files in files_hint", () => {
+    const result = inferVerificationFromFilesHint([
+      "src/core/foo.ts",
+      "tests/core/foo.test.ts",
+      "tests/core/bar.test.ts",
+    ]);
+    assert.equal(result.length, 2);
+    assert.ok(result[0].startsWith("node --test"));
+    assert.ok(result[0].includes("foo.test.ts"));
+    assert.ok(result[1].includes("bar.test.ts"));
+  });
+
+  it("caps results at 3 commands even with many test files", () => {
+    const files = Array.from({ length: 5 }, (_, i) => `tests/core/file${i}.test.ts`);
+    const result = inferVerificationFromFilesHint(files);
+    assert.equal(result.length, 3);
+  });
+
+  it("only includes files matching .test. or .spec. pattern", () => {
+    const result = inferVerificationFromFilesHint([
+      "tests/core/foo.spec.ts",
+      "src/core/bar.ts",
+    ]);
+    assert.equal(result.length, 1);
+    assert.ok(result[0].includes("foo.spec.ts"));
+  });
+});
+
+describe("repairPrometheusTask — specific verification inference", () => {
+  it("injects specific verification commands when files_hint has test files and all commands are generic", () => {
+    const task = {
+      task_id: "T-001",
+      title: "Add validation",
+      files_hint: ["src/core/validator.ts", "tests/core/validator.test.ts"],
+      verification_commands: [],
+    };
+    const repaired = repairPrometheusTask(task);
+    const hasSpecific = repaired.verification_commands.some(cmd =>
+      /validator\.test\.ts/.test(cmd)
+    );
+    assert.ok(hasSpecific, "repaired task should have a specific test command for validator.test.ts");
+  });
+
+  it("does not change verification_commands when they already contain specific targets", () => {
+    const task = {
+      task_id: "T-002",
+      title: "Add validation",
+      files_hint: ["src/core/validator.ts", "tests/core/validator.test.ts"],
+      verification_commands: ["node --test tests/core/validator.test.ts"],
+    };
+    const repaired = repairPrometheusTask(task);
+    // Should contain the specific command (not duplicated)
+    const specificCount = repaired.verification_commands.filter(cmd =>
+      /validator\.test\.ts/.test(cmd)
+    ).length;
+    assert.ok(specificCount >= 1, "specific command should be preserved");
   });
 });

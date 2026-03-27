@@ -12,6 +12,44 @@
 import { checkForbiddenCommands } from "./verification_command_registry.js";
 
 /**
+ * Verification values that are non-specific: bare CLI commands with no test file
+ * reference or observable assertion description.
+ * Per the Prometheus output format, `verification` MUST be a specific test file
+ * path + expected test description, not a generic command invocation.
+ */
+export const NON_SPECIFIC_VERIFICATION_PATTERNS = [
+  /^npm\s+test\s*$/i,
+  /^npm\s+run\s+test\s*$/i,
+  /^npm\s+run\s+tests\s*$/i,
+  /^node\s+--test\s*$/i,
+  /^npx\s+[a-z][\w-]*\s*$/i,
+  /^run\s+tests?\s*$/i,
+  /^tests?\s+pass\s*$/i,
+];
+
+/**
+ * Determine whether a `verification` field value is non-specific.
+ * A value is non-specific when it contains no test file reference (`.test.ts`,
+ * `.test.js`, `.spec.ts`, etc.) and no test description separator (`— test:`)
+ * and matches a known bare CLI command pattern.
+ *
+ * @param {string} value - the plan's `verification` field
+ * @returns {boolean} true when non-specific (should be rejected)
+ */
+export function isNonSpecificVerification(value: string): boolean {
+  if (!value || !String(value).trim()) return true;
+  const v = String(value).trim();
+  // Specific: references a test file by extension
+  if (/\.(test|spec)\.(ts|js|tsx|jsx)/i.test(v)) return false;
+  // Specific: references a tests/ directory path
+  if (/\/tests?\/[^\s]/.test(v)) return false;
+  // Specific: contains a description separator used by the output format
+  if (/[—\-–]\s*test[:\s]/i.test(v)) return false;
+  // Non-specific: matches a known bare CLI command (no file argument)
+  return /^(npm|node|npx)\s/i.test(v) || /^run\s+(test|check)/i.test(v);
+}
+
+/**
  * Plan contract violation severity levels.
  * @enum {string}
  */
@@ -49,6 +87,14 @@ export function validatePlanContract(plan) {
 
   if (!plan.verification || String(plan.verification).trim().length === 0) {
     violations.push({ field: "verification", message: "Verification command must be specified", severity: PLAN_VIOLATION_SEVERITY.WARNING });
+  } else if (isNonSpecificVerification(String(plan.verification))) {
+    violations.push({
+      field: "verification",
+      message: `Verification target is non-specific: "${String(plan.verification).trim()}". ` +
+        "Must reference a specific test file (e.g. tests/core/foo.test.ts — test: expected description). " +
+        "Generic commands like 'npm test' alone are rejected.",
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+    });
   }
 
   // Recommended fields

@@ -366,6 +366,23 @@ function buildConversationContext(history, instruction, sessionState: WorkerSess
   parts.push("If BOX_STATUS is omitted, it defaults to done.");
   parts.push("PR POLICY: If your task changes code, open or update your PR and carry it to merge when checks are green.");
   parts.push(String(instruction.task || ""));
+
+  // Warn when the task text provides no specific test file targets so the worker
+  // knows it must supply concrete test evidence in its VERIFICATION_REPORT.
+  const taskText = String(instruction.task || "");
+  const hasSpecificTestTarget = /\.(test|spec)\.(ts|js|tsx|jsx)/i.test(taskText) ||
+    /\/tests?\/[^\s]+/.test(taskText) ||
+    /[—\-–]\s*test[:\s]/i.test(taskText);
+  if (!hasSpecificTestTarget) {
+    parts.push("");
+    parts.push("## ⚠️ VERIFICATION TARGET REQUIRED");
+    parts.push("No specific test file target was detected in this task's verification commands.");
+    parts.push("You MUST provide specific test evidence in your VERIFICATION_REPORT:");
+    parts.push("  - Run or create a specific test file (e.g. tests/core/<module>.test.ts)");
+    parts.push("  - Reference it explicitly: 'node --test tests/core/<module>.test.ts'");
+    parts.push("  - Generic 'npm test passed' alone is NOT accepted as verification evidence.");
+  }
+
   if (instruction.context) {
     parts.push("");
     parts.push("Additional context:");

@@ -700,6 +700,62 @@ function buildPlansFromBottlenecksShape(input) {
   return plans;
 }
 
+/**
+ * Compute what fraction of the declared top bottlenecks are addressed by the generated plans.
+ *
+ * A bottleneck is considered "covered" when at least one plan's task text, title, or
+ * _fromBottleneck field references the bottleneck's id or contains meaningful keyword overlap
+ * with the bottleneck's title (≥2 matching 4-char words).
+ *
+ * @param plans - normalized plan objects
+ * @param bottlenecks - topBottlenecks array from the Prometheus output
+ * @returns {{ coverage: number, covered: string[], uncovered: string[], total: number }}
+ */
+export function computeBottleneckCoverage(plans: any[], bottlenecks: any[]): {
+  coverage: number;
+  covered: string[];
+  uncovered: string[];
+  total: number;
+} {
+  const bns = Array.isArray(bottlenecks) ? bottlenecks : [];
+  const planList = Array.isArray(plans) ? plans : [];
+
+  if (bns.length === 0) {
+    return { coverage: 1.0, covered: [], uncovered: [], total: 0 };
+  }
+
+  const covered: string[] = [];
+  const uncovered: string[] = [];
+
+  for (const bn of bns) {
+    const bnId = String(bn?.id || "").trim();
+    const bnTitle = String(bn?.title || "").toLowerCase();
+    const bnWords = bnTitle.split(/[^a-z0-9]+/).filter(w => w.length >= 4);
+
+    const isCovered = planList.some(plan => {
+      // Explicit bottleneck reference
+      if (bnId && String(plan._fromBottleneck || "").trim() === bnId) return true;
+      // Keyword overlap: ≥2 matching words between bottleneck title and plan task/title
+      const planText = `${String(plan.task || "")} ${String(plan.title || "")}`.toLowerCase();
+      const planWords = planText.split(/[^a-z0-9]+/).filter(w => w.length >= 4);
+      const matches = bnWords.filter(w => planWords.includes(w));
+      return matches.length >= 2;
+    });
+
+    if (isCovered) {
+      covered.push(bnId || bnTitle.slice(0, 40));
+    } else {
+      uncovered.push(bnId || bnTitle.slice(0, 40));
+    }
+  }
+
+  const coverage = bns.length > 0 ? Math.round((covered.length / bns.length) * 100) / 100 : 1.0;
+  return { coverage, covered, uncovered, total: bns.length };
+}
+
+/** Minimum bottleneck coverage ratio before a confidence penalty is applied. */
+export const BOTTLENECK_COVERAGE_FLOOR = 0.5;
+
 function buildPlansFromNarrative(analysisText) {
   const lines = String(analysisText || "").split(/\r?\n/);
   const plans = [];
@@ -932,9 +988,10 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
   // parserConfidencePenalties: explicit list of reasons why the score was reduced.
   // The aggregate parserConfidence remains a single 0-1 value (backward compatible).
   //
-  //   plansShape    — 1.0 = JSON plans direct, 0.5 = narrative/alt-shape fallback, 0.0 = no plans
-  //   healthField   — 1.0 = explicit valid health value present, 0.8 = missing/inferred
-  //   requestBudget — 1.0 = budget provided by model, 0.9 = fallback rebuilt deterministically
+  //   plansShape          — 1.0 = JSON plans direct, 0.5 = narrative/alt-shape fallback, 0.0 = no plans
+  //   healthField         — 1.0 = explicit valid health value present, 0.8 = missing/inferred
+  //   requestBudget       — 1.0 = budget provided by model, 0.9 = fallback rebuilt deterministically
+  //   bottleneckCoverage  — 1.0 = all declared bottlenecks addressed, reduced by uncovered fraction
 
   const parserConfidencePenalties: Array<{ reason: string; component: string; delta: number }> = [];
 
@@ -960,10 +1017,34 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
     parserConfidencePenalties.push({ reason: "request_budget_fallback", component: "requestBudget", delta: -0.1 });
   }
 
+  // ── Bottleneck coverage check ────────────────────────────────────────────
+  // When the input declared topBottlenecks, every bottleneck should be
+  // addressed by at least one generated plan.  A coverage ratio below
+  // BOTTLENECK_COVERAGE_FLOOR triggers a proportional confidence penalty
+  // so low-coverage cycles cannot silently proceed past quality gates.
+  const topBottlenecks = Array.isArray(input.topBottlenecks) ? input.topBottlenecks : [];
+  const bnCovResult = computeBottleneckCoverage(plans, topBottlenecks);
+  let bottleneckCoverageScore: number;
+  if (topBottlenecks.length === 0) {
+    bottleneckCoverageScore = 1.0;
+  } else {
+    bottleneckCoverageScore = bnCovResult.coverage;
+    if (bnCovResult.coverage < BOTTLENECK_COVERAGE_FLOOR) {
+      const uncoveredCount = bnCovResult.uncovered.length;
+      const delta = -Math.round(Math.min(0.3, uncoveredCount * 0.05) * 100) / 100;
+      parserConfidencePenalties.push({
+        reason: `bottleneck_coverage_low_${bnCovResult.covered.length}_of_${bnCovResult.total}`,
+        component: "bottleneckCoverage",
+        delta,
+      });
+    }
+  }
+
   const parserConfidenceComponents = {
-    plansShape:    plansShapeScore,
-    healthField:   healthFieldScore,
-    requestBudget: requestBudgetScore,
+    plansShape:         plansShapeScore,
+    healthField:        healthFieldScore,
+    requestBudget:      requestBudgetScore,
+    bottleneckCoverage: bottleneckCoverageScore,
   };
 
   // Aggregate: plansShape sets the base; remaining penalties apply cumulatively.
@@ -993,6 +1074,7 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
     parserConfidence: Math.round(parserConfidence * 100) / 100,
     parserConfidenceComponents,
     parserConfidencePenalties,
+    bottleneckCoverage: bnCovResult,
     _parserBelowFloor: belowFloor,
     _parserConfidenceFloor: PARSER_CONFIDENCE_FLOOR,
     plans: finalPlans

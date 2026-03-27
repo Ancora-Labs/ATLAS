@@ -20,6 +20,7 @@ export const CRITIC_DIMENSION = Object.freeze({
   HAS_DEPENDENCIES:       "HAS_DEPENDENCIES",
   NO_VAGUE_TASK:          "NO_VAGUE_TASK",
   REASONABLE_RISK:        "REASONABLE_RISK",
+  HAS_LEVERAGE_RANK:      "HAS_LEVERAGE_RANK",
 });
 
 /** Minimum composite score to pass the critic gate (0-1 scale). */
@@ -129,6 +130,15 @@ export function critiquePlan(plan) {
   const riskLevel = String(plan.riskLevel || "").toLowerCase();
   const hasRisk = riskLevel.length > 0;
   dimensions[CRITIC_DIMENSION.REASONABLE_RISK] = hasRisk ? 1.0 : 0.5;
+
+  // 7. Leverage rank — plans must declare which capacity dimension(s) they improve.
+  // Non-empty leverage_rank signals the plan was intentionally ranked against alternatives.
+  const leverageRank = Array.isArray(plan.leverage_rank) ? plan.leverage_rank.filter(Boolean) : [];
+  const hasLeverageRank = leverageRank.length > 0;
+  dimensions[CRITIC_DIMENSION.HAS_LEVERAGE_RANK] = hasLeverageRank ? 1.0 : 0.3;
+  if (!hasLeverageRank) {
+    issues.push("leverage_rank is empty — plan should declare which capacity dimension(s) it improves");
+  }
 
   // Composite score (equal weight)
   const values = Object.values(dimensions);

@@ -4,16 +4,47 @@ import {
   validatePlanContract,
   validateAllPlans,
   PLAN_VIOLATION_SEVERITY,
+  isNonSpecificVerification,
 } from "../../src/core/plan_contract_validator.js";
 
 describe("plan_contract_validator", () => {
+  describe("isNonSpecificVerification", () => {
+    it("identifies bare npm test as non-specific", () => {
+      assert.equal(isNonSpecificVerification("npm test"), true);
+      assert.equal(isNonSpecificVerification("npm run test"), true);
+      assert.equal(isNonSpecificVerification("npm run tests"), true);
+      assert.equal(isNonSpecificVerification("node --test"), true);
+      assert.equal(isNonSpecificVerification("run tests"), true);
+    });
+
+    it("identifies test file references as specific", () => {
+      assert.equal(isNonSpecificVerification("tests/core/foo.test.ts — test: should return X"), false);
+      assert.equal(isNonSpecificVerification("node --test tests/core/foo.test.ts"), false);
+      assert.equal(isNonSpecificVerification("src/core/bar.spec.js"), false);
+    });
+
+    it("identifies description separators as specific", () => {
+      assert.equal(isNonSpecificVerification("tests/core/auth.test.ts — test: login works"), false);
+    });
+
+    it("treats empty string as non-specific", () => {
+      assert.equal(isNonSpecificVerification(""), true);
+      assert.equal(isNonSpecificVerification("   "), true);
+    });
+
+    it("treats non-CLI descriptive text as specific (benefit of doubt)", () => {
+      // Descriptive assertion text is not a bare CLI command
+      assert.equal(isNonSpecificVerification("All integration tests pass when auth module is loaded"), false);
+    });
+  });
+
   describe("validatePlanContract", () => {
-    it("accepts a fully valid plan", () => {
+    it("accepts a fully valid plan with specific verification", () => {
       const plan = {
         task: "Implement user authentication module",
         role: "evolution-worker",
         wave: 1,
-        verification: "npm test",
+        verification: "tests/core/auth.test.ts — test: should authenticate user",
         dependencies: [],
         acceptance_criteria: ["All tests pass"],
         capacityDelta: 0.1,
@@ -43,7 +74,7 @@ describe("plan_contract_validator", () => {
     });
 
     it("warns on missing wave", () => {
-      const plan = { task: "Implement something long enough", role: "worker", verification: "npm test", dependencies: [], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.5 };
+      const plan = { task: "Implement something long enough", role: "worker", verification: "tests/core/foo.test.ts — test: passes", dependencies: [], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.5 };
       const result = validatePlanContract(plan);
       // wave warning is non-critical
       assert.ok(result.violations.some(v => v.field === "wave"));
@@ -56,7 +87,7 @@ describe("plan_contract_validator", () => {
     });
 
     it("warns on missing dependencies", () => {
-      const plan = { task: "Implement something long enough", role: "worker", wave: 1, verification: "npm test", acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.5 };
+      const plan = { task: "Implement something long enough", role: "worker", wave: 1, verification: "tests/core/foo.test.ts — test: passes", acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.5 };
       const result = validatePlanContract(plan);
       assert.ok(result.violations.some(v => v.field === "dependencies"));
     });
@@ -77,7 +108,7 @@ describe("plan_contract_validator", () => {
       assert.ok(result.violations.some(v => v.field === "verification" && v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL));
     });
 
-    it("allows npm test as verification", () => {
+    it("rejects non-specific verification (npm test alone) as CRITICAL", () => {
       const plan = {
         task: "Implement something long enough",
         role: "worker",
@@ -89,7 +120,43 @@ describe("plan_contract_validator", () => {
         requestROI: 1.5,
       };
       const result = validatePlanContract(plan);
-      assert.equal(result.valid, true);
+      assert.equal(result.valid, false, "plan with non-specific verification must be invalid");
+      assert.ok(
+        result.violations.some(v => v.field === "verification" && v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL),
+        "must have a CRITICAL violation on the verification field"
+      );
+    });
+
+    it("accepts specific verification with test file path", () => {
+      const plan = {
+        task: "Implement something long enough",
+        role: "worker",
+        wave: 1,
+        verification: "tests/core/foo.test.ts — test: should pass validation",
+        dependencies: [],
+        acceptance_criteria: ["pass"],
+        capacityDelta: 0.1,
+        requestROI: 1.5,
+      };
+      const result = validatePlanContract(plan);
+      assert.ok(!result.violations.some(v => v.field === "verification" && v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL),
+        "specific verification should not produce a CRITICAL violation");
+    });
+
+    it("accepts node --test with a specific test file as verification", () => {
+      const plan = {
+        task: "Implement something long enough here",
+        role: "worker",
+        wave: 1,
+        verification: "node --test tests/core/foo.test.ts",
+        dependencies: [],
+        acceptance_criteria: ["pass"],
+        capacityDelta: 0.1,
+        requestROI: 1.5,
+      };
+      const result = validatePlanContract(plan);
+      assert.ok(!result.violations.some(v => v.field === "verification" && v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL),
+        "node --test with specific file should not be CRITICAL");
     });
 
     it("rejects empty acceptance_criteria as CRITICAL (Packet 8)", () => {
@@ -146,7 +213,7 @@ describe("plan_contract_validator", () => {
         task: "Implement something long enough here",
         role: "worker",
         wave: 1,
-        verification: "npm test",
+        verification: "tests/core/foo.test.ts — test: should pass with safe commands",
         verification_commands: ["npm test", "npm run lint"],
         dependencies: [],
         acceptance_criteria: ["pass"],
@@ -305,7 +372,7 @@ describe("plan_contract_validator", () => {
 
     it("computes correct pass rate for mixed plans", () => {
       const plans = [
-        { task: "Valid plan with enough chars", role: "worker", wave: 1, verification: "npm test", dependencies: [], acceptance_criteria: ["ok"], capacityDelta: 0.1, requestROI: 1.5 },
+        { task: "Valid plan with enough chars", role: "worker", wave: 1, verification: "tests/core/foo.test.ts — test: ok", dependencies: [], acceptance_criteria: ["ok"], capacityDelta: 0.1, requestROI: 1.5 },
         { task: "X", role: "", wave: -1, verification: "" }, // invalid
       ];
       const result = validateAllPlans(plans);
@@ -317,8 +384,8 @@ describe("plan_contract_validator", () => {
 
     it("returns all valid when all plans pass", () => {
       const plans = [
-        { task: "First valid plan task here", role: "w1", wave: 1, verification: "npm test", dependencies: [], acceptance_criteria: ["ok"], capacityDelta: 0.1, requestROI: 2.0 },
-        { task: "Second valid plan task here", role: "w2", wave: 2, verification: "npm test", dependencies: [], acceptance_criteria: ["ok"], capacityDelta: 0.2, requestROI: 1.5 },
+        { task: "First valid plan task here", role: "w1", wave: 1, verification: "tests/core/foo.test.ts — test: first", dependencies: [], acceptance_criteria: ["ok"], capacityDelta: 0.1, requestROI: 2.0 },
+        { task: "Second valid plan task here", role: "w2", wave: 2, verification: "tests/core/bar.test.ts — test: second", dependencies: [], acceptance_criteria: ["ok"], capacityDelta: 0.2, requestROI: 1.5 },
       ];
       const result = validateAllPlans(plans);
       assert.equal(result.passRate, 1);
@@ -327,9 +394,9 @@ describe("plan_contract_validator", () => {
 
     it("planIndex correctly identifies critical-violation plans for removal", () => {
       const plans = [
-        { task: "Valid plan with enough chars", role: "worker", wave: 1, verification: "npm test", dependencies: [], acceptance_criteria: ["ok"], capacityDelta: 0.1, requestROI: 1.5 },
+        { task: "Valid plan with enough chars", role: "worker", wave: 1, verification: "tests/core/foo.test.ts — test: passes", dependencies: [], acceptance_criteria: ["ok"], capacityDelta: 0.1, requestROI: 1.5 },
         { task: "X", role: "", wave: -1, verification: "" }, // critical violations
-        { task: "Another valid plan here", role: "worker", wave: 2, verification: "npm test", dependencies: [], acceptance_criteria: ["ok"], capacityDelta: 0.2, requestROI: 2.0 },
+        { task: "Another valid plan here", role: "worker", wave: 2, verification: "tests/core/bar.test.ts — test: ok", dependencies: [], acceptance_criteria: ["ok"], capacityDelta: 0.2, requestROI: 2.0 },
       ];
       const result = validateAllPlans(plans);
 
