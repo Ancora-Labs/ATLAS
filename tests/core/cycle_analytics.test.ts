@@ -1009,3 +1009,80 @@ describe("persistCycleHealth and readCycleHealth", () => {
     }
   });
 });
+
+// ── Deterministic guards — evidence envelope boundary ─────────────────────────
+// These tests verify that evidence envelope evolution cannot corrupt the
+// KPI channel or the health channel semantics.
+
+describe("computeCycleAnalytics — evidence envelope guards", () => {
+  const config = {};
+
+  it("extra EvidenceEnvelope fields on workerResults items are stripped before outcome computation", () => {
+    const envelopeLike = {
+      roleName: "evolution-worker",
+      status: "done",
+      // These EvidenceEnvelope fields must not influence outcome computation
+      verificationEvidence: { build: "fail", tests: "fail", lint: "fail" },
+      prChecks: { ok: false, passed: false, failed: ["ci"], pending: [], total: 1 },
+      verificationPassed: false,
+    };
+    const record = computeCycleAnalytics(config, {
+      workerResults: [envelopeLike],
+      phase: CYCLE_PHASE.COMPLETED,
+    });
+    // Outcome must be SUCCESS because status="done" — not FAILED from the envelope fields
+    assert.equal(record.outcomes.status, CYCLE_OUTCOME_STATUS.SUCCESS);
+    assert.equal(record.outcomes.tasksCompleted, 1);
+    assert.equal(record.outcomes.tasksFailed, 0);
+  });
+
+  it("non-numeric sloRecord.metrics values are treated as null (not propagated to KPIs)", () => {
+    const corruptSlo = {
+      ...makeSloRecord(),
+      metrics: {
+        decisionLatencyMs: "not-a-number",  // string instead of number
+        dispatchLatencyMs: null,
+        verificationCompletionMs: {},       // object instead of number
+      },
+    };
+    const record = computeCycleAnalytics(config, { sloRecord: corruptSlo });
+    assert.equal(record.kpis.decisionLatencyMs, null,
+      "non-numeric decisionLatencyMs must be null");
+    assert.equal(record.kpis.dispatchLatencyMs, null,
+      "null dispatchLatencyMs must stay null");
+    assert.equal(record.kpis.verificationCompletionMs, null,
+      "object verificationCompletionMs must be null");
+  });
+
+  it("negative path: Infinity and NaN in sloRecord metrics are clamped to null", () => {
+    const slo = { ...makeSloRecord(), metrics: { decisionLatencyMs: Infinity, dispatchLatencyMs: NaN, verificationCompletionMs: -Infinity } };
+    const record = computeCycleAnalytics(config, { sloRecord: slo });
+    assert.equal(record.kpis.decisionLatencyMs, null);
+    assert.equal(record.kpis.dispatchLatencyMs, null);
+    assert.equal(record.kpis.verificationCompletionMs, null);
+  });
+});
+
+describe("computeCycleHealth — sloStatus enum guard", () => {
+  it("unknown sloStatus string is clamped to 'unknown' to preserve health channel semantics", () => {
+    // Directly construct an analytics-like record with a rogue sloStatus value
+    const analytics = { kpis: { sloStatus: "future-unknown-value", sloBreachCount: 0 }, causalLinks: [] };
+    const health = computeCycleHealth(analytics);
+    assert.equal(health.sloStatus, "unknown",
+      "invalid sloStatus must be clamped to 'unknown'");
+  });
+
+  it("valid sloStatus values pass through unchanged", () => {
+    for (const status of ["ok", "degraded", "unknown"]) {
+      const analytics = { kpis: { sloStatus: status, sloBreachCount: 0 }, causalLinks: [] };
+      const health = computeCycleHealth(analytics);
+      assert.equal(health.sloStatus, status, `sloStatus="${status}" must pass through`);
+    }
+  });
+
+  it("negative path: non-string sloStatus is clamped to 'unknown'", () => {
+    const analytics = { kpis: { sloStatus: 42, sloBreachCount: 0 }, causalLinks: [] };
+    const health = computeCycleHealth(analytics);
+    assert.equal(health.sloStatus, "unknown");
+  });
+});

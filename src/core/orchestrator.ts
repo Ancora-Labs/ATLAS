@@ -69,7 +69,16 @@ import {
   addDebtEntries,
   saveLedgerFull,
   shouldBlockOnDebt,
+  autoCloseVerifiedDebt,
 } from "./carry_forward_ledger.js";
+import { loadBudget, canUseClaude } from "./budget_controller.js";
+import {
+  runInterventionOptimizer,
+  buildInterventionsFromPlan,
+  buildBudgetFromConfig,
+  persistOptimizerLog,
+  OPTIMIZER_STATUS,
+} from "./intervention_optimizer.js";
 
 /**
  * Orchestrator health status enum.
@@ -340,6 +349,28 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
     }
   } catch (err) {
     warn(`[orchestrator] carry-forward debt gate failed (non-fatal): ${String(err?.message || err)}`);
+  }
+
+  // ── Budget reconciliation gate ────────────────────────────────────────────
+  // Block dispatch when the remaining budget falls below the Claude usage
+  // threshold.  Only evaluated when config.paths.budgetFile is configured —
+  // unconfigured budget paths are treated as "unlimited" (fail-open).
+  // Fail-open on any budget read error so a corrupt file never halts work.
+  if (config?.paths?.budgetFile) {
+    try {
+      const budget = await loadBudget(config);
+      if (!canUseClaude(budget)) {
+        return {
+          blocked: true,
+          reason: `budget_exhausted:remainingUsd=${budget.remainingUsd}`,
+          action: undefined,
+          graphResult,
+          cycleId,
+        };
+      }
+    } catch (err) {
+      warn(`[orchestrator] budget gate failed (non-fatal): ${String(err?.message || err)}`);
+    }
   }
 
   return {
@@ -1453,8 +1484,14 @@ async function runSingleCycle(config) {
   }
 
   // ── Lane diversity gate (Packet 6) ──
+  // Pass the capability pool result (from assignWorkersToPlans) so the gate
+  // inspects actual lane assignments rather than a raw plans array.
+  // minLanes is read from config?.workerPool?.minLanes; defaults to 2.
   try {
-    const diversityResult = enforceLaneDiversity(plans);
+    const diversityPool = capabilityPoolResult || { activeLaneCount: 0, assignments: [] };
+    const diversityResult = enforceLaneDiversity(diversityPool, {
+      minLanes: config?.workerPool?.minLanes,
+    });
     if (!diversityResult.meetsMinimum) {
       await appendProgress(config, `[LANE_DIVERSITY] Warning: ${diversityResult.warning}`);
     }
@@ -1551,6 +1588,53 @@ async function runSingleCycle(config) {
   // Funnel tracking: capture dispatched count after all quality/freeze gates.
   const funnelDispatchedCount: number = plans.length;
 
+  // ── Optimizer budget admission gate ──────────────────────────────────────
+  // The intervention optimizer ranks plans by expected value and enforces all
+  // three budget constraints (total, per-wave, per-role) simultaneously.
+  // Its selected[] output is the authoritative set of plans admitted to dispatch.
+  // Fail-open when the optimizer cannot run (invalid budget config, empty input,
+  // or any exception) so a missing budget configuration never halts work.
+  if (config?.runtime?.disableOptimizerAdmission !== true) {
+    try {
+      const interventions = buildInterventionsFromPlan(plans, config);
+      const budgetInput = buildBudgetFromConfig(prometheusAnalysis?.requestBudget, config);
+      const optimizerResult = runInterventionOptimizer(interventions, budgetInput);
+
+      // Persist for observability regardless of outcome
+      await persistOptimizerLog(stateDir, optimizerResult).catch(() => {});
+
+      if (
+        optimizerResult.status !== OPTIMIZER_STATUS.INVALID_INPUT &&
+        optimizerResult.status !== OPTIMIZER_STATUS.EMPTY_INPUT
+      ) {
+        const admittedIds = new Set(optimizerResult.selected.map((i: any) => i.id));
+        const admittedPlans = plans.filter((plan: any, idx: number) => {
+          const interventionId = String(plan?.id ?? `plan-${idx + 1}`);
+          return admittedIds.has(interventionId);
+        });
+
+        if (admittedPlans.length < plans.length) {
+          const rejectedCount = plans.length - admittedPlans.length;
+          await appendProgress(config,
+            `[OPTIMIZER] Budget admission: ${admittedPlans.length}/${plans.length} plan(s) admitted — ${rejectedCount} rejected (status=${optimizerResult.status} reason=${optimizerResult.reasonCode})`
+          );
+          plans.splice(0, plans.length, ...admittedPlans);
+          if (plans.length === 0) {
+            await appendProgress(config, "[CYCLE] All plans rejected by optimizer budget gate — cycle complete");
+            await safeUpdatePipelineProgress(config, "cycle_complete", "All plans rejected by optimizer budget gate");
+            return;
+          }
+        } else {
+          await appendProgress(config,
+            `[OPTIMIZER] Budget admission: all ${plans.length} plan(s) admitted (status=${optimizerResult.status})`
+          );
+        }
+      }
+    } catch (err) {
+      warn(`[orchestrator] Optimizer admission gate failed (non-fatal): ${String(err?.message || err)}`);
+    }
+  }
+
   const workerBatches = buildRoleExecutionBatches(plans, config, capabilityPoolResult);
   await safeUpdatePipelineProgress(config, "workers_dispatching", `Dispatching ${workerBatches.length} worker batch(es)`, {
     workersTotal: workerBatches.length,
@@ -1560,6 +1644,9 @@ async function runSingleCycle(config) {
   const dispatchCheckpoint = await beginDispatchCheckpoint(config, workerBatches);
   let workersDone = 0;
   const allWorkerResults: Array<{ roleName: string; status: string }> = [];
+  // Collects (taskText, verificationEvidence) from successful workers for
+  // carry-forward auto-close matching at end of cycle.
+  const resolvedPlanItems: Array<{ taskText: string; verificationEvidence: string }> = [];
 
   for (const batch of workerBatches) {
     const stopReq = await readStopRequest(config);
@@ -1610,6 +1697,22 @@ async function runSingleCycle(config) {
 
     workersDone += 1;
     allWorkerResults.push({ roleName: batch.role, status: String(workerResult?.status || "unknown") });
+
+    // Collect plan tasks with verification evidence for carry-forward auto-close.
+    // Only plans from successful batches with real evidence qualify.
+    if (workerResult?.verificationEvidence) {
+      const batchPlansList = Array.isArray((batch as any).plans) ? (batch as any).plans : [];
+      for (const plan of batchPlansList) {
+        const taskText = String((plan as any)?.task || "").trim();
+        if (taskText.length >= 10) {
+          resolvedPlanItems.push({
+            taskText,
+            verificationEvidence: String(workerResult.verificationEvidence),
+          });
+        }
+      }
+    }
+
     await appendProgress(config, `[WORKER_BATCH] BATCH ${workersDone}/${workerBatches.length} DONE role=${batch.role} status=${workerResult?.status || "unknown"}`);
     await updateDispatchCheckpointProgress(config, dispatchCheckpoint, workersDone);
     await waitForWorkersToFinish(config);
@@ -1846,6 +1949,18 @@ async function runSingleCycle(config) {
     const updatedLedger = followUpItems.length > 0
       ? addDebtEntries(debtLedger, followUpItems, cycleCounter, slaOpts)
       : debtLedger;
+
+    // Auto-close debt items verified by worker evidence this cycle.
+    // Only items with a fingerprint match AND non-trivial evidence are closed.
+    // Unresolved items remain open and continue to gate future dispatch via
+    // shouldBlockOnDebt in evaluatePreDispatchGovernanceGate.
+    const closedByEvidence = autoCloseVerifiedDebt(updatedLedger, resolvedPlanItems);
+    if (closedByEvidence > 0) {
+      await appendProgress(config,
+        `[CARRY_FORWARD] ${closedByEvidence} debt item(s) auto-closed by worker verification evidence`
+      );
+    }
+
     const newCycleCounter = cycleCounter + 1;
     await saveLedgerFull(config, updatedLedger, newCycleCounter);
 

@@ -59,6 +59,39 @@ function safeRatio(numerator: number | null | undefined, denominator: number | n
   return Math.round((numerator / denominator) * 1000) / 1000;
 }
 
+// ── Deterministic guard helpers ────────────────────────────────────────────────
+
+/**
+ * Return the value only if it is a finite number; otherwise null.
+ * Prevents non-numeric values (e.g. strings, booleans) from leaking into KPI
+ * channels when sloRecord fields carry unexpected types after schema evolution.
+ */
+function toFiniteNumberOrNull(v: unknown): number | null {
+  return (typeof v === "number" && isFinite(v)) ? v : null;
+}
+
+/**
+ * Allowed values for the sloStatus KPI field.
+ * Any value outside this set is clamped to "unknown" so health-channel
+ * derivation logic always receives a recognised status token.
+ */
+const ALLOWED_SLO_STATUSES = new Set(["ok", "degraded", "unknown"]);
+
+/**
+ * Sanitize a single worker-result entry so that only the two fields consumed
+ * by computeCycleAnalytics ({roleName, status}) are propagated.
+ * This prevents EvidenceEnvelope fields (verificationEvidence, prChecks, etc.)
+ * from silently bleeding into the analytics record as the envelope evolves.
+ */
+function sanitizeWorkerResult(w: unknown): { roleName: string; status: string } {
+  if (!w || typeof w !== "object") return { roleName: "unknown", status: "unknown" };
+  const obj = w as Record<string, unknown>;
+  return {
+    roleName: typeof obj.roleName === "string" ? obj.roleName : "unknown",
+    status:   typeof obj.status   === "string" ? obj.status   : "unknown",
+  };
+}
+
 // ── Enums ──────────────────────────────────────────────────────────────────────
 
 /** Pipeline phase at the time analytics were generated. */
@@ -383,11 +416,18 @@ export function computeCycleAnalytics(config, {
   // Causal links (deterministic, SLO-span aligned)
   const causalLinks = buildCausalLinks(config, stageTimestamps, missingData);
 
-  // KPIs — reference sloRecord for latency values; do NOT duplicate raw breach records
+  // Sanitize worker results: strip any extra EvidenceEnvelope fields so that
+  // only {roleName, status} can influence outcome computation.
+  const safeWorkerResults = Array.isArray(workerResults)
+    ? workerResults.map(sanitizeWorkerResult)
+    : workerResults;
+
+  // KPIs — reference sloRecord for latency values; do NOT duplicate raw breach records.
+  // toFiniteNumberOrNull guards against non-numeric values if sloRecord schema evolves.
   const kpis = {
-    decisionLatencyMs: sloRecord?.metrics?.decisionLatencyMs ?? null,
-    dispatchLatencyMs: sloRecord?.metrics?.dispatchLatencyMs ?? null,
-    verificationCompletionMs: sloRecord?.metrics?.verificationCompletionMs ?? null,
+    decisionLatencyMs: toFiniteNumberOrNull(sloRecord?.metrics?.decisionLatencyMs),
+    dispatchLatencyMs: toFiniteNumberOrNull(sloRecord?.metrics?.dispatchLatencyMs),
+    verificationCompletionMs: toFiniteNumberOrNull(sloRecord?.metrics?.verificationCompletionMs),
     systemHealthScore: null,   // populated externally if self-improvement ran
     sloBreachCount: Array.isArray(sloRecord?.sloBreaches) ? sloRecord.sloBreaches.length : 0,
     sloStatus: sloRecord?.status ?? "unknown",
@@ -404,11 +444,11 @@ export function computeCycleAnalytics(config, {
 
   // Outcomes
   const tasksDispatched = planCount !== null ? planCount : null;
-  const tasksCompleted = Array.isArray(workerResults)
-    ? workerResults.filter(w => w.status === "done" || w.status === "success").length
+  const tasksCompleted = Array.isArray(safeWorkerResults)
+    ? safeWorkerResults.filter(w => w.status === "done" || w.status === "success").length
     : null;
-  const tasksFailed = Array.isArray(workerResults)
-    ? workerResults.filter(w => w.status === "error" || w.status === "failed").length
+  const tasksFailed = Array.isArray(safeWorkerResults)
+    ? safeWorkerResults.filter(w => w.status === "error" || w.status === "failed").length
     : null;
 
   if (planCount === null) {
@@ -419,14 +459,14 @@ export function computeCycleAnalytics(config, {
     });
   }
 
-  if (!Array.isArray(workerResults)) {
+  if (!Array.isArray(safeWorkerResults)) {
     missingData.push(
       { field: "outcomes.tasksCompleted", reason: MISSING_DATA_REASON.MISSING_SOURCE, impact: MISSING_DATA_IMPACT.OUTCOME },
       { field: "outcomes.tasksFailed",    reason: MISSING_DATA_REASON.MISSING_SOURCE, impact: MISSING_DATA_IMPACT.OUTCOME },
     );
   }
 
-  const outcomeStatus = computeOutcomeStatus(phase, workerResults, planCount);
+  const outcomeStatus = computeOutcomeStatus(phase, safeWorkerResults, planCount);
 
   const outcomes = {
     tasksDispatched,
@@ -441,9 +481,9 @@ export function computeCycleAnalytics(config, {
 
   // Explicit reason code when outcome status is UNKNOWN (no silent ambiguity).
   if (outcomeStatus === CYCLE_OUTCOME_STATUS.UNKNOWN) {
-    const unknownReason = !Array.isArray(workerResults)
+    const unknownReason = !Array.isArray(safeWorkerResults)
       ? "workerResults not provided"
-      : (workerResults.length === 0
+      : (safeWorkerResults.length === 0
           ? "no worker results recorded"
           : "unrecognized worker status values");
     missingData.push({
@@ -642,7 +682,12 @@ function deriveHealthReason(
  * @returns {object} Health record conforming to CYCLE_HEALTH_SCHEMA.healthRecord
  */
 export function computeCycleHealth(analyticsRecord: any) {
-  const sloStatus     = analyticsRecord?.kpis?.sloStatus     ?? "unknown";
+  // Guard sloStatus against invalid enum values: only "ok", "degraded", "unknown"
+  // are meaningful to health derivation; anything else is clamped to "unknown".
+  const rawSloStatus = analyticsRecord?.kpis?.sloStatus ?? "unknown";
+  const sloStatus = (typeof rawSloStatus === "string" && ALLOWED_SLO_STATUSES.has(rawSloStatus))
+    ? rawSloStatus
+    : "unknown";
   const sloBreachCount = typeof analyticsRecord?.kpis?.sloBreachCount === "number"
     ? analyticsRecord.kpis.sloBreachCount
     : 0;

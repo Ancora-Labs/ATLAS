@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { inferCapabilityTag, selectWorkerForPlan, assignWorkersToPlans, computeDispatchMetrics, buildWorkerChain, detectLaneConflicts } from "../../src/core/capability_pool.js";
+import { inferCapabilityTag, selectWorkerForPlan, assignWorkersToPlans, enforceLaneDiversity, computeDispatchMetrics, buildWorkerChain, detectLaneConflicts } from "../../src/core/capability_pool.js";
 
 describe("capability_pool", () => {
   describe("inferCapabilityTag", () => {
@@ -209,6 +209,56 @@ describe("capability_pool", () => {
       ]);
       // A↔B, A↔C, B↔C = 3 pairs
       assert.equal(conflicts.length, 3);
+    });
+  });
+
+  describe("enforceLaneDiversity — lane diversity gate", () => {
+    it("passes when activeLaneCount meets minLanes default (2)", () => {
+      const pool = assignWorkersToPlans([
+        { task: "Add test coverage" },
+        { task: "Update Docker configuration" },
+      ]);
+      const result = enforceLaneDiversity(pool);
+      assert.equal(result.meetsMinimum, true);
+      assert.equal(result.warning, "");
+    });
+
+    it("fails when all plans route to a single lane", () => {
+      const pool = assignWorkersToPlans([
+        { task: "Add test coverage" },
+        { task: "Write more tests" },
+      ]);
+      // Both are test-infra → quality lane → activeLaneCount = 1
+      const result = enforceLaneDiversity(pool, { minLanes: 2 });
+      if (pool.activeLaneCount < 2) {
+        assert.equal(result.meetsMinimum, false);
+        assert.ok(result.warning.length > 0, "warning must be non-empty when minimum is not met");
+      } else {
+        // If diversity happened to spread, just verify shape
+        assert.ok(typeof result.meetsMinimum === "boolean");
+      }
+    });
+
+    it("respects custom minLanes from config", () => {
+      const pool = assignWorkersToPlans([
+        { task: "Add test coverage" },
+        { task: "Update Docker configuration" },
+      ]);
+      // Require 5 lanes — almost certain to fail with only 2 plans
+      const result = enforceLaneDiversity(pool, { minLanes: 5 });
+      assert.equal(result.meetsMinimum, false);
+      assert.ok(result.warning.includes("minimum is 5"));
+    });
+
+    it("negative path: empty pool produces meetsMinimum=false", () => {
+      const result = enforceLaneDiversity({ activeLaneCount: 0, assignments: [] });
+      assert.equal(result.meetsMinimum, false);
+      assert.ok(result.warning.length > 0);
+    });
+
+    it("negative path: null/missing pool falls back to activeLaneCount=0", () => {
+      const result = enforceLaneDiversity({});
+      assert.equal(result.meetsMinimum, false);
     });
   });
 });
