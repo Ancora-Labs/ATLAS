@@ -234,3 +234,72 @@ export function buildWorkerChain(plan, hints: any = {}) {
     ],
   };
 }
+
+/**
+ * Conflict descriptor for a pair of plans within the same lane that share target files.
+ *
+ * @typedef {object} LaneConflict
+ * @property {string} lane — the shared capability lane
+ * @property {string} plan1Task — task string of the first plan
+ * @property {string} plan2Task — task string of the second plan
+ * @property {string[]} sharedFiles — target files that both plans reference
+ */
+
+/**
+ * Detect intra-lane conflicts: pairs of plans in the same capability lane
+ * that reference at least one overlapping target file.
+ *
+ * Concurrent workers in the same lane touching the same files risk write
+ * conflicts and merge failures. Callers should ensure such plans are placed
+ * in separate waves or batches.
+ *
+ * @param {Array<{ plan: object, selection: WorkerSelection }>} assignments
+ * @returns {Array<LaneConflict>}
+ */
+export function detectLaneConflicts(assignments) {
+  if (!Array.isArray(assignments) || assignments.length < 2) return [];
+
+  // Group plan indices by lane
+  const laneMap = new Map();
+  for (let i = 0; i < assignments.length; i++) {
+    const lane = assignments[i]?.selection?.lane || "unknown";
+    if (!laneMap.has(lane)) laneMap.set(lane, []);
+    laneMap.get(lane).push(i);
+  }
+
+  const conflicts = [];
+
+  for (const [lane, indices] of laneMap.entries()) {
+    if (indices.length < 2) continue;
+
+    // For each pair in this lane, check for file overlap
+    for (let a = 0; a < indices.length - 1; a++) {
+      for (let b = a + 1; b < indices.length; b++) {
+        const planA = assignments[indices[a]]?.plan;
+        const planB = assignments[indices[b]]?.plan;
+
+        const filesA = new Set(
+          Array.isArray(planA?.target_files) ? planA.target_files.map(String) :
+          (Array.isArray(planA?.targetFiles) ? planA.targetFiles.map(String) : [])
+        );
+        if (filesA.size === 0) continue;
+
+        const sharedFiles = (
+          Array.isArray(planB?.target_files) ? planB.target_files.map(String) :
+          (Array.isArray(planB?.targetFiles) ? planB.targetFiles.map(String) : [])
+        ).filter(f => filesA.has(f));
+
+        if (sharedFiles.length > 0) {
+          conflicts.push({
+            lane,
+            plan1Task: String(planA?.task || "").slice(0, 80),
+            plan2Task: String(planB?.task || "").slice(0, 80),
+            sharedFiles,
+          });
+        }
+      }
+    }
+  }
+
+  return conflicts;
+}

@@ -60,4 +60,42 @@ describe("worker_batch_planner", () => {
     assert.equal(batches[1].roleBatchTotal, 2);
     assert.equal(batches[0].sharedBranch, batches[1].sharedBranch);
   });
+
+  it("produces the same result when capabilityPoolResult is null (backward-compatible)", () => {
+    const config = { copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 } };
+    const plans = [buildPlan(0), buildPlan(1), buildPlan(2)];
+    const withNull = buildRoleExecutionBatches(plans, config, null);
+    const withoutArg = buildRoleExecutionBatches(plans, config);
+    assert.equal(withNull.length, withoutArg.length);
+    assert.equal(withNull[0].plans.length, withoutArg[0].plans.length);
+  });
+
+  it("separates conflicting plans in the same lane into distinct batches", () => {
+    const config = { copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 } };
+    const planA = { role: "Evolution Worker", task: "Refactor orchestrator", target_files: ["src/core/orchestrator.ts"], wave: 1 };
+    const planB = { role: "Evolution Worker", task: "Add log to orchestrator", target_files: ["src/core/orchestrator.ts"], wave: 1 };
+    const planC = { role: "Evolution Worker", task: "Update prometheus", target_files: ["src/core/prometheus.ts"], wave: 1 };
+
+    // Simulate capability pool result with lane assignments and a file conflict between A and B
+    const capabilityPoolResult = {
+      assignments: [
+        { plan: planA, selection: { role: "Evolution Worker", lane: "implementation", isFallback: false } },
+        { plan: planB, selection: { role: "Evolution Worker", lane: "implementation", isFallback: false } },
+        { plan: planC, selection: { role: "Evolution Worker", lane: "implementation", isFallback: false } },
+      ],
+      diversityIndex: 0,
+      activeLaneCount: 1,
+    };
+
+    const batches = buildRoleExecutionBatches([planA, planB, planC], config, capabilityPoolResult);
+
+    // planA and planB share a file so they must NOT appear in the same batch
+    const allBatchPlanSets = batches.map(b => b.plans);
+    const conflictCoexists = allBatchPlanSets.some(batchPlans => batchPlans.includes(planA) && batchPlans.includes(planB));
+    assert.equal(conflictCoexists, false, "conflicting plans should be in different batches");
+
+    // planC (no conflict) should appear alongside exactly one of the two conflicting plans
+    const planCBatch = allBatchPlanSets.find(bp => bp.includes(planC));
+    assert.ok(planCBatch, "planC should be in some batch");
+  });
 });

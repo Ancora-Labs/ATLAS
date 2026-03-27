@@ -60,6 +60,8 @@ import { executeRollback, ROLLBACK_LEVEL, ROLLBACK_TRIGGER } from "./rollback_en
 import { initializeAggregateLiveLog } from "./live_log.js";
 import { buildRoleExecutionBatches } from "./worker_batch_planner.js";
 import { agentFileExists, nameToSlug } from "./agent_loader.js";
+import { checkArchitectureDrift } from "./architecture_drift.js";
+import { detectLaneConflicts } from "./capability_pool.js";
 
 /**
  * Orchestrator health status enum.
@@ -1050,6 +1052,7 @@ async function runSingleCycle(config) {
 
   // Step 1: Jesus analyzes state and decides what to do (1 request)
   await appendProgress(config, "[CYCLE] ── Step 1: Jesus analyzing system state ──");
+  await appendProgress(config, "[AGENT] JESUS ACTIVATED");
 
   // ── Closure SLA audit: flag stale escalations (advisory) ────────────────
   try {
@@ -1083,13 +1086,34 @@ async function runSingleCycle(config) {
 
   // Step 2: Prometheus plans (single-prompt, no autopilot)
   await appendProgress(config, "[CYCLE] ── Step 2: Prometheus scanning & planning ──");
+  await appendProgress(config, "[AGENT] PROMETHEUS ACTIVATED");
   await safeUpdatePipelineProgress(config, "prometheus_starting", "Prometheus starting repository scan");
+
+  // ── Architecture drift check: run before Prometheus to surface stale refs ──
+  let architectureDriftReport = null;
+  try {
+    const rootDir = config.paths?.repoRoot || process.cwd();
+    architectureDriftReport = await checkArchitectureDrift({ rootDir });
+    const unresolvedCount = (architectureDriftReport.staleCount || 0) + (architectureDriftReport.deprecatedTokenCount || 0);
+    await appendProgress(config,
+      `[DRIFT_CHECK] Architecture drift scan complete — staleRefs=${architectureDriftReport.staleCount} deprecatedTokens=${architectureDriftReport.deprecatedTokenCount} scannedDocs=${architectureDriftReport.scannedDocs.length}`
+    );
+    if (unresolvedCount > 0) {
+      await appendProgress(config,
+        `[DRIFT_CHECK] ${unresolvedCount} unresolved drift item(s) — injecting summary into Prometheus context`
+      );
+    }
+  } catch (driftErr) {
+    warn(`[orchestrator] Architecture drift check failed (non-fatal): ${String(driftErr?.message || driftErr)}`);
+  }
+
   let prometheusAnalysis;
   try {
     await safeUpdatePipelineProgress(config, "prometheus_reading_repo", "Prometheus reading repository");
     prometheusAnalysis = await runPrometheusAnalysis(config, {
       prompt: jesusDecision.briefForPrometheus || jesusDecision.thinking || "Full repository analysis",
-      requestedBy: "Jesus"
+      requestedBy: "Jesus",
+      driftReport: architectureDriftReport
     });
   } catch (err) {
     await appendProgress(config, `[CYCLE] Prometheus failed: ${String(err?.message || err)}`);
@@ -1127,6 +1151,7 @@ async function runSingleCycle(config) {
 
   // Step 3: Athena validates the plan (1 request)
   await appendProgress(config, "[CYCLE] ── Step 3: Athena reviewing plan ──");
+  await appendProgress(config, "[AGENT] ATHENA ACTIVATED");
   await safeUpdatePipelineProgress(config, "athena_reviewing", "Athena reviewing Prometheus plan");
   let planReview;
   try {
@@ -1185,16 +1210,36 @@ async function runSingleCycle(config) {
     : prometheusAnalysis.plans;
 
   // ── Capability pool: assign workers based on task capability matching ──────
+  let capabilityPoolResult = null;
   try {
     const poolResult = assignWorkersToPlans(plans, config);
+    capabilityPoolResult = poolResult;
     if (poolResult.diversityIndex > 0) {
       await appendProgress(config, `[CAPABILITY_POOL] Worker diversity index: ${poolResult.diversityIndex} (0=single-worker, 1=fully diversified)`);
     }
-    // Apply pool assignment — update plan.role if a better worker is available (and not fallback-only)
+    // Apply pool assignment — update plan.role to the capability-assigned role when it improves on the default.
+    // _originalRole preserves the Prometheus-suggested role for audit; _capabilityLane tracks the lane.
     for (const { plan, selection } of poolResult.assignments) {
       if (!selection.isFallback && selection.role !== plan.role) {
         plan._originalRole = plan.role;
+        plan.role = selection.role;
         plan._capabilityLane = selection.lane;
+      } else {
+        // Always stamp lane even for fallback selections so batch planner can use it.
+        plan._capabilityLane = plan._capabilityLane || selection.lane;
+      }
+    }
+
+    // ── Lane conflict detection ──────────────────────────────────────────────
+    // Warn when plans within the same lane target overlapping files — these
+    // should ideally run in separate waves to avoid concurrent write conflicts.
+    const conflicts = detectLaneConflicts(poolResult.assignments);
+    if (conflicts.length > 0) {
+      await appendProgress(config,
+        `[CAPABILITY_POOL] ${conflicts.length} lane conflict(s) detected — conflicting plans will be separated into distinct batches`
+      );
+      for (const c of conflicts) {
+        warn(`[orchestrator] Lane conflict: lane="${c.lane}" plans="${c.plan1Task}" ↔ "${c.plan2Task}" share files: ${c.sharedFiles.join(", ")}`);
       }
     }
   } catch (err) {
@@ -1324,7 +1369,7 @@ async function runSingleCycle(config) {
     }
   }
 
-  const workerBatches = buildRoleExecutionBatches(plans, config);
+  const workerBatches = buildRoleExecutionBatches(plans, config, capabilityPoolResult);
   await safeUpdatePipelineProgress(config, "workers_dispatching", `Dispatching ${workerBatches.length} worker batch(es)`, {
     workersTotal: workerBatches.length,
     workersDone: 0
@@ -1345,6 +1390,7 @@ async function runSingleCycle(config) {
       workersDone,
       currentWorker: batch.role
     });
+    await appendProgress(config, `[WORKER_BATCH] BATCH ${workersDone + 1}/${workerBatches.length} STARTED role=${batch.role}`);
 
     let workerResult;
     let transientRetries = 0;
@@ -1380,6 +1426,7 @@ async function runSingleCycle(config) {
     }
 
     workersDone += 1;
+    await appendProgress(config, `[WORKER_BATCH] BATCH ${workersDone}/${workerBatches.length} DONE role=${batch.role} status=${workerResult?.status || "unknown"}`);
     await updateDispatchCheckpointProgress(config, dispatchCheckpoint, workersDone);
     await waitForWorkersToFinish(config);
 
@@ -1399,6 +1446,7 @@ async function runSingleCycle(config) {
   });
 
   await appendProgress(config, "[CYCLE] ── All workers dispatched — cycle complete ──");
+  await appendProgress(config, `[RUN] RUN DONE — ${workerBatches.length} batch(es) completed`);
   await safeUpdatePipelineProgress(config, "cycle_complete", `Cycle complete — ${workerBatches.length} worker batch(es) processed`, {
     workersTotal: workerBatches.length,
     workersDone: workerBatches.length

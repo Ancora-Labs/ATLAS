@@ -1062,8 +1062,8 @@ Consider whether the root causes are:
   try {
     const coreFiles = await fs.readdir(path.join(repoRoot, "src", "core")).catch(() => []);
     const testFiles = await fs.readdir(path.join(repoRoot, "tests", "core")).catch(() => []);
-    const srcList = coreFiles.filter(f => f.endsWith(".js") || f.endsWith(".cjs")).map(f => `src/core/${f}`).join("\n");
-    const tstList = testFiles.filter(f => f.endsWith(".js")).map(f => `tests/core/${f}`).join("\n");
+    const srcList = coreFiles.filter(f => f.endsWith(".ts") || f.endsWith(".js") || f.endsWith(".mts") || f.endsWith(".cjs")).map(f => `src/core/${f}`).join("\n");
+    const tstList = testFiles.filter(f => f.endsWith(".test.ts") || f.endsWith(".test.js")).map(f => `tests/core/${f}`).join("\n");
     if (srcList || tstList) {
       repoFileListingSection = `\n\n## EXISTING REPOSITORY FILES\nYou MUST only reference paths from this list in target_files. Do NOT invent new module names.\n### src/core/ (source modules)\n${srcList}\n### tests/core/ (test files)\n${tstList}\n`;
     }
@@ -1079,6 +1079,26 @@ Consider whether the root causes are:
     const upgrades = (rf.verificationUpgrades || []).map((u, i) => `${i + 1}. ${u.area}: ${u.currentProblem} \u2192 required: ${u.requiredStandard}`).join("\n");
 
     repairFeedbackSection = `\n\n## CRITICAL: ATHENA REJECTION REPAIR FEEDBACK\nThe previous plan was REJECTED by Athena. Self-improvement has analyzed the failure.\nYou MUST address every item below. Repeating the same mistakes will cause a hard stop.\n\n### ROOT CAUSES OF REJECTION\n${causes || "- No root causes identified"}\n\n### BEHAVIOR PATCHES (you MUST follow these)\n${patches || "- No patches specified"}\n\n### PLAN CONSTRAINTS (mandatory for this re-plan)\n- Must include: ${JSON.stringify(constraints.mustInclude || [])}\n- Must NOT repeat: ${JSON.stringify(constraints.mustNotRepeat || [])}\n- Verification standard: ${constraints.verificationStandard || "task-specific, measurable"}\n- Wave strategy: ${constraints.waveStrategy || "explicit inter-wave dependencies required"}\n\n### VERIFICATION UPGRADES REQUIRED\n${upgrades || "- No specific upgrades"}\n\nFAILURE TO COMPLY WITH THESE CONSTRAINTS WILL RESULT IN CYCLE TERMINATION.\n`;
+  }
+
+  // ── Architecture drift summary injection ─────────────────────────────────
+  // Inject unresolved stale doc references and deprecated token usage so
+  // Prometheus can include remediation tasks in the plan.
+  let driftSummarySection = "";
+  const driftReport = options.driftReport;
+  if (driftReport && (driftReport.staleCount > 0 || driftReport.deprecatedTokenCount > 0)) {
+    const staleLines = (driftReport.staleReferences || []).slice(0, 20).map(
+      (r, i) => `${i + 1}. [${r.docPath}:${r.line}] references missing file: ${r.referencedPath}`
+    ).join("\n");
+    const tokenLines = (driftReport.deprecatedTokenRefs || []).slice(0, 20).map(
+      (r, i) => `${i + 1}. [${r.docPath}:${r.line}] deprecated token "${r.token}" — ${r.hint}`
+    ).join("\n");
+    const moreMsgStale = (driftReport.staleReferences || []).length > 20
+      ? `\n... and ${(driftReport.staleReferences || []).length - 20} more` : "";
+    const moreMsgToken = (driftReport.deprecatedTokenRefs || []).length > 20
+      ? `\n... and ${(driftReport.deprecatedTokenRefs || []).length - 20} more` : "";
+
+    driftSummarySection = `\n\n## ARCHITECTURE DRIFT REPORT (unresolved — generated this cycle)\nScanned ${driftReport.scannedDocs.length} documentation file(s). Found ${driftReport.staleCount} stale file reference(s) and ${driftReport.deprecatedTokenCount} deprecated token usage(s).\nThese represent gaps between docs and the current codebase. You MUST include remediation tasks for items you cannot immediately resolve.\n${staleLines ? `\n### Stale File References\n${staleLines}${moreMsgStale}` : ""}${tokenLines ? `\n\n### Deprecated Token Usage\n${tokenLines}${moreMsgToken}` : ""}`;
   }
 
   // ── Build prompt — Copilot reads the repo itself ──────────────────────────
@@ -1138,7 +1158,7 @@ You MUST answer these explicitly in a dedicated section titled "Mandatory Answer
 - preferFewestWorkers: ${planningPolicy.preferFewestWorkers}
 - requireDependencyAwareWaves: ${planningPolicy.requireDependencyAwareWaves}
 - If maxTasks is UNLIMITED, include ALL materially distinct actionable tasks you find.
-${behaviorPatternsSection}${carryForwardSection}${repoFileListingSection}${repairFeedbackSection}
+${behaviorPatternsSection}${carryForwardSection}${repoFileListingSection}${driftSummarySection}${repairFeedbackSection}
 ## OUTPUT FORMAT
 Write a substantial senior-level narrative master plan.
 The plan must be centered on TOTAL SYSTEM CAPACITY INCREASE, not generic hardening.

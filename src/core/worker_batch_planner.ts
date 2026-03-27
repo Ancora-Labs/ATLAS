@@ -210,12 +210,66 @@ function buildSharedBranchName(roleName, plans) {
   return `box/${roleSlug}-${firstTask || "batch"}`;
 }
 
-export function buildRoleExecutionBatches(plans = [], config) {
+export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResult = null) {
   const sortedPlans = [...plans].sort((a, b) => {
     const waveDelta = Number(a?.wave || 0) - Number(b?.wave || 0);
     if (waveDelta !== 0) return waveDelta;
     return Number(a?.priority || 0) - Number(b?.priority || 0);
   });
+
+  // ── Conflict-aware lane separation ────────────────────────────────────────
+  // If the capability pool detected intra-lane file conflicts, plans that
+  // share target files within the same lane must not be co-batched.
+  // Build a conflict adjacency set: "planIndex_a:planIndex_b" → true
+  const conflictedPairs = new Set();
+  if (capabilityPoolResult?.assignments) {
+    const assignments = capabilityPoolResult.assignments;
+    const laneMap = new Map();
+    for (let i = 0; i < assignments.length; i++) {
+      const lane = assignments[i]?.selection?.lane || "unknown";
+      if (!laneMap.has(lane)) laneMap.set(lane, []);
+      laneMap.get(lane).push(i);
+    }
+    for (const indices of laneMap.values()) {
+      for (let a = 0; a < indices.length - 1; a++) {
+        for (let b = a + 1; b < indices.length; b++) {
+          const planA = assignments[indices[a]]?.plan;
+          const planB = assignments[indices[b]]?.plan;
+          const filesA = new Set(
+            Array.isArray(planA?.target_files) ? planA.target_files.map(String) :
+            (Array.isArray(planA?.targetFiles) ? planA.targetFiles.map(String) : [])
+          );
+          if (filesA.size === 0) continue;
+          const hasOverlap = (
+            Array.isArray(planB?.target_files) ? planB.target_files.map(String) :
+            (Array.isArray(planB?.targetFiles) ? planB.targetFiles.map(String) : [])
+          ).some(f => filesA.has(f));
+          if (hasOverlap) {
+            // Record original-array indices so we can match back to sortedPlans
+            conflictedPairs.add(`${indices[a]}:${indices[b]}`);
+            conflictedPairs.add(`${indices[b]}:${indices[a]}`);
+          }
+        }
+      }
+    }
+  }
+
+  // Build a lookup from plan object identity → original assignment index
+  const planToAssignmentIndex = new Map();
+  if (capabilityPoolResult?.assignments) {
+    capabilityPoolResult.assignments.forEach((a, i) => {
+      if (a?.plan) planToAssignmentIndex.set(a.plan, i);
+    });
+  }
+
+  /**
+   * Determine whether two plans (identified by their assignment indices) are
+   * in conflict (same lane, overlapping target files).
+   */
+  function arePlanIndexesConflicting(idxA, idxB) {
+    if (idxA === -1 || idxB === -1) return false;
+    return conflictedPairs.has(`${idxA}:${idxB}`);
+  }
 
   const roleBuckets = new Map();
   for (const plan of sortedPlans) {
@@ -227,24 +281,59 @@ export function buildRoleExecutionBatches(plans = [], config) {
   const flattened = [];
   for (const [roleName, rolePlans] of roleBuckets.entries()) {
     const taskKind = String(rolePlans[0]?.taskKind || rolePlans[0]?.kind || "implementation");
-    const selection = chooseModelForRolePlans(config, roleName, rolePlans, taskKind);
     const sharedBranch = buildSharedBranchName(roleName, rolePlans);
 
-    selection.batches.forEach((batch, index) => {
-      flattened.push({
-        role: roleName,
-        plans: batch.plans,
-        model: selection.model,
-        contextWindowTokens: selection.contextWindowTokens,
-        usableContextTokens: selection.usableContextTokens,
-        estimatedTokens: batch.estimatedTokens,
-        taskKind,
-        sharedBranch,
-        roleBatchIndex: index + 1,
-        roleBatchTotal: selection.batches.length,
-        githubFinalizer: index === selection.batches.length - 1,
+    // ── Conflict-aware sub-grouping within a role bucket ──────────────────
+    // Greedily pack plans into sub-groups such that no two conflicting plans
+    // share a sub-group.  This is a greedy graph-coloring approach: each
+    // sub-group is a color, and conflicts are edges.
+    const subGroups: Array<typeof rolePlans> = [];
+    const assignedGroup = new Array(rolePlans.length).fill(-1);
+
+    for (let i = 0; i < rolePlans.length; i++) {
+      const plan = rolePlans[i];
+      const planIdx = planToAssignmentIndex.get(plan) ?? -1;
+
+      // Find the first group that has no conflict with this plan
+      let placed = false;
+      for (let g = 0; g < subGroups.length; g++) {
+        const hasConflict = subGroups[g].some((existing) => {
+          const existingIdx = planToAssignmentIndex.get(existing) ?? -1;
+          return arePlanIndexesConflicting(planIdx, existingIdx);
+        });
+        if (!hasConflict) {
+          subGroups[g].push(plan);
+          assignedGroup[i] = g;
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        subGroups.push([plan]);
+        assignedGroup[i] = subGroups.length - 1;
+      }
+    }
+
+    // For each sub-group, choose model and pack into context batches
+    for (const subGroupPlans of subGroups) {
+      const selection = chooseModelForRolePlans(config, roleName, subGroupPlans, taskKind);
+
+      selection.batches.forEach((batch, index) => {
+        flattened.push({
+          role: roleName,
+          plans: batch.plans,
+          model: selection.model,
+          contextWindowTokens: selection.contextWindowTokens,
+          usableContextTokens: selection.usableContextTokens,
+          estimatedTokens: batch.estimatedTokens,
+          taskKind,
+          sharedBranch,
+          roleBatchIndex: index + 1,
+          roleBatchTotal: selection.batches.length,
+          githubFinalizer: index === selection.batches.length - 1,
+        });
       });
-    });
+    }
   }
 
   return flattened.map((batch, index) => ({
