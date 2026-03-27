@@ -417,6 +417,12 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
     }
   }
 
+  // Sort by wave so that sequential dispatch (orchestrator's for-loop) respects the
+  // global wave boundary across roles.  Without this, role-grouped insertion order
+  // produces [A-wave1, A-wave2, B-wave1, B-wave2] — causing wave-2 work to start
+  // before all wave-1 work is globally complete.
+  flattened.sort((a, b) => (a.wave as number) - (b.wave as number));
+
   return flattened.map((batch, index) => ({
     ...batch,
     bundleIndex: index + 1,

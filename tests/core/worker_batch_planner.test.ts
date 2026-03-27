@@ -163,6 +163,73 @@ describe("worker_batch_planner — dependency graph optimization (Task 3)", () =
   });
 });
 
+// ── Cross-role wave ordering ──────────────────────────────────────────────────
+
+describe("worker_batch_planner — cross-role wave ordering", () => {
+  const baseConfig = { copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 } };
+
+  it("all wave-1 batches precede all wave-2 batches across different roles", () => {
+    // Two roles each contributing one plan per wave.
+    // Without the wave-sort fix the output is [A-w1, A-w2, B-w1, B-w2],
+    // causing the orchestrator to run A-w2 before B-w1 — wrong.
+    const planA = { role: "Worker A", task: "task-a", wave: 1 };
+    const planB = { role: "Worker A", task: "task-b", wave: 2 };
+    const planC = { role: "Worker B", task: "task-c", wave: 1 };
+    const planD = { role: "Worker B", task: "task-d", wave: 2 };
+
+    const batches = buildRoleExecutionBatches([planA, planB, planC, planD], baseConfig);
+
+    const wave1Indices = batches.filter(b => b.wave === 1).map(b => b.bundleIndex);
+    const wave2Indices = batches.filter(b => b.wave === 2).map(b => b.bundleIndex);
+
+    assert.ok(wave1Indices.length > 0, "expected wave-1 batches");
+    assert.ok(wave2Indices.length > 0, "expected wave-2 batches");
+
+    const maxWave1 = Math.max(...wave1Indices);
+    const minWave2 = Math.min(...wave2Indices);
+    assert.ok(maxWave1 < minWave2,
+      `all wave-1 bundleIndices must be less than all wave-2 bundleIndices; max-w1=${maxWave1} min-w2=${minWave2}`);
+  });
+
+  it("graph-derived cross-role waves maintain global bundle ordering", () => {
+    // planA and planB share a file across different roles — graph assigns them
+    // different waves.  The batch with the lower graph-derived wave must have
+    // the lower bundleIndex so the orchestrator runs it first.
+    const planA = { role: "Worker A", task: "task-alpha", filesInScope: ["src/shared.ts"] };
+    const planB = { role: "Worker B", task: "task-beta",  filesInScope: ["src/shared.ts"] };
+
+    const batches = buildRoleExecutionBatches([planA, planB], baseConfig);
+
+    const batchA = batches.find(b => b.plans.includes(planA as any));
+    const batchB = batches.find(b => b.plans.includes(planB as any));
+
+    assert.ok(batchA, "planA must appear in a batch");
+    assert.ok(batchB, "planB must appear in a batch");
+    assert.ok((batchA as any).wave !== (batchB as any).wave,
+      "conflicting cross-role plans must be in different waves");
+
+    const earlier = (batchA as any).wave < (batchB as any).wave ? batchA : batchB;
+    const later   = (batchA as any).wave < (batchB as any).wave ? batchB : batchA;
+    assert.ok((earlier as any).bundleIndex < (later as any).bundleIndex,
+      "earlier-wave batch must have lower bundleIndex than later-wave batch");
+  });
+
+  it("negative: single-role plans are unaffected by cross-role sort", () => {
+    // All plans belong to the same role at the same wave — batch count and
+    // wave field must remain unchanged by the final sort step.
+    const plans = Array.from({ length: 3 }, (_, i) => ({
+      role: "Evolution Worker",
+      task: `T${i}`,
+      wave: 1,
+    }));
+
+    const batches = buildRoleExecutionBatches(plans, baseConfig);
+    assert.equal(batches.length, 1);
+    assert.equal(batches[0].wave, 1);
+    assert.equal(batches[0].plans.length, 3);
+  });
+});
+
 // ── Wave-boundary enforcement ─────────────────────────────────────────────────
 
 describe("worker_batch_planner — wave-boundary enforcement", () => {
