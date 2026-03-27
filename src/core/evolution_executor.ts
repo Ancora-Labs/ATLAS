@@ -107,6 +107,7 @@ export type ScopeConformanceResult = {
 
 export type { VerificationEvidence, EvidenceEnvelope, PrChecksSnapshot } from "./evidence_envelope.js";
 import type { VerificationEvidence, EvidenceEnvelope } from "./evidence_envelope.js";
+import { validateEvidenceEnvelope } from "./evidence_envelope.js";
 
 /**
  * Map raw verification command results to the canonical VerificationEvidence
@@ -1107,6 +1108,27 @@ export async function runEvolutionLoop(config, options: { fromTaskId?: string; d
         preReviewAssessment: preReview.reason || null,
         preReviewIssues: preReview.issues || []
       };
+
+      // ── Envelope structure validation — hard admission control ──────────────
+      // Reject malformed envelopes before they reach Athena's fast-path logic.
+      // An invalid envelope is treated as a worker failure (escalate, no merge).
+      const envelopeCheck = validateEvidenceEnvelope(athenaInput);
+      if (!envelopeCheck.valid) {
+        const envelopeErrors = envelopeCheck.errors.join("; ");
+        console.error(`[evolution] Evidence envelope invalid — escalating without Athena call: ${envelopeErrors}`);
+        taskState.athena_verdict = {
+          recommendation: "escalate",
+          lessonLearned: `Envelope structure invalid: ${envelopeErrors}`,
+        };
+        taskState.worker_result = {
+          status: workerResult.status,
+          prUrl: workerResult.prUrl,
+          filesTouched: workerResult.filesTouched,
+        };
+        progress.tasks[task.task_id] = taskState;
+        await saveProgress(stateDir, progress);
+        continue;
+      }
       const athenaOriginalPlan = {
         task: activeTask.title,
         verification: (activeTask.acceptance_criteria || []).join("; "),

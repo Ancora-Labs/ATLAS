@@ -1483,20 +1483,39 @@ async function runSingleCycle(config) {
     warn(`[orchestrator] Plan quality gate failed (non-fatal): ${String(err?.message || err)}`);
   }
 
-  // ── Lane diversity gate (Packet 6) ──
-  // Pass the capability pool result (from assignWorkersToPlans) so the gate
-  // inspects actual lane assignments rather than a raw plans array.
-  // minLanes is read from config?.workerPool?.minLanes; defaults to 2.
-  try {
-    const diversityPool = capabilityPoolResult || { activeLaneCount: 0, assignments: [] };
-    const diversityResult = enforceLaneDiversity(diversityPool, {
-      minLanes: config?.workerPool?.minLanes,
-    });
-    if (!diversityResult.meetsMinimum) {
-      await appendProgress(config, `[LANE_DIVERSITY] Warning: ${diversityResult.warning}`);
+  // ── Lane diversity gate (Packet 6) — hard admission control ──
+  // Blocks dispatch when the active plan set spans fewer lanes than the
+  // configured minimum. Only enforced when plans.length >= minLanes so
+  // single-plan batches are not penalised for inherent monoculture.
+  // Errors in the gate itself are fail-closed: they block dispatch.
+  {
+    const diversityMinLanes: number = config?.workerPool?.minLanes || 2;
+    if (plans.length >= diversityMinLanes) {
+      let diversityBlocked = false;
+      let diversityMsg = "";
+      try {
+        const diversityPool = capabilityPoolResult || { activeLaneCount: 0, assignments: [] };
+        const diversityResult = enforceLaneDiversity(diversityPool, { minLanes: diversityMinLanes });
+        if (!diversityResult.meetsMinimum) {
+          diversityBlocked = true;
+          diversityMsg = diversityResult.warning;
+        }
+      } catch (err) {
+        diversityBlocked = true;
+        diversityMsg = `Lane diversity gate threw: ${String(err?.message || err)}`;
+      }
+      if (diversityBlocked) {
+        await appendProgress(config, `[LANE_DIVERSITY] Hard gate: dispatch blocked — ${diversityMsg}`);
+        await appendAlert(config, {
+          severity: ALERT_SEVERITY.HIGH,
+          source: "orchestrator",
+          title: "Lane diversity gate blocked dispatch",
+          message: diversityMsg,
+        });
+        warn(`[orchestrator] Lane diversity gate blocked dispatch: ${diversityMsg}`);
+        return;
+      }
     }
-  } catch (err) {
-    warn(`[orchestrator] Lane diversity check failed (non-fatal): ${String(err?.message || err)}`);
   }
 
   await appendProgress(config, `[CYCLE] ── Step 4: Dispatching ${plans.length} workers ──`);

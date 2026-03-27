@@ -72,3 +72,51 @@ export type EvidenceEnvelope = {
   /** Issues Athena flagged in the pre-review that the worker was asked to address. */
   preReviewIssues?: string[];
 };
+
+// ── Envelope structure validation ─────────────────────────────────────────────
+
+const VALID_EVIDENCE_VALUES = new Set(["pass", "fail", "n/a"]);
+
+/**
+ * Validate the structure of an EvidenceEnvelope before it is passed to Athena.
+ *
+ * Required fields: roleName (string), status (string), summary (string),
+ * verificationEvidence (object with build/tests/lint slots).
+ * Each evidence slot must be "pass" | "fail" | "n/a".
+ *
+ * @param envelope — value to validate (untrusted)
+ * @returns { valid: boolean; errors: string[] }
+ */
+export function validateEvidenceEnvelope(envelope: unknown): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+
+  if (!envelope || typeof envelope !== "object") {
+    return { valid: false, errors: ["envelope must be a non-null object"] };
+  }
+
+  const e = envelope as Record<string, unknown>;
+
+  if (typeof e.roleName !== "string" || e.roleName.trim() === "") {
+    errors.push("roleName must be a non-empty string");
+  }
+  if (typeof e.status !== "string" || e.status.trim() === "") {
+    errors.push("status must be a non-empty string");
+  }
+  if (typeof e.summary !== "string" || e.summary.trim() === "") {
+    errors.push("summary must be a non-empty string");
+  }
+
+  const ev = e.verificationEvidence;
+  if (!ev || typeof ev !== "object") {
+    errors.push("verificationEvidence must be a non-null object");
+  } else {
+    const evObj = ev as Record<string, unknown>;
+    for (const slot of ["build", "tests", "lint"] as const) {
+      if (!VALID_EVIDENCE_VALUES.has(evObj[slot] as string)) {
+        errors.push(`verificationEvidence.${slot} must be "pass", "fail", or "n/a"; got ${JSON.stringify(evObj[slot])}`);
+      }
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
+}
