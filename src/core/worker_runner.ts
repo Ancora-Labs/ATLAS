@@ -23,7 +23,8 @@ import { buildAgentArgs, nameToSlug } from "./agent_loader.js";
 import { buildVerificationChecklist } from "./verification_profiles.js";
 import { getVerificationCommands } from "./verification_command_registry.js";
 import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired } from "./verification_gate.js";
-import { enforceModelPolicy } from "./model_policy.js";
+import { enforceModelPolicy, routeModelWithUncertainty, classifyComplexityTier, COMPLEXITY_TIER } from "./model_policy.js";
+import { deriveRoutingAdjustments, buildPromptHardConstraints } from "./learning_policy_compiler.js";
 import { loadPolicy, getProtectedPathMatches, getRolePathViolations } from "./policy_engine.js";
 import { appendEscalation, BLOCKING_REASON_CLASS, NEXT_ACTION } from "./escalation_queue.js";
 import { buildTaskFingerprint, buildLineageId, LINEAGE_ENTRY_STATUS } from "./lineage_graph.js";
@@ -54,6 +55,25 @@ type TaskHints = {
   estimatedLines?: number;
   estimatedDurationMinutes?: number;
   complexity?: string;
+};
+
+type RoutingAdjustment = {
+  policyId: string;
+  modelOverride: string;
+  reason: string;
+  severity: string;
+};
+
+type PromptHardConstraint = {
+  policyId: string;
+  constraint: string;
+  blocking: boolean;
+  severity: string;
+};
+
+type PromptControls = {
+  tier?: string;
+  hardConstraints?: PromptHardConstraint[];
 };
 
 type WorkerActivityEntry = {
@@ -131,6 +151,43 @@ function truncate(text, max) {
   return s.length > max ? `${s.slice(0, max)}...` : s;
 }
 
+/**
+ * Compute a recent ROI proxy from the premium usage log for the given task kind.
+ * Returns a value in [0, 1]: ratio of "done" outcomes in the last 10 matching entries.
+ * Returns 0 when there is no history (fail-open — caller treats 0 as "no signal").
+ */
+function computeRecentROI(config, taskKind: string): number {
+  try {
+    const logPath = path.join(config.paths?.stateDir || "state", "premium_usage_log.json");
+    if (!existsSync(logPath)) return 0;
+    const entries = JSON.parse(readFileSync(logPath, "utf8"));
+    if (!Array.isArray(entries)) return 0;
+    const relevant = entries
+      .filter((e) => !taskKind || e.taskKind === taskKind)
+      .slice(-10);
+    if (relevant.length === 0) return 0;
+    const successCount = relevant.filter((e) => e.outcome === "done").length;
+    return successCount / relevant.length;
+  } catch {
+    return 0; // fail-open: absence of history must never block dispatch
+  }
+}
+
+/**
+ * Load compiled lesson-based policies from state/learned_policies.json.
+ * Fail-open: returns [] on any read or parse error.
+ */
+function loadLearnedPolicies(config): any[] {
+  try {
+    const pPath = path.join(config.paths?.stateDir || "state", "learned_policies.json");
+    if (!existsSync(pPath)) return [];
+    const data = JSON.parse(readFileSync(pPath, "utf8"));
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return []; // non-critical; missing policy file must never block dispatch
+  }
+}
+
 function getLiveLogPath(config, roleName) {
   const stateDir = config.paths?.stateDir || "state";
   const safeRole = String(roleName || "worker").replace(/[^a-z0-9_-]+/gi, "_");
@@ -154,9 +211,14 @@ function findWorkerByName(config, roleName) {
 }
 
 // ── Task-aware model resolution ───────────────────────────────────────────────
-// Priority: taskKind → role preference → worker's registered model → default
+// Priority: taskKind → role preference → worker model → uncertainty-aware routing → default
+// Policy adjustments from compiled lessons may override the candidate after selection.
 
-function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {}) {
+function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {}, routingAdjustments: RoutingAdjustment[] = []) {
+  const defaultModel = config?.copilot?.defaultModel || "Claude Sonnet 4.6";
+  const strongModel = config?.copilot?.strongModel || defaultModel;
+  const efficientModel = config?.copilot?.efficientModel || defaultModel;
+
   let candidate;
   // 1. Task-kind override (e.g. "scan" always uses GPT-5.3-Codex)
   if (taskKind) {
@@ -173,22 +235,61 @@ function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {}) {
     const workerConfig = findWorkerByName(config, roleName);
     if (workerConfig?.model) candidate = workerConfig.model;
   }
-  // 4. System default
-  if (!candidate) candidate = config?.copilot?.defaultModel || "Claude Sonnet 4.6";
+  // 4. Uncertainty-aware routing: factor in task complexity tier + historical ROI
+  //    to auto-select the right model when no explicit config override exists.
+  if (!candidate) {
+    const recentROI = computeRecentROI(config, taskKind);
+    const uncertaintyRoute = routeModelWithUncertainty(
+      taskHints,
+      { defaultModel, strongModel, efficientModel },
+      { recentROI }
+    );
+    candidate = uncertaintyRoute.model;
+    if (uncertaintyRoute.uncertainty !== "low") {
+      try {
+        appendProgress(config,
+          `[UNCERTAINTY_ROUTE] ${roleName}: tier=${uncertaintyRoute.tier} uncertainty=${uncertaintyRoute.uncertainty} recentROI=${recentROI.toFixed(2)} → ${candidate}`
+        );
+      } catch { /* non-critical */ }
+    }
+  }
 
-  // 5. Enforce model policy — ban fast/30x, gate Opus to large tasks
-  const fallback = config?.copilot?.defaultModel || "Claude Sonnet 4.6";
-  const policy = enforceModelPolicy(candidate, taskHints, fallback);
+  // 5. Apply routing adjustments derived from compiled lesson policies.
+  //    Recurring failure classes (e.g. syntax errors, import errors) override the
+  //    complexity-based selection since model capability was NOT the root cause.
+  for (const adj of routingAdjustments) {
+    if (adj.modelOverride === "force-sonnet") {
+      const previous = candidate;
+      candidate = defaultModel;
+      try {
+        appendProgress(config,
+          `[POLICY_ROUTE] ${roleName}: ${previous} → ${defaultModel} (policy=${adj.policyId}: ${adj.reason})`
+        );
+      } catch { /* non-critical */ }
+      break; // First critical policy override wins
+    }
+    if (adj.modelOverride === "block-opus" && /opus/i.test(String(candidate || ""))) {
+      candidate = defaultModel;
+      try {
+        appendProgress(config,
+          `[POLICY_ROUTE] ${roleName}: Opus blocked → ${defaultModel} (policy=${adj.policyId}: ${adj.reason})`
+        );
+      } catch { /* non-critical */ }
+      break;
+    }
+  }
+
+  // 6. Enforce model policy — ban fast/30x, gate Opus to large tasks
+  const policy = enforceModelPolicy(candidate || defaultModel, taskHints, defaultModel);
   if (policy.downgraded) {
-    const logMsg = `[MODEL_POLICY] ${roleName}: ${policy.reason}`;
-    try { appendProgress(config, logMsg); } catch { /* non-critical */ }
+    try { appendProgress(config, `[MODEL_POLICY] ${roleName}: ${policy.reason}`); } catch { /* non-critical */ }
   }
   return policy.model;
 }
 
 // ── Build conversation-only context (persona is in .agent.md) ───────────────
 
-function buildConversationContext(history, instruction, sessionState: WorkerSessionState = {}, config: WorkerRunnerConfig = {}, workerKind = null) {
+function buildConversationContext(history, instruction, sessionState: WorkerSessionState = {}, config: WorkerRunnerConfig = {}, workerKind = null, promptControls: PromptControls = {}) {
   const parts = [];
 
   // Persistent worker state — always injected first so workers always know where they stand
@@ -344,6 +445,26 @@ function buildConversationContext(history, instruction, sessionState: WorkerSess
   parts.push(`  Lint:  ${verifCmds.lint}`);
   parts.push(`  Build: ${verifCmds.build}`);
 
+  // Prompt tier budget — informs the worker how much reasoning depth is expected.
+  // T3 (architectural): deep think required, critic mandatory, multi-pass.
+  // T2 (medium): two-pass, moderate reasoning.
+  // T1 (routine): lean, direct implementation — no extra passes needed.
+  const tier = promptControls.tier;
+  if (tier === COMPLEXITY_TIER.T3) {
+    parts.push("\n## PROMPT TIER BUDGET — T3 (ARCHITECTURAL)");
+    parts.push("This task is classified as T3: deep architectural reasoning required.");
+    parts.push("- Mandatory: multi-pass reasoning (design → implement → verify → critique).");
+    parts.push("- Perform a critic step before finalising: challenge your own solution.");
+    parts.push("- Verify all edge cases explicitly before reporting done.");
+    parts.push("- Budget: up to 5 continuation passes if needed.");
+  } else if (tier === COMPLEXITY_TIER.T2) {
+    parts.push("\n## PROMPT TIER BUDGET — T2 (MEDIUM)");
+    parts.push("This task is classified as T2: two-pass reasoning expected.");
+    parts.push("- Implement first, then verify the result before reporting done.");
+    parts.push("- Budget: up to 3 continuation passes if needed.");
+  }
+  // T1: no tier section — keep the prompt lean for routine patches.
+
   // Role-based verification — inject requirements specific to this worker's kind
   if (workerKind) {
     parts.push("");
@@ -353,6 +474,18 @@ function buildConversationContext(history, instruction, sessionState: WorkerSess
     parts.push("\n## SELF-VERIFICATION PROTOCOL");
     parts.push("Before reporting done, verify your work: run build, run tests, check edge cases.");
     parts.push("Include VERIFICATION_REPORT: BUILD=<pass|fail|n/a>; TESTS=<pass|fail|n/a>; RESPONSIVE=<pass|fail|n/a>; API=<pass|fail|n/a>; EDGE_CASES=<pass|fail|n/a>; SECURITY=<pass|fail|n/a>");
+  }
+
+  // Hard constraints from compiled lesson policies — injected prominently so the
+  // model cannot silently violate them. Blocking constraints cause immediate rework
+  // if violated. Violation is detected via the verification gate at post-task review.
+  const hardConstraints = Array.isArray(promptControls.hardConstraints) ? promptControls.hardConstraints : [];
+  if (hardConstraints.length > 0) {
+    parts.push("\n## HARD CONSTRAINTS (enforced from prior cycle lessons — violations trigger rework)");
+    for (const hc of hardConstraints) {
+      const blockLabel = hc.blocking ? " [BLOCKING]" : "";
+      parts.push(`${hc.constraint}${blockLabel}`);
+    }
   }
 
   parts.push("\n## OUTPUT FORMAT");
@@ -461,11 +594,28 @@ export function parseWorkerResponse(stdout, stderr) {
 // ── Main Worker Conversation ─────────────────────────────────────────────────
 
 export async function runWorkerConversation(config, roleName, instruction, history = [], sessionState: WorkerSessionState = {}) {
-  const model = resolveModel(config, roleName, instruction.taskKind, {
+  const taskHints: TaskHints = {
     estimatedLines: Number(instruction.estimatedLines || 0),
     estimatedDurationMinutes: Number(instruction.estimatedDurationMinutes || 0),
     complexity: String(instruction.complexity || instruction.estimatedComplexity || "")
-  });
+  };
+
+  // ── Task 2: Load compiled lesson policies and derive dispatch controls ──────
+  // learned_policies.json is written by the orchestrator after each cycle from
+  // postmortem lessons. Routing adjustments and prompt hard constraints are
+  // derived here — fail-open so a missing/corrupt file never blocks dispatch.
+  const learnedPolicies = loadLearnedPolicies(config);
+  const routingAdjustments: RoutingAdjustment[] = deriveRoutingAdjustments(learnedPolicies);
+  const hardConstraints: PromptHardConstraint[] = buildPromptHardConstraints(learnedPolicies);
+
+  // ── Task 1: Uncertainty-aware model selection ─────────────────────────────
+  // resolveModel now uses routeModelWithUncertainty (backed by historical ROI)
+  // and applies policy routing adjustments from recurring failure lessons.
+  const model = resolveModel(config, roleName, instruction.taskKind, taskHints, routingAdjustments);
+
+  // Classify complexity tier for prompt budget injection
+  const { tier } = classifyComplexityTier(taskHints);
+
   const command = config.env?.copilotCliCommand || "copilot";
   const agentSlug = nameToSlug(roleName); // "king-david", "esther", etc.
 
@@ -473,8 +623,11 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   const workerConfig = findWorkerByName(config, roleName);
   const workerKind = workerConfig?.kind || null;
 
-  // Build conversation-only context (persona is in the .agent.md file)
-  const conversationContext = buildConversationContext(history, instruction, sessionState, config, workerKind);
+  // Build conversation-only context with prompt tier budget and hard constraints injected
+  const conversationContext = buildConversationContext(
+    history, instruction, sessionState, config, workerKind,
+    { tier, hardConstraints }
+  );
 
   await appendProgress(config, `[WORKER:${roleName}] [${instruction.taskKind || "general"}→${model}] ${truncate(instruction.task, 70)}`);
 
