@@ -38,6 +38,7 @@ import {
   TRUST_BOUNDARY_ERROR,
 } from "./trust_boundary.js";
 import { validateAllPlans } from "./plan_contract_validator.js";
+import { section, compilePrompt } from "./prompt_compiler.js";
 
 export function detectModelFallback(rawText) {
   const text = String(rawText || "");
@@ -74,6 +75,46 @@ function normalizeFollowUpTaskKey(text) {
     .replace(/\b(five|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen)\s+consecutive\s+postmortem\s+audit\s+records\b/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/**
+ * Maximum tokens for the carry-forward payload in the planning prompt.
+ * Prevents unbounded growth when many follow-up tasks accumulate across cycles.
+ */
+export const CARRY_FORWARD_MAX_TOKENS = 2000;
+
+/**
+ * Maximum tokens for the behavior-patterns payload in the planning prompt.
+ */
+export const BEHAVIOR_PATTERNS_MAX_TOKENS = 1500;
+
+/**
+ * Retire carry-forward items that have already been resolved.
+ * Checks the carry-forward ledger (closedAt) and the coordination completedTasks list
+ * to skip items that have evidence of resolution before including them in the prompt.
+ *
+ * @param {Array} pendingEntries - postmortem entries with followUpNeeded + followUpTask
+ * @param {Array} ledger - carry_forward_ledger entries (may include closed entries)
+ * @param {string[]} completedTasks - completed task IDs/titles from coordination state
+ * @returns {Array} - only entries NOT yet resolved
+ */
+export function filterResolvedCarryForwardItems(pendingEntries, ledger, completedTasks) {
+  const ledgerEntries = Array.isArray(ledger) ? ledger : [];
+  const completed = Array.isArray(completedTasks) ? completedTasks : [];
+
+  const resolvedKeys = new Set(
+    [
+      ...ledgerEntries
+        .filter(e => e.closedAt)
+        .map(e => normalizeFollowUpTaskKey(String(e.lesson || ""))),
+      ...completed.map(t => normalizeFollowUpTaskKey(String(t || ""))),
+    ].filter(Boolean)
+  );
+
+  return (Array.isArray(pendingEntries) ? pendingEntries : []).filter(e => {
+    const key = normalizeFollowUpTaskKey(String(e.followUpTask || ""));
+    return key && !resolvedKeys.has(key);
+  });
 }
 
 function liveLogPath(stateDir) {
@@ -889,226 +930,13 @@ function buildNarrativeFallbackParsed(aiResult) {
 
 // ── Main Prometheus Analysis (simplified) ────────────────────────────────────
 
-export async function runPrometheusAnalysis(config, options: any = {}) {
-  const stateDir = config.paths?.stateDir || "state";
-
-  // ── Freshness cache: skip if recent analysis exists ───────────────────────
-  // bypassCache: allows event-driven invalidation (e.g., all plans completed)
-  if (options.bypassCache) {
-    await appendProgress(config, `[PROMETHEUS] Cache bypass requested (reason=${options.bypassReason || "unknown"}) — forcing fresh analysis`);
-  }
-  const freshnessMins = Number(config.runtime?.prometheusAnalysisFreshnessMinutes);
-  if (!options.bypassCache && Number.isFinite(freshnessMins) && freshnessMins > 0) {
-    try {
-      const existing = await readJson(path.join(stateDir, "prometheus_analysis.json"), null);
-      if (existing?.analyzedAt) {
-        const ageMs = Date.now() - new Date(existing.analyzedAt).getTime();
-        if (ageMs < freshnessMins * 60_000) {
-          // If cached file already has plans, re-normalise them so enrichment
-          // functions (target_files, scope, acceptance_criteria) always run.
-          if (Array.isArray(existing.plans) && existing.plans.length > 0) {
-            const renormalized = normalizePrometheusParsedOutput(existing, {});
-            await appendProgress(config, `[PROMETHEUS] Fresh analysis exists (${Math.round(ageMs / 60_000)}m old, threshold=${freshnessMins}m) — reusing cached result (re-normalized ${renormalized.plans.length} plan(s))`);
-            return renormalized;
-          }
-          // Cached file has no plans — attempt normalization to recover plans
-          const recovered = normalizePrometheusParsedOutput(existing, {});
-          if (Array.isArray(recovered.plans) && recovered.plans.length > 0) {
-            await appendProgress(config, `[PROMETHEUS] Cached analysis normalized: ${recovered.plans.length} plan(s) recovered — rebuilding dependency graph`);
-            // Rebuild dependency graph for the recovered plans
-            try {
-              const graphTasks = recovered.plans.map((plan, i) => ({
-                id: String(plan.task || `plan-${i}`),
-                dependsOn: Array.isArray(plan.dependencies) ? plan.dependencies.map(String) : [],
-                filesInScope: Array.isArray(plan.target_files) ? plan.target_files : (Array.isArray(plan.targetFiles) ? plan.targetFiles : []),
-              }));
-              const graphResult = resolveDependencyGraph(graphTasks);
-              recovered.dependencyGraph = {
-                status:          graphResult.status,
-                reasonCode:      graphResult.reasonCode,
-                waveCount:       graphResult.waves.length,
-                parallelTasks:   graphResult.parallelTasks,
-                serializedTasks: graphResult.serializedTasks,
-                conflictCount:   graphResult.conflictPairs.length,
-                cycleCount:      graphResult.cycles.length,
-                waves:           graphResult.waves,
-                errorMessage:    graphResult.errorMessage ?? null,
-              };
-            } catch (graphErr) {
-              recovered.dependencyGraph = { status: "degraded", errorMessage: String(graphErr?.message || graphErr) };
-            }
-            // Persist normalized result so subsequent reads don't need re-normalization
-            await writeJson(path.join(stateDir, "prometheus_analysis.json"), recovered).catch(() => {});
-            return recovered;
-          }
-          // Cache exists but normalization also produced no plans — re-run
-          await appendProgress(config, `[PROMETHEUS] Cached analysis has no actionable plans (${Math.round(ageMs / 60_000)}m old) — re-running`);
-        }
-      }
-    } catch { /* no cached analysis — proceed normally */ }
-  }
-
-  const repoRoot = process.cwd();
-  const registry = getRoleRegistry(config);
-  const prometheusName = registry?.deepPlanner?.name || "Prometheus";
-  const prometheusModel = registry?.deepPlanner?.model || "GPT-5.3-Codex";
-  const command = config.env?.copilotCliCommand || "copilot";
-
-  const userPrompt = options.prompt || options.prometheusReason || "Full repository self-evolution analysis";
-  const requestedBy = options.requestedBy || "Jesus";
-
-  const ts = () => new Date().toISOString().replace("T", " ").slice(0, 19);
-
-  // ── Log start ─────────────────────────────────────────────────────────────
-  await appendProgress(config, `[PROMETHEUS] ${prometheusName} awakening — starting deep repository analysis (simplified mode)`);
-  await appendPrometheusLiveLog(stateDir, "leadership_live", `[${ts()}] ${prometheusName.padEnd(20)} Awakening — direct Copilot CLI scan starting...`);
-
-  const planningPolicy = buildPrometheusPlanningPolicy(config);
-
-  // ── Extract behavior patterns from postmortems ────────────────────────────
-  let behaviorPatternsSection = "";
-  let carryForwardSection = "";
-  try {
-    const postmortems = await readJson(path.join(stateDir, "athena_postmortems.json"), null);
-    const entries = Array.isArray(postmortems?.entries) ? postmortems.entries : [];
-    
-    if (entries.length > 0) {
-      // Extract patterns: recurring issues, worker problems, quality trends
-      const last20 = entries.slice(-20);
-      
-      // Count issue patterns
-      const issuePatterns: Record<string, any> = {};
-      const workerProblems: Record<string, any> = {};
-      let totalQualityScore = 0;
-      let lowQualityCount = 0;
-      
-      for (const entry of last20) {
-        // Track worker performance
-        const worker = entry.workerName || "unknown";
-        if (!workerProblems[worker]) workerProblems[worker] = { count: 0, failureReasons: [] };
-        workerProblems[worker].count++;
-        
-        // Track quality score
-        const score = Number(entry.qualityScore) || 0;
-        totalQualityScore += score;
-        if (score < 6) lowQualityCount++;
-        
-        // Extract issue keywords from lesson learned
-        const deviation = entry.deviation || "unknown";
-        
-        if (deviation === "major" || score < 5) {
-          if (!issuePatterns[worker]) issuePatterns[worker] = [];
-          issuePatterns[worker].push({
-            issue: entry.expectedOutcome?.slice(0, 80) || "unclear",
-            score: score,
-            deviation: deviation
-          });
-        }
-      }
-      
-      // Build pattern analysis
-      const patterns = [];
-      for (const [worker, problems] of Object.entries(workerProblems)) {
-        if (problems.count >= 2) {
-          patterns.push(`- **${worker}**: appeared in ${problems.count}/${last20.length} recent postmortems`);
-          if (issuePatterns[worker]) {
-            for (const p of issuePatterns[worker].slice(0, 2)) {
-              patterns.push(`  - Issue: ${p.issue} (quality=${p.score}, deviation=${p.deviation})`);
-            }
-          }
-        }
-      }
-      
-      if (patterns.length > 0) {
-        const avgQuality = (totalQualityScore / last20.length).toFixed(2);
-        behaviorPatternsSection = `\n\n## BEHAVIOR PATTERNS FROM RECENT POSTMORTEMS (last ${last20.length} cycles)
-Average decision quality: ${avgQuality}/10
-Low-quality outcomes: ${lowQualityCount}/${last20.length}
-
-Recurring issues and worker performance:
-${patterns.join("\n")}
-
-**Strategic implications:** Your plan should address why these patterns persist despite code changes.
-Consider whether the root causes are:
-1. Insufficient optimization (algorithm complexity, not just code cleanup)
-2. External constraints (I/O, database, infrastructure limits)
-3. Scaling challenges (metrics degrade with input size growth)`;
-      }
-      
-      // Carry-forward follow-ups
-      const pending = entries.filter(e => e.followUpNeeded && e.followUpTask);
-      if (pending.length > 0) {
-        const seenFollowUps = new Set();
-        const deduped = [];
-        // Traverse from newest to oldest so repeated tasks keep their latest wording/date.
-        for (let i = pending.length - 1; i >= 0; i--) {
-          const e = pending[i];
-          const key = normalizeFollowUpTaskKey(e.followUpTask);
-          if (!key || seenFollowUps.has(key)) continue;
-          seenFollowUps.add(key);
-          deduped.push(e);
-        }
-        deduped.reverse();
-        const items = deduped.slice(-10).map((e, i) =>
-          `${i + 1}. [worker=${e.workerName || "unknown"}, reviewed=${e.reviewedAt || "?"}] ${e.followUpTask}`
-        ).join("\n");
-        carryForwardSection = `\n\n## MANDATORY_CARRY_FORWARD\nThe following follow-up tasks from previous Athena postmortems have NOT been addressed yet.\nYou MUST include these in your plan unless they are already resolved in the codebase:\n${items}\n`;
-      }
-    }
-  } catch { /* non-fatal — proceed without pattern analysis */ }
-
-  // ── Build real file listing for prompt (prevents fabricated target_files) ─
-  let repoFileListingSection = "";
-  try {
-    const coreFiles = await fs.readdir(path.join(repoRoot, "src", "core")).catch(() => []);
-    const testFiles = await fs.readdir(path.join(repoRoot, "tests", "core")).catch(() => []);
-    const srcList = coreFiles.filter(f => f.endsWith(".ts") || f.endsWith(".js") || f.endsWith(".mts") || f.endsWith(".cjs")).map(f => `src/core/${f}`).join("\n");
-    const tstList = testFiles.filter(f => f.endsWith(".test.ts") || f.endsWith(".test.js")).map(f => `tests/core/${f}`).join("\n");
-    if (srcList || tstList) {
-      repoFileListingSection = `\n\n## EXISTING REPOSITORY FILES\nYou MUST only reference paths from this list in target_files. Do NOT invent new module names.\n### src/core/ (source modules)\n${srcList}\n### tests/core/ (test files)\n${tstList}\n`;
-    }
-  } catch { /* non-fatal */ }
-
-  // ── Self-improvement repair feedback injection ────────────────────────────
-  let repairFeedbackSection = "";
-  if (options.repairFeedback) {
-    const rf = options.repairFeedback;
-    const causes = (rf.rootCauses || []).map((c, i) => `${i + 1}. [${c.severity}] ${c.cause} (affects: ${c.affectedComponent})`).join("\n");
-    const patches = (rf.behaviorPatches || []).map((p, i) => `${i + 1}. [${p.target}] ${p.patch} \u2014 rationale: ${p.rationale}`).join("\n");
-    const constraints = rf.repairedPlanConstraints || {};
-    const upgrades = (rf.verificationUpgrades || []).map((u, i) => `${i + 1}. ${u.area}: ${u.currentProblem} \u2192 required: ${u.requiredStandard}`).join("\n");
-
-    repairFeedbackSection = `\n\n## CRITICAL: ATHENA REJECTION REPAIR FEEDBACK\nThe previous plan was REJECTED by Athena. Self-improvement has analyzed the failure.\nYou MUST address every item below. Repeating the same mistakes will cause a hard stop.\n\n### ROOT CAUSES OF REJECTION\n${causes || "- No root causes identified"}\n\n### BEHAVIOR PATCHES (you MUST follow these)\n${patches || "- No patches specified"}\n\n### PLAN CONSTRAINTS (mandatory for this re-plan)\n- Must include: ${JSON.stringify(constraints.mustInclude || [])}\n- Must NOT repeat: ${JSON.stringify(constraints.mustNotRepeat || [])}\n- Verification standard: ${constraints.verificationStandard || "task-specific, measurable"}\n- Wave strategy: ${constraints.waveStrategy || "explicit inter-wave dependencies required"}\n\n### VERIFICATION UPGRADES REQUIRED\n${upgrades || "- No specific upgrades"}\n\nFAILURE TO COMPLY WITH THESE CONSTRAINTS WILL RESULT IN CYCLE TERMINATION.\n`;
-  }
-
-  // ── Architecture drift summary injection ─────────────────────────────────
-  // Inject unresolved stale doc references and deprecated token usage so
-  // Prometheus can include remediation tasks in the plan.
-  let driftSummarySection = "";
-  const driftReport = options.driftReport;
-  if (driftReport && (driftReport.staleCount > 0 || driftReport.deprecatedTokenCount > 0)) {
-    const staleLines = (driftReport.staleReferences || []).slice(0, 20).map(
-      (r, i) => `${i + 1}. [${r.docPath}:${r.line}] references missing file: ${r.referencedPath}`
-    ).join("\n");
-    const tokenLines = (driftReport.deprecatedTokenRefs || []).slice(0, 20).map(
-      (r, i) => `${i + 1}. [${r.docPath}:${r.line}] deprecated token "${r.token}" — ${r.hint}`
-    ).join("\n");
-    const moreMsgStale = (driftReport.staleReferences || []).length > 20
-      ? `\n... and ${(driftReport.staleReferences || []).length - 20} more` : "";
-    const moreMsgToken = (driftReport.deprecatedTokenRefs || []).length > 20
-      ? `\n... and ${(driftReport.deprecatedTokenRefs || []).length - 20} more` : "";
-
-    driftSummarySection = `\n\n## ARCHITECTURE DRIFT REPORT (unresolved — generated this cycle)\nScanned ${driftReport.scannedDocs.length} documentation file(s). Found ${driftReport.staleCount} stale file reference(s) and ${driftReport.deprecatedTokenCount} deprecated token usage(s).\nThese represent gaps between docs and the current codebase. You MUST include remediation tasks for items you cannot immediately resolve.\n${staleLines ? `\n### Stale File References\n${staleLines}${moreMsgStale}` : ""}${tokenLines ? `\n\n### Deprecated Token Usage\n${tokenLines}${moreMsgToken}` : ""}`;
-  }
-
-  // ── Build prompt — Copilot reads the repo itself ──────────────────────────
-  const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
-REPO PATH: ${repoRoot}
-
-## OPERATOR OBJECTIVE
-${userPrompt}
-
-## EVOLUTION DIRECTIVE
+/**
+ * Static invariant Prometheus planning prompt sections.
+ * These do not change between planning cycles — extract them here so they can be
+ * shared, tested, and referenced by name rather than being buried in a template literal.
+ */
+export const PROMETHEUS_STATIC_SECTIONS = Object.freeze({
+  evolutionDirective: section("evolution-directive", `## EVOLUTION DIRECTIVE
 You are NOT a risk-reducing planner. You are NOT a security-first hardening auditor.
 You are the system's META-IMPROVER: your primary objective is TOTAL SYSTEM CAPACITY INCREASE.
 "Capacity" means: more capability delivered per cycle, deeper reasoning, faster adaptation, better learning, higher task quality, smarter model usage — across every dimension simultaneously.
@@ -1127,9 +955,9 @@ You MUST analyze and propose improvements for EACH of these:
 7. Model-task fit (routing complexity to the right model, token budget allocation)
 8. Learning loop (postmortem-to-policy conversion, pattern detection, carry-forward)
 9. Cost efficiency (premium requests per useful outcome, waste reduction)
-10. Security (vulnerability prevention, access control, governance — ONE dimension among equals)
+10. Security (vulnerability prevention, access control, governance — ONE dimension among equals)`),
 
-## MANDATORY SELF-CRITIQUE SECTIONS
+  mandatorySelfCritique: section("mandatory-self-critique", `## MANDATORY SELF-CRITIQUE SECTIONS
 You MUST include a dedicated self-critique section for EACH of the following components.
 Each section must answer: "What is this component doing well?", "What is it doing poorly?", and "How specifically should it improve next cycle?"
 Do NOT just say "there is a problem" — produce a concrete improvement proposal for each.
@@ -1140,9 +968,9 @@ Do NOT just say "there is a problem" — produce a concrete improvement proposal
 4. **Worker Structure Self-Critique** — Is the worker topology enabling or blocking progress? Are workers specialized enough? How should worker roles evolve?
 5. **Parser / Normalization Self-Critique** — Is plan parsing reliable? Are fence blocks handled correctly? What parsing failures recur and how to fix them?
 6. **Prompt Layer Self-Critique** — Are runtime prompts getting the most out of model capacity? What prompt patterns waste tokens or produce shallow output?
-7. **Verification System Self-Critique** — Is verification catching real failures or generating false signals? Are verification commands reliable across platforms?
+7. **Verification System Self-Critique** — Is verification catching real failures or generating false signals? Are verification commands reliable across platforms?`),
 
-## MANDATORY_OPERATOR_QUESTIONS
+  mandatoryOperatorQuestions: section("mandatory-operator-questions", `## MANDATORY_OPERATOR_QUESTIONS
 You MUST answer these explicitly in a dedicated section titled "Mandatory Answers" before the rest of the plan:
 1. Is wave-based plan distribution truly the most efficient model for this system?
 2. Should it be preserved, improved, or removed?
@@ -1150,16 +978,9 @@ You MUST answer these explicitly in a dedicated section titled "Mandatory Answer
 4. Is Prometheus currently evolving the system, or mostly auditing and distributing tasks?
 5. How should Prometheus improve its own reasoning structure, planning quality, and model-capacity utilization?
 6. Does the worker behavior model and code structure help self-improvement, or block it?
-7. In this cycle, what are the highest-leverage changes that make the system not only safer, but also smarter and deeper in reasoning?
+7. In this cycle, what are the highest-leverage changes that make the system not only safer, but also smarter and deeper in reasoning?`),
 
-## PLANNING POLICY
-- maxTasks: ${planningPolicy.maxTasks > 0 ? planningPolicy.maxTasks : "UNLIMITED"}
-- maxWorkersPerWave: ${planningPolicy.maxWorkersPerWave}
-- preferFewestWorkers: ${planningPolicy.preferFewestWorkers}
-- requireDependencyAwareWaves: ${planningPolicy.requireDependencyAwareWaves}
-- If maxTasks is UNLIMITED, include ALL materially distinct actionable tasks you find.
-${behaviorPatternsSection}${carryForwardSection}${repoFileListingSection}${driftSummarySection}${repairFeedbackSection}
-## OUTPUT FORMAT
+  outputFormat: section("output-format", `## OUTPUT FORMAT
 Write a substantial senior-level narrative master plan.
 The plan must be centered on TOTAL SYSTEM CAPACITY INCREASE, not generic hardening.
 First analyze how BOX can increase its capacity in every dimension, then derive what should change.
@@ -1253,7 +1074,255 @@ Wrap the JSON companion with markers:
 
 ===DECISION===
 { ...optional companion json... }
-===END===`;
+===END===`),
+});
+
+export async function runPrometheusAnalysis(config, options: any = {}) {
+  const stateDir = config.paths?.stateDir || "state";
+
+  // ── Freshness cache: skip if recent analysis exists ───────────────────────
+  // bypassCache: allows event-driven invalidation (e.g., all plans completed)
+  if (options.bypassCache) {
+    await appendProgress(config, `[PROMETHEUS] Cache bypass requested (reason=${options.bypassReason || "unknown"}) — forcing fresh analysis`);
+  }
+  const freshnessMins = Number(config.runtime?.prometheusAnalysisFreshnessMinutes);
+  if (!options.bypassCache && Number.isFinite(freshnessMins) && freshnessMins > 0) {
+    try {
+      const existing = await readJson(path.join(stateDir, "prometheus_analysis.json"), null);
+      if (existing?.analyzedAt) {
+        const ageMs = Date.now() - new Date(existing.analyzedAt).getTime();
+        if (ageMs < freshnessMins * 60_000) {
+          // If cached file already has plans, re-normalise them so enrichment
+          // functions (target_files, scope, acceptance_criteria) always run.
+          if (Array.isArray(existing.plans) && existing.plans.length > 0) {
+            const renormalized = normalizePrometheusParsedOutput(existing, {});
+            await appendProgress(config, `[PROMETHEUS] Fresh analysis exists (${Math.round(ageMs / 60_000)}m old, threshold=${freshnessMins}m) — reusing cached result (re-normalized ${renormalized.plans.length} plan(s))`);
+            return renormalized;
+          }
+          // Cached file has no plans — attempt normalization to recover plans
+          const recovered = normalizePrometheusParsedOutput(existing, {});
+          if (Array.isArray(recovered.plans) && recovered.plans.length > 0) {
+            await appendProgress(config, `[PROMETHEUS] Cached analysis normalized: ${recovered.plans.length} plan(s) recovered — rebuilding dependency graph`);
+            // Rebuild dependency graph for the recovered plans
+            try {
+              const graphTasks = recovered.plans.map((plan, i) => ({
+                id: String(plan.task || `plan-${i}`),
+                dependsOn: Array.isArray(plan.dependencies) ? plan.dependencies.map(String) : [],
+                filesInScope: Array.isArray(plan.target_files) ? plan.target_files : (Array.isArray(plan.targetFiles) ? plan.targetFiles : []),
+              }));
+              const graphResult = resolveDependencyGraph(graphTasks);
+              recovered.dependencyGraph = {
+                status:          graphResult.status,
+                reasonCode:      graphResult.reasonCode,
+                waveCount:       graphResult.waves.length,
+                parallelTasks:   graphResult.parallelTasks,
+                serializedTasks: graphResult.serializedTasks,
+                conflictCount:   graphResult.conflictPairs.length,
+                cycleCount:      graphResult.cycles.length,
+                waves:           graphResult.waves,
+                errorMessage:    graphResult.errorMessage ?? null,
+              };
+            } catch (graphErr) {
+              recovered.dependencyGraph = { status: "degraded", errorMessage: String(graphErr?.message || graphErr) };
+            }
+            // Persist normalized result so subsequent reads don't need re-normalization
+            await writeJson(path.join(stateDir, "prometheus_analysis.json"), recovered).catch(() => {});
+            return recovered;
+          }
+          // Cache exists but normalization also produced no plans — re-run
+          await appendProgress(config, `[PROMETHEUS] Cached analysis has no actionable plans (${Math.round(ageMs / 60_000)}m old) — re-running`);
+        }
+      }
+    } catch { /* no cached analysis — proceed normally */ }
+  }
+
+  const repoRoot = process.cwd();
+  const registry = getRoleRegistry(config);
+  const prometheusName = registry?.deepPlanner?.name || "Prometheus";
+  const prometheusModel = registry?.deepPlanner?.model || "GPT-5.3-Codex";
+  const command = config.env?.copilotCliCommand || "copilot";
+
+  const userPrompt = options.prompt || options.prometheusReason || "Full repository self-evolution analysis";
+  const requestedBy = options.requestedBy || "Jesus";
+
+  const ts = () => new Date().toISOString().replace("T", " ").slice(0, 19);
+
+  // ── Log start ─────────────────────────────────────────────────────────────
+  await appendProgress(config, `[PROMETHEUS] ${prometheusName} awakening — starting deep repository analysis (simplified mode)`);
+  await appendPrometheusLiveLog(stateDir, "leadership_live", `[${ts()}] ${prometheusName.padEnd(20)} Awakening — direct Copilot CLI scan starting...`);
+
+  const planningPolicy = buildPrometheusPlanningPolicy(config);
+
+  // ── Extract behavior patterns from postmortems ────────────────────────────
+  let behaviorPatternsSection = "";
+  let carryForwardSection = "";
+  try {
+    // Load carry-forward ledger and coordination data in parallel for retirement check
+    const [postmortems, cfLedgerData, coordinationData] = await Promise.all([
+      readJson(path.join(stateDir, "athena_postmortems.json"), null),
+      readJson(path.join(stateDir, "carry_forward_ledger.json"), { entries: [] }),
+      readJson(path.join(stateDir, "athena_coordination.json"), {}),
+    ]);
+    const cfLedger = Array.isArray(cfLedgerData?.entries) ? cfLedgerData.entries : [];
+    const coordinationCompletedTasks = Array.isArray(coordinationData?.completedTasks)
+      ? coordinationData.completedTasks : [];
+    const entries = Array.isArray(postmortems?.entries) ? postmortems.entries : [];
+    
+    if (entries.length > 0) {
+      // Extract patterns: recurring issues, worker problems, quality trends
+      const last20 = entries.slice(-20);
+      
+      // Count issue patterns
+      const issuePatterns: Record<string, any> = {};
+      const workerProblems: Record<string, any> = {};
+      let totalQualityScore = 0;
+      let lowQualityCount = 0;
+      
+      for (const entry of last20) {
+        // Track worker performance
+        const worker = entry.workerName || "unknown";
+        if (!workerProblems[worker]) workerProblems[worker] = { count: 0, failureReasons: [] };
+        workerProblems[worker].count++;
+        
+        // Track quality score
+        const score = Number(entry.qualityScore) || 0;
+        totalQualityScore += score;
+        if (score < 6) lowQualityCount++;
+        
+        // Extract issue keywords from lesson learned
+        const deviation = entry.deviation || "unknown";
+        
+        if (deviation === "major" || score < 5) {
+          if (!issuePatterns[worker]) issuePatterns[worker] = [];
+          issuePatterns[worker].push({
+            issue: entry.expectedOutcome?.slice(0, 80) || "unclear",
+            score: score,
+            deviation: deviation
+          });
+        }
+      }
+      
+      // Build pattern analysis
+      const patterns = [];
+      for (const [worker, problems] of Object.entries(workerProblems)) {
+        if (problems.count >= 2) {
+          patterns.push(`- **${worker}**: appeared in ${problems.count}/${last20.length} recent postmortems`);
+          if (issuePatterns[worker]) {
+            for (const p of issuePatterns[worker].slice(0, 2)) {
+              patterns.push(`  - Issue: ${p.issue} (quality=${p.score}, deviation=${p.deviation})`);
+            }
+          }
+        }
+      }
+      
+      if (patterns.length > 0) {
+        const avgQuality = (totalQualityScore / last20.length).toFixed(2);
+        behaviorPatternsSection = `\n\n## BEHAVIOR PATTERNS FROM RECENT POSTMORTEMS (last ${last20.length} cycles)
+Average decision quality: ${avgQuality}/10
+Low-quality outcomes: ${lowQualityCount}/${last20.length}
+
+Recurring issues and worker performance:
+${patterns.join("\n")}
+
+**Strategic implications:** Your plan should address why these patterns persist despite code changes.
+Consider whether the root causes are:
+1. Insufficient optimization (algorithm complexity, not just code cleanup)
+2. External constraints (I/O, database, infrastructure limits)
+3. Scaling challenges (metrics degrade with input size growth)`;
+      }
+      
+      // Carry-forward follow-ups — retire items already resolved in ledger or coordination
+      const allPending = entries.filter(e => e.followUpNeeded && e.followUpTask);
+      const pending = filterResolvedCarryForwardItems(allPending, cfLedger, coordinationCompletedTasks);
+      if (pending.length > 0) {
+        const seenFollowUps = new Set();
+        const deduped = [];
+        // Traverse from newest to oldest so repeated tasks keep their latest wording/date.
+        for (let i = pending.length - 1; i >= 0; i--) {
+          const e = pending[i];
+          const key = normalizeFollowUpTaskKey(e.followUpTask);
+          if (!key || seenFollowUps.has(key)) continue;
+          seenFollowUps.add(key);
+          deduped.push(e);
+        }
+        deduped.reverse();
+        const items = deduped.slice(-10).map((e, i) =>
+          `${i + 1}. [worker=${e.workerName || "unknown"}, reviewed=${e.reviewedAt || "?"}] ${e.followUpTask}`
+        ).join("\n");
+        carryForwardSection = `\n\n## MANDATORY_CARRY_FORWARD\nThe following follow-up tasks from previous Athena postmortems have NOT been addressed yet.\nYou MUST include these in your plan unless they are already resolved in the codebase:\n${items}\n`;
+      }
+    }
+  } catch { /* non-fatal — proceed without pattern analysis */ }
+
+  // ── Build real file listing for prompt (prevents fabricated target_files) ─
+  let repoFileListingSection = "";
+  try {
+    const coreFiles = await fs.readdir(path.join(repoRoot, "src", "core")).catch(() => []);
+    const testFiles = await fs.readdir(path.join(repoRoot, "tests", "core")).catch(() => []);
+    const srcList = coreFiles.filter(f => f.endsWith(".ts") || f.endsWith(".js") || f.endsWith(".mts") || f.endsWith(".cjs")).map(f => `src/core/${f}`).join("\n");
+    const tstList = testFiles.filter(f => f.endsWith(".test.ts") || f.endsWith(".test.js")).map(f => `tests/core/${f}`).join("\n");
+    if (srcList || tstList) {
+      repoFileListingSection = `\n\n## EXISTING REPOSITORY FILES\nYou MUST only reference paths from this list in target_files. Do NOT invent new module names.\n### src/core/ (source modules)\n${srcList}\n### tests/core/ (test files)\n${tstList}\n`;
+    }
+  } catch { /* non-fatal */ }
+
+  // ── Self-improvement repair feedback injection ────────────────────────────
+  let repairFeedbackSection = "";
+  if (options.repairFeedback) {
+    const rf = options.repairFeedback;
+    const causes = (rf.rootCauses || []).map((c, i) => `${i + 1}. [${c.severity}] ${c.cause} (affects: ${c.affectedComponent})`).join("\n");
+    const patches = (rf.behaviorPatches || []).map((p, i) => `${i + 1}. [${p.target}] ${p.patch} \u2014 rationale: ${p.rationale}`).join("\n");
+    const constraints = rf.repairedPlanConstraints || {};
+    const upgrades = (rf.verificationUpgrades || []).map((u, i) => `${i + 1}. ${u.area}: ${u.currentProblem} \u2192 required: ${u.requiredStandard}`).join("\n");
+
+    repairFeedbackSection = `\n\n## CRITICAL: ATHENA REJECTION REPAIR FEEDBACK\nThe previous plan was REJECTED by Athena. Self-improvement has analyzed the failure.\nYou MUST address every item below. Repeating the same mistakes will cause a hard stop.\n\n### ROOT CAUSES OF REJECTION\n${causes || "- No root causes identified"}\n\n### BEHAVIOR PATCHES (you MUST follow these)\n${patches || "- No patches specified"}\n\n### PLAN CONSTRAINTS (mandatory for this re-plan)\n- Must include: ${JSON.stringify(constraints.mustInclude || [])}\n- Must NOT repeat: ${JSON.stringify(constraints.mustNotRepeat || [])}\n- Verification standard: ${constraints.verificationStandard || "task-specific, measurable"}\n- Wave strategy: ${constraints.waveStrategy || "explicit inter-wave dependencies required"}\n\n### VERIFICATION UPGRADES REQUIRED\n${upgrades || "- No specific upgrades"}\n\nFAILURE TO COMPLY WITH THESE CONSTRAINTS WILL RESULT IN CYCLE TERMINATION.\n`;
+  }
+
+  // ── Architecture drift summary injection ─────────────────────────────────
+  // Inject unresolved stale doc references and deprecated token usage so
+  // Prometheus can include remediation tasks in the plan.
+  let driftSummarySection = "";
+  const driftReport = options.driftReport;
+  if (driftReport && (driftReport.staleCount > 0 || driftReport.deprecatedTokenCount > 0)) {
+    const staleLines = (driftReport.staleReferences || []).slice(0, 20).map(
+      (r, i) => `${i + 1}. [${r.docPath}:${r.line}] references missing file: ${r.referencedPath}`
+    ).join("\n");
+    const tokenLines = (driftReport.deprecatedTokenRefs || []).slice(0, 20).map(
+      (r, i) => `${i + 1}. [${r.docPath}:${r.line}] deprecated token "${r.token}" — ${r.hint}`
+    ).join("\n");
+    const moreMsgStale = (driftReport.staleReferences || []).length > 20
+      ? `\n... and ${(driftReport.staleReferences || []).length - 20} more` : "";
+    const moreMsgToken = (driftReport.deprecatedTokenRefs || []).length > 20
+      ? `\n... and ${(driftReport.deprecatedTokenRefs || []).length - 20} more` : "";
+
+    driftSummarySection = `\n\n## ARCHITECTURE DRIFT REPORT (unresolved — generated this cycle)\nScanned ${driftReport.scannedDocs.length} documentation file(s). Found ${driftReport.staleCount} stale file reference(s) and ${driftReport.deprecatedTokenCount} deprecated token usage(s).\nThese represent gaps between docs and the current codebase. You MUST include remediation tasks for items you cannot immediately resolve.\n${staleLines ? `\n### Stale File References\n${staleLines}${moreMsgStale}` : ""}${tokenLines ? `\n\n### Deprecated Token Usage\n${tokenLines}${moreMsgToken}` : ""}`;
+  }
+
+  // ── Build prompt from static and dynamic sections ────────────────────────
+  // Static sections are invariant across cycles and stored in PROMETHEUS_STATIC_SECTIONS.
+  // Dynamic sections carry per-cycle deltas; carry-forward and behavior-patterns are capped
+  // via maxTokens to prevent unbounded payload growth across many cycles.
+  const carryFwdSection = Object.assign(
+    section("carry-forward", carryForwardSection),
+    { maxTokens: CARRY_FORWARD_MAX_TOKENS }
+  );
+  const behaviorSection = Object.assign(
+    section("behavior-patterns", behaviorPatternsSection),
+    { maxTokens: BEHAVIOR_PATTERNS_MAX_TOKENS }
+  );
+  const contextPrompt = compilePrompt([
+    section("context", `TARGET REPO: ${config.env?.targetRepo || "unknown"}\nREPO PATH: ${repoRoot}\n\n## OPERATOR OBJECTIVE\n${userPrompt}`),
+    PROMETHEUS_STATIC_SECTIONS.evolutionDirective,
+    PROMETHEUS_STATIC_SECTIONS.mandatorySelfCritique,
+    PROMETHEUS_STATIC_SECTIONS.mandatoryOperatorQuestions,
+    section("planning-policy", `## PLANNING POLICY\n- maxTasks: ${planningPolicy.maxTasks > 0 ? planningPolicy.maxTasks : "UNLIMITED"}\n- maxWorkersPerWave: ${planningPolicy.maxWorkersPerWave}\n- preferFewestWorkers: ${planningPolicy.preferFewestWorkers}\n- requireDependencyAwareWaves: ${planningPolicy.requireDependencyAwareWaves}\n- If maxTasks is UNLIMITED, include ALL materially distinct actionable tasks you find.`),
+    behaviorSection,
+    carryFwdSection,
+    section("repo-file-listing", repoFileListingSection),
+    section("drift-summary", driftSummarySection),
+    section("repair-feedback", repairFeedbackSection),
+    PROMETHEUS_STATIC_SECTIONS.outputFormat,
+  ]);
 
   appendPromptPreviewSync(stateDir, contextPrompt);
 

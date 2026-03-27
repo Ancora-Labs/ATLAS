@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { normalizePrometheusParsedOutput } from "../../src/core/prometheus.js";
+import {
+  normalizePrometheusParsedOutput,
+  filterResolvedCarryForwardItems,
+  CARRY_FORWARD_MAX_TOKENS,
+  BEHAVIOR_PATTERNS_MAX_TOKENS,
+  PROMETHEUS_STATIC_SECTIONS,
+} from "../../src/core/prometheus.js";
 
 describe("normalizePrometheusParsedOutput", () => {
   it("maps tasks/waves decision payload into planner plans", () => {
@@ -195,5 +201,109 @@ Wave 2
 
     assert.equal(normalized.plans[2].riskLevel, "high");
     assert.ok(normalized.plans[2].target_files.includes("src/core/model_router.ts"));
+  });
+});
+
+describe("filterResolvedCarryForwardItems", () => {
+  const makePending = (followUpTask, workerName = "evolution-worker") => ({
+    followUpNeeded: true,
+    followUpTask,
+    workerName,
+    reviewedAt: "2025-01-01",
+  });
+
+  it("returns all items when ledger is empty and no completedTasks", () => {
+    const pending = [makePending("Fix flaky test in worker runner"), makePending("Add trust-boundary coverage")];
+    const result = filterResolvedCarryForwardItems(pending, [], []);
+    assert.equal(result.length, 2);
+  });
+
+  it("retires items closed in the carry-forward ledger", () => {
+    const pending = [
+      makePending("Fix flaky test in worker runner"),
+      makePending("Add trust-boundary coverage"),
+    ];
+    const ledger = [
+      { id: "debt-1-0", lesson: "Fix flaky test in worker runner", closedAt: "2025-02-01T00:00:00Z", closureEvidence: "PR #99" },
+      { id: "debt-1-1", lesson: "Another open item", closedAt: null },
+    ];
+    const result = filterResolvedCarryForwardItems(pending, ledger, []);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].followUpTask, "Add trust-boundary coverage");
+  });
+
+  it("retires items present in coordinationCompletedTasks", () => {
+    const pending = [makePending("Upgrade evaluation stack"), makePending("Add circuit breaker for model calls")];
+    const result = filterResolvedCarryForwardItems(pending, [], ["Upgrade evaluation stack"]);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].followUpTask, "Add circuit breaker for model calls");
+  });
+
+  it("uses normalized key matching — strips noise before comparing", () => {
+    const pending = [makePending("Create and complete a task to fix the verification harness")];
+    const ledger = [
+      { id: "d1", lesson: "fix the verification harness", closedAt: "2025-03-01T00:00:00Z" },
+    ];
+    const result = filterResolvedCarryForwardItems(pending, ledger, []);
+    assert.equal(result.length, 0);
+  });
+
+  it("keeps items whose ledger entry is open (closedAt = null)", () => {
+    const pending = [makePending("Automate carry-forward escalation")];
+    const ledger = [
+      { id: "d1", lesson: "Automate carry-forward escalation", closedAt: null },
+    ];
+    const result = filterResolvedCarryForwardItems(pending, ledger, []);
+    assert.equal(result.length, 1);
+  });
+
+  it("handles empty pendingEntries gracefully", () => {
+    const result = filterResolvedCarryForwardItems([], [{ id: "d1", lesson: "anything", closedAt: "2025-01-01" }], []);
+    assert.equal(result.length, 0);
+  });
+
+  it("handles null/undefined inputs without throwing", () => {
+    const result = filterResolvedCarryForwardItems(null, null, null);
+    assert.equal(result.length, 0);
+  });
+});
+
+describe("PROMETHEUS_STATIC_SECTIONS", () => {
+  it("exports all required static sections", () => {
+    assert.ok(PROMETHEUS_STATIC_SECTIONS.evolutionDirective);
+    assert.ok(PROMETHEUS_STATIC_SECTIONS.mandatorySelfCritique);
+    assert.ok(PROMETHEUS_STATIC_SECTIONS.mandatoryOperatorQuestions);
+    assert.ok(PROMETHEUS_STATIC_SECTIONS.outputFormat);
+  });
+
+  it("static sections have non-empty content", () => {
+    for (const [key, sec] of Object.entries(PROMETHEUS_STATIC_SECTIONS)) {
+      assert.ok(sec.content && sec.content.length > 0, `${key} section must have content`);
+    }
+  });
+
+  it("evolutionDirective contains EVOLUTION DIRECTIVE and EQUAL DIMENSION SET headers", () => {
+    const content = PROMETHEUS_STATIC_SECTIONS.evolutionDirective.content;
+    assert.ok(content.includes("EVOLUTION DIRECTIVE"), "should contain EVOLUTION DIRECTIVE header");
+    assert.ok(content.includes("EQUAL DIMENSION SET"), "should contain EQUAL DIMENSION SET header");
+  });
+
+  it("outputFormat contains ACTIONABLE IMPROVEMENT PACKET FORMAT and PACKET FIELD ENFORCEMENT RULES", () => {
+    const content = PROMETHEUS_STATIC_SECTIONS.outputFormat.content;
+    assert.ok(content.includes("ACTIONABLE IMPROVEMENT PACKET FORMAT"));
+    assert.ok(content.includes("PACKET FIELD ENFORCEMENT RULES"));
+    assert.ok(content.includes("===DECISION==="), "should contain JSON output markers");
+  });
+});
+
+describe("carry-forward token cap constants", () => {
+  it("CARRY_FORWARD_MAX_TOKENS is a positive number", () => {
+    assert.ok(Number.isFinite(CARRY_FORWARD_MAX_TOKENS));
+    assert.ok(CARRY_FORWARD_MAX_TOKENS > 0);
+  });
+
+  it("BEHAVIOR_PATTERNS_MAX_TOKENS is a positive number", () => {
+    assert.ok(Number.isFinite(BEHAVIOR_PATTERNS_MAX_TOKENS));
+    assert.ok(BEHAVIOR_PATTERNS_MAX_TOKENS > 0);
   });
 });
