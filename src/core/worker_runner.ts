@@ -20,9 +20,9 @@ import { spawnAsync } from "./fs_utils.js";
 import { getRoleRegistry } from "./role_registry.js";
 import { appendProgress, appendLineageEntry, appendFailureClassification } from "./state_tracker.js";
 import { buildAgentArgs, nameToSlug } from "./agent_loader.js";
-import { buildVerificationChecklist } from "./verification_profiles.js";
+import { buildVerificationChecklist, getVerificationProfile } from "./verification_profiles.js";
 import { getVerificationCommands } from "./verification_command_registry.js";
-import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework } from "./verification_gate.js";
+import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, ARTIFACT_GAP } from "./verification_gate.js";
 import { enforceModelPolicy } from "./model_policy.js";
 import { loadPolicy, getProtectedPathMatches, getRolePathViolations } from "./policy_engine.js";
 import { appendEscalation, BLOCKING_REASON_CLASS, NEXT_ACTION } from "./escalation_queue.js";
@@ -689,6 +689,27 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     outcome: parsed.status,
     taskId: instruction.taskId || instruction.task || null
   });
+
+  // ── Unconditional artifact hard-block ──────────────────────────────────────
+  // For any worker that can emit done status (i.e. not a fully-exempt scan/doc role),
+  // the post-merge artifact gate is NON-BYPASSABLE — it runs regardless of
+  // config.runtime.requireTaskContract.  This ensures both the worker-runtime path
+  // and the evolution-executor path enforce the same SHA + raw-test-output contract.
+  if (parsed.status === "done") {
+    const hardBlockProfile = getVerificationProfile(workerKind ?? "unknown");
+    const allExempt = Object.values(hardBlockProfile.evidence).every(v => v === "exempt");
+    if (!allExempt) {
+      const artifact = checkPostMergeArtifact(parsed.fullOutput || parsed.summary || "");
+      if (!artifact.hasArtifact) {
+        const artifactGaps: string[] = [];
+        if (artifact.hasUnfilledPlaceholder) artifactGaps.push(ARTIFACT_GAP.UNFILLED_PLACEHOLDER);
+        if (!artifact.hasSha) artifactGaps.push(ARTIFACT_GAP.MISSING_SHA);
+        if (!artifact.hasTestOutput) artifactGaps.push(ARTIFACT_GAP.MISSING_TEST_OUTPUT);
+        parsed.status = "blocked";
+        parsed.summary = `[ARTIFACT GATE] done hard-blocked — ${artifactGaps.join("; ")}\n${parsed.summary}`;
+      }
+    }
+  }
 
   // ── Verification gate — evidence-based done acceptance ──────────────────────
   // Feature-flagged via config.runtime.requireTaskContract (default: true).
