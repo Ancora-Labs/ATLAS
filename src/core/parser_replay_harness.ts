@@ -24,6 +24,7 @@ const MAX_CORPUS_SIZE = 50;
  * @property {number} expectedPlanCount — number of plans parsed originally
  * @property {number} baselineConfidence — confidence at time of recording
  * @property {string} recordedAt — ISO timestamp
+ * @property {string[]} [requiredKeys] — keys that must be present in every parsed plan
  */
 
 /**
@@ -32,9 +33,10 @@ const MAX_CORPUS_SIZE = 50;
  * @property {number} baselineConfidence
  * @property {number} currentConfidence
  * @property {number} delta — currentConfidence - baselineConfidence
- * @property {boolean} regressed — true if delta < MAX_CONFIDENCE_DELTA
+ * @property {boolean} regressed — true if delta < MAX_CONFIDENCE_DELTA or required keys are missing
  * @property {number} baselinePlanCount
  * @property {number} currentPlanCount
+ * @property {string[]} omittedKeys — required keys missing from any parsed plan
  */
 
 /**
@@ -87,18 +89,35 @@ export function replayCorpus(corpus, parserFn) {
   for (const entry of corpus) {
     let currentConfidence: number;
     let currentPlanCount: number;
+    let parsedPlans: object[];
 
     try {
       const parsed = parserFn(entry.raw);
       currentConfidence = parsed.confidence ?? 0;
-      currentPlanCount = Array.isArray(parsed.plans) ? parsed.plans.length : 0;
+      parsedPlans = Array.isArray(parsed.plans) ? parsed.plans : [];
+      currentPlanCount = parsedPlans.length;
     } catch {
       currentConfidence = 0;
       currentPlanCount = 0;
+      parsedPlans = [];
     }
 
     const delta = currentConfidence - (entry.baselineConfidence || 0);
-    const regressed = delta < MAX_CONFIDENCE_DELTA;
+    const confidenceRegressed = delta < MAX_CONFIDENCE_DELTA;
+
+    // Check for omitted mandatory keys in every parsed plan
+    const requiredKeys: string[] = Array.isArray(entry.requiredKeys) ? entry.requiredKeys : [];
+    const omittedKeys: string[] = [];
+    if (requiredKeys.length > 0 && parsedPlans.length > 0) {
+      for (const key of requiredKeys) {
+        const missing = parsedPlans.some(plan => !(key in (plan as object)));
+        if (missing && !omittedKeys.includes(key)) {
+          omittedKeys.push(key);
+        }
+      }
+    }
+
+    const regressed = confidenceRegressed || omittedKeys.length > 0;
     if (regressed) regressionCount++;
 
     results.push({
@@ -109,6 +128,7 @@ export function replayCorpus(corpus, parserFn) {
       regressed,
       baselinePlanCount: entry.expectedPlanCount || 0,
       currentPlanCount,
+      omittedKeys,
     });
   }
 

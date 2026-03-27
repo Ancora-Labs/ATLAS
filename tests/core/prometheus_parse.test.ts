@@ -6,7 +6,10 @@ import {
   CARRY_FORWARD_MAX_TOKENS,
   BEHAVIOR_PATTERNS_MAX_TOKENS,
   PROMETHEUS_STATIC_SECTIONS,
+  computeDriftConfidencePenalty,
+  DRIFT_REMEDIATION_THRESHOLD,
 } from "../../src/core/prometheus.js";
+import { compilePrompt } from "../../src/core/prompt_compiler.js";
 
 describe("normalizePrometheusParsedOutput", () => {
   it("maps tasks/waves decision payload into planner plans", () => {
@@ -407,5 +410,84 @@ describe("carry-forward token cap constants", () => {
   it("BEHAVIOR_PATTERNS_MAX_TOKENS is a positive number", () => {
     assert.ok(Number.isFinite(BEHAVIOR_PATTERNS_MAX_TOKENS));
     assert.ok(BEHAVIOR_PATTERNS_MAX_TOKENS > 0);
+  });
+});
+
+// ── Task 1: Required-field retention in mandatory planning contract directives ──
+
+describe("PROMETHEUS_STATIC_SECTIONS — required field marking (Task 1)", () => {
+  const MANDATORY_KEYS = ["evolutionDirective", "mandatorySelfCritique", "mandatoryOperatorQuestions", "outputFormat"] as const;
+
+  it("mandatory planning sections are marked required:true", () => {
+    for (const key of MANDATORY_KEYS) {
+      const sec = PROMETHEUS_STATIC_SECTIONS[key] as Record<string, unknown>;
+      assert.strictEqual(sec.required, true, `${key} must have required:true`);
+    }
+  });
+
+  it("mandatory sections are retained under tight token budget (token pressure simulation)", () => {
+    // Simulate a very tight budget — mandatory sections must survive
+    const sections = [
+      { ...PROMETHEUS_STATIC_SECTIONS.evolutionDirective },
+      { ...PROMETHEUS_STATIC_SECTIONS.outputFormat },
+      { name: "optional-noise", content: "o".repeat(100_000) }, // ~25000 tokens
+    ];
+    const result = compilePrompt(sections, { tokenBudget: 100 });
+    assert.ok(
+      result.includes("EVOLUTION DIRECTIVE"),
+      "evolutionDirective must be retained under token pressure"
+    );
+    assert.ok(
+      result.includes("OUTPUT FORMAT"),
+      "outputFormat must be retained under token pressure"
+    );
+  });
+
+  it("non-mandatory sections can be dropped under token pressure", () => {
+    const sections = [
+      { ...PROMETHEUS_STATIC_SECTIONS.evolutionDirective },
+      { name: "optional-filler", content: "OPTIONAL_CONTENT" }, // no required:true
+    ];
+    const result = compilePrompt(sections, { tokenBudget: 5 }); // very tight
+    // The filler is optional and large — evolutionDirective (required) should remain
+    assert.ok(result.includes("EVOLUTION DIRECTIVE"), "required section must survive");
+  });
+});
+
+// ── Task 4: Drift confidence penalty ──────────────────────────────────────────
+
+describe("computeDriftConfidencePenalty (Task 4)", () => {
+  it("returns zero penalty for null/undefined drift report", () => {
+    assert.deepEqual(computeDriftConfidencePenalty(null), { penalty: 0, reason: "no-drift-report", requiresRemediation: false });
+    assert.deepEqual(computeDriftConfidencePenalty(undefined), { penalty: 0, reason: "no-drift-report", requiresRemediation: false });
+  });
+
+  it("returns zero penalty when staleCount and deprecatedTokenCount are both 0", () => {
+    const result = computeDriftConfidencePenalty({ staleCount: 0, deprecatedTokenCount: 0 });
+    assert.equal(result.penalty, 0);
+    assert.equal(result.requiresRemediation, false);
+  });
+
+  it("returns a positive penalty proportional to total unresolved items", () => {
+    const result = computeDriftConfidencePenalty({ staleCount: 3, deprecatedTokenCount: 2 }); // total=5
+    assert.ok(result.penalty > 0, "penalty must be positive for non-zero drift");
+    assert.ok(result.penalty <= 0.30, "penalty must not exceed cap of 0.30");
+  });
+
+  it("caps penalty at 0.30 regardless of very high drift count", () => {
+    const result = computeDriftConfidencePenalty({ staleCount: 100, deprecatedTokenCount: 100 }); // total=200
+    assert.equal(result.penalty, 0.30, "penalty is capped at 0.30");
+  });
+
+  it("sets requiresRemediation=true when total >= DRIFT_REMEDIATION_THRESHOLD", () => {
+    const atThreshold = computeDriftConfidencePenalty({ staleCount: DRIFT_REMEDIATION_THRESHOLD, deprecatedTokenCount: 0 });
+    assert.equal(atThreshold.requiresRemediation, true);
+    const belowThreshold = computeDriftConfidencePenalty({ staleCount: DRIFT_REMEDIATION_THRESHOLD - 1, deprecatedTokenCount: 0 });
+    assert.equal(belowThreshold.requiresRemediation, false);
+  });
+
+  it("reason string encodes total unresolved count", () => {
+    const result = computeDriftConfidencePenalty({ staleCount: 2, deprecatedTokenCount: 1 });
+    assert.ok(result.reason.includes("3"), "reason must encode total count (3)");
   });
 });

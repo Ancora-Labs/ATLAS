@@ -334,3 +334,47 @@ describe("verification_gate — SHA + raw npm output enforced across done-capabl
     assert.match(String(result.reason || ""), /exempt/i);
   });
 });
+
+// ── Task 2: Artifact gate applies regardless of workerKind ────────────────────
+
+describe("verification_gate — artifact check mandatory across all completion paths (Task 2)", () => {
+  it("unknown workerKind falls through to DEFAULT_PROFILE which requires build", () => {
+    // 'unknown' kind hits DEFAULT_PROFILE: build=required, artifacts required
+    const result = validateWorkerContract("unknown", {
+      status: "done",
+      fullOutput: "All done!"
+    });
+    assert.equal(result.passed, false);
+    assert.ok(
+      result.gaps.some(g => /sha|test output/i.test(g)),
+      `expected artifact gap for unknown kind; got: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("done status with git SHA + npm test output passes artifact gate for unknown workerKind", () => {
+    const result = validateWorkerContract("unknown", {
+      status: "done",
+      fullOutput: [
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=n/a",
+        "Merged at abc1234",
+        "  3 passing"
+      ].join("\n")
+    });
+    // Should not fail on artifact gate specifically
+    const artifactGaps = result.gaps.filter(g => /sha|test output|placeholder/i.test(g));
+    assert.equal(artifactGaps.length, 0, `artifact gate should not fire; gaps: [${result.gaps.join("; ")}]`);
+  });
+
+  it("negative path: done output with placeholder token is rejected even for unknown workerKind", () => {
+    const result = validateWorkerContract("unknown", {
+      status: "done",
+      fullOutput: "POST_MERGE_TEST_OUTPUT placeholder not replaced"
+    });
+    assert.equal(result.passed, false);
+    assert.ok(
+      result.gaps.some(g => /placeholder/i.test(g)),
+      `expected placeholder gap; got: [${result.gaps.join("; ")}]`
+    );
+  });
+});
+

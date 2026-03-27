@@ -5,6 +5,7 @@ import {
   normalizeAthenaReviewPayload,
   MANDATORY_ACTIONABLE_PACKET_FIELDS,
   PREMORTEM_RISK_LEVEL,
+  validatePatchedPlan,
 } from "../../src/core/athena_reviewer.js";
 
 const BASE_PLANS = [
@@ -187,4 +188,88 @@ describe("normalizeAthenaReviewPayload", () => {
       "planReviews must NOT be in missingFields when plan_reviews alias is present");
   });
 });
+
+// ── Task 3: Patched-plan validation gate ──────────────────────────────────────
+
+describe("validatePatchedPlan (Task 3)", () => {
+  it("passes a well-formed patched plan", () => {
+    const result = validatePatchedPlan({
+      target_files: ["src/core/orchestrator.ts"],
+      scope: "src/core/",
+      acceptance_criteria: ["CI passes", "Tests green"],
+    });
+    assert.equal(result.valid, true);
+    assert.equal(result.issues.length, 0);
+  });
+
+  it("fails when target_files is missing", () => {
+    const result = validatePatchedPlan({ scope: "src/core/", acceptance_criteria: ["test passes"] });
+    assert.equal(result.valid, false);
+    assert.ok(result.issues.some(i => /target_files/i.test(i)));
+  });
+
+  it("fails when target_files is an empty array", () => {
+    const result = validatePatchedPlan({ target_files: [], scope: "src/", acceptance_criteria: ["test passes"] });
+    assert.equal(result.valid, false);
+    assert.ok(result.issues.some(i => /target_files/i.test(i)));
+  });
+
+  it("fails when target_files contains '...' placeholder", () => {
+    const result = validatePatchedPlan({
+      target_files: ["src/core/foo.ts", "..."],
+      scope: "src/core/",
+      acceptance_criteria: ["test passes"],
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.issues.some(i => /placeholder/i.test(i)));
+  });
+
+  it("fails when target_files contains '<placeholder>' style", () => {
+    const result = validatePatchedPlan({
+      target_files: ["<path/to/file.ts>"],
+      scope: "src/",
+      acceptance_criteria: ["test passes"],
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.issues.some(i => /placeholder/i.test(i)));
+  });
+
+  it("fails when target_files contains 'path/to/' generic prefix", () => {
+    const result = validatePatchedPlan({
+      target_files: ["path/to/module.ts"],
+      scope: "src/",
+      acceptance_criteria: ["passes"],
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.issues.some(i => /placeholder/i.test(i)));
+  });
+
+  it("fails when scope is missing", () => {
+    const result = validatePatchedPlan({ target_files: ["src/core/foo.ts"], acceptance_criteria: ["test"] });
+    assert.equal(result.valid, false);
+    assert.ok(result.issues.some(i => /scope/i.test(i)));
+  });
+
+  it("fails when acceptance_criteria is empty", () => {
+    const result = validatePatchedPlan({ target_files: ["src/core/foo.ts"], scope: "src/core/", acceptance_criteria: [] });
+    assert.equal(result.valid, false);
+    assert.ok(result.issues.some(i => /acceptance_criteria/i.test(i)));
+  });
+
+  it("negative path: non-object plan is invalid", () => {
+    const result = validatePatchedPlan("not an object");
+    assert.equal(result.valid, false);
+    assert.ok(result.issues.length > 0);
+  });
+
+  it("accepts targetFiles alias for target_files", () => {
+    const result = validatePatchedPlan({
+      targetFiles: ["src/core/foo.ts"],
+      scope: "src/core/",
+      acceptance_criteria: ["passes"],
+    });
+    assert.equal(result.valid, true);
+  });
+});
+
 

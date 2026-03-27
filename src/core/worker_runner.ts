@@ -695,12 +695,15 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // Rework threshold: config.runtime.maxReworkAttempts (default: 2, per Athena AC#2 concern).
   // Evidence snapshot schema includes profile, report fields, gaps, attempt, and timestamp (AC#4).
   const requireTaskContract = config?.runtime?.requireTaskContract !== false;
-  if (requireTaskContract && parsed.status === "done" && workerKind) {
+  if (requireTaskContract && parsed.status === "done") {
     const maxReworkAttempts = Number(config?.runtime?.maxReworkAttempts ?? 2);
     // reworkAttempt is set by buildReworkInstruction on re-dispatches; 0 on the first call
     const currentAttempt = Number(instruction.reworkAttempt || 0);
 
-    const validationResult = validateWorkerContract(workerKind, {
+    // Artifact check is mandatory for all done-capable workers, even when workerKind is unknown.
+    // Unknown workerKind falls back to the DEFAULT_PROFILE (build required, others optional).
+    const effectiveKind = workerKind ?? "unknown";
+    const validationResult = validateWorkerContract(effectiveKind, {
       status: parsed.status,
       fullOutput: parsed.fullOutput,
       summary: parsed.summary
@@ -708,7 +711,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
 
     // Evidence snapshot for audit (AC#4 defined schema)
     const verificationEvidence: VerificationEvidence = {
-      profile: String(validationResult.evidence?.profile || workerKind),
+      profile: String(validationResult.evidence?.profile || effectiveKind),
       hasReport: Boolean(validationResult.evidence?.hasReport),
       report: validationResult.evidence?.report || {},
       responsiveMatrix: validationResult.evidence?.responsiveMatrix || {},

@@ -860,7 +860,72 @@ function normalizePlanReviewEntry(entry, plan, index) {
  */
 export const MANDATORY_ACTIONABLE_PACKET_FIELDS = Object.freeze(["approved", "planReviews"] as const);
 
-/** Status strings that constitute an explicit approval/rejection signal (alias for `approved`). */
+// ── Patched-plan validation (Task 3) ─────────────────────────────────────────
+
+/**
+ * Patterns that indicate an unresolved placeholder value in target_files.
+ * Any path matching one of these patterns blocks approval.
+ */
+const TARGET_FILE_PLACEHOLDER_PATTERNS: RegExp[] = [
+  /^\.{2,}$/,         // "..." or "...."
+  /^<[^>]+>$/,        // "<placeholder>", "<file>", "<path/to/file>"
+  /^\[.*\]$/,         // "[...]", "[placeholder]"
+  /^path\/to\//i,     // "path/to/..."  (generic non-real path)
+];
+
+/** Return true when the given string looks like an unresolved placeholder. */
+function isTargetFilePlaceholder(filePath: string): boolean {
+  const s = String(filePath || "").trim();
+  if (!s) return true;
+  return TARGET_FILE_PLACEHOLDER_PATTERNS.some(p => p.test(s));
+}
+
+/**
+ * Validate a single patched plan for unresolved target-file placeholders and missing mandatory
+ * packet fields. Called after Athena returns patchedPlans so approval can be blocked when the
+ * AI failed to properly resolve all placeholder values.
+ *
+ * Mandatory fields checked: target_files (non-empty, no placeholders), scope, acceptance_criteria.
+ *
+ * @param plan - a single entry from patchedPlans
+ * @returns {{ valid: boolean, issues: string[] }}
+ */
+export function validatePatchedPlan(plan: unknown): { valid: boolean; issues: string[] } {
+  if (!plan || typeof plan !== "object") {
+    return { valid: false, issues: ["patched plan is not an object"] };
+  }
+  const p = plan as Record<string, unknown>;
+  const issues: string[] = [];
+
+  // target_files: must be a non-empty array with no placeholder values
+  const targetFiles: unknown[] | null = Array.isArray(p.target_files) ? p.target_files
+    : Array.isArray(p.targetFiles) ? p.targetFiles : null;
+  if (!targetFiles || targetFiles.length === 0) {
+    issues.push("target_files is missing or empty");
+  } else {
+    const placeholders = targetFiles
+      .map(f => String(f || "").trim())
+      .filter(f => isTargetFilePlaceholder(f));
+    if (placeholders.length > 0) {
+      issues.push(`target_files contains unresolved placeholder(s): ${placeholders.slice(0, 3).join(", ")}`);
+    }
+  }
+
+  // scope: must be a non-empty string
+  if (!p.scope || String(p.scope).trim().length === 0) {
+    issues.push("scope is missing or empty");
+  }
+
+  // acceptance_criteria: must be a non-empty array
+  const ac = Array.isArray(p.acceptance_criteria) ? p.acceptance_criteria : null;
+  if (!ac || ac.length === 0) {
+    issues.push("acceptance_criteria is missing or empty");
+  }
+
+  return { valid: issues.length === 0, issues };
+}
+
+
 const EXPLICIT_APPROVAL_STATUS_VALUES = new Set([
   "approved", "approve", "pass", "passed", "accept", "accepted",
   "rejected", "reject", "fail", "failed", "blocked"
@@ -1253,6 +1318,39 @@ IMPORTANT: Always include "patchedPlans" with the FULL corrected plan array. Eve
     reviewedAt: new Date().toISOString(),
     model: athenaModel
   };
+
+  // ── Patched-plan validation gate (Task 3) ─────────────────────────────────
+  // Block approval when Athena's patchedPlans contain unresolved target-file placeholders
+  // or are missing mandatory packet fields (target_files, scope, acceptance_criteria).
+  if (Array.isArray(result.patchedPlans) && result.patchedPlans.length > 0) {
+    const patchedPlanIssues: string[] = [];
+    for (let pi = 0; pi < result.patchedPlans.length; pi++) {
+      const vResult = validatePatchedPlan(result.patchedPlans[pi]);
+      if (!vResult.valid) {
+        patchedPlanIssues.push(`plan[${pi}]: ${vResult.issues.join("; ")}`);
+      }
+    }
+    if (patchedPlanIssues.length > 0) {
+      const blockReason = {
+        code: "PATCHED_PLAN_VALIDATION_FAILED",
+        message: `Patched plans contain unresolved placeholders or missing mandatory fields: ${patchedPlanIssues.join(" | ")}`
+      };
+      await appendProgress(config, `[ATHENA] Plan review BLOCKED — ${blockReason.message}`);
+      chatLog(stateDir, athenaName, `Patched plan validation failed: ${patchedPlanIssues.join(" | ")}`);
+      await appendAlert(config, {
+        severity: ALERT_SEVERITY.CRITICAL,
+        source: "athena_reviewer",
+        title: "Patched plans contain unresolved placeholders or missing mandatory fields",
+        message: `code=${blockReason.code} issues=${patchedPlanIssues.slice(0, 3).join(" | ")}`
+      });
+      return {
+        ...result,
+        approved: false,
+        corrections: [...corrections, ...patchedPlanIssues],
+        reason: blockReason,
+      };
+    }
+  }
 
   await writeJson(path.join(stateDir, "athena_plan_review.json"), result);
 

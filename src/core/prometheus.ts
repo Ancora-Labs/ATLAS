@@ -975,8 +975,12 @@ function buildNarrativeFallbackParsed(aiResult) {
  * These do not change between planning cycles — extract them here so they can be
  * shared, tested, and referenced by name rather than being buried in a template literal.
  */
+
+/** Build a section marked as required — always retained under any token-budget pressure in compileTieredPrompt. */
+const rqs = (name: string, content: string) => Object.assign(section(name, content), { required: true as const });
+
 export const PROMETHEUS_STATIC_SECTIONS = Object.freeze({
-  evolutionDirective: section("evolution-directive", `## EVOLUTION DIRECTIVE
+  evolutionDirective: rqs("evolution-directive", `## EVOLUTION DIRECTIVE
 You are NOT a risk-reducing planner. You are NOT a security-first hardening auditor.
 You are the system's META-IMPROVER: your primary objective is TOTAL SYSTEM CAPACITY INCREASE.
 "Capacity" means: more capability delivered per cycle, deeper reasoning, faster adaptation, better learning, higher task quality, smarter model usage — across every dimension simultaneously.
@@ -997,7 +1001,7 @@ You MUST analyze and propose improvements for EACH of these:
 9. Cost efficiency (premium requests per useful outcome, waste reduction)
 10. Security (vulnerability prevention, access control, governance — ONE dimension among equals)`),
 
-  mandatorySelfCritique: section("mandatory-self-critique", `## MANDATORY SELF-CRITIQUE SECTIONS
+  mandatorySelfCritique: rqs("mandatory-self-critique", `## MANDATORY SELF-CRITIQUE SECTIONS
 You MUST include a dedicated self-critique section for EACH of the following components.
 Each section must answer: "What is this component doing well?", "What is it doing poorly?", and "How specifically should it improve next cycle?"
 Do NOT just say "there is a problem" — produce a concrete improvement proposal for each.
@@ -1010,7 +1014,7 @@ Do NOT just say "there is a problem" — produce a concrete improvement proposal
 6. **Prompt Layer Self-Critique** — Are runtime prompts getting the most out of model capacity? What prompt patterns waste tokens or produce shallow output?
 7. **Verification System Self-Critique** — Is verification catching real failures or generating false signals? Are verification commands reliable across platforms?`),
 
-  mandatoryOperatorQuestions: section("mandatory-operator-questions", `## MANDATORY_OPERATOR_QUESTIONS
+  mandatoryOperatorQuestions: rqs("mandatory-operator-questions", `## MANDATORY_OPERATOR_QUESTIONS
 You MUST answer these explicitly in a dedicated section titled "Mandatory Answers" before the rest of the plan:
 1. Is wave-based plan distribution truly the most efficient model for this system?
 2. Should it be preserved, improved, or removed?
@@ -1020,7 +1024,7 @@ You MUST answer these explicitly in a dedicated section titled "Mandatory Answer
 6. Does the worker behavior model and code structure help self-improvement, or block it?
 7. In this cycle, what are the highest-leverage changes that make the system not only safer, but also smarter and deeper in reasoning?`),
 
-  outputFormat: section("output-format", `## OUTPUT FORMAT
+  outputFormat: rqs("output-format", `## OUTPUT FORMAT
 Write a substantial senior-level narrative master plan.
 The plan must be centered on TOTAL SYSTEM CAPACITY INCREASE, not generic hardening.
 First analyze how BOX can increase its capacity in every dimension, then derive what should change.
@@ -1116,6 +1120,38 @@ Wrap the JSON companion with markers:
 { ...optional companion json... }
 ===END===`),
 });
+
+// ── Architecture Drift Confidence Binding (Task 4) ──────────────────────────
+
+/** Minimum total drift items above which plans must include remediation tasks. */
+export const DRIFT_REMEDIATION_THRESHOLD = 5;
+
+/**
+ * Compute a parser confidence penalty from an architecture drift report.
+ * Applied after plan normalization to penalize cycles where docs are out of sync.
+ *
+ * Penalty formula: 0.02 per unresolved item (staleCount + deprecatedTokenCount), capped at 0.30.
+ * requiresRemediation is true when total unresolved items >= DRIFT_REMEDIATION_THRESHOLD.
+ *
+ * @param driftReport - result of checkArchitectureDrift(), or null/undefined
+ * @returns {{ penalty: number, reason: string, requiresRemediation: boolean }}
+ */
+export function computeDriftConfidencePenalty(driftReport?: Record<string, unknown> | null): {
+  penalty: number;
+  reason: string;
+  requiresRemediation: boolean;
+} {
+  if (!driftReport) return { penalty: 0, reason: "no-drift-report", requiresRemediation: false };
+  const total = (Number(driftReport.staleCount) || 0) + (Number(driftReport.deprecatedTokenCount) || 0);
+  if (total === 0) return { penalty: 0, reason: "no-drift", requiresRemediation: false };
+  const penalty = Math.round(Math.min(0.30, total * 0.02) * 100) / 100;
+  return {
+    penalty,
+    reason: `architecture_drift_${total}_unresolved`,
+    requiresRemediation: total >= DRIFT_REMEDIATION_THRESHOLD,
+  };
+}
+
 
 export async function runPrometheusAnalysis(config, options: any = {}) {
   const stateDir = config.paths?.stateDir || "state";
@@ -1557,6 +1593,27 @@ Consider whether the root causes are:
       _fallback: false
     };
     await appendProgress(config, `[PROMETHEUS][BUDGET] Rebuilt deterministic request budget with byWave/byRole breakdown`);
+  }
+
+  // ── Drift confidence penalty (Task 4) ────────────────────────────────────
+  // Bind unresolved architecture drift counts to planning confidence.
+  // High drift counts signal docs-codebase divergence, reducing trust in the plan.
+  const driftPenaltyResult = computeDriftConfidencePenalty(driftReport);
+  if (driftPenaltyResult.penalty > 0) {
+    parsed.parserConfidence = Math.max(0.1, (parsed.parserConfidence ?? 1.0) - driftPenaltyResult.penalty);
+    if (!Array.isArray(parsed.parserConfidencePenalties)) parsed.parserConfidencePenalties = [];
+    parsed.parserConfidencePenalties.push({
+      reason: driftPenaltyResult.reason,
+      component: "architectureDrift",
+      delta: -driftPenaltyResult.penalty,
+    });
+    if (driftPenaltyResult.requiresRemediation) {
+      parsed._requiresDriftRemediation = true;
+    }
+    await appendProgress(config,
+      `[PROMETHEUS][DRIFT] Confidence penalty applied: ${driftPenaltyResult.penalty.toFixed(2)} (${driftPenaltyResult.reason})` +
+      (driftPenaltyResult.requiresRemediation ? " — remediation plans required" : "")
+    );
   }
 
   // ── Build analysis result ─────────────────────────────────────────────────
