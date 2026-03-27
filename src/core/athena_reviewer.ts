@@ -35,6 +35,7 @@ import {
   LEADERSHIP_CONTRACT_TYPE,
   TRUST_BOUNDARY_ERROR,
 } from "./trust_boundary.js";
+import type { EvidenceEnvelope } from "./evidence_envelope.js";
 
 // ── Rubric calibration ───────────────────────────────────────────────────────
 
@@ -1505,7 +1506,7 @@ function computeDeterministicPostmortem(workerResult, originalPlan, dql) {
 
 // ── Postmortem (post-work review) ────────────────────────────────────────────
 
-export async function runAthenaPostmortem(config, workerResult, originalPlan) {
+export async function runAthenaPostmortem(config, workerResult: EvidenceEnvelope & Record<string, unknown>, originalPlan) {
   const stateDir = config.paths?.stateDir || "state";
   const registry = getRoleRegistry(config);
   const athenaName = registry?.qualityReviewer?.name || "Athena";

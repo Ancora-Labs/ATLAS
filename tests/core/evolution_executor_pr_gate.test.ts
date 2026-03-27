@@ -401,3 +401,74 @@ describe("repairPrometheusTask — specific verification inference", () => {
     assert.ok(specificCount >= 1, "specific command should be preserved");
   });
 });
+
+// ── buildVerificationEvidence — canonical slot mapping ────────────────────────
+
+import { buildVerificationEvidence } from "../../src/core/evolution_executor.js";
+
+describe("buildVerificationEvidence", () => {
+  it("maps npm test to tests slot", () => {
+    const ev = buildVerificationEvidence([{ cmd: "npm test", passed: true }]);
+    assert.equal(ev.tests, "pass");
+    assert.equal(ev.build, "n/a");
+    assert.equal(ev.lint, "n/a");
+  });
+
+  it("maps node --test to tests slot", () => {
+    const ev = buildVerificationEvidence([{ cmd: "node --test foo.test.ts", passed: false }]);
+    assert.equal(ev.tests, "fail");
+    assert.equal(ev.build, "n/a");
+  });
+
+  it("maps npm run build to build slot", () => {
+    const ev = buildVerificationEvidence([{ cmd: "npm run build", passed: true }]);
+    assert.equal(ev.build, "pass");
+    assert.equal(ev.tests, "n/a");
+    assert.equal(ev.lint, "n/a");
+  });
+
+  it("maps tsc to build slot", () => {
+    const ev = buildVerificationEvidence([{ cmd: "tsc --noEmit", passed: false }]);
+    assert.equal(ev.build, "fail");
+  });
+
+  it("maps npm run lint to lint slot", () => {
+    const ev = buildVerificationEvidence([{ cmd: "npm run lint", passed: true }]);
+    assert.equal(ev.lint, "pass");
+    assert.equal(ev.build, "n/a");
+    assert.equal(ev.tests, "n/a");
+  });
+
+  it("fail is sticky — one failure overrides a passing command in same slot", () => {
+    const ev = buildVerificationEvidence([
+      { cmd: "npm test", passed: true },
+      { cmd: "node --test foo.test.ts", passed: false },
+    ]);
+    assert.equal(ev.tests, "fail");
+  });
+
+  it("all slots from mixed commands", () => {
+    const ev = buildVerificationEvidence([
+      { cmd: "npm run build", passed: true },
+      { cmd: "npm test", passed: true },
+      { cmd: "npm run lint", passed: false },
+    ]);
+    assert.equal(ev.build, "pass");
+    assert.equal(ev.tests, "pass");
+    assert.equal(ev.lint, "fail");
+  });
+
+  it("returns all n/a for empty input", () => {
+    const ev = buildVerificationEvidence([]);
+    assert.equal(ev.build, "n/a");
+    assert.equal(ev.tests, "n/a");
+    assert.equal(ev.lint, "n/a");
+  });
+
+  it("negative: partial failure — clean pass requires all slots green", () => {
+    // Verify that a build-only run cannot satisfy the full green requirement
+    const ev = buildVerificationEvidence([{ cmd: "npm run build", passed: true }]);
+    const fullGreen = ev.build === "pass" && ev.tests === "pass";
+    assert.equal(fullGreen, false, "tests slot is n/a, so full green must be false");
+  });
+});

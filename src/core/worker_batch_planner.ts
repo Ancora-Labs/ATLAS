@@ -374,25 +374,46 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
       }
     }
 
-    // For each sub-group, choose model and pack into context batches
+    // ── Wave-boundary enforcement ─────────────────────────────────────────
+    // Plans from different waves must NOT be co-batched into the same context
+    // batch delivered to a worker. Wave N+1 tasks have data dependencies on
+    // ALL wave N completions across all workers; co-batching would allow a
+    // worker to start wave N+1 work before wave N is globally complete.
+    //
+    // For each sub-group, split by wave number first, then pack each wave
+    // slice into context batches independently using the critical-path-sized
+    // model selection.
     for (const subGroupPlans of subGroups) {
-      const selection = chooseModelForRolePlans(config, roleName, subGroupPlans, taskKind);
+      const plansByWave = new Map<number, typeof subGroupPlans>();
+      for (const plan of subGroupPlans) {
+        const planId = String((plan as any)?.task_id || (plan as any)?.task || (plan as any)?.role || "");
+        const waveNum = Number((plan as any)?.wave ?? graphWaveByPlanId.get(planId) ?? 0);
+        if (!plansByWave.has(waveNum)) plansByWave.set(waveNum, []);
+        plansByWave.get(waveNum)!.push(plan);
+      }
 
-      selection.batches.forEach((batch, index) => {
-        flattened.push({
-          role: roleName,
-          plans: batch.plans,
-          model: selection.model,
-          contextWindowTokens: selection.contextWindowTokens,
-          usableContextTokens: selection.usableContextTokens,
-          estimatedTokens: batch.estimatedTokens,
-          taskKind,
-          sharedBranch,
-          roleBatchIndex: index + 1,
-          roleBatchTotal: selection.batches.length,
-          githubFinalizer: index === selection.batches.length - 1,
+      const sortedWaves = [...plansByWave.keys()].sort((a, b) => a - b);
+      for (const waveNum of sortedWaves) {
+        const wavePlans = plansByWave.get(waveNum)!;
+        const selection = chooseModelForRolePlans(config, roleName, wavePlans, taskKind);
+
+        selection.batches.forEach((batch, index) => {
+          flattened.push({
+            role: roleName,
+            plans: batch.plans,
+            model: selection.model,
+            contextWindowTokens: selection.contextWindowTokens,
+            usableContextTokens: selection.usableContextTokens,
+            estimatedTokens: batch.estimatedTokens,
+            taskKind,
+            sharedBranch,
+            wave: waveNum,
+            roleBatchIndex: index + 1,
+            roleBatchTotal: selection.batches.length,
+            githubFinalizer: index === selection.batches.length - 1,
+          });
         });
-      });
+      }
     }
   }
 

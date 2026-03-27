@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { computeNextWaves, computeFrontier, microBatch } from "../../src/core/dag_scheduler.js";
+import { computeNextWaves, computeFrontier, microBatch, computeCriticalPathLength, computeWaveParallelismBound } from "../../src/core/dag_scheduler.js";
 
 describe("dag_scheduler", () => {
   describe("computeNextWaves", () => {
@@ -130,10 +130,56 @@ describe("dag_scheduler", () => {
       assert.equal(batches.length, 1);
     });
 
-    it("uses default maxConcurrent of 3", () => {
+    it("uses default maxConcurrent of 3 when no graph info provided", () => {
       const items = Array.from({ length: 7 }, (_, i) => ({ task: `T${i}` }));
       const batches = microBatch(items);
       assert.equal(batches[0].length, 3);
     });
+
+    it("derives concurrency from criticalPathLength when provided", () => {
+      // 6 tasks, critical path length 3 → bound = ceil(6/3) = 2
+      const items = Array.from({ length: 6 }, (_, i) => ({ task: `T${i}` }));
+      const batches = microBatch(items, { criticalPathLength: 3 });
+      assert.equal(batches[0].length, 2);
+      assert.equal(batches.length, 3);
+    });
+
+    it("explicit maxConcurrent takes precedence over criticalPathLength", () => {
+      const items = Array.from({ length: 6 }, (_, i) => ({ task: `T${i}` }));
+      // criticalPathLength would give 2, but maxConcurrent=4 wins
+      const batches = microBatch(items, { maxConcurrent: 4, criticalPathLength: 3 });
+      assert.equal(batches[0].length, 4);
+    });
+  });
+});
+
+describe("dag_scheduler — critical path utilities", () => {
+  it("computeCriticalPathLength returns 1 for empty graph", () => {
+    assert.equal(computeCriticalPathLength({}), 1);
+    assert.equal(computeCriticalPathLength({ waves: [] }), 1);
+  });
+
+  it("computeCriticalPathLength returns max wave number", () => {
+    const graph = { waves: [{ wave: 1, taskIds: ["A"] }, { wave: 2, taskIds: ["B"] }, { wave: 3, taskIds: ["C"] }] };
+    assert.equal(computeCriticalPathLength(graph), 3);
+  });
+
+  it("computeWaveParallelismBound distributes tasks evenly across stages", () => {
+    // 9 tasks, critical path 3 → ceil(9/3) = 3
+    assert.equal(computeWaveParallelismBound(9, 3), 3);
+    // 10 tasks, critical path 1 → ceil(10/1) = 10 → clamped to max 8
+    assert.equal(computeWaveParallelismBound(10, 1), 8);
+    // 1 task → bound = 1
+    assert.equal(computeWaveParallelismBound(1, 5), 1);
+  });
+
+  it("computeWaveParallelismBound respects min/max opts", () => {
+    assert.equal(computeWaveParallelismBound(2, 10, { min: 1, max: 4 }), 1);
+    assert.equal(computeWaveParallelismBound(100, 1, { min: 1, max: 4 }), 4);
+  });
+
+  it("computeWaveParallelismBound returns min for invalid inputs", () => {
+    assert.equal(computeWaveParallelismBound(0, 3), 1);
+    assert.equal(computeWaveParallelismBound(5, 0), 1);
   });
 });
