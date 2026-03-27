@@ -528,3 +528,55 @@ describe("verification_gate — task-kind aware artifact gate in validateWorkerC
   });
 });
 
+// ── collectArtifactGaps — shared gap-collection contract ──────────────────────
+
+import {
+  collectArtifactGaps,
+  ARTIFACT_GAP,
+} from "../../src/core/verification_gate.js";
+
+describe("verification_gate — collectArtifactGaps shared contract", () => {
+  it("returns empty array when artifact is complete", () => {
+    const artifact = { hasSha: true, hasTestOutput: true, hasUnfilledPlaceholder: false };
+    assert.deepEqual(collectArtifactGaps(artifact), []);
+  });
+
+  it("returns MISSING_SHA gap when SHA is absent", () => {
+    const artifact = { hasSha: false, hasTestOutput: true, hasUnfilledPlaceholder: false };
+    const gaps = collectArtifactGaps(artifact);
+    assert.ok(gaps.some(g => /sha/i.test(g)), `expected SHA gap; got: [${gaps.join("; ")}]`);
+  });
+
+  it("returns MISSING_TEST_OUTPUT gap when test output is absent", () => {
+    const artifact = { hasSha: true, hasTestOutput: false, hasUnfilledPlaceholder: false };
+    const gaps = collectArtifactGaps(artifact);
+    assert.ok(gaps.some(g => /npm|test output/i.test(g)), `expected test-output gap; got: [${gaps.join("; ")}]`);
+  });
+
+  it("returns UNFILLED_PLACEHOLDER gap when placeholder is present", () => {
+    const artifact = { hasSha: true, hasTestOutput: true, hasUnfilledPlaceholder: true };
+    const gaps = collectArtifactGaps(artifact);
+    assert.ok(gaps.some(g => /placeholder/i.test(g)), `expected placeholder gap; got: [${gaps.join("; ")}]`);
+  });
+
+  it("collects all three gaps when artifact is fully missing", () => {
+    const artifact = { hasSha: false, hasTestOutput: false, hasUnfilledPlaceholder: true };
+    const gaps = collectArtifactGaps(artifact);
+    assert.equal(gaps.length, 3, `expected 3 gaps; got: [${gaps.join("; ")}]`);
+  });
+
+  it("gap reasons match ARTIFACT_GAP constants exactly", () => {
+    const artifact = { hasSha: false, hasTestOutput: false, hasUnfilledPlaceholder: true };
+    const gaps = collectArtifactGaps(artifact);
+    assert.ok(gaps.includes(ARTIFACT_GAP.UNFILLED_PLACEHOLDER), "must include UNFILLED_PLACEHOLDER constant");
+    assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_SHA), "must include MISSING_SHA constant");
+    assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_TEST_OUTPUT), "must include MISSING_TEST_OUTPUT constant");
+  });
+
+  it("negative path: partial artifact returns only applicable gaps", () => {
+    const artifact = { hasSha: true, hasTestOutput: false, hasUnfilledPlaceholder: false };
+    const gaps = collectArtifactGaps(artifact);
+    assert.equal(gaps.length, 1);
+    assert.equal(gaps[0], ARTIFACT_GAP.MISSING_TEST_OUTPUT);
+  });
+});

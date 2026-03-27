@@ -14,6 +14,68 @@
 import { LANE_WORKER_NAMES } from "./role_registry.js";
 
 /**
+ * Per-lane outcome accumulator.  Populated by callers (e.g. orchestrator or
+ * evolution_executor) after each worker completes.  All fields are non-negative
+ * integers / floats so arithmetic scoring never throws.
+ */
+export interface LaneOutcome {
+  successes: number;
+  failures:  number;
+  totalMs:   number;
+  lastUpdated: string; // ISO-8601
+}
+
+export type LanePerformanceLedger = Record<string, LaneOutcome>;
+
+/**
+ * Record a single worker outcome for a lane.
+ * Returns a **new** ledger object — the input is never mutated.
+ *
+ * @param ledger — current ledger (may be empty `{}`)
+ * @param lane   — lane name (e.g. "quality", "implementation")
+ * @param outcome — { success, durationMs? }
+ */
+export function recordLaneOutcome(
+  ledger: LanePerformanceLedger,
+  lane: string,
+  outcome: { success: boolean; durationMs?: number }
+): LanePerformanceLedger {
+  const existing: LaneOutcome = ledger[lane] ?? { successes: 0, failures: 0, totalMs: 0, lastUpdated: "" };
+  return {
+    ...ledger,
+    [lane]: {
+      successes:   existing.successes + (outcome.success ? 1 : 0),
+      failures:    existing.failures  + (outcome.success ? 0 : 1),
+      totalMs:     existing.totalMs   + Math.max(0, outcome.durationMs ?? 0),
+      lastUpdated: new Date().toISOString(),
+    },
+  };
+}
+
+/**
+ * Compute a 0–1 performance score for a lane.
+ *
+ * Formula: Laplace-smoothed success rate = (successes + 1) / (total + 2).
+ * This means an unseen lane scores 0.5, a perfect lane scores close to 1,
+ * and a consistently failing lane scores close to 0.
+ *
+ * The score is intentionally smooth so it acts as a soft nudge, not a hard
+ * override — diversity controls remain authoritative over lane selection.
+ *
+ * @param ledger — accumulated lane outcomes
+ * @param lane   — lane name to score
+ * @returns      — value in [0, 1]
+ */
+export function getLaneScore(ledger: LanePerformanceLedger, lane: string): number {
+  if (!ledger || !lane) return 0.5;
+  const entry = ledger[lane];
+  if (!entry) return 0.5; // no data → neutral score
+  const total = entry.successes + entry.failures;
+  if (total === 0) return 0.5;
+  return (entry.successes + 1) / (total + 2);
+}
+
+/**
  * Default worker capabilities mapping.
  * Maps capability tags to preferred worker roles.
  */
@@ -33,6 +95,7 @@ const DEFAULT_CAPABILITY_MAP = Object.freeze({
  * @property {string} lane — capability lane
  * @property {string} reason — why this worker was selected
  * @property {boolean} isFallback — true if using fallback worker
+ * @property {number} performanceScore — Laplace-smoothed success rate (0–1); 0.5 when no data
  */
 
 /**
@@ -74,24 +137,44 @@ export function inferCapabilityTag(plan) {
 /**
  * Select the best worker for a plan based on capability matching.
  *
+ * When `lanePerformance` is provided, the returned `performanceScore` reflects
+ * the lane's historical success rate.  If the primary lane has a score below
+ * `LOW_PERFORMANCE_THRESHOLD` the selection falls back to the evolution-worker
+ * while preserving the original lane label for diversity accounting.
+ *
+ * Diversity controls (`enforceLaneDiversity`, `diversityIndex`) are not
+ * affected — they operate on the final assignment set after all selections.
+ *
  * @param {object} plan — plan object
  * @param {object} [config] — BOX config for custom mappings
+ * @param {LanePerformanceLedger} [lanePerformance] — optional historical lane outcomes
  * @returns {WorkerSelection}
  */
-export function selectWorkerForPlan(plan, config) {
+export function selectWorkerForPlan(plan, config?, lanePerformance?: LanePerformanceLedger) {
   const capTag = inferCapabilityTag(plan);
   const customMap = config?.workerPool?.capabilityMap;
   const mapping = customMap?.[capTag] || DEFAULT_CAPABILITY_MAP[capTag] || { lane: "implementation", fallback: "evolution-worker" };
 
+  const score = getLaneScore(lanePerformance ?? {}, mapping.lane);
+
   // Resolve to the canonical lane worker name; fall back to configured fallback if lane is unknown.
+  // When performance data indicates a consistently degraded lane (score < 0.25), route to the
+  // fallback worker instead so throughput is not stuck behind a broken specialised lane.
+  // The lane label is preserved in the selection so diversity accounting still counts it.
+  const LOW_PERFORMANCE_THRESHOLD = 0.25;
   const laneWorkerName = LANE_WORKER_NAMES[mapping.lane] || mapping.fallback;
-  const isFallback = !LANE_WORKER_NAMES[mapping.lane];
+  const performanceDegraded = score < LOW_PERFORMANCE_THRESHOLD;
+  const selectedRole = performanceDegraded ? mapping.fallback : laneWorkerName;
+  const isFallback = !LANE_WORKER_NAMES[mapping.lane] || performanceDegraded;
 
   return {
-    role: laneWorkerName,
+    role: selectedRole,
     lane: mapping.lane,
-    reason: `Capability "${capTag}" → lane "${mapping.lane}" → worker "${laneWorkerName}"`,
+    reason: performanceDegraded
+      ? `Capability "${capTag}" → lane "${mapping.lane}" → performance score ${score.toFixed(2)} below threshold; falling back to "${selectedRole}"`
+      : `Capability "${capTag}" → lane "${mapping.lane}" → worker "${selectedRole}"`,
     isFallback,
+    performanceScore: score,
   };
 }
 
@@ -100,14 +183,15 @@ export function selectWorkerForPlan(plan, config) {
  *
  * @param {object[]} plans — array of plan objects
  * @param {object} [config]
+ * @param {LanePerformanceLedger} [lanePerformance] — optional historical lane outcomes
  * @returns {{ assignments: Array<{ plan: object, selection: WorkerSelection }>, diversityIndex: number }}
  */
-export function assignWorkersToPlans(plans, config) {
+export function assignWorkersToPlans(plans, config?, lanePerformance?: LanePerformanceLedger) {
   if (!Array.isArray(plans)) return { assignments: [], diversityIndex: 0 };
 
   const assignments = plans.map(plan => ({
     plan,
-    selection: selectWorkerForPlan(plan, config)
+    selection: selectWorkerForPlan(plan, config, lanePerformance)
   }));
 
   // Compute diversity index: 1 - (maxWorkerShare)

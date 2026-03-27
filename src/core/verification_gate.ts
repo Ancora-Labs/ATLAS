@@ -61,6 +61,23 @@ export function checkPostMergeArtifact(output) {
 }
 
 /**
+ * Canonical artifact gap collector — shared contract used by worker_runner,
+ * evolution_executor, and validateWorkerContract so all finalization paths
+ * produce identical gap reason strings from a single source of truth.
+ *
+ * @param {{ hasSha: boolean, hasTestOutput: boolean, hasUnfilledPlaceholder: boolean }} artifact
+ *   — result of checkPostMergeArtifact()
+ * @returns {string[]} ordered list of gap reason strings (empty when artifact is complete)
+ */
+export function collectArtifactGaps(artifact: { hasSha: boolean; hasTestOutput: boolean; hasUnfilledPlaceholder: boolean }): string[] {
+  const gaps: string[] = [];
+  if (artifact.hasUnfilledPlaceholder) gaps.push(ARTIFACT_GAP.UNFILLED_PLACEHOLDER);
+  if (!artifact.hasSha)               gaps.push(ARTIFACT_GAP.MISSING_SHA);
+  if (!artifact.hasTestOutput)         gaps.push(ARTIFACT_GAP.MISSING_TEST_OUTPUT);
+  return gaps;
+}
+
+/**
  * Apply config-based gate overrides to a verification profile.
  * Gates config can upgrade optional evidence fields to required.
  *
@@ -269,15 +286,7 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
   if (requireArtifact) {
     const artifact = checkPostMergeArtifact(output);
     evidence.postMergeArtifact = artifact;
-    if (artifact.hasUnfilledPlaceholder) {
-      gaps.push(ARTIFACT_GAP.UNFILLED_PLACEHOLDER);
-    }
-    if (!artifact.hasSha) {
-      gaps.push(ARTIFACT_GAP.MISSING_SHA);
-    }
-    if (!artifact.hasTestOutput) {
-      gaps.push(ARTIFACT_GAP.MISSING_TEST_OUTPUT);
-    }
+    for (const gap of collectArtifactGaps(artifact)) gaps.push(gap);
   }
 
   // No verification report at all — gap for any role with required fields

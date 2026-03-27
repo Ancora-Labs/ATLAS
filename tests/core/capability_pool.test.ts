@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { inferCapabilityTag, selectWorkerForPlan, assignWorkersToPlans, enforceLaneDiversity, computeDispatchMetrics, buildWorkerChain, detectLaneConflicts } from "../../src/core/capability_pool.js";
+import { inferCapabilityTag, selectWorkerForPlan, assignWorkersToPlans, enforceLaneDiversity, computeDispatchMetrics, buildWorkerChain, detectLaneConflicts, recordLaneOutcome, getLaneScore } from "../../src/core/capability_pool.js";
 
 describe("capability_pool", () => {
   describe("inferCapabilityTag", () => {
@@ -286,6 +286,156 @@ describe("capability_pool", () => {
       if (result.meetsMinimum) {
         assert.equal(result.warning, "", "no warning when gate passes");
       }
+    });
+  });
+});
+
+// ── Lane performance feedback ─────────────────────────────────────────────────
+
+describe("capability_pool — lane performance feedback", () => {
+  describe("recordLaneOutcome", () => {
+    it("initialises a lane entry from an empty ledger", () => {
+      const ledger = recordLaneOutcome({}, "quality", { success: true, durationMs: 500 });
+      assert.equal(ledger.quality.successes, 1);
+      assert.equal(ledger.quality.failures, 0);
+      assert.equal(ledger.quality.totalMs, 500);
+      assert.ok(ledger.quality.lastUpdated);
+    });
+
+    it("accumulates multiple outcomes for the same lane", () => {
+      let ledger = {};
+      ledger = recordLaneOutcome(ledger, "quality", { success: true,  durationMs: 300 });
+      ledger = recordLaneOutcome(ledger, "quality", { success: false, durationMs: 150 });
+      ledger = recordLaneOutcome(ledger, "quality", { success: true,  durationMs: 200 });
+      assert.equal(ledger.quality.successes, 2);
+      assert.equal(ledger.quality.failures,  1);
+      assert.equal(ledger.quality.totalMs,   650);
+    });
+
+    it("does not mutate the input ledger", () => {
+      const original = {};
+      recordLaneOutcome(original, "quality", { success: true });
+      assert.deepEqual(original, {});
+    });
+
+    it("handles missing durationMs gracefully (treats as 0)", () => {
+      const ledger = recordLaneOutcome({}, "implementation", { success: true });
+      assert.equal(ledger.implementation.totalMs, 0);
+    });
+
+    it("tracks separate lanes independently", () => {
+      let ledger = {};
+      ledger = recordLaneOutcome(ledger, "quality",        { success: true });
+      ledger = recordLaneOutcome(ledger, "infrastructure", { success: false });
+      assert.equal(ledger.quality.successes,        1);
+      assert.equal(ledger.infrastructure.failures,  1);
+      assert.equal(ledger.infrastructure.successes, 0);
+    });
+  });
+
+  describe("getLaneScore", () => {
+    it("returns 0.5 for an unseen lane (neutral prior)", () => {
+      assert.equal(getLaneScore({}, "quality"), 0.5);
+    });
+
+    it("returns 0.5 for null/undefined ledger", () => {
+      assert.equal(getLaneScore(null, "quality"), 0.5);
+      assert.equal(getLaneScore(undefined, "quality"), 0.5);
+    });
+
+    it("returns close to 1 for a perfect lane (all successes)", () => {
+      let ledger = {};
+      for (let i = 0; i < 10; i++) ledger = recordLaneOutcome(ledger, "quality", { success: true });
+      const score = getLaneScore(ledger, "quality");
+      assert.ok(score > 0.9, `expected score > 0.9 for perfect lane; got ${score}`);
+    });
+
+    it("returns close to 0 for a consistently failing lane", () => {
+      let ledger = {};
+      for (let i = 0; i < 10; i++) ledger = recordLaneOutcome(ledger, "infra", { success: false });
+      const score = getLaneScore(ledger, "infra");
+      assert.ok(score < 0.2, `expected score < 0.2 for failing lane; got ${score}`);
+    });
+
+    it("score is always in [0, 1]", () => {
+      let ledger = {};
+      ledger = recordLaneOutcome(ledger, "governance", { success: true });
+      ledger = recordLaneOutcome(ledger, "governance", { success: false });
+      const score = getLaneScore(ledger, "governance");
+      assert.ok(score >= 0 && score <= 1, `score out of range: ${score}`);
+    });
+
+    it("negative path: score below LOW_PERFORMANCE_THRESHOLD triggers fallback in selectWorkerForPlan", () => {
+      let ledger = {};
+      // Force 10 consecutive failures → score well below 0.25
+      for (let i = 0; i < 10; i++) ledger = recordLaneOutcome(ledger, "quality", { success: false });
+      const plan = { task: "Add test coverage for the parser module" }; // routes to quality lane
+      const selection = selectWorkerForPlan(plan, null, ledger);
+      assert.equal(selection.isFallback, true, "degraded lane must trigger fallback");
+      assert.ok(selection.performanceScore < 0.25, `expected low score; got ${selection.performanceScore}`);
+    });
+  });
+
+  describe("selectWorkerForPlan — performance-aware routing", () => {
+    it("includes performanceScore=0.5 when no ledger is provided", () => {
+      const plan = { task: "Add test coverage" };
+      const selection = selectWorkerForPlan(plan);
+      assert.equal(selection.performanceScore, 0.5);
+    });
+
+    it("routes to quality-worker when quality lane has healthy score", () => {
+      let ledger = {};
+      for (let i = 0; i < 5; i++) ledger = recordLaneOutcome(ledger, "quality", { success: true });
+      const plan = { task: "Add test coverage for the parser module" };
+      const selection = selectWorkerForPlan(plan, null, ledger);
+      assert.equal(selection.role, "quality-worker");
+      assert.equal(selection.lane, "quality");
+      assert.ok(selection.performanceScore > 0.5);
+    });
+
+    it("falls back to evolution-worker when quality lane is degraded", () => {
+      let ledger = {};
+      for (let i = 0; i < 20; i++) ledger = recordLaneOutcome(ledger, "quality", { success: false });
+      const plan = { task: "Add test coverage for the parser module" };
+      const selection = selectWorkerForPlan(plan, null, ledger);
+      assert.equal(selection.isFallback, true);
+      assert.equal(selection.lane, "quality", "lane label preserved for diversity accounting");
+    });
+  });
+
+  describe("assignWorkersToPlans — performance ledger passthrough", () => {
+    it("accepts lanePerformance parameter and propagates scores to selections", () => {
+      let ledger = {};
+      for (let i = 0; i < 5; i++) ledger = recordLaneOutcome(ledger, "quality", { success: true });
+      const plans = [{ task: "Add test coverage" }];
+      const result = assignWorkersToPlans(plans, null, ledger);
+      assert.equal(result.assignments.length, 1);
+      assert.ok(result.assignments[0].selection.performanceScore > 0.5);
+    });
+
+    it("backward-compatible: works without lanePerformance argument", () => {
+      const plans = [{ task: "Add test coverage" }, { task: "Update docker config" }];
+      const result = assignWorkersToPlans(plans);
+      assert.equal(result.assignments.length, 2);
+      result.assignments.forEach(a => {
+        assert.equal(a.selection.performanceScore, 0.5, "default score is 0.5 when no ledger");
+      });
+    });
+
+    it("diversity controls are unaffected by performance feedback", () => {
+      // Even when all lanes are healthy, diversityIndex and activeLaneCount still reflect actual routing
+      let ledger = {};
+      ["quality", "governance", "infrastructure"].forEach(l => {
+        for (let i = 0; i < 5; i++) ledger = recordLaneOutcome(ledger, l, { success: true });
+      });
+      const plans = [
+        { task: "Add test coverage" },
+        { task: "Fix governance policy" },
+        { task: "Update docker config" },
+      ];
+      const result = assignWorkersToPlans(plans, null, ledger);
+      assert.ok(typeof result.diversityIndex === "number", "diversityIndex must still be computed");
+      assert.ok(typeof result.activeLaneCount === "number", "activeLaneCount must still be computed");
     });
   });
 });

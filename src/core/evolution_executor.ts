@@ -27,7 +27,7 @@ import { appendProgress } from "./state_tracker.js";
 import { buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
 import { spawnAsync } from "./fs_utils.js";
 import { getRoleRegistry } from "./role_registry.js";
-import { checkPostMergeArtifact, ARTIFACT_GAP, ARTIFACT_GATE_ERROR_PREFIX, isArtifactGateRequired } from "./verification_gate.js";
+import { checkPostMergeArtifact, collectArtifactGaps, ARTIFACT_GATE_ERROR_PREFIX, isArtifactGateRequired } from "./verification_gate.js";
 import { VERIFICATION_DEFAULTS, rewriteVerificationCommand } from "./verification_command_registry.js";
 import { isNonSpecificVerification } from "./plan_contract_validator.js";
 
@@ -1013,10 +1013,7 @@ export async function runEvolutionLoop(config, options: { fromTaskId?: string; d
       if (isArtifactGateRequired(evolutionWorkerKind, evolutionTaskKind)) {
         const artifact = checkPostMergeArtifact(workerResult.fullOutput || workerResult.summary || "");
         if (!artifact.hasArtifact) {
-          const gaps: string[] = [];
-          if (artifact.hasUnfilledPlaceholder) gaps.push(ARTIFACT_GAP.UNFILLED_PLACEHOLDER);
-          if (!artifact.hasSha) gaps.push(ARTIFACT_GAP.MISSING_SHA);
-          if (!artifact.hasTestOutput) gaps.push(ARTIFACT_GAP.MISSING_TEST_OUTPUT);
+          const gaps = collectArtifactGaps(artifact);
           taskState.status = "rework";
           taskState.error = `${ARTIFACT_GATE_ERROR_PREFIX}: ${gaps.join("; ")}`;
           await appendProgress(config, `[EVO] ${task.task_id} — artifact gate failed: ${gaps.join("; ")}`);

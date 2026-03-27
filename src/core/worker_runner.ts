@@ -22,7 +22,7 @@ import { appendProgress, appendLineageEntry, appendFailureClassification } from 
 import { buildAgentArgs, nameToSlug } from "./agent_loader.js";
 import { buildVerificationChecklist } from "./verification_profiles.js";
 import { getVerificationCommands } from "./verification_command_registry.js";
-import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, ARTIFACT_GAP, isArtifactGateRequired } from "./verification_gate.js";
+import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired } from "./verification_gate.js";
 import { enforceModelPolicy } from "./model_policy.js";
 import { loadPolicy, getProtectedPathMatches, getRolePathViolations } from "./policy_engine.js";
 import { appendEscalation, BLOCKING_REASON_CLASS, NEXT_ACTION } from "./escalation_queue.js";
@@ -716,10 +716,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   if (parsed.status === "done" && isArtifactGateRequired(workerKind ?? "unknown", instruction.taskKind)) {
     const artifact = checkPostMergeArtifact(parsed.fullOutput || parsed.summary || "");
     if (!artifact.hasArtifact) {
-      const artifactGaps: string[] = [];
-      if (artifact.hasUnfilledPlaceholder) artifactGaps.push(ARTIFACT_GAP.UNFILLED_PLACEHOLDER);
-      if (!artifact.hasSha) artifactGaps.push(ARTIFACT_GAP.MISSING_SHA);
-      if (!artifact.hasTestOutput) artifactGaps.push(ARTIFACT_GAP.MISSING_TEST_OUTPUT);
+      const artifactGaps = collectArtifactGaps(artifact);
       parsed.status = "blocked";
       parsed.summary = `[ARTIFACT GATE] done hard-blocked — ${artifactGaps.join("; ")}\n${parsed.summary}`;
     }
