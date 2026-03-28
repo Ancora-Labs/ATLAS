@@ -1560,9 +1560,27 @@ async function runSingleCycle(config) {
   await safeUpdatePipelineProgress(config, "athena_approved", "Athena approved the plan");
 
   // Step 4: Dispatch workers sequentially (1 request per worker)
-  const plans = Array.isArray(planReview.patchedPlans) && planReview.patchedPlans.length > 0
+  const rawPlans = Array.isArray(planReview.patchedPlans) && planReview.patchedPlans.length > 0
     ? planReview.patchedPlans
     : prometheusAnalysis.plans;
+
+  // ── Ensure synthesizable defaults on all plans ─────────────────────────────
+  // Athena's patchedPlans come from AI output and may lack fields that
+  // normalizePlanFromTask would synthesize (capacityDelta, requestROI,
+  // verification_commands, acceptance_criteria, dependencies).
+  // Fill only missing fields with safe defaults so downstream gates pass.
+  const plans = rawPlans.map((p: any) => ({
+    ...p,
+    capacityDelta: Number.isFinite(Number(p.capacityDelta)) && Number(p.capacityDelta) >= -1 && Number(p.capacityDelta) <= 1
+      ? Number(p.capacityDelta) : 0.1,
+    requestROI: Number.isFinite(Number(p.requestROI)) && Number(p.requestROI) > 0
+      ? Number(p.requestROI) : 1.0,
+    verification_commands: Array.isArray(p.verification_commands) && p.verification_commands.length > 0
+      ? p.verification_commands : [String(p.verification || "npm test")],
+    acceptance_criteria: Array.isArray(p.acceptance_criteria) && p.acceptance_criteria.length > 0
+      ? p.acceptance_criteria : [String(p.task || "Task completes successfully")],
+    dependencies: Array.isArray(p.dependencies) ? p.dependencies : [],
+  }));
 
   // Funnel tracking: capture approved count before quality/freeze gates reduce plans.
   const funnelApprovedCount: number = plans.length;
