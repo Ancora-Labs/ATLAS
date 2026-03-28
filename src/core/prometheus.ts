@@ -112,12 +112,8 @@ export const UNRECOVERABLE_PACKET_REASONS = Object.freeze({
  * Unrecoverable conditions:
  *  1. No task identity  — all of task/title/task_id/id are absent or empty.
  *     Normalization falls back to "Task-N" which carries no semantic meaning.
- *  2. Missing/invalid capacityDelta  — normalization explicitly omits this field
- *     when it is absent or out of range; the downstream contract validator would
- *     remove the plan anyway, so rejecting early avoids wasted processing.
- *  3. Missing/invalid requestROI  — same rationale as capacityDelta.
- * Verification coupling is NOT treated as unrecoverable at this raw stage because
- * normalizePlanFromTask() can synthesize verification + verification_commands.
+ * Fields like capacityDelta, requestROI, and verification are NOT treated as
+ * unrecoverable because normalizePlanFromTask() synthesizes sensible defaults.
  *
  * Reason codes are values from the canonical PACKET_VIOLATION_CODE taxonomy
  * (plan_contract_validator.ts) so they are identical to codes emitted by the
@@ -139,25 +135,8 @@ export function checkPacketCompleteness(rawPlan: any): { recoverable: boolean; r
     reasons.push(PACKET_VIOLATION_CODE.NO_TASK_IDENTITY);
   }
 
-  // 2. capacityDelta: must be present and a finite number ∈ [-1.0, 1.0].
-  if (!("capacityDelta" in rawPlan)) {
-    reasons.push(PACKET_VIOLATION_CODE.MISSING_CAPACITY_DELTA);
-  } else {
-    const cd = Number(rawPlan.capacityDelta);
-    if (!Number.isFinite(cd) || cd < -1 || cd > 1) {
-      reasons.push(PACKET_VIOLATION_CODE.INVALID_CAPACITY_DELTA);
-    }
-  }
-
-  // 3. requestROI: must be present and a positive finite number.
-  if (!("requestROI" in rawPlan)) {
-    reasons.push(PACKET_VIOLATION_CODE.MISSING_REQUEST_ROI);
-  } else {
-    const roi = Number(rawPlan.requestROI);
-    if (!Number.isFinite(roi) || roi <= 0) {
-      reasons.push(PACKET_VIOLATION_CODE.INVALID_REQUEST_ROI);
-    }
-  }
+  // capacityDelta and requestROI are NOT checked here because
+  // normalizePlanFromTask() synthesizes defaults (0.1 and 1.0 respectively).
 
   return { recoverable: reasons.length === 0, reasons };
 }
@@ -609,16 +588,17 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
     waveDepends: Array.isArray(src.waveDepends)
       ? (src.waveDepends as any[]).map(Number).filter(n => Number.isFinite(n))
       : [],
-    // capacityDelta: mandatory field — expected measurable change in system capacity ∈ [-1.0, 1.0].
-    // Preserved from source when provided and valid; omitted otherwise (contract validator rejects).
-    ...(Number.isFinite(Number(src.capacityDelta)) && Number(src.capacityDelta) >= -1 && Number(src.capacityDelta) <= 1
-      ? { capacityDelta: Number(src.capacityDelta) }
-      : "capacityDelta" in src ? { capacityDelta: src.capacityDelta } : {}),
-    // requestROI: mandatory field — expected return-on-investment for premium request consumed.
-    // Preserved from source when provided and valid; omitted otherwise (contract validator rejects).
-    ...(Number.isFinite(Number(src.requestROI)) && Number(src.requestROI) > 0
-      ? { requestROI: Number(src.requestROI) }
-      : "requestROI" in src ? { requestROI: src.requestROI } : {}),
+    // capacityDelta: expected measurable change in system capacity ∈ [-1.0, 1.0].
+    // Preserved from source when valid; defaults to 0.1 (conservative positive impact)
+    // when AI omits it so downstream gates do not reject the plan.
+    capacityDelta: Number.isFinite(Number(src.capacityDelta)) && Number(src.capacityDelta) >= -1 && Number(src.capacityDelta) <= 1
+      ? Number(src.capacityDelta)
+      : 0.1,
+    // requestROI: expected return-on-investment for premium request consumed.
+    // Preserved from source when valid; defaults to 1.0 (break-even) when AI omits it.
+    requestROI: Number.isFinite(Number(src.requestROI)) && Number(src.requestROI) > 0
+      ? Number(src.requestROI)
+      : 1.0,
   };
 }
 

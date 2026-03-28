@@ -1244,44 +1244,38 @@ describe("checkPacketCompleteness — generation-boundary gate", () => {
     assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.NO_TASK_IDENTITY));
   });
 
-  it("returns recoverable=false with missing_capacity_delta when capacityDelta is absent", () => {
+  it("returns recoverable=true when capacityDelta is absent (normalization synthesizes default)", () => {
     const plan = validRawPlan();
     delete (plan as any).capacityDelta;
     const result = checkPacketCompleteness(plan);
-    assert.equal(result.recoverable, false);
-    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_CAPACITY_DELTA));
+    assert.equal(result.recoverable, true);
   });
 
-  it("returns recoverable=false with invalid_capacity_delta when capacityDelta is out of range", () => {
+  it("returns recoverable=true when capacityDelta is out of range (normalization synthesizes default)", () => {
     const result = checkPacketCompleteness(validRawPlan({ capacityDelta: 2.0 }));
-    assert.equal(result.recoverable, false);
-    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_CAPACITY_DELTA));
+    assert.equal(result.recoverable, true);
   });
 
-  it("returns recoverable=false with invalid_capacity_delta when capacityDelta is non-finite", () => {
+  it("returns recoverable=true when capacityDelta is non-finite (normalization synthesizes default)", () => {
     const result = checkPacketCompleteness(validRawPlan({ capacityDelta: NaN }));
-    assert.equal(result.recoverable, false);
-    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_CAPACITY_DELTA));
+    assert.equal(result.recoverable, true);
   });
 
-  it("returns recoverable=false with missing_request_roi when requestROI is absent", () => {
+  it("returns recoverable=true when requestROI is absent (normalization synthesizes default)", () => {
     const plan = validRawPlan();
     delete (plan as any).requestROI;
     const result = checkPacketCompleteness(plan);
-    assert.equal(result.recoverable, false);
-    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_REQUEST_ROI));
+    assert.equal(result.recoverable, true);
   });
 
-  it("returns recoverable=false with invalid_request_roi when requestROI is zero", () => {
+  it("returns recoverable=true when requestROI is zero (normalization synthesizes default)", () => {
     const result = checkPacketCompleteness(validRawPlan({ requestROI: 0 }));
-    assert.equal(result.recoverable, false);
-    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_REQUEST_ROI));
+    assert.equal(result.recoverable, true);
   });
 
-  it("returns recoverable=false with invalid_request_roi when requestROI is negative", () => {
+  it("returns recoverable=true when requestROI is negative (normalization synthesizes default)", () => {
     const result = checkPacketCompleteness(validRawPlan({ requestROI: -1 }));
-    assert.equal(result.recoverable, false);
-    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_REQUEST_ROI));
+    assert.equal(result.recoverable, true);
   });
 
   it("accepts non-empty verification text when verification_commands is absent", () => {
@@ -1300,14 +1294,11 @@ describe("checkPacketCompleteness — generation-boundary gate", () => {
     assert.equal(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING), false);
   });
 
-  it("accumulates multiple reasons when multiple fields are unrecoverable", () => {
-    const result = checkPacketCompleteness({ wave: 1 }); // no task, no capacityDelta, no requestROI
+  it("only reports no_task_identity when task is missing (capacityDelta/requestROI handled by normalization)", () => {
+    const result = checkPacketCompleteness({ wave: 1 }); // no task — only unrecoverable condition
     assert.equal(result.recoverable, false);
     assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.NO_TASK_IDENTITY));
-    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_CAPACITY_DELTA));
-    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_REQUEST_ROI));
-    assert.equal(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING), false);
-    assert.equal(result.reasons.length, 3);
+    assert.equal(result.reasons.length, 1);
   });
 
   it("accepts title as task identity fallback", () => {
@@ -1340,12 +1331,12 @@ describe("checkPacketCompleteness — generation-boundary gate", () => {
     assert.equal(result.recoverable, true);
   });
 
-  it("negative path: invalid capacityDelta does NOT suppress task identity detection", () => {
-    // Both no task identity AND invalid capacityDelta → two reasons
+  it("negative path: only task identity is checked at raw stage", () => {
+    // No task identity → single reason (capacityDelta/requestROI not checked here)
     const result = checkPacketCompleteness({ capacityDelta: 999, requestROI: 2.0 });
     assert.equal(result.recoverable, false);
     assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.NO_TASK_IDENTITY));
-    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_CAPACITY_DELTA));
+    assert.equal(result.reasons.length, 1);
   });
 
   // ── Raw packet stage: verification coupling is synthesized downstream ─────
