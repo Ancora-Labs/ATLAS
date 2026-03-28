@@ -161,8 +161,8 @@ export const CATASTROPHE_DEFAULTS = Object.freeze({
   runawayRetryThreshold:          5,
   /** blocked/total > this ratio → MASS_BLOCKED_TASKS. */
   massBlockedRatio:               0.5,
-  /** State file age (ms) > this → STALE_CRITICAL_STATE. 8 hours = 28800000 ms. */
-  staleCriticalStateAgeMs:        28_800_000,
+  /** State file age (ms) > this → STALE_CRITICAL_STATE. 2 hours = 7200000 ms. */
+  staleCriticalStateAgeMs:        7_200_000,
   /** Parse failure count >= this → REPEATED_AI_PARSE_FAILURES. */
   repeatedParseFailureThreshold:  3,
   /** Consecutive budget breaches >= this → BUDGET_EXHAUSTION_SPIRAL. */
