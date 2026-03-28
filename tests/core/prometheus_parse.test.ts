@@ -371,6 +371,66 @@ describe("normalizePrometheusParsedOutput — confidence components", () => {
     assert.equal(result.parserConfidenceComponents.bottleneckCoverage, 1.0);
     assert.ok(!result.parserConfidencePenalties.some(p => p.component === "bottleneckCoverage"));
   });
+
+  // ── Structural quality: alias variation must not affect healthField score ──
+
+  it("healthField=1.0 for 'healthy' alias — structural quality invariant to alias vs canonical", () => {
+    const parsed = {
+      projectHealth: "healthy",
+      plans: [{ task: "Harden trust boundary", role: "evolution-worker" }],
+      requestBudget: { estimatedPremiumRequestsTotal: 1, errorMarginPercent: 15, hardCapTotal: 2 },
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    assert.equal(result.parserConfidenceComponents.healthField, 1.0,
+      "'healthy' alias must score healthField=1.0 — same as canonical 'good'");
+    assert.ok(!result.parserConfidencePenalties.some(p => p.component === "healthField"),
+      "no healthField penalty expected for a recognized alias");
+  });
+
+  it("healthField=1.0 for 'warning' alias — structural quality invariant to alias vs canonical", () => {
+    const parsed = {
+      projectHealth: "warning",
+      plans: [{ task: "Fix retry escalation", role: "evolution-worker" }],
+      requestBudget: { estimatedPremiumRequestsTotal: 1, errorMarginPercent: 15, hardCapTotal: 2 },
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    assert.equal(result.parserConfidenceComponents.healthField, 1.0,
+      "'warning' alias must score healthField=1.0 — same as canonical 'needs-work'");
+    assert.ok(!result.parserConfidencePenalties.some(p => p.component === "healthField"),
+      "no healthField penalty expected for a recognized alias");
+  });
+
+  it("healthField=1.0 for all canonical health values ('good', 'needs-work', 'critical')", () => {
+    for (const value of ["good", "needs-work", "critical"]) {
+      const parsed = {
+        projectHealth: value,
+        plans: [{ task: "Fix something", role: "evolution-worker" }],
+        requestBudget: { estimatedPremiumRequestsTotal: 1, errorMarginPercent: 15, hardCapTotal: 2 },
+      };
+      const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+      assert.equal(result.parserConfidenceComponents.healthField, 1.0,
+        `canonical '${value}' must score healthField=1.0`);
+      assert.ok(!result.parserConfidencePenalties.some(p => p.component === "healthField"),
+        `no healthField penalty expected for canonical value '${value}'`);
+    }
+  });
+
+  it("healthField=0.8 for unrecognized projectHealth value — negative path (not a known alias)", () => {
+    const parsed = {
+      projectHealth: "unknown-status",
+      plans: [{ task: "Fix something", role: "evolution-worker" }],
+      requestBudget: { estimatedPremiumRequestsTotal: 1, errorMarginPercent: 15, hardCapTotal: 2 },
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    assert.equal(result.parserConfidenceComponents.healthField, 0.8,
+      "unrecognized health value is treated as a structural gap — field cannot be validated");
+    const penalty = result.parserConfidencePenalties.find(p => p.component === "healthField");
+    assert.ok(penalty, "must have a healthField penalty for an unrecognized value");
+    assert.equal(penalty.reason, "health_field_missing_or_invalid");
+  });
 });
 
 describe("computeBottleneckCoverage", () => {
