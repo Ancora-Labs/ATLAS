@@ -16,8 +16,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { runOnce, runResumeDispatch, evaluatePreDispatchGovernanceGate } from "../../src/core/orchestrator.js";
-import { readPipelineProgress, PIPELINE_STAGE_ENUM } from "../../src/core/pipeline_progress.js";
+import { runOnce, runResumeDispatch, evaluatePreDispatchGovernanceGate, BLOCK_REASON } from "../../src/core/orchestrator.js";
+import { readPipelineProgress, PIPELINE_STAGE_ENUM, PIPELINE_STEPS } from "../../src/core/pipeline_progress.js";
 import { EVENTS } from "../../src/core/event_schema.js";
 
 describe("orchestrator pipeline progress — resilience", () => {
@@ -1227,3 +1227,119 @@ describe("plan evidence coupling gate — pre-dispatch governance gate (Task 3 h
   });
 });
 
+// ── Terminology drift prevention ──────────────────────────────────────────────
+//
+// These tests pin the exact canonical terminology used across:
+//   1. PIPELINE_STAGE_ENUM  — stage IDs referenced by the orchestrator and dashboard
+//   2. PIPELINE_STEPS       — human-readable stage labels used in the dashboard
+//   3. BLOCK_REASON         — guardrail reason code prefixes emitted by the governance gate
+//
+// If any of these change, tests here fail immediately and force an explicit
+// documentation update — preventing silent terminology drift between the
+// orchestrator, pipeline progress tracker, and test assertions.
+
+describe("pipeline progress — terminology drift prevention (stage IDs)", () => {
+  it("PIPELINE_STAGE_ENUM contains exactly the canonical leadership chain stage IDs", () => {
+    // Authoritative ordered list of all stage IDs.
+    // Any addition, removal, or rename must update this list explicitly.
+    const CANONICAL_STAGE_IDS = [
+      "idle",
+      "jesus_awakening",
+      "jesus_reading",
+      "jesus_thinking",
+      "jesus_decided",
+      "prometheus_starting",
+      "prometheus_reading_repo",
+      "prometheus_analyzing",
+      "prometheus_audit",
+      "prometheus_done",
+      "athena_reviewing",
+      "athena_approved",
+      "workers_dispatching",
+      "workers_running",
+      "workers_finishing",
+      "cycle_complete",
+    ];
+    assert.deepEqual(
+      [...PIPELINE_STAGE_ENUM],
+      CANONICAL_STAGE_IDS,
+      "PIPELINE_STAGE_ENUM must match the canonical stage ID list exactly — update this list if a stage is intentionally renamed or added"
+    );
+  });
+
+  it("PIPELINE_STEPS contains exactly the canonical stage labels (prevents label drift)", () => {
+    // Authoritative stage-ID-to-label mapping.
+    // Labels appear in the dashboard — changes require an explicit update here.
+    const CANONICAL_LABELS: Record<string, string> = {
+      idle:                    "Idle",
+      jesus_awakening:         "Jesus Awakening",
+      jesus_reading:           "Jesus Reading System State",
+      jesus_thinking:          "Jesus Analyzing (AI)",
+      jesus_decided:           "Jesus Decided",
+      prometheus_starting:     "Prometheus Awakening",
+      prometheus_reading_repo: "Prometheus Reading Repository",
+      prometheus_analyzing:    "Prometheus Deep Analysis (AI)",
+      prometheus_audit:        "Prometheus Read Audit",
+      prometheus_done:         "Prometheus Analysis Complete",
+      athena_reviewing:        "Athena Reviewing Plan",
+      athena_approved:         "Athena Plan Approved",
+      workers_dispatching:     "Dispatching Workers",
+      workers_running:         "Workers Running",
+      workers_finishing:       "Workers Finishing",
+      cycle_complete:          "Cycle Complete",
+    };
+
+    for (const step of PIPELINE_STEPS) {
+      assert.equal(
+        step.label,
+        CANONICAL_LABELS[step.id],
+        `PIPELINE_STEPS label for '${step.id}' must be '${CANONICAL_LABELS[step.id]}' — got '${step.label}'. Update CANONICAL_LABELS if the label change is intentional.`
+      );
+    }
+  });
+
+  it("governance gate BLOCK_REASON values match canonical reason-code prefixes", () => {
+    // Authoritative reason-code prefix map for evaluatePreDispatchGovernanceGate.
+    // These prefixes appear in reason strings returned by the gate and are
+    // pattern-matched by consumers and monitors — any change must be deliberate.
+    const CANONICAL_BLOCK_REASONS: Record<string, string> = {
+      BUDGET_EXHAUSTED:               "budget_exhausted",
+      GUARDRAIL_PAUSE_WORKERS_ACTIVE: "guardrail_pause_workers_active",
+      GOVERNANCE_FREEZE_ACTIVE:       "governance_freeze_active",
+      LINEAGE_CYCLE_DETECTED:         "lineage_cycle_detected",
+      GOVERNANCE_CANARY_BREACH:       "governance_canary_breach",
+      CRITICAL_DEBT_OVERDUE:          "critical_debt_overdue",
+      MANDATORY_DRIFT_DEBT_UNRESOLVED:"mandatory_drift_debt_unresolved",
+      PLAN_EVIDENCE_COUPLING_INVALID: "plan_evidence_coupling_invalid",
+    };
+
+    for (const [key, expectedValue] of Object.entries(CANONICAL_BLOCK_REASONS)) {
+      assert.equal(
+        (BLOCK_REASON as Record<string, string>)[key],
+        expectedValue,
+        `BLOCK_REASON.${key} must equal '${expectedValue}' — update CANONICAL_BLOCK_REASONS if the reason code is intentionally changed`
+      );
+    }
+
+    // Ensure no new reason codes were added without being captured here
+    const actualKeys = Object.keys(BLOCK_REASON).sort();
+    const canonicalKeys = Object.keys(CANONICAL_BLOCK_REASONS).sort();
+    assert.deepEqual(
+      actualKeys,
+      canonicalKeys,
+      `BLOCK_REASON has ${actualKeys.length} keys but CANONICAL_BLOCK_REASONS has ${canonicalKeys.length}. New reason codes: [${actualKeys.filter(k => !canonicalKeys.includes(k)).join(", ")}]. Removed reason codes: [${canonicalKeys.filter(k => !actualKeys.includes(k)).join(", ")}]. Update CANONICAL_BLOCK_REASONS to reflect intentional changes.`
+    );
+  });
+
+  it("negative path: unknown stage ID is not in PIPELINE_STAGE_ENUM (catches accidental renames)", () => {
+    // Verify that a hypothetical mis-typed or drifted stage name is not silently accepted
+    const driftedNames = ["planner_starting", "supervisor_awakening", "review_approved", "dispatch_workers"];
+    for (const drifted of driftedNames) {
+      assert.equal(
+        (PIPELINE_STAGE_ENUM as ReadonlyArray<string>).includes(drifted),
+        false,
+        `Drifted stage name '${drifted}' must not appear in PIPELINE_STAGE_ENUM`
+      );
+    }
+  });
+});

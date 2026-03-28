@@ -308,3 +308,106 @@ describe("run_task.js — startup ordering and env/startup contract gaps", () =>
     );
   });
 });
+
+// ── Per-variable named env contract tests ────────────────────────────────────
+
+/**
+ * These tests verify the exact required env var contract for run_task.ts.
+ * Each required variable is tested in isolation so that future renames or
+ * additions are caught immediately by a named, scoped failure.
+ *
+ * Required env vars (authoritative set): WORKER_ROLE, TASK_PAYLOAD, TARGET_REPO, GITHUB_TOKEN
+ */
+describe("run_task.js — exact named required-env-var contract", () => {
+  it("documents the exact required env var set: WORKER_ROLE, TASK_PAYLOAD, TARGET_REPO, GITHUB_TOKEN", () => {
+    // This test pins the authoritative required-variable names.
+    // If any variable is added or renamed in run_task.ts, this test must be
+    // updated to reflect the new contract — preventing silent terminology drift.
+    const REQUIRED_ENV_VARS = ["WORKER_ROLE", "TASK_PAYLOAD", "TARGET_REPO", "GITHUB_TOKEN"];
+
+    // Run with all vars absent and confirm each name appears in the error output
+    const result = run(
+      Object.fromEntries(REQUIRED_ENV_VARS.map(v => [v, ""]))
+    );
+    assert.equal(result.status, 1, "must exit 1 when all required vars are absent");
+
+    const combined = result.stderr + result.stdout;
+    for (const varName of REQUIRED_ENV_VARS) {
+      assert.ok(
+        combined.includes(varName),
+        `required env var '${varName}' must be named in the error output; combined output: ${combined.slice(0, 400)}`
+      );
+    }
+  });
+
+  it("WORKER_ROLE alone missing → env_vars:fail with WORKER_ROLE named in stderr", () => {
+    const result = run({
+      WORKER_ROLE: "",
+      TASK_PAYLOAD: JSON.stringify({ id: "t-wrmissing", kind: "devops" }),
+      TARGET_REPO: "owner/repo",
+      GITHUB_TOKEN: "ghp_fake",
+    });
+    assert.equal(result.status, 1, "must exit 1 when WORKER_ROLE is absent");
+    assert.match(result.stderr, /WORKER_ROLE/,
+      "stderr must name WORKER_ROLE as the missing variable");
+    const health = parseContractHealth(result.stderr);
+    assert.ok(health !== null, "WORKER_CONTRACT_HEALTH must be emitted to stderr");
+    assert.equal(health!.env_vars, "fail",
+      "env_vars must be 'fail' when WORKER_ROLE is missing");
+    assert.equal(health!.payload, "n/a",
+      "payload must be 'n/a' when env_vars check fails (not reached)");
+    assert.equal(health!.role, "n/a",
+      "role must be 'n/a' when env_vars check fails (not reached)");
+  });
+
+  it("GITHUB_TOKEN alone missing → env_vars:fail with GITHUB_TOKEN named in stderr", () => {
+    const result = run({
+      WORKER_ROLE: "noah",
+      TASK_PAYLOAD: JSON.stringify({ id: "t-ghtoken", kind: "devops" }),
+      TARGET_REPO: "owner/repo",
+      GITHUB_TOKEN: "",
+    });
+    assert.equal(result.status, 1, "must exit 1 when GITHUB_TOKEN is absent");
+    assert.match(result.stderr, /GITHUB_TOKEN/,
+      "stderr must name GITHUB_TOKEN as the missing variable");
+    const health = parseContractHealth(result.stderr);
+    assert.ok(health !== null, "WORKER_CONTRACT_HEALTH must be emitted to stderr");
+    assert.equal(health!.env_vars, "fail",
+      "env_vars must be 'fail' when GITHUB_TOKEN is missing");
+    assert.equal(health!.payload, "n/a");
+    assert.equal(health!.role, "n/a");
+  });
+
+  it("TASK_PAYLOAD alone missing → env_vars:fail with TASK_PAYLOAD named in stderr", () => {
+    const result = run({
+      WORKER_ROLE: "noah",
+      TASK_PAYLOAD: "",
+      TARGET_REPO: "owner/repo",
+      GITHUB_TOKEN: "ghp_fake",
+    });
+    assert.equal(result.status, 1, "must exit 1 when TASK_PAYLOAD is absent");
+    assert.match(result.stderr, /TASK_PAYLOAD/,
+      "stderr must name TASK_PAYLOAD as the missing variable");
+    const health = parseContractHealth(result.stderr);
+    assert.ok(health !== null, "WORKER_CONTRACT_HEALTH must be emitted to stderr");
+    assert.equal(health!.env_vars, "fail",
+      "env_vars must be 'fail' when TASK_PAYLOAD is missing (treated as absent by the env check)");
+  });
+
+  it("all four required vars present → exits 0 with full-pass contract health on stdout", () => {
+    const task = JSON.stringify({ id: "t-allpresent", kind: "implementation" });
+    const result = run({
+      WORKER_ROLE: "evolution-worker",
+      TASK_PAYLOAD: task,
+      TARGET_REPO: "owner/repo",
+      GITHUB_TOKEN: "ghp_fake",
+    });
+    assert.equal(result.status, 0, "must exit 0 when all four required vars are present");
+    const health = parseContractHealth(result.stdout);
+    assert.ok(health !== null,
+      "WORKER_CONTRACT_HEALTH must appear in stdout on success");
+    assert.equal(health!.env_vars, "pass");
+    assert.equal(health!.payload, "pass");
+    assert.equal(health!.role, "pass");
+  });
+});
