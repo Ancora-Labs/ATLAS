@@ -1116,6 +1116,34 @@ describe("budget reconciliation gate — pre-dispatch governance gate integratio
     assert.equal(result.budgetEligibility.configured, false);
     assert.equal(result.budgetEligibility.remainingUsd, null);
   });
+
+  it("hard gate: budget exhaustion blocks before governance freeze fires", async () => {
+    // Budget exhausted + freeze active simultaneously: budget gate must win because
+    // it is now the first gate evaluated, preventing unnecessary downstream work.
+    const budgetFile = path.join(tmpDir, "budget.json");
+    await fs.writeFile(
+      budgetFile,
+      JSON.stringify({ initialUsd: 5, remainingUsd: 0.1, claudeCalls: 10, workerRuns: 5, updatedAt: new Date().toISOString() }),
+      "utf8"
+    );
+    const cfg = {
+      ...config,
+      paths: { ...config.paths, budgetFile },
+      governanceFreeze: { enabled: true, manualOverrideActive: true },
+    };
+
+    const result = await evaluatePreDispatchGovernanceGate(cfg, [], "budget-hard-gate-freeze-active");
+
+    assert.equal(result.blocked, true, "dispatch must be blocked");
+    assert.ok(
+      result.reason?.startsWith("budget_exhausted:"),
+      `budget gate must fire before freeze gate; got: ${result.reason}`
+    );
+    assert.equal(result.budgetEligibility.eligible, false);
+    assert.equal(result.budgetEligibility.remainingUsd, 0.1);
+    // graphResult is null because graph resolution is skipped when budget blocks first
+    assert.equal(result.graphResult, null, "graphResult must be null when budget gate fires first");
+  });
 });
 
 // ── Task 3 hardening: plan evidence coupling gate ─────────────────────────────
