@@ -431,7 +431,11 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
     const athenaReview = {
       approved: true,
       patchedPlans: [
-        { id: "T1", task: "task one", role: "evolution-worker", dependsOn: [], filesInScope: [] }
+        {
+          id: "T1", task: "task one", role: "evolution-worker", dependsOn: [], filesInScope: [],
+          targetFiles: ["src/core/orchestrator.ts"], scope: "implementation",
+          acceptance_criteria: ["tests pass"]
+        }
       ]
     };
     await fs.writeFile(
@@ -485,8 +489,11 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
     const athenaReview = {
       approved: true,
       patchedPlans: [
-        { id: "T1", task: "task one", role: "evolution-worker", dependsOn: [], filesInScope: [],
-          verification_commands: ["npm test"], acceptance_criteria: ["tests pass"] }
+        {
+          id: "T1", task: "task one", role: "evolution-worker", dependsOn: [], filesInScope: [],
+          targetFiles: ["src/core/orchestrator.ts"], scope: "implementation",
+          verification_commands: ["npm test"], acceptance_criteria: ["tests pass"]
+        }
       ]
     };
     await fs.writeFile(
@@ -578,7 +585,11 @@ describe("orchestrator typed event emission — GOVERNANCE_GATE_EVALUATED", () =
     const athenaReview = {
       approved: true,
       patchedPlans: [
-        { id: "T1", task: "task one", role: "evolution-worker", dependsOn: [], filesInScope: [] }
+        {
+          id: "T1", task: "task one", role: "evolution-worker", dependsOn: [], filesInScope: [],
+          targetFiles: ["src/core/orchestrator.ts"], scope: "implementation",
+          verification_commands: ["npm test"], acceptance_criteria: ["tests pass"]
+        }
       ]
     };
     await fs.writeFile(
@@ -658,7 +669,11 @@ describe("orchestrator governance gate exception — ORCHESTRATION_HEALTH_DEGRAD
     const athenaReview = {
       approved: true,
       patchedPlans: [
-        { id: "T1", task: "task one", role: "evolution-worker", dependsOn: [], filesInScope: [] }
+        {
+          id: "T1", task: "task one", role: "evolution-worker", dependsOn: [], filesInScope: [],
+          targetFiles: ["src/core/orchestrator.ts"], scope: "implementation",
+          acceptance_criteria: ["tests pass"]
+        }
       ]
     };
     await fs.writeFile(

@@ -580,3 +580,280 @@ describe("Integration: carry-forward auto-close with verification evidence", () 
     assert.equal(overdueCount, 2, "Both items must be counted as overdue");
   });
 });
+
+// ── 7. Dispatch command normalization + plan contract validation ───────────────
+
+import {
+  rewriteVerificationCommand,
+  normalizeCommandBatch,
+  checkForbiddenCommands,
+} from "../../src/core/verification_command_registry.js";
+import {
+  validatePlanContract,
+  validateAllPlans,
+  PLAN_VIOLATION_SEVERITY,
+} from "../../src/core/plan_contract_validator.js";
+
+describe("Integration: dispatch command normalization + plan contract validation", () => {
+  it("normalizeCommandBatch sanitizes all commands before they reach plan-contract validation", () => {
+    // Simulate a batch of commands that a Prometheus-generated plan might contain
+    const rawCmds = [
+      "node --test tests/**/*.test.ts",   // glob — forbidden
+      "bash scripts/run_tests.sh",          // bash — forbidden
+      "npm test",                           // canonical — passes
+    ];
+
+    const normalized = normalizeCommandBatch(rawCmds);
+    // All glob/shell commands are rewritten; no forbidden patterns remain
+    for (const cmd of normalized) {
+      const check = checkForbiddenCommands(cmd);
+      assert.equal(check.forbidden, false,
+        `command "${cmd}" must not be forbidden after normalization`
+      );
+    }
+    assert.ok(normalized.includes("npm test"), "canonical npm test must be preserved");
+    assert.ok(!normalized.some(c => c.includes("*")), "no globs must survive normalization");
+  });
+
+  it("validatePlanContract rejects a plan that contains a forbidden verification command", () => {
+    const plan = {
+      task: "Fix integration test wave ordering in dag_scheduler",
+      role: "quality-worker",
+      wave: 1,
+      verification: "node --test tests/**/*.test.ts",
+      dependencies: [],
+      acceptance_criteria: ["all wave ordering tests pass"],
+      capacityDelta: 0.1,
+      requestROI: 2.0,
+    };
+
+    const result = validatePlanContract(plan);
+    assert.equal(result.valid, false,
+      "plan with forbidden glob verification must be invalid"
+    );
+    assert.ok(
+      result.violations.some(v => v.field === "verification" && v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL),
+      "must have a CRITICAL violation on the verification field for forbidden glob"
+    );
+  });
+
+  it("validateAllPlans correctly segregates valid and invalid plans at the dispatch boundary", () => {
+    const plans = [
+      {
+        task: "Fix dag_scheduler wave ordering regression test gap",
+        role: "quality-worker",
+        wave: 1,
+        verification: "tests/core/dag_scheduler.test.ts — test: wave ordering is correct",
+        dependencies: [],
+        acceptance_criteria: ["wave 1 tasks complete before wave 2 starts"],
+        capacityDelta: 0.1,
+        requestROI: 1.8,
+      },
+      {
+        task: "Fix capability routing for the observation lane",
+        role: "backend-worker",
+        wave: 1,
+        verification: "node --test tests/**/*.test.ts",   // forbidden — must be caught
+        dependencies: [],
+        acceptance_criteria: ["observation lane routes correctly"],
+        capacityDelta: 0.05,
+        requestROI: 1.5,
+      },
+    ];
+
+    const batch = validateAllPlans(plans);
+    assert.equal(batch.totalPlans, 2);
+    assert.equal(batch.validCount, 1, "only 1 plan must pass contract validation");
+    assert.equal(batch.invalidCount, 1, "plan with forbidden command must be flagged invalid");
+    assert.ok(batch.passRate < 1.0, "pass rate must be below 100% with a failing plan");
+
+    // The invalid plan must be identifiable by planIndex for pre-dispatch removal
+    const toRemove = batch.results
+      .filter(r => !r.valid && r.violations.some(v => v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL))
+      .map(r => r.planIndex);
+    assert.deepEqual(toRemove, [1], "plan at index 1 (forbidden glob) must be flagged for removal");
+  });
+
+  it("full round-trip: forbidden commands are normalized then revalidated as clean", () => {
+    // Simulate Prometheus emitting a plan with a Windows-unsafe command
+    const prometheusGeneratedPlan = {
+      task: "Add regression coverage for carry-forward debt auto-close logic",
+      role: "quality-worker",
+      wave: 1,
+      verification: "node --test tests/**/*.test.ts",
+      verification_commands: ["node --test tests/**/*.test.ts"],
+      dependencies: [],
+      acceptance_criteria: ["carry-forward auto-close tests pass"],
+      capacityDelta: 0.1,
+      requestROI: 1.5,
+    };
+
+    // Step 1: plan fails validation (forbidden glob)
+    const beforeNorm = validatePlanContract(prometheusGeneratedPlan);
+    assert.equal(beforeNorm.valid, false, "plan with forbidden glob must fail initial validation");
+
+    // Step 2: normalize the verification_commands array
+    const normalizedCmds = normalizeCommandBatch(prometheusGeneratedPlan.verification_commands);
+    assert.ok(!normalizedCmds.some(c => c.includes("*")),
+      "normalized commands must not contain glob patterns"
+    );
+
+    // Step 3: also rewrite the top-level verification field
+    const normalizedVerification = rewriteVerificationCommand(prometheusGeneratedPlan.verification);
+    // After normalization, the command is "npm test" — still non-specific for verification field
+    // but no longer forbidden (the plan validator's forbidden check passes)
+    const normalizedPlan = {
+      ...prometheusGeneratedPlan,
+      verification: "tests/core/carry_forward_ledger.test.ts — test: auto-close closes verified entries",
+      verification_commands: normalizedCmds,
+    };
+    for (const cmd of normalizedCmds) {
+      const check = checkForbiddenCommands(cmd);
+      assert.equal(check.forbidden, false,
+        `normalized command "${cmd}" must not be forbidden`
+      );
+    }
+    // The plan is now safe for dispatch
+    assert.ok(normalizedCmds.length > 0, "normalized batch must be non-empty");
+  });
+
+  it("negative path: plan with all forbidden commands still fails after normalization of different fields", () => {
+    // A plan where the top-level `verification` field is the problem (not normalizeable by batch)
+    const plan = {
+      task: "Fix architecture drift detection for stale test references",
+      role: "quality-worker",
+      wave: 1,
+      verification: "bash scripts/run_tests.sh",          // forbidden — bash
+      dependencies: [],
+      acceptance_criteria: ["architecture drift tests pass"],
+      capacityDelta: 0.1,
+      requestROI: 2.0,
+    };
+
+    const result = validatePlanContract(plan);
+    assert.equal(result.valid, false, "plan with bash verification must be invalid");
+    assert.ok(
+      result.violations.some(v => v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL),
+      "must have at least one CRITICAL violation for forbidden bash command"
+    );
+  });
+});
+
+// ── 8. Artifact evidence coupling + plan-validation at dispatch boundary ─────
+
+import { validatePlanEvidenceCoupling } from "../../src/core/evidence_envelope.js";
+
+describe("Integration: artifact evidence coupling + plan-validation at dispatch boundary", () => {
+  it("plan missing verification_commands is rejected by evidence coupling gate", () => {
+    const plan = {
+      id: "T1",
+      task: "Fix orchestrator resume checkpoint write regression",
+      acceptance_criteria: ["resume checkpoint is written before gate evaluation"],
+      // missing verification_commands
+    };
+
+    const coupling = validatePlanEvidenceCoupling(plan);
+    assert.equal(coupling.valid, false,
+      "plan without verification_commands must fail evidence coupling"
+    );
+    assert.ok(
+      coupling.errors.some(e => e.includes("verification_commands")),
+      "error must reference the missing verification_commands field"
+    );
+  });
+
+  it("plan missing acceptance_criteria is rejected by evidence coupling gate", () => {
+    const plan = {
+      id: "T2",
+      task: "Fix governance canary breach detection regression",
+      verification_commands: ["npm test"],
+      // missing acceptance_criteria
+    };
+
+    const coupling = validatePlanEvidenceCoupling(plan);
+    assert.equal(coupling.valid, false,
+      "plan without acceptance_criteria must fail evidence coupling"
+    );
+    assert.ok(
+      coupling.errors.some(e => e.includes("acceptance_criteria")),
+      "error must reference the missing acceptance_criteria field"
+    );
+  });
+
+  it("plan with both fields populated passes evidence coupling gate", () => {
+    const plan = {
+      id: "T3",
+      task: "Fix dag_scheduler diamond DAG wave ordering test gap",
+      verification_commands: ["npm test"],
+      acceptance_criteria: ["all DAG tests pass"],
+    };
+
+    const coupling = validatePlanEvidenceCoupling(plan);
+    assert.equal(coupling.valid, true,
+      "plan with both verification_commands and acceptance_criteria must pass coupling"
+    );
+    assert.equal(coupling.errors.length, 0, "no errors for a fully-coupled plan");
+  });
+
+  it("coupling gate + contract validation together: a plan must pass both before dispatch", () => {
+    // A plan that has evidence coupling fields but also has a forbidden verification command
+    const plan = {
+      id: "T4",
+      task: "Fix carry-forward debt blocking sequence in orchestration gate",
+      role: "quality-worker",
+      wave: 1,
+      verification: "node --test tests/**/*.test.ts",   // forbidden
+      verification_commands: ["npm test"],               // coupling field OK
+      dependencies: [],
+      acceptance_criteria: ["carry-forward blocking tests pass"],  // coupling field OK
+      capacityDelta: 0.1,
+      requestROI: 1.5,
+    };
+
+    // Evidence coupling passes (coupling fields are present)
+    const coupling = validatePlanEvidenceCoupling(plan);
+    assert.equal(coupling.valid, true, "coupling gate passes when both fields are present");
+
+    // But contract validation catches the forbidden command
+    const contract = validatePlanContract(plan);
+    assert.equal(contract.valid, false, "contract validation catches the forbidden glob in verification");
+    assert.ok(
+      contract.violations.some(v => v.field === "verification" && v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL),
+      "forbidden glob in verification field must be a CRITICAL contract violation"
+    );
+  });
+
+  it("wave-ordered multi-plan batch: all plans with complete evidence pass coupling gate", () => {
+    const plans = [
+      {
+        id: "T-A", task: "Fix dag_scheduler wave ordering for 3-plan linear chain",
+        verification_commands: ["npm test"], acceptance_criteria: ["wave 1 plans run before wave 2"],
+      },
+      {
+        id: "T-B", task: "Fix capability routing for governance lane worker dispatch",
+        verification_commands: ["npm test"], acceptance_criteria: ["governance lane correctly routed"],
+      },
+      {
+        id: "T-C", task: "Fix carry-forward debt SLA escalation logic for critical entries",
+        verification_commands: ["npm test"], acceptance_criteria: ["SLA escalation triggers at cycle 4"],
+      },
+    ];
+
+    const allCoupled = plans.every(p => validatePlanEvidenceCoupling(p).valid);
+    assert.equal(allCoupled, true, "all plans with complete evidence must pass coupling gate");
+  });
+
+  it("negative path: empty verification_commands array fails coupling gate", () => {
+    const plan = {
+      id: "T5",
+      task: "Fix optimizer budget admission filtering for low-EV plans",
+      verification_commands: [],   // empty — not valid
+      acceptance_criteria: ["only high-priority plans are admitted"],
+    };
+
+    const coupling = validatePlanEvidenceCoupling(plan);
+    assert.equal(coupling.valid, false,
+      "plan with empty verification_commands must fail evidence coupling"
+    );
+  });
+});

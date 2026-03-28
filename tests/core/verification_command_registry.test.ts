@@ -195,3 +195,89 @@ describe("normalizeCommandBatch — end-to-end batch normalization", () => {
     );
   });
 });
+
+// ── Task 2 hardening: Windows-safe conformance — npx tsx and ts-node glob patterns ──
+
+describe("Windows-safe conformance — AI-generated glob patterns (Task 2)", () => {
+  it("detects npx tsx with glob as forbidden", () => {
+    const result = checkForbiddenCommands("npx tsx tests/**/*.test.ts");
+    assert.equal(result.forbidden, true,
+      "npx tsx with glob must be detected as forbidden (not Windows-safe)"
+    );
+    assert.ok(result.violations.length > 0, "must report at least one violation");
+    assert.ok(
+      result.violations.some(v => v.reason.includes("Windows")),
+      "violation reason must mention Windows"
+    );
+  });
+
+  it("detects ts-node with glob as forbidden", () => {
+    const result = checkForbiddenCommands("ts-node tests/**/*.spec.ts");
+    assert.equal(result.forbidden, true,
+      "ts-node with glob must be detected as forbidden (not Windows-safe)"
+    );
+    assert.ok(result.violations.length > 0);
+  });
+
+  it("rewrites npx tsx glob to npm test", () => {
+    assert.equal(rewriteVerificationCommand("npx tsx tests/**/*.test.ts"), "npm test");
+    assert.equal(rewriteVerificationCommand("npx tsx src/**/*.spec.ts"), "npm test");
+  });
+
+  it("rewrites ts-node glob to npm test", () => {
+    assert.equal(rewriteVerificationCommand("ts-node tests/**/*.test.ts"), "npm test");
+  });
+
+  it("passes npx tsx without glob through unchanged (registry-conformant)", () => {
+    assert.equal(rewriteVerificationCommand("npx tsx"), "npx tsx");
+    assert.equal(rewriteVerificationCommand("npx tsx tests/core/foo.test.ts"), "npx tsx tests/core/foo.test.ts");
+  });
+
+  it("every new FORBIDDEN_VERIFICATION_PATTERNS entry has a corresponding rewrite rule (registry completeness)", () => {
+    // Each forbidden pattern must be rewritable — not just detected but fixed.
+    // This test locks the registry contract: detection ↔ rewrite parity.
+    const testCases = [
+      "node --test tests/**/*.test.ts",
+      "bash scripts/test.sh",
+      "sh run.sh",
+      "npx tsx tests/**/*.test.ts",
+      "ts-node tests/**/*.spec.ts",
+    ];
+    for (const cmd of testCases) {
+      const forbidden = checkForbiddenCommands(cmd);
+      assert.ok(forbidden.forbidden, `"${cmd}" must be detected as forbidden`);
+      const rewritten = rewriteVerificationCommand(cmd);
+      assert.notEqual(rewritten, cmd, `"${cmd}" must be rewritten to a canonical form`);
+      assert.ok(rewritten.length > 0, `rewrite of "${cmd}" must not be empty`);
+    }
+  });
+
+  it("negative path: canonical commands are not forbidden (no false positives)", () => {
+    const canonical = ["npm test", "npm run lint", "npm run build", "node --test"];
+    for (const cmd of canonical) {
+      const result = checkForbiddenCommands(cmd);
+      assert.equal(result.forbidden, false,
+        `canonical command "${cmd}" must not be flagged as forbidden`
+      );
+    }
+  });
+
+  it("normalizeCommandBatch eliminates all AI-generated glob patterns in a mixed batch", () => {
+    const aiGeneratedBatch = [
+      "npx tsx tests/**/*.test.ts",
+      "ts-node src/**/*.spec.ts",
+      "node --test tests/**",
+      "npm test",
+      "npm run lint",
+    ];
+    const result = normalizeCommandBatch(aiGeneratedBatch);
+    assert.ok(!result.some(cmd => cmd.includes("*")),
+      `no glob patterns must survive after normalizeCommandBatch; got: [${result.join(", ")}]`
+    );
+    assert.ok(result.includes("npm test"), "npm test must be in the result");
+    assert.ok(result.includes("npm run lint"), "npm run lint must be in the result");
+    // npx tsx glob, ts-node glob, node --test glob all rewrite to npm test — deduplicated to 1
+    const npmTestCount = result.filter(c => c === "npm test").length;
+    assert.equal(npmTestCount, 1, "all glob rewrites collapse to a single 'npm test' after deduplication");
+  });
+});

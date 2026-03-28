@@ -189,3 +189,122 @@ describe("run_task.js — WORKER_CONTRACT_HEALTH runtime gate", () => {
     );
   });
 });
+
+// ── Carry-forward env/startup contract gap tests ──────────────────────────────
+
+describe("run_task.js — startup ordering and env/startup contract gaps", () => {
+  it("env_vars check runs before payload check: env failure reported when both ROLE and PAYLOAD are absent", () => {
+    // When WORKER_ROLE is empty and TASK_PAYLOAD is also empty,
+    // env_vars:fail must be emitted — not payload:fail — because env check runs first.
+    const result = run({
+      WORKER_ROLE: "",
+      TASK_PAYLOAD: "",
+      TARGET_REPO: "",
+      GITHUB_TOKEN: "",
+    });
+    assert.equal(result.status, 1, "must exit 1 when all required vars are absent");
+    const health = parseContractHealth(result.stderr);
+    assert.ok(health !== null, "WORKER_CONTRACT_HEALTH must appear in stderr");
+    assert.equal(health!.env_vars, "fail",
+      "env_vars slot must be 'fail' when env vars are absent — env check is first"
+    );
+    assert.equal(health!.payload, "n/a",
+      "payload slot must be 'n/a' when env_vars fails (payload check not reached)"
+    );
+    assert.equal(health!.role, "n/a",
+      "role slot must be 'n/a' when env_vars fails (role check not reached)"
+    );
+  });
+
+  it("single missing env var triggers env_vars:fail (partial env_vars failure)", () => {
+    // Only TARGET_REPO is missing — still an env_vars failure
+    const result = run({
+      WORKER_ROLE: "evolution-worker",
+      TASK_PAYLOAD: JSON.stringify({ id: "t-99", kind: "implementation" }),
+      TARGET_REPO: "",            // single missing required var
+      GITHUB_TOKEN: "ghp_fake",
+    });
+    assert.equal(result.status, 1, "must exit 1 when a single required env var is absent");
+    const health = parseContractHealth(result.stderr);
+    assert.ok(health !== null, "WORKER_CONTRACT_HEALTH must appear in stderr for single-missing-var failure");
+    assert.equal(health!.env_vars, "fail",
+      "env_vars must be 'fail' even for a single missing variable"
+    );
+  });
+
+  it("startup log line appears in stdout before the contract health line on success", () => {
+    const task = JSON.stringify({ id: "t-88", kind: "devops" });
+    const result = run({
+      WORKER_ROLE: "noah",
+      TASK_PAYLOAD: task,
+      TARGET_REPO: "owner/repo",
+      GITHUB_TOKEN: "ghp_fake",
+    });
+    assert.equal(result.status, 0, "must exit 0 when all env vars are valid");
+
+    const lines = result.stdout.split("\n").filter(l => l.trim().length > 0);
+    const startupIdx = lines.findIndex(l => l.includes("[run_task] Worker container started"));
+    const healthIdx  = lines.findIndex(l => l.includes("WORKER_CONTRACT_HEALTH="));
+
+    assert.ok(startupIdx >= 0, "'Worker container started' line must appear in stdout");
+    assert.ok(healthIdx >= 0,  "WORKER_CONTRACT_HEALTH line must appear in stdout on success");
+    assert.ok(startupIdx < healthIdx,
+      "startup log line must appear BEFORE the contract health line (startup ordering contract)"
+    );
+  });
+
+  it("contract health line appears before 'Worker ready' message on success (health gate is pre-ready)", () => {
+    const task = JSON.stringify({ id: "t-77", kind: "infrastructure" });
+    const result = run({
+      WORKER_ROLE: "evolution-worker",
+      TASK_PAYLOAD: task,
+      TARGET_REPO: "owner/repo",
+      GITHUB_TOKEN: "ghp_fake",
+    });
+    assert.equal(result.status, 0);
+
+    const lines = result.stdout.split("\n").filter(l => l.trim().length > 0);
+    const healthIdx = lines.findIndex(l => l.includes("WORKER_CONTRACT_HEALTH="));
+    const readyIdx  = lines.findIndex(l => l.includes("Worker ready"));
+
+    assert.ok(healthIdx >= 0, "WORKER_CONTRACT_HEALTH line must appear in stdout");
+    assert.ok(readyIdx >= 0,  "'Worker ready' message must appear in stdout");
+    assert.ok(healthIdx < readyIdx,
+      "contract health line must appear BEFORE 'Worker ready' (health gate precedes task dispatch)"
+    );
+  });
+
+  it("WORKER_ROLE value is echoed in the startup log line for every successful start", () => {
+    for (const role of ["noah", "evolution-worker", "quality-worker"]) {
+      const task = JSON.stringify({ id: `t-${role}`, kind: "test" });
+      const result = run({
+        WORKER_ROLE: role,
+        TASK_PAYLOAD: task,
+        TARGET_REPO: "owner/repo",
+        GITHUB_TOKEN: "ghp_fake",
+      });
+      assert.equal(result.status, 0, `must exit 0 for role=${role}`);
+      assert.match(
+        result.stdout,
+        new RegExp(`role=${role}`),
+        `stdout must echo role=${role} in the startup log line`
+      );
+    }
+  });
+
+  it("negative: WORKER_ROLE is NOT echoed to stdout when env_vars check fails", () => {
+    const result = run({
+      WORKER_ROLE: "",
+      TASK_PAYLOAD: "",
+      TARGET_REPO: "",
+      GITHUB_TOKEN: "",
+    });
+    assert.equal(result.status, 1);
+    // The startup log line that echoes role= must not appear when env check fails
+    // (it is written only after env validation passes)
+    assert.ok(
+      !result.stdout.includes("Worker container started"),
+      "startup log must NOT appear in stdout when env_vars check fails — fail-fast before echoing role"
+    );
+  });
+});

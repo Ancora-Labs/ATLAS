@@ -77,6 +77,14 @@ export const FORBIDDEN_VERIFICATION_PATTERNS = Object.freeze([
     pattern: /^sh\s+/i,
     reason: "sh is not available on Windows — use 'npm test' instead"
   },
+  {
+    pattern: /^npx\s+tsx\s+[^\s]*\*/i,
+    reason: "Glob patterns via npx tsx are not expanded on Windows — use 'npm test' instead"
+  },
+  {
+    pattern: /^ts-node\s+[^\s]*\*/i,
+    reason: "Glob patterns via ts-node are not expanded on Windows — use 'npm test' instead"
+  },
 ]);
 
 /**
@@ -97,6 +105,9 @@ export const VERIFICATION_CMD_REWRITE_RULES: ReadonlyArray<{ match: RegExp; repl
   // Bash/sh scripts are not available on Windows
   { match: /^bash\s+/i, replacement: DEFAULTS.test },
   { match: /^sh\s+/i, replacement: DEFAULTS.test },
+  // npx tsx / ts-node with glob patterns — not expanded on Windows
+  { match: /^npx\s+tsx\s+[^\s]*\*/i, replacement: DEFAULTS.test },
+  { match: /^ts-node\s+[^\s]*\*/i, replacement: DEFAULTS.test },
   // BOX daemon/start commands that would launch the full agent stack
   { match: /^node\s+src\/cli\.js\s+once$/i, replacement: DEFAULTS.test },
   { match: /^npm\s+run\s+box:once$/i, replacement: DEFAULTS.test },
