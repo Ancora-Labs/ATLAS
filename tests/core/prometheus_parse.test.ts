@@ -249,19 +249,19 @@ describe("normalizePrometheusParsedOutput — confidence components", () => {
     assert.equal(result.parserConfidence, 0.5);
   });
 
-  it("emits healthField=0.8 and a health-field penalty when projectHealth is missing", () => {
+  it("emits healthField=0.9 and a health_field_inferred penalty when projectHealth is missing", () => {
     const parsed = {
       plans: [{ task: "Add canary metrics", role: "evolution-worker" }],
       requestBudget: { estimatedPremiumRequestsTotal: 1, errorMarginPercent: 15, hardCapTotal: 2 }
     };
     const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
 
-    assert.equal(result.parserConfidenceComponents.healthField, 0.8);
+    assert.equal(result.parserConfidenceComponents.healthField, 0.9);
     const penalty = result.parserConfidencePenalties.find(p => p.component === "healthField");
     assert.ok(penalty, "must have a healthField penalty");
-    assert.equal(penalty.reason, "health_field_missing_or_invalid");
-    assert.equal(penalty.delta, -0.2);
-    assert.equal(result.parserConfidence, 0.8);
+    assert.equal(penalty.reason, "health_field_inferred_from_text");
+    assert.equal(penalty.delta, -0.1);
+    assert.equal(result.parserConfidence, 0.9);
   });
 
   it("emits requestBudget=0.9 and a budget-fallback penalty when requestBudget is absent", () => {
@@ -280,18 +280,18 @@ describe("normalizePrometheusParsedOutput — confidence components", () => {
   });
 
   it("accumulates multiple penalties correctly", () => {
-    // Narrative plans (base=0.5) + missing health (-0.2) + no budget (-0.1) = 0.2
+    // Narrative plans (base=0.5) + inferred health (-0.1) + no budget (-0.1) = 0.3
     const parsed = {
       waves: [{ wave: 1, tasks: ["Fix parser"] }],
     };
     const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
 
     assert.equal(result.parserConfidenceComponents.plansShape, 0.5);
-    assert.equal(result.parserConfidenceComponents.healthField, 0.8);
+    assert.equal(result.parserConfidenceComponents.healthField, 0.9);
     assert.equal(result.parserConfidenceComponents.requestBudget, 0.9);
     assert.equal(result.parserConfidencePenalties.length, 3);
-    // 0.5 - 0.2 - 0.1 = 0.2
-    assert.equal(result.parserConfidence, 0.2);
+    // 0.5 - 0.1 - 0.1 = 0.3
+    assert.equal(result.parserConfidence, 0.3);
   });
 
   it("emits plansShape=0.0 and no_plans_extracted penalty when no plans are found", () => {
@@ -430,6 +430,76 @@ describe("normalizePrometheusParsedOutput — confidence components", () => {
     const penalty = result.parserConfidencePenalties.find(p => p.component === "healthField");
     assert.ok(penalty, "must have a healthField penalty for an unrecognized value");
     assert.equal(penalty.reason, "health_field_missing_or_invalid");
+  });
+
+  // ── Channel split: parser-core vs context-penalty ──────────────────────────
+
+  it("parserCoreConfidence equals 1.0 and parserContextPenalty equals 0 for full-score input", () => {
+    const parsed = {
+      projectHealth: "good",
+      plans: [{ task: "Fix trust boundary", role: "evolution-worker" }],
+      requestBudget: { estimatedPremiumRequestsTotal: 2, errorMarginPercent: 15, hardCapTotal: 3 },
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    assert.equal(result.parserCoreConfidence, 1.0, "core channel must be 1.0 for fully-scored structural input");
+    assert.equal(result.parserContextPenalty, 0, "context-penalty channel must be 0 when no context signals degrade quality");
+    assert.equal(result.parserConfidence, 1.0, "aggregate must equal core − context = 1.0 (backward compat)");
+  });
+
+  it("parserCoreConfidence absorbs healthField and requestBudget penalties; context channel stays 0", () => {
+    // Narrative plans (base=0.5) + missing health (-0.2) + no budget (-0.1)
+    const parsed = {
+      waves: [{ wave: 1, tasks: ["Fix parser"] }],
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    assert.equal(result.parserCoreConfidence, 0.2,
+      "core confidence = 0.5 base − 0.2 healthField − 0.1 requestBudget = 0.2");
+    assert.equal(result.parserContextPenalty, 0,
+      "context-penalty must be 0 — bottleneckCoverage and architectureDrift are context signals, not present here");
+    assert.equal(result.parserConfidence, 0.2,
+      "aggregate parserConfidence must equal parserCoreConfidence (backward compat)");
+  });
+
+  it("parserContextPenalty absorbs bottleneckCoverage penalty; parserCoreConfidence is unaffected", () => {
+    const parsed = {
+      projectHealth: "good",
+      topBottlenecks: [
+        { id: "BN-1", title: "Sequential worker dispatch", severity: "high" },
+        { id: "BN-2", title: "Trust boundary missing gate", severity: "critical" },
+        { id: "BN-3", title: "Parser fence drop", severity: "medium" },
+        { id: "BN-4", title: "Budget estimation stale", severity: "low" },
+      ],
+      // Only BN-1 addressed — 3 uncovered → coverage < BOTTLENECK_COVERAGE_FLOOR
+      plans: [
+        { task: "Fix sequential worker dispatch", role: "evolution-worker", _fromBottleneck: "BN-1" },
+      ],
+      requestBudget: { estimatedPremiumRequestsTotal: 1, errorMarginPercent: 15, hardCapTotal: 2 },
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    assert.equal(result.parserCoreConfidence, 1.0,
+      "core confidence must be unaffected by bottleneckCoverage — that is a context signal");
+    assert.ok(result.parserContextPenalty > 0,
+      "context-penalty must be positive when bottleneck coverage is below floor");
+    assert.ok(result.parserConfidence < 1.0,
+      "aggregate must be reduced by context penalty");
+    assert.equal(
+      Math.round((result.parserCoreConfidence - result.parserContextPenalty) * 100) / 100,
+      result.parserConfidence,
+      "parserConfidence must equal parserCoreConfidence − parserContextPenalty (channel invariant)"
+    );
+  });
+
+  it("parserCoreConfidence and parserContextPenalty are independent — negative path: no plans", () => {
+    const result = normalizePrometheusParsedOutput({}, { raw: "" });
+
+    // No plans: base=0.1, health penalty (-0.2) floored → core=0.1, no context signals
+    assert.equal(result.parserCoreConfidence, 0.1,
+      "core channel must floor at 0.1 for unparseable output");
+    assert.equal(result.parserContextPenalty, 0,
+      "context-penalty channel must be 0 when no context signals are present");
   });
 });
 

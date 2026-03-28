@@ -1079,7 +1079,7 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
   // The aggregate parserConfidence remains a single 0-1 value (backward compatible).
   //
   //   plansShape          — 1.0 = JSON plans direct, 0.5 = narrative/alt-shape fallback, 0.0 = no plans
-  //   healthField         — 1.0 = recognizable health value present (canonical or known alias), 0.8 = absent or unrecognizable
+  //   healthField         — 1.0 = canonical/alias health from field, 0.9 = inferred from analysis text, 0.8 = unresolvable
   //   requestBudget       — 1.0 = budget provided by model, 0.9 = fallback rebuilt deterministically
   //   bottleneckCoverage  — 1.0 = all declared bottlenecks addressed, reduced by uncovered fraction
 
@@ -1096,12 +1096,23 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
     parserConfidencePenalties.push({ reason: "no_plans_extracted", component: "plansShape", delta: -0.9 });
   }
 
-  // `health` is already alias-normalized (see normalizeProjectHealthAlias above).
-  // Scoring after normalization measures structural completeness — whether a recognizable
-  // health signal was provided — not which specific alias or canonical form the model emitted.
-  const healthFieldValid = Boolean(health && ["good", "needs-work", "critical"].includes(health));
-  const healthFieldScore = healthFieldValid ? 1.0 : 0.8;
-  if (!healthFieldValid) {
+  // `health` is alias-normalized from input.projectHealth; `projectHealth` is the fully
+  // resolved canonical value (filled via inferProjectHealth when the field was absent or
+  // unrecognized).  Scoring uses the resolved canonical health so that successfully-inferred
+  // health carries a lighter penalty than a truly unresolvable field.
+  const CANONICAL_HEALTH_VALS = ["good", "needs-work", "critical"] as const;
+  const healthFieldExplicit = Boolean(health && CANONICAL_HEALTH_VALS.includes(health as typeof CANONICAL_HEALTH_VALS[number]));
+  const healthFieldResolved = CANONICAL_HEALTH_VALS.includes(projectHealth as typeof CANONICAL_HEALTH_VALS[number]);
+  let healthFieldScore: number;
+  if (healthFieldExplicit) {
+    healthFieldScore = 1.0;
+  } else if (healthFieldResolved) {
+    // Health was resolved via text inference — slight penalty to signal field was not explicit.
+    healthFieldScore = 0.9;
+    parserConfidencePenalties.push({ reason: "health_field_inferred_from_text", component: "healthField", delta: -0.1 });
+  } else {
+    // Field absent and inference also produced no canonical value (defensive; currently unreachable).
+    healthFieldScore = 0.8;
     parserConfidencePenalties.push({ reason: "health_field_missing_or_invalid", component: "healthField", delta: -0.2 });
   }
 
@@ -1140,13 +1151,27 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
     bottleneckCoverage: bottleneckCoverageScore,
   };
 
-  // Aggregate: plansShape sets the base; remaining penalties apply cumulatively.
-  let parserConfidence = rawPlans.length > 0 ? 1.0 : plans.length > 0 ? 0.5 : 0.1;
+  // ── Confidence channel split ──────────────────────────────────────────────
+  // parser-core channel: structural parser signals only (plansShape base,
+  //   healthField, requestBudget).  Reflects fidelity of the extraction step.
+  // context-penalty channel: external/contextual signals (bottleneckCoverage,
+  //   architectureDrift) applied on top of the core score.
+  // parserConfidence remains the aggregate (core − context) for backward compat.
+  const CONTEXT_PENALTY_COMPONENTS = new Set(["bottleneckCoverage", "architectureDrift"]);
+  const coreBase = rawPlans.length > 0 ? 1.0 : plans.length > 0 ? 0.5 : 0.1;
+  let parserCoreConfidence = coreBase;
+  let parserContextPenalty = 0;
   for (const penalty of parserConfidencePenalties) {
-    if (penalty.component !== "plansShape") {
-      parserConfidence = Math.max(0.1, parserConfidence + penalty.delta);
+    if (penalty.component === "plansShape") continue; // plansShape sets base, not an additive delta
+    if (CONTEXT_PENALTY_COMPONENTS.has(penalty.component)) {
+      parserContextPenalty += -penalty.delta; // delta is negative; negate to get positive magnitude
+    } else {
+      parserCoreConfidence = Math.max(0.1, parserCoreConfidence + penalty.delta);
     }
   }
+  parserCoreConfidence = Math.round(parserCoreConfidence * 100) / 100;
+  parserContextPenalty = Math.round(parserContextPenalty * 100) / 100;
+  const parserConfidence = Math.max(0.1, parserCoreConfidence - parserContextPenalty);
 
   // ── Strict parser confidence floor (Packet 11) ───────────────────────────
   // If confidence is below the floor, fail-closed: reject plans rather than
@@ -1165,6 +1190,8 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
     executionStrategy,
     requestBudget,
     parserConfidence: Math.round(parserConfidence * 100) / 100,
+    parserCoreConfidence,
+    parserContextPenalty,
     parserConfidenceComponents,
     parserConfidencePenalties,
     bottleneckCoverage: bnCovResult,
@@ -2155,6 +2182,8 @@ Consider whether the root causes are:
   const driftPenaltyResult = computeDriftConfidencePenalty(driftReport);
   if (driftPenaltyResult.penalty > 0) {
     parsed.parserConfidence = Math.max(0.1, (parsed.parserConfidence ?? 1.0) - driftPenaltyResult.penalty);
+    // Accumulate drift into the context-penalty channel (architectureDrift is a context signal).
+    parsed.parserContextPenalty = Math.round(((parsed.parserContextPenalty ?? 0) + driftPenaltyResult.penalty) * 100) / 100;
     if (!Array.isArray(parsed.parserConfidencePenalties)) parsed.parserConfidencePenalties = [];
     parsed.parserConfidencePenalties.push({
       reason: driftPenaltyResult.reason,
