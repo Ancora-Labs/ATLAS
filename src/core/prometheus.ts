@@ -1079,7 +1079,7 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
   // The aggregate parserConfidence remains a single 0-1 value (backward compatible).
   //
   //   plansShape          — 1.0 = JSON plans direct, 0.5 = narrative/alt-shape fallback, 0.0 = no plans
-  //   healthField         — 1.0 = explicit valid health value present, 0.8 = missing/inferred
+  //   healthField         — 1.0 = recognizable health value present (canonical or known alias), 0.8 = absent or unrecognizable
   //   requestBudget       — 1.0 = budget provided by model, 0.9 = fallback rebuilt deterministically
   //   bottleneckCoverage  — 1.0 = all declared bottlenecks addressed, reduced by uncovered fraction
 
@@ -1096,6 +1096,9 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
     parserConfidencePenalties.push({ reason: "no_plans_extracted", component: "plansShape", delta: -0.9 });
   }
 
+  // `health` is already alias-normalized (see normalizeProjectHealthAlias above).
+  // Scoring after normalization measures structural completeness — whether a recognizable
+  // health signal was provided — not which specific alias or canonical form the model emitted.
   const healthFieldValid = Boolean(health && ["good", "needs-work", "critical"].includes(health));
   const healthFieldScore = healthFieldValid ? 1.0 : 0.8;
   if (!healthFieldValid) {
