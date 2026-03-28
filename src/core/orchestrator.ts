@@ -63,7 +63,11 @@ import { initializeAggregateLiveLog } from "./live_log.js";
 import { buildRoleExecutionBatches } from "./worker_batch_planner.js";
 import { agentFileExists, nameToSlug } from "./agent_loader.js";
 import { getRoleRegistry } from "./role_registry.js";
-import { checkArchitectureDrift } from "./architecture_drift.js";
+import {
+  checkArchitectureDrift,
+  rankStaleRefsAsRemediationCandidates,
+  type ArchitectureDriftReport,
+} from "./architecture_drift.js";
 import { detectLaneConflicts } from "./capability_pool.js";
 import {
   loadLedgerMeta,
@@ -248,7 +252,7 @@ export async function writeOrchestratorHealth(stateDir, status, reason, details 
  * Exported for integration tests and any callers that need the dispatch decision
  * surface without running a full orchestration cycle.
  */
-export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycleId = "") {
+export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycleId = "", driftReport: ArchitectureDriftReport | null = null) {
   const stateDir = config?.paths?.stateDir || "state";
 
   // ── Budget reconciliation — resolved upfront so every dispatch decision
@@ -363,6 +367,36 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
     }
   } catch (err) {
     warn(`[orchestrator] carry-forward debt gate failed (non-fatal): ${String(err?.message || err)}`);
+  }
+
+  // ── Mandatory drift debt gate ─────────────────────────────────────────────
+  // Block dispatch when high-priority architecture drift debt remains unresolved
+  // after plan normalization. "Mandatory" drift debt = stale references to
+  // src/core/ files (priority=high, confidence=0.50) that have not been remediated.
+  // These indicate that the architecture doc is pointing to ghost paths in active
+  // infrastructure, which can cause workers to build against non-existent files.
+  //
+  // Fail-open: any error processing the drift report is treated as no signal so
+  // a transient scan failure never prevents legitimate work.
+  // Disabled when config.runtime.disableDriftDebtGate === true.
+  if (driftReport && config?.runtime?.disableDriftDebtGate !== true) {
+    try {
+      const driftCandidates = rankStaleRefsAsRemediationCandidates(driftReport);
+      const mandatoryDebt = driftCandidates.filter(c => c.priority === "high");
+      if (mandatoryDebt.length > 0) {
+        const firstHint = mandatoryDebt[0].suggestedTask;
+        return {
+          blocked: true,
+          reason: `mandatory_drift_debt_unresolved:${mandatoryDebt.length} high-priority drift debt task(s) remain — ${firstHint}`,
+          action: undefined,
+          graphResult,
+          cycleId,
+          budgetEligibility,
+        };
+      }
+    } catch (driftDebtErr) {
+      warn(`[orchestrator] mandatory drift debt gate failed (non-fatal): ${String(driftDebtErr?.message || driftDebtErr)}`);
+    }
   }
 
   // ── Budget eligibility gate ───────────────────────────────────────────────
@@ -1610,7 +1644,7 @@ async function runSingleCycle(config) {
   {
     const cycleId = `cycle-${Date.now()}`;
     try {
-      const gateDecision = await evaluatePreDispatchGovernanceGate(config, plans, cycleId);
+      const gateDecision = await evaluatePreDispatchGovernanceGate(config, plans, cycleId, architectureDriftReport);
       emitEvent(EVENTS.GOVERNANCE_GATE_EVALUATED, EVENT_DOMAIN.GOVERNANCE, cycleId, {
         blocked: gateDecision.blocked,
         reason: gateDecision.reason || null,
