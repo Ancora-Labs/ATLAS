@@ -53,13 +53,21 @@ import {
 
 import {
   checkPostMergeArtifact,
+  collectArtifactGaps,
   ARTIFACT_GAP,
+  validateWorkerContract,
 } from "../../src/core/verification_gate.js";
 
 import {
   validatePlanContract,
+  validateAllPlans,
   PLAN_VIOLATION_SEVERITY,
+  PACKET_VIOLATION_CODE,
 } from "../../src/core/plan_contract_validator.js";
+
+import {
+  validatePlanEvidenceCoupling,
+} from "../../src/core/evidence_envelope.js";
 
 // ── Shared test infrastructure ─────────────────────────────────────────────────
 
@@ -482,5 +490,168 @@ describe("plan packet — capacityDelta and requestROI field enforcement", () =>
       Math.sign(actualComposite) === Math.sign(declaredDelta),
       "declared capacityDelta direction must match actual composite capacity change direction"
     );
+  });
+});
+
+// ── Artifact gate regression — all gap combinations ───────────────────────────
+
+describe("artifact gate regression — collectArtifactGaps covers all gap combinations", () => {
+  it("no SHA and no test output produces both MISSING_SHA and MISSING_TEST_OUTPUT gaps", () => {
+    const gaps = collectArtifactGaps({ hasSha: false, hasTestOutput: false, hasUnfilledPlaceholder: false });
+    assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_SHA), "must include MISSING_SHA gap");
+    assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_TEST_OUTPUT), "must include MISSING_TEST_OUTPUT gap");
+    assert.equal(gaps.length, 2);
+  });
+
+  it("missing SHA only produces a single MISSING_SHA gap", () => {
+    const gaps = collectArtifactGaps({ hasSha: false, hasTestOutput: true, hasUnfilledPlaceholder: false });
+    assert.equal(gaps.length, 1);
+    assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_SHA));
+  });
+
+  it("missing test output only produces a single MISSING_TEST_OUTPUT gap", () => {
+    const gaps = collectArtifactGaps({ hasSha: true, hasTestOutput: false, hasUnfilledPlaceholder: false });
+    assert.equal(gaps.length, 1);
+    assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_TEST_OUTPUT));
+  });
+
+  it("complete artifact (SHA + test output, no placeholder) produces empty gaps array", () => {
+    const gaps = collectArtifactGaps({ hasSha: true, hasTestOutput: true, hasUnfilledPlaceholder: false });
+    assert.deepEqual(gaps, []);
+  });
+
+  it("unfilled placeholder gap is emitted first (highest priority)", () => {
+    const gaps = collectArtifactGaps({ hasSha: false, hasTestOutput: false, hasUnfilledPlaceholder: true });
+    assert.ok(gaps[0] === ARTIFACT_GAP.UNFILLED_PLACEHOLDER, "placeholder gap must be first");
+    assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_SHA));
+    assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_TEST_OUTPUT));
+    assert.equal(gaps.length, 3);
+  });
+
+  it("checkPostMergeArtifact: missing test output block produces hasTestOutput=false", () => {
+    const output = [
+      "Merged f1a2b3c into main",
+      // No '# tests N # pass N # fail N' line
+      "BOX_STATUS=done",
+    ].join("\n");
+    const artifact = checkPostMergeArtifact(output);
+    assert.equal(artifact.hasSha, true, "SHA must be detected");
+    assert.equal(artifact.hasTestOutput, false, "missing test output line must yield hasTestOutput=false");
+    assert.equal(artifact.hasArtifact, false, "incomplete artifact must be false");
+  });
+
+  it("checkPostMergeArtifact: test output line without SHA yields hasSha=false", () => {
+    const output = [
+      "# tests 12 # pass 12 # fail 0",
+      "VERIFICATION_REPORT: BUILD=pass; TESTS=pass",
+      "BOX_STATUS=done",
+      // No SHA
+    ].join("\n");
+    const artifact = checkPostMergeArtifact(output);
+    assert.equal(artifact.hasTestOutput, true, "test output line must be detected");
+    assert.equal(artifact.hasSha, false, "absent SHA must yield hasSha=false");
+    assert.equal(artifact.hasArtifact, false);
+  });
+});
+
+// ── Env-contract regression — worker contract and dispatch gate ───────────────
+
+describe("env-contract regression — worker contract and dispatch command gate", () => {
+  it("validateWorkerContract: backend status=done without VERIFICATION_REPORT fails with descriptive gap", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: "Work completed but I forgot to include the report",
+    });
+    assert.equal(result.passed, false);
+    assert.ok(
+      result.gaps.some(g => g.includes("VERIFICATION_REPORT")),
+      "gap must reference missing VERIFICATION_REPORT"
+    );
+  });
+
+  it("validateWorkerContract: backend status=done with all evidence fields passes", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        "Merged abc123f into main",
+        "# tests 25 # pass 25 # fail 0",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass; API=n/a; RESPONSIVE=n/a",
+        "BOX_PR_URL=https://github.com/CanerDoqdu/Box/pull/200",
+      ].join("\n"),
+    });
+    assert.equal(result.passed, true, "complete worker output must pass env-contract");
+    assert.equal(result.gaps.length, 0);
+  });
+
+  it("validateWorkerContract: TESTS=fail gap is emitted with exact reason text", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        "Merged abc1234 into main",
+        "# tests 10 # pass 7 # fail 3",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=fail; EDGE_CASES=pass; SECURITY=pass",
+        "BOX_PR_URL=https://github.com/CanerDoqdu/Box/pull/201",
+      ].join("\n"),
+    });
+    assert.equal(result.passed, false);
+    assert.ok(result.gaps.some(g => g.includes("TESTS reported as FAIL")), "TESTS=fail must produce exact gap text");
+  });
+
+  it("plan evidence coupling and contract validator are complementary: both can block the same plan", () => {
+    const plan = {
+      task: "X", // too short → TASK_TOO_SHORT in contract validator
+      role: "",   // missing → MISSING_ROLE
+      wave: -1,
+      // no verification_commands → coupling fails
+      // no acceptance_criteria → coupling fails
+    };
+    const contractResult = validatePlanContract(plan);
+    const couplingResult = validatePlanEvidenceCoupling(plan);
+    assert.equal(contractResult.valid, false, "contract validator must block malformed plan");
+    assert.equal(couplingResult.valid, false, "coupling gate must block plan without commands");
+  });
+
+  it("violation codes from validateAllPlans batch preserve deterministic taxonomy codes", () => {
+    const plans = [
+      // valid plan
+      {
+        task: "Add deterministic SLA enforcement to the carry forward ledger cycle gate",
+        role: "evolution-worker",
+        wave: 1,
+        verification: "tests/core/carry_forward_ledger.test.ts — test: tickCycle",
+        dependencies: [],
+        acceptance_criteria: ["Gate blocks after SLA exceeded"],
+        capacityDelta: 0.1,
+        requestROI: 2.0,
+      },
+      // missing capacityDelta → MISSING_CAPACITY_DELTA
+      {
+        task: "Expand budget controller to track per-model USD consumption",
+        role: "evolution-worker",
+        wave: 1,
+        verification: "tests/core/budget_controller.test.ts — test: charges",
+        dependencies: [],
+        acceptance_criteria: ["Per-model tracking works"],
+        requestROI: 1.5,
+      },
+    ];
+    const result = validateAllPlans(plans);
+    assert.equal(result.validCount, 1);
+    assert.equal(result.invalidCount, 1);
+    const invalidEntry = result.results.find(r => !r.valid);
+    assert.ok(invalidEntry, "invalid entry must exist");
+    const cdViolation = invalidEntry!.violations.find(v => v.code === PACKET_VIOLATION_CODE.MISSING_CAPACITY_DELTA);
+    assert.ok(cdViolation, "MISSING_CAPACITY_DELTA code must be present in batch validation results");
+    assert.equal(cdViolation!.severity, PLAN_VIOLATION_SEVERITY.CRITICAL);
+  });
+
+  it("packet taxonomy: UNRECOVERABLE_PACKET_REASONS aliases and PACKET_VIOLATION_CODE values are identical for cross-gate consistency", async () => {
+    const { UNRECOVERABLE_PACKET_REASONS } = await import("../../src/core/prometheus.js");
+    assert.equal(UNRECOVERABLE_PACKET_REASONS.NO_TASK_IDENTITY,        PACKET_VIOLATION_CODE.NO_TASK_IDENTITY);
+    assert.equal(UNRECOVERABLE_PACKET_REASONS.MISSING_CAPACITY_DELTA,  PACKET_VIOLATION_CODE.MISSING_CAPACITY_DELTA);
+    assert.equal(UNRECOVERABLE_PACKET_REASONS.INVALID_CAPACITY_DELTA,  PACKET_VIOLATION_CODE.INVALID_CAPACITY_DELTA);
+    assert.equal(UNRECOVERABLE_PACKET_REASONS.MISSING_REQUEST_ROI,     PACKET_VIOLATION_CODE.MISSING_REQUEST_ROI);
+    assert.equal(UNRECOVERABLE_PACKET_REASONS.INVALID_REQUEST_ROI,     PACKET_VIOLATION_CODE.INVALID_REQUEST_ROI);
+    assert.equal(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING, PACKET_VIOLATION_CODE.MISSING_VERIFICATION_COUPLING);
   });
 });

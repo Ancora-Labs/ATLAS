@@ -15,7 +15,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { canUseClaude } from "../../src/core/budget_controller.js";
+import { canUseClaude, BUDGET_THRESHOLD_USD } from "../../src/core/budget_controller.js";
 
 import {
   assignWorkersToPlans,
@@ -33,7 +33,7 @@ import {
   computeFingerprint,
 } from "../../src/core/carry_forward_ledger.js";
 
-import { validateEvidenceEnvelope } from "../../src/core/evidence_envelope.js";
+import { validateEvidenceEnvelope, validatePlanEvidenceCoupling } from "../../src/core/evidence_envelope.js";
 
 import { detectDeprecatedTokensInContent } from "../../src/core/architecture_drift.js";
 
@@ -451,5 +451,228 @@ describe("pipeline matrix — cross-system invariants", () => {
     // Diversity computation is budget-agnostic
     assert.equal(poolFull.diversityIndex, poolExhausted.diversityIndex);
     assert.equal(poolFull.activeLaneCount, poolExhausted.activeLaneCount);
+  });
+});
+
+// ── Budget gate (expanded) ────────────────────────────────────────────────────
+
+describe("pipeline matrix — budget gate (expanded)", () => {
+  it("BUDGET_THRESHOLD_USD constant is exactly 0.2", () => {
+    assert.equal(BUDGET_THRESHOLD_USD, 0.2);
+  });
+
+  it("canUseClaude gate boundary is strictly greater-than, not greater-than-or-equal", () => {
+    assert.equal(canUseClaude({ remainingUsd: BUDGET_THRESHOLD_USD }), false, "exactly at threshold must block");
+    assert.equal(canUseClaude({ remainingUsd: BUDGET_THRESHOLD_USD + 0.0001 }), true, "just above threshold must pass");
+  });
+
+  it("canUseClaude returns false for negative remaining budget (overdrawn state)", () => {
+    assert.equal(canUseClaude({ remainingUsd: -0.5 }), false);
+  });
+
+  it("canUseClaude: depletion simulation — five sequential 0.2 charges from 1.0 USD exhaust the budget", () => {
+    let remaining = 1.0;
+    let dispatchCount = 0;
+    for (let i = 0; i < 10; i++) {
+      if (canUseClaude({ remainingUsd: remaining })) {
+        dispatchCount++;
+        remaining = Number((remaining - 0.2).toFixed(4));
+      }
+    }
+    // At 0.2 exactly the gate closes, so only 4 dispatches allowed (1.0→0.8→0.6→0.4→stop at 0.2)
+    assert.equal(dispatchCount, 4, "exactly 4 dispatches before gate closes at 0.2");
+    assert.equal(remaining, 0.2);
+  });
+
+  it("budget gate is orthogonal to lane diversity — canUseClaude ignores lane topology", () => {
+    // Exhausted budget always blocks regardless of how many lanes are active
+    const exhaustedBudget = { remainingUsd: 0.1 };
+    const richBudget = { remainingUsd: 5.0 };
+    assert.equal(canUseClaude(exhaustedBudget), false);
+    assert.equal(canUseClaude(richBudget), true);
+    // Lane count has no bearing on canUseClaude output
+  });
+});
+
+// ── Drift debt (expanded) ─────────────────────────────────────────────────────
+
+describe("pipeline matrix — drift debt (expanded)", () => {
+  it("closed debt entry is excluded from getOpenDebts but remains in the ledger", () => {
+    const ledger = addDebtEntries([], [
+      { followUpTask: "refactor the authentication module to remove dead code paths", severity: "critical" as const },
+    ], 1);
+    const debtId = ledger[0].id;
+    closeDebt(ledger, debtId, "Completed in PR #77");
+    const open = getOpenDebts(ledger);
+    assert.equal(open.length, 0, "no open debts after closing");
+    assert.equal(ledger.length, 1, "closed entry stays in ledger for audit trail");
+    assert.ok(ledger[0].closedAt !== null, "closedAt must be set");
+  });
+
+  it("shouldBlockOnDebt does not block after all critical entries are closed", () => {
+    const items = [
+      { followUpTask: "resolve data corruption in state tracker atomic flush path", severity: "critical" as const },
+      { followUpTask: "fix integer overflow in capacity scoreboard composite formula", severity: "critical" as const },
+      { followUpTask: "repair silent error swallow in rollback engine revert sequence", severity: "critical" as const },
+    ];
+    const ledger = addDebtEntries([], items, 1, { slaMaxCycles: 1 });
+    // Close all entries before advancing
+    for (const entry of ledger) {
+      closeDebt(ledger, entry.id, "Fixed and verified in post-cycle review");
+    }
+    const gate = shouldBlockOnDebt(ledger, 5, { maxCriticalOverdue: 3 });
+    assert.equal(gate.shouldBlock, false, "gate must not block when all critical debt is closed");
+  });
+
+  it("mixed critical+warning debt: gate fires only on critical overdue count", () => {
+    // 2 critical (overdue) + 4 warnings (overdue): gate at threshold=3 must NOT fire (only 2 critical)
+    const warnings = [
+      { followUpTask: "add verbose logging to canary engine state transitions", severity: "warning" as const },
+      { followUpTask: "document the hypothesis scheduler scoring algorithm", severity: "warning" as const },
+      { followUpTask: "improve error message clarity in the resilience drill", severity: "warning" as const },
+      { followUpTask: "update README with correct docker compose version instructions", severity: "warning" as const },
+    ];
+    const criticals = [
+      { followUpTask: "fix determinism violation in the dag_scheduler wave ordering", severity: "critical" as const },
+      { followUpTask: "resolve checkpoint engine race condition on concurrent writes", severity: "critical" as const },
+    ];
+    const ledger = addDebtEntries([], [...warnings, ...criticals], 1, { slaMaxCycles: 1 });
+    // At cycle 5, all entries are overdue
+    const gate = shouldBlockOnDebt(ledger, 5, { maxCriticalOverdue: 3 });
+    assert.equal(gate.shouldBlock, false, "2 critical overdue < threshold 3 → must not block");
+    assert.equal(gate.overdueCount, 2, "overdueCount must reflect only critical entries");
+  });
+
+  it("tickCycle: entries opened at different cycles age independently and correctly", () => {
+    const cycle1Item = { followUpTask: "address memory pressure in the evidence envelope consumer", severity: "critical" as const };
+    const cycle3Item = { followUpTask: "fix off-by-one in the carry forward SLA deadline calculation", severity: "critical" as const };
+    let ledger = addDebtEntries([], [cycle1Item], 1);
+    ledger = addDebtEntries(ledger, [cycle3Item], 3);
+    // At current cycle 7: entry1 has been open 6 cycles, entry2 has been open 4 cycles
+    tickCycle(ledger, 7);
+    const entry1 = ledger.find(e => e.lesson.includes("memory pressure"));
+    const entry2 = ledger.find(e => e.lesson.includes("off-by-one"));
+    assert.equal(entry1!.cyclesOpen, 6, "entry opened at cycle 1 must show 6 cycles open at cycle 7");
+    assert.equal(entry2!.cyclesOpen, 4, "entry opened at cycle 3 must show 4 cycles open at cycle 7");
+  });
+});
+
+// ── Evidence envelope coupling (expanded) ────────────────────────────────────
+
+describe("pipeline matrix — evidence envelope coupling gate", () => {
+  function basePlan() {
+    return {
+      task: "Implement deterministic budget gate enforcement across all dispatch paths",
+      role: "evolution-worker",
+      verification_commands: ["node --import tsx --test tests/core/budget_controller.test.ts"],
+      acceptance_criteria: ["Budget gate blocks dispatch at threshold", "canUseClaude returns correct boundary value"],
+    };
+  }
+
+  it("plan with valid verification_commands and acceptance_criteria passes coupling gate", () => {
+    const { valid, errors } = validatePlanEvidenceCoupling(basePlan());
+    assert.equal(valid, true);
+    assert.deepEqual(errors, []);
+  });
+
+  it("plan with no verification_commands fails coupling gate", () => {
+    const plan = { ...basePlan() };
+    delete (plan as any).verification_commands;
+    const { valid, errors } = validatePlanEvidenceCoupling(plan);
+    assert.equal(valid, false);
+    assert.ok(errors.some(e => e.includes("verification_commands")));
+  });
+
+  it("plan with empty verification_commands array fails coupling gate", () => {
+    const { valid, errors } = validatePlanEvidenceCoupling({ ...basePlan(), verification_commands: [] });
+    assert.equal(valid, false);
+    assert.ok(errors.some(e => e.includes("verification_commands")));
+  });
+
+  it("plan with blank-string-only commands fails coupling gate", () => {
+    const { valid, errors } = validatePlanEvidenceCoupling({ ...basePlan(), verification_commands: ["   ", ""] });
+    assert.equal(valid, false);
+    assert.ok(errors.some(e => e.includes("verification_commands")));
+  });
+
+  it("plan with absent acceptance_criteria fails coupling gate", () => {
+    const plan = { ...basePlan() };
+    delete (plan as any).acceptance_criteria;
+    const { valid, errors } = validatePlanEvidenceCoupling(plan);
+    assert.equal(valid, false);
+    assert.ok(errors.some(e => e.includes("acceptance_criteria")));
+  });
+
+  it("plan with empty acceptance_criteria array fails coupling gate", () => {
+    const { valid, errors } = validatePlanEvidenceCoupling({ ...basePlan(), acceptance_criteria: [] });
+    assert.equal(valid, false);
+    assert.ok(errors.some(e => e.includes("acceptance_criteria")));
+  });
+
+  it("null plan input fails coupling gate with descriptive error", () => {
+    const { valid, errors } = validatePlanEvidenceCoupling(null);
+    assert.equal(valid, false);
+    assert.ok(errors.length > 0);
+  });
+
+  it("coupling validation is structurally independent of evidence envelope validation", () => {
+    // A structurally valid evidence envelope can pass while the plan fails coupling
+    const envelope = {
+      roleName: "evolution-worker",
+      status: "done",
+      summary: "Task completed.",
+      verificationEvidence: { build: "pass", tests: "pass", lint: "pass" },
+    };
+    const envelopeResult = validateEvidenceEnvelope(envelope);
+    const couplingResult = validatePlanEvidenceCoupling({ task: "no commands here", role: "w" });
+    assert.equal(envelopeResult.valid, true, "envelope must be structurally valid");
+    assert.equal(couplingResult.valid, false, "plan must fail coupling (missing verification_commands)");
+  });
+});
+
+// ── Lane diversity (expanded) ─────────────────────────────────────────────────
+
+describe("pipeline matrix — lane diversity (expanded)", () => {
+  it("enforceLaneDiversity at exact minimum (activeLanes === minLanes) passes", () => {
+    const pool = { activeLaneCount: 3 };
+    const gate = enforceLaneDiversity(pool, { minLanes: 3 });
+    assert.equal(gate.meetsMinimum, true, "meeting the exact minimum must pass");
+    assert.equal(gate.warning, "");
+  });
+
+  it("enforceLaneDiversity below minimum produces a non-empty warning message", () => {
+    const pool = { activeLaneCount: 1 };
+    const gate = enforceLaneDiversity(pool, { minLanes: 3 });
+    assert.equal(gate.meetsMinimum, false);
+    assert.ok(gate.warning.length > 0, "warning message must be non-empty on diversity failure");
+    assert.ok(gate.warning.includes("1"), "warning must reference the actual lane count");
+    assert.ok(gate.warning.includes("3"), "warning must reference the minimum required lanes");
+  });
+
+  it("diverse task types infer distinct capability lanes", () => {
+    const plans = [
+      { task: "add prometheus metric collection endpoint to dashboard service" }, // → observation
+      { task: "add test coverage for the canary ledger flush timeout path" },     // → test-infra
+      { task: "wire governance policy engine into the pre-dispatch gate" },        // → state-governance
+      { task: "update docker ci deploy pipeline for multi-stage builds" },         // → infrastructure
+    ];
+    const pool = assignWorkersToPlans(plans, {});
+    // Each plan infers a distinct tag → ≥ 4 lanes
+    assert.ok(pool.activeLaneCount >= 3, `diverse tasks must produce at least 3 lanes; got ${pool.activeLaneCount}`);
+  });
+
+  it("concentrationRatio is 1 for zero-plan pool (edge case)", () => {
+    const metrics = computeDispatchMetrics({ assignments: [] });
+    assert.equal(metrics.concentrationRatio, 1, "empty pool must report concentrationRatio=1");
+    assert.equal(metrics.diversityScore, 0, "empty pool must report diversityScore=0");
+  });
+
+  it("assignWorkersToPlans includes diversityCheck gate in return value", () => {
+    const plans = [
+      { role: "Evolution Worker", task: "fix the auth service token refresh path" },
+    ];
+    const result = assignWorkersToPlans(plans, {});
+    assert.ok("diversityCheck" in result, "result must include diversityCheck property");
+    assert.ok(typeof result.diversityCheck.meetsMinimum === "boolean");
   });
 });
