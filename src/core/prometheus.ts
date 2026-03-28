@@ -1375,10 +1375,29 @@ Wrap the JSON companion with markers:
 export const DRIFT_REMEDIATION_THRESHOLD = 5;
 
 /**
+ * Per-priority penalty weights for stale file references.
+ * High-priority (src/core/) items carry more weight because they indicate
+ * that the architecture doc references ghost paths in active infrastructure.
+ */
+export const DRIFT_PENALTY_BY_PRIORITY: Record<"high" | "medium" | "low", number> = Object.freeze({
+  high:   0.05,
+  medium: 0.02,
+  low:    0.01,
+});
+
+/**
  * Compute a parser confidence penalty from an architecture drift report.
  * Applied after plan normalization to penalize cycles where docs are out of sync.
  *
- * Penalty formula: 0.02 per unresolved item (staleCount + deprecatedTokenCount), capped at 0.30.
+ * When the full `staleReferences` array is available the penalty is priority-weighted:
+ *   - src/core/ stale refs (high):   0.05 each
+ *   - other src/ stale refs (medium): 0.02 each
+ *   - docker/scripts/docs refs (low): 0.01 each
+ *   - deprecated token usages:        0.02 each
+ *
+ * When only summary counts are available (legacy callers) the flat formula
+ * `0.02 × total` is used as a fallback.  Both paths cap the result at 0.30.
+ *
  * requiresRemediation is true when total unresolved items >= DRIFT_REMEDIATION_THRESHOLD.
  *
  * @param driftReport - result of checkArchitectureDrift(), or null/undefined
@@ -1390,9 +1409,31 @@ export function computeDriftConfidencePenalty(driftReport?: Record<string, unkno
   requiresRemediation: boolean;
 } {
   if (!driftReport) return { penalty: 0, reason: "no-drift-report", requiresRemediation: false };
-  const total = (Number(driftReport.staleCount) || 0) + (Number(driftReport.deprecatedTokenCount) || 0);
+  const staleCount = (Number(driftReport.staleCount) || 0);
+  const deprecatedTokenCount = (Number(driftReport.deprecatedTokenCount) || 0);
+  const total = staleCount + deprecatedTokenCount;
   if (total === 0) return { penalty: 0, reason: "no-drift", requiresRemediation: false };
-  const penalty = Math.round(Math.min(0.30, total * 0.02) * 100) / 100;
+
+  let rawPenalty: number;
+  const staleRefs = Array.isArray(driftReport.staleReferences) ? driftReport.staleReferences : null;
+  if (staleRefs) {
+    // Priority-weighted: penalize src/core/ ghost paths more heavily.
+    rawPenalty = 0;
+    for (const ref of staleRefs) {
+      if (ref && typeof ref === "object") {
+        const p = String((ref as any).referencedPath || "");
+        const priority: "high" | "medium" | "low" =
+          p.startsWith("src/core/") ? "high" : p.startsWith("src/") ? "medium" : "low";
+        rawPenalty += DRIFT_PENALTY_BY_PRIORITY[priority];
+      }
+    }
+    rawPenalty += deprecatedTokenCount * DRIFT_PENALTY_BY_PRIORITY.medium;
+  } else {
+    // Fallback flat formula for callers that supply only summary counts.
+    rawPenalty = total * 0.02;
+  }
+
+  const penalty = Math.round(Math.min(0.30, rawPenalty) * 100) / 100;
   return {
     penalty,
     reason: `architecture_drift_${total}_unresolved`,
@@ -1453,18 +1494,36 @@ export function buildDriftDebtTasks(
 
   const debtTasks: any[] = [];
   // Use high priority numbers so debt tasks sort after critical delivery work.
+  // Within debt tasks, lower numbers mean higher urgency (high-priority refs first).
   let priority = 900;
 
+  // Effective priority rank for a set of refs: the highest-priority (lowest rank) item wins.
+  function effectivePriorityRank(refs: any[]): number {
+    let best = 2; // low
+    for (const r of refs) {
+      const p = String(r.referencedPath || "");
+      const rank = p.startsWith("src/core/") ? 0 : p.startsWith("src/") ? 1 : 2;
+      if (rank < best) best = rank;
+    }
+    return best;
+  }
+
   // One debt task per doc with stale file references.
+  // Docs are sorted by their highest-priority ref so high-risk docs surface first.
   const staleByDoc = new Map<string, any[]>();
   for (const ref of staleRefs) {
     const doc = String(ref.docPath || "");
     if (!staleByDoc.has(doc)) staleByDoc.set(doc, []);
     staleByDoc.get(doc)!.push(ref);
   }
-  for (const [doc, refs] of staleByDoc.entries()) {
+  const sortedStaleByDoc = [...staleByDoc.entries()].sort(
+    ([, aRefs], [, bRefs]) => effectivePriorityRank(aRefs) - effectivePriorityRank(bRefs)
+  );
+  const RANK_TO_DRIFT_PRIORITY = ["high", "medium", "low"] as const;
+  for (const [doc, refs] of sortedStaleByDoc) {
     if (coveredDocs.has(doc)) continue;
     const paths = [...new Set(refs.map((r: any) => String(r.referencedPath)))].join(", ");
+    const driftPriority = RANK_TO_DRIFT_PRIORITY[effectivePriorityRank(refs)];
     // Specific verification target: names the test file and the exact assertion so the
     // quality gate (plan_contract_validator.isNonSpecificVerification) accepts the task
     // and does not auto-remove it for having a bare "npm test" command.
@@ -1476,6 +1535,8 @@ export function buildDriftDebtTasks(
       taskKind: "debt",
       source: "architecture_drift",
       _driftDebt: true,
+      // driftPriority reflects the highest-urgency issue in this doc for downstream filtering.
+      driftPriority,
       wave: debtWave,
       priority: priority++,
       target_files: [doc],

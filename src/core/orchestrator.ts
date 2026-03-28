@@ -400,6 +400,10 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       const mandatoryDebt = driftCandidates.filter(c => c.priority === "high");
       if (mandatoryDebt.length > 0) {
         const firstHint = mandatoryDebt[0].suggestedTask;
+        // Collect the distinct missing file paths so callers can surface them directly.
+        const mandatoryDriftPaths = [...new Set(
+          mandatoryDebt.map(c => c.referencedPath).filter(Boolean) as string[]
+        )];
         return {
           blocked: true,
           reason: `mandatory_drift_debt_unresolved:${mandatoryDebt.length} high-priority drift debt task(s) remain — ${firstHint}`,
@@ -407,6 +411,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
           graphResult,
           cycleId,
           budgetEligibility,
+          mandatoryDriftPaths,
         };
       }
     } catch (driftDebtErr) {

@@ -630,6 +630,53 @@ describe("computeDriftConfidencePenalty (Task 4)", () => {
     const result = computeDriftConfidencePenalty({ staleCount: 2, deprecatedTokenCount: 1 });
     assert.ok(result.reason.includes("3"), "reason must encode total count (3)");
   });
+
+  it("priority-weighted: src/core/ stale ref incurs higher penalty than scripts/ ref of same count", () => {
+    const highPriority = computeDriftConfidencePenalty({
+      staleCount: 1,
+      deprecatedTokenCount: 0,
+      staleReferences: [{ referencedPath: "src/core/orchestrator.ts", docPath: "docs/a.md", line: 1 }],
+    });
+    const lowPriority = computeDriftConfidencePenalty({
+      staleCount: 1,
+      deprecatedTokenCount: 0,
+      staleReferences: [{ referencedPath: "scripts/deploy.sh", docPath: "docs/a.md", line: 1 }],
+    });
+    assert.ok(highPriority.penalty > lowPriority.penalty,
+      `src/core/ ref (${highPriority.penalty}) must penalize more than scripts/ ref (${lowPriority.penalty})`);
+  });
+
+  it("priority-weighted: fallback to flat formula when staleReferences array is absent", () => {
+    const withCounts = computeDriftConfidencePenalty({ staleCount: 2, deprecatedTokenCount: 0 });
+    // Flat formula: 2 × 0.02 = 0.04
+    assert.equal(withCounts.penalty, 0.04, "flat fallback must produce 0.04 for 2 items");
+  });
+
+  it("priority-weighted: deprecated tokens penalized at medium rate (0.02 each)", () => {
+    const result = computeDriftConfidencePenalty({
+      staleCount: 0,
+      deprecatedTokenCount: 3,
+      staleReferences: [],
+    });
+    // 3 × 0.02 = 0.06
+    assert.equal(result.penalty, 0.06, "3 deprecated tokens must produce 0.06 penalty");
+  });
+
+  it("priority-weighted: mixed report penalizes by priority, capped at 0.30", () => {
+    // 2 high (src/core/) refs → 2 × 0.05 = 0.10, 1 low (scripts/) → 0.01, 2 tokens → 0.04 → total 0.15
+    const result = computeDriftConfidencePenalty({
+      staleCount: 3,
+      deprecatedTokenCount: 2,
+      staleReferences: [
+        { referencedPath: "src/core/a.ts",   docPath: "docs/a.md", line: 1 },
+        { referencedPath: "src/core/b.ts",   docPath: "docs/a.md", line: 2 },
+        { referencedPath: "scripts/old.sh",  docPath: "docs/a.md", line: 3 },
+      ],
+    });
+    assert.ok(result.penalty > 0 && result.penalty <= 0.30, "penalty must be positive and capped");
+    // Exact: 0.10 + 0.01 + 0.04 = 0.15
+    assert.equal(result.penalty, 0.15, "priority-weighted penalty must be 0.15 for this mix");
+  });
 });
 
 // ── Batch/wave packet field preservation (current task) ───────────────────────
@@ -914,7 +961,75 @@ describe("buildDriftDebtTasks", () => {
   });
 });
 
-// ── Task 2: Drift debt tasks pass quality gate (contract validation) ───────────
+// ── buildDriftDebtTasks — prioritization and deduplication improvements ─────────
+
+describe("buildDriftDebtTasks — prioritization and driftPriority field", () => {
+  it("orders tasks so docs with high-priority (src/core/) refs come before docs with low-priority refs", () => {
+    const report = {
+      staleReferences: [
+        // Low-priority doc inserted first in the input array
+        { docPath: "docs/ops.md",  referencedPath: "scripts/old.sh",        line: 1 },
+        // High-priority doc inserted second
+        { docPath: "docs/arch.md", referencedPath: "src/core/missing.ts",   line: 2 },
+        // Medium-priority doc inserted last
+        { docPath: "docs/api.md",  referencedPath: "src/providers/gone.ts", line: 3 },
+      ],
+      deprecatedTokenRefs: [],
+    };
+    const tasks = buildDriftDebtTasks(report);
+    assert.equal(tasks.length, 3);
+    // High-priority doc must surface first regardless of insertion order.
+    assert.ok(
+      tasks[0].target_files?.includes("docs/arch.md"),
+      `first task must cover the high-priority doc (docs/arch.md), got ${tasks[0].target_files}`
+    );
+    assert.ok(
+      tasks[1].target_files?.includes("docs/api.md"),
+      `second task must cover the medium-priority doc (docs/api.md), got ${tasks[1].target_files}`
+    );
+    assert.ok(
+      tasks[2].target_files?.includes("docs/ops.md"),
+      `last task must cover the low-priority doc (docs/ops.md), got ${tasks[2].target_files}`
+    );
+  });
+
+  it("each stale-ref debt task carries a driftPriority field derived from its highest-urgency ref", () => {
+    const report = {
+      staleReferences: [
+        // doc with one high-priority and one low-priority ref → effective priority = high
+        { docPath: "docs/mixed.md",  referencedPath: "src/core/ghost.ts",  line: 1 },
+        { docPath: "docs/mixed.md",  referencedPath: "scripts/old.sh",     line: 2 },
+        // doc with only a low-priority ref → effective priority = low
+        { docPath: "docs/ops.md",    referencedPath: "docker/worker.Dockerfile", line: 3 },
+      ],
+      deprecatedTokenRefs: [],
+    };
+    const tasks = buildDriftDebtTasks(report);
+    const mixedTask = tasks.find(t => t.target_files?.includes("docs/mixed.md"));
+    const opsTask   = tasks.find(t => t.target_files?.includes("docs/ops.md"));
+    assert.ok(mixedTask, "task for docs/mixed.md must exist");
+    assert.ok(opsTask,   "task for docs/ops.md must exist");
+    assert.equal(mixedTask.driftPriority, "high",
+      "docs/mixed.md task driftPriority must be 'high' (has src/core/ ref)");
+    assert.equal(opsTask.driftPriority, "low",
+      "docs/ops.md task driftPriority must be 'low' (only docker/ ref)");
+  });
+
+  it("priority numbers are assigned in order: high doc gets lower priority number than low doc", () => {
+    const report = {
+      staleReferences: [
+        { docPath: "docs/ops.md",  referencedPath: "scripts/x.sh",         line: 1 },
+        { docPath: "docs/arch.md", referencedPath: "src/core/missing.ts",  line: 2 },
+      ],
+      deprecatedTokenRefs: [],
+    };
+    const tasks = buildDriftDebtTasks(report);
+    const archTask = tasks.find(t => t.target_files?.includes("docs/arch.md"))!;
+    const opsTask  = tasks.find(t => t.target_files?.includes("docs/ops.md"))!;
+    assert.ok(archTask.priority < opsTask.priority,
+      `high-priority doc task (${archTask.priority}) must have lower priority number than low-priority doc task (${opsTask.priority})`);
+  });
+});
 
 describe("buildDriftDebtTasks — quality gate contract compliance", () => {
   it("stale-ref debt task verification field is NOT flagged as non-specific by plan_contract_validator", () => {

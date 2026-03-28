@@ -215,4 +215,41 @@ describe("evaluatePreDispatchGovernanceGate — mandatory drift debt gate", () =
     assert.equal(result.blocked, true, "mixed report with high-priority item must block dispatch");
     assert.ok(result.reason?.startsWith("mandatory_drift_debt_unresolved:"));
   });
+
+  it("blocked result includes mandatoryDriftPaths listing the missing high-priority files", async () => {
+    const report: ArchitectureDriftReport = {
+      scannedDocs: ["docs/a.md"],
+      presentCount: 0,
+      staleCount: 2,
+      staleReferences: [
+        { docPath: "docs/a.md", referencedPath: "src/core/alpha.ts", line: 1 },
+        { docPath: "docs/a.md", referencedPath: "src/core/beta.ts",  line: 2 },
+      ],
+      deprecatedTokenCount: 0,
+      deprecatedTokenRefs: [],
+    };
+    const result = await evaluatePreDispatchGovernanceGate(makeConfig(), [], "test-cycle", report);
+    assert.equal(result.blocked, true);
+    assert.ok(
+      Array.isArray((result as any).mandatoryDriftPaths),
+      "blocked result must include mandatoryDriftPaths array"
+    );
+    assert.ok(
+      (result as any).mandatoryDriftPaths.includes("src/core/alpha.ts"),
+      "mandatoryDriftPaths must include src/core/alpha.ts"
+    );
+    assert.ok(
+      (result as any).mandatoryDriftPaths.includes("src/core/beta.ts"),
+      "mandatoryDriftPaths must include src/core/beta.ts"
+    );
+  });
+
+  it("non-blocked result does not include mandatoryDriftPaths", async () => {
+    const result = await evaluatePreDispatchGovernanceGate(makeConfig(), [], "test-cycle", makeEmptyDriftReport());
+    assert.equal(result.blocked, false);
+    assert.ok(
+      !(result as any).mandatoryDriftPaths,
+      "non-blocked result must not include mandatoryDriftPaths"
+    );
+  });
 });
