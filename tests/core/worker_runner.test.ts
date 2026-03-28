@@ -75,6 +75,19 @@ describe("parseWorkerResponse", () => {
       "Worker self-reporting done must be overridden when access is blocked");
   });
 
+  it("does not force blocked when only tools/api are blocked (env verification limitation)", () => {
+    // Workers on Windows Copilot CLI can't run npm/git but code changes exist.
+    // tools:blocked should NOT override a worker's self-reported partial status.
+    const stdout = [
+      "BOX_STATUS=partial",
+      "BOX_ACCESS=repo:ok;files:ok;tools:blocked;api:blocked",
+      "I pushed changes but could not run npm test"
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "partial",
+      "tools:blocked alone must not override partial — code changes exist and dispatch must advance");
+  });
+
   it("does not override status when BOX_ACCESS reports all ok", () => {
     const stdout = [
       "BOX_STATUS=done",

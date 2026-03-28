@@ -566,12 +566,19 @@ export function parseWorkerResponse(stdout, stderr) {
 
   const accessHeaderMatch = combined.match(/BOX_ACCESS=([^\n\r]+)/i);
   const accessHeader = accessHeaderMatch ? accessHeaderMatch[1].trim() : null;
-  const hasBlockedAccess = accessHeader ? /\bblocked\b/i.test(accessHeader) : false;
+  // Only consider repo/file access denial as a hard block.  tools:blocked or api:blocked
+  // means the worker's verification environment has no subprocess execution (e.g. Windows
+  // Copilot CLI autonomous mode) but the code changes themselves were committed/pushed.
+  // Forcing those to "blocked" prevents the dispatch checkpoint from ever advancing.
+  const hasCriticalBlockedAccess = accessHeader
+    ? (/repo:blocked/i.test(accessHeader) || /files:blocked/i.test(accessHeader))
+    : false;
 
-  // Guardrail: if access protocol reports blocked but status is not blocked,
-  // force status to blocked for safe deterministic follow-up routing.
+  // Guardrail: if access protocol reports a CRITICAL (repo/file) block but worker
+  // status is not blocked, force it to blocked for safe deterministic follow-up routing.
+  // tools:blocked / api:blocked alone do NOT override — worker self-reported status wins.
   let normalizedStatus = ["done", "partial", "blocked", "error"].includes(status) ? status : "done";
-  if (hasBlockedAccess && normalizedStatus !== "blocked") {
+  if (hasCriticalBlockedAccess && normalizedStatus !== "blocked") {
     normalizedStatus = "blocked";
   }
 
@@ -819,15 +826,17 @@ export async function runWorkerConversation(config, roleName, instruction, histo
 
   const parsed: ParsedWorkerResponse = parseWorkerResponse(stdout, stderr);
 
-  // If access was reported as blocked, persist a structured escalation (non-critical)
-  if (parsed.status === "blocked" && /BOX_ACCESS=[^\n]*blocked/i.test(stdout)) {
+  // If access was reported as blocked (repo or file level), persist a structured escalation.
+  // tools:blocked alone is purposely excluded — that reflects a verification environment
+  // limitation (no subprocess execution) rather than a genuine access denial.
+  if (parsed.status === "blocked" && /repo:blocked|files:blocked/i.test(stdout)) {
     appendEscalation(config, {
       role: roleName,
       task: instruction.task,
       blockingReasonClass: BLOCKING_REASON_CLASS.ACCESS_BLOCKED,
       attempts: Number(instruction.reworkAttempt || 0),
       nextAction: NEXT_ACTION.RETRY,
-      summary: "Worker reported BOX_ACCESS blocked"
+      summary: "Worker reported BOX_ACCESS blocked (repo or files)"
     }).catch(() => { /* non-fatal */ });
   }
 
