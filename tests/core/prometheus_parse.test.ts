@@ -11,6 +11,8 @@ import {
   computeBottleneckCoverage,
   BOTTLENECK_COVERAGE_FLOOR,
   buildDriftDebtTasks,
+  checkPacketCompleteness,
+  UNRECOVERABLE_PACKET_REASONS,
 } from "../../src/core/prometheus.js";
 import { compilePrompt } from "../../src/core/prompt_compiler.js";
 import { isNonSpecificVerification, validatePlanContract } from "../../src/core/plan_contract_validator.js";
@@ -1097,5 +1099,137 @@ describe("capacityDelta/requestROI generation-time hard filter", () => {
       ))
       .map(r => r.planIndex);
     assert.equal(toRemove.length, 1, "out-of-range capacityDelta must be flagged for removal");
+  });
+});
+
+// ── Generation-boundary packet completeness gate ──────────────────────────────
+
+describe("checkPacketCompleteness — generation-boundary gate", () => {
+  function validRawPlan(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      task: "Implement trust boundary validation for planner output",
+      role: "evolution-worker",
+      wave: 1,
+      capacityDelta: 0.15,
+      requestROI: 2.5,
+      ...overrides,
+    };
+  }
+
+  it("returns recoverable=true for a fully valid raw packet", () => {
+    const result = checkPacketCompleteness(validRawPlan());
+    assert.equal(result.recoverable, true);
+    assert.deepEqual(result.reasons, []);
+  });
+
+  it("returns recoverable=false with no_task_identity when task/title/task_id/id are all absent", () => {
+    const result = checkPacketCompleteness({ capacityDelta: 0.1, requestROI: 1.5 });
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.NO_TASK_IDENTITY));
+  });
+
+  it("returns recoverable=false with missing_capacity_delta when capacityDelta is absent", () => {
+    const plan = validRawPlan();
+    delete (plan as any).capacityDelta;
+    const result = checkPacketCompleteness(plan);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_CAPACITY_DELTA));
+  });
+
+  it("returns recoverable=false with invalid_capacity_delta when capacityDelta is out of range", () => {
+    const result = checkPacketCompleteness(validRawPlan({ capacityDelta: 2.0 }));
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_CAPACITY_DELTA));
+  });
+
+  it("returns recoverable=false with invalid_capacity_delta when capacityDelta is non-finite", () => {
+    const result = checkPacketCompleteness(validRawPlan({ capacityDelta: NaN }));
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_CAPACITY_DELTA));
+  });
+
+  it("returns recoverable=false with missing_request_roi when requestROI is absent", () => {
+    const plan = validRawPlan();
+    delete (plan as any).requestROI;
+    const result = checkPacketCompleteness(plan);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_REQUEST_ROI));
+  });
+
+  it("returns recoverable=false with invalid_request_roi when requestROI is zero", () => {
+    const result = checkPacketCompleteness(validRawPlan({ requestROI: 0 }));
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_REQUEST_ROI));
+  });
+
+  it("returns recoverable=false with invalid_request_roi when requestROI is negative", () => {
+    const result = checkPacketCompleteness(validRawPlan({ requestROI: -1 }));
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_REQUEST_ROI));
+  });
+
+  it("accumulates multiple reasons when multiple fields are unrecoverable", () => {
+    const result = checkPacketCompleteness({ wave: 1 }); // no task, no capacityDelta, no requestROI
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.NO_TASK_IDENTITY));
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_CAPACITY_DELTA));
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_REQUEST_ROI));
+    assert.equal(result.reasons.length, 3);
+  });
+
+  it("accepts title as task identity fallback", () => {
+    const plan = validRawPlan({ title: "Fix something important" });
+    delete (plan as any).task;
+    const result = checkPacketCompleteness(plan);
+    assert.equal(result.recoverable, true, "title must count as task identity");
+  });
+
+  it("accepts task_id as task identity fallback", () => {
+    const plan = validRawPlan({ task_id: "T-001" });
+    delete (plan as any).task;
+    const result = checkPacketCompleteness(plan);
+    assert.equal(result.recoverable, true, "task_id must count as task identity");
+  });
+
+  it("returns recoverable=false for null input", () => {
+    const result = checkPacketCompleteness(null);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.NO_TASK_IDENTITY));
+  });
+
+  it("accepts capacityDelta=-1.0 (boundary min) as valid", () => {
+    const result = checkPacketCompleteness(validRawPlan({ capacityDelta: -1.0 }));
+    assert.equal(result.recoverable, true);
+  });
+
+  it("accepts capacityDelta=1.0 (boundary max) as valid", () => {
+    const result = checkPacketCompleteness(validRawPlan({ capacityDelta: 1.0 }));
+    assert.equal(result.recoverable, true);
+  });
+
+  it("negative path: invalid capacityDelta does NOT suppress task identity detection", () => {
+    // Both no task identity AND invalid capacityDelta → two reasons
+    const result = checkPacketCompleteness({ capacityDelta: 999, requestROI: 2.0 });
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.NO_TASK_IDENTITY));
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_CAPACITY_DELTA));
+  });
+});
+
+describe("UNRECOVERABLE_PACKET_REASONS", () => {
+  it("exports all expected reason codes as frozen string constants", () => {
+    assert.equal(typeof UNRECOVERABLE_PACKET_REASONS.NO_TASK_IDENTITY, "string");
+    assert.equal(typeof UNRECOVERABLE_PACKET_REASONS.MISSING_CAPACITY_DELTA, "string");
+    assert.equal(typeof UNRECOVERABLE_PACKET_REASONS.INVALID_CAPACITY_DELTA, "string");
+    assert.equal(typeof UNRECOVERABLE_PACKET_REASONS.MISSING_REQUEST_ROI, "string");
+    assert.equal(typeof UNRECOVERABLE_PACKET_REASONS.INVALID_REQUEST_ROI, "string");
+  });
+
+  it("is frozen — mutation throws in strict mode", () => {
+    assert.throws(
+      () => { (UNRECOVERABLE_PACKET_REASONS as any).NEW_KEY = "x"; },
+      /Cannot add property/,
+      "UNRECOVERABLE_PACKET_REASONS must be frozen"
+    );
   });
 });
