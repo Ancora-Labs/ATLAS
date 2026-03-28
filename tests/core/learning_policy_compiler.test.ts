@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { compileLessonsToPolicies, validatePlanAgainstPolicies, COMPILABLE_PATTERNS, hardGateRecurrenceToPolicies, checkCarryForwardGate, deriveRoutingAdjustments, buildPromptHardConstraints } from "../../src/core/learning_policy_compiler.js";
+import { compileLessonsToPolicies, validatePlanAgainstPolicies, COMPILABLE_PATTERNS, hardGateRecurrenceToPolicies, checkCarryForwardGate, deriveRoutingAdjustments, buildPromptHardConstraints, REASON_CODES } from "../../src/core/learning_policy_compiler.js";
 
 describe("learning_policy_compiler", () => {
   describe("compileLessonsToPolicies", () => {
@@ -321,6 +321,150 @@ describe("learning_policy_compiler", () => {
       const policies = [{ id: "custom-recurrence-xyz", severity: "warning", _hardGated: false }];
       const result = buildPromptHardConstraints(policies);
       assert.equal(result.length, 0);
+    });
+  });
+
+  // ── Early promotion + reason codes (Task: promote repeated unresolved lessons earlier) ─
+
+  describe("REASON_CODES", () => {
+    it("exports all required reason code constants", () => {
+      assert.equal(typeof REASON_CODES.RECURRENCE_HARD_GATE, "string");
+      assert.equal(typeof REASON_CODES.EARLY_RECURRENCE_WARNING, "string");
+      assert.equal(typeof REASON_CODES.CARRY_FORWARD_UNRESOLVED, "string");
+      assert.equal(typeof REASON_CODES.MANDATORY_ITEM_MISSING, "string");
+      assert.equal(typeof REASON_CODES.PLAN_VIOLATION, "string");
+    });
+
+    it("all reason code values are unique", () => {
+      const values = Object.values(REASON_CODES);
+      assert.equal(values.length, new Set(values).size);
+    });
+  });
+
+  describe("hardGateRecurrenceToPolicies — early promotion", () => {
+    it("emits early-warning policy at earlyGateThreshold before hard gate fires", () => {
+      // maxRecurrences=3, earlyGateThreshold=2. count=2 → early warning, not hard gate.
+      const pms = [
+        { lessonLearned: "The glob pattern expansion fails on Windows systems", followUpNeeded: true },
+        { lessonLearned: "The glob pattern expansion fails on Windows systems", followUpNeeded: true },
+      ];
+      const result = hardGateRecurrenceToPolicies(pms, [], { maxRecurrences: 3, earlyGateThreshold: 2 });
+      assert.ok(result.newPolicies.length > 0, "at least one early-warning policy must be emitted");
+      const earlyPolicy = result.newPolicies[0];
+      assert.ok(earlyPolicy.id.endsWith("-early-warning"), `ID must end with -early-warning, got: ${earlyPolicy.id}`);
+      assert.equal(earlyPolicy._hardGated, false);
+      assert.equal(earlyPolicy.reasonCode, REASON_CODES.EARLY_RECURRENCE_WARNING);
+    });
+
+    it("emits hard-gate policy (critical, canonical ID) at maxRecurrences threshold", () => {
+      const pms = [
+        { lessonLearned: "The glob pattern expansion fails on Windows systems", followUpNeeded: true },
+        { lessonLearned: "The glob pattern expansion fails on Windows systems", followUpNeeded: true },
+        { lessonLearned: "The glob pattern expansion fails on Windows systems", followUpNeeded: true },
+      ];
+      const result = hardGateRecurrenceToPolicies(pms, [], { maxRecurrences: 3 });
+      assert.ok(result.newPolicies.length > 0);
+      const hardPolicy = result.newPolicies.find((p) => !p.id.endsWith("-early-warning"));
+      assert.ok(hardPolicy, "must have a canonical (non-early-warning) hard gate policy");
+      assert.equal(hardPolicy.severity, "critical");
+      assert.equal(hardPolicy._hardGated, true);
+      assert.equal(hardPolicy.reasonCode, REASON_CODES.RECURRENCE_HARD_GATE);
+    });
+
+    it("custom pattern emits early-warning escalation message when below hard threshold", () => {
+      // A lesson that matches no known COMPILABLE_PATTERN → falls to custom-recurrence path.
+      const pms = [
+        { lessonLearned: "Unique custom problem with zorp configuration setting", followUpNeeded: true },
+        { lessonLearned: "Unique custom problem with zorp configuration setting", followUpNeeded: true },
+      ];
+      const result = hardGateRecurrenceToPolicies(pms, [], { maxRecurrences: 3, earlyGateThreshold: 2 });
+      assert.ok(result.newPolicies.length > 0);
+      const earlyPolicy = result.newPolicies[0];
+      assert.ok(earlyPolicy.id.endsWith("-early-warning"));
+      assert.equal(earlyPolicy.reasonCode, REASON_CODES.EARLY_RECURRENCE_WARNING);
+      assert.ok(result.escalations.some((e) => e.includes("approaching")), "escalation must mention approaching threshold");
+    });
+
+    it("default earlyGateThreshold is one below maxRecurrences", () => {
+      // maxRecurrences=4, default earlyGateThreshold should be 3.
+      const pms = Array.from({ length: 3 }, () => ({
+        lessonLearned: "The glob pattern expansion fails on Windows systems",
+        followUpNeeded: true,
+      }));
+      // count=3, maxRecurrences=4 → earlyGateThreshold=3 → should emit early warning
+      const result = hardGateRecurrenceToPolicies(pms, [], { maxRecurrences: 4 });
+      assert.ok(result.newPolicies.some((p) => p.id.endsWith("-early-warning")));
+      assert.ok(!result.newPolicies.some((p) => p._hardGated === true), "hard gate must not fire below maxRecurrences");
+    });
+
+    it("negative: count below earlyGateThreshold emits nothing", () => {
+      const pms = [
+        { lessonLearned: "The glob pattern expansion fails on Windows systems", followUpNeeded: true },
+      ];
+      const result = hardGateRecurrenceToPolicies(pms, [], { maxRecurrences: 3, earlyGateThreshold: 2 });
+      assert.equal(result.newPolicies.length, 0);
+    });
+
+    it("early-warning and hard-gate policies coexist when existing list contains only the early-warning ID", () => {
+      // Simulate: early warning was added last cycle; this cycle count hits maxRecurrences.
+      const lesson = "The glob pattern expansion fails on Windows systems";
+      const earlyWarningId = "glob-false-fail-early-warning";
+      const pms = Array.from({ length: 3 }, () => ({ lessonLearned: lesson, followUpNeeded: true }));
+      // Existing list already has the early-warning policy
+      const result = hardGateRecurrenceToPolicies(pms, [earlyWarningId], { maxRecurrences: 3, earlyGateThreshold: 2 });
+      // Hard gate must still be emitted
+      assert.ok(result.newPolicies.some((p) => p.id === "glob-false-fail" && p._hardGated === true));
+      // Early warning must NOT be duplicated
+      assert.ok(!result.newPolicies.some((p) => p.id === earlyWarningId));
+    });
+  });
+
+  describe("checkCarryForwardGate — reason codes", () => {
+    it("returns CARRY_FORWARD_UNRESOLVED reason code when unresolved lessons block", () => {
+      const pms = [
+        { followUpNeeded: true, followUpTask: "Fix the recurring blocker issue", lessonLearned: "a" },
+        { followUpNeeded: true, followUpTask: "Fix the recurring blocker issue", lessonLearned: "b" },
+        { followUpNeeded: true, followUpTask: "Fix the recurring blocker issue", lessonLearned: "c" },
+      ];
+      const result = checkCarryForwardGate(pms, [], { maxUnresolvedCycles: 2 });
+      assert.equal(result.shouldBlock, true);
+      assert.equal(result.reasonCode, REASON_CODES.CARRY_FORWARD_UNRESOLVED);
+    });
+
+    it("returns MANDATORY_ITEM_MISSING reason code when only mandatory items are missing", () => {
+      const result = checkCarryForwardGate([], [], { mandatoryCarryForward: ["Must fix thing X now"] });
+      assert.equal(result.shouldBlock, true);
+      assert.equal(result.reasonCode, REASON_CODES.MANDATORY_ITEM_MISSING);
+    });
+
+    it("returns null reasonCode when shouldBlock is false", () => {
+      const result = checkCarryForwardGate([], []);
+      assert.equal(result.shouldBlock, false);
+      assert.equal(result.reasonCode, null);
+    });
+
+    it("CARRY_FORWARD_UNRESOLVED takes priority when both unresolved and mandatory issues exist", () => {
+      const pms = [
+        { followUpNeeded: true, followUpTask: "Persistent issue that must be fixed today", lessonLearned: "1" },
+        { followUpNeeded: true, followUpTask: "Persistent issue that must be fixed today", lessonLearned: "2" },
+        { followUpNeeded: true, followUpTask: "Persistent issue that must be fixed today", lessonLearned: "3" },
+      ];
+      const result = checkCarryForwardGate(pms, [], {
+        maxUnresolvedCycles: 2,
+        mandatoryCarryForward: ["Mandatory item not in plans at all"],
+      });
+      assert.equal(result.shouldBlock, true);
+      assert.equal(result.reasonCode, REASON_CODES.CARRY_FORWARD_UNRESOLVED);
+    });
+  });
+
+  describe("validatePlanAgainstPolicies — reason codes", () => {
+    it("violation includes PLAN_VIOLATION reason code", () => {
+      const plan = { task: "Run tests", verification: "node --test tests/**/*.test.ts" };
+      const policies = [{ id: "glob-false-fail", assertion: "Use npm test", severity: "critical" }];
+      const result = validatePlanAgainstPolicies(plan, policies);
+      assert.equal(result.ok, false);
+      assert.equal(result.violations[0].reasonCode, REASON_CODES.PLAN_VIOLATION);
     });
   });
 });

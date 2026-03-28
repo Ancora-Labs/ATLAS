@@ -412,3 +412,140 @@ describe("autoCloseVerifiedDebt", () => {
     assert.equal(shouldBlock, true, "Unresolved critical debt must still block after partial close");
   });
 });
+
+// ── tickCycle early warning tier ─────────────────────────────────────────────
+
+describe("tickCycle — early warning", () => {
+  it("includes entries one cycle before their due date in earlyWarning", () => {
+    const ledger = [{
+      id: "debt-1-0",
+      lesson: "Approaching deadline",
+      owner: "w",
+      openedCycle: 1,
+      dueCycle: 6,
+      severity: "critical",
+      closedAt: null,
+      closureEvidence: null,
+      cyclesOpen: 0,
+    }];
+    // currentCycle=5, dueCycle=6 → within one cycle of deadline → earlyWarning
+    const { overdue, earlyWarning } = tickCycle(ledger, 5);
+    assert.equal(overdue.length, 0, "not yet overdue");
+    assert.equal(earlyWarning.length, 1, "must surface as early warning");
+  });
+
+  it("does not include entries with more than one cycle remaining in earlyWarning", () => {
+    const ledger = [{
+      id: "debt-1-0",
+      lesson: "Not yet close to deadline",
+      owner: "w",
+      openedCycle: 1,
+      dueCycle: 10,
+      severity: "warning",
+      closedAt: null,
+      closureEvidence: null,
+      cyclesOpen: 0,
+    }];
+    const { earlyWarning } = tickCycle(ledger, 5);
+    assert.equal(earlyWarning.length, 0);
+  });
+
+  it("already-overdue entries appear in overdue, not earlyWarning", () => {
+    const ledger = [{
+      id: "debt-1-0",
+      lesson: "Already overdue lesson",
+      owner: "w",
+      openedCycle: 1,
+      dueCycle: 3,
+      severity: "critical",
+      closedAt: null,
+      closureEvidence: null,
+      cyclesOpen: 0,
+    }];
+    const { overdue, earlyWarning } = tickCycle(ledger, 7);
+    assert.equal(overdue.length, 1);
+    assert.equal(earlyWarning.length, 0);
+  });
+
+  it("closed entries do not appear in earlyWarning", () => {
+    const ledger = [{
+      id: "debt-1-0",
+      lesson: "Closed lesson",
+      owner: "w",
+      openedCycle: 1,
+      dueCycle: 6,
+      severity: "critical",
+      closedAt: "2025-01-01T00:00:00Z",
+      closureEvidence: "fixed",
+      cyclesOpen: 0,
+    }];
+    const { earlyWarning } = tickCycle(ledger, 5);
+    assert.equal(earlyWarning.length, 0);
+  });
+});
+
+// ── shouldBlockOnDebt — reason codes + early warning ─────────────────────────
+
+describe("shouldBlockOnDebt — reason codes and early warning", () => {
+  it("returns reasonCode=DEBT_SLA_EXCEEDED when blocking", () => {
+    const ledger = [
+      { id: "d1", lesson: "A", openedCycle: 1, dueCycle: 2, severity: "critical", closedAt: null, cyclesOpen: 0 },
+      { id: "d2", lesson: "B", openedCycle: 1, dueCycle: 2, severity: "critical", closedAt: null, cyclesOpen: 0 },
+      { id: "d3", lesson: "C", openedCycle: 1, dueCycle: 2, severity: "critical", closedAt: null, cyclesOpen: 0 },
+    ];
+    const result = shouldBlockOnDebt(ledger, 10, { maxCriticalOverdue: 3 });
+    assert.equal(result.shouldBlock, true);
+    assert.equal(result.reasonCode, "DEBT_SLA_EXCEEDED");
+  });
+
+  it("returns reasonCode=DEBT_APPROACHING_SLA when a critical entry is one cycle from due", () => {
+    const ledger = [{
+      id: "d1",
+      lesson: "Critical item about to breach SLA",
+      openedCycle: 1,
+      dueCycle: 6,
+      severity: "critical",
+      closedAt: null,
+      cyclesOpen: 0,
+    }];
+    // currentCycle=5, dueCycle=6 → earlyWarning fires
+    const result = shouldBlockOnDebt(ledger, 5, { maxCriticalOverdue: 3 });
+    assert.equal(result.shouldBlock, false, "early warning must not hard-block");
+    assert.equal(result.reasonCode, "DEBT_APPROACHING_SLA");
+    assert.equal(result.earlyWarningCount, 1);
+  });
+
+  it("returns reasonCode=null and earlyWarningCount=0 when no issues", () => {
+    const result = shouldBlockOnDebt([], 10);
+    assert.equal(result.shouldBlock, false);
+    assert.equal(result.reasonCode, null);
+    assert.equal(result.earlyWarningCount, 0);
+  });
+
+  it("earlyWarningCount is exposed alongside overdueCount when blocking", () => {
+    const ledger = [
+      { id: "d1", lesson: "A", openedCycle: 1, dueCycle: 2, severity: "critical", closedAt: null, cyclesOpen: 0 },
+      { id: "d2", lesson: "B", openedCycle: 1, dueCycle: 2, severity: "critical", closedAt: null, cyclesOpen: 0 },
+      { id: "d3", lesson: "C", openedCycle: 1, dueCycle: 2, severity: "critical", closedAt: null, cyclesOpen: 0 },
+    ];
+    const result = shouldBlockOnDebt(ledger, 10, { maxCriticalOverdue: 3 });
+    assert.ok(typeof result.earlyWarningCount === "number", "earlyWarningCount must always be present");
+    assert.ok(typeof result.overdueCount === "number", "overdueCount must always be present");
+  });
+
+  it("negative: warning-severity early warning items do not set DEBT_APPROACHING_SLA", () => {
+    const ledger = [{
+      id: "d1",
+      lesson: "Warning item approaching SLA",
+      openedCycle: 1,
+      dueCycle: 6,
+      severity: "warning",
+      closedAt: null,
+      cyclesOpen: 0,
+    }];
+    const result = shouldBlockOnDebt(ledger, 5, { maxCriticalOverdue: 3 });
+    assert.equal(result.shouldBlock, false);
+    assert.equal(result.reasonCode, null, "warning-severity items must not set reasonCode");
+    assert.equal(result.earlyWarningCount, 0, "earlyWarningCount counts only critical items");
+  });
+});

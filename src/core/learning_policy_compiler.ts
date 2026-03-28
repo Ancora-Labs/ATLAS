@@ -130,10 +130,10 @@ export function validatePlanAgainstPolicies(plan, policies) {
   for (const policy of policies) {
     // Check specific known violations
     if (policy.id === "glob-false-fail" && /node\s+--test\s+tests/.test(verification)) {
-      violations.push({ policyId: policy.id, assertion: policy.assertion, severity: policy.severity });
+      violations.push({ policyId: policy.id, assertion: policy.assertion, severity: policy.severity, reasonCode: REASON_CODES.PLAN_VIOLATION });
     }
     if (policy.id === "missing-test" && /implement|create|add/.test(task) && !/test/.test(task) && !/test/.test(verification)) {
-      violations.push({ policyId: policy.id, assertion: policy.assertion, severity: policy.severity });
+      violations.push({ policyId: policy.id, assertion: policy.assertion, severity: policy.severity, reasonCode: REASON_CODES.PLAN_VIOLATION });
     }
   }
 
@@ -201,6 +201,11 @@ export function checkCarryForwardGate(postmortems, currentPlans, opts: any = {})
   return {
     shouldBlock,
     reason: reasons.join("; "),
+    reasonCode: unresolvedLessons.length > 0
+      ? REASON_CODES.CARRY_FORWARD_UNRESOLVED
+      : missingMandatory.length > 0
+      ? REASON_CODES.MANDATORY_ITEM_MISSING
+      : null,
     unresolvedLessons,
     missingMandatory,
   };
@@ -219,19 +224,47 @@ function normalizeKey(text) {
 export { COMPILABLE_PATTERNS };
 
 /**
+ * Structured reason codes emitted by gate functions so callers can react
+ * programmatically without parsing free-form reason strings.
+ */
+export const REASON_CODES = {
+  /** Lesson has recurred enough times to trigger a hard-gate policy block. */
+  RECURRENCE_HARD_GATE: "RECURRENCE_HARD_GATE",
+  /** Lesson is approaching the hard-gate threshold — early warning issued. */
+  EARLY_RECURRENCE_WARNING: "EARLY_RECURRENCE_WARNING",
+  /** One or more carry-forward lessons remain unresolved past the cycle limit. */
+  CARRY_FORWARD_UNRESOLVED: "CARRY_FORWARD_UNRESOLVED",
+  /** A mandatory carry-forward item is absent from the current plan set. */
+  MANDATORY_ITEM_MISSING: "MANDATORY_ITEM_MISSING",
+  /** A plan field directly violates an active compiled policy. */
+  PLAN_VIOLATION: "PLAN_VIOLATION",
+} as const;
+
+export type ReasonCode = typeof REASON_CODES[keyof typeof REASON_CODES];
+
+/**
  * Hard-gate: auto-compile unresolved recurrences into enforceable policies (Packet 15).
  *
  * When the same lesson recurs more than `maxRecurrences` times without resolution,
  * this function forcibly compiles it into a policy assertion that blocks future plans
  * matching the same pattern.
  *
+ * Early promotion: lessons that recur more than `earlyGateThreshold` times (default:
+ * maxRecurrences - 1) are promoted to warning-level policies with a distinct
+ * `-early-warning` ID suffix so they enter the gate pipeline before the hard threshold.
+ * This gives operators one cycle of advance notice before the hard block fires.
+ *
+ * All emitted policies carry a `reasonCode` field for programmatic routing by callers.
+ *
  * @param {object[]} postmortems — full postmortem history
  * @param {string[]} existingPolicyIds — already-active policy IDs
- * @param {{ maxRecurrences?: number }} opts
+ * @param {{ maxRecurrences?: number, earlyGateThreshold?: number }} opts
  * @returns {{ newPolicies: CompiledPolicy[], escalations: string[] }}
  */
 export function hardGateRecurrenceToPolicies(postmortems, existingPolicyIds = [], opts: any = {}) {
   const maxRecurrences = opts.maxRecurrences || 3;
+  // earlyGateThreshold defaults to one below maxRecurrences so promotion is one cycle early.
+  const earlyGateThreshold = opts.earlyGateThreshold ?? Math.max(1, maxRecurrences - 1);
   if (!Array.isArray(postmortems)) return { newPolicies: [], escalations: [] };
 
   const existing = new Set(existingPolicyIds);
@@ -249,42 +282,56 @@ export function hardGateRecurrenceToPolicies(postmortems, existingPolicyIds = []
   const escalations = [];
 
   for (const [lesson, count] of lessonCounts) {
-    if (count < maxRecurrences) continue;
+    const isHardGate = count >= maxRecurrences;
+    const isEarlyWarning = !isHardGate && count >= earlyGateThreshold;
+    if (!isHardGate && !isEarlyWarning) continue;
+
+    const reasonCode = isHardGate ? REASON_CODES.RECURRENCE_HARD_GATE : REASON_CODES.EARLY_RECURRENCE_WARNING;
 
     // Try to compile into a known pattern
     let compiled = false;
     for (const template of COMPILABLE_PATTERNS) {
-      if (template.pattern.test(lesson) && !existing.has(template.id)) {
-        existing.add(template.id);
-        newPolicies.push({
-          id: template.id,
-          assertion: template.assertion,
-          severity: "critical", // Force critical for recurring issues
-          sourceLesson: lesson.slice(0, 200),
-          detectedAt: new Date().toISOString(),
-          _hardGated: true,
-          _recurrenceCount: count,
-        });
-        compiled = true;
-        break;
-      }
+      if (!template.pattern.test(lesson)) continue;
+      // Hard gate uses the canonical ID; early warning uses a distinct suffixed ID so
+      // both can coexist in existingPolicyIds without suppressing each other.
+      const policyId = isHardGate ? template.id : `${template.id}-early-warning`;
+      if (existing.has(policyId)) { compiled = true; break; }
+      existing.add(policyId);
+      newPolicies.push({
+        id: policyId,
+        assertion: template.assertion,
+        severity: isHardGate ? "critical" : template.severity,
+        reasonCode,
+        sourceLesson: lesson.slice(0, 200),
+        detectedAt: new Date().toISOString(),
+        _hardGated: isHardGate,
+        _recurrenceCount: count,
+      });
+      compiled = true;
+      break;
     }
 
     // If no known pattern matches, escalate as a custom rule
     if (!compiled) {
-      const customId = `custom-recurrence-${normalizeKey(lesson).slice(0, 30).replace(/\s/g, "-")}`;
+      const baseId = `custom-recurrence-${normalizeKey(lesson).slice(0, 30).replace(/\s/g, "-")}`;
+      const customId = isHardGate ? baseId : `${baseId}-early-warning`;
       if (!existing.has(customId)) {
         existing.add(customId);
         newPolicies.push({
           id: customId,
           assertion: `Recurring unresolved: ${lesson.slice(0, 100)}`,
-          severity: "warning",
+          severity: isHardGate ? "critical" : "warning",
+          reasonCode,
           sourceLesson: lesson.slice(0, 200),
           detectedAt: new Date().toISOString(),
-          _hardGated: true,
+          _hardGated: isHardGate,
           _recurrenceCount: count,
         });
-        escalations.push(`Lesson recurring ${count}x without resolution: ${lesson.slice(0, 80)}`);
+        if (isEarlyWarning) {
+          escalations.push(`Lesson approaching recurrence threshold (${count}/${maxRecurrences}): ${lesson.slice(0, 80)}`);
+        } else {
+          escalations.push(`Lesson recurring ${count}x without resolution: ${lesson.slice(0, 80)}`);
+        }
       }
     }
   }

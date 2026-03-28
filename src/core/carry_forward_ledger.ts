@@ -172,21 +172,27 @@ export function addDebtEntries(ledger, newItems, currentCycle, opts: any = {}) {
 
 /**
  * Increment cycle counters for open entries and flag overdue items.
+ * Also identifies entries that are approaching their due cycle (within 1 cycle)
+ * as an early-warning tier so callers can escalate before the hard SLA breach.
  *
  * @param {DebtEntry[]} ledger
  * @param {number} currentCycle
- * @returns {{ ledger: DebtEntry[], overdue: DebtEntry[] }}
+ * @returns {{ ledger: DebtEntry[], overdue: DebtEntry[], earlyWarning: DebtEntry[] }}
  */
 export function tickCycle(ledger, currentCycle) {
   const overdue = [];
+  const earlyWarning = [];
   for (const entry of ledger) {
     if (entry.closedAt) continue;
     entry.cyclesOpen = currentCycle - entry.openedCycle;
     if (currentCycle > entry.dueCycle) {
       overdue.push(entry);
+    } else if (currentCycle >= entry.dueCycle - 1) {
+      // One cycle before the SLA deadline — surface as early warning.
+      earlyWarning.push(entry);
     }
   }
-  return { ledger, overdue };
+  return { ledger, overdue, earlyWarning };
 }
 
 /**
@@ -268,25 +274,38 @@ export function autoCloseVerifiedDebt(
 
 /**
  * Check if critical overdue debt should block plan acceptance.
+ * Returns a structured `reasonCode` so callers can react programmatically
+ * without parsing the free-form reason string.
  *
  * @param {DebtEntry[]} ledger
  * @param {number} currentCycle
  * @param {{ maxCriticalOverdue?: number }} opts
- * @returns {{ shouldBlock: boolean, reason: string, overdueCount: number }}
+ * @returns {{ shouldBlock: boolean, reason: string, reasonCode: string|null, overdueCount: number, earlyWarningCount: number }}
  */
 export function shouldBlockOnDebt(ledger, currentCycle, opts: any = {}) {
   const maxCritical = opts.maxCriticalOverdue ?? 3;
-  const { overdue } = tickCycle(ledger, currentCycle);
+  const { overdue, earlyWarning } = tickCycle(ledger, currentCycle);
   const criticalOverdue = overdue.filter(e => e.severity === "critical");
+  const criticalEarlyWarning = earlyWarning.filter(e => e.severity === "critical");
 
   if (criticalOverdue.length >= maxCritical) {
     return {
       shouldBlock: true,
       reason: `${criticalOverdue.length} critical debt items overdue (limit: ${maxCritical})`,
+      reasonCode: "DEBT_SLA_EXCEEDED",
       overdueCount: criticalOverdue.length,
+      earlyWarningCount: criticalEarlyWarning.length,
     };
   }
-  return { shouldBlock: false, reason: "", overdueCount: criticalOverdue.length };
+  return {
+    shouldBlock: false,
+    reason: criticalEarlyWarning.length > 0
+      ? `${criticalEarlyWarning.length} critical debt item(s) approaching SLA deadline`
+      : "",
+    reasonCode: criticalEarlyWarning.length > 0 ? "DEBT_APPROACHING_SLA" : null,
+    overdueCount: criticalOverdue.length,
+    earlyWarningCount: criticalEarlyWarning.length,
+  };
 }
 
 
