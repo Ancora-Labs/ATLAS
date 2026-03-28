@@ -77,6 +77,79 @@ export const CARRY_FORWARD_MAX_TOKENS = 2000;
 export const BEHAVIOR_PATTERNS_MAX_TOKENS = 1500;
 
 /**
+ * Reason codes emitted by checkPacketCompleteness for unrecoverable conditions.
+ * Used in logs and _rejectedIncompletePackets metadata so callers can diagnose
+ * which field caused rejection without inspecting the raw plan object.
+ */
+export const UNRECOVERABLE_PACKET_REASONS = Object.freeze({
+  /** Raw plan has no task/title/task_id/id — normalization would synthesize "Task-N" */
+  NO_TASK_IDENTITY:       "no_task_identity",
+  /** capacityDelta field is absent — normalization cannot synthesize it */
+  MISSING_CAPACITY_DELTA: "missing_capacity_delta",
+  /** capacityDelta is present but not a finite number ∈ [-1.0, 1.0] */
+  INVALID_CAPACITY_DELTA: "invalid_capacity_delta",
+  /** requestROI field is absent — normalization cannot synthesize it */
+  MISSING_REQUEST_ROI:    "missing_request_roi",
+  /** requestROI is present but not a positive finite number */
+  INVALID_REQUEST_ROI:    "invalid_request_roi",
+});
+
+/**
+ * Check whether a raw plan packet is unrecoverable before normalization.
+ *
+ * A packet is unrecoverable when it is missing fields that normalizePlanFromTask()
+ * cannot meaningfully synthesize.  These packets must be rejected at the generation
+ * boundary — right after parseAgentOutput() and before normalizePrometheusParsedOutput()
+ * is called — so invalid AI output never enters the normalization pipeline.
+ *
+ * Unrecoverable conditions:
+ *  1. No task identity  — all of task/title/task_id/id are absent or empty.
+ *     Normalization falls back to "Task-N" which carries no semantic meaning.
+ *  2. Missing/invalid capacityDelta  — normalization explicitly omits this field
+ *     when it is absent or out of range; the downstream contract validator would
+ *     remove the plan anyway, so rejecting early avoids wasted processing.
+ *  3. Missing/invalid requestROI  — same rationale as capacityDelta.
+ *
+ * @param rawPlan - raw plan object as emitted by the AI, before any normalization
+ * @returns {{ recoverable: boolean, reasons: string[] }}
+ */
+export function checkPacketCompleteness(rawPlan: any): { recoverable: boolean; reasons: string[] } {
+  if (!rawPlan || typeof rawPlan !== "object") {
+    return { recoverable: false, reasons: [UNRECOVERABLE_PACKET_REASONS.NO_TASK_IDENTITY] };
+  }
+
+  const reasons: string[] = [];
+
+  // 1. Task identity: at least one of task/title/task_id/id must be a non-empty string.
+  const taskText = String(rawPlan.task || rawPlan.title || rawPlan.task_id || rawPlan.id || "").trim();
+  if (taskText.length === 0) {
+    reasons.push(UNRECOVERABLE_PACKET_REASONS.NO_TASK_IDENTITY);
+  }
+
+  // 2. capacityDelta: must be present and a finite number ∈ [-1.0, 1.0].
+  if (!("capacityDelta" in rawPlan)) {
+    reasons.push(UNRECOVERABLE_PACKET_REASONS.MISSING_CAPACITY_DELTA);
+  } else {
+    const cd = Number(rawPlan.capacityDelta);
+    if (!Number.isFinite(cd) || cd < -1 || cd > 1) {
+      reasons.push(UNRECOVERABLE_PACKET_REASONS.INVALID_CAPACITY_DELTA);
+    }
+  }
+
+  // 3. requestROI: must be present and a positive finite number.
+  if (!("requestROI" in rawPlan)) {
+    reasons.push(UNRECOVERABLE_PACKET_REASONS.MISSING_REQUEST_ROI);
+  } else {
+    const roi = Number(rawPlan.requestROI);
+    if (!Number.isFinite(roi) || roi <= 0) {
+      reasons.push(UNRECOVERABLE_PACKET_REASONS.INVALID_REQUEST_ROI);
+    }
+  }
+
+  return { recoverable: reasons.length === 0, reasons };
+}
+
+/**
  * Retire carry-forward items that have already been resolved.
  * Checks the carry-forward ledger (closedAt + closureEvidence) and the coordination
  * completedTasks list to skip items that have verified evidence of resolution before
@@ -1763,8 +1836,40 @@ Consider whether the root causes are:
 
   // ── Parse output ──────────────────────────────────────────────────────────
   const aiResult = parseAgentOutput(raw);
+
+  // ── Generation-boundary packet completeness gate ──────────────────────────
+  // Reject unrecoverable incomplete packets BEFORE normalization so they never
+  // enter the normalization pipeline. Unrecoverable means normalizePlanFromTask()
+  // cannot synthesize a meaningful value for the missing field:
+  //   - No task identity (task/title/task_id/id all absent) → "Task-N" is useless
+  //   - Missing/invalid capacityDelta → normalization omits it; validator removes it
+  //   - Missing/invalid requestROI   → same rationale
+  // This is the primary enforcement gate. The post-normalization capacityDelta/
+  // requestROI filter below remains as a secondary safety net for plans injected
+  // by non-rawPlans paths (alternative shapes, drift debt tasks).
+  const rawParsedInput = aiResult?.parsed || buildNarrativeFallbackParsed({ ...aiResult, raw });
+  if (Array.isArray(rawParsedInput.plans) && rawParsedInput.plans.length > 0) {
+    const incompletePackets: Array<{ index: number; reasons: string[] }> = [];
+    rawParsedInput.plans = rawParsedInput.plans.filter((plan: any, i: number) => {
+      const check = checkPacketCompleteness(plan);
+      if (!check.recoverable) {
+        incompletePackets.push({ index: i, reasons: check.reasons });
+        return false;
+      }
+      return true;
+    });
+    if (incompletePackets.length > 0) {
+      await appendProgress(config,
+        `[PROMETHEUS][PACKET_GATE] Rejected ${incompletePackets.length} unrecoverable packet(s) at generation boundary ` +
+        `(reasons: ${[...new Set(incompletePackets.flatMap(p => p.reasons))].join(", ")})`
+      );
+      rawParsedInput._rejectedIncompleteCount = incompletePackets.length;
+      rawParsedInput._rejectedIncompletePackets = incompletePackets;
+    }
+  }
+
   const parsedForValidation = normalizePrometheusParsedOutput(
-    aiResult?.parsed || buildNarrativeFallbackParsed({ ...aiResult, raw }),
+    rawParsedInput,
     { ...aiResult, raw }
   );
 
@@ -1862,10 +1967,11 @@ Consider whether the root causes are:
     }
     parsed._planContractPassRate = contractResult.passRate;
 
-    // ── Hard-filter plans missing valid capacityDelta / requestROI (Task 1) ─
-    // These fields are required for plan ranking and budget comparison.
-    // Plans that omit or supply invalid values are removed at generation time,
-    // before the critic or Athena review, so invalid plans never enter dispatch.
+    // ── Secondary safety net: hard-filter plans missing valid capacityDelta / requestROI ─
+    // Primary rejection happens at the generation boundary (checkPacketCompleteness above).
+    // This secondary pass catches any surviving violations from alternative-shape synthesized
+    // plans (waves, bottlenecks, narrative fallback) or drift debt tasks that bypass the
+    // pre-normalization gate. These fields are required for plan ranking and budget comparison.
     const capacityRoiViolatingIndices = contractResult.results
       .filter(r => !r.valid && r.violations.some(v =>
         (v.field === "capacityDelta" || v.field === "requestROI") &&
@@ -1878,7 +1984,7 @@ Consider whether the root causes are:
         parsed.plans.splice(idx, 1);
       }
       await appendProgress(config,
-        `[PROMETHEUS][CONTRACT] Hard-filtered ${capacityRoiViolatingIndices.length} plan(s) missing valid capacityDelta/requestROI — generation-time requirement enforced`
+        `[PROMETHEUS][CONTRACT] Hard-filtered ${capacityRoiViolatingIndices.length} plan(s) missing valid capacityDelta/requestROI — secondary safety net`
       );
       parsed._capacityRoiFilteredCount = capacityRoiViolatingIndices.length;
     }
