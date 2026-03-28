@@ -972,6 +972,39 @@ export const PATCHED_PLAN_REVALIDATION_REASON = Object.freeze({
 });
 
 /**
+ * Prepare patched plans for dispatch handoff in a single atomic operation.
+ *
+ * This function MUST be called on every patchedPlans array before it enters the dispatch
+ * pipeline — regardless of whether the array is empty or non-empty. It combines
+ * normalizePatchedPlansForDispatch (idempotent field defaults) with
+ * revalidatePatchedPlansAfterNormalization (contract re-validation), returning a single
+ * result that callers must check before trusting the normalized plans.
+ *
+ * Fails closed: any contract violation sets valid=false with an explicit code and list of
+ * violations so callers can block dispatch rather than proceeding with invalid plans.
+ *
+ * Idempotent: calling twice on the same input produces an identical result.
+ *
+ * @param plans - patchedPlans array from Athena (may be empty — empty returns valid=true)
+ * @returns {{ plans, valid, violations, code }}
+ */
+export function preparePatchedPlansForDispatch(plans: unknown[]): {
+  plans: Record<string, unknown>[];
+  valid: boolean;
+  violations: string[];
+  code: string;
+} {
+  const normalized = normalizePatchedPlansForDispatch(Array.isArray(plans) ? plans : []);
+  const check = revalidatePatchedPlansAfterNormalization(normalized);
+  return {
+    plans: normalized,
+    valid: check.valid,
+    violations: check.violations,
+    code: check.code,
+  };
+}
+
+/**
  * Run deterministic contract re-validation on normalized patched plans.
  *
  * Called after normalizePatchedPlansForDispatch to ensure that the normalization
@@ -1506,9 +1539,10 @@ IMPORTANT: Always include "patchedPlans" with the FULL corrected plan array. Eve
     model: athenaModel
   };
 
-  // ── Patched-plan validation gate (Task 3) ─────────────────────────────────
+  // ── Patched-plan validation gate ─────────────────────────────────────────
   // Block approval when Athena's patchedPlans contain unresolved target-file placeholders
   // or are missing mandatory packet fields (target_files, scope, acceptance_criteria).
+  // Individual-plan validation runs before normalization so raw AI output is checked first.
   if (Array.isArray(result.patchedPlans) && result.patchedPlans.length > 0) {
     const patchedPlanIssues: string[] = [];
     for (let pi = 0; pi < result.patchedPlans.length; pi++) {
@@ -1539,39 +1573,34 @@ IMPORTANT: Always include "patchedPlans" with the FULL corrected plan array. Eve
     }
   }
 
-  // ── Patched-plan normalization at handoff ─────────────────────────────────
-  // After validation confirms no placeholders or missing fields, normalize
-  // dispatch-critical fields so patchedPlans are fully dispatch-ready when
-  // consumed by the orchestrator. This is idempotent: applying twice is safe.
-  if (Array.isArray(result.patchedPlans) && result.patchedPlans.length > 0) {
-    result.patchedPlans = normalizePatchedPlansForDispatch(result.patchedPlans);
-
-    // ── Post-normalization contract re-validation ─────────────────────────
-    // Deterministic re-validation runs after normalization to catch cases where
-    // normalization silently applied defaults that violate dispatch constraints
-    // (e.g., empty target_files, forbidden verification commands). Fail-closed:
-    // any violation blocks approval with an explicit machine-readable reason.
-    const contractCheck = revalidatePatchedPlansAfterNormalization(result.patchedPlans);
-    if (!contractCheck.valid) {
+  // ── Patched-plan normalization + contract re-validation at handoff ────────
+  // Required for EVERY patchedPlans array (including empty) before dispatch handoff.
+  // preparePatchedPlansForDispatch atomically normalizes dispatch-critical fields and
+  // re-validates the contract — fails closed on any violation so dispatch never receives
+  // plans that bypass the normalization pipeline.
+  if (Array.isArray(result.patchedPlans)) {
+    const handoff = preparePatchedPlansForDispatch(result.patchedPlans);
+    if (!handoff.valid) {
       const blockReason = {
-        code: contractCheck.code,
-        message: `Normalized patched plans failed contract re-validation: ${contractCheck.violations.join(" | ")}`
+        code: handoff.code,
+        message: `Normalized patched plans failed contract re-validation: ${handoff.violations.join(" | ")}`
       };
       await appendProgress(config, `[ATHENA] Patched plan contract re-validation FAILED — ${blockReason.message}`);
-      chatLog(stateDir, athenaName, `Contract re-validation failed: ${contractCheck.violations.join(" | ")}`);
+      chatLog(stateDir, athenaName, `Contract re-validation failed: ${handoff.violations.join(" | ")}`);
       await appendAlert(config, {
         severity: ALERT_SEVERITY.CRITICAL,
         source: "athena_reviewer",
         title: "Patched plans failed contract re-validation after normalization",
-        message: `code=${blockReason.code} violations=${contractCheck.violations.slice(0, 3).join(" | ")}`
+        message: `code=${blockReason.code} violations=${handoff.violations.slice(0, 3).join(" | ")}`
       });
       return {
         ...result,
         approved: false,
-        corrections: [...corrections, ...contractCheck.violations],
+        corrections: [...corrections, ...handoff.violations],
         reason: blockReason,
       };
     }
+    result.patchedPlans = handoff.plans;
   }
 
   await writeJson(path.join(stateDir, "athena_plan_review.json"), result);

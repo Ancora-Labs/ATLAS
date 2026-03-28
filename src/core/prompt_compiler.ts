@@ -214,3 +214,94 @@ export function compileTieredPrompt(sections, opts: any = {}) {
     tokenBudget: tier.maxTokens,
   });
 }
+
+// ─── Actionable Packet Contract Validation ──────────────────────────────────
+
+/**
+ * Required output-contract terms for actionable packet prompts.
+ *
+ * Every prompt that instructs an AI to produce an actionable packet (a structured
+ * response consumed by the dispatch pipeline) MUST reference these terms in the
+ * output format section so the AI knows which fields to populate.
+ *
+ * Absence of any term from the compiled prompt is a completeness gap — the AI
+ * may omit that field entirely, causing downstream failures in plan review,
+ * normalization, and dispatch.
+ *
+ * Terms are checked case-insensitively against the full compiled section content.
+ */
+export const ACTIONABLE_PACKET_CONTRACT_TERMS = Object.freeze([
+  "approved",
+  "patchedPlans",
+  "planReviews",
+  "acceptance_criteria",
+  "verification",
+]);
+
+/**
+ * Status codes returned by validateActionablePacketCompleteness.
+ *
+ * @enum {string}
+ */
+export const COMPLETENESS_STATUS = Object.freeze({
+  /** All required contract terms are present in the sections. */
+  COMPLETE: "complete",
+  /** One or more required contract terms are absent from the sections. */
+  INCOMPLETE: "incomplete",
+});
+
+/**
+ * Validate that a compiled set of prompt sections provides adequate coverage for
+ * an actionable packet response. Checks whether all required contract terms appear
+ * in the combined section content so the AI knows which output fields to populate.
+ *
+ * Terms are checked case-insensitively. A section must have non-empty content to
+ * contribute to coverage — empty sections are skipped.
+ *
+ * @param {Array<{ name: string, content: string }>} sections
+ * @returns {{ status: string, complete: boolean, completenessScore: number, missingTerms: string[] }}
+ */
+export function validateActionablePacketCompleteness(sections) {
+  const combinedContent = (sections || [])
+    .filter(s => s && typeof s.content === "string" && s.content.trim().length > 0)
+    .map(s => s.content)
+    .join(" ")
+    .toLowerCase();
+
+  const missingTerms = (ACTIONABLE_PACKET_CONTRACT_TERMS as readonly string[]).filter(
+    term => !combinedContent.includes(term.toLowerCase())
+  );
+
+  const presentCount = ACTIONABLE_PACKET_CONTRACT_TERMS.length - missingTerms.length;
+  const completenessScore = ACTIONABLE_PACKET_CONTRACT_TERMS.length > 0
+    ? Math.round((presentCount / ACTIONABLE_PACKET_CONTRACT_TERMS.length) * 10000) / 10000
+    : 1.0;
+
+  const complete = missingTerms.length === 0;
+  return {
+    status: complete ? COMPLETENESS_STATUS.COMPLETE : COMPLETENESS_STATUS.INCOMPLETE,
+    complete,
+    completenessScore,
+    missingTerms,
+  };
+}
+
+/**
+ * Compile an actionable packet prompt with integrated completeness validation.
+ *
+ * Wraps compileTieredPrompt and runs validateActionablePacketCompleteness before
+ * returning. The caller receives both the compiled prompt string and the completeness
+ * result so it can decide whether to proceed or reject the prompt before submission.
+ *
+ * This is the preferred entry point when building prompts that expect structured
+ * actionable packet responses (e.g., Athena plan review, governance decisions).
+ *
+ * @param {Array<{ name: string, content: string, maxTokens?: number, required?: boolean }>} sections
+ * @param {{ tier?: "T1"|"T2"|"T3", separator?: string, includeHeaders?: boolean }} opts
+ * @returns {{ prompt: string, completeness: { status, complete, completenessScore, missingTerms } }}
+ */
+export function compileActionablePacketPrompt(sections, opts: any = {}) {
+  const completeness = validateActionablePacketCompleteness(sections);
+  const prompt = compileTieredPrompt(sections, opts);
+  return { prompt, completeness };
+}
