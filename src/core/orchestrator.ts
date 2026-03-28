@@ -262,6 +262,21 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
     warn(`[orchestrator] budget gate failed (non-fatal): ${budgetEligibility.reason}`);
   }
 
+  // ── Budget eligibility gate (hard gate — first check) ────────────────────
+  // Fires immediately after reconciliation, before all other gates so that
+  // budget exhaustion short-circuits every subsequent operation (including
+  // expensive canary rollback and ledger reads) with a uniform block signal.
+  if (!budgetEligibility.eligible) {
+    return {
+      blocked: true,
+      reason: budgetEligibility.reason,
+      action: undefined,
+      graphResult: null,
+      cycleId,
+      budgetEligibility,
+    };
+  }
+
   if (config?.systemGuardian?.enabled !== false) {
     try {
       const pauseActive = await isGuardrailActive(config, GUARDRAIL_ACTION.PAUSE_WORKERS);
@@ -397,20 +412,6 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
     } catch (driftDebtErr) {
       warn(`[orchestrator] mandatory drift debt gate failed (non-fatal): ${String(driftDebtErr?.message || driftDebtErr)}`);
     }
-  }
-
-  // ── Budget eligibility gate ───────────────────────────────────────────────
-  // Block dispatch when the budget contract indicates ineligibility.
-  // reconcileBudgetEligibility already ran above; we simply act on its result.
-  if (!budgetEligibility.eligible) {
-    return {
-      blocked: true,
-      reason: budgetEligibility.reason,
-      action: undefined,
-      graphResult,
-      cycleId,
-      budgetEligibility,
-    };
   }
 
   // ── Plan evidence coupling gate ───────────────────────────────────────────
