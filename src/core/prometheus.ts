@@ -116,8 +116,8 @@ export const UNRECOVERABLE_PACKET_REASONS = Object.freeze({
  *     when it is absent or out of range; the downstream contract validator would
  *     remove the plan anyway, so rejecting early avoids wasted processing.
  *  3. Missing/invalid requestROI  — same rationale as capacityDelta.
- *  4. Missing verification coupling — both verification_commands and verification
- *     are empty, so there is no deterministic completion signal.
+ * Verification coupling is NOT treated as unrecoverable at this raw stage because
+ * normalizePlanFromTask() can synthesize verification + verification_commands.
  *
  * Reason codes are values from the canonical PACKET_VIOLATION_CODE taxonomy
  * (plan_contract_validator.ts) so they are identical to codes emitted by the
@@ -157,20 +157,6 @@ export function checkPacketCompleteness(rawPlan: any): { recoverable: boolean; r
     if (!Number.isFinite(roi) || roi <= 0) {
       reasons.push(PACKET_VIOLATION_CODE.INVALID_REQUEST_ROI);
     }
-  }
-
-  // 4. verification coupling: accept either a non-empty verification_commands array
-  //    OR a non-empty verification string. normalizePlanFromTask() can synthesize
-  //    verification_commands from verification, so rejecting on missing array alone
-  //    would block otherwise recoverable packets.
-  const cmds = rawPlan.verification_commands;
-  const hasValidCmds =
-    Array.isArray(cmds) &&
-    cmds.length > 0 &&
-    cmds.some(c => typeof c === "string" && String(c).trim().length > 0);
-  const hasVerificationText = String(rawPlan.verification || "").trim().length > 0;
-  if (!hasValidCmds && !hasVerificationText) {
-    reasons.push(PACKET_VIOLATION_CODE.MISSING_VERIFICATION_COUPLING);
   }
 
   return { recoverable: reasons.length === 0, reasons };
