@@ -975,3 +975,92 @@ describe("verification_gate — buildArtifactAuditEntry structured audit record"
     assert.equal(entry.gateSource, "evolution-gate");
   });
 });
+
+// ── Task 1: Artifact gate enforced across all done-capable lanes ──────────────
+// Ensures devops, integration, and frontend roles (all have ≥1 required
+// evidence field) are blocked when SHA or npm test output is absent.
+
+describe("verification_gate — artifact gate across additional done-capable lanes (Task 1)", () => {
+  it("devops role done without SHA or npm output fails artifact gate", () => {
+    const result = validateWorkerContract("devops", {
+      status: "done",
+      fullOutput: [
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=n/a; EDGE_CASES=n/a; SECURITY=n/a",
+        "BOX_PR_URL=https://github.com/org/repo/pull/201",
+        // No git SHA or npm test output
+      ].join("\n")
+    });
+    assert.equal(result.passed, false, "devops done without artifact must fail");
+    const hasArtifactGap = result.gaps.some(g => /sha|npm|post-merge|test output/i.test(g));
+    assert.ok(hasArtifactGap,
+      `expected artifact gap for devops role; got: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("devops role done with BOX_MERGED_SHA and npm block passes artifact gate", () => {
+    const result = validateWorkerContract("devops", {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=cafe1234",
+        "===NPM TEST OUTPUT START===",
+        "# tests 5",
+        "# pass 5",
+        "# fail 0",
+        "===NPM TEST OUTPUT END===",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=n/a; EDGE_CASES=n/a; SECURITY=n/a",
+        "BOX_PR_URL=https://github.com/org/repo/pull/201",
+      ].join("\n")
+    });
+    const artifactGap = result.gaps.find(g => /sha|npm|post-merge|test output/i.test(g));
+    assert.equal(artifactGap, undefined,
+      `devops done with BOX_MERGED_SHA + npm block must pass artifact gate; gaps: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("integration role done without artifact fails artifact gate (negative path)", () => {
+    const result = validateWorkerContract("integration", {
+      status: "done",
+      fullOutput: [
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; API=pass; EDGE_CASES=pass",
+        // No git SHA or npm test output
+      ].join("\n")
+    });
+    assert.equal(result.passed, false, "integration done without artifact must fail");
+    const hasArtifactGap = result.gaps.some(g => /sha|npm|post-merge|test output/i.test(g));
+    assert.ok(hasArtifactGap,
+      `expected artifact gap for integration role; got: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("frontend role done without SHA fails artifact gate (negative path)", () => {
+    const result = validateWorkerContract("frontend", {
+      status: "done",
+      fullOutput: [
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=n/a; RESPONSIVE=pass; EDGE_CASES=pass",
+        "RESPONSIVE_MATRIX: 320x568=pass, 360x640=pass, 375x667=pass, 390x844=pass, 412x915=pass",
+        "BOX_PR_URL=https://github.com/org/repo/pull/300",
+        // No git SHA or npm test output
+      ].join("\n")
+    });
+    assert.equal(result.passed, false, "frontend done without artifact must fail");
+    const hasArtifactGap = result.gaps.some(g => /sha|npm|post-merge|test output/i.test(g));
+    assert.ok(hasArtifactGap,
+      `expected artifact gap for frontend role; got: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("negative path: devops done with unfilled placeholder is rejected", () => {
+    const result = validateWorkerContract("devops", {
+      status: "done",
+      fullOutput: [
+        "POST_MERGE_TEST_OUTPUT placeholder not replaced",
+        "VERIFICATION_REPORT: BUILD=pass",
+        "BOX_PR_URL=https://github.com/org/repo/pull/202",
+      ].join("\n")
+    });
+    assert.equal(result.passed, false);
+    assert.ok(result.gaps.some(g => /placeholder/i.test(g)),
+      `expected placeholder gap for devops role; got: [${result.gaps.join("; ")}]`
+    );
+  });
+});

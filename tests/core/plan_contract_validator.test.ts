@@ -688,3 +688,136 @@ describe("plan_contract_validator — forbidden command checks (Task 3 hardening
     );
   });
 });
+
+// ── Task 2: Shell-glob regression locks — dual-path enforcement ───────────────
+// Guards against two distinct regression paths:
+//   Path A (isNonSpecificVerification): bare "node --test tests/**" passes the
+//     specificity check (the "--test " substring triggers the separator pattern),
+//     so Path A does NOT catch this — demonstrating that Path B is essential.
+//   Path B (checkForbiddenCommands): "node --test tests/**" AND
+//     "node --test tests/**/*.test.ts" are both caught as forbidden globs.
+// Both paths must be independently tested so removing either check causes failures.
+
+describe("plan_contract_validator — shell-glob regression locks (Task 2)", () => {
+  // ── Path A specificity edge-case: isNonSpecificVerification has a false-negative
+  // for "node --test tests/**" because "--test " matches the separator check.
+  // This makes Path B (checkForbiddenCommands) the sole guard for this pattern.
+  it("isNonSpecificVerification treats 'node --test tests/**' as specific (--test separator match)", () => {
+    // The "--test " portion matches the description-separator pattern [—\-–]\s*test[:\s],
+    // so isNonSpecificVerification returns false. Path A does NOT catch this glob.
+    // Regression lock: Path B (checkForbiddenCommands) must remain to catch it.
+    assert.equal(isNonSpecificVerification("node --test tests/**"), false,
+      "isNonSpecificVerification has a false-negative for 'node --test tests/**' — Path B must catch it"
+    );
+  });
+
+  it("validatePlanContract rejects 'node --test tests/**' via FORBIDDEN_COMMAND (Path B catches what Path A misses)", () => {
+    const plan = {
+      task: "Implement something long enough here",
+      role: "worker",
+      wave: 1,
+      verification: "node --test tests/**",
+      dependencies: [],
+      acceptance_criteria: ["pass"],
+      capacityDelta: 0.1,
+      requestROI: 1.5,
+    };
+    const result = validatePlanContract(plan);
+    assert.equal(result.valid, false,
+      "glob must be rejected even though isNonSpecificVerification returned false"
+    );
+    // Must be caught by FORBIDDEN_COMMAND (Path B)
+    const forbiddenViolation = result.violations.find(
+      v => v.field === "verification" && v.code === PACKET_VIOLATION_CODE.FORBIDDEN_COMMAND
+    );
+    assert.ok(forbiddenViolation,
+      `expected FORBIDDEN_COMMAND on verification; got: [${JSON.stringify(result.violations)}]`
+    );
+  });
+
+  // ── Path B: FORBIDDEN_COMMAND gate catches glob-with-extension ─────────────
+  it("isNonSpecificVerification treats 'node --test tests/**/*.test.ts' as specific (has .test.ts)", () => {
+    // .test.ts extension → specificity check returns false
+    // Confirms Path A alone would NOT catch this; Path B must handle it
+    assert.equal(isNonSpecificVerification("node --test tests/**/*.test.ts"), false,
+      "glob WITH .test.ts extension is considered specific by isNonSpecificVerification"
+    );
+  });
+
+  it("validatePlanContract rejects 'node --test tests/**/*.test.ts' via FORBIDDEN_COMMAND (Path B)", () => {
+    const plan = {
+      task: "Implement something long enough here",
+      role: "worker",
+      wave: 1,
+      verification: "node --test tests/**/*.test.ts",
+      dependencies: [],
+      acceptance_criteria: ["pass"],
+      capacityDelta: 0.1,
+      requestROI: 1.5,
+    };
+    const result = validatePlanContract(plan);
+    assert.equal(result.valid, false,
+      "glob-with-extension must still be rejected via FORBIDDEN_COMMAND check"
+    );
+    const forbiddenViolation = result.violations.find(
+      v => v.field === "verification" && v.code === PACKET_VIOLATION_CODE.FORBIDDEN_COMMAND
+    );
+    assert.ok(forbiddenViolation,
+      `expected FORBIDDEN_COMMAND violation for glob-with-extension; got: [${JSON.stringify(result.violations)}]`
+    );
+    // Must NOT have NON_SPECIFIC_VERIFICATION code (Path A didn't catch it)
+    const nonSpecificViolation = result.violations.find(
+      v => v.field === "verification" && v.code === PACKET_VIOLATION_CODE.NON_SPECIFIC_VERIFICATION
+    );
+    assert.equal(nonSpecificViolation, undefined,
+      "glob-with-extension must NOT trigger NON_SPECIFIC_VERIFICATION (Path B handles it)"
+    );
+  });
+
+  it("negative path: 'node --test tests/core/foo.test.ts' (no glob) passes both path checks", () => {
+    // Specific file reference without glob → passes both isNonSpecificVerification AND checkForbiddenCommands
+    const plan = {
+      task: "Implement something long enough here",
+      role: "worker",
+      wave: 1,
+      verification: "node --test tests/core/foo.test.ts",
+      dependencies: [],
+      acceptance_criteria: ["pass"],
+      capacityDelta: 0.1,
+      requestROI: 1.5,
+    };
+    const result = validatePlanContract(plan);
+    const verificationViolation = result.violations.find(
+      v => v.field === "verification" && v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL
+    );
+    assert.equal(verificationViolation, undefined,
+      "specific file reference without glob must not produce a CRITICAL verification violation"
+    );
+  });
+
+  it("glob in verification_commands is caught even when verification is clean (Path B via array)", () => {
+    // Regression lock: forbidden glob in verification_commands must be rejected
+    // even when the primary verification field is specific and clean
+    const plan = {
+      task: "Implement something long enough here",
+      role: "worker",
+      wave: 1,
+      verification: "tests/core/foo.test.ts — test: should pass",
+      verification_commands: ["node --test tests/**/*.test.ts"],
+      dependencies: [],
+      acceptance_criteria: ["pass"],
+      capacityDelta: 0.1,
+      requestROI: 1.5,
+    };
+    const result = validatePlanContract(plan);
+    assert.equal(result.valid, false,
+      "glob in verification_commands must be rejected even with clean verification field"
+    );
+    const v = result.violations.find(
+      v => v.field === "verification_commands[0]" && v.code === PACKET_VIOLATION_CODE.FORBIDDEN_COMMAND
+    );
+    assert.ok(v,
+      `expected FORBIDDEN_COMMAND on verification_commands[0]; got: [${JSON.stringify(result.violations)}]`
+    );
+  });
+});
