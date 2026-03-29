@@ -307,6 +307,22 @@ describe("run_task.js — startup ordering and env/startup contract gaps", () =>
       "startup log must NOT appear in stdout when env_vars check fails — fail-fast before echoing role"
     );
   });
+
+  it("TARGET_REPO value is echoed as repo= in the startup log line on success", () => {
+    const task = JSON.stringify({ id: "t-repo", kind: "devops" });
+    const result = run({
+      WORKER_ROLE: "noah",
+      TASK_PAYLOAD: task,
+      TARGET_REPO: "owner/myrepo",
+      GITHUB_TOKEN: "ghp_fake",
+    });
+    assert.equal(result.status, 0, "must exit 0 when all env vars are valid");
+    assert.match(
+      result.stdout,
+      /repo=owner\/myrepo/,
+      "stdout must echo repo=<TARGET_REPO> in the startup log line so the operator can confirm which repo the worker targets"
+    );
+  });
 });
 
 // ── Per-variable named env contract tests ────────────────────────────────────
