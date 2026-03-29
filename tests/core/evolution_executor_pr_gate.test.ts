@@ -11,6 +11,7 @@ import {
   buildVerificationTargets,
   inferVerificationFromFilesHint,
   validateVerificationPortability,
+  BLOCKED_VERIFICATION_CMDS,
 } from "../../src/core/evolution_executor.js";
 
 describe("assessStatusCheckRollup", () => {
@@ -552,5 +553,55 @@ describe("validateVerificationPortability", () => {
     assert.ok(result.violations.length >= cmds.length,
       `Expected at least ${cmds.length} violations, got ${result.violations.length}`);
     assert.equal(result.rewrites.length, 3);
+  });
+});
+
+// ── BLOCKED_VERIFICATION_CMDS — execution-time glob blocking (Task 1) ──────────
+
+describe("BLOCKED_VERIFICATION_CMDS — execution-time glob blocking", () => {
+  it("is a non-empty array of RegExp entries", () => {
+    assert.ok(Array.isArray(BLOCKED_VERIFICATION_CMDS), "must be an array");
+    assert.ok(BLOCKED_VERIFICATION_CMDS.length > 0, "must be non-empty");
+    for (const entry of BLOCKED_VERIFICATION_CMDS) {
+      assert.ok(entry instanceof RegExp, `every entry must be a RegExp, got: ${typeof entry}`);
+    }
+  });
+
+  it("includes a pattern that blocks node --test with glob wildcards", () => {
+    const globCmds = [
+      "node --test tests/**/*.test.ts",
+      "node --test tests/**/*.spec.ts",
+      "node --test tests/**",
+      "node --test src/**/*.test.ts",
+    ];
+    for (const cmd of globCmds) {
+      assert.ok(
+        BLOCKED_VERIFICATION_CMDS.some(re => re.test(cmd)),
+        `BLOCKED_VERIFICATION_CMDS must block glob-based command: "${cmd}"`
+      );
+    }
+  });
+
+  it("does not block specific file-path node --test commands (no false positives)", () => {
+    const specificCmds = [
+      "node --test tests/core/foo.test.ts",
+      "node --test tests/core/verification_gate.test.ts",
+    ];
+    for (const cmd of specificCmds) {
+      assert.ok(
+        !BLOCKED_VERIFICATION_CMDS.some(re => re.test(cmd)),
+        `BLOCKED_VERIFICATION_CMDS must not block specific-file command: "${cmd}"`
+      );
+    }
+  });
+
+  it("negative path: canonical npm commands are not blocked", () => {
+    const canonical = ["npm test", "npm run lint", "npm run build"];
+    for (const cmd of canonical) {
+      assert.ok(
+        !BLOCKED_VERIFICATION_CMDS.some(re => re.test(cmd)),
+        `canonical command must not be blocked: "${cmd}"`
+      );
+    }
   });
 });

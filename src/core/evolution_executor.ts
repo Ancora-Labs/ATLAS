@@ -28,7 +28,7 @@ import { buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
 import { spawnAsync } from "./fs_utils.js";
 import { getRoleRegistry } from "./role_registry.js";
 import { checkPostMergeArtifact, collectArtifactGaps, ARTIFACT_GATE_ERROR_PREFIX, isArtifactGateRequired, buildArtifactAuditEntry } from "./verification_gate.js";
-import { VERIFICATION_DEFAULTS, rewriteVerificationCommand, checkForbiddenCommands } from "./verification_command_registry.js";
+import { VERIFICATION_DEFAULTS, rewriteVerificationCommand, checkForbiddenCommands, normalizeCommandBatch } from "./verification_command_registry.js";
 import { isNonSpecificVerification } from "./plan_contract_validator.js";
 
 type EvolutionTask = {
@@ -744,12 +744,14 @@ function buildInstruction(task, athenaHints = null) {
 // Commands that start the daemon or long-running processes are excluded from
 // local verification — running them would wake up Jesus and the full agent
 // stack, which is not safe during an evolution task.
-const BLOCKED_VERIFICATION_CMDS = [
+// Also blocks shell-glob node --test invocations that fail on Windows.
+export const BLOCKED_VERIFICATION_CMDS = [
   /node\s+src\/cli\.js/,
   /npm\s+start/,
   /npm\s+run\s+start/,
   /pm2/,
-  /node\s+.*daemon/
+  /node\s+.*daemon/,
+  /node\s+--test\s+[^\s]*\*/i,   // node --test with glob patterns (fails on Windows)
 ];
 
 /**
@@ -852,12 +854,18 @@ export function validateVerificationPortability(commands: string[]): {
 }
 
 function runVerificationCommands(task) {
-  const allCmds = task.verification_commands || [VERIFICATION_DEFAULTS.test];
+  // Normalize commands first: rewrite any forbidden glob patterns to their canonical
+  // equivalents before executing. This is defense-in-depth — callers already normalize
+  // via repairPrometheusTask, but this guarantees no glob pattern ever reaches execSync.
+  const rawCmds = task.verification_commands || [VERIFICATION_DEFAULTS.test];
+  const normalized = normalizeCommandBatch(rawCmds);
+  const allCmds = normalized.length > 0 ? normalized : [VERIFICATION_DEFAULTS.test];
+
   const blockedCmds: string[] = [];
   const cmds = allCmds.filter(cmd => {
     const blocked = BLOCKED_VERIFICATION_CMDS.some(re => re.test(cmd));
     if (blocked) {
-      console.log(`[evolution] Skipping daemon command: ${cmd}`);
+      console.log(`[evolution] Skipping non-portable/daemon command: ${cmd}`);
       blockedCmds.push(cmd);
     }
     return !blocked;
