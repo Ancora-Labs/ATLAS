@@ -85,6 +85,7 @@ import {
   OPTIMIZER_STATUS,
 } from "./intervention_optimizer.js";
 import { validatePlanEvidenceCoupling } from "./evidence_envelope.js";
+import { runMedic, shouldTriggerMedic, isLanePaused } from "./medic_agent.js";
 
 /**
  * Orchestrator health status enum.
@@ -896,12 +897,17 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
     emitEvent(EVENTS.GOVERNANCE_GATE_EVALUATED, EVENT_DOMAIN.GOVERNANCE, resumeCycleId, {
       blocked: gateDecision.blocked,
       reason: gateDecision.reason || null,
+      gateIndex: gateDecision.gateIndex,
+      action: gateDecision.action ?? null,
+      budgetEligibility: gateDecision.budgetEligibility,
+      rollbackResult: gateDecision.rollbackResult,
+      mandatoryDriftPaths: gateDecision.mandatoryDriftPaths,
       inputSnapshot: { planCount: plans.length, resumedFromCheckpoint: true, startIndex }
     });
     if (gateDecision.blocked) {
       const reasonMsg = gateDecision.reason || "pre_dispatch_gate_blocked";
       await appendProgress(config,
-        `[RESUME] Pre-dispatch governance gate blocked resumed dispatch — reason=${reasonMsg}`
+        `[RESUME] Pre-dispatch governance gate blocked resumed dispatch — reason=${reasonMsg} gateIndex=${gateDecision.gateIndex ?? "n/a"} action=${gateDecision.action || "none"}`
       );
       await appendAlert(config, {
         severity: ALERT_SEVERITY.HIGH,
@@ -1045,6 +1051,7 @@ export async function runOnce(config) {
   await Promise.all([
     fs.writeFile(path.join(stateDir, "live_worker_jesus.log"), "[leadership_live]\n[run_once] Jesus live log ready...\n", "utf8"),
     fs.writeFile(path.join(stateDir, "live_worker_athena.log"), "[leadership_live]\n[run_once] Athena live log ready...\n", "utf8"),
+    fs.writeFile(path.join(stateDir, "live_worker_medic.log"), "[medic_live]\n[run_once] Medic live log ready...\n", "utf8"),
     initializeAggregateLiveLog(stateDir, "run_once")
   ]);
 
@@ -1057,6 +1064,7 @@ export async function runResumeDispatch(config) {
   await Promise.all([
     fs.writeFile(path.join(stateDir, "live_worker_jesus.log"), "[leadership_live]\n[resume] Jesus live log ready...\n", "utf8"),
     fs.writeFile(path.join(stateDir, "live_worker_athena.log"), "[leadership_live]\n[resume] Athena live log ready...\n", "utf8"),
+    fs.writeFile(path.join(stateDir, "live_worker_medic.log"), "[medic_live]\n[resume] Medic live log ready...\n", "utf8"),
     initializeAggregateLiveLog(stateDir, "resume")
   ]);
 
@@ -1427,7 +1435,9 @@ async function runSingleCycle(config) {
 
   // Step 1: Jesus analyzes state and decides what to do (1 request)
   await appendProgress(config, "[CYCLE] ── Step 1: Jesus analyzing system state ──");
-  await appendProgress(config, "[AGENT] JESUS ACTIVATED");
+  await appendProgress(config, "[AGENT] ╔══════════════════════════════════════╗");
+  await appendProgress(config, "[AGENT] ║          JESUS  ACTIVATED            ║");
+  await appendProgress(config, "[AGENT] ╚══════════════════════════════════════╝");
 
   // ── Closure SLA audit: flag stale escalations (advisory) ────────────────
   try {
@@ -1459,9 +1469,19 @@ async function runSingleCycle(config) {
     jesusDecision: typeof jesusDecision === "object" ? String(jesusDecision.thinking || "").slice(0, 200) : ""
   });
 
+  const shouldRunPrometheus = jesusDecision?.callPrometheus !== false;
+  if (!shouldRunPrometheus) {
+    const skipReason = String(jesusDecision?.prometheusReason || "Jesus directed no fresh planning this cycle").trim();
+    await appendProgress(config, `[CYCLE] Jesus skipped research + Prometheus this cycle — ${skipReason}`);
+    await safeUpdatePipelineProgress(config, "cycle_complete", "Jesus skipped research + Prometheus for this cycle");
+    return;
+  }
+
   // Step 2: Prometheus plans (single-prompt, no autopilot)
   await appendProgress(config, "[CYCLE] ── Step 2: Prometheus scanning & planning ──");
-  await appendProgress(config, "[AGENT] PROMETHEUS ACTIVATED");
+  await appendProgress(config, "[AGENT] ╔══════════════════════════════════════╗");
+  await appendProgress(config, "[AGENT] ║       PROMETHEUS  ACTIVATED          ║");
+  await appendProgress(config, "[AGENT] ╚══════════════════════════════════════╝");
   await safeUpdatePipelineProgress(config, "prometheus_starting", "Prometheus starting repository scan");
 
   // ── Architecture drift check: run before Prometheus to surface stale refs ──
@@ -1482,6 +1502,37 @@ async function runSingleCycle(config) {
     warn(`[orchestrator] Architecture drift check failed (non-fatal): ${String(driftErr?.message || driftErr)}`);
   }
 
+  // ── Research cycle: Scout → Synthesizer (2 premium requests) ──────────────
+  // Runs before Prometheus so the synthesis is available in the planning prompt.
+  // Non-fatal: if research fails, Prometheus plans without external intelligence.
+  try {
+    await appendProgress(config, "[CYCLE] ── Research Phase: Scout + Synthesizer ──");
+    await safeUpdatePipelineProgress(config, "research_scout_starting", "Research Scout searching the internet");
+
+    const { runResearchScout } = await import("./research_scout.js");
+    const scoutResult = await runResearchScout(config);
+
+    if (scoutResult.success && scoutResult.sourceCount > 0) {
+      await safeUpdatePipelineProgress(config, "research_synthesizer_starting", `Research Synthesizer processing ${scoutResult.sourceCount} source(s)`);
+
+      const { runResearchSynthesizer } = await import("./research_synthesizer.js");
+      const synthesisResult = await runResearchSynthesizer(config, scoutResult);
+
+      if (synthesisResult.success) {
+        await appendProgress(config, `[CYCLE] Research phase complete — ${synthesisResult.topicCount} topic(s) ready for Prometheus`);
+      } else {
+        await appendProgress(config, `[CYCLE] Research Synthesizer failed — Prometheus will plan without research intelligence`);
+      }
+    } else if (scoutResult.success) {
+      await appendProgress(config, "[CYCLE] Research Scout found no sources — skipping synthesis");
+    } else {
+      await appendProgress(config, "[CYCLE] Research Scout failed — Prometheus will plan without research intelligence");
+    }
+  } catch (researchErr) {
+    warn(`[orchestrator] Research cycle failed (non-fatal): ${String(researchErr?.message || researchErr)}`);
+    await appendProgress(config, `[CYCLE] Research phase error (non-fatal): ${String(researchErr?.message || researchErr).slice(0, 200)} — continuing without research`);
+  }
+
   let prometheusAnalysis;
   try {
     await safeUpdatePipelineProgress(config, "prometheus_reading_repo", "Prometheus reading repository");
@@ -1493,12 +1544,33 @@ async function runSingleCycle(config) {
   } catch (err) {
     await appendProgress(config, `[CYCLE] Prometheus failed: ${String(err?.message || err)}`);
     warn(`[orchestrator] Prometheus analysis error: ${String(err?.message || err)}`);
+
+    // ── Medic trigger: Prometheus crash ──────────────────────────────────────
+    const medicSignal = shouldTriggerMedic({ error: err instanceof Error ? err : String(err) });
+    if (medicSignal) {
+      await appendProgress(config, `[CYCLE] Triggering Medic — ${medicSignal.trigger}`);
+      await runMedic(config, medicSignal);
+    }
     return;
   }
 
   if (!prometheusAnalysis || !Array.isArray(prometheusAnalysis.plans) || prometheusAnalysis.plans.length === 0) {
-    await appendProgress(config, "[CYCLE] Prometheus produced no plans — cycle complete");
-    await safeUpdatePipelineProgress(config, "cycle_complete", "Prometheus produced no plans — nothing to dispatch");
+    await appendProgress(config, "[CYCLE] Prometheus produced no plans — triggering Medic");
+
+    // ── Medic trigger: plans=0 critical signal ──────────────────────────────
+    const medicSignal = shouldTriggerMedic({ plansCount: 0 });
+    if (medicSignal) {
+      const medicResult = await runMedic(config, medicSignal);
+      if (medicResult.status === "fixed") {
+        await appendProgress(config, `[CYCLE] Medic fixed the issue — resuming from checkpoint`);
+        await safeUpdatePipelineProgress(config, "medic_fixed", `Medic repaired: ${medicResult.diagnosis}`);
+        // Don't return — let the cycle retry naturally on next loop iteration
+      } else {
+        await safeUpdatePipelineProgress(config, "cycle_complete", `Medic failed — system halted: ${medicResult.diagnosis}`);
+      }
+    } else {
+      await safeUpdatePipelineProgress(config, "cycle_complete", "Prometheus produced no plans — nothing to dispatch");
+    }
     return;
   }
 
@@ -1610,7 +1682,9 @@ async function runSingleCycle(config) {
 
   // Step 3: Athena validates the plan (1 request)
   await appendProgress(config, "[CYCLE] ── Step 3: Athena reviewing plan ──");
-  await appendProgress(config, "[AGENT] ATHENA ACTIVATED");
+  await appendProgress(config, "[AGENT] ╔══════════════════════════════════════╗");
+  await appendProgress(config, "[AGENT] ║         ATHENA  ACTIVATED            ║");
+  await appendProgress(config, "[AGENT] ╚══════════════════════════════════════╝");
   await safeUpdatePipelineProgress(config, "athena_reviewing", "Athena reviewing Prometheus plan");
   let planReview;
   try {
@@ -1686,6 +1760,10 @@ async function runSingleCycle(config) {
     dependencies: Array.isArray(p.dependencies) ? p.dependencies : [],
   }));
 
+  // Keep a pre-gate snapshot so the cycle cannot dead-end when quality
+  // filtering removes every approved plan in one pass.
+  const preQualityPlansSnapshot = plans.map((p: any) => ({ ...p }));
+
   // Funnel tracking: capture approved count before quality/freeze gates reduce plans.
   const funnelApprovedCount: number = plans.length;
 
@@ -1744,9 +1822,16 @@ async function runSingleCycle(config) {
         plans.splice(idx, 1);
       }
       if (plans.length === 0) {
-        await appendProgress(config, "[CYCLE] All plans removed by contract quality gate — cycle complete");
-        await safeUpdatePipelineProgress(config, "cycle_complete", "All plans failed contract quality gate");
-        return;
+        plans.push(...preQualityPlansSnapshot.map((p: any) => ({ ...p })));
+        await appendProgress(config,
+          "[PLAN_QUALITY] Critical filter removed all plans — restored pre-gate snapshot to prevent empty-plan loop"
+        );
+        await appendAlert(config, {
+          severity: ALERT_SEVERITY.HIGH,
+          source: "orchestrator",
+          title: "Plan quality gate restored snapshot",
+          message: "All plans were removed by critical violations; pre-gate approved plans were restored to avoid loop dead-end"
+        });
       }
     }
   } catch (err) {
@@ -1800,12 +1885,17 @@ async function runSingleCycle(config) {
       emitEvent(EVENTS.GOVERNANCE_GATE_EVALUATED, EVENT_DOMAIN.GOVERNANCE, cycleId, {
         blocked: gateDecision.blocked,
         reason: gateDecision.reason || null,
+        gateIndex: gateDecision.gateIndex,
+        action: gateDecision.action ?? null,
+        budgetEligibility: gateDecision.budgetEligibility,
+        rollbackResult: gateDecision.rollbackResult,
+        mandatoryDriftPaths: gateDecision.mandatoryDriftPaths,
         inputSnapshot: { planCount: plans.length, cycleId }
       });
       if (gateDecision.blocked) {
         const reasonMsg = gateDecision.reason || "pre_dispatch_gate_blocked";
         await appendProgress(config,
-          `[CYCLE] Pre-dispatch governance gate blocked dispatch — reason=${reasonMsg}`
+          `[CYCLE] Pre-dispatch governance gate blocked dispatch — reason=${reasonMsg} gateIndex=${gateDecision.gateIndex ?? "n/a"} action=${gateDecision.action || "none"}`
         );
         await appendAlert(config, {
           severity: ALERT_SEVERITY.HIGH,

@@ -102,6 +102,24 @@
     },
     "interBatchDelayMs": 90000,
     "workerContextTokenLimit": 100000,
+    "maxCapacityMode": true,
+    "modelContextLimits": {
+      "Claude Sonnet 4.6": 160000,
+      "GPT-5.3-Codex": 400000
+    },
+    "prometheusPromptTokenBudget": 0,
+    "prometheusDisableCache": true,
+    "prometheusCarryForwardMaxTokens": 30000,
+    "prometheusBehaviorMaxTokens": 20000,
+    "prometheusDeepRepoMaxFiles": 6000,
+    "prometheusDeepRepoMaxChars": 180000,
+    "prometheusScoutRawMaxChars": 120000,
+    "researchScoutPromptTokenBudget": 0,
+    "researchScoutDisableCache": true,
+    "researchSynthesizerPromptTokenBudget": 0,
+    "workerDisableCache": true,
+    "researchScoutDeepRepoMaxFiles": 5000,
+    "researchScoutDeepRepoMaxChars": 100000,
     "trustBoundaryMode": "warn",
     "planQualityMinScore": 0
   },
@@ -128,6 +146,18 @@
     "qualityReviewer": {
       "id": "quality-reviewer",
       "name": "Athena",
+      "model": "Claude Sonnet 4.6",
+      "provider": "copilot"
+    },
+    "researchScout": {
+      "id": "research-scout",
+      "name": "Research Scout",
+      "model": "GPT-5.3-Codex",
+      "provider": "copilot"
+    },
+    "researchSynthesizer": {
+      "id": "research-synthesizer",
+      "name": "Research Synthesizer",
       "model": "Claude Sonnet 4.6",
       "provider": "copilot"
     },

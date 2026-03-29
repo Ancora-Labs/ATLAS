@@ -38,10 +38,13 @@ import {
   TRUST_BOUNDARY_ERROR,
 } from "./trust_boundary.js";
 import { validateAllPlans, PLAN_VIOLATION_SEVERITY, PACKET_VIOLATION_CODE } from "./plan_contract_validator.js";
-import { section, compilePrompt } from "./prompt_compiler.js";
+import { section, compilePrompt, estimateTokens } from "./prompt_compiler.js";
+import { appendAgentContextUsage, resolveMaxPromptBudget } from "./context_usage.js";
 import { computeFingerprint } from "./carry_forward_ledger.js";
 import { rewriteVerificationCommand } from "./verification_command_registry.js";
 import { checkCarryForwardGate, hardGateRecurrenceToPolicies } from "./learning_policy_compiler.js";
+import { buildResearchSectionForPrometheus } from "./research_synthesizer.js";
+import { appendAggregateLiveLogSync } from "./live_log.js";
 
 export function detectModelFallback(rawText) {
   const text = String(rawText || "");
@@ -75,6 +78,192 @@ export const CARRY_FORWARD_MAX_TOKENS = 2000;
  * Maximum tokens for the behavior-patterns payload in the planning prompt.
  */
 export const BEHAVIOR_PATTERNS_MAX_TOKENS = 1500;
+
+const PROMPT_CONTEXT_IGNORED_DIRS = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "build",
+  "coverage",
+  ".box-work",
+  "state/backups",
+]);
+
+const PROMPT_CONTEXT_TEXT_EXTENSIONS = new Set([
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+  ".json", ".md", ".yml", ".yaml", ".toml", ".env",
+  ".sh", ".ps1", ".Dockerfile", ".txt",
+]);
+
+function isTextPromptFile(relPath: string): boolean {
+  const normalized = String(relPath || "").replace(/\\/g, "/");
+  const base = normalized.split("/").pop() || normalized;
+  if (base === "Dockerfile") return true;
+  if (base.endsWith(".Dockerfile")) return true;
+  const dot = base.lastIndexOf(".");
+  if (dot < 0) return false;
+  return PROMPT_CONTEXT_TEXT_EXTENSIONS.has(base.slice(dot));
+}
+
+async function collectPromptContextFiles(repoRoot: string, maxFiles: number): Promise<string[]> {
+  const preferredRoots = ["src", "tests", "scripts", "docs", "docker", ".github"];
+  const queue = [...preferredRoots.filter(Boolean)];
+  const files: string[] = [];
+
+  while (queue.length > 0 && files.length < maxFiles) {
+    const relDir = queue.shift() || "";
+    const absDir = path.join(repoRoot, relDir);
+    let entries: any[] = [];
+    try {
+      entries = await fs.readdir(absDir, { withFileTypes: true }) as any[];
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const relPath = relDir ? `${relDir}/${entry.name}` : String(entry.name || "");
+      const normalized = relPath.replace(/\\/g, "/");
+      if (entry.isDirectory && entry.isDirectory()) {
+        const lower = normalized.toLowerCase();
+        if (PROMPT_CONTEXT_IGNORED_DIRS.has(lower) || lower.startsWith("state/")) continue;
+        queue.push(normalized);
+      } else if (entry.isFile && entry.isFile()) {
+        if (!isTextPromptFile(normalized)) continue;
+        files.push(normalized);
+        if (files.length >= maxFiles) break;
+      }
+    }
+  }
+
+  const rootFiles = [
+    "package.json",
+    "tsconfig.json",
+    "tsconfig.typecheck.json",
+    "box.config.json",
+    "README.md",
+    "docker-compose.yml",
+    "eslint.config.ts",
+  ];
+
+  for (const file of rootFiles) {
+    const abs = path.join(repoRoot, file);
+    try {
+      const st = await fs.stat(abs);
+      if (st.isFile() && !files.includes(file)) files.push(file);
+    } catch { /* ignore missing */ }
+    if (files.length >= maxFiles) break;
+  }
+
+  return files.sort();
+}
+
+async function buildDeepRepoCodeCorpusSection(repoRoot: string, opts: any = {}): Promise<string> {
+  const maxFiles = Number.isFinite(Number(opts.maxFiles)) ? Number(opts.maxFiles) : 1200;
+  const maxChars = Number.isFinite(Number(opts.maxChars)) ? Number(opts.maxChars) : 600000;
+  const maxFileChars = Number.isFinite(Number(opts.maxFileChars)) ? Number(opts.maxFileChars) : 8000;
+  if (maxChars <= 0 || maxFiles <= 0 || maxFileChars <= 0) return "";
+
+  const candidateFiles = await collectPromptContextFiles(repoRoot, maxFiles);
+  if (candidateFiles.length === 0) return "";
+
+  let usedChars = 0;
+  const chunks: string[] = [];
+  let includedFiles = 0;
+
+  for (const rel of candidateFiles) {
+    if (usedChars >= maxChars) break;
+    const abs = path.join(repoRoot, rel);
+    let text = "";
+    try {
+      text = await fs.readFile(abs, "utf8");
+    } catch {
+      continue;
+    }
+    if (!text.trim()) continue;
+
+    const clipped = text.length > maxFileChars
+      ? `${text.slice(0, maxFileChars)}\n... [truncated file body]`
+      : text;
+    const block = `\n\n### FILE ${rel}\n${clipped}`;
+
+    if (usedChars + block.length > maxChars) {
+      const remain = Math.max(0, maxChars - usedChars);
+      if (remain > 120) {
+        chunks.push(block.slice(0, remain));
+        usedChars += remain;
+      }
+      break;
+    }
+
+    chunks.push(block);
+    usedChars += block.length;
+    includedFiles += 1;
+  }
+
+  if (chunks.length === 0) return "";
+
+  return `## FULL REPOSITORY CODE CORPUS (MAX-CAPACITY MODE)\n` +
+    `Included files: ${includedFiles}/${candidateFiles.length}\n` +
+    `This section exists to maximize meaningful analysis coverage up to prompt budget.\n` +
+    `Prioritize architecture, orchestration, verification, and worker behavior insights from this corpus.\n` +
+    chunks.join("");
+}
+
+async function buildDeepRepoContextSection(repoRoot: string, opts: any = {}): Promise<string> {
+  const maxFiles = Number.isFinite(Number(opts.maxFiles)) ? Number(opts.maxFiles) : 6000;
+  const maxChars = Number.isFinite(Number(opts.maxChars)) ? Number(opts.maxChars) : 180000;
+  const queue = [""];
+  const files: string[] = [];
+
+  while (queue.length > 0 && files.length < maxFiles) {
+    const relDir = queue.shift() || "";
+    const absDir = path.join(repoRoot, relDir);
+    let entries: any[] = [];
+    try {
+      entries = await fs.readdir(absDir, { withFileTypes: true }) as any[];
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const relPath = relDir ? `${relDir}/${entry.name}` : String(entry.name || "");
+      const normalized = relPath.replace(/\\/g, "/");
+      if (entry.isDirectory && entry.isDirectory()) {
+        const lower = normalized.toLowerCase();
+        if (PROMPT_CONTEXT_IGNORED_DIRS.has(lower) || lower.startsWith("state/backups")) continue;
+        queue.push(normalized);
+      } else if (entry.isFile && entry.isFile()) {
+        files.push(normalized);
+        if (files.length >= maxFiles) break;
+      }
+    }
+  }
+
+  const sorted = files.sort();
+  let listing = sorted.join("\n");
+  if (listing.length > maxChars) {
+    listing = `${listing.slice(0, maxChars)}\n... [truncated deep repo listing]`;
+  }
+
+  return `## FULL REPOSITORY INVENTORY (MAX-CAPACITY MODE)\n` +
+    `Scanned files: ${files.length} (cap=${maxFiles})\n` +
+    `Use this broader inventory to reason about full-system changes, not just core modules.\n\n` +
+    listing;
+}
+
+async function buildScoutRawContextSection(stateDir: string, maxChars: number): Promise<string> {
+  try {
+    const scoutRaw = await readJson(path.join(stateDir, "research_scout_output.json"), null);
+    const rawText = String(scoutRaw?.rawText || "");
+    if (!rawText.trim()) return "";
+    const text = rawText.length > maxChars
+      ? `${rawText.slice(0, maxChars)}\n... [truncated raw scout output]`
+      : rawText;
+    return `## RAW SCOUT FINDINGS (MAX-CAPACITY MODE)\n` +
+      `Inspect raw findings directly in addition to synthesized topics.\n\n${text}`;
+  } catch {
+    return "";
+  }
+}
 
 /**
  * Reason codes emitted by checkPacketCompleteness for unrecoverable conditions.
@@ -185,6 +374,7 @@ function liveLogPath(stateDir) {
 function appendLiveLogSync(stateDir, text) {
   try {
     appendFileSync(liveLogPath(stateDir), text, "utf8");
+    appendAggregateLiveLogSync(stateDir, "prometheus", text);
   } catch { /* best-effort */ }
 }
 
@@ -826,10 +1016,36 @@ export const BOTTLENECK_COVERAGE_FLOOR = 0.5;
 function buildPlansFromNarrative(analysisText) {
   const lines = String(analysisText || "").split(/\r?\n/);
   const plans = [];
+  const packetPlans = [];
   let currentWave = 1;
   let currentWaveLabel = "";
   let currentSection = "";
   let inWaveSection = false;
+  let currentPacket: {
+    title?: string;
+    role?: string;
+    wave?: number;
+    verification?: string;
+    scope?: string;
+  } | null = null;
+
+  const flushPacket = () => {
+    if (!currentPacket) return;
+    const task = String(currentPacket.title || "").trim();
+    if (!task) {
+      currentPacket = null;
+      return;
+    }
+    packetPlans.push({
+      task,
+      role: String(currentPacket.role || "evolution-worker"),
+      wave: Number.isFinite(Number(currentPacket.wave)) ? Math.max(1, Number(currentPacket.wave)) : currentWave,
+      verification: String(currentPacket.verification || "npm test"),
+      scope: String(currentPacket.scope || ""),
+      waveLabel: currentWaveLabel,
+    });
+    currentPacket = null;
+  };
 
   const normalizeSectionTitle = (value) => String(value || "")
     .toLowerCase()
@@ -878,6 +1094,31 @@ function buildPlansFromNarrative(analysisText) {
   for (let i = 0; i < lines.length; i++) {
     const line = String(lines[i] || "").trim();
     if (!line) continue;
+
+    // Packet format emitted by Prometheus prompt:
+    //   ### Packet 1
+    //   **title:** ...
+    //   **role:** ...
+    //   **wave:** ...
+    if (/^#+\s*packet\s+\d+/i.test(line) || /^\*\*\s*packet\s+\d+\s*\*\*/i.test(line)) {
+      flushPacket();
+      currentPacket = {};
+      continue;
+    }
+
+    if (currentPacket) {
+      const packetField = line.match(/^\*\*\s*([a-zA-Z_\s]+?)\s*\*\*\s*:\s*(.+)$/);
+      if (packetField) {
+        const key = packetField[1].trim().toLowerCase().replace(/\s+/g, "_");
+        const value = packetField[2].trim();
+        if (key === "title") currentPacket.title = value;
+        else if (key === "role") currentPacket.role = value;
+        else if (key === "wave") currentPacket.wave = Number(value);
+        else if (key === "verification") currentPacket.verification = value;
+        else if (key === "scope") currentPacket.scope = value;
+      }
+      continue;
+    }
 
     const headingMatch = line.match(/^#+\s+(.+)$/);
     if (headingMatch) {
@@ -961,6 +1202,12 @@ function buildPlansFromNarrative(analysisText) {
         });
       }
     }
+  }
+
+  flushPacket();
+
+  if (packetPlans.length > 0) {
+    return packetPlans;
   }
 
   // Deduplicate by normalized task text while keeping insertion order.
@@ -1715,6 +1962,23 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   await appendPrometheusLiveLog(stateDir, "leadership_live", `[${ts()}] ${prometheusName.padEnd(20)} Awakening — direct Copilot CLI scan starting...`);
 
   const planningPolicy = buildPrometheusPlanningPolicy(config);
+  const maxCapacityMode = config?.runtime?.maxCapacityMode === true;
+  const disablePromptCache = config?.runtime?.prometheusDisableCache !== false;
+  const runNonce = disablePromptCache
+    ? `prometheus-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    : "prometheus";
+  await appendProgress(config, `[PROMETHEUS][CACHE_POLICY] promptCache=${disablePromptCache ? "disabled(via nonce)" : "enabled"}`);
+  const promptTokenBudget = resolveMaxPromptBudget(
+    config,
+    String(prometheusModel || "GPT-5.3-Codex"),
+    Number(config?.runtime?.prometheusPromptTokenBudget)
+  );
+  const carryForwardBudget = Number.isFinite(Number(config?.runtime?.prometheusCarryForwardMaxTokens))
+    ? Number(config.runtime.prometheusCarryForwardMaxTokens)
+    : (maxCapacityMode ? 30000 : CARRY_FORWARD_MAX_TOKENS);
+  const behaviorBudget = Number.isFinite(Number(config?.runtime?.prometheusBehaviorMaxTokens))
+    ? Number(config.runtime.prometheusBehaviorMaxTokens)
+    : (maxCapacityMode ? 20000 : BEHAVIOR_PATTERNS_MAX_TOKENS);
 
   // ── Extract behavior patterns from postmortems ────────────────────────────
   let behaviorPatternsSection = "";
@@ -1865,19 +2129,44 @@ Consider whether the root causes are:
     driftSummarySection = `\n\n## ARCHITECTURE DRIFT REPORT (unresolved — generated this cycle)\nScanned ${driftReport.scannedDocs.length} documentation file(s). Found ${driftReport.staleCount} stale file reference(s) and ${driftReport.deprecatedTokenCount} deprecated token usage(s).\nThese represent gaps between docs and the current codebase. You MUST include remediation tasks for items you cannot immediately resolve.\n${staleLines ? `\n### Stale File References\n${staleLines}${moreMsgStale}` : ""}${tokenLines ? `\n\n### Deprecated Token Usage\n${tokenLines}${moreMsgToken}` : ""}`;
   }
 
+  // ── Load Research Synthesis for injection into planning prompt ─────────────
+  let researchSection = "";
+  let deepRepoContextSection = "";
+  let scoutRawContextSection = "";
+  try {
+    const synthesis = await readJson(path.join(stateDir, "research_synthesis.json"), null);
+    if (synthesis?.success && synthesis?.topicCount > 0) {
+      researchSection = buildResearchSectionForPrometheus(synthesis);
+      await appendProgress(config, `[PROMETHEUS] Injecting research synthesis: ${synthesis.topicCount} topic(s) from ${synthesis.scoutSourceCount} source(s)`);
+    }
+  } catch { /* non-fatal — proceed without research intelligence */ }
+
+  if (maxCapacityMode) {
+    deepRepoContextSection = await buildDeepRepoContextSection(repoRoot, {
+      maxFiles: config?.runtime?.prometheusDeepRepoMaxFiles,
+      maxChars: config?.runtime?.prometheusDeepRepoMaxChars,
+    });
+    scoutRawContextSection = await buildScoutRawContextSection(
+      stateDir,
+      Number.isFinite(Number(config?.runtime?.prometheusScoutRawMaxChars))
+        ? Number(config.runtime.prometheusScoutRawMaxChars)
+        : 120000
+    );
+  }
+
   // ── Build prompt from static and dynamic sections ────────────────────────
   // Static sections are invariant across cycles and stored in PROMETHEUS_STATIC_SECTIONS.
   // Dynamic sections carry per-cycle deltas; carry-forward and behavior-patterns are capped
   // via maxTokens to prevent unbounded payload growth across many cycles.
   const carryFwdSection = Object.assign(
     section("carry-forward", carryForwardSection),
-    { maxTokens: CARRY_FORWARD_MAX_TOKENS }
+    { maxTokens: carryForwardBudget }
   );
   const behaviorSection = Object.assign(
     section("behavior-patterns", behaviorPatternsSection),
-    { maxTokens: BEHAVIOR_PATTERNS_MAX_TOKENS }
+    { maxTokens: behaviorBudget }
   );
-  const contextPrompt = compilePrompt([
+  const baseSections = [
     section("context", `TARGET REPO: ${config.env?.targetRepo || "unknown"}\nREPO PATH: ${repoRoot}\n\n## OPERATOR OBJECTIVE\n${userPrompt}`),
     PROMETHEUS_STATIC_SECTIONS.evolutionDirective,
     PROMETHEUS_STATIC_SECTIONS.mandatorySelfCritique,
@@ -1886,10 +2175,55 @@ Consider whether the root causes are:
     behaviorSection,
     carryFwdSection,
     section("repo-file-listing", repoFileListingSection),
+    section("deep-repo-context", deepRepoContextSection),
     section("drift-summary", driftSummarySection),
+    section("research-intelligence", researchSection),
+    section("research-raw", scoutRawContextSection),
     section("repair-feedback", repairFeedbackSection),
     PROMETHEUS_STATIC_SECTIONS.outputFormat,
-  ]);
+  ];
+
+  const compiledBasePrompt = compilePrompt(baseSections, {
+    tokenBudget: promptTokenBudget > 0 ? promptTokenBudget : undefined,
+  });
+
+  const cacheBypassPrefix = disablePromptCache
+    ? `\n\n## RUN NONCE\n${runNonce}\nTreat this run nonce as immutable metadata for this execution.\n`
+    : "";
+
+  let codeCorpusSection = "";
+  if (maxCapacityMode && promptTokenBudget > 0) {
+    // Full-capacity mode: collect meaningful context up front and let compilePrompt
+    // trim deterministically to the final token budget.
+    const fullTargetChars = promptTokenBudget * 4;
+    codeCorpusSection = await buildDeepRepoCodeCorpusSection(repoRoot, {
+      maxChars: Number.isFinite(Number(config?.runtime?.prometheusDeepRepoCorpusMaxChars))
+        ? Number(config.runtime.prometheusDeepRepoCorpusMaxChars)
+        : fullTargetChars,
+      maxFiles: Number.isFinite(Number(config?.runtime?.prometheusDeepRepoCorpusMaxFiles))
+        ? Number(config.runtime.prometheusDeepRepoCorpusMaxFiles)
+        : 2400,
+      maxFileChars: Number.isFinite(Number(config?.runtime?.prometheusDeepRepoCorpusMaxFileChars))
+        ? Number(config.runtime.prometheusDeepRepoCorpusMaxFileChars)
+        : 12000,
+    });
+  }
+
+  const compiledPrompt = compilePrompt([
+    ...baseSections,
+    section("deep-repo-code-corpus", codeCorpusSection),
+  ], {
+    tokenBudget: promptTokenBudget > 0 ? promptTokenBudget : undefined,
+  });
+
+  const contextPrompt = `${compiledPrompt}${cacheBypassPrefix}`;
+  const estimatedPromptTokens = estimateTokens(contextPrompt);
+  const budgetMsg = promptTokenBudget > 0
+    ? `/${promptTokenBudget} tokens (~${((estimatedPromptTokens / promptTokenBudget) * 100).toFixed(1)}%)`
+    : "(no global token cap)";
+  await appendProgress(config,
+    `[PROMETHEUS][CONTEXT_BUDGET] prompt~${estimatedPromptTokens} tokens ${budgetMsg} | carry=${carryForwardBudget} behavior=${behaviorBudget} maxCapacityMode=${maxCapacityMode}`
+  );
 
   appendPromptPreviewSync(stateDir, contextPrompt);
 
@@ -1922,6 +2256,13 @@ Consider whether the root causes are:
   const stderr = String((result as any)?.stderr || "");
   const raw = stdout || stderr;
   const combinedRaw = `${stdout}\n${stderr}`.trim();
+  await appendAgentContextUsage(config, {
+    agent: "prometheus",
+    model: String(prometheusModel || "GPT-5.3-Codex"),
+    promptText: contextPrompt,
+    status: (result as any).status === 0 ? "success" : "failed",
+    note: `budget=${promptTokenBudget > 0 ? promptTokenBudget : "none"}`,
+  });
 
   // ── Check for model fallback ──────────────────────────────────────────────
   const fallback = detectModelFallback(combinedRaw);
@@ -2224,7 +2565,24 @@ Consider whether the root causes are:
     requestedBy
   };
 
-  await writeJson(path.join(stateDir, "prometheus_analysis.json"), addSchemaVersion(analysis, STATE_FILE_TYPE.PROMETHEUS_ANALYSIS));
+  const analysisPath = path.join(stateDir, "prometheus_analysis.json");
+  const previousAnalysis = await readJson(analysisPath, null);
+  const currentPlans = Array.isArray(analysis.plans) ? analysis.plans : [];
+  const previousPlans = Array.isArray(previousAnalysis?.plans) ? previousAnalysis.plans : [];
+  if (currentPlans.length === 0 && previousPlans.length > 0) {
+    analysis.plans = previousPlans;
+    analysis.snapshotFallback = {
+      restored: true,
+      reason: "empty_current_plans",
+      restoredPlanCount: previousPlans.length,
+      restoredAt: new Date().toISOString(),
+    };
+    await appendProgress(config,
+      `[PROMETHEUS] Non-empty snapshot fallback applied — restored ${previousPlans.length} plan(s) from previous analysis`
+    );
+  }
+
+  await writeJson(analysisPath, addSchemaVersion(analysis, STATE_FILE_TYPE.PROMETHEUS_ANALYSIS));
 
   const planCount = Array.isArray(analysis.plans) ? analysis.plans.length : 0;
   await appendProgress(config, `[PROMETHEUS] Analysis complete — ${planCount} work items | health=${analysis.projectHealth}`);
