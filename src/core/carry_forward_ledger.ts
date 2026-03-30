@@ -346,3 +346,60 @@ export function shouldBlockOnDebt(ledger, currentCycle, opts: any = {}) {
 }
 
 
+
+// ── Reviewer Debt Tracking ────────────────────────────────────────────────────
+
+/**
+ * Create a carry-forward debt entry if the reviewer false positive rate is
+ * persistently high (exceeds threshold AND we have enough known outcomes).
+ *
+ * Guards:
+ *   - knownOutcomes < 5 -> no action (too sparse to be meaningful)
+ *   - An open debt with the "reviewer-high-fpr" marker already exists -> no duplicate
+ *   - falsePositiveRate <= threshold -> no action
+ *
+ * @param {DebtEntry[]} ledger - existing carry-forward ledger
+ * @param {{ falsePositiveRate: number|null, knownOutcomes: number }} metrics
+ * @param {number} currentCycle
+ * @param {{ fpRateThreshold?: number, slaMaxCycles?: number }} opts
+ * @returns {DebtEntry[]} - updated ledger (new array; original is not mutated)
+ */
+export function createReviewerDebtIfNeeded(
+  ledger: any[],
+  metrics: { falsePositiveRate: number | null; knownOutcomes: number },
+  currentCycle: number,
+  opts: any = {}
+): any[] {
+  const threshold  = typeof opts.fpRateThreshold === "number" ? opts.fpRateThreshold : 0.3;
+  const sla        = typeof opts.slaMaxCycles    === "number" ? opts.slaMaxCycles    : 3;
+  const fpr        = metrics?.falsePositiveRate;
+  const known      = metrics?.knownOutcomes ?? 0;
+
+  // Require minimum sample before raising debt
+  if (fpr === null || fpr === undefined || known < 5 || fpr <= threshold) return [...ledger];
+
+  const existing = [...ledger];
+  const alreadyOpen = existing.some(
+    e => !e.closedAt && typeof e.lesson === "string" && e.lesson.includes("reviewer-high-fpr")
+  );
+  if (alreadyOpen) return existing;
+
+  const lesson = `reviewer-high-fpr: Athena approved ${(fpr * 100).toFixed(1)}% of plans that failed ` +
+    `(threshold ${(threshold * 100).toFixed(0)}%) — review and tighten plan quality gate`;
+  const fingerprint = computeFingerprint(lesson);
+  if (!fingerprint) return existing;
+
+  existing.push({
+    id:              `debt-reviewer-${currentCycle}`,
+    lesson,
+    fingerprint,
+    owner:           "governance-worker",
+    openedCycle:     currentCycle,
+    dueCycle:        currentCycle + sla,
+    severity:        "critical",
+    closedAt:        null,
+    closureEvidence: null,
+    cyclesOpen:      0,
+  });
+  return existing;
+}

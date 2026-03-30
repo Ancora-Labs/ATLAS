@@ -2056,3 +2056,93 @@ ${recurrenceContext}
 
   return postmortem;
 }
+
+// ── Reviewer Precision/Recall ─────────────────────────────────────────────────
+
+/**
+ * Shape returned by computeReviewerPrecisionRecall.
+ * All rates are in [0, 1], null when there is insufficient data.
+ *
+ * correct          — count with decisionQualityLabel="correct"
+ * delayedCorrect   — count with decisionQualityLabel="delayed-correct"
+ * incorrect        — count with decisionQualityLabel="incorrect"
+ * inconclusive     — count with decisionQualityLabel="inconclusive" (excluded from rates)
+ * knownOutcomes    — correct + delayedCorrect + incorrect
+ * precision        — (correct + delayedCorrect) / knownOutcomes
+ * recall           — correct / (correct + delayedCorrect); null if no successes
+ * falsePositiveRate— incorrect / knownOutcomes
+ * reworkRate       — delayedCorrect / (correct + delayedCorrect)
+ * f1               — harmonic mean of precision and recall; null if either is null
+ */
+export interface ReviewerPrecisionRecallResult {
+  correct: number;
+  delayedCorrect: number;
+  incorrect: number;
+  inconclusive: number;
+  knownOutcomes: number;
+  precision: number | null;
+  recall: number | null;
+  falsePositiveRate: number | null;
+  reworkRate: number | null;
+  f1: number | null;
+  computedAt: string;
+}
+
+function _round4(n: number): number {
+  return Math.round(n * 10000) / 10000;
+}
+
+/**
+ * Compute reviewer precision/recall metrics from postmortem entries.
+ *
+ * In BOX's context, Athena approves plans for execution. The "realized outcome"
+ * is captured as decisionQualityLabel in each postmortem:
+ *   correct         -> approved, succeeded on first attempt (TP)
+ *   delayed-correct -> approved, succeeded after rework (partial TP)
+ *   incorrect       -> approved, failed/rolled back (FP)
+ *   inconclusive    -> excluded from rate calculations (unknown outcome)
+ *
+ * Metric definitions:
+ *   precision        = (correct + delayed_correct) / known_outcomes
+ *   recall           = correct / (correct + delayed_correct)
+ *   falsePositiveRate= incorrect / known_outcomes
+ *   reworkRate       = delayed_correct / (correct + delayed_correct)
+ *   f1               = 2 * precision * recall / (precision + recall)
+ *
+ * Returns null rates when there is insufficient data (knownOutcomes === 0).
+ *
+ * @param {Array<object>} postmortems - entries with decisionQualityLabel fields
+ * @returns {ReviewerPrecisionRecallResult}
+ */
+export function computeReviewerPrecisionRecall(postmortems: any[]): ReviewerPrecisionRecallResult {
+  let correct = 0, delayedCorrect = 0, incorrect = 0, inconclusive = 0;
+  for (const pm of (Array.isArray(postmortems) ? postmortems : [])) {
+    const label = normalizeDecisionQualityLabel(pm);
+    if (label === DECISION_QUALITY_LABEL.CORRECT)              correct++;
+    else if (label === DECISION_QUALITY_LABEL.DELAYED_CORRECT) delayedCorrect++;
+    else if (label === DECISION_QUALITY_LABEL.INCORRECT)       incorrect++;
+    else                                                       inconclusive++;
+  }
+  const knownOutcomes = correct + delayedCorrect + incorrect;
+  if (knownOutcomes === 0) {
+    return {
+      correct, delayedCorrect, incorrect, inconclusive, knownOutcomes,
+      precision: null, recall: null, falsePositiveRate: null, reworkRate: null, f1: null,
+      computedAt: new Date().toISOString()
+    };
+  }
+  const precision = _round4((correct + delayedCorrect) / knownOutcomes);
+  const successCount = correct + delayedCorrect;
+  const recall = successCount > 0 ? _round4(correct / successCount) : null;
+  const falsePositiveRate = _round4(incorrect / knownOutcomes);
+  const reworkRate = successCount > 0 ? _round4(delayedCorrect / successCount) : null;
+  let f1: number | null = null;
+  if (precision !== null && recall !== null && (precision + recall) > 0) {
+    f1 = _round4((2 * precision * recall) / (precision + recall));
+  }
+  return {
+    correct, delayedCorrect, incorrect, inconclusive, knownOutcomes,
+    precision, recall, falsePositiveRate, reworkRate, f1,
+    computedAt: new Date().toISOString()
+  };
+}

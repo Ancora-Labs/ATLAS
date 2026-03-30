@@ -21,7 +21,7 @@ import { readJson, readJsonSafe, READ_JSON_REASON, writeJson, spawnAsync } from 
 import { appendProgress } from "./state_tracker.js";
 import { buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
 import { chatLog, warn } from "./logger.js";
-import { normalizeDecisionQualityLabel, DECISION_QUALITY_LABEL, PREMORTEM_RISK_LEVEL } from "./athena_reviewer.js";
+import { normalizeDecisionQualityLabel, DECISION_QUALITY_LABEL, PREMORTEM_RISK_LEVEL, computeReviewerPrecisionRecall } from "./athena_reviewer.js";
 import { extractPostmortemEntries, migrateData, STATE_FILE_TYPE } from "./schema_registry.js";
 import { loadRegistry, getRunningExperimentsForPath } from "./experiment_registry.js";
 import { getCanaryConfig, startCanary, processRunningCanaries } from "./canary_engine.js";
@@ -1798,6 +1798,47 @@ export async function runSelfImprovementCycle(config) {
   }
   await writeJson(reportsPath, existingReports);
 
+  // 8. Compute reviewer precision/recall and feed into policy tuning
+  // Reads the full athena_postmortems history to compute precision, recall,
+  // and FP rate. Derives policy adjustment signals and persists to reviewer_metrics.json.
+  let reviewerMetrics = null;
+  try {
+    const rawPmsForPR = await readJson(path.join(stateDir, "athena_postmortems.json"), null);
+    if (rawPmsForPR !== null) {
+      const migratedForPR = migrateData(rawPmsForPR, STATE_FILE_TYPE.ATHENA_POSTMORTEMS);
+      if (migratedForPR.ok) {
+        const entriesForPR = extractPostmortemEntries(migratedForPR.data);
+        reviewerMetrics = computeReviewerPrecisionRecall(entriesForPR);
+        await persistReviewerMetrics(config, reviewerMetrics);
+        const policyAdj = deriveReviewerPolicyAdjustment(reviewerMetrics);
+        if (policyAdj.lessons.length > 0) {
+          for (const lesson of policyAdj.lessons) {
+            lesson.addedAt = new Date().toISOString();
+            knowledgeMemory.lessons.push(lesson);
+          }
+          if (knowledgeMemory.lessons.length > (siConfig.maxReports || 200)) {
+            knowledgeMemory.lessons = knowledgeMemory.lessons.slice(-(siConfig.maxReports || 200));
+          }
+          await saveKnowledgeMemory(stateDir, knowledgeMemory);
+        }
+        if (policyAdj.warnings.length > 0) {
+          await appendProgress(config,
+            `[SELF-IMPROVEMENT] Reviewer precision/recall: precision=${reviewerMetrics.precision !== null ? (reviewerMetrics.precision * 100).toFixed(1) + "%" : "N/A"} fpr=${reviewerMetrics.falsePositiveRate !== null ? (reviewerMetrics.falsePositiveRate * 100).toFixed(1) + "%" : "N/A"} signal=${policyAdj.policySignal}`
+          );
+        }
+      }
+    }
+  } catch (err) {
+    warn(`[self-improvement] reviewer precision/recall computation failed: ${String((err as any)?.message || err)}`);
+  }
+  (report as any).reviewerMetrics = reviewerMetrics !== null ? {
+    precision: reviewerMetrics.precision,
+    recall: reviewerMetrics.recall,
+    falsePositiveRate: reviewerMetrics.falsePositiveRate,
+    reworkRate: reviewerMetrics.reworkRate,
+    f1: reviewerMetrics.f1,
+    knownOutcomes: reviewerMetrics.knownOutcomes
+  } : null;
   const healthScore = analysis.systemHealthScore || 0;
   const lessonsStr = newLessons.map(l => `[${l.severity}] ${l.lesson}`).join("; ").slice(0, 300);
   await appendProgress(config,
@@ -1809,4 +1850,120 @@ export async function runSelfImprovementCycle(config) {
   );
 
   return report;
+}
+
+// ── Reviewer Precision/Recall Policy Tuning ───────────────────────────────────
+
+/**
+ * Thresholds used by deriveReviewerPolicyAdjustment.
+ * Conservative defaults — override via config if needed.
+ *
+ * FP_RATE_HIGH     — max acceptable false positive rate (approved plans that failed)
+ * REWORK_RATE_HIGH — max acceptable rework rate (approved plans that needed rework)
+ * PRECISION_LOW    — min acceptable precision; below this emits a critical lesson
+ */
+export const REVIEWER_POLICY_THRESHOLDS = Object.freeze({
+  FP_RATE_HIGH:    0.25,
+  REWORK_RATE_HIGH: 0.35,
+  PRECISION_LOW:   0.65,
+});
+
+/**
+ * Derive policy adjustment signals from reviewer precision/recall metrics.
+ *
+ * Returns:
+ *   suggestedMinScore — recommended planQualityMinScore (null = no change)
+ *   warnings          — human-readable warning strings
+ *   lessons           — lesson objects to inject into knowledge memory
+ *   policySignal      — "tighten" | "deepen" | "ok"
+ *
+ * Logic:
+ *   falsePositiveRate > FP_RATE_HIGH  -> signal=tighten, raise planQualityMinScore
+ *   reworkRate > REWORK_RATE_HIGH     -> signal=deepen, improve verification depth
+ *   precision < PRECISION_LOW         -> emit critical lesson
+ *
+ * @param {object} metrics - result from computeReviewerPrecisionRecall
+ * @returns {{ suggestedMinScore: number|null, warnings: string[], lessons: object[], policySignal: string }}
+ */
+export function deriveReviewerPolicyAdjustment(metrics: any): {
+  suggestedMinScore: number | null;
+  warnings: string[];
+  lessons: any[];
+  policySignal: "tighten" | "deepen" | "ok";
+} {
+  if (!metrics || metrics.knownOutcomes === 0) {
+    return { suggestedMinScore: null, warnings: [], lessons: [], policySignal: "ok" };
+  }
+  const warnings: string[] = [];
+  const lessons: any[] = [];
+  let suggestedMinScore: number | null = null;
+  let policySignal: "tighten" | "deepen" | "ok" = "ok";
+  const fp   = typeof metrics.falsePositiveRate === "number" ? metrics.falsePositiveRate : null;
+  const rw   = typeof metrics.reworkRate       === "number" ? metrics.reworkRate        : null;
+  const prec = typeof metrics.precision        === "number" ? metrics.precision         : null;
+
+  if (fp !== null && fp > REVIEWER_POLICY_THRESHOLDS.FP_RATE_HIGH) {
+    policySignal = "tighten";
+    suggestedMinScore = 55;
+    warnings.push(
+      `Reviewer false positive rate ${(fp * 100).toFixed(1)}% exceeds threshold ` +
+      `${(REVIEWER_POLICY_THRESHOLDS.FP_RATE_HIGH * 100).toFixed(0)}% — recommend raising planQualityMinScore`
+    );
+    lessons.push({
+      lesson: `Athena approved ${(fp * 100).toFixed(1)}% of plans that failed — tighten plan quality gate (planQualityMinScore)`,
+      source: "reviewer_precision_recall",
+      category: "prompt-quality",
+      severity: "warning"
+    });
+  }
+
+  if (rw !== null && rw > REVIEWER_POLICY_THRESHOLDS.REWORK_RATE_HIGH) {
+    if (policySignal === "ok") policySignal = "deepen";
+    warnings.push(
+      `Reviewer rework rate ${(rw * 100).toFixed(1)}% exceeds threshold ` +
+      `${(REVIEWER_POLICY_THRESHOLDS.REWORK_RATE_HIGH * 100).toFixed(0)}% — plans need more iteration than expected`
+    );
+    lessons.push({
+      lesson: `${(rw * 100).toFixed(1)}% of successful plans required rework — improve verification depth in plan review`,
+      source: "reviewer_precision_recall",
+      category: "prompt-quality",
+      severity: "info"
+    });
+  }
+
+  if (prec !== null && prec < REVIEWER_POLICY_THRESHOLDS.PRECISION_LOW) {
+    if (policySignal === "ok") policySignal = "tighten";
+    lessons.push({
+      lesson: `Reviewer precision ${(prec * 100).toFixed(1)}% is below threshold ` +
+        `${(REVIEWER_POLICY_THRESHOLDS.PRECISION_LOW * 100).toFixed(0)}% — review acceptance criteria and plan quality standards`,
+      source: "reviewer_precision_recall",
+      category: "prompt-quality",
+      severity: "critical"
+    });
+  }
+
+  return { suggestedMinScore, warnings, lessons, policySignal };
+}
+
+/**
+ * Persist reviewer precision/recall metrics to state/reviewer_metrics.json.
+ * Appends to a rolling history capped at 100 entries.
+ * Non-fatal: errors are logged but do not throw.
+ *
+ * @param {object} config
+ * @param {object} metrics - result from computeReviewerPrecisionRecall
+ * @returns {Promise<void>}
+ */
+export async function persistReviewerMetrics(config: any, metrics: any): Promise<void> {
+  const stateDir = config?.paths?.stateDir || "state";
+  const metricsPath = path.join(stateDir, "reviewer_metrics.json");
+  try {
+    const existing = await readJson(metricsPath, { history: [] });
+    existing.history.push({ ...metrics, computedAt: metrics.computedAt || new Date().toISOString() });
+    if (existing.history.length > 100) existing.history = existing.history.slice(-100);
+    existing.updatedAt = new Date().toISOString();
+    await writeJson(metricsPath, existing);
+  } catch (err) {
+    warn(`[self-improvement] failed to persist reviewer metrics: ${String((err as any)?.message || err)}`);
+  }
 }
