@@ -50,6 +50,43 @@ import {
 // Re-export so existing callers that import from prometheus.ts continue to work
 export { _splitWavesIntoMicrowaves as splitWavesIntoMicrowaves, _MICROWAVE_MAX_TASKS_DEFAULT as MICROWAVE_MAX_TASKS_DEFAULT };
 
+import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
+
+// ── Span contract emitter ─────────────────────────────────────────────────────
+
+/** Canonical agent identifier for Prometheus in span events. */
+export const PROMETHEUS_AGENT_ID = "prometheus";
+
+/**
+ * Build a PLANNING_STAGE_TRANSITION span event for Prometheus.
+ * Conforms to SPAN_CONTRACT: stamps spanId, parentSpanId, traceId, agentId.
+ *
+ * @param correlationId — non-empty cycle trace ID
+ * @param stageFrom     — stage being left (one of ORCHESTRATION_LOOP_STEPS)
+ * @param stageTo       — stage being entered
+ * @param opts          — optional parentSpanId, durationMs
+ * @returns validated event envelope
+ */
+export function emitPrometheusSpanTransition(
+  correlationId: string,
+  stageFrom: string,
+  stageTo: string,
+  opts: { parentSpanId?: string | null; durationMs?: number | null } = {},
+) {
+  return buildSpanEvent(
+    EVENTS.PLANNING_STAGE_TRANSITION,
+    EVENT_DOMAIN.PLANNING,
+    correlationId,
+    { agentId: PROMETHEUS_AGENT_ID, parentSpanId: opts.parentSpanId ?? null },
+    {
+      [SPAN_CONTRACT.stageTransition.taskId]:     null,
+      [SPAN_CONTRACT.stageTransition.stageFrom]:  stageFrom,
+      [SPAN_CONTRACT.stageTransition.stageTo]:    stageTo,
+      [SPAN_CONTRACT.stageTransition.durationMs]: opts.durationMs ?? null,
+    },
+  );
+}
+
 export function detectModelFallback(rawText) {
   const text = String(rawText || "");
   const match = text.match(/Warning:\s*Custom agent\s+"([^"]+)"\s+specifies model\s+"([^"]+)"\s+which is not available;\s+using\s+"([^"]+)"\s+instead/i);

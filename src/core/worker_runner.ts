@@ -28,6 +28,7 @@ import { deriveRoutingAdjustments, buildPromptHardConstraints } from "./learning
 import { loadPolicy, getProtectedPathMatches, getRolePathViolations } from "./policy_engine.js";
 import { appendEscalation, BLOCKING_REASON_CLASS, NEXT_ACTION } from "./escalation_queue.js";
 import { buildTaskFingerprint, buildLineageId, LINEAGE_ENTRY_STATUS } from "./lineage_graph.js";
+import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
 import { classifyFailure } from "./failure_classifier.js";
 import { resolveRetryAction, persistRetryMetric } from "./retry_strategy.js";
 
@@ -125,6 +126,73 @@ type VerificationEvidence = {
 type ParsedWorkerResponse = ReturnType<typeof parseWorkerResponse> & {
   verificationEvidence?: VerificationEvidence | null;
 };
+
+// ── Span contract emitter ─────────────────────────────────────────────────────
+
+/** Canonical agent identifier for workers in span events. */
+export const WORKER_AGENT_ID = "worker";
+
+/**
+ * Build a PLANNING_STAGE_TRANSITION span event for a worker.
+ * Conforms to SPAN_CONTRACT: stamps spanId, parentSpanId, traceId, agentId.
+ *
+ * @param correlationId — non-empty cycle trace ID
+ * @param stageFrom     — stage being left (one of ORCHESTRATION_LOOP_STEPS)
+ * @param stageTo       — stage being entered
+ * @param opts          — optional parentSpanId, durationMs, taskId
+ * @returns validated event envelope
+ */
+export function emitWorkerSpanTransition(
+  correlationId: string,
+  stageFrom: string,
+  stageTo: string,
+  opts: { parentSpanId?: string | null; durationMs?: number | null; taskId?: string | null } = {},
+) {
+  return buildSpanEvent(
+    EVENTS.PLANNING_STAGE_TRANSITION,
+    EVENT_DOMAIN.PLANNING,
+    correlationId,
+    { agentId: WORKER_AGENT_ID, parentSpanId: opts.parentSpanId ?? null },
+    {
+      [SPAN_CONTRACT.stageTransition.taskId]:     opts.taskId ?? null,
+      [SPAN_CONTRACT.stageTransition.stageFrom]:  stageFrom,
+      [SPAN_CONTRACT.stageTransition.stageTo]:    stageTo,
+      [SPAN_CONTRACT.stageTransition.durationMs]: opts.durationMs ?? null,
+    },
+  );
+}
+
+/**
+ * Build a PLANNING_TASK_DROPPED span event for a worker (blocked/capacity-exhausted path).
+ * Conforms to SPAN_CONTRACT.dropReason.
+ *
+ * @param correlationId  — non-empty cycle trace ID
+ * @param taskId         — identifier of the dropped task
+ * @param reason         — human-readable drop reason
+ * @param dropCode       — machine code from SPAN_CONTRACT.dropCodes (defaults to CAPACITY_EXHAUSTED)
+ * @param opts           — optional parentSpanId, stageWhenDropped
+ * @returns validated event envelope
+ */
+export function emitWorkerSpanDrop(
+  correlationId: string,
+  taskId: string,
+  reason: string,
+  dropCode: string = SPAN_CONTRACT.dropCodes.CAPACITY_EXHAUSTED,
+  opts: { parentSpanId?: string | null; stageWhenDropped?: string } = {},
+) {
+  return buildSpanEvent(
+    EVENTS.PLANNING_TASK_DROPPED,
+    EVENT_DOMAIN.PLANNING,
+    correlationId,
+    { agentId: WORKER_AGENT_ID, parentSpanId: opts.parentSpanId ?? null },
+    {
+      [SPAN_CONTRACT.dropReason.taskId]:           taskId,
+      [SPAN_CONTRACT.dropReason.stageWhenDropped]: opts.stageWhenDropped ?? "workers_running",
+      [SPAN_CONTRACT.dropReason.reason]:           reason,
+      [SPAN_CONTRACT.dropReason.dropCode]:         dropCode,
+    },
+  );
+}
 
 // ── Premium usage tracking ──────────────────────────────────────────────────
 
