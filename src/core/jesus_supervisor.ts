@@ -264,6 +264,115 @@ async function fetchGitHubState(config) {
   };
 }
 
+// ── Directive Payload Validation ─────────────────────────────────────────────
+
+/**
+ * Required string fields in a valid Jesus directive payload.
+ * These fields must be present and non-empty for the directive to be actionable.
+ */
+const REQUIRED_DIRECTIVE_STRING_FIELDS = ["decision", "systemHealth", "briefForPrometheus"] as const;
+
+/**
+ * Required boolean fields in a valid Jesus directive payload.
+ */
+const REQUIRED_DIRECTIVE_BOOLEAN_FIELDS = ["wakeAthena", "callPrometheus"] as const;
+
+/**
+ * Valid health state values that produce measurable expectedOutcome forecasts.
+ * "unknown" is permitted only as a transient system state, not as a stable forecast.
+ */
+const MEASURABLE_HEALTH_STATES = new Set(["good", "degraded", "critical", "unknown"]);
+
+/**
+ * Valid decision type values that produce meaningful calibration predictions.
+ */
+const VALID_DECISION_TYPES = new Set(["tactical", "strategic", "emergency", "wait"]);
+
+/**
+ * Validate that a directive payload has all required fields and that the
+ * `expectedOutcome` block contains measurable (non-null, non-degenerate) values.
+ *
+ * "Fail-close" semantics:
+ *   - If required fields are missing or have wrong types, `valid: false` is returned.
+ *   - Callers should degrade to a safe fallback directive instead of writing an
+ *     incomplete payload to disk.
+ *
+ * @param directive - The assembled directive object (post AI-parse, pre-write).
+ * @param expectedOutcome - The expectedOutcome block attached to the directive.
+ * @returns {{ valid: boolean, gaps: string[], hasMeasurableOutcome: boolean }}
+ */
+export function validateDirectivePayload(
+  directive: Record<string, unknown>,
+  expectedOutcome: Record<string, unknown>
+): { valid: boolean; gaps: string[]; hasMeasurableOutcome: boolean } {
+  const gaps: string[] = [];
+
+  // Check required string fields
+  for (const field of REQUIRED_DIRECTIVE_STRING_FIELDS) {
+    const value = directive[field];
+    if (value === null || value === undefined || String(value).trim() === "") {
+      gaps.push(`directive.${field} is required but missing or empty`);
+    }
+  }
+
+  // Check required boolean fields
+  for (const field of REQUIRED_DIRECTIVE_BOOLEAN_FIELDS) {
+    if (typeof directive[field] !== "boolean") {
+      gaps.push(`directive.${field} must be a boolean (got ${typeof directive[field]})`);
+    }
+  }
+
+  // Validate decision type is a recognised value
+  const decision = String(directive.decision || "").toLowerCase();
+  if (decision && !VALID_DECISION_TYPES.has(decision)) {
+    gaps.push(`directive.decision "${decision}" is not a valid decision type (expected: tactical|strategic|emergency|wait)`);
+  }
+
+  // Validate expectedOutcome has measurable fields
+  const hasMeasurableOutcome = validateExpectedOutcomeMeasurable(expectedOutcome);
+  if (!hasMeasurableOutcome) {
+    gaps.push("expectedOutcome is missing required measurable fields — calibration will be unreliable");
+  }
+
+  return { valid: gaps.length === 0, gaps, hasMeasurableOutcome };
+}
+
+/**
+ * Check whether an expectedOutcome block has all required measurable fields.
+ *
+ * Measurable means: all 6 fields are present and non-null, with concrete values
+ * that can be compared against realized outcomes for calibration scoring.
+ */
+export function validateExpectedOutcomeMeasurable(expectedOutcome: Record<string, unknown>): boolean {
+  if (!expectedOutcome || typeof expectedOutcome !== "object") return false;
+
+  const requiredFields = [
+    "expectedSystemHealthAfter",
+    "expectedNextDecision",
+    "expectedAthenaActivated",
+    "expectedPrometheusRan",
+    "expectedWorkItemCount",
+    "forecastConfidence",
+  ];
+
+  for (const field of requiredFields) {
+    const value = expectedOutcome[field];
+    if (value === null || value === undefined) return false;
+  }
+
+  // Verify health and decision fields are concrete (in known valid sets)
+  const healthAfter = String(expectedOutcome.expectedSystemHealthAfter || "");
+  const nextDecision = String(expectedOutcome.expectedNextDecision || "");
+
+  if (!MEASURABLE_HEALTH_STATES.has(healthAfter)) return false;
+  if (!VALID_DECISION_TYPES.has(nextDecision)) return false;
+  if (typeof expectedOutcome.expectedAthenaActivated !== "boolean") return false;
+  if (typeof expectedOutcome.expectedPrometheusRan !== "boolean") return false;
+  if (typeof expectedOutcome.expectedWorkItemCount !== "number") return false;
+
+  return true;
+}
+
 // ── Main Jesus Cycle ─────────────────────────────────────────────────────────
 
 /**
@@ -644,6 +753,46 @@ ${workersList}`;
   });
 
   const expectedOutcome = buildExpectedOutcome(d);
+
+  // ── Directive payload validation — fail-close on incomplete payloads ────
+  // After the AI output passes the trust boundary, validate the assembled
+  // directive has all required fields and a measurable expectedOutcome.
+  // If validation fails, degrade to a safe fallback rather than writing an
+  // incomplete payload to disk.
+  const payloadValidation = validateDirectivePayload(
+    d as Record<string, unknown>,
+    expectedOutcome as unknown as Record<string, unknown>
+  );
+  if (!payloadValidation.valid) {
+    const gapList = payloadValidation.gaps.join(" | ");
+    await appendProgress(config,
+      `[JESUS][PAYLOAD_GATE] Directive payload incomplete — fail-closing. Gaps: ${gapList}`
+    );
+    try {
+      await appendAlert(config, {
+        severity: ALERT_SEVERITY.CRITICAL,
+        source: "jesus_supervisor",
+        title: "Directive payload failed validation — safe fallback returned",
+        message: gapList
+      });
+    } catch { /* non-fatal */ }
+    const needsPrometheus = prometheusAgeHours > 6;
+    return {
+      wait: false,
+      wakeAthena: true,
+      callPrometheus: needsPrometheus,
+      prometheusReason: needsPrometheus
+        ? "Directive payload incomplete and no recent Prometheus analysis" : undefined,
+      decision: "tactical",
+      systemHealth: "unknown",
+      thinking: aiResult.thinking,
+      fullOutput: (aiResult as any).raw || "",
+      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${config.env?.targetRepo}`,
+      priorities: [],
+      workerSuggestions: [],
+      _directivePayloadGaps: payloadValidation.gaps,
+    };
+  }
 
   const directive = {
     ...d,

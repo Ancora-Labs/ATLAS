@@ -1333,3 +1333,147 @@ describe("verification_gate — scanB and quality-worker artifact gate (Task 1 c
     );
   });
 });
+
+// ── Task 1: Packet-named verification proof gate ──────────────────────────────
+// When the task packet's verification field names a specific test file and/or
+// description, the worker output must contain that evidence before done closure
+// is accepted. This tests the integration path through validateWorkerContract.
+
+describe("verification_gate — packet-named verification proof gate (Task 1)", () => {
+  it("rejects done when packet verification names a test file absent from worker output", () => {
+    // Packet says: run tests/core/foo.test.ts — but worker output doesn't mention it.
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234f",
+        "===NPM TEST OUTPUT START===",
+        "# Subtest: other_test.test.ts",
+        "ok 1 - some passing test",
+        "# pass 1",
+        "===NPM TEST OUTPUT END===",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass",
+        "BOX_PR_URL=https://github.com/org/repo/pull/1",
+      ].join("\n"),
+    }, {
+      taskKind: "backend",
+      verificationText: "tests/core/foo.test.ts — test: should handle edge case",
+    });
+    assert.equal(result.passed, false,
+      "done must be rejected when packet-named test file is absent from worker output"
+    );
+    const namedGap = result.gaps.find((g: string) => g.includes("foo.test.ts"));
+    assert.ok(namedGap,
+      `gaps must reference the missing named test file; got: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("accepts done when packet verification names a test file present in worker output", () => {
+    // Packet names foo.test.ts and worker output contains it.
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234f",
+        "===NPM TEST OUTPUT START===",
+        "# Subtest: foo.test.ts",
+        "ok 1 - should handle edge case",
+        "# pass 1",
+        "===NPM TEST OUTPUT END===",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass",
+        "BOX_PR_URL=https://github.com/org/repo/pull/1",
+      ].join("\n"),
+    }, {
+      taskKind: "backend",
+      verificationText: "tests/core/foo.test.ts — test: should handle edge case",
+    });
+    const namedGap = result.gaps.find((g: string) => g.includes("Named test proof"));
+    assert.equal(namedGap, undefined,
+      `no named-proof gap expected when test file and description are in output; got: ${namedGap}`
+    );
+  });
+
+  it("no named-proof gap when verificationText is a non-specific format (e.g. 'npm test')", () => {
+    // 'npm test' is not a named test proof format — gate must not fire.
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234f",
+        "===NPM TEST OUTPUT START===",
+        "# pass 5",
+        "===NPM TEST OUTPUT END===",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass",
+        "BOX_PR_URL=https://github.com/org/repo/pull/2",
+      ].join("\n"),
+    }, {
+      taskKind: "backend",
+      verificationText: "npm test",
+    });
+    const namedGap = result.gaps.find((g: string) => g.includes("Named test proof"));
+    assert.equal(namedGap, undefined,
+      "generic 'npm test' must not trigger the named-proof gate"
+    );
+  });
+
+  it("no named-proof gap when verificationText is null or empty", () => {
+    // When no verificationText is provided, the gate must not fire.
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234f",
+        "===NPM TEST OUTPUT START===",
+        "# pass 5",
+        "===NPM TEST OUTPUT END===",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass",
+        "BOX_PR_URL=https://github.com/org/repo/pull/3",
+      ].join("\n"),
+    }, {
+      taskKind: "backend",
+      verificationText: null,
+    });
+    const namedGap = result.gaps.find((g: string) => g.includes("Named test proof"));
+    assert.equal(namedGap, undefined,
+      "null verificationText must not trigger the named-proof gate"
+    );
+  });
+
+  it("negative: named-proof gap is NOT added when worker status is skipped (proof gate bypassed)", () => {
+    const result = validateWorkerContract("backend", {
+      status: "skipped",
+      fullOutput: "Already merged in a previous wave.",
+    }, {
+      verificationText: "tests/core/bar.test.ts — test: some named proof",
+    });
+    assert.equal(result.passed, true,
+      "skipped status must bypass the named-proof gate entirely"
+    );
+    const namedGap = result.gaps.find((g: string) => g.includes("Named test proof"));
+    assert.equal(namedGap, undefined,
+      "skipped status must not trigger the named-proof gate"
+    );
+  });
+
+  it("rejects done when packet names only a test file (no description) and file is absent", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234f",
+        "===NPM TEST OUTPUT START===",
+        "# Subtest: other.test.ts",
+        "# pass 1",
+        "===NPM TEST OUTPUT END===",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass",
+        "BOX_PR_URL=https://github.com/org/repo/pull/4",
+      ].join("\n"),
+    }, {
+      taskKind: "backend",
+      verificationText: "tests/core/specific.test.ts",
+    });
+    assert.equal(result.passed, false,
+      "done must be rejected when packet-named test file (file-only format) is absent"
+    );
+    const namedGap = result.gaps.find((g: string) => g.includes("specific.test.ts"));
+    assert.ok(namedGap,
+      `gaps must reference the missing named test file; got: [${result.gaps.join("; ")}]`
+    );
+  });
+});
+

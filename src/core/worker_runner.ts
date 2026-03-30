@@ -935,12 +935,17 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     // Artifact check is mandatory for all done-capable workers, even when workerKind is unknown.
     // Unknown workerKind falls back to the DEFAULT_PROFILE (build required, others optional).
     // Task kind is passed through so non-merge tasks (scan, doc, etc.) skip the artifact gate.
+    // verificationText is passed from the packet's verification field so the named-test-proof gate
+    // fires when the packet names a specific test file/description in its verification commands.
     const effectiveKind = workerKind ?? "unknown";
     const validationResult = validateWorkerContract(effectiveKind, {
       status: parsed.status,
       fullOutput: parsed.fullOutput,
       summary: parsed.summary
-    }, { taskKind: instruction.taskKind });
+    }, {
+      taskKind: instruction.taskKind,
+      verificationText: String(instruction.verification || "").trim() || null,
+    });
 
     // Evidence snapshot for audit (AC#4 defined schema)
     const postMergeArtifact = validationResult.evidence?.postMergeArtifact as ReturnType<typeof checkPostMergeArtifact> | undefined;
