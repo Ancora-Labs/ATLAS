@@ -273,6 +273,43 @@ export function autoCloseVerifiedDebt(
 }
 
 /**
+ * Return open debt entries sorted by priority for operator attention.
+ *
+ * Sort order (highest priority first):
+ *   1. critical + overdue (currentCycle > dueCycle)
+ *   2. warning  + overdue
+ *   3. critical + approaching-SLA (within 1 cycle of due)
+ *   4. warning  + not-yet-overdue
+ *
+ * Within each tier, entries are sorted by cyclesOpen descending (stalest first).
+ *
+ * Side-effect: updates `cyclesOpen` on each returned open entry.
+ * Closed entries are excluded.
+ *
+ * @param {DebtEntry[]} ledger
+ * @param {number} currentCycle
+ * @returns {DebtEntry[]}
+ */
+export function prioritizeStaleDebts(ledger: any[], currentCycle: number): any[] {
+  const open = ledger.filter(e => !e.closedAt);
+  for (const entry of open) {
+    entry.cyclesOpen = currentCycle - entry.openedCycle;
+  }
+  return open.sort((a, b) => {
+    const aOverdue = currentCycle > a.dueCycle;
+    const bOverdue = currentCycle > b.dueCycle;
+    const aCritical = a.severity === "critical";
+    const bCritical = b.severity === "critical";
+    // Priority tiers: critical+overdue=4, warning+overdue=3, critical+pending=2, warning+pending=1
+    const aScore = (aCritical ? 2 : 1) + (aOverdue ? 2 : 0);
+    const bScore = (bCritical ? 2 : 1) + (bOverdue ? 2 : 0);
+    if (aScore !== bScore) return bScore - aScore;
+    // Tiebreak: stalest first
+    return b.cyclesOpen - a.cyclesOpen;
+  });
+}
+
+/**
  * Check if critical overdue debt should block plan acceptance.
  * Returns a structured `reasonCode` so callers can react programmatically
  * without parsing the free-form reason string.

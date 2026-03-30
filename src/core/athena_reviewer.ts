@@ -38,6 +38,11 @@ import {
 import { checkForbiddenCommands } from "./verification_command_registry.js";
 import { validateEvidenceEnvelope } from "./evidence_envelope.js";
 import type { EvidenceEnvelope } from "./evidence_envelope.js";
+import {
+  loadLedgerMeta,
+  autoCloseVerifiedDebt,
+  saveLedgerFull,
+} from "./carry_forward_ledger.js";
 
 // ── Rubric calibration ───────────────────────────────────────────────────────
 
@@ -1716,6 +1721,38 @@ function computeDeterministicPostmortem(workerResult, originalPlan, dql) {
 
 // ── Postmortem (post-work review) ────────────────────────────────────────────
 
+/**
+ * Attempt to auto-close any carry-forward debt items resolved by the current task.
+ * Non-fatal: logs and swallows errors so postmortem flow is never blocked.
+ *
+ * @param {object} config
+ * @param {string} taskText   — original plan task text used for fingerprint matching
+ * @param {string} evidenceStr — verification evidence string (must be >= 5 chars to qualify)
+ */
+async function attemptCarryForwardAutoClose(
+  config: any,
+  taskText: string,
+  evidenceStr: string
+): Promise<void> {
+  if (taskText.length < 10 || evidenceStr.length < 5) return;
+  try {
+    const { entries: debtLedger, cycleCounter } = await loadLedgerMeta(config);
+    const closed = autoCloseVerifiedDebt(debtLedger, [{ taskText, verificationEvidence: evidenceStr }]);
+    if (closed > 0) {
+      await saveLedgerFull(config, debtLedger, cycleCounter);
+      await appendProgress(config,
+        `[ATHENA] ${closed} carry-forward debt item(s) auto-closed by postmortem evidence`
+      );
+    }
+  } catch (err) {
+    try {
+      await appendProgress(config,
+        `[ATHENA] Carry-forward auto-close failed (non-fatal): ${String((err as any)?.message || err).slice(0, 200)}`
+      );
+    } catch { /* ignore nested logging failure */ }
+  }
+}
+
 export async function runAthenaPostmortem(
   config,
   workerResult: EvidenceEnvelope & {
@@ -1802,6 +1839,13 @@ export async function runAthenaPostmortem(
     if (history.length > 50) history.splice(0, history.length - 50);
     await writeJson(postmortemsFilePath, addSchemaVersion(history, STATE_FILE_TYPE.ATHENA_POSTMORTEMS));
     await writeJson(path.join(stateDir, "athena_latest_postmortem.json"), postmortem);
+
+    // Auto-close any carry-forward debt items resolved by this task.
+    const evFast = workerResult?.verificationEvidence;
+    const evidenceFast = evFast
+      ? (typeof evFast === "string" ? evFast : JSON.stringify(evFast)).slice(0, 500)
+      : String(workerResult?.summary || "").slice(0, 500);
+    await attemptCarryForwardAutoClose(config, String(originalPlan?.task || "").trim(), evidenceFast);
 
     return postmortem;
   }
@@ -1995,6 +2039,13 @@ ${recurrenceContext}
 
   // Also write latest for dashboard visibility
   await writeJson(path.join(stateDir, "athena_latest_postmortem.json"), postmortem);
+
+  // Auto-close any carry-forward debt items resolved by this task.
+  const evAi = workerResult?.verificationEvidence;
+  const evidenceAi = evAi
+    ? (typeof evAi === "string" ? evAi : JSON.stringify(evAi)).slice(0, 500)
+    : String(workerResult?.summary || "").slice(0, 500);
+  await attemptCarryForwardAutoClose(config, String(originalPlan?.task || "").trim(), evidenceAi);
 
   await appendProgress(config,
     `[ATHENA] Postmortem: ${workerName} — score=${postmortem.qualityScore}/10 deviation=${postmortem.deviation} recommendation=${postmortem.recommendation} decisionQualityLabel=${postmortem.decisionQualityLabel}`

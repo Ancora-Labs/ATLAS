@@ -37,6 +37,10 @@ import {
 } from "./governance_freeze.js";
 import { isGuardrailActive } from "./guardrail_executor.js";
 import { GUARDRAIL_ACTION } from "./catastrophe_detector.js";
+import {
+  loadLedgerMeta,
+  prioritizeStaleDebts,
+} from "./carry_forward_ledger.js";
 
 // ── Decision Quality Weights ──────────────────────────────────────────────────
 
@@ -1488,6 +1492,23 @@ export async function generateMonthlyPostmortem(config, monthKey) {
     compoundingEffects, decisionQualityTrend, experimentOutcomes, resolvedMonthKey
   );
 
+  // ── Stale unresolved carry-forward debts ───────────────────────────────────
+  // Surface top N open debt items sorted by priority (critical+overdue first).
+  // Non-fatal: failure to read ledger does not degrade the postmortem status.
+  let staleUnresolvedDebts: any[] = [];
+  try {
+    const { entries: debtLedger, cycleCounter } = await loadLedgerMeta(config);
+    staleUnresolvedDebts = prioritizeStaleDebts(debtLedger, cycleCounter).slice(0, 5).map(e => ({
+      id:         e.id,
+      lesson:     e.lesson,
+      severity:   e.severity,
+      owner:      e.owner,
+      openedCycle: e.openedCycle,
+      dueCycle:   e.dueCycle,
+      cyclesOpen: e.cyclesOpen,
+    }));
+  } catch { /* no ledger data — omit stale debts from report */ }
+
   // ── Final status ───────────────────────────────────────────────────────────
   const status = degradedSources.length > 0
     ? MONTHLY_POSTMORTEM_STATUS.DEGRADED
@@ -1504,7 +1525,8 @@ export async function generateMonthlyPostmortem(config, monthKey) {
     experimentOutcomes,
     compoundingEffects,
     decisionQualityTrend,
-    seedQuestion
+    seedQuestion,
+    staleUnresolvedDebts,
   };
 
   return { ok: true, status, postmortem };

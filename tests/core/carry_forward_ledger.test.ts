@@ -13,6 +13,7 @@ import {
   loadLedgerMeta,
   saveLedgerFull,
   autoCloseVerifiedDebt,
+  prioritizeStaleDebts,
 } from "../../src/core/carry_forward_ledger.js";
 
 describe("carry_forward_ledger", () => {
@@ -547,5 +548,105 @@ describe("shouldBlockOnDebt — reason codes and early warning", () => {
     assert.equal(result.shouldBlock, false);
     assert.equal(result.reasonCode, null, "warning-severity items must not set reasonCode");
     assert.equal(result.earlyWarningCount, 0, "earlyWarningCount counts only critical items");
+  });
+});
+
+// ── prioritizeStaleDebts ──────────────────────────────────────────────────────
+
+describe("prioritizeStaleDebts", () => {
+  function makeDebt(opts: Partial<{
+    id: string; lesson: string; severity: string;
+    openedCycle: number; dueCycle: number; closedAt: string | null;
+  }> = {}) {
+    return {
+      id:          opts.id          ?? "debt-1",
+      lesson:      opts.lesson      ?? "Fix something important in the pipeline",
+      severity:    opts.severity    ?? "warning",
+      owner:       "evolution-worker",
+      openedCycle: opts.openedCycle ?? 1,
+      dueCycle:    opts.dueCycle    ?? 10,
+      closedAt:    opts.closedAt    ?? null,
+      closureEvidence: null,
+      cyclesOpen:  0,
+    };
+  }
+
+  it("returns empty array for empty ledger", () => {
+    assert.deepEqual(prioritizeStaleDebts([], 5), []);
+  });
+
+  it("excludes closed entries", () => {
+    const ledger = [
+      makeDebt({ id: "d1", closedAt: "2025-01-01T00:00:00Z" }),
+      makeDebt({ id: "d2" }),
+    ];
+    const result = prioritizeStaleDebts(ledger, 5);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].id, "d2");
+  });
+
+  it("places critical+overdue first (highest priority)", () => {
+    const ledger = [
+      makeDebt({ id: "low",  severity: "warning",  openedCycle: 1, dueCycle: 10 }),
+      makeDebt({ id: "high", severity: "critical", openedCycle: 1, dueCycle: 2  }), // overdue at cycle 5
+    ];
+    const result = prioritizeStaleDebts(ledger, 5);
+    assert.equal(result[0].id, "high", "critical+overdue must be first");
+    assert.equal(result[1].id, "low");
+  });
+
+  it("places warning+overdue above critical+pending", () => {
+    const ledger = [
+      makeDebt({ id: "crit-pending",  severity: "critical", openedCycle: 1, dueCycle: 10 }),
+      makeDebt({ id: "warn-overdue",  severity: "warning",  openedCycle: 1, dueCycle: 2  }), // overdue
+    ];
+    const result = prioritizeStaleDebts(ledger, 5);
+    assert.equal(result[0].id, "warn-overdue", "warning+overdue outranks critical+pending");
+    assert.equal(result[1].id, "crit-pending");
+  });
+
+  it("sorts by cyclesOpen descending within same priority tier", () => {
+    const ledger = [
+      makeDebt({ id: "newer", severity: "critical", openedCycle: 4, dueCycle: 2 }), // overdue, cyclesOpen=1
+      makeDebt({ id: "older", severity: "critical", openedCycle: 1, dueCycle: 2 }), // overdue, cyclesOpen=4
+    ];
+    const result = prioritizeStaleDebts(ledger, 5);
+    assert.equal(result[0].id, "older", "stalest (most cycles open) must come first in same tier");
+    assert.equal(result[1].id, "newer");
+  });
+
+  it("updates cyclesOpen on returned entries", () => {
+    const ledger = [makeDebt({ openedCycle: 1 })];
+    const result = prioritizeStaleDebts(ledger, 7);
+    assert.equal(result[0].cyclesOpen, 6);
+  });
+
+  it("does not update cyclesOpen on closed entries (they are excluded)", () => {
+    const closed = makeDebt({ closedAt: "2025-01-01T00:00:00Z", openedCycle: 1 });
+    prioritizeStaleDebts([closed], 7);
+    assert.equal(closed.cyclesOpen, 0, "cyclesOpen on closed entry must not be modified");
+  });
+
+  it("full priority ordering: critical+overdue > warning+overdue > critical+pending > warning+pending", () => {
+    const ledger = [
+      makeDebt({ id: "wp",  severity: "warning",  openedCycle: 1, dueCycle: 10 }),
+      makeDebt({ id: "wo",  severity: "warning",  openedCycle: 1, dueCycle: 2  }), // overdue
+      makeDebt({ id: "cp",  severity: "critical", openedCycle: 1, dueCycle: 10 }),
+      makeDebt({ id: "co",  severity: "critical", openedCycle: 1, dueCycle: 2  }), // overdue
+    ];
+    const result = prioritizeStaleDebts(ledger, 5);
+    assert.equal(result[0].id, "co", "1st: critical+overdue");
+    assert.equal(result[1].id, "wo", "2nd: warning+overdue");
+    assert.equal(result[2].id, "cp", "3rd: critical+pending");
+    assert.equal(result[3].id, "wp", "4th: warning+pending");
+  });
+
+  it("negative path: all-closed ledger returns empty array", () => {
+    const ledger = [
+      makeDebt({ id: "d1", closedAt: "2025-01-01T00:00:00Z", severity: "critical" }),
+      makeDebt({ id: "d2", closedAt: "2025-01-02T00:00:00Z", severity: "critical" }),
+    ];
+    const result = prioritizeStaleDebts(ledger, 10);
+    assert.deepEqual(result, [], "closed entries must not appear in prioritized output");
   });
 });
