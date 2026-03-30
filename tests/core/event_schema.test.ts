@@ -44,10 +44,13 @@ import {
   REDACTED,
   EVENT_SHAPE_SCHEMA,
   EVENT_ERROR_CODE,
+  SPAN_CONTRACT,
   redactSensitiveFields,
   validateEvent,
   buildEvent,
   parseTypedEvent,
+  generateSpanId,
+  buildSpanEvent,
 } from "../../src/core/event_schema.js";
 
 import {
@@ -613,6 +616,179 @@ describe("Task 8 — POLICY_PROVIDER_FALLBACK_DECISION typed event", () => {
       err = e;
     }
     assert.ok(err, "must throw when domain is invalid");
+    assert.equal((err as NodeJS.ErrnoException).code, "INVALID_DOMAIN");
+  });
+});
+
+// ── Cross-agent span contract ─────────────────────────────────────────────────
+
+describe("SPAN_CONTRACT — structure and completeness", () => {
+  it("SPAN_CONTRACT is a frozen object with required sub-objects", () => {
+    assert.ok(Object.isFrozen(SPAN_CONTRACT));
+    assert.ok(typeof SPAN_CONTRACT.fields === "object" && Object.isFrozen(SPAN_CONTRACT.fields));
+    assert.ok(typeof SPAN_CONTRACT.stageTransition === "object" && Object.isFrozen(SPAN_CONTRACT.stageTransition));
+    assert.ok(typeof SPAN_CONTRACT.dropReason === "object" && Object.isFrozen(SPAN_CONTRACT.dropReason));
+    assert.ok(typeof SPAN_CONTRACT.dropCodes === "object" && Object.isFrozen(SPAN_CONTRACT.dropCodes));
+  });
+
+  it("SPAN_CONTRACT.fields has all required span identity keys", () => {
+    for (const key of ["spanId", "parentSpanId", "traceId", "agentId"]) {
+      assert.ok(
+        SPAN_CONTRACT.fields[key as keyof typeof SPAN_CONTRACT.fields],
+        `SPAN_CONTRACT.fields must define '${key}'`
+      );
+    }
+  });
+
+  it("SPAN_CONTRACT.stageTransition has all required keys", () => {
+    for (const key of ["taskId", "stageFrom", "stageTo", "durationMs"]) {
+      assert.ok(
+        SPAN_CONTRACT.stageTransition[key as keyof typeof SPAN_CONTRACT.stageTransition],
+        `SPAN_CONTRACT.stageTransition must define '${key}'`
+      );
+    }
+  });
+
+  it("SPAN_CONTRACT.dropReason has all required keys", () => {
+    for (const key of ["taskId", "stageWhenDropped", "reason", "dropCode"]) {
+      assert.ok(
+        SPAN_CONTRACT.dropReason[key as keyof typeof SPAN_CONTRACT.dropReason],
+        `SPAN_CONTRACT.dropReason must define '${key}'`
+      );
+    }
+  });
+
+  it("SPAN_CONTRACT.dropCodes contains canonical drop codes", () => {
+    const expected = [
+      "ATHENA_REJECTED", "GOVERNANCE_FREEZE", "BUDGET_EXCEEDED",
+      "CAPACITY_EXHAUSTED", "SELF_DEV_BLOCKED", "UNCLASSIFIED",
+    ];
+    for (const code of expected) {
+      assert.ok(
+        SPAN_CONTRACT.dropCodes[code as keyof typeof SPAN_CONTRACT.dropCodes],
+        `SPAN_CONTRACT.dropCodes must define '${code}'`
+      );
+    }
+  });
+});
+
+describe("generateSpanId()", () => {
+  it("returns a non-empty string", () => {
+    const id = generateSpanId();
+    assert.ok(typeof id === "string" && id.length > 0);
+  });
+
+  it("returns a different value on successive calls (collision resistance)", () => {
+    const ids = new Set(Array.from({ length: 10 }, () => generateSpanId()));
+    assert.equal(ids.size, 10, "generateSpanId must return unique values");
+  });
+
+  it("conforms to UUID v4 format (8-4-4-4-12)", () => {
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const id = generateSpanId();
+    assert.ok(uuidPattern.test(id), `'${id}' is not a valid UUID v4`);
+  });
+});
+
+describe("buildSpanEvent() — span contract factory", () => {
+  it("stamps spanId, parentSpanId, traceId, agentId onto the payload", () => {
+    const corrId = "trace-corr-001";
+    const evt = buildSpanEvent(
+      EVENTS.PLANNING_STAGE_TRANSITION,
+      EVENT_DOMAIN.PLANNING,
+      corrId,
+      { parentSpanId: "parent-span-001", agentId: "orchestrator" },
+      { taskId: "T-001", stageFrom: "athena_approved", stageTo: "workers_dispatching", durationMs: 1200 }
+    );
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.traceId], corrId, "traceId must equal correlationId");
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.parentSpanId], "parent-span-001");
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.agentId], "orchestrator");
+    assert.ok(typeof evt.payload[SPAN_CONTRACT.fields.spanId] === "string" && (evt.payload[SPAN_CONTRACT.fields.spanId] as string).length > 0, "spanId must be set");
+  });
+
+  it("auto-generates spanId when not supplied", () => {
+    const evt = buildSpanEvent(
+      EVENTS.PLANNING_TASK_DROPPED,
+      EVENT_DOMAIN.PLANNING,
+      "trace-corr-002",
+      {},
+      { taskId: "T-002", stageWhenDropped: "workers_dispatching", reason: "freeze", dropCode: "GOVERNANCE_FREEZE" }
+    );
+    const spanId = evt.payload[SPAN_CONTRACT.fields.spanId] as string;
+    assert.ok(typeof spanId === "string" && spanId.length > 0);
+  });
+
+  it("uses provided spanId when supplied", () => {
+    const mySpanId = "my-span-id-123";
+    const evt = buildSpanEvent(
+      EVENTS.PLANNING_STAGE_TRANSITION,
+      EVENT_DOMAIN.PLANNING,
+      "trace-corr-003",
+      { spanId: mySpanId }
+    );
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.spanId], mySpanId);
+  });
+
+  it("defaults parentSpanId and agentId to null when not supplied", () => {
+    const evt = buildSpanEvent(
+      EVENTS.PLANNING_STAGE_TRANSITION,
+      EVENT_DOMAIN.PLANNING,
+      "trace-corr-004",
+      {}
+    );
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.parentSpanId], null);
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.agentId], null);
+  });
+
+  it("produced envelope passes full validateEvent check", () => {
+    const evt = buildSpanEvent(
+      EVENTS.PLANNING_TASK_DROPPED,
+      EVENT_DOMAIN.PLANNING,
+      "trace-corr-005",
+      { agentId: "worker-infra" },
+      { taskId: "T-003", reason: "budget limit", dropCode: "BUDGET_EXCEEDED" }
+    );
+    const result = validateEvent(evt);
+    assert.equal(result.ok, true, `validateEvent failed: ${result.message}`);
+  });
+
+  it("negative: throws when correlationId is empty (same guard as buildEvent)", () => {
+    let threw = false;
+    try {
+      buildSpanEvent(EVENTS.PLANNING_STAGE_TRANSITION, EVENT_DOMAIN.PLANNING, "");
+    } catch {
+      threw = true;
+    }
+    assert.equal(threw, true, "buildSpanEvent must throw when correlationId is empty");
+  });
+});
+
+describe("PLANNING_STAGE_TRANSITION and PLANNING_TASK_DROPPED events", () => {
+  it("PLANNING_STAGE_TRANSITION is in EVENTS and VALID_EVENT_NAMES", () => {
+    assert.ok(EVENTS.PLANNING_STAGE_TRANSITION, "key must exist");
+    assert.ok(EVENT_NAME_PATTERN.test(EVENTS.PLANNING_STAGE_TRANSITION));
+    assert.ok(VALID_EVENT_NAMES.has(EVENTS.PLANNING_STAGE_TRANSITION));
+  });
+
+  it("PLANNING_TASK_DROPPED is in EVENTS and VALID_EVENT_NAMES", () => {
+    assert.ok(EVENTS.PLANNING_TASK_DROPPED, "key must exist");
+    assert.ok(EVENT_NAME_PATTERN.test(EVENTS.PLANNING_TASK_DROPPED));
+    assert.ok(VALID_EVENT_NAMES.has(EVENTS.PLANNING_TASK_DROPPED));
+  });
+
+  it("both events belong to the planning domain", () => {
+    assert.ok(EVENTS.PLANNING_STAGE_TRANSITION.includes(".planning."));
+    assert.ok(EVENTS.PLANNING_TASK_DROPPED.includes(".planning."));
+  });
+
+  it("negative: PLANNING_TASK_DROPPED with an unknown domain is rejected by buildEvent", () => {
+    let err: unknown;
+    try {
+      buildEvent(EVENTS.PLANNING_TASK_DROPPED, "not-a-valid-domain", "neg-span-001", {});
+    } catch (e) {
+      err = e;
+    }
+    assert.ok(err, "must throw on unrecognised domain");
     assert.equal((err as NodeJS.ErrnoException).code, "INVALID_DOMAIN");
   });
 });

@@ -146,6 +146,11 @@ export const MISSING_DATA_IMPACT = Object.freeze({
  *
  * Required fields and enums are fully specified.
  * cycleId = pipeline_progress.startedAt (ISO 8601 string) — same as slo_metrics.json.
+ *
+ * stageTransitions — per-packet stage transition records from PLANNING_STAGE_TRANSITION
+ *   span events.  Array; empty when no transitions were recorded.
+ * dropReasons      — task drop summaries from PLANNING_TASK_DROPPED span events.
+ *   Array; empty when no tasks were dropped.
  */
 export const CYCLE_ANALYTICS_SCHEMA = Object.freeze({
   schemaVersion: 1,
@@ -162,6 +167,8 @@ export const CYCLE_ANALYTICS_SCHEMA = Object.freeze({
       "causalLinks",
       "canonicalEvents",
       "missingData",
+      "stageTransitions",
+      "dropReasons",
     ],
     cycleIdSource: "pipeline_progress.startedAt",
     phaseEnum: Object.freeze([...Object.values(CYCLE_PHASE)]),
@@ -381,6 +388,12 @@ function computeOutcomeStatus(phase, workerResults, planCount) {
  * @param {number|null} opts.funnelCounts.approved   Plans approved by Athena (before quality/freeze gate).
  * @param {number|null} opts.funnelCounts.dispatched Plans actually dispatched (after all gates).
  * @param {number|null} opts.funnelCounts.completed  Plans completed successfully.
+ * @param {Array}       opts.stageTransitions        Per-packet stage transition records from
+ *                                                   PLANNING_STAGE_TRANSITION span events.
+ *                                                   Each entry: {taskId,stageFrom,stageTo,durationMs,spanId}.
+ * @param {Array}       opts.dropReasons             Task drop summaries from PLANNING_TASK_DROPPED
+ *                                                   span events.
+ *                                                   Each entry: {taskId,stageWhenDropped,reason,dropCode,spanId}.
  * @returns {object} Analytics record conforming to CYCLE_ANALYTICS_SCHEMA.cycleRecord.
  */
 export function computeCycleAnalytics(config, {
@@ -391,6 +404,8 @@ export function computeCycleAnalytics(config, {
   phase = CYCLE_PHASE.COMPLETED,
   parserBaselineRecovery = null,
   funnelCounts = null,
+  stageTransitions = [],
+  dropReasons = [],
 }: any = {}) {
   const missingData = [];
   const stageTimestamps = pipelineProgress?.stageTimestamps || null;
@@ -528,6 +543,8 @@ export function computeCycleAnalytics(config, {
     canonicalEvents,
     missingData,
     parserBaselineRecovery: parserBaselineRecovery ?? null,
+    stageTransitions: Array.isArray(stageTransitions) ? stageTransitions : [],
+    dropReasons:      Array.isArray(dropReasons) ? dropReasons : [],
   };
 }
 

@@ -12,9 +12,16 @@
  * Sensitive-field denylist: any payload key matching SENSITIVE_FIELD_DENYLIST
  * is redacted before emission. Callers must never embed raw secrets in events.
  *
+ * Cross-agent span contract (SPAN_CONTRACT): optional span fields that any
+ * agent MAY attach to event payloads for deterministic distributed tracing.
+ * spanId/parentSpanId follow the OpenTelemetry naming convention.
+ * Use buildSpanEvent() to stamp span context onto an event envelope.
+ *
  * Risk level: HIGH — changes here affect the entire emission path across all
  * workers, orchestrator, and dashboard.
  */
+
+import { randomUUID } from "node:crypto";
 
 // ── Schema version ────────────────────────────────────────────────────────────
 
@@ -100,6 +107,16 @@ export const EVENTS = Object.freeze({
   // Policy domain — provider fallback decision (Task 8)
   // Payload fields: source ("provider"|"fallback"), fallbackReason (string|null), inputSnapshot (object)
   POLICY_PROVIDER_FALLBACK_DECISION: "box.v1.policy.providerFallbackDecision",
+
+  // Planning domain — per-packet stage transition (span contract)
+  // Payload fields: taskId, stageFrom, stageTo, durationMs (SPAN_CONTRACT.stageTransition)
+  //                 spanId, parentSpanId, traceId, agentId   (SPAN_CONTRACT.fields)
+  PLANNING_STAGE_TRANSITION:         "box.v1.planning.stageTransition",
+
+  // Planning domain — task dropped before completion (span contract)
+  // Payload fields: taskId, stageWhenDropped, reason, dropCode (SPAN_CONTRACT.dropReason)
+  //                 spanId, parentSpanId, traceId, agentId      (SPAN_CONTRACT.fields)
+  PLANNING_TASK_DROPPED:             "box.v1.planning.taskDropped",
 });
 
 /** Flat set of all valid event name strings — for O(1) lookup. */
@@ -174,6 +191,68 @@ export const SENSITIVE_FIELD_DENYLIST = Object.freeze([
 
 /** Sentinel value that replaces a redacted sensitive field. */
 export const REDACTED = "[REDACTED]";
+
+// ── Cross-agent span contract ─────────────────────────────────────────────────
+
+/**
+ * Cross-agent span contract for deterministic distributed tracing.
+ *
+ * Any agent MAY attach these fields to an event payload to form a traceable span.
+ * Use buildSpanEvent() to stamp span context automatically onto event envelopes.
+ *
+ * fields           — canonical payload key names for span identity fields
+ * stageTransition  — payload key names for PLANNING_STAGE_TRANSITION events
+ * dropReason       — payload key names for PLANNING_TASK_DROPPED events
+ * dropCodes        — canonical drop-reason machine codes
+ */
+export const SPAN_CONTRACT = Object.freeze({
+  /** Span identity fields — present on every span-bearing event payload. */
+  fields: Object.freeze({
+    /** Unique identifier for this span (generated per event). */
+    spanId:       "spanId",
+    /** Parent span ID; null for root spans (first agent in a chain). */
+    parentSpanId: "parentSpanId",
+    /** Full-trace identifier — equals the event's correlationId. */
+    traceId:      "traceId",
+    /** Agent role that emitted this event (worker role, orchestrator, etc.). */
+    agentId:      "agentId",
+  }),
+
+  /** Payload fields for PLANNING_STAGE_TRANSITION events. */
+  stageTransition: Object.freeze({
+    taskId:     "taskId",
+    stageFrom:  "stageFrom",
+    stageTo:    "stageTo",
+    /** Wall-clock ms spent in stageFrom before transitioning; null if unknown. */
+    durationMs: "durationMs",
+  }),
+
+  /** Payload fields for PLANNING_TASK_DROPPED events. */
+  dropReason: Object.freeze({
+    taskId:           "taskId",
+    stageWhenDropped: "stageWhenDropped",
+    /** Human-readable drop reason. */
+    reason:           "reason",
+    /** Machine-readable drop code from SPAN_CONTRACT.dropCodes. */
+    dropCode:         "dropCode",
+  }),
+
+  /** Canonical drop-reason codes for PLANNING_TASK_DROPPED.dropCode. */
+  dropCodes: Object.freeze({
+    /** Plan was rejected by Athena reviewer before dispatch. */
+    ATHENA_REJECTED:     "ATHENA_REJECTED",
+    /** Governance freeze is active; plan not allowed to proceed. */
+    GOVERNANCE_FREEZE:   "GOVERNANCE_FREEZE",
+    /** Budget was exceeded; plan dropped to stay within cost limit. */
+    BUDGET_EXCEEDED:     "BUDGET_EXCEEDED",
+    /** Worker capacity was not available within the timeout. */
+    CAPACITY_EXHAUSTED:  "CAPACITY_EXHAUSTED",
+    /** Self-dev guard blocked the task (self-modification risk). */
+    SELF_DEV_BLOCKED:    "SELF_DEV_BLOCKED",
+    /** Generic/unclassified drop; provide human reason field for context. */
+    UNCLASSIFIED:        "UNCLASSIFIED",
+  }),
+});
 
 // ── Schema definition ─────────────────────────────────────────────────────────
 
@@ -390,4 +469,56 @@ export function parseTypedEvent(raw) {
   const result = validateEvent(parsed);
   if (!result.ok) return result;
   return { ok: true, event: parsed, code: null, message: "valid" };
+}
+
+// ── Span helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Generate a new unique span ID using the Node.js crypto module.
+ * Safe to call in any agent context — never throws.
+ *
+ * @returns {string} A UUID v4 string usable as a spanId.
+ */
+export function generateSpanId(): string {
+  return randomUUID();
+}
+
+/**
+ * Build a validated, redacted event envelope with cross-agent span fields stamped
+ * onto the payload, conforming to SPAN_CONTRACT.fields.
+ *
+ * The traceId field is always set to correlationId.
+ * spanId is auto-generated if not provided in spanContext.
+ * parentSpanId and agentId default to null when absent.
+ *
+ * Throws (same as buildEvent) if the resulting envelope fails schema validation.
+ *
+ * @param {string} eventName    — one of EVENTS values
+ * @param {string} domain       — one of EVENT_DOMAIN values
+ * @param {string} correlationId — non-empty opaque trace ID for this pipeline cycle
+ * @param {object} [spanContext] — span identity fields
+ * @param {string} [spanContext.spanId]       — use existing spanId; auto-generated if absent
+ * @param {string} [spanContext.parentSpanId] — parent span; null for root spans
+ * @param {string} [spanContext.agentId]      — role/agent identifier
+ * @param {object} [payload]    — event-specific data (will be redacted; merged with span fields)
+ * @returns {object}            — validated, redacted event envelope with span fields in payload
+ */
+export function buildSpanEvent(
+  eventName: string,
+  domain: string,
+  correlationId: string,
+  spanContext: { spanId?: string; parentSpanId?: string | null; agentId?: string | null } = {},
+  payload: Record<string, unknown> = {},
+) {
+  const spanId = (typeof spanContext.spanId === "string" && spanContext.spanId.length > 0)
+    ? spanContext.spanId
+    : generateSpanId();
+
+  return buildEvent(eventName, domain, correlationId, {
+    ...payload,
+    [SPAN_CONTRACT.fields.spanId]:       spanId,
+    [SPAN_CONTRACT.fields.parentSpanId]: spanContext.parentSpanId ?? null,
+    [SPAN_CONTRACT.fields.traceId]:      correlationId,
+    [SPAN_CONTRACT.fields.agentId]:      spanContext.agentId ?? null,
+  });
 }

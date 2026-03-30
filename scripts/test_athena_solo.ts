@@ -28,7 +28,8 @@ const result = await runAthenaPlanReview(config, prometheusAnalysis);
 
 console.log("\n=== ATHENA RESULT ===");
 console.log(`approved : ${result.approved}`);
-console.log(`reason   : ${typeof result.reason === "object" ? JSON.stringify(result.reason) : result.reason}`);
+const reason = (result as Record<string, unknown>).reason;
+console.log(`reason   : ${typeof reason === "object" ? JSON.stringify(reason) : reason}`);
 if (result.corrections?.length) {
   console.log(`corrections (${result.corrections.length}):`);
   for (const c of result.corrections) console.log(`  - ${c}`);
