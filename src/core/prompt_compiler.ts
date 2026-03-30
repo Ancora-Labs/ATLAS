@@ -286,6 +286,54 @@ export function validateActionablePacketCompleteness(sections) {
   };
 }
 
+// ─── Packet — Cache-eligible segment marking ──────────────────────────────────
+
+/**
+ * Section names that are structurally stable across calls — suitable for
+ * prompt-caching layers that avoid re-tokenising unchanged prefixes.
+ *
+ * Dynamic sections (task context, plan details, per-call data) must NOT appear
+ * here; only content that is effectively constant for a given system/model build.
+ */
+export const CACHE_STABLE_SECTION_NAMES: ReadonlySet<string> = new Set([
+  "role",
+  "system",
+  "instructions",
+  "single-prompt-mode",
+  "json-output-markers",
+  "no-vague-goals",
+  "leverage-ranked-alternatives",
+]);
+
+/**
+ * Mark prompt sections as cache-eligible based on naming heuristics.
+ *
+ * A section is marked `cacheable: true` when:
+ *   (a) its name is in CACHE_STABLE_SECTION_NAMES, or
+ *   (b) `opts.stableNames` includes its name, or
+ *   (c) the section already carries `cacheable: true`.
+ *
+ * Sections that vary per-call (task context, plan details) are left
+ * `cacheable: false` so callers know not to include them in a cached prefix.
+ *
+ * Original section objects are never mutated — a new array is returned.
+ *
+ * @param sections - prompt sections to process
+ * @param opts     - optional additional stable names to treat as cacheable
+ * @returns new array with `cacheable` field set on every element
+ */
+export function markCacheableSegments(
+  sections: Array<{ name: string; content: string; cacheable?: boolean; [key: string]: any }>,
+  opts: { stableNames?: string[] } = {}
+): Array<{ name: string; content: string; cacheable: boolean; [key: string]: any }> {
+  const extra = new Set((opts.stableNames || []).map(n => String(n).toLowerCase()));
+  return (sections || []).map(s => {
+    const name = String(s?.name || "").toLowerCase();
+    const isStable = CACHE_STABLE_SECTION_NAMES.has(name) || extra.has(name) || s?.cacheable === true;
+    return { ...s, cacheable: isStable };
+  });
+}
+
 /**
  * Compile an actionable packet prompt with integrated completeness validation.
  *

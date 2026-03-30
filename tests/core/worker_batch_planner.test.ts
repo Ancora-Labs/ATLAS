@@ -6,6 +6,7 @@ import {
   computeCriticalPathScores,
   splitWavesIntoMicrowaves,
   MICROWAVE_MAX_TASKS_DEFAULT,
+  buildFitScoredBatches,
 } from "../../src/core/worker_batch_planner.js";
 
 function buildPlan(index) {
@@ -692,5 +693,43 @@ describe("worker_batch_planner — micro-wave integration via config", () => {
         "all wave-1 micro-wave batches must precede wave-2 micro-wave batches"
       );
     }
+  });
+});
+
+describe("buildFitScoredBatches — fit-score-based worker assignment", () => {
+  it("returns batches for an array of plans", () => {
+    const plans = [
+      { task: "Add spec coverage for parser", wave: 1 },
+      { task: "Update Docker configuration", wave: 1 },
+    ];
+    const batches = buildFitScoredBatches(plans, {});
+    assert.ok(Array.isArray(batches) && batches.length > 0, "must return at least one batch");
+  });
+
+  it("assigns workers based on fit score (test task → quality-worker)", () => {
+    const plans = [{ task: "Add spec coverage for parser", wave: 1 }];
+    const batches = buildFitScoredBatches(plans, {});
+    assert.ok(batches.length > 0);
+    assert.equal((batches[0] as any).role, "quality-worker");
+  });
+
+  it("returns empty array for empty input", () => {
+    const batches = buildFitScoredBatches([], {});
+    assert.deepEqual(batches, []);
+  });
+
+  it("each batch has the standard shape (role, plans, model, wave)", () => {
+    const plans = [{ task: "Update governance freeze rules", wave: 1 }];
+    const batches = buildFitScoredBatches(plans, {});
+    for (const b of batches) {
+      assert.ok((b as any).role, "batch must have role");
+      assert.ok(Array.isArray((b as any).plans), "batch must have plans array");
+      assert.ok((b as any).model, "batch must have model");
+    }
+  });
+
+  it("negative path: null plans does not throw", () => {
+    const batches = buildFitScoredBatches(null as any, {});
+    assert.deepEqual(batches, []);
   });
 });
