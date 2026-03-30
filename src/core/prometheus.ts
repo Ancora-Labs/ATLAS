@@ -109,6 +109,63 @@ export const UNRECOVERABLE_PACKET_REASONS = Object.freeze({
 });
 
 /**
+ * Reason code emitted when a packet is explicitly high-risk but lacks BOTH
+ * premortem AND acceptance_criteria at the raw-packet stage.
+ * Rejecting these packets before normalization prevents undocumented high-risk
+ * changes from entering the dispatch pipeline without any safety evidence.
+ */
+export const HIGH_RISK_LOW_CONFIDENCE_REASON = "high_risk_low_confidence" as const;
+
+/**
+ * Check whether a raw plan packet is a high-risk/low-confidence stub that must
+ * be rejected before normalization.
+ *
+ * Rejection criteria (ALL must hold simultaneously):
+ *  1. `riskLevel` is explicitly `"high"` in the raw packet.
+ *  2. `premortem` is absent or contains no meaningful content (no failurePaths,
+ *     mitigations, or rollbackPlan).
+ *  3. `acceptance_criteria` is absent or is an empty array.
+ *
+ * Rationale: the OUTPUT FORMAT prompt mandates premortem for high-risk plans.
+ * When BOTH confidence signals are absent the packet is an undocumented stub —
+ * dispatching it is indistinguishable from random mutation on a critical path.
+ *
+ * Only EXPLICIT `riskLevel: "high"` triggers rejection.  Risk inferred from
+ * task text is not checked here because inference requires the full normalised
+ * task context which is not available at the raw-packet stage.
+ *
+ * @param rawPlan - raw plan object as emitted by the AI, before any normalization
+ * @returns {{ requiresRejection: boolean, reason: string }}
+ */
+export function checkHighRiskPacketConfidence(rawPlan: any): { requiresRejection: boolean; reason: string } {
+  if (!rawPlan || typeof rawPlan !== "object") {
+    return { requiresRejection: false, reason: "not_an_object" };
+  }
+
+  const riskLevel = String(rawPlan.riskLevel || "").trim().toLowerCase();
+  if (riskLevel !== "high") {
+    return { requiresRejection: false, reason: "not_high_risk" };
+  }
+
+  // Premortem is "present" when it contains at least one of the required safety fields.
+  const premortem = rawPlan.premortem;
+  const hasPremortem = premortem && typeof premortem === "object" && (
+    (Array.isArray(premortem.failurePaths) && premortem.failurePaths.length > 0) ||
+    (Array.isArray(premortem.mitigations) && premortem.mitigations.length > 0) ||
+    (typeof premortem.rollbackPlan === "string" && premortem.rollbackPlan.trim().length > 0)
+  );
+
+  const ac = rawPlan.acceptance_criteria;
+  const hasAcceptanceCriteria = Array.isArray(ac) && ac.some(c => String(c || "").trim().length > 0);
+
+  if (!hasPremortem && !hasAcceptanceCriteria) {
+    return { requiresRejection: true, reason: HIGH_RISK_LOW_CONFIDENCE_REASON };
+  }
+
+  return { requiresRejection: false, reason: "sufficient_confidence" };
+}
+
+/**
  * Check whether a raw plan packet is unrecoverable before normalization.
  *
  * A packet is unrecoverable when it is missing fields that normalizePlanFromTask()
@@ -1979,6 +2036,31 @@ Consider whether the root causes are:
       );
       rawParsedInput._rejectedIncompleteCount = incompletePackets.length;
       rawParsedInput._rejectedIncompletePackets = incompletePackets;
+    }
+
+    // ── High-risk / low-confidence packet gate ────────────────────────────
+    // Reject packets that are explicitly high-risk but lack BOTH premortem AND
+    // acceptance_criteria.  Executing an undocumented high-risk change without
+    // any completion signal or failure-mode analysis is a safety violation.
+    // Only runs when plans survived the completeness gate (empty arrays skipped).
+    if (rawParsedInput.plans.length > 0) {
+      const highRiskLowConfidence: Array<{ index: number; reason: string }> = [];
+      rawParsedInput.plans = rawParsedInput.plans.filter((plan: any, i: number) => {
+        const check = checkHighRiskPacketConfidence(plan);
+        if (check.requiresRejection) {
+          highRiskLowConfidence.push({ index: i, reason: check.reason });
+          return false;
+        }
+        return true;
+      });
+      if (highRiskLowConfidence.length > 0) {
+        await appendProgress(config,
+          `[PROMETHEUS][PACKET_GATE] Rejected ${highRiskLowConfidence.length} high-risk low-confidence packet(s) ` +
+          `— explicit riskLevel=high but no premortem and no acceptance_criteria (reason: ${HIGH_RISK_LOW_CONFIDENCE_REASON})`
+        );
+        rawParsedInput._rejectedHighRiskLowConfidenceCount = highRiskLowConfidence.length;
+        rawParsedInput._rejectedHighRiskLowConfidencePackets = highRiskLowConfidence;
+      }
     }
   }
 
