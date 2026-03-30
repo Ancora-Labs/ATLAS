@@ -19,6 +19,7 @@ import {
   loadRouteROILedger,
   computeRecentROIForTier,
   MAX_LEDGER_SIZE,
+  routeModelByCost,
 } from "../../src/core/model_policy.js";
 
 describe("model_policy — complexity tiers", () => {
@@ -381,5 +382,58 @@ describe("Route ROI Ledger — persist uncertainty and realized ROI per route", 
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("routeModelByCost — quality-floor routing", () => {
+  const modelOptions = {
+    efficientModel: "Claude Haiku 4",
+    defaultModel:   "Claude Sonnet 4.6",
+    strongModel:    "Claude Opus 4.6",
+    qualityByModel: {
+      "Claude Haiku 4":   0.70,
+      "Claude Sonnet 4.6": 0.85,
+      "Claude Opus 4.6":  0.95,
+    },
+  };
+
+  it("selects cheapest model that meets quality floor", () => {
+    const result = routeModelByCost({}, modelOptions, 0.65);
+    assert.equal(result.model, "Claude Haiku 4", "Haiku (0.70) should be chosen when floor is 0.65");
+    assert.equal(result.meetsQualityFloor, true);
+  });
+
+  it("skips haiku and selects sonnet when floor is 0.80", () => {
+    const result = routeModelByCost({}, modelOptions, 0.80);
+    assert.equal(result.model, "Claude Sonnet 4.6");
+    assert.equal(result.meetsQualityFloor, true);
+  });
+
+  it("uses strongest model when floor is very high (0.99)", () => {
+    const result = routeModelByCost({}, modelOptions, 0.99);
+    // Opus scores 0.95 < 0.99 so no model qualifies; falls back to strongest
+    assert.equal(result.model, "Claude Opus 4.6");
+    assert.equal(result.meetsQualityFloor, false);
+  });
+
+  it("includes tier in result", () => {
+    const result = routeModelByCost({ complexity: "critical" }, modelOptions, 0.8);
+    assert.ok(result.tier, "tier must be present");
+    assert.ok(typeof result.reason === "string");
+  });
+
+  it("negative path: no options — falls back to default model", () => {
+    const result = routeModelByCost({}, {}, 0.5);
+    assert.ok(result.model, "should return a model");
+    assert.ok(typeof result.meetsQualityFloor === "boolean");
+  });
+
+  it("deduplicates candidates when efficientModel equals defaultModel", () => {
+    const result = routeModelByCost(
+      {},
+      { efficientModel: "Claude Sonnet 4.6", defaultModel: "Claude Sonnet 4.6" },
+      0.8
+    );
+    assert.ok(result.model);
   });
 });

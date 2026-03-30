@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { getRoleRegistry, LANE_WORKER_NAMES } from "../../src/core/role_registry.js";
+import { getRoleRegistry, LANE_WORKER_NAMES, WORKER_CAPABILITIES } from "../../src/core/role_registry.js";
 
 describe("role_registry", () => {
   it("returns fallback registry when config is missing", () => {
@@ -49,4 +49,33 @@ describe("role_registry", () => {
   });
 });
 
+describe("WORKER_CAPABILITIES", () => {
+  it("is frozen (immutable)", () => {
+    assert.ok(Object.isFrozen(WORKER_CAPABILITIES));
+  });
 
+  it("has entries for all six lane workers", () => {
+    const expected = Object.values(LANE_WORKER_NAMES);
+    for (const workerName of expected) {
+      assert.ok(workerName in WORKER_CAPABILITIES, `Missing WORKER_CAPABILITIES entry for: ${workerName}`);
+    }
+  });
+
+  it("each worker declares at least one capability", () => {
+    for (const [worker, caps] of Object.entries(WORKER_CAPABILITIES)) {
+      assert.ok(Array.isArray(caps) && caps.length > 0, `${worker} must declare at least one capability`);
+    }
+  });
+
+  it("governance-worker is the only worker declaring state-governance", () => {
+    const declaring = Object.entries(WORKER_CAPABILITIES)
+      .filter(([, caps]) => (caps as readonly string[]).includes("state-governance"))
+      .map(([name]) => name);
+    assert.deepEqual(declaring, ["governance-worker"]);
+  });
+
+  it("negative path: unknown worker name returns undefined (no throw)", () => {
+    const caps = (WORKER_CAPABILITIES as any)["nonexistent-worker"];
+    assert.equal(caps, undefined);
+  });
+});

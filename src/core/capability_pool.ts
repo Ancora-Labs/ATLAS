@@ -11,7 +11,7 @@
  * optimal worker for each plan.
  */
 
-import { LANE_WORKER_NAMES } from "./role_registry.js";
+import { LANE_WORKER_NAMES, WORKER_CAPABILITIES } from "./role_registry.js";
 
 /**
  * Per-lane outcome accumulator.  Populated by callers (e.g. orchestrator or
@@ -97,6 +97,13 @@ const DEFAULT_CAPABILITY_MAP = Object.freeze({
  * @property {boolean} isFallback — true if using fallback worker
  * @property {number} performanceScore — Laplace-smoothed success rate (0–1); 0.5 when no data
  */
+export interface WorkerSelection {
+  role: string;
+  lane: string;
+  reason: string;
+  isFallback: boolean;
+  performanceScore: number;
+}
 
 /**
  * Infer capability tag from plan content.
@@ -402,4 +409,85 @@ export function detectLaneConflicts(assignments) {
   }
 
   return conflicts;
+}
+
+// ── Worker-task fit scoring ────────────────────────────────────────────────────
+
+/**
+ * Score a worker's fitness for a given plan on a 0–1 scale.
+ *
+ * Scoring components:
+ *   1. Capability match (50%): 1.0 if the inferred capability tag is in the
+ *      worker's declared capability list, 0 otherwise.
+ *   2. Lane performance (40%): Laplace-smoothed historical success rate for
+ *      the worker's primary lane (from the supplied ledger).
+ *   3. Specialist bonus (10%): awarded when the worker declares exactly one
+ *      capability AND that capability matches the plan's tag.
+ *
+ * Ties are broken deterministically by worker name (lexicographic ascending)
+ * in the caller (selectWorkerByFitScore).
+ *
+ * @param workerName  — worker name (e.g. "quality-worker")
+ * @param plan        — plan object passed to inferCapabilityTag
+ * @param ledger      — optional historical lane outcomes for performance component
+ * @returns score in [0, 1]
+ */
+export function scoreWorkerTaskFit(
+  workerName: string,
+  plan: object,
+  ledger?: LanePerformanceLedger
+): number {
+  const capTag = inferCapabilityTag(plan);
+  const workerCaps: readonly string[] = (WORKER_CAPABILITIES as Record<string, readonly string[]>)[workerName] ?? [];
+
+  // Find the primary lane for this worker
+  const workerLane = Object.entries(LANE_WORKER_NAMES).find(([, name]) => name === workerName)?.[0] ?? "";
+
+  const capMatch = workerCaps.includes(capTag) ? 1.0 : 0.0;
+  const laneScore = getLaneScore(ledger ?? {}, workerLane);
+  const specialistBonus = workerCaps.length === 1 && capMatch > 0 ? 0.1 : 0;
+
+  const raw = (capMatch * 0.5) + (laneScore * 0.4) + specialistBonus;
+  return Math.min(1.0, Math.round(raw * 1000) / 1000);
+}
+
+/**
+ * Select the best-fit worker for a plan using explicit fit scores.
+ *
+ * All registered workers (from LANE_WORKER_NAMES) are scored against the plan.
+ * The highest-scoring worker is returned.  When two workers tie, the one that
+ * sorts first alphabetically by name is chosen — guaranteeing deterministic
+ * output for identical inputs.
+ *
+ * Falls back to "Evolution Worker" when no workers are registered.
+ *
+ * @param plan    — plan object to match against worker capabilities
+ * @param config  — BOX config (unused currently; reserved for future custom registrations)
+ * @param ledger  — optional historical lane outcomes for performance-aware scoring
+ * @returns WorkerSelection extended with a `fitScore` field
+ */
+export function selectWorkerByFitScore(
+  plan: object,
+  config?: object,
+  ledger?: LanePerformanceLedger
+): WorkerSelection & { fitScore: number } {
+  const workerNames = Object.values(LANE_WORKER_NAMES) as string[];
+
+  const scored = workerNames
+    .map(name => ({ name, score: scoreWorkerTaskFit(name, plan, ledger) }))
+    // Higher score first; alphabetical name as deterministic tie-breaker
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+
+  const best = scored[0] ?? { name: "Evolution Worker", score: 0 };
+  const lane = Object.entries(LANE_WORKER_NAMES).find(([, n]) => n === best.name)?.[0] ?? "implementation";
+  const capTag = inferCapabilityTag(plan);
+
+  return {
+    role: best.name,
+    lane,
+    reason: `fit-score: "${best.name}" scored ${best.score.toFixed(3)} for capability "${capTag}" (deterministic)`,
+    isFallback: best.score === 0,
+    performanceScore: getLaneScore(ledger ?? {}, lane),
+    fitScore: best.score,
+  };
 }

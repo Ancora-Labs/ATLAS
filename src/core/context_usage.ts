@@ -79,3 +79,41 @@ export async function appendAgentContextUsage(config: any, input: AgentContextLo
     `[CONTEXT_USAGE] agent=${input.agent} model=${input.model} used=${used}/${limit} (${pct}%) status=${input.status}${suffix}`
   );
 }
+
+// ── Cache-segment telemetry ────────────────────────────────────────────────────
+
+/** Input for cache-segment utilisation logging. */
+export type CacheSegmentLogInput = {
+  agent: string;
+  model: string;
+  /** Number of sections marked cacheable in the assembled prompt. */
+  cachedSegments: number;
+  /** Total number of sections in the assembled prompt. */
+  totalSegments: number;
+  /** Estimated tokens saved by reusing cached prefix (0 when cache was cold). */
+  estimatedSavedTokens: number;
+};
+
+/**
+ * Append a cache-segment utilisation record to the pipeline progress log.
+ * Used alongside markCacheableSegments() to track how much of each prompt
+ * can be served from the provider's prompt cache.
+ *
+ * Never throws — callers rely on fire-and-forget semantics.
+ *
+ * @param config — BOX config object
+ * @param input  — cache segment usage data
+ */
+export async function appendCacheSegmentUsage(config: any, input: CacheSegmentLogInput): Promise<void> {
+  const cacheRatio = input.totalSegments > 0
+    ? ((input.cachedSegments / input.totalSegments) * 100).toFixed(1)
+    : "0.0";
+  try {
+    await appendProgress(
+      config,
+      `[CACHE_SEGMENTS] agent=${input.agent} model=${input.model} cached=${input.cachedSegments}/${input.totalSegments} (${cacheRatio}%) savedTokens=${input.estimatedSavedTokens}`
+    );
+  } catch (_err) {
+    // Non-fatal: cache telemetry must never block the primary pipeline
+  }
+}

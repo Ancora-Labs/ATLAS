@@ -9,6 +9,8 @@ import {
   PROMPT_TIERS,
   stripFluff,
   compileTieredPrompt,
+  markCacheableSegments,
+  CACHE_STABLE_SECTION_NAMES,
 } from "../../src/core/prompt_compiler.js";
 
 describe("prompt_compiler", () => {
@@ -257,6 +259,54 @@ describe("prompt_compiler", () => {
       const posB = result.indexOf("BBB");
       const posC = result.indexOf("CCC");
       assert.ok(posA < posB && posB < posC, "order must be preserved");
+    });
+  });
+
+  describe("markCacheableSegments()", () => {
+    it("marks stable section names as cacheable", () => {
+      const sections = [
+        section("role", "You are Athena."),
+        section("context", "Task: fix bug #42"),
+      ];
+      const result = markCacheableSegments(sections);
+      assert.equal(result[0].cacheable, true, "'role' should be cacheable");
+      assert.equal(result[1].cacheable, false, "'context' should NOT be cacheable");
+    });
+
+    it("marks all CACHE_STABLE_SECTION_NAMES as cacheable", () => {
+      for (const name of CACHE_STABLE_SECTION_NAMES) {
+        const result = markCacheableSegments([section(name, "content")]);
+        assert.equal(result[0].cacheable, true, `section '${name}' should be cacheable`);
+      }
+    });
+
+    it("honours opts.stableNames for extra stable sections", () => {
+      const sections = [section("preamble", "Stable preamble text.")];
+      const result = markCacheableSegments(sections, { stableNames: ["preamble"] });
+      assert.equal(result[0].cacheable, true);
+    });
+
+    it("preserves sections already marked cacheable: true", () => {
+      const sections = [{ name: "custom", content: "text", cacheable: true }];
+      const result = markCacheableSegments(sections);
+      assert.equal(result[0].cacheable, true);
+    });
+
+    it("does not mutate input sections", () => {
+      const sections = [section("role", "You are X.")];
+      markCacheableSegments(sections);
+      assert.equal((sections[0] as any).cacheable, undefined, "original should be unmodified");
+    });
+
+    it("negative path: returns empty array for empty input", () => {
+      const result = markCacheableSegments([]);
+      assert.deepEqual(result, []);
+    });
+
+    it("CACHE_STABLE_SECTION_NAMES is a Set and contains 'role' and 'system'", () => {
+      assert.ok(CACHE_STABLE_SECTION_NAMES instanceof Set);
+      assert.ok(CACHE_STABLE_SECTION_NAMES.has("role"));
+      assert.ok(CACHE_STABLE_SECTION_NAMES.has("system"));
     });
   });
 });

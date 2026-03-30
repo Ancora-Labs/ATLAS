@@ -1,7 +1,7 @@
 import { getRoleRegistry } from "./role_registry.js";
 import { enforceModelPolicy } from "./model_policy.js";
 import { resolveDependencyGraph, GRAPH_STATUS } from "./dependency_graph_resolver.js";
-import { enforceLaneDiversity } from "./capability_pool.js";
+import { enforceLaneDiversity, selectWorkerByFitScore, LanePerformanceLedger } from "./capability_pool.js";
 
 const CHARS_PER_TOKEN = 4;
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 100000;
@@ -767,4 +767,37 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
     totalBundles: flattened.length,
     diversityViolation,
   }));
+}
+
+/**
+ * Build execution batches using fit-score-based worker assignment.
+ *
+ * Alternative entry point to buildRoleExecutionBatches for callers that want
+ * worker-task fit scoring (selectWorkerByFitScore) rather than relying solely on
+ * the plan's `role` field.
+ *
+ * Each plan is assigned the highest-scoring worker (deterministic tie-breaking)
+ * and its `role` field is set accordingly before delegating to
+ * buildRoleExecutionBatches.
+ *
+ * @param plans          — plan objects to assign and batch
+ * @param config         — BOX config
+ * @param lanePerformance — optional historical lane outcomes for fit scoring
+ * @returns same shape as buildRoleExecutionBatches
+ */
+export function buildFitScoredBatches(
+  plans: any[],
+  config?: object,
+  lanePerformance?: LanePerformanceLedger
+) {
+  if (!Array.isArray(plans) || plans.length === 0) {
+    return buildRoleExecutionBatches([], config);
+  }
+
+  const assignedPlans = plans.map(plan => {
+    const selection = selectWorkerByFitScore(plan, config, lanePerformance);
+    return { ...plan, role: selection.role };
+  });
+
+  return buildRoleExecutionBatches(assignedPlans, config);
 }

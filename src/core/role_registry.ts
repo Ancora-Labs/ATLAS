@@ -13,6 +13,23 @@ export const LANE_WORKER_NAMES: Readonly<Record<string, string>> = Object.freeze
   observation:     "observation-worker",
 });
 
+/**
+ * Per-worker capability declarations.
+ * Maps worker name → ordered list of capability tags it handles best.
+ * Used by scoreWorkerTaskFit() in capability_pool to produce a numeric fit score.
+ *
+ * Workers may declare multiple capabilities when they handle adjacent task types.
+ * Single-capability workers receive a specialist bonus in fit scoring.
+ */
+export const WORKER_CAPABILITIES: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  "Evolution Worker":      Object.freeze(["runtime-refactor", "integration", "planner-improvement"]),
+  "quality-worker":        Object.freeze(["test-infra", "planner-improvement"]),
+  "governance-worker":     Object.freeze(["state-governance"]),
+  "infrastructure-worker": Object.freeze(["infrastructure"]),
+  "integration-worker":    Object.freeze(["integration", "runtime-refactor"]),
+  "observation-worker":    Object.freeze(["observation"]),
+});
+
 export function getRoleRegistry(config) {
   const fallback = {
     ceoSupervisor: { id: "ceo-supervisor", name: "Jesus", model: "GPT-5.3-Codex" },
