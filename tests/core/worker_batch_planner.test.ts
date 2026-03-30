@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildRoleExecutionBatches, MAX_PLANS_PER_DEPENDENCY_BATCH, computeCriticalPathScores } from "../../src/core/worker_batch_planner.js";
+import {
+  buildRoleExecutionBatches,
+  MAX_PLANS_PER_DEPENDENCY_BATCH,
+  computeCriticalPathScores,
+  splitWavesIntoMicrowaves,
+  MICROWAVE_MAX_TASKS_DEFAULT,
+} from "../../src/core/worker_batch_planner.js";
 
 function buildPlan(index) {
   return {
@@ -500,5 +506,173 @@ describe("worker_batch_planner — critical-path dispatch ordering", () => {
     assert.ok(batchB, "wave2-task must be in some batch");
     assert.ok((batchA as any).bundleIndex < (batchB as any).bundleIndex,
       "wave-1 batch must precede wave-2 batch regardless of critical-path score");
+  });
+});
+
+// ── splitWavesIntoMicrowaves (re-exported from worker_batch_planner) ──────────
+
+describe("worker_batch_planner — splitWavesIntoMicrowaves export", () => {
+  it("MICROWAVE_MAX_TASKS_DEFAULT is 3", () => {
+    assert.equal(MICROWAVE_MAX_TASKS_DEFAULT, 3);
+  });
+
+  it("returns empty array for empty input", () => {
+    assert.deepEqual(splitWavesIntoMicrowaves([]), []);
+  });
+
+  it("returns empty array for non-array input", () => {
+    assert.deepEqual(splitWavesIntoMicrowaves(null as any), []);
+  });
+
+  it("preserves plans that already fit within the limit", () => {
+    const plans = [
+      { task_id: "T-1", task: "Task 1", wave: 1, dependencies: [] },
+      { task_id: "T-2", task: "Task 2", wave: 1, dependencies: [] },
+    ];
+    const result = splitWavesIntoMicrowaves(plans, 3);
+    assert.equal(result.length, 2);
+    assert.equal(result[0].wave, 1);
+    assert.equal(result[1].wave, 1);
+  });
+
+  it("splits a wave exceeding the limit into micro-waves", () => {
+    const plans = Array.from({ length: 5 }, (_, i) => ({
+      task_id: `T-${i + 1}`, task: `Task ${i + 1}`, wave: 1, dependencies: [],
+    }));
+    const result = splitWavesIntoMicrowaves(plans, 3);
+    assert.equal(result.length, 5);
+    const waves = [...new Set(result.map((p: any) => p.wave))].sort((a, b) => a - b);
+    assert.deepEqual(waves, [1, 2]);
+  });
+
+  it("negative path: tasks with no wave field are treated as wave 1", () => {
+    const plans = [
+      { task_id: "T-1", task: "T1", dependencies: [] },
+      { task_id: "T-2", task: "T2", dependencies: [] },
+    ];
+    const result = splitWavesIntoMicrowaves(plans, 3);
+    assert.equal(result.length, 2);
+    assert.ok(result.every((p: any) => p.wave === 1));
+  });
+});
+
+// ── buildRoleExecutionBatches — micro-wave integration ───────────────────────
+
+describe("worker_batch_planner — micro-wave integration via config", () => {
+  it("without maxTasksPerMicrowave config, large waves are not split (backward-compatible)", () => {
+    const config = { copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 } };
+    const plans = Array.from({ length: 6 }, (_, i) => ({
+      role: "Evolution Worker",
+      task: `Task ${i}`,
+      wave: 1,
+    }));
+    // Without the config key, no micro-wave splitting — all 6 plans stay in wave 1 and fit one batch
+    const batches = buildRoleExecutionBatches(plans, config);
+    assert.equal(batches.length, 1, "no splitting without config — all 6 plans in one batch");
+    assert.equal((batches[0].plans as any[]).length, 6);
+  });
+
+  it("with maxTasksPerMicrowave=2, a 6-plan wave is split into 3 micro-waves of 2", () => {
+    const config = {
+      copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 },
+      planner: { maxTasksPerMicrowave: 2 },
+    };
+    const plans = Array.from({ length: 6 }, (_, i) => ({
+      role: "Evolution Worker",
+      task: `Task ${i}`,
+      wave: 1,
+    }));
+    const batches = buildRoleExecutionBatches(plans, config);
+    // 6 plans split into 3 micro-waves → 3 batches (wave-boundary enforcement prevents co-batching)
+    assert.equal(batches.length, 3, "6 plans with maxTasksPerMicrowave=2 → 3 batches");
+    for (const batch of batches) {
+      assert.ok(
+        (batch.plans as any[]).length <= 2,
+        `each micro-wave batch must have at most 2 plans; got ${(batch.plans as any[]).length}`
+      );
+    }
+    // All plans must be present
+    const allPlans = batches.flatMap(b => b.plans);
+    assert.equal(allPlans.length, 6);
+  });
+
+  it("with maxTasksPerMicrowave=3, critical-path tasks are in earlier micro-waves", () => {
+    // T-C has 2 intra-wave dependents (T-B and T-D depend on T-C) → highest priority
+    const config = {
+      copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 },
+      planner: { maxTasksPerMicrowave: 3 },
+    };
+    const plans = [
+      { role: "Evolution Worker", task_id: "T-A", task: "Task A", wave: 1, dependencies: [] },
+      { role: "Evolution Worker", task_id: "T-B", task: "Task B", wave: 1, dependencies: ["T-C"] },
+      { role: "Evolution Worker", task_id: "T-C", task: "Task C", wave: 1, dependencies: [] },
+      { role: "Evolution Worker", task_id: "T-D", task: "Task D", wave: 1, dependencies: ["T-C"] },
+    ];
+    const batches = buildRoleExecutionBatches(plans, config);
+    // 4 plans with limit 3 → 2 micro-waves
+    assert.equal(batches.length, 2, "4 plans with maxTasksPerMicrowave=3 → 2 batches");
+    const firstBatchTaskIds = (batches[0].plans as any[]).map((p: any) => p.task_id);
+    // T-C (2 intra-wave dependents) must be in the first micro-wave batch
+    assert.ok(
+      firstBatchTaskIds.includes("T-C"),
+      `T-C (critical-path) must be in first micro-wave; first batch: ${firstBatchTaskIds.join(", ")}`
+    );
+  });
+
+  it("negative: maxTasksPerMicrowave=0 is treated as disabled (no splitting)", () => {
+    const config = {
+      copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 },
+      planner: { maxTasksPerMicrowave: 0 },
+    };
+    const plans = Array.from({ length: 4 }, (_, i) => ({
+      role: "Evolution Worker",
+      task: `Task ${i}`,
+      wave: 1,
+    }));
+    const batches = buildRoleExecutionBatches(plans, config);
+    assert.equal(batches.length, 1, "maxTasksPerMicrowave=0 disables splitting");
+    assert.equal((batches[0].plans as any[]).length, 4);
+  });
+
+  it("negative: maxTasksPerMicrowave set to non-numeric is treated as disabled", () => {
+    const config = {
+      copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 },
+      planner: { maxTasksPerMicrowave: "invalid" },
+    };
+    const plans = Array.from({ length: 4 }, (_, i) => ({
+      role: "Evolution Worker",
+      task: `Task ${i}`,
+      wave: 1,
+    }));
+    const batches = buildRoleExecutionBatches(plans, config);
+    assert.equal(batches.length, 1, "non-numeric maxTasksPerMicrowave disables splitting");
+  });
+
+  it("micro-wave splitting preserves all plans across waves", () => {
+    const config = {
+      copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 },
+      planner: { maxTasksPerMicrowave: 2 },
+    };
+    // 3 wave-1 plans and 3 wave-2 plans
+    const w1Plans = Array.from({ length: 3 }, (_, i) => ({
+      role: "Evolution Worker", task: `w1-task-${i}`, wave: 1,
+    }));
+    const w2Plans = Array.from({ length: 3 }, (_, i) => ({
+      role: "Evolution Worker", task: `w2-task-${i}`, wave: 2,
+    }));
+    const batches = buildRoleExecutionBatches([...w1Plans, ...w2Plans], config);
+    // wave 1: 3 plans → 2 micro-waves (2+1); wave 2: 3 plans → 2 micro-waves (2+1)
+    // Total: 4 batches
+    const allPlans = batches.flatMap(b => b.plans);
+    assert.equal(allPlans.length, 6, "all 6 plans must be preserved after micro-wave splitting");
+    // All wave-1 batches must precede wave-2 batches
+    const wave1Indices = batches.filter(b => (b as any).wave <= 2).map(b => (b as any).bundleIndex);
+    const wave2Indices = batches.filter(b => (b as any).wave >= 3).map(b => (b as any).bundleIndex);
+    if (wave1Indices.length > 0 && wave2Indices.length > 0) {
+      assert.ok(
+        Math.max(...wave1Indices) < Math.min(...wave2Indices),
+        "all wave-1 micro-wave batches must precede wave-2 micro-wave batches"
+      );
+    }
   });
 });
