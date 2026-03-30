@@ -1064,3 +1064,81 @@ describe("verification_gate — artifact gate across additional done-capable lan
     );
   });
 });
+
+// ── Task 1: scanB and quality-worker done-path artifact gate coverage ─────────
+// scanB has no required evidence fields → artifact gate must NOT fire.
+// quality-worker has no dedicated profile → falls back to DEFAULT_PROFILE
+// (build=required) → artifact gate MUST fire and block when SHA/npm output absent.
+
+describe("verification_gate — scanB and quality-worker artifact gate (Task 1 coverage)", () => {
+  it("scanB role done without artifact passes gate (no required evidence fields)", () => {
+    // scanB (Documentation role): build=optional, everything else optional/exempt.
+    // hasRequiredFields=false → requireArtifact=false → artifact gate is skipped.
+    const result = validateWorkerContract("scanB", {
+      status: "done",
+      fullOutput: "Documentation review complete. No code changes made."
+      // No git SHA, no npm test output — intentionally absent
+    });
+    assert.equal(result.passed, true,
+      "scanB has no required fields, so artifact gate must not fire"
+    );
+    const artifactGap = result.gaps.find(g => /sha|npm|post-merge|test output/i.test(g));
+    assert.equal(artifactGap, undefined,
+      `scanB must not be blocked by artifact gate; unexpected gap: ${artifactGap}`
+    );
+  });
+
+  it("quality-worker role done without SHA or npm output fails artifact gate", () => {
+    // 'quality-worker' has no dedicated profile → falls back to DEFAULT_PROFILE.
+    // DEFAULT_PROFILE has build=required → hasRequiredFields=true → artifact gate fires.
+    const result = validateWorkerContract("quality-worker", {
+      status: "done",
+      fullOutput: [
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass",
+        // No git SHA or npm test output
+      ].join("\n")
+    });
+    assert.equal(result.passed, false,
+      "quality-worker done without SHA/npm output must fail (DEFAULT_PROFILE: build=required)"
+    );
+    const hasArtifactGap = result.gaps.some(g => /sha|npm|post-merge|test output/i.test(g));
+    assert.ok(hasArtifactGap,
+      `expected artifact gap for quality-worker role; got: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("quality-worker role done with BOX_MERGED_SHA and npm block passes artifact gate", () => {
+    const result = validateWorkerContract("quality-worker", {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234f",
+        "===NPM TEST OUTPUT START===",
+        "# tests 10",
+        "# pass 10",
+        "# fail 0",
+        "===NPM TEST OUTPUT END===",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass",
+      ].join("\n")
+    });
+    const artifactGap = result.gaps.find(g => /sha|npm|post-merge|test output/i.test(g));
+    assert.equal(artifactGap, undefined,
+      `quality-worker with BOX_MERGED_SHA + npm block must pass artifact gate; gaps: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("negative path: scanB done with unfilled placeholder passes gate (artifact gate skipped entirely for scanB)", () => {
+    // scanB has no required fields → artifact gate block is never entered,
+    // so the placeholder check does NOT fire — same behavior as scan taskKind.
+    const result = validateWorkerContract("scanB", {
+      status: "done",
+      fullOutput: "POST_MERGE_TEST_OUTPUT placeholder not replaced"
+    });
+    assert.equal(result.passed, true,
+      "scanB artifact gate is skipped entirely (no required fields)"
+    );
+    const artifactGap = result.gaps.find(g => /sha|npm|post-merge|test output|placeholder/i.test(g));
+    assert.equal(artifactGap, undefined,
+      `scanB placeholder check must not fire when artifact gate is skipped; got: ${artifactGap}`
+    );
+  });
+});

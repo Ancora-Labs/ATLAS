@@ -7,6 +7,7 @@ import {
   PACKET_VIOLATION_CODE,
   isNonSpecificVerification,
 } from "../../src/core/plan_contract_validator.js";
+import { checkForbiddenCommands } from "../../src/core/verification_command_registry.js";
 
 describe("plan_contract_validator", () => {
   describe("isNonSpecificVerification", () => {
@@ -819,5 +820,191 @@ describe("plan_contract_validator — shell-glob regression locks (Task 2)", () 
     assert.ok(v,
       `expected FORBIDDEN_COMMAND on verification_commands[0]; got: [${JSON.stringify(result.violations)}]`
     );
+  });
+});
+
+// ── Task 2: Regression locks for additional forbidden shell patterns ──────────
+// Guards against sh, npx tsx glob, and ts-node glob patterns slipping through
+// the planner validation path (validatePlanContract) AND the registry-level
+// forbidden check (checkForbiddenCommands). Both paths are independently tested.
+
+describe("plan_contract_validator — additional forbidden shell-pattern regression locks (Task 2)", () => {
+  it("rejects 'sh scripts/run_tests.sh' in verification field as FORBIDDEN_COMMAND", () => {
+    const plan = {
+      task: "Implement something long enough here",
+      role: "worker",
+      wave: 1,
+      verification: "sh scripts/run_tests.sh",
+      dependencies: [],
+      acceptance_criteria: ["tests pass"],
+      capacityDelta: 0.1,
+      requestROI: 1.5,
+    };
+    const result = validatePlanContract(plan);
+    assert.equal(result.valid, false,
+      "'sh ...' command in verification must be rejected as forbidden"
+    );
+    assert.ok(
+      result.violations.some(v => v.field === "verification" && v.code === PACKET_VIOLATION_CODE.FORBIDDEN_COMMAND),
+      `expected FORBIDDEN_COMMAND violation on verification; got: [${JSON.stringify(result.violations)}]`
+    );
+  });
+
+  it("rejects 'npx tsx tests/**/*.test.ts' in verification field as FORBIDDEN_COMMAND", () => {
+    const plan = {
+      task: "Implement something long enough here",
+      role: "worker",
+      wave: 1,
+      verification: "npx tsx tests/**/*.test.ts",
+      dependencies: [],
+      acceptance_criteria: ["tests pass"],
+      capacityDelta: 0.1,
+      requestROI: 1.5,
+    };
+    const result = validatePlanContract(plan);
+    assert.equal(result.valid, false,
+      "'npx tsx ...' glob command in verification must be rejected as forbidden"
+    );
+    assert.ok(
+      result.violations.some(v => v.field === "verification" && v.code === PACKET_VIOLATION_CODE.FORBIDDEN_COMMAND),
+      `expected FORBIDDEN_COMMAND violation on verification; got: [${JSON.stringify(result.violations)}]`
+    );
+  });
+
+  it("rejects 'ts-node tests/**/*.test.ts' in verification field as FORBIDDEN_COMMAND", () => {
+    const plan = {
+      task: "Implement something long enough here",
+      role: "worker",
+      wave: 1,
+      verification: "ts-node tests/**/*.test.ts",
+      dependencies: [],
+      acceptance_criteria: ["tests pass"],
+      capacityDelta: 0.1,
+      requestROI: 1.5,
+    };
+    const result = validatePlanContract(plan);
+    assert.equal(result.valid, false,
+      "'ts-node ...' glob command in verification must be rejected as forbidden"
+    );
+    assert.ok(
+      result.violations.some(v => v.field === "verification" && v.code === PACKET_VIOLATION_CODE.FORBIDDEN_COMMAND),
+      `expected FORBIDDEN_COMMAND violation on verification; got: [${JSON.stringify(result.violations)}]`
+    );
+  });
+
+  it("rejects 'sh scripts/run_tests.sh' in verification_commands array (runtime dispatch path)", () => {
+    const plan = {
+      task: "Implement something long enough here",
+      role: "worker",
+      wave: 1,
+      verification: "tests/core/foo.test.ts — test: passes",
+      verification_commands: ["sh scripts/run_tests.sh"],
+      dependencies: [],
+      acceptance_criteria: ["tests pass"],
+      capacityDelta: 0.1,
+      requestROI: 1.5,
+    };
+    const result = validatePlanContract(plan);
+    assert.equal(result.valid, false,
+      "'sh ...' in verification_commands must be rejected as forbidden"
+    );
+    assert.ok(
+      result.violations.some(v => v.field === "verification_commands[0]" && v.code === PACKET_VIOLATION_CODE.FORBIDDEN_COMMAND),
+      `expected FORBIDDEN_COMMAND on verification_commands[0]; got: [${JSON.stringify(result.violations)}]`
+    );
+  });
+
+  it("rejects 'npx tsx tests/**/*.test.ts' in verification_commands array (runtime dispatch path)", () => {
+    const plan = {
+      task: "Implement something long enough here",
+      role: "worker",
+      wave: 1,
+      verification: "tests/core/foo.test.ts — test: passes",
+      verification_commands: ["npx tsx tests/**/*.test.ts"],
+      dependencies: [],
+      acceptance_criteria: ["tests pass"],
+      capacityDelta: 0.1,
+      requestROI: 1.5,
+    };
+    const result = validatePlanContract(plan);
+    assert.equal(result.valid, false,
+      "'npx tsx ...' glob in verification_commands must be rejected as forbidden"
+    );
+    assert.ok(
+      result.violations.some(v => v.field === "verification_commands[0]" && v.code === PACKET_VIOLATION_CODE.FORBIDDEN_COMMAND),
+      `expected FORBIDDEN_COMMAND on verification_commands[0]; got: [${JSON.stringify(result.violations)}]`
+    );
+  });
+
+  it("rejects 'ts-node src/**/*.test.ts' in verification_commands array (runtime dispatch path)", () => {
+    const plan = {
+      task: "Implement something long enough here",
+      role: "worker",
+      wave: 1,
+      verification: "tests/core/foo.test.ts — test: passes",
+      verification_commands: ["ts-node src/**/*.test.ts"],
+      dependencies: [],
+      acceptance_criteria: ["tests pass"],
+      capacityDelta: 0.1,
+      requestROI: 1.5,
+    };
+    const result = validatePlanContract(plan);
+    assert.equal(result.valid, false,
+      "'ts-node ...' glob in verification_commands must be rejected as forbidden"
+    );
+    assert.ok(
+      result.violations.some(v => v.field === "verification_commands[0]" && v.code === PACKET_VIOLATION_CODE.FORBIDDEN_COMMAND),
+      `expected FORBIDDEN_COMMAND on verification_commands[0]; got: [${JSON.stringify(result.violations)}]`
+    );
+  });
+
+  it("negative path: 'sh' alone (no argument) is not caught by forbidden registry pattern", () => {
+    // The forbidden pattern requires '^sh\s+' — 'sh' alone doesn't match.
+    // Locks the boundary of the sh detection pattern.
+    const result = checkForbiddenCommands("sh");
+    assert.equal(result.forbidden, false,
+      "'sh' without an argument must NOT be caught (pattern requires '^sh\\s+' — space + argument needed)"
+    );
+  });
+
+  it("negative path: 'npx tsx tests/core/foo.test.ts' (no glob) is NOT forbidden", () => {
+    // npx tsx with a specific file (no glob) must pass the forbidden check.
+    // The forbidden pattern requires a '*' in the path.
+    const plan = {
+      task: "Implement something long enough here",
+      role: "worker",
+      wave: 1,
+      verification: "npx tsx tests/core/foo.test.ts",
+      dependencies: [],
+      acceptance_criteria: ["pass"],
+      capacityDelta: 0.1,
+      requestROI: 1.5,
+    };
+    const result = validatePlanContract(plan);
+    const forbiddenViolation = result.violations.find(
+      v => v.field === "verification" && v.code === PACKET_VIOLATION_CODE.FORBIDDEN_COMMAND
+    );
+    assert.equal(forbiddenViolation, undefined,
+      "'npx tsx tests/core/foo.test.ts' (no glob) must not be flagged as FORBIDDEN_COMMAND"
+    );
+  });
+
+  it("all four forbidden shell patterns are independently detected by checkForbiddenCommands", () => {
+    // Registry-level regression lock: ensures each pattern independently fires.
+    const forbidden = [
+      "sh run.sh",
+      "bash scripts/test.sh",
+      "npx tsx tests/**/*.test.ts",
+      "ts-node tests/**/*.spec.ts",
+    ];
+    for (const cmd of forbidden) {
+      const result = checkForbiddenCommands(cmd);
+      assert.equal(result.forbidden, true,
+        `"${cmd}" must be detected as forbidden by checkForbiddenCommands`
+      );
+      assert.ok(result.violations.length > 0,
+        `"${cmd}" must produce at least one violation`
+      );
+    }
   });
 });
