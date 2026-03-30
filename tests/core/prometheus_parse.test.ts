@@ -1929,4 +1929,67 @@ describe("splitWavesIntoMicrowaves", () => {
     assert.deepEqual(waveNums, [1, 2, 3],
       "each task must be assigned a unique wave number when maxTasksPerWave=1");
   });
+
+  it("multiple original waves both needing splitting produce sequential micro-wave numbers", () => {
+    // wave 1: 4 tasks → split into micro-waves 1+2
+    // wave 2: 4 tasks → split into micro-waves 3+4
+    const plans = [
+      { task_id: "A-1", task: "Wave A Task 1", wave: 1, dependencies: [] },
+      { task_id: "A-2", task: "Wave A Task 2", wave: 1, dependencies: [] },
+      { task_id: "A-3", task: "Wave A Task 3", wave: 1, dependencies: [] },
+      { task_id: "A-4", task: "Wave A Task 4", wave: 1, dependencies: [] },
+      { task_id: "B-1", task: "Wave B Task 1", wave: 2, dependencies: [] },
+      { task_id: "B-2", task: "Wave B Task 2", wave: 2, dependencies: [] },
+      { task_id: "B-3", task: "Wave B Task 3", wave: 2, dependencies: [] },
+      { task_id: "B-4", task: "Wave B Task 4", wave: 2, dependencies: [] },
+    ];
+    const result = splitWavesIntoMicrowaves(plans, 3);
+    assert.equal(result.length, 8, "all 8 tasks must be preserved");
+    const waveNums = [...new Set(result.map((p: any) => p.wave))].sort((a: number, b: number) => a - b);
+    assert.deepEqual(waveNums, [1, 2, 3, 4],
+      "wave 1 (4 tasks) → micro-waves 1+2; wave 2 (4 tasks) → micro-waves 3+4");
+    // All original wave-1 tasks must be in micro-waves ≤2
+    const wave1Tasks = result.filter((p: any) => p.task_id.startsWith("A-"));
+    assert.ok(wave1Tasks.every((p: any) => p.wave <= 2),
+      "all original wave-1 tasks must be assigned to micro-waves 1 or 2");
+    // All original wave-2 tasks must be in micro-waves ≥3
+    const wave2Tasks = result.filter((p: any) => p.task_id.startsWith("B-"));
+    assert.ok(wave2Tasks.every((p: any) => p.wave >= 3),
+      "all original wave-2 tasks must be renumbered to micro-waves 3 or 4");
+  });
+
+  it("cross-wave dependencies are not counted toward intra-wave critical-path score", () => {
+    // T-X is in wave 2 and depends on T-A (wave 1). That cross-wave dependency
+    // must NOT inflate T-A's intra-wave critical-path score in wave 1.
+    const plans = [
+      { task_id: "T-A", task: "Task A", wave: 1, dependencies: [] },
+      { task_id: "T-B", task: "Task B", wave: 1, dependencies: [] },
+      { task_id: "T-C", task: "Task C", wave: 1, dependencies: [] },
+      { task_id: "T-D", task: "Task D", wave: 1, dependencies: [] },
+      { task_id: "T-X", task: "Task X", wave: 2, dependencies: ["T-A"] },
+    ];
+    const result = splitWavesIntoMicrowaves(plans, 3);
+    assert.equal(result.length, 5, "all 5 tasks must be preserved");
+    // Wave 1 (4 tasks) → split: micro-wave 1 gets 3, micro-wave 2 gets 1
+    const mw1Tasks = result.filter((p: any) => p.wave === 1).map((p: any) => p.task_id);
+    const mw2Tasks = result.filter((p: any) => p.wave === 2).map((p: any) => p.task_id);
+    assert.equal(mw1Tasks.length, 3, "first micro-wave from wave 1 must have 3 tasks");
+    assert.equal(mw2Tasks.length, 1, "second micro-wave from wave 1 must have 1 task");
+    // T-X (wave 2) must still be present — renumbered to wave 3 after the split
+    const tX = result.find((p: any) => p.task_id === "T-X");
+    assert.ok(tX, "T-X must be preserved in output");
+    assert.equal(tX.wave, 3, "T-X (original wave 2) must be renumbered to wave 3 after wave 1 splits");
+  });
+
+  it("boundary: exactly maxTasksPerWave tasks in a wave are not split (no-op)", () => {
+    const plans = [
+      { task_id: "T-1", task: "Task 1", wave: 1, dependencies: [] },
+      { task_id: "T-2", task: "Task 2", wave: 1, dependencies: [] },
+    ];
+    const result = splitWavesIntoMicrowaves(plans, 2);
+    assert.equal(result.length, 2, "both tasks must be preserved");
+    const waveNums = [...new Set(result.map((p: any) => p.wave))];
+    assert.equal(waveNums.length, 1, "exactly-2-tasks wave with limit-2 must NOT be split");
+    assert.equal(waveNums[0], 1, "must remain in wave 1");
+  });
 });

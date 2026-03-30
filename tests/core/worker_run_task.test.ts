@@ -631,5 +631,22 @@ describe("run_task.js — Docker entrypoint conformance and canonical named test
       "startup-contract anchor must NOT appear when Docker CMD cannot complete env var validation"
     );
   });
+
+  it("CANONICAL_TEST_PROOF: NAMED_TEST_PROOF_PATTERN accepts worker_run_task.test.ts as a valid named test proof reference", async () => {
+    // Meta-verification: the CANONICAL_TEST_PROOF naming convention used in this file
+    // must be parseable by NAMED_TEST_PROOF_PATTERN in verification_gate.ts.
+    // If the pattern is narrowed in a future change, this test will catch the regression.
+    const { NAMED_TEST_PROOF_PATTERN } = await import("../../src/core/verification_gate.js");
+    const sampleVerification = "tests/core/worker_run_task.test.ts \u2014 CANONICAL_TEST_PROOF: worker Dockerfile CMD entry point matches the ENTRY constant used in tests";
+    const match = NAMED_TEST_PROOF_PATTERN.exec(sampleVerification);
+    assert.ok(
+      match !== null,
+      `CANONICAL_TEST_PROOF naming must be parseable by NAMED_TEST_PROOF_PATTERN; tested: "${sampleVerification}"`
+    );
+    assert.ok(
+      match![1].includes("worker_run_task.test.ts"),
+      "parsed test file must reference worker_run_task.test.ts"
+    );
+  });
 });
 

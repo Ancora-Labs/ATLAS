@@ -1185,6 +1185,75 @@ describe("verification_gate — checkNamedTestProof", () => {
     const namedGap = result.gaps.find((g: string) => g.includes("Named test proof"));
     assert.equal(namedGap, undefined, "no named-test-proof gap when verificationText is 'npm test'");
   });
+
+  it("en dash (–) separator is supported as a valid named test proof format", () => {
+    const output = "# Subtest: verification_gate.test.ts\n  ok 1 - should parse en dash separator\n";
+    const result = checkNamedTestProof(
+      "tests/core/verification_gate.test.ts \u2013 test: should parse en dash separator",
+      output
+    );
+    assert.equal(result.matched, true, "en dash separator must be matched by NAMED_TEST_PROOF_PATTERN");
+    assert.equal(result.gap, null, "gap must be null when file and description are in output");
+  });
+
+  it("hyphen (-) separator is supported as a valid named test proof format", () => {
+    const output = "# Subtest: verification_gate.test.ts\n  ok 1 - should parse hyphen separator\n";
+    const result = checkNamedTestProof(
+      "tests/core/verification_gate.test.ts - test: should parse hyphen separator",
+      output
+    );
+    assert.equal(result.matched, true, "hyphen separator must be matched by NAMED_TEST_PROOF_PATTERN");
+    assert.equal(result.gap, null, "gap must be null when file and description are in output");
+  });
+
+  it("'it:' prefix is supported in named test proof description", () => {
+    const output = "# Subtest: foo.test.ts\n  ok 1 - handle edge case\n";
+    const result = checkNamedTestProof(
+      "tests/core/foo.test.ts \u2014 it: handle edge case",
+      output
+    );
+    assert.equal(result.matched, true, "it: prefix must be recognized as a named test proof format");
+    assert.equal(result.testDesc, "handle edge case", "testDesc must strip the 'it:' prefix");
+    assert.equal(result.gap, null, "gap must be null when description is in output");
+  });
+
+  it("negative: named test proof gap is NOT added when worker status is 'skipped'", () => {
+    const parsedResponse = {
+      status: "skipped",
+      fullOutput: "Already merged in previous wave.",
+    };
+    const result = validateWorkerContract("backend", parsedResponse, {
+      verificationText: "tests/core/specific.test.ts \u2014 test: some named proof",
+    });
+    assert.equal(result.passed, true,
+      "skipped status must bypass all verification gates including named test proof");
+    const namedGap = result.gaps.find((g: string) => g.includes("Named test proof"));
+    assert.equal(namedGap, undefined,
+      "named test proof gap must not be added for skipped status");
+  });
+
+  it("negative: named test proof gap is NOT added when worker status is 'partial'", () => {
+    const parsedResponse = {
+      status: "partial",
+      fullOutput: "Work in progress.",
+    };
+    const result = validateWorkerContract("backend", parsedResponse, {
+      verificationText: "tests/core/specific.test.ts \u2014 test: some named proof",
+    });
+    // partial status → verification skipped by validateWorkerContract
+    const namedGap = result.gaps.find((g: string) => g.includes("Named test proof"));
+    assert.equal(namedGap, undefined,
+      "named test proof gap must not be added when status is partial (verification skipped for non-done)");
+  });
+
+  it("gap message references NAMED_TEST_PROOF_GAP constant prefix text", () => {
+    const result = checkNamedTestProof("tests/core/foo.test.ts", "some unrelated output");
+    assert.ok(result.gap !== null, "must produce a gap when test file is absent from output");
+    assert.ok(
+      result.gap!.startsWith("Named test proof missing"),
+      `gap message must start with the NAMED_TEST_PROOF_GAP prefix; got: "${result.gap}"`
+    );
+  });
 });
 
 // ── Task 1: scanB and quality-worker done-path artifact gate coverage ─────────
