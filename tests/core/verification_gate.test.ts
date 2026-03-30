@@ -10,6 +10,9 @@ import {
   POST_MERGE_PLACEHOLDER,
   NON_MERGE_TASK_KINDS,
   isArtifactGateRequired,
+  checkNamedTestProof,
+  NAMED_TEST_PROOF_GAP,
+  NAMED_TEST_PROOF_PATTERN,
 } from "../../src/core/verification_gate.js";
 
 describe("verification_gate parse helpers", () => {
@@ -1062,6 +1065,125 @@ describe("verification_gate — artifact gate across additional done-capable lan
     assert.ok(result.gaps.some(g => /placeholder/i.test(g)),
       `expected placeholder gap for devops role; got: [${result.gaps.join("; ")}]`
     );
+  });
+});
+
+// ── Named test proof gate ─────────────────────────────────────────────────────
+
+describe("verification_gate — checkNamedTestProof", () => {
+  it("exports NAMED_TEST_PROOF_PATTERN as a RegExp", () => {
+    assert.ok(NAMED_TEST_PROOF_PATTERN instanceof RegExp, "NAMED_TEST_PROOF_PATTERN must be a RegExp");
+  });
+
+  it("exports NAMED_TEST_PROOF_GAP as a non-empty string", () => {
+    assert.ok(typeof NAMED_TEST_PROOF_GAP === "string" && NAMED_TEST_PROOF_GAP.length > 0);
+  });
+
+  it("returns matched:false for non-named-test verification text (e.g. 'npm test')", () => {
+    const result = checkNamedTestProof("npm test", "all tests passed");
+    assert.equal(result.matched, false, "'npm test' is not a named test proof format");
+    assert.equal(result.gap, null, "no gap for non-named-test verification text");
+    assert.equal(result.testFile, null);
+    assert.equal(result.testDesc, null);
+  });
+
+  it("returns matched:false for empty verification text", () => {
+    const result = checkNamedTestProof("", "some output");
+    assert.equal(result.matched, false);
+    assert.equal(result.gap, null);
+  });
+
+  it("returns matched:true with gap=null when test file appears in output (file-only format)", () => {
+    const output = "# Subtest: prometheus_parse.test.ts\nok 1 - should compute X\n# pass 3\n";
+    const result = checkNamedTestProof("tests/core/prometheus_parse.test.ts", output);
+    assert.equal(result.matched, true, "file-only format must be matched");
+    assert.equal(result.testFile, "tests/core/prometheus_parse.test.ts");
+    assert.equal(result.gap, null, "gap must be null when test file appears in output");
+  });
+
+  it("returns matched:true with gap when test file does NOT appear in output", () => {
+    const output = "# Subtest: some_other.test.ts\nok 1 - passes\n";
+    const result = checkNamedTestProof("tests/core/prometheus_parse.test.ts", output);
+    assert.equal(result.matched, true);
+    assert.ok(result.gap !== null, "gap must be non-null when test file is missing from output");
+    assert.ok(result.gap!.includes("prometheus_parse.test.ts"), "gap message must name the missing test file");
+  });
+
+  it("returns gap when test file is present but description is NOT in output", () => {
+    const output = "# Subtest: verification_gate.test.ts\nok 1 - some other test\n";
+    const result = checkNamedTestProof(
+      "tests/core/verification_gate.test.ts — test: should validate named test proof",
+      output
+    );
+    assert.equal(result.matched, true);
+    assert.equal(result.testFile, "tests/core/verification_gate.test.ts");
+    assert.equal(result.testDesc, "should validate named test proof");
+    assert.ok(result.gap !== null, "gap must be non-null when description is missing from output");
+    assert.ok(result.gap!.includes("should validate named test proof"), "gap must include the missing description");
+  });
+
+  it("returns gap=null when both test file and description appear in output", () => {
+    const output = [
+      "# Subtest: verification_gate.test.ts",
+      "  ok 1 - should validate named test proof",
+      "# pass 1",
+    ].join("\n");
+    const result = checkNamedTestProof(
+      "tests/core/verification_gate.test.ts — test: should validate named test proof",
+      output
+    );
+    assert.equal(result.matched, true);
+    assert.equal(result.gap, null, "gap must be null when both file and description are in output");
+  });
+
+  it("negative: returns gap when worker output is empty", () => {
+    const result = checkNamedTestProof("tests/core/foo.test.ts — test: should do X", "");
+    assert.equal(result.matched, true, "empty output triggers named test proof check");
+    assert.ok(result.gap !== null, "gap must be non-null when output is empty");
+  });
+
+  it("integrates with validateWorkerContract via options.verificationText — adds gap when named test file missing", () => {
+    const parsedResponse = {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234",
+        "===NPM TEST OUTPUT START===",
+        "# Subtest: other_test.test.ts",
+        "ok 1 - some test",
+        "# pass 1",
+        "===NPM TEST OUTPUT END===",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass",
+        "BOX_PR_URL=https://github.com/org/repo/pull/99",
+      ].join("\n"),
+    };
+    const result = validateWorkerContract("backend", parsedResponse, {
+      taskKind: "implementation",
+      verificationText: "tests/core/my_specific.test.ts — test: should handle edge case",
+    });
+    assert.equal(result.passed, false, "must fail when named test file is not in output");
+    const namedGap = result.gaps.find((g: string) => g.includes("my_specific.test.ts"));
+    assert.ok(namedGap, `gaps must include the named test file gap; got: [${result.gaps.join("; ")}]`);
+  });
+
+  it("integrates with validateWorkerContract — no gap when verificationText is not a named test format", () => {
+    const parsedResponse = {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234",
+        "===NPM TEST OUTPUT START===",
+        "# pass 5",
+        "===NPM TEST OUTPUT END===",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass",
+        "BOX_PR_URL=https://github.com/org/repo/pull/88",
+      ].join("\n"),
+    };
+    const result = validateWorkerContract("backend", parsedResponse, {
+      taskKind: "implementation",
+      verificationText: "npm test",
+    });
+    // 'npm test' is non-specific, so no named-test-proof gap should be added
+    const namedGap = result.gaps.find((g: string) => g.includes("Named test proof"));
+    assert.equal(namedGap, undefined, "no named-test-proof gap when verificationText is 'npm test'");
   });
 });
 

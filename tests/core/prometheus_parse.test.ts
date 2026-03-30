@@ -1807,3 +1807,126 @@ describe("PLANNER_HEALTH_ALIASES and normalizeProjectHealthAlias (Task 1)", () =
     assert.equal(penalty.reason, "health_field_inferred_from_text");
   });
 });
+
+// ── splitWavesIntoMicrowaves — deterministic micro-wave splitting ──────────────
+
+import {
+  splitWavesIntoMicrowaves,
+  MICROWAVE_MAX_TASKS_DEFAULT,
+} from "../../src/core/prometheus.js";
+
+describe("splitWavesIntoMicrowaves", () => {
+  it("returns empty array for empty input", () => {
+    assert.deepEqual(splitWavesIntoMicrowaves([]), []);
+  });
+
+  it("returns empty array for non-array input", () => {
+    assert.deepEqual(splitWavesIntoMicrowaves(null as any), []);
+  });
+
+  it("preserves plans that already fit within the limit (no splitting needed)", () => {
+    const plans = [
+      { task_id: "T-1", task: "Task 1", wave: 1, dependencies: [] },
+      { task_id: "T-2", task: "Task 2", wave: 1, dependencies: [] },
+    ];
+    const result = splitWavesIntoMicrowaves(plans, 3);
+    assert.equal(result.length, 2, "both plans must be preserved");
+    assert.equal(result[0].wave, 1, "first plan remains in wave 1");
+    assert.equal(result[1].wave, 1, "second plan remains in wave 1");
+  });
+
+  it("splits a wave with more tasks than the limit into micro-waves", () => {
+    const plans = [
+      { task_id: "T-1", task: "Task 1", wave: 1, dependencies: [] },
+      { task_id: "T-2", task: "Task 2", wave: 1, dependencies: [] },
+      { task_id: "T-3", task: "Task 3", wave: 1, dependencies: [] },
+      { task_id: "T-4", task: "Task 4", wave: 1, dependencies: [] },
+      { task_id: "T-5", task: "Task 5", wave: 1, dependencies: [] },
+    ];
+    const result = splitWavesIntoMicrowaves(plans, 3);
+    assert.equal(result.length, 5, "all plans must be preserved after split");
+    const waveNumbers = [...new Set(result.map((p: any) => p.wave))].sort((a, b) => a - b);
+    assert.equal(waveNumbers.length, 2, "5 tasks split into 3+2 should produce 2 micro-waves");
+    assert.equal(waveNumbers[0], 1, "first micro-wave must be wave 1");
+    assert.equal(waveNumbers[1], 2, "second micro-wave must be wave 2");
+    const wave1Count = result.filter((p: any) => p.wave === 1).length;
+    const wave2Count = result.filter((p: any) => p.wave === 2).length;
+    assert.equal(wave1Count, 3, "first micro-wave must have exactly 3 tasks");
+    assert.equal(wave2Count, 2, "second micro-wave must have exactly 2 tasks");
+  });
+
+  it("MICROWAVE_MAX_TASKS_DEFAULT is 3", () => {
+    assert.equal(MICROWAVE_MAX_TASKS_DEFAULT, 3);
+  });
+
+  it("uses MICROWAVE_MAX_TASKS_DEFAULT when no limit is specified", () => {
+    const plans = Array.from({ length: 4 }, (_, i) => ({
+      task_id: `T-${i + 1}`, task: `Task ${i + 1}`, wave: 1, dependencies: [],
+    }));
+    const result = splitWavesIntoMicrowaves(plans);
+    const waveNumbers = [...new Set(result.map((p: any) => p.wave))];
+    assert.equal(waveNumbers.length, 2, "4 tasks with default limit of 3 must produce 2 micro-waves");
+  });
+
+  it("preserves relative ordering: wave 2 tasks are renumbered after wave 1 micro-waves", () => {
+    const plans = [
+      { task_id: "T-1", task: "Task 1", wave: 1, dependencies: [] },
+      { task_id: "T-2", task: "Task 2", wave: 1, dependencies: [] },
+      { task_id: "T-3", task: "Task 3", wave: 1, dependencies: [] },
+      { task_id: "T-4", task: "Task 4", wave: 1, dependencies: [] },
+      { task_id: "T-5", task: "Task 5", wave: 2, dependencies: [] },
+    ];
+    const result = splitWavesIntoMicrowaves(plans, 3);
+    const t5 = result.find((p: any) => p.task_id === "T-5");
+    assert.ok(t5, "T-5 must be present in the output");
+    assert.equal(t5.wave, 3,
+      "original wave 2 task must be renumbered to wave 3 after wave 1 splits into 2 micro-waves");
+  });
+
+  it("critical-path ordering: tasks that others depend on in the same wave go first", () => {
+    const plans = [
+      { task_id: "T-A", task: "Task A", wave: 1, dependencies: [] },
+      { task_id: "T-B", task: "Task B", wave: 1, dependencies: ["T-C"] },
+      { task_id: "T-C", task: "Task C", wave: 1, dependencies: [] },
+      { task_id: "T-D", task: "Task D", wave: 1, dependencies: ["T-C"] },
+    ];
+    const result = splitWavesIntoMicrowaves(plans, 3);
+    // T-C is depended on by T-B and T-D → 2 intra-wave dependents → must be in first micro-wave
+    const wave1Tasks = result.filter((p: any) => p.wave === 1).map((p: any) => p.task_id);
+    assert.ok(
+      wave1Tasks.includes("T-C"),
+      `T-C (2 dependents) must be in the first micro-wave; wave 1 tasks: ${wave1Tasks.join(", ")}`
+    );
+  });
+
+  it("does not mutate the original plan objects", () => {
+    const plan = { task_id: "T-1", task: "Task 1", wave: 1, dependencies: [], extra: "preserved" };
+    const result = splitWavesIntoMicrowaves([plan], 3);
+    assert.equal(plan.wave, 1, "original plan wave must not be mutated");
+    assert.equal(result[0].extra, "preserved", "extra fields must be preserved in output");
+  });
+
+  it("negative: single-task waves are never split (no-op pass-through)", () => {
+    const plans = [
+      { task_id: "T-1", task: "Task 1", wave: 1, dependencies: [] },
+      { task_id: "T-2", task: "Task 2", wave: 2, dependencies: [] },
+    ];
+    const result = splitWavesIntoMicrowaves(plans, 3);
+    assert.equal(result.length, 2);
+    assert.equal(result[0].wave, 1, "single-task wave 1 must remain wave 1");
+    assert.equal(result[1].wave, 2, "single-task wave 2 must remain wave 2");
+  });
+
+  it("maxTasksPerWave=1 forces one task per micro-wave", () => {
+    const plans = [
+      { task_id: "T-1", task: "Task 1", wave: 1, dependencies: [] },
+      { task_id: "T-2", task: "Task 2", wave: 1, dependencies: [] },
+      { task_id: "T-3", task: "Task 3", wave: 1, dependencies: [] },
+    ];
+    const result = splitWavesIntoMicrowaves(plans, 1);
+    assert.equal(result.length, 3);
+    const waveNums = result.map((p: any) => p.wave).sort((a: number, b: number) => a - b);
+    assert.deepEqual(waveNums, [1, 2, 3],
+      "each task must be assigned a unique wave number when maxTasksPerWave=1");
+  });
+});

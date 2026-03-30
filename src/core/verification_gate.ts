@@ -16,6 +16,80 @@ import {
   type DispatchCommandValidationResult,
 } from "./verification_command_registry.js";
 
+// ── Named test proof patterns ─────────────────────────────────────────────────
+// Packets whose verification field names a specific test file + description must
+// produce matching evidence in the worker output before done closure is accepted.
+
+/**
+ * Pattern to parse a named test proof from a packet's verification field.
+ *
+ * Accepted formats (case-insensitive):
+ *   "tests/core/foo.test.ts — test: description text"
+ *   "tests/core/foo.test.ts – it: description text"
+ *   "tests/core/foo.test.ts"
+ *   "tests/providers/bar.test.ts — should return X when Y"
+ */
+export const NAMED_TEST_PROOF_PATTERN =
+  /^(tests\/[^\s—–-]+(?:\.test\.ts|\.test\.js))\s*(?:[—–-]+\s*(?:test:|it:|describe:|should\s)?(.+))?$/i;
+
+/**
+ * Gap message emitted when the named test proof required by the packet's
+ * verification field is absent from the worker's output.
+ */
+export const NAMED_TEST_PROOF_GAP =
+  "Named test proof missing — the verification field names a specific test file/description that must appear in the worker output before done closure";
+
+/**
+ * Check whether a worker's output contains the named test proof specified in
+ * a packet's verification field.
+ *
+ * Returns `matched: false` when the verification text does not follow the named
+ * test proof format (e.g., it is just "npm test") — in that case no gap is raised.
+ * Returns `matched: true` with `gap: null` when the proof is present.
+ * Returns `matched: true` with `gap: <string>` when the proof is missing.
+ *
+ * @param verificationText — packet's verification field value
+ * @param workerOutput — full worker output text
+ */
+export function checkNamedTestProof(
+  verificationText: string,
+  workerOutput: string
+): { matched: boolean; testFile: string | null; testDesc: string | null; gap: string | null } {
+  const text = String(verificationText || "").trim();
+  const output = String(workerOutput || "");
+
+  const match = NAMED_TEST_PROOF_PATTERN.exec(text);
+  if (!match) {
+    return { matched: false, testFile: null, testDesc: null, gap: null };
+  }
+
+  const testFile = match[1].trim();
+  // Extract just the filename stem for loose matching (handles path prefix differences)
+  const filenamePart = testFile.split("/").pop() ?? testFile;
+  const testDesc = match[2] ? match[2].trim() : null;
+
+  const fileInOutput = output.includes(testFile) || output.includes(filenamePart);
+  if (!fileInOutput) {
+    return {
+      matched: true,
+      testFile,
+      testDesc,
+      gap: `${NAMED_TEST_PROOF_GAP}: test file "${testFile}" not found in worker output`,
+    };
+  }
+
+  if (testDesc && !output.includes(testDesc)) {
+    return {
+      matched: true,
+      testFile,
+      testDesc,
+      gap: `${NAMED_TEST_PROOF_GAP}: test description "${testDesc}" not found in worker output`,
+    };
+  }
+
+  return { matched: true, testFile, testDesc, gap: null };
+}
+
 // ── Post-merge verification artifact patterns (Packet 1) ───────────────────
 // Worker output must contain a git SHA and raw npm test stdout block for
 // BOX_STATUS=done to be accepted on merge-oriented tasks.
@@ -361,6 +435,13 @@ export interface ValidateWorkerContractOptions {
    * the artifact gate even when the worker role is done-capable.
    */
   taskKind?: string | null;
+  /**
+   * The packet's verification field value (e.g. "tests/core/foo.test.ts — test: desc").
+   * When provided and the value follows the named-test-proof format, the gate checks
+   * that the specified test file and description appear in the worker output.
+   * Packets with non-specific verification text (e.g. "npm test") are not checked.
+   */
+  verificationText?: string | null;
 }
 
 /**
@@ -420,6 +501,18 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
     const artifact = checkPostMergeArtifact(output);
     evidence.postMergeArtifact = artifact;
     for (const gap of collectArtifactGaps(artifact)) gaps.push(gap);
+  }
+
+  // ── Named test proof gate ────────────────────────────────────────────────
+  // When the task packet's verification field names a specific test file and
+  // optionally a test description, the worker output must contain that evidence
+  // before done closure is accepted.  Generic "npm test" values are not checked.
+  if (options.verificationText) {
+    const namedProof = checkNamedTestProof(String(options.verificationText), String(output));
+    if (namedProof.matched && namedProof.gap) {
+      gaps.push(namedProof.gap);
+    }
+    evidence.namedTestProof = namedProof;
   }
 
   // No verification report at all — gap for any role with required fields

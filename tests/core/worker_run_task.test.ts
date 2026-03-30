@@ -10,6 +10,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseContractHealth, isContractHealthy, formatContractHealth, parseStartupContractAnchor, formatStartupContractAnchor, STARTUP_CONTRACT_ANCHOR_KEY } from "../../src/workers/contract_health.js";
 
@@ -518,3 +519,117 @@ describe("run_task.js — STARTUP_CONTRACT_ANCHOR named verification anchor", ()
     );
   });
 });
+
+// ── Docker entrypoint conformance and canonical named test proofs ─────────────
+
+/**
+ * CANONICAL_TEST_PROOF: These tests unify Docker entrypoint conformance with
+ * worker startup contract verification.  Each test is explicitly named so that
+ * downstream verification gates can match the test name against packet
+ * verification fields (named test proof pattern).
+ *
+ * Invariants verified:
+ *  1. The ENTRY constant used in tests matches the Docker worker CMD — production
+ *     containers run the exact same file that tests exercise.
+ *  2. The package.json "worker:run" script references the same entry point.
+ *  3. The ENTRY file exists on disk (pre-condition for all startup contract tests).
+ *  4. A healthy startup anchor is not emitted when Docker CMD cannot start cleanly
+ *     (missing env vars simulation).
+ */
+describe("run_task.js — Docker entrypoint conformance and canonical named test proofs", () => {
+  const ROOT = path.resolve(__dirname, "..", "..");
+  const workerDockerfilePath = path.join(ROOT, "docker", "worker", "Dockerfile");
+
+  function extractDockerfileCmdFiles(text: string): string[] {
+    const cmdMatch = text.match(/^CMD\s+(\[.+?\])/m);
+    if (!cmdMatch) return [];
+    try {
+      const parts: unknown = JSON.parse(cmdMatch[1]);
+      if (!Array.isArray(parts)) return [];
+      return (parts as string[]).filter(
+        (p) => typeof p === "string" && (p.endsWith(".ts") || p.endsWith(".js")) && p.includes("/")
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  it("CANONICAL_TEST_PROOF: worker Dockerfile CMD entry point matches the ENTRY constant used in tests", () => {
+    const dockerfileText = fs.readFileSync(workerDockerfilePath, "utf8");
+    const cmdFiles = extractDockerfileCmdFiles(dockerfileText);
+    assert.ok(
+      cmdFiles.length > 0,
+      "worker Dockerfile must have a CMD referencing at least one .ts or .js entry point file"
+    );
+    const cmdEntryFile = cmdFiles[0];
+    // ENTRY is an absolute path; convert to repo-relative for comparison
+    const entryRelative = path
+      .relative(ROOT, ENTRY)
+      .split(path.sep)
+      .join("/");
+    assert.equal(
+      cmdEntryFile,
+      entryRelative,
+      `worker Dockerfile CMD entry point "${cmdEntryFile}" must match ENTRY constant "${entryRelative}" — tests and container run the same file`
+    );
+  });
+
+  it("CANONICAL_TEST_PROOF: worker:run npm script contains the same entry point as the Dockerfile CMD", () => {
+    const pkgPath = path.join(ROOT, "package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { scripts?: Record<string, string> };
+    const workerRun = pkg.scripts?.["worker:run"];
+    assert.ok(
+      workerRun,
+      'package.json must define a "worker:run" script — this is the canonical container entrypoint'
+    );
+    const dockerfileText = fs.readFileSync(workerDockerfilePath, "utf8");
+    const cmdFiles = extractDockerfileCmdFiles(dockerfileText);
+    assert.ok(cmdFiles.length > 0, "worker Dockerfile must have a CMD with a .ts/.js entry point");
+    const cmdEntryFile = cmdFiles[0];
+    assert.ok(
+      workerRun.includes(cmdEntryFile),
+      `"worker:run" npm script must include the Docker CMD entry point "${cmdEntryFile}" (got: "${workerRun}")`
+    );
+  });
+
+  it("CANONICAL_TEST_PROOF: ENTRY file exists on disk — startup contract requires the entry file to be present", () => {
+    assert.ok(
+      fs.existsSync(ENTRY),
+      `ENTRY file must exist on disk: ${ENTRY}`
+    );
+  });
+
+  it("CANONICAL_TEST_PROOF: Docker worker Dockerfile CMD is a valid JSON array with node and tsx", () => {
+    const dockerfileText = fs.readFileSync(workerDockerfilePath, "utf8");
+    const cmdMatch = dockerfileText.match(/^CMD\s+(\[.+?\])/m);
+    assert.ok(cmdMatch, "worker Dockerfile must have a CMD directive using JSON array syntax");
+    const parts: string[] = JSON.parse(cmdMatch![1]);
+    assert.ok(
+      parts.includes("node"),
+      "Docker CMD must include 'node' as the runtime executable"
+    );
+    const hasTsx = parts.some(p => p.includes("tsx"));
+    assert.ok(
+      hasTsx,
+      "Docker CMD must use '--import tsx' or similar tsx invocation to support TypeScript entry points"
+    );
+  });
+
+  it("negative: CANONICAL_TEST_PROOF: startup contract anchor absent when env vars are missing — Docker CMD cannot produce healthy startup without env vars", () => {
+    const result = run({
+      WORKER_ROLE: "",
+      TASK_PAYLOAD: "",
+      TARGET_REPO: "",
+      GITHUB_TOKEN: "",
+    });
+    assert.equal(result.status, 1,
+      "exit code must be 1 when all required env vars are absent (Docker CMD startup failure)"
+    );
+    const combined = result.stdout + result.stderr;
+    assert.ok(
+      !combined.includes(`${STARTUP_CONTRACT_ANCHOR_KEY}=verified`),
+      "startup-contract anchor must NOT appear when Docker CMD cannot complete env var validation"
+    );
+  });
+});
+
