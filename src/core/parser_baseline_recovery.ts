@@ -37,11 +37,18 @@ export const BASELINE_METRICS_SCHEMA_VERSION = 1;
 /**
  * Per-component confidence scores extracted from a prometheusAnalysis object.
  * Each value is a 0–1 score; a score of 1.0 means no degradation in that component.
+ *
+ * dependencyGraph reflects dependency-graph resolution quality:
+ *   1.0 = graph resolved OK with no conflicts
+ *   0.8 = graph resolved OK but with conflict pairs (conflict-rate adjusted)
+ *   0.6 = graph resolution degraded (non-OK status, no cycles)
+ *   0.3 = cycle detected in dependency graph (hard degradation)
  */
 export interface ParserComponentMetrics {
-  plansShape:    number;
-  healthField:   number;
-  requestBudget: number;
+  plansShape:      number;
+  healthField:     number;
+  requestBudget:   number;
+  dependencyGraph: number;
   [key: string]: number;
 }
 
@@ -50,9 +57,10 @@ export interface ParserComponentMetrics {
  * A gap of 0 means the component is fully healthy.
  */
 export interface ParserComponentGap {
-  plansShape:    number;
-  healthField:   number;
-  requestBudget: number;
+  plansShape:      number;
+  healthField:     number;
+  requestBudget:   number;
+  dependencyGraph: number;
   [key: string]: number;
 }
 
@@ -100,15 +108,17 @@ export function computeBaselineRecoveryState(
 
   const rawComponents = prometheusAnalysis?.parserConfidenceComponents;
   const componentMetrics: ParserComponentMetrics = {
-    plansShape:    typeof rawComponents?.plansShape    === "number" ? rawComponents.plansShape    : 1.0,
-    healthField:   typeof rawComponents?.healthField   === "number" ? rawComponents.healthField   : 1.0,
-    requestBudget: typeof rawComponents?.requestBudget === "number" ? rawComponents.requestBudget : 1.0,
+    plansShape:      typeof rawComponents?.plansShape      === "number" ? rawComponents.plansShape      : 1.0,
+    healthField:     typeof rawComponents?.healthField     === "number" ? rawComponents.healthField     : 1.0,
+    requestBudget:   typeof rawComponents?.requestBudget   === "number" ? rawComponents.requestBudget   : 1.0,
+    dependencyGraph: typeof rawComponents?.dependencyGraph === "number" ? rawComponents.dependencyGraph : 1.0,
   };
 
   const componentGap: ParserComponentGap = {
-    plansShape:    Math.round((1.0 - componentMetrics.plansShape)    * 1000) / 1000,
-    healthField:   Math.round((1.0 - componentMetrics.healthField)   * 1000) / 1000,
-    requestBudget: Math.round((1.0 - componentMetrics.requestBudget) * 1000) / 1000,
+    plansShape:      Math.round((1.0 - componentMetrics.plansShape)      * 1000) / 1000,
+    healthField:     Math.round((1.0 - componentMetrics.healthField)     * 1000) / 1000,
+    requestBudget:   Math.round((1.0 - componentMetrics.requestBudget)   * 1000) / 1000,
+    dependencyGraph: Math.round((1.0 - componentMetrics.dependencyGraph) * 1000) / 1000,
   };
 
   const rawPenalties = prometheusAnalysis?.parserConfidencePenalties;

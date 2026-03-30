@@ -17,6 +17,8 @@ import {
   normalizeProjectHealthAlias,
   checkHighRiskPacketConfidence,
   HIGH_RISK_LOW_CONFIDENCE_REASON,
+  computeHighRiskComponentGate,
+  HIGH_RISK_COMPONENT_GATE_THRESHOLDS,
 } from "../../src/core/prometheus.js";
 import { compilePrompt } from "../../src/core/prompt_compiler.js";
 import { isNonSpecificVerification, validatePlanContract } from "../../src/core/plan_contract_validator.js";
@@ -1900,6 +1902,122 @@ describe("splitWavesIntoMicrowaves", () => {
       `T-C (2 dependents) must be in the first micro-wave; wave 1 tasks: ${wave1Tasks.join(", ")}`
     );
   });
+
+// ── computeHighRiskComponentGate ──────────────────────────────────────────────
+
+describe("computeHighRiskComponentGate", () => {
+  it("returns shouldApplyStricterGate=false when all components are healthy (1.0)", () => {
+    const result = computeHighRiskComponentGate({
+      plansShape:      1.0,
+      requestBudget:   1.0,
+      dependencyGraph: 1.0,
+    });
+    assert.equal(result.shouldApplyStricterGate, false);
+    assert.equal(result.weakComponents.length, 0);
+    assert.equal(result.reason, "all_components_healthy");
+  });
+
+  it("returns shouldApplyStricterGate=false with empty components (all default to 1.0)", () => {
+    const result = computeHighRiskComponentGate({});
+    assert.equal(result.shouldApplyStricterGate, false);
+    assert.equal(result.weakComponents.length, 0);
+  });
+
+  it("flags plansShape as weak when score is below threshold (0.5 = fallback mode)", () => {
+    const result = computeHighRiskComponentGate({
+      plansShape:      0.5,
+      requestBudget:   1.0,
+      dependencyGraph: 1.0,
+    });
+    assert.equal(result.shouldApplyStricterGate, true);
+    assert.ok(result.weakComponents.includes("plansShape"), "plansShape must be listed as weak");
+    assert.ok(result.reason.includes("plansShape"), "reason must mention the weak component");
+  });
+
+  it("flags requestBudget as weak when score is below threshold (0.9 = fallback budget)", () => {
+    const result = computeHighRiskComponentGate({
+      plansShape:      1.0,
+      requestBudget:   0.9,
+      dependencyGraph: 1.0,
+    });
+    assert.equal(result.shouldApplyStricterGate, true);
+    assert.ok(result.weakComponents.includes("requestBudget"));
+  });
+
+  it("flags dependencyGraph as weak when score is below threshold (0.3 = cycle detected)", () => {
+    const result = computeHighRiskComponentGate({
+      plansShape:      1.0,
+      requestBudget:   1.0,
+      dependencyGraph: 0.3,
+    });
+    assert.equal(result.shouldApplyStricterGate, true);
+    assert.ok(result.weakComponents.includes("dependencyGraph"));
+  });
+
+  it("flags multiple weak components and lists all in weakComponents", () => {
+    const result = computeHighRiskComponentGate({
+      plansShape:      0.5,
+      requestBudget:   0.9,
+      dependencyGraph: 0.6,
+    });
+    assert.equal(result.shouldApplyStricterGate, true);
+    assert.ok(result.weakComponents.includes("plansShape"));
+    assert.ok(result.weakComponents.includes("requestBudget"));
+    assert.ok(result.weakComponents.includes("dependencyGraph"));
+    assert.equal(result.weakComponents.length, 3);
+  });
+
+  it("does NOT flag plansShape=1.0 (direct JSON path — healthy)", () => {
+    const result = computeHighRiskComponentGate({ plansShape: 1.0 });
+    assert.ok(!result.weakComponents.includes("plansShape"));
+  });
+
+  it("does NOT flag requestBudget at exactly the threshold (scores at threshold are NOT weak)", () => {
+    // threshold is 0.95; a score of exactly 0.95 is not below threshold
+    const result = computeHighRiskComponentGate({ requestBudget: 0.95 });
+    assert.ok(!result.weakComponents.includes("requestBudget"));
+  });
+
+  it("does NOT flag dependencyGraph=0.8 (at the threshold boundary — not below)", () => {
+    const result = computeHighRiskComponentGate({ dependencyGraph: 0.8 });
+    assert.ok(!result.weakComponents.includes("dependencyGraph"));
+  });
+
+  it("handles undefined component values by defaulting to 1.0 (healthy)", () => {
+    const result = computeHighRiskComponentGate({ plansShape: undefined as any });
+    assert.ok(!result.weakComponents.includes("plansShape"), "undefined plansShape must default to 1.0 (healthy)");
+  });
+
+  it("HIGH_RISK_COMPONENT_GATE_THRESHOLDS exports expected keys", () => {
+    assert.ok("plansShape"      in HIGH_RISK_COMPONENT_GATE_THRESHOLDS);
+    assert.ok("requestBudget"   in HIGH_RISK_COMPONENT_GATE_THRESHOLDS);
+    assert.ok("dependencyGraph" in HIGH_RISK_COMPONENT_GATE_THRESHOLDS);
+  });
+
+  it("reason includes all weak component names when gate is active", () => {
+    const result = computeHighRiskComponentGate({ plansShape: 0.5, dependencyGraph: 0.3 });
+    assert.ok(result.reason.includes("plansShape"),      "reason must include plansShape");
+    assert.ok(result.reason.includes("dependencyGraph"), "reason must include dependencyGraph");
+  });
+
+  // ── Negative paths ────────────────────────────────────────────────────────
+
+  it("NEGATIVE: gate not active when plansShape is exactly at boundary 0.8", () => {
+    const result = computeHighRiskComponentGate({ plansShape: 0.8 });
+    // 0.8 is NOT below 0.8 → no weak component
+    assert.equal(result.shouldApplyStricterGate, false);
+  });
+
+  it("NEGATIVE: gate not active when requestBudget is fully healthy (1.0)", () => {
+    const result = computeHighRiskComponentGate({
+      plansShape:      0.9,
+      requestBudget:   1.0,
+      dependencyGraph: 0.9,
+    });
+    // plansShape 0.9 >= 0.8, requestBudget 1.0 >= 0.95, dependencyGraph 0.9 >= 0.8
+    assert.equal(result.shouldApplyStricterGate, false);
+  });
+});
 
   it("does not mutate the original plan objects", () => {
     const plan = { task_id: "T-1", task: "Task 1", wave: 1, dependencies: [], extra: "preserved" };

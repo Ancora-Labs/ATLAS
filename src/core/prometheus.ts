@@ -435,6 +435,74 @@ export const UNRECOVERABLE_PACKET_REASONS = Object.freeze({
 export const HIGH_RISK_LOW_CONFIDENCE_REASON = "high_risk_low_confidence" as const;
 
 /**
+ * Component confidence thresholds for the strict high-risk gate.
+ *
+ * When a component score falls below its threshold, the component is considered
+ * "weak" and the strict gate becomes active for high-risk plans.
+ *
+ *   plansShape:      < 0.8 — fallback/narrative parse mode was used (score 0.5)
+ *   requestBudget:   < 0.95 — request budget was rebuilt deterministically (score 0.9)
+ *   dependencyGraph: < 0.8 — dependency graph had cycles (0.3) or conflicts/degradation (0.6)
+ */
+export const HIGH_RISK_COMPONENT_GATE_THRESHOLDS: Readonly<Record<string, number>> = Object.freeze({
+  plansShape:      0.8,
+  requestBudget:   0.95,
+  dependencyGraph: 0.8,
+});
+
+/** Result returned by computeHighRiskComponentGate(). */
+export interface ComponentHighRiskGateResult {
+  /** True when at least one component is below its threshold — strict gate is active. */
+  shouldApplyStricterGate: boolean;
+  /** Human-readable explanation of why the strict gate is/is not active. */
+  reason: string;
+  /** Names of components whose score fell below the threshold. */
+  weakComponents: string[];
+}
+
+/**
+ * Compute whether the component-level strict gate should be applied to high-risk plans.
+ *
+ * When any component (plansShape, requestBudget, dependencyGraph) is below its
+ * threshold, the gate becomes active.  Active gate means high-risk plans must have
+ * BOTH a valid premortem AND non-empty acceptance_criteria — not just one of the two,
+ * which is the looser requirement enforced by the pre-normalization
+ * checkHighRiskPacketConfidence gate.
+ *
+ * Pure function — no I/O.  Safe to call with partial/missing components;
+ * missing scores default to 1.0 (healthy).
+ *
+ * @param components — subset of parserConfidenceComponents (plansShape, requestBudget, dependencyGraph)
+ * @returns ComponentHighRiskGateResult
+ */
+export function computeHighRiskComponentGate(
+  components: Partial<Record<string, number>>
+): ComponentHighRiskGateResult {
+  const weakComponents: string[] = [];
+
+  const plansShape      = typeof components.plansShape      === "number" ? components.plansShape      : 1.0;
+  const requestBudget   = typeof components.requestBudget   === "number" ? components.requestBudget   : 1.0;
+  const dependencyGraph = typeof components.dependencyGraph === "number" ? components.dependencyGraph : 1.0;
+
+  if (plansShape      < HIGH_RISK_COMPONENT_GATE_THRESHOLDS.plansShape)
+    weakComponents.push("plansShape");
+  if (requestBudget   < HIGH_RISK_COMPONENT_GATE_THRESHOLDS.requestBudget)
+    weakComponents.push("requestBudget");
+  if (dependencyGraph < HIGH_RISK_COMPONENT_GATE_THRESHOLDS.dependencyGraph)
+    weakComponents.push("dependencyGraph");
+
+  if (weakComponents.length === 0) {
+    return { shouldApplyStricterGate: false, reason: "all_components_healthy", weakComponents: [] };
+  }
+
+  return {
+    shouldApplyStricterGate: true,
+    reason: `component_confidence_degraded(${weakComponents.join(",")})`,
+    weakComponents,
+  };
+}
+
+/**
  * Check whether a raw plan packet is a high-risk/low-confidence stub that must
  * be rejected before normalization.
  *
@@ -2498,6 +2566,60 @@ Consider whether the root causes are:
         rawParsedInput._rejectedHighRiskLowConfidenceCount = highRiskLowConfidence.length;
         rawParsedInput._rejectedHighRiskLowConfidencePackets = highRiskLowConfidence;
       }
+
+      // ── Component-level strict high-risk gate ────────────────────────────
+      // When parser component confidence is degraded (shape/budget/dependency
+      // below thresholds), require BOTH premortem AND acceptance_criteria for
+      // every high-risk plan.  This is stricter than the gate above, which only
+      // rejects when BOTH signals are simultaneously absent.
+      //
+      // Preliminary component scores are computed from the raw parsed input
+      // (pre-normalization) because normalization always injects premortem/AC
+      // for high-risk plans, making post-normalization checks ineffective.
+      //   plansShape:      1.0 if plans[] is non-empty JSON array, else 0.5
+      //   requestBudget:   1.0 if budget with estimatedPremiumRequestsTotal
+      //                    present, else 0.9 (built deterministically)
+      //   dependencyGraph: 1.0 default; refined post-normalization via the
+      //                    non-blocking dependency resolver.
+      if (rawParsedInput.plans.length > 0) {
+        const prelimComponents = {
+          plansShape:      Array.isArray(rawParsedInput.plans) && rawParsedInput.plans.length > 0 ? 1.0 : 0.5,
+          requestBudget:   (rawParsedInput.requestBudget &&
+            Number.isFinite(Number(rawParsedInput.requestBudget.estimatedPremiumRequestsTotal))) ? 1.0 : 0.9,
+          dependencyGraph: 1.0,
+        };
+        const componentGateResult = computeHighRiskComponentGate(prelimComponents);
+        if (componentGateResult.shouldApplyStricterGate) {
+          const componentStrictRejected: Array<{ index: number; reason: string }> = [];
+          rawParsedInput.plans = rawParsedInput.plans.filter((plan: any, i: number) => {
+            if (String(plan.riskLevel || "").trim().toLowerCase() !== "high") return true;
+            const premortem = plan.premortem;
+            const hasPremortem = premortem && typeof premortem === "object" && (
+              (Array.isArray(premortem.failurePaths) && premortem.failurePaths.length > 0) ||
+              (Array.isArray(premortem.mitigations)  && premortem.mitigations.length  > 0) ||
+              (typeof premortem.rollbackPlan === "string" && premortem.rollbackPlan.trim().length > 0)
+            );
+            const ac = plan.acceptance_criteria;
+            const hasAC = Array.isArray(ac) && ac.some(c => String(c || "").trim().length > 0);
+            if (!hasPremortem || !hasAC) {
+              componentStrictRejected.push({
+                index: i,
+                reason: `component_high_risk_strict_gate(${componentGateResult.weakComponents.join(",")})`,
+              });
+              return false;
+            }
+            return true;
+          });
+          if (componentStrictRejected.length > 0) {
+            await appendProgress(config,
+              `[PROMETHEUS][PACKET_GATE] Component-level strict gate rejected ${componentStrictRejected.length} high-risk packet(s) ` +
+              `(weak: ${componentGateResult.weakComponents.join(",")}) — both premortem and acceptance_criteria required`
+            );
+            rawParsedInput._rejectedComponentGateCount   = componentStrictRejected.length;
+            rawParsedInput._rejectedComponentGatePackets = componentStrictRejected;
+          }
+        }
+      }
     }
   }
 
@@ -2890,12 +3012,37 @@ Consider whether the root causes are:
         waves:           graphResult.waves,
         errorMessage:    graphResult.errorMessage ?? null,
       };
+
+      // ── Update dependencyGraph confidence component ──────────────────────
+      // Compute a 0–1 score from the resolved graph and attach it to the
+      // parserConfidenceComponents so that calibration loops (baseline recovery,
+      // dispatch strictness) can use it on the next cycle.
+      //
+      // Score scale:
+      //   1.0 — OK, no conflicts
+      //   0.8–1.0 — OK, conflict-rate adjusted (0.2 deducted per 100% conflict rate)
+      //   0.6 — non-OK status without cycles (degraded but recoverable)
+      //   0.3 — cycle detected (hard graph failure)
+      const conflictRate = graphResult.conflictPairs.length / Math.max(1, analysis.plans.length);
+      const cycleCount   = Array.isArray(graphResult.cycles) ? graphResult.cycles.length : 0;
+      const dependencyGraphScore =
+        cycleCount > 0                           ? 0.3 :
+        graphResult.status !== GRAPH_STATUS.OK   ? 0.6 :
+        Math.max(0.5, 1.0 - conflictRate * 0.2);
+      const roundedDGScore = Math.round(dependencyGraphScore * 100) / 100;
+
+      if (!analysis.parserConfidenceComponents) analysis.parserConfidenceComponents = {};
+      analysis.parserConfidenceComponents.dependencyGraph = roundedDGScore;
+      analysis.dependencyGraph.score = roundedDGScore;
     } catch (err) {
       analysis.dependencyGraph = {
         status:       GRAPH_STATUS.DEGRADED,
         reasonCode:   "RESOLVER_INTERNAL_ERROR",
         errorMessage: String(err?.message || err),
       };
+      // Reflect degraded graph in parserConfidenceComponents so downstream gates see it.
+      if (!analysis.parserConfidenceComponents) analysis.parserConfidenceComponents = {};
+      analysis.parserConfidenceComponents.dependencyGraph = 0.6;
       await appendProgress(config, `[PROMETHEUS][WARN] Dependency graph resolver error (non-fatal): ${String(err?.message || err)}`).catch(() => {});
     }
   }

@@ -27,9 +27,10 @@ function makeFullAnalysis(overrides: Record<string, any> = {}): Record<string, a
   return {
     parserConfidence: 1.0,
     parserConfidenceComponents: {
-      plansShape:    1.0,
-      healthField:   1.0,
-      requestBudget: 1.0,
+      plansShape:      1.0,
+      healthField:     1.0,
+      requestBudget:   1.0,
+      dependencyGraph: 1.0,
     },
     parserConfidencePenalties: [],
     ...overrides,
@@ -86,23 +87,25 @@ describe("computeBaselineRecoveryState", () => {
   it("componentMetrics reflects provided components", () => {
     const analysis = makeFullAnalysis({
       parserConfidence: 0.7,
-      parserConfidenceComponents: { plansShape: 0.5, healthField: 0.8, requestBudget: 0.9 },
+      parserConfidenceComponents: { plansShape: 0.5, healthField: 0.8, requestBudget: 0.9, dependencyGraph: 0.6 },
     });
     const result = computeBaselineRecoveryState(analysis);
-    assert.equal(result.componentMetrics.plansShape,    0.5);
-    assert.equal(result.componentMetrics.healthField,   0.8);
-    assert.equal(result.componentMetrics.requestBudget, 0.9);
+    assert.equal(result.componentMetrics.plansShape,      0.5);
+    assert.equal(result.componentMetrics.healthField,     0.8);
+    assert.equal(result.componentMetrics.requestBudget,   0.9);
+    assert.equal(result.componentMetrics.dependencyGraph, 0.6);
   });
 
-  it("componentGap is 1.0 - score for each component", () => {
+  it("componentGap is 1.0 - score for each component including dependencyGraph", () => {
     const analysis = makeFullAnalysis({
       parserConfidence: 0.7,
-      parserConfidenceComponents: { plansShape: 0.5, healthField: 0.8, requestBudget: 1.0 },
+      parserConfidenceComponents: { plansShape: 0.5, healthField: 0.8, requestBudget: 1.0, dependencyGraph: 0.7 },
     });
     const result = computeBaselineRecoveryState(analysis);
-    assert.equal(result.componentGap.plansShape,    0.5);
-    assert.equal(result.componentGap.healthField,   0.2);
-    assert.equal(result.componentGap.requestBudget, 0);
+    assert.equal(result.componentGap.plansShape,      0.5);
+    assert.equal(result.componentGap.healthField,     0.2);
+    assert.equal(result.componentGap.requestBudget,   0);
+    assert.equal(result.componentGap.dependencyGraph, 0.3);
   });
 
   it("penalties are passed through when valid", () => {
@@ -144,9 +147,10 @@ describe("computeBaselineRecoveryState", () => {
 
   it("handles missing parserConfidenceComponents (defaults all to 1.0)", () => {
     const result = computeBaselineRecoveryState({ parserConfidence: 0.8 });
-    assert.equal(result.componentMetrics.plansShape,    1.0);
-    assert.equal(result.componentMetrics.healthField,   1.0);
-    assert.equal(result.componentMetrics.requestBudget, 1.0);
+    assert.equal(result.componentMetrics.plansShape,      1.0);
+    assert.equal(result.componentMetrics.healthField,     1.0);
+    assert.equal(result.componentMetrics.requestBudget,   1.0);
+    assert.equal(result.componentMetrics.dependencyGraph, 1.0);
   });
 
   it("accepts a cycleId parameter and includes it in the record", () => {
