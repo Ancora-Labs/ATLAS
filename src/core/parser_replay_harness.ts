@@ -172,8 +172,9 @@ export function replayCorpus(corpus, parserFn) {
  *   ELEVATED — ≤20% corpus regression rate OR baseline recovery active with
  *              confidence ≥ 0.7: advisory warning, dispatch continues.
  *   STRICT   — 20–50% corpus regression rate OR baseline recovery active with
- *              confidence < 0.7: alert emitted, dispatch continues with reduced
- *              concurrency allowed by the caller.
+ *              confidence < 0.7 OR baseline recovery active with severe
+ *              component degradation (maxComponentGap ≥ 0.4): alert emitted,
+ *              dispatch continues with reduced concurrency allowed by the caller.
  *   BLOCKED  — >50% corpus regression rate: dispatch blocked, human review required.
  */
 export const DISPATCH_STRICTNESS = Object.freeze({
@@ -196,11 +197,13 @@ export interface ReplayRegressionState {
 /**
  * Result of computeDispatchStrictness().
  *
- * @property strictness     — resolved strictness level
- * @property regressionRate — regressionCount / totalCount (0 when no corpus)
+ * @property strictness      — resolved strictness level
+ * @property regressionRate  — regressionCount / totalCount (0 when no corpus)
  * @property regressionCount — raw count from replay state
  * @property totalCount      — corpus size at last replay run
  * @property recoveryActive  — true when baseline recovery is currently active
+ * @property penaltyCount    — number of component penalties from the baseline record (0 when absent)
+ * @property maxComponentGap — worst single-component gap from the baseline record (0 when absent)
  * @property reason          — human-readable explanation of the resolved level
  */
 export interface DispatchStrictnessResult {
@@ -209,6 +212,8 @@ export interface DispatchStrictnessResult {
   regressionCount: number;
   totalCount:      number;
   recoveryActive:  boolean;
+  penaltyCount:    number;
+  maxComponentGap: number;
   reason:          string;
 }
 
@@ -240,6 +245,22 @@ export function computeDispatchStrictness(
       ? baselineRecoveryRecord.parserConfidence
       : 1.0;
 
+  // Extract component penalty data for richer strictness decisions.
+  const penalties = Array.isArray(baselineRecoveryRecord?.penalties)
+    ? baselineRecoveryRecord!.penalties
+    : [];
+  const penaltyCount = penalties.length;
+
+  const cgap = baselineRecoveryRecord?.componentGap;
+  const maxComponentGap: number = cgap
+    ? Math.max(
+        typeof cgap.plansShape      === "number" ? cgap.plansShape      : 0,
+        typeof cgap.healthField     === "number" ? cgap.healthField     : 0,
+        typeof cgap.requestBudget   === "number" ? cgap.requestBudget   : 0,
+        typeof cgap.dependencyGraph === "number" ? cgap.dependencyGraph : 0,
+      )
+    : 0;
+
   // Hard block: >50% of the replay corpus has regressed.
   if (regressionRate > 0.5) {
     return {
@@ -248,37 +269,58 @@ export function computeDispatchStrictness(
       regressionCount,
       totalCount,
       recoveryActive,
+      penaltyCount,
+      maxComponentGap,
       reason: `Replay regression rate ${(regressionRate * 100).toFixed(0)}% exceeds 50% — dispatch blocked pending human review`,
     };
   }
 
-  // Strict: 20–50% regression OR deep recovery (confidence < 0.7).
-  if (regressionRate > 0.2 || (recoveryActive && parserConfidence < 0.7)) {
-    const rateReason = regressionRate > 0.2
-      ? `Replay regression rate ${(regressionRate * 100).toFixed(0)}% exceeds 20%`
-      : `Baseline recovery active with deep confidence degradation (confidence=${parserConfidence})`;
+  // Strict: 20–50% regression OR deep recovery (confidence < 0.7) OR severe component degradation.
+  // A maxComponentGap >= 0.4 (component confidence ≤ 0.6) is treated as severe even when the
+  // aggregate parserConfidence is still above 0.7, because a single deeply-degraded component
+  // is a reliable precursor to plan quality failures.
+  const hasDeepComponentDegradation = recoveryActive && maxComponentGap >= 0.4;
+  if (regressionRate > 0.2 || (recoveryActive && parserConfidence < 0.7) || hasDeepComponentDegradation) {
+    let strictReason: string;
+    if (regressionRate > 0.2) {
+      strictReason = `Replay regression rate ${(regressionRate * 100).toFixed(0)}% exceeds 20%`;
+    } else if (parserConfidence < 0.7) {
+      strictReason = `Baseline recovery active with deep confidence degradation (confidence=${parserConfidence})`;
+    } else {
+      strictReason = `Baseline recovery active with severe component degradation (maxComponentGap=${maxComponentGap})`;
+    }
     return {
       strictness:      DISPATCH_STRICTNESS.STRICT,
       regressionRate,
       regressionCount,
       totalCount,
       recoveryActive,
-      reason: rateReason,
+      penaltyCount,
+      maxComponentGap,
+      reason: strictReason,
     };
   }
 
   // Elevated: any regression present OR recovery active (shallow).
+  // When recovery is active, include penalty count in the reason for operator visibility.
   if (regressionRate > 0 || recoveryActive) {
-    const rateReason = regressionRate > 0
-      ? `Replay corpus has ${regressionCount} regression(s) (${(regressionRate * 100).toFixed(0)}% rate)`
-      : `Baseline recovery mode active (confidence=${parserConfidence})`;
+    let elevatedReason: string;
+    if (regressionRate > 0) {
+      elevatedReason = `Replay corpus has ${regressionCount} regression(s) (${(regressionRate * 100).toFixed(0)}% rate)`;
+    } else if (penaltyCount > 0) {
+      elevatedReason = `Baseline recovery mode active (confidence=${parserConfidence}, penalties=${penaltyCount})`;
+    } else {
+      elevatedReason = `Baseline recovery mode active (confidence=${parserConfidence})`;
+    }
     return {
       strictness:      DISPATCH_STRICTNESS.ELEVATED,
       regressionRate,
       regressionCount,
       totalCount,
       recoveryActive,
-      reason: rateReason,
+      penaltyCount,
+      maxComponentGap,
+      reason: elevatedReason,
     };
   }
 
@@ -288,6 +330,8 @@ export function computeDispatchStrictness(
     regressionCount: 0,
     totalCount,
     recoveryActive:  false,
+    penaltyCount:    0,
+    maxComponentGap: 0,
     reason:          "No replay regressions and parser confidence healthy",
   };
 }

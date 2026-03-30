@@ -643,6 +643,125 @@ describe("computeDispatchStrictness — strictness calibration", () => {
     );
     assert.notEqual(result.strictness, DISPATCH_STRICTNESS.NORMAL);
   });
+
+  // ── Component confidence penalty tests ────────────────────────────────────
+
+  it("STRICT: recovery active with severe component degradation (maxComponentGap >= 0.4, confidence >= 0.7)", () => {
+    const result = computeDispatchStrictness(
+      null,
+      {
+        recoveryActive: true,
+        parserConfidence: 0.75,
+        componentGap: { plansShape: 0.45, healthField: 0.1, requestBudget: 0.0, dependencyGraph: 0.0 },
+        penalties: [{ reason: "plansShape degraded", component: "plansShape", delta: -0.45 }],
+        recordedAt: new Date().toISOString(),
+      } as any,
+    );
+    assert.equal(result.strictness, DISPATCH_STRICTNESS.STRICT);
+    assert.ok(result.reason.includes("severe component degradation"));
+    assert.ok(result.reason.includes("maxComponentGap=0.45"));
+  });
+
+  it("STRICT: recovery active with exactly 0.4 maxComponentGap (boundary case)", () => {
+    const result = computeDispatchStrictness(
+      null,
+      {
+        recoveryActive: true,
+        parserConfidence: 0.8,
+        componentGap: { plansShape: 0.0, healthField: 0.4, requestBudget: 0.0, dependencyGraph: 0.0 },
+        penalties: [],
+        recordedAt: new Date().toISOString(),
+      } as any,
+    );
+    assert.equal(result.strictness, DISPATCH_STRICTNESS.STRICT);
+  });
+
+  it("ELEVATED (not STRICT): recovery active with maxComponentGap < 0.4 and confidence >= 0.7", () => {
+    const result = computeDispatchStrictness(
+      null,
+      {
+        recoveryActive: true,
+        parserConfidence: 0.82,
+        componentGap: { plansShape: 0.18, healthField: 0.1, requestBudget: 0.05, dependencyGraph: 0.0 },
+        penalties: [{ reason: "minor plansShape gap", component: "plansShape", delta: -0.18 }],
+        recordedAt: new Date().toISOString(),
+      } as any,
+    );
+    assert.equal(result.strictness, DISPATCH_STRICTNESS.ELEVATED);
+  });
+
+  it("ELEVATED reason includes penalty count when penalties present", () => {
+    const result = computeDispatchStrictness(
+      null,
+      {
+        recoveryActive: true,
+        parserConfidence: 0.85,
+        componentGap: { plansShape: 0.15, healthField: 0.0, requestBudget: 0.0, dependencyGraph: 0.0 },
+        penalties: [
+          { reason: "plansShape degraded", component: "plansShape", delta: -0.1 },
+          { reason: "requestBudget degraded", component: "requestBudget", delta: -0.05 },
+        ],
+        recordedAt: new Date().toISOString(),
+      } as any,
+    );
+    assert.equal(result.strictness, DISPATCH_STRICTNESS.ELEVATED);
+    assert.ok(result.reason.includes("penalties=2"), `Expected 'penalties=2' in reason: "${result.reason}"`);
+  });
+
+  it("result exposes penaltyCount and maxComponentGap fields", () => {
+    const result = computeDispatchStrictness(
+      { regressionCount: 0, totalCount: 5, passed: true, computedAt: new Date().toISOString() },
+      {
+        recoveryActive: true,
+        parserConfidence: 0.88,
+        componentGap: { plansShape: 0.12, healthField: 0.0, requestBudget: 0.0, dependencyGraph: 0.05 },
+        penalties: [{ reason: "plansShape minor gap", component: "plansShape", delta: -0.12 }],
+        recordedAt: new Date().toISOString(),
+      } as any,
+    );
+    assert.equal(typeof result.penaltyCount, "number");
+    assert.equal(typeof result.maxComponentGap, "number");
+    assert.equal(result.penaltyCount, 1);
+    assert.ok(Math.abs(result.maxComponentGap - 0.12) < 0.001);
+  });
+
+  it("penaltyCount=0 and maxComponentGap=0 when no baseline record provided", () => {
+    const result = computeDispatchStrictness(null, null);
+    assert.equal(result.penaltyCount, 0);
+    assert.equal(result.maxComponentGap, 0);
+  });
+
+  it("negative path: component gap below threshold does not escalate NORMAL to STRICT", () => {
+    // maxComponentGap=0.2 (< 0.4) with recoveryActive=false → NORMAL
+    const result = computeDispatchStrictness(
+      { regressionCount: 0, totalCount: 10, passed: true, computedAt: new Date().toISOString() },
+      {
+        recoveryActive: false,
+        parserConfidence: 0.92,
+        componentGap: { plansShape: 0.2, healthField: 0.1, requestBudget: 0.0, dependencyGraph: 0.0 },
+        penalties: [],
+        recordedAt: new Date().toISOString(),
+      } as any,
+    );
+    assert.equal(result.strictness, DISPATCH_STRICTNESS.NORMAL);
+  });
+
+  it("dependencyGraph component gap >= 0.4 triggers STRICT", () => {
+    const result = computeDispatchStrictness(
+      null,
+      {
+        recoveryActive: true,
+        parserConfidence: 0.75,
+        componentGap: { plansShape: 0.0, healthField: 0.0, requestBudget: 0.0, dependencyGraph: 0.7 },
+        penalties: [{ reason: "cycle in dependency graph", component: "dependencyGraph", delta: -0.7 }],
+        recordedAt: new Date().toISOString(),
+      } as any,
+    );
+    assert.equal(result.strictness, DISPATCH_STRICTNESS.STRICT);
+    assert.ok(result.reason.includes("severe component degradation"));
+    assert.equal(result.penaltyCount, 1);
+    assert.ok(Math.abs(result.maxComponentGap - 0.7) < 0.001);
+  });
 });
 
 // ── Replay regression state persistence ───────────────────────────────────────
