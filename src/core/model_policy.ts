@@ -454,6 +454,81 @@ export async function loadRouteROILedger(config: object): Promise<RouteROIEntry[
   return Array.isArray(data) ? data : [];
 }
 
+// ── Cost-aware routing — quality-floor model selection ────────────────────────
+//
+// Selects the cheapest model whose expected quality meets or exceeds a caller-
+// supplied floor.  Falls back to the strongest available model when no candidate
+// qualifies, marking the result so the caller can log a warning.
+
+/** Heuristic default quality scores per model (case-insensitive normalized key). */
+const DEFAULT_MODEL_QUALITY: Record<string, number> = {
+  "claude sonnet 4.6": 0.85,
+  "claude haiku 4":    0.70,
+  "claude haiku 4.5":  0.72,
+  "claude opus 4.6":   0.95,
+};
+
+/**
+ * Route to the cheapest model that still meets a minimum quality floor.
+ *
+ * Candidates are evaluated cheapest → strongest.  The first candidate whose
+ * expected quality meets or exceeds `qualityFloor` is returned.  When no
+ * candidate satisfies the constraint the strongest model is returned and
+ * `meetsQualityFloor` is `false`.
+ *
+ * @param taskHints    — task scope for complexity-tier derivation
+ * @param modelOptions — model pool; supply efficientModel / defaultModel / strongModel
+ *                       and optionally qualityByModel to override heuristic scores
+ * @param qualityFloor — minimum acceptable quality score (0–1; default 0.7)
+ * @returns {{ model, tier, reason, meetsQualityFloor }}
+ */
+export function routeModelByCost(
+  taskHints: TaskHints = {},
+  modelOptions: ModelOptions & { qualityByModel?: Record<string, number> } = {},
+  qualityFloor = 0.7
+): { model: string; tier: string; reason: string; meetsQualityFloor: boolean } {
+  const { tier } = classifyComplexityTier(taskHints);
+  const qualityByModel = modelOptions.qualityByModel || {};
+
+  const resolveQuality = (name: string): number => {
+    const key = String(name || "").toLowerCase();
+    return qualityByModel[name] ?? qualityByModel[key] ?? DEFAULT_MODEL_QUALITY[key] ?? 0.75;
+  };
+
+  const efficientModel = modelOptions.efficientModel || "";
+  const defaultModel   = modelOptions.defaultModel   || "Claude Sonnet 4.6";
+  const strongModel    = modelOptions.strongModel    || defaultModel;
+
+  // Build candidate list cheapest → strongest (deduplication preserving order)
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  for (const m of [efficientModel, defaultModel, strongModel]) {
+    if (m && !seen.has(m)) { candidates.push(m); seen.add(m); }
+  }
+
+  for (const candidate of candidates) {
+    const quality = resolveQuality(candidate);
+    if (quality >= qualityFloor) {
+      return {
+        model: candidate,
+        tier,
+        reason: `cost-aware: "${candidate}" meets quality floor ${qualityFloor} (score=${quality}) for tier ${tier}`,
+        meetsQualityFloor: true,
+      };
+    }
+  }
+
+  // No candidate meets the floor — use strongest as safe fallback
+  const fallback = candidates[candidates.length - 1] || defaultModel;
+  const fallbackQuality = resolveQuality(fallback);
+  return {
+    model: fallback,
+    tier,
+    reason: `cost-aware: no model meets quality floor ${qualityFloor}; using strongest "${fallback}" (score=${fallbackQuality}) for tier ${tier}`,
+    meetsQualityFloor: fallbackQuality >= qualityFloor,
+  };
+}
+
 /**
  * Compute the average realized ROI for a complexity tier from the ledger.
  *

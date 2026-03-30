@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { inferCapabilityTag, selectWorkerForPlan, assignWorkersToPlans, enforceLaneDiversity, computeDispatchMetrics, buildWorkerChain, detectLaneConflicts, recordLaneOutcome, getLaneScore } from "../../src/core/capability_pool.js";
+import { inferCapabilityTag, selectWorkerForPlan, assignWorkersToPlans, enforceLaneDiversity, computeDispatchMetrics, buildWorkerChain, detectLaneConflicts, recordLaneOutcome, getLaneScore, scoreWorkerTaskFit, selectWorkerByFitScore } from "../../src/core/capability_pool.js";
 
 describe("capability_pool", () => {
   describe("inferCapabilityTag", () => {
@@ -545,6 +545,77 @@ describe("capability_pool — lane diversity threshold enforcement", () => {
       const batches = buildRoleExecutionBatches(plans, {}, null);
       // No capabilityPoolResult → no diversity info → null
       assert.equal((batches[0] as any).diversityViolation, null);
+    });
+  });
+});
+
+// ── Worker-task fit scoring ────────────────────────────────────────────────────
+
+describe("capability_pool — worker-task fit scoring", () => {
+  describe("scoreWorkerTaskFit()", () => {
+    it("returns a number in [0, 1]", () => {
+      const score = scoreWorkerTaskFit("quality-worker", { task: "Add test coverage" });
+      assert.ok(typeof score === "number");
+      assert.ok(score >= 0 && score <= 1, `score out of range: ${score}`);
+    });
+
+    it("gives high score when worker capability matches plan tag", () => {
+      // test-infra tag → quality-worker handles it
+      const score = scoreWorkerTaskFit("quality-worker", { task: "Add spec for parser" });
+      assert.ok(score > 0.5, `expected > 0.5; got ${score}`);
+    });
+
+    it("gives lower score for a mismatched worker", () => {
+      // governance task → governance-worker is correct; quality-worker is not
+      const govScore  = scoreWorkerTaskFit("governance-worker", { task: "Freeze governance policy" });
+      const qualScore = scoreWorkerTaskFit("quality-worker",    { task: "Freeze governance policy" });
+      assert.ok(govScore > qualScore, "governance-worker should outscore quality-worker on a governance task");
+    });
+
+    it("incorporates lane performance via ledger", () => {
+      let ledger = {};
+      for (let i = 0; i < 10; i++) ledger = recordLaneOutcome(ledger, "quality", { success: true });
+      const scoreWithHistory    = scoreWorkerTaskFit("quality-worker", { task: "Add spec" }, ledger);
+      const scoreWithoutHistory = scoreWorkerTaskFit("quality-worker", { task: "Add spec" });
+      assert.ok(scoreWithHistory >= scoreWithoutHistory, "healthy ledger should not decrease score");
+    });
+
+    it("negative path: unknown worker name returns a number (no throw)", () => {
+      const score = scoreWorkerTaskFit("nonexistent-worker", { task: "Fix bug" });
+      assert.ok(typeof score === "number");
+    });
+  });
+
+  describe("selectWorkerByFitScore()", () => {
+    it("returns a WorkerSelection shape", () => {
+      const result = selectWorkerByFitScore({ task: "Add test coverage" });
+      assert.ok(result.role, "must have role");
+      assert.ok(result.lane, "must have lane");
+      assert.ok(result.reason, "must have reason");
+      assert.ok(typeof result.fitScore === "number", "must have fitScore");
+      assert.ok(typeof result.isFallback === "boolean");
+    });
+
+    it("selects quality-worker for a test-infra task", () => {
+      const result = selectWorkerByFitScore({ task: "Add spec coverage for parser" });
+      assert.equal(result.role, "quality-worker");
+    });
+
+    it("selects governance-worker for a governance task", () => {
+      const result = selectWorkerByFitScore({ task: "Update governance freeze rules" });
+      assert.equal(result.role, "governance-worker");
+    });
+
+    it("is deterministic — same input always returns same worker", () => {
+      const plan = { task: "Add docker configuration" };
+      const r1 = selectWorkerByFitScore(plan);
+      const r2 = selectWorkerByFitScore(plan);
+      assert.equal(r1.role, r2.role, "must be deterministic");
+    });
+
+    it("negative path: null plan does not throw and returns a selection", () => {
+      const result = selectWorkerByFitScore(null as any);
+      assert.ok(result.role);
     });
   });
 });
