@@ -43,6 +43,74 @@ import {
   autoCloseVerifiedDebt,
   saveLedgerFull,
 } from "./carry_forward_ledger.js";
+import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
+
+// ── Span contract emitter ─────────────────────────────────────────────────────
+
+/** Canonical agent identifier for Athena in span events. */
+export const ATHENA_AGENT_ID = "athena";
+
+/**
+ * Build a PLANNING_STAGE_TRANSITION span event for Athena.
+ * Conforms to SPAN_CONTRACT: stamps spanId, parentSpanId, traceId, agentId.
+ *
+ * @param correlationId — non-empty cycle trace ID
+ * @param stageFrom     — stage being left (one of ORCHESTRATION_LOOP_STEPS)
+ * @param stageTo       — stage being entered
+ * @param opts          — optional parentSpanId, durationMs
+ * @returns validated event envelope
+ */
+export function emitAthenaSpanTransition(
+  correlationId: string,
+  stageFrom: string,
+  stageTo: string,
+  opts: { parentSpanId?: string | null; durationMs?: number | null } = {},
+) {
+  return buildSpanEvent(
+    EVENTS.PLANNING_STAGE_TRANSITION,
+    EVENT_DOMAIN.PLANNING,
+    correlationId,
+    { agentId: ATHENA_AGENT_ID, parentSpanId: opts.parentSpanId ?? null },
+    {
+      [SPAN_CONTRACT.stageTransition.taskId]:     null,
+      [SPAN_CONTRACT.stageTransition.stageFrom]:  stageFrom,
+      [SPAN_CONTRACT.stageTransition.stageTo]:    stageTo,
+      [SPAN_CONTRACT.stageTransition.durationMs]: opts.durationMs ?? null,
+    },
+  );
+}
+
+/**
+ * Build a PLANNING_TASK_DROPPED span event for Athena (plan rejection path).
+ * Conforms to SPAN_CONTRACT.dropReason.
+ *
+ * @param correlationId  — non-empty cycle trace ID
+ * @param taskId         — identifier of the dropped task/plan
+ * @param reason         — human-readable rejection reason
+ * @param dropCode       — machine code from SPAN_CONTRACT.dropCodes (defaults to ATHENA_REJECTED)
+ * @param opts           — optional parentSpanId, stageWhenDropped
+ * @returns validated event envelope
+ */
+export function emitAthenaSpanDrop(
+  correlationId: string,
+  taskId: string,
+  reason: string,
+  dropCode: string = SPAN_CONTRACT.dropCodes.ATHENA_REJECTED,
+  opts: { parentSpanId?: string | null; stageWhenDropped?: string } = {},
+) {
+  return buildSpanEvent(
+    EVENTS.PLANNING_TASK_DROPPED,
+    EVENT_DOMAIN.PLANNING,
+    correlationId,
+    { agentId: ATHENA_AGENT_ID, parentSpanId: opts.parentSpanId ?? null },
+    {
+      [SPAN_CONTRACT.dropReason.taskId]:           taskId,
+      [SPAN_CONTRACT.dropReason.stageWhenDropped]: opts.stageWhenDropped ?? "athena_reviewing",
+      [SPAN_CONTRACT.dropReason.reason]:           reason,
+      [SPAN_CONTRACT.dropReason.dropCode]:         dropCode,
+    },
+  );
+}
 
 // ── Rubric calibration ───────────────────────────────────────────────────────
 

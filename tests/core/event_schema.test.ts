@@ -62,6 +62,28 @@ import { emitEvent } from "../../src/core/logger.js";
 
 import { PIPELINE_STAGE_ENUM } from "../../src/core/pipeline_progress.js";
 
+import {
+  JESUS_AGENT_ID,
+  emitJesusSpanTransition,
+} from "../../src/core/jesus_supervisor.js";
+
+import {
+  PROMETHEUS_AGENT_ID,
+  emitPrometheusSpanTransition,
+} from "../../src/core/prometheus.js";
+
+import {
+  ATHENA_AGENT_ID,
+  emitAthenaSpanTransition,
+  emitAthenaSpanDrop,
+} from "../../src/core/athena_reviewer.js";
+
+import {
+  WORKER_AGENT_ID,
+  emitWorkerSpanTransition,
+  emitWorkerSpanDrop,
+} from "../../src/core/worker_runner.js";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const SAMPLING_DOC_PATH = path.join(REPO_ROOT, "docs", "sampling_strategy.md");
@@ -790,5 +812,271 @@ describe("PLANNING_STAGE_TRANSITION and PLANNING_TASK_DROPPED events", () => {
     }
     assert.ok(err, "must throw on unrecognised domain");
     assert.equal((err as NodeJS.ErrnoException).code, "INVALID_DOMAIN");
+  });
+});
+
+// ── Span contract conformance — cross-agent emitters ─────────────────────────
+// These tests validate that each agent emitter (Jesus, Prometheus, Athena,
+// Worker) produces span events that fully conform to SPAN_CONTRACT and pass
+// EVENT_SHAPE_SCHEMA validation. At least one negative path per agent is
+// included to ensure the span helpers reject invalid input explicitly.
+
+describe("Span contract conformance — Jesus emitter", () => {
+  it("JESUS_AGENT_ID is the canonical string 'jesus'", () => {
+    assert.equal(JESUS_AGENT_ID, "jesus");
+  });
+
+  it("emitJesusSpanTransition returns a valid PLANNING_STAGE_TRANSITION envelope", () => {
+    const evt = emitJesusSpanTransition("corr-jesus-001", "idle", "jesus_awakening");
+    const result = validateEvent(evt);
+    assert.equal(result.ok, true, `validateEvent failed: ${result.message}`);
+    assert.equal(evt.event, EVENTS.PLANNING_STAGE_TRANSITION);
+    assert.equal(evt.domain, EVENT_DOMAIN.PLANNING);
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.agentId], JESUS_AGENT_ID);
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.traceId], "corr-jesus-001");
+    assert.ok(typeof evt.payload[SPAN_CONTRACT.fields.spanId] === "string");
+  });
+
+  it("emitJesusSpanTransition stamps stageFrom and stageTo in payload", () => {
+    const evt = emitJesusSpanTransition("corr-jesus-002", "jesus_awakening", "jesus_reading");
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.stageFrom], "jesus_awakening");
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.stageTo], "jesus_reading");
+  });
+
+  it("emitJesusSpanTransition forwards optional parentSpanId and durationMs", () => {
+    const evt = emitJesusSpanTransition(
+      "corr-jesus-003",
+      "jesus_thinking",
+      "jesus_decided",
+      { parentSpanId: "parent-span-x", durationMs: 850 },
+    );
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.parentSpanId], "parent-span-x");
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.durationMs], 850);
+  });
+
+  it("negative: emitJesusSpanTransition throws when correlationId is empty", () => {
+    assert.throws(
+      () => emitJesusSpanTransition("", "idle", "jesus_awakening"),
+      (err: NodeJS.ErrnoException) => err.code === EVENT_ERROR_CODE.EMPTY_CORRELATION_ID,
+      "must throw EMPTY_CORRELATION_ID",
+    );
+  });
+});
+
+describe("Span contract conformance — Prometheus emitter", () => {
+  it("PROMETHEUS_AGENT_ID is the canonical string 'prometheus'", () => {
+    assert.equal(PROMETHEUS_AGENT_ID, "prometheus");
+  });
+
+  it("emitPrometheusSpanTransition returns a valid PLANNING_STAGE_TRANSITION envelope", () => {
+    const evt = emitPrometheusSpanTransition("corr-prom-001", "prometheus_starting", "prometheus_reading_repo");
+    const result = validateEvent(evt);
+    assert.equal(result.ok, true, `validateEvent failed: ${result.message}`);
+    assert.equal(evt.event, EVENTS.PLANNING_STAGE_TRANSITION);
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.agentId], PROMETHEUS_AGENT_ID);
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.traceId], "corr-prom-001");
+  });
+
+  it("emitPrometheusSpanTransition stamps stageFrom and stageTo in payload", () => {
+    const evt = emitPrometheusSpanTransition("corr-prom-002", "prometheus_analyzing", "prometheus_audit");
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.stageFrom], "prometheus_analyzing");
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.stageTo], "prometheus_audit");
+  });
+
+  it("emitPrometheusSpanTransition auto-generates a unique spanId", () => {
+    const ids = new Set([
+      emitPrometheusSpanTransition("c1", "prometheus_starting", "prometheus_reading_repo").payload[SPAN_CONTRACT.fields.spanId],
+      emitPrometheusSpanTransition("c2", "prometheus_starting", "prometheus_reading_repo").payload[SPAN_CONTRACT.fields.spanId],
+    ]);
+    assert.equal(ids.size, 2, "each call must produce a distinct spanId");
+  });
+
+  it("negative: emitPrometheusSpanTransition throws when correlationId is empty", () => {
+    assert.throws(
+      () => emitPrometheusSpanTransition("", "prometheus_starting", "prometheus_done"),
+      (err: NodeJS.ErrnoException) => err.code === EVENT_ERROR_CODE.EMPTY_CORRELATION_ID,
+    );
+  });
+});
+
+describe("Span contract conformance — Athena emitter (stage transition)", () => {
+  it("ATHENA_AGENT_ID is the canonical string 'athena'", () => {
+    assert.equal(ATHENA_AGENT_ID, "athena");
+  });
+
+  it("emitAthenaSpanTransition returns a valid PLANNING_STAGE_TRANSITION envelope", () => {
+    const evt = emitAthenaSpanTransition("corr-athena-001", "athena_reviewing", "athena_approved");
+    const result = validateEvent(evt);
+    assert.equal(result.ok, true, `validateEvent failed: ${result.message}`);
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.agentId], ATHENA_AGENT_ID);
+  });
+
+  it("emitAthenaSpanTransition stamps stageFrom and stageTo correctly", () => {
+    const evt = emitAthenaSpanTransition("corr-athena-002", "athena_reviewing", "athena_approved", { durationMs: 200 });
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.stageFrom], "athena_reviewing");
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.stageTo], "athena_approved");
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.durationMs], 200);
+  });
+
+  it("negative: emitAthenaSpanTransition throws on empty correlationId", () => {
+    assert.throws(
+      () => emitAthenaSpanTransition("", "athena_reviewing", "athena_approved"),
+      (err: NodeJS.ErrnoException) => err.code === EVENT_ERROR_CODE.EMPTY_CORRELATION_ID,
+    );
+  });
+});
+
+describe("Span contract conformance — Athena emitter (task drop)", () => {
+  it("emitAthenaSpanDrop returns a valid PLANNING_TASK_DROPPED envelope", () => {
+    const evt = emitAthenaSpanDrop("corr-athena-drop-001", "T-042", "low quality plan");
+    const result = validateEvent(evt);
+    assert.equal(result.ok, true, `validateEvent failed: ${result.message}`);
+    assert.equal(evt.event, EVENTS.PLANNING_TASK_DROPPED);
+    assert.equal(evt.domain, EVENT_DOMAIN.PLANNING);
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.agentId], ATHENA_AGENT_ID);
+  });
+
+  it("emitAthenaSpanDrop stamps dropCode=ATHENA_REJECTED", () => {
+    const evt = emitAthenaSpanDrop("corr-athena-drop-002", "T-043", "missing pre-mortem");
+    assert.equal(evt.payload[SPAN_CONTRACT.dropReason.dropCode], SPAN_CONTRACT.dropCodes.ATHENA_REJECTED);
+    assert.equal(evt.payload[SPAN_CONTRACT.dropReason.taskId], "T-043");
+    assert.equal(evt.payload[SPAN_CONTRACT.dropReason.reason], "missing pre-mortem");
+  });
+
+  it("emitAthenaSpanDrop defaults stageWhenDropped to 'athena_reviewing'", () => {
+    const evt = emitAthenaSpanDrop("corr-athena-drop-003", "T-044", "scope undefined");
+    assert.equal(evt.payload[SPAN_CONTRACT.dropReason.stageWhenDropped], "athena_reviewing");
+  });
+
+  it("emitAthenaSpanDrop respects custom stageWhenDropped option", () => {
+    const evt = emitAthenaSpanDrop("corr-athena-drop-004", "T-045", "budget exceeded early", SPAN_CONTRACT.dropCodes.ATHENA_REJECTED, {
+      stageWhenDropped: "prometheus_done",
+    });
+    assert.equal(evt.payload[SPAN_CONTRACT.dropReason.stageWhenDropped], "prometheus_done");
+  });
+
+  it("negative: emitAthenaSpanDrop throws on empty correlationId", () => {
+    assert.throws(
+      () => emitAthenaSpanDrop("", "T-046", "any reason"),
+      (err: NodeJS.ErrnoException) => err.code === EVENT_ERROR_CODE.EMPTY_CORRELATION_ID,
+    );
+  });
+});
+
+describe("Span contract conformance — Worker emitter (stage transition)", () => {
+  it("WORKER_AGENT_ID is the canonical string 'worker'", () => {
+    assert.equal(WORKER_AGENT_ID, "worker");
+  });
+
+  it("emitWorkerSpanTransition returns a valid PLANNING_STAGE_TRANSITION envelope", () => {
+    const evt = emitWorkerSpanTransition("corr-worker-001", "workers_dispatching", "workers_running");
+    const result = validateEvent(evt);
+    assert.equal(result.ok, true, `validateEvent failed: ${result.message}`);
+    assert.equal(evt.event, EVENTS.PLANNING_STAGE_TRANSITION);
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.agentId], WORKER_AGENT_ID);
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.traceId], "corr-worker-001");
+  });
+
+  it("emitWorkerSpanTransition stamps stageFrom, stageTo, and optional taskId", () => {
+    const evt = emitWorkerSpanTransition(
+      "corr-worker-002",
+      "workers_running",
+      "workers_finishing",
+      { taskId: "T-099", durationMs: 4200 },
+    );
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.stageFrom], "workers_running");
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.stageTo], "workers_finishing");
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.taskId], "T-099");
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.durationMs], 4200);
+  });
+
+  it("negative: emitWorkerSpanTransition throws on empty correlationId", () => {
+    assert.throws(
+      () => emitWorkerSpanTransition("", "workers_dispatching", "workers_running"),
+      (err: NodeJS.ErrnoException) => err.code === EVENT_ERROR_CODE.EMPTY_CORRELATION_ID,
+    );
+  });
+});
+
+describe("Span contract conformance — Worker emitter (task drop)", () => {
+  it("emitWorkerSpanDrop returns a valid PLANNING_TASK_DROPPED envelope", () => {
+    const evt = emitWorkerSpanDrop("corr-worker-drop-001", "T-077", "no capacity available");
+    const result = validateEvent(evt);
+    assert.equal(result.ok, true, `validateEvent failed: ${result.message}`);
+    assert.equal(evt.event, EVENTS.PLANNING_TASK_DROPPED);
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.agentId], WORKER_AGENT_ID);
+  });
+
+  it("emitWorkerSpanDrop defaults dropCode to CAPACITY_EXHAUSTED", () => {
+    const evt = emitWorkerSpanDrop("corr-worker-drop-002", "T-078", "timeout");
+    assert.equal(evt.payload[SPAN_CONTRACT.dropReason.dropCode], SPAN_CONTRACT.dropCodes.CAPACITY_EXHAUSTED);
+  });
+
+  it("emitWorkerSpanDrop accepts any valid SPAN_CONTRACT.dropCode", () => {
+    const evt = emitWorkerSpanDrop(
+      "corr-worker-drop-003",
+      "T-079",
+      "budget exceeded",
+      SPAN_CONTRACT.dropCodes.BUDGET_EXCEEDED,
+    );
+    assert.equal(evt.payload[SPAN_CONTRACT.dropReason.dropCode], SPAN_CONTRACT.dropCodes.BUDGET_EXCEEDED);
+  });
+
+  it("emitWorkerSpanDrop defaults stageWhenDropped to 'workers_running'", () => {
+    const evt = emitWorkerSpanDrop("corr-worker-drop-004", "T-080", "blocked");
+    assert.equal(evt.payload[SPAN_CONTRACT.dropReason.stageWhenDropped], "workers_running");
+  });
+
+  it("negative: emitWorkerSpanDrop throws on empty correlationId", () => {
+    assert.throws(
+      () => emitWorkerSpanDrop("", "T-081", "blocked"),
+      (err: NodeJS.ErrnoException) => err.code === EVENT_ERROR_CODE.EMPTY_CORRELATION_ID,
+    );
+  });
+});
+
+describe("Span contract conformance — cross-agent agentId uniqueness", () => {
+  it("all four agent IDs are distinct strings", () => {
+    const ids = [JESUS_AGENT_ID, PROMETHEUS_AGENT_ID, ATHENA_AGENT_ID, WORKER_AGENT_ID];
+    const unique = new Set(ids);
+    assert.equal(unique.size, ids.length, "each agent must have a distinct AGENT_ID");
+    for (const id of ids) {
+      assert.ok(typeof id === "string" && id.length > 0, `agentId '${id}' must be a non-empty string`);
+    }
+  });
+
+  it("span events from different agents share the same correlationId (traceId)", () => {
+    const corrId = "shared-trace-001";
+    const jesusEvt   = emitJesusSpanTransition(corrId, "idle", "jesus_awakening");
+    const promEvt    = emitPrometheusSpanTransition(corrId, "prometheus_starting", "prometheus_reading_repo");
+    const athenaEvt  = emitAthenaSpanTransition(corrId, "athena_reviewing", "athena_approved");
+    const workerEvt  = emitWorkerSpanTransition(corrId, "workers_dispatching", "workers_running");
+
+    for (const evt of [jesusEvt, promEvt, athenaEvt, workerEvt]) {
+      assert.equal(evt.payload[SPAN_CONTRACT.fields.traceId], corrId, "traceId must equal correlationId");
+      assert.equal(evt.correlationId, corrId, "envelope correlationId must match");
+    }
+  });
+
+  it("span events from different agents have unique spanIds", () => {
+    const corrId = "shared-trace-002";
+    const spanIds = [
+      emitJesusSpanTransition(corrId, "idle", "jesus_awakening").payload[SPAN_CONTRACT.fields.spanId],
+      emitPrometheusSpanTransition(corrId, "prometheus_starting", "prometheus_reading_repo").payload[SPAN_CONTRACT.fields.spanId],
+      emitAthenaSpanTransition(corrId, "athena_reviewing", "athena_approved").payload[SPAN_CONTRACT.fields.spanId],
+      emitWorkerSpanTransition(corrId, "workers_dispatching", "workers_running").payload[SPAN_CONTRACT.fields.spanId],
+    ];
+    const unique = new Set(spanIds);
+    assert.equal(unique.size, spanIds.length, "each emitter call must produce a unique spanId");
+  });
+
+  it("Athena drop event can be linked to a Jesus parent span via parentSpanId", () => {
+    const corrId = "chain-trace-001";
+    const jesusEvt = emitJesusSpanTransition(corrId, "idle", "jesus_awakening");
+    const jesusSpanId = jesusEvt.payload[SPAN_CONTRACT.fields.spanId] as string;
+    const athenaEvt = emitAthenaSpanDrop(corrId, "T-050", "plan rejected", SPAN_CONTRACT.dropCodes.ATHENA_REJECTED, {
+      parentSpanId: jesusSpanId,
+    });
+    assert.equal(athenaEvt.payload[SPAN_CONTRACT.fields.parentSpanId], jesusSpanId, "parentSpanId must link to Jesus span");
   });
 });

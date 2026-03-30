@@ -31,6 +31,42 @@ import {
   computeCalibrationRecord,
   appendCalibrationHistory,
 } from "./jesus_calibration.js";
+import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
+
+// ── Span contract emitter ─────────────────────────────────────────────────────
+
+/** Canonical agent identifier for Jesus in span events. */
+export const JESUS_AGENT_ID = "jesus";
+
+/**
+ * Build a PLANNING_STAGE_TRANSITION span event for Jesus.
+ * Conforms to SPAN_CONTRACT: stamps spanId, parentSpanId, traceId, agentId.
+ *
+ * @param correlationId — non-empty cycle trace ID
+ * @param stageFrom     — stage being left (one of ORCHESTRATION_LOOP_STEPS)
+ * @param stageTo       — stage being entered
+ * @param opts          — optional parentSpanId, durationMs
+ * @returns validated event envelope
+ */
+export function emitJesusSpanTransition(
+  correlationId: string,
+  stageFrom: string,
+  stageTo: string,
+  opts: { parentSpanId?: string | null; durationMs?: number | null } = {},
+) {
+  return buildSpanEvent(
+    EVENTS.PLANNING_STAGE_TRANSITION,
+    EVENT_DOMAIN.PLANNING,
+    correlationId,
+    { agentId: JESUS_AGENT_ID, parentSpanId: opts.parentSpanId ?? null },
+    {
+      [SPAN_CONTRACT.stageTransition.taskId]:     null,
+      [SPAN_CONTRACT.stageTransition.stageFrom]:  stageFrom,
+      [SPAN_CONTRACT.stageTransition.stageTo]:    stageTo,
+      [SPAN_CONTRACT.stageTransition.durationMs]: opts.durationMs ?? null,
+    },
+  );
+}
 
 async function callCopilotAgent(command, agentSlug, contextPrompt) {
   const args = buildAgentArgs({ agentSlug, prompt: contextPrompt, allowAll: true, noAskUser: true });
