@@ -223,23 +223,91 @@ function buildSharedBranchName(roleName, plans) {
 }
 
 /**
- * Compute critical-path scores for a set of tasks.
- *
- * Score = length of the longest downstream dependency chain rooted at each task:
- *   - A task with no downstream dependents scores 0.
- *   - A task whose dependents have max score S scores S + 1.
- *
- * Higher score → task is on the critical path → should be dispatched first
- * within its wave so the longest tail of dependent work starts as early as
- * possible.
- *
- * The computation is advisory and cycle-safe: if a dependency cycle is present
- * (which the graph resolver would have caught earlier), the visiting-set guard
- * returns 0 for any node that re-enters.
- *
- * @param tasks - Array of { id: string; dependsOn: string[] } task descriptors.
- * @returns Map<taskId, criticalPathScore>
+ * Default maximum number of tasks per micro-wave when splitting large waves.
+ * Keeps each dependency layer small so workers can reason without context overload.
+ * Configurable via config.planner.maxTasksPerMicrowave.
  */
+export const MICROWAVE_MAX_TASKS_DEFAULT = 3;
+
+/**
+ * Deterministically split plans into micro-waves of at most maxTasksPerWave tasks
+ * per dependency layer, with critical-path ordering within each split wave.
+ *
+ * Algorithm:
+ *  1. Group plans by their wave number.
+ *  2. For each wave group larger than maxTasksPerWave, sort by intra-wave critical-path
+ *     priority: tasks depended on by other tasks in the same wave are placed first.
+ *  3. Slice sorted tasks into chunks of maxTasksPerWave and assign new sequential wave numbers.
+ *  4. Waves that already fit within the limit are preserved as-is (only their wave number
+ *     is resequenced to remain contiguous after earlier waves are split).
+ *
+ * @param plans - normalized plan objects (must have .wave and .dependencies fields)
+ * @param maxTasksPerWave - max tasks per micro-wave (default MICROWAVE_MAX_TASKS_DEFAULT)
+ * @returns new plans array with resequenced wave numbers; original objects are not mutated
+ */
+export function splitWavesIntoMicrowaves(
+  plans: any[],
+  maxTasksPerWave: number = MICROWAVE_MAX_TASKS_DEFAULT
+): any[] {
+  if (!Array.isArray(plans) || plans.length === 0) return [];
+
+  const maxTasks = Math.max(1, Math.floor(maxTasksPerWave));
+
+  // Group plans by their declared wave number
+  const waveMap = new Map<number, any[]>();
+  for (const plan of plans) {
+    const wave = Number.isFinite(Number(plan.wave)) ? Number(plan.wave) : 1;
+    if (!waveMap.has(wave)) waveMap.set(wave, []);
+    waveMap.get(wave)!.push(plan);
+  }
+
+  const sortedWaveKeys = [...waveMap.keys()].sort((a, b) => a - b);
+  const result: any[] = [];
+  let nextWaveNum = 1;
+
+  for (const waveKey of sortedWaveKeys) {
+    const wavePlans = waveMap.get(waveKey)!;
+
+    // Compute intra-wave dependent count for each task (critical-path ordering).
+    // Only considers tasks within the same wave — cross-wave dependencies are excluded
+    // to prevent inflating scores of tasks whose dependents belong to a later wave.
+    const idToDepCount = new Map<string, number>();
+    const waveTaskIds = new Set<string>();
+    for (const plan of wavePlans) {
+      const id = String(plan.task_id || plan.id || plan.task || "");
+      if (id) { idToDepCount.set(id, 0); waveTaskIds.add(id); }
+    }
+    for (const plan of wavePlans) {
+      const deps = Array.isArray(plan.dependencies) ? plan.dependencies : [];
+      for (const dep of deps) {
+        const depStr = String(dep || "");
+        // Only count intra-wave dependencies (cross-wave deps do not affect ordering here)
+        if (waveTaskIds.has(depStr)) {
+          idToDepCount.set(depStr, (idToDepCount.get(depStr) ?? 0) + 1);
+        }
+      }
+    }
+
+    // Sort: tasks with more intra-wave dependents (critical path) go first
+    const sorted = [...wavePlans].sort((a: any, b: any) => {
+      const idA = String(a.task_id || a.id || a.task || "");
+      const idB = String(b.task_id || b.id || b.task || "");
+      return (idToDepCount.get(idB) ?? 0) - (idToDepCount.get(idA) ?? 0);
+    });
+
+    // Slice into micro-waves of maxTasks, reassigning wave numbers sequentially
+    for (let i = 0; i < sorted.length; i += maxTasks) {
+      const chunk = sorted.slice(i, i + maxTasks);
+      for (const plan of chunk) {
+        result.push({ ...plan, wave: nextWaveNum });
+      }
+      nextWaveNum++;
+    }
+  }
+
+  return result;
+}
+
 export function computeCriticalPathScores(
   tasks: Array<{ id: string; dependsOn: string[] }>
 ): Map<string, number> {
@@ -272,6 +340,23 @@ export function computeCriticalPathScores(
 }
 
 export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResult = null) {
+  // ── Micro-wave splitting ──────────────────────────────────────────────────
+  // When config.planner.maxTasksPerMicrowave is set to a positive integer,
+  // large waves are split into micro-waves of at most that many tasks.
+  // Critical-path tasks within each wave are placed first so the longest tail
+  // of dependent work is unblocked as early as possible.
+  //
+  // This is opt-in: if maxTasksPerMicrowave is absent/falsy, no splitting
+  // occurs and the function behaves identically to the previous version
+  // (backward-compatible).
+  const rawMicrowaveMax = (config as any)?.planner?.maxTasksPerMicrowave;
+  const microwaveMax = Number.isFinite(Number(rawMicrowaveMax)) && Number(rawMicrowaveMax) > 0
+    ? Math.floor(Number(rawMicrowaveMax))
+    : 0; // 0 = disabled
+  const inputPlans = microwaveMax > 0
+    ? splitWavesIntoMicrowaves(plans as any[], microwaveMax)
+    : (plans as any[]);
+
   // ── Dependency graph resolution ───────────────────────────────────────────
   // When any plan carries explicit dependency or file-scope hints, resolve the
   // full dependency graph to (a) assign accurate wave numbers and (b) detect
@@ -285,7 +370,7 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
   // longest tail of blocked downstream work is unblocked as early as possible.
   const criticalPathScoreByPlanId = new Map<string, number>();
 
-  const hasGraphHints = (plans as any[]).some(p =>
+  const hasGraphHints = (inputPlans as any[]).some(p =>
     (Array.isArray(p.filesInScope)   && p.filesInScope.length   > 0) ||
     (Array.isArray(p.dependsOn)      && p.dependsOn.length      > 0) ||
     (Array.isArray(p.dependencies)   && p.dependencies.length   > 0)
@@ -293,7 +378,7 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
 
   if (hasGraphHints) {
     try {
-      const graphTasks = (plans as any[]).map(p => ({
+      const graphTasks = (inputPlans as any[]).map(p => ({
         id:          String(p.task_id || p.task || p.role || ""),
         dependsOn:   Array.isArray(p.dependsOn)    ? p.dependsOn
                    : Array.isArray(p.dependencies) ? p.dependencies
@@ -321,7 +406,7 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
     }
   }
 
-  const sortedPlans = [...(plans as any[])].sort((a, b) => {
+  const sortedPlans = [...(inputPlans as any[])].sort((a, b) => {
     const idA   = String(a?.task_id || a?.task || a?.role || "");
     const idB   = String(b?.task_id || b?.task || b?.role || "");
     // Use graph-derived wave when the plan lacks an explicit wave field
