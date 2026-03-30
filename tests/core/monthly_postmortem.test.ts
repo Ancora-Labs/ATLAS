@@ -1008,3 +1008,84 @@ describe("generateMonthlyPostmortem — degradedSources use POSTMORTEM_DEGRADED_
     );
   });
 });
+
+// ── staleUnresolvedDebts in monthly postmortem ────────────────────────────────
+
+import {
+  addDebtEntries,
+  saveLedgerFull,
+  computeFingerprint,
+} from "../../src/core/carry_forward_ledger.js";
+
+describe("generateMonthlyPostmortem — staleUnresolvedDebts field", () => {
+  let tmpDir: string;
+  let result: any;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-t030-stale-debts-"));
+
+    // Write enough improvement reports to pass the cycleCount gate
+    const reports = {
+      reports: Array.from({ length: 4 }, (_, i) =>
+        makeReport(`2025-03-${String(i + 5).padStart(2, "0")}T12:00:00.000Z`)
+      )
+    };
+    await writeTestJson(tmpDir, "improvement_reports.json", reports);
+
+    // Seed the carry-forward ledger with two open debt entries
+    const ledger = addDebtEntries([], [
+      { followUpTask: "Fix critical governance canary breach detection false negative path", severity: "critical" },
+      { followUpTask: "Resolve the worker runner retry loop transient error handling gap", severity: "warning" },
+    ], 2);
+    // Persist at cycle 3 so entries are open and cyclesOpen is tracked
+    await saveLedgerFull(makeConfig(tmpDir), ledger, 3);
+
+    result = await generateMonthlyPostmortem(makeConfig(tmpDir), "2025-03");
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("staleUnresolvedDebts is an array", () => {
+    assert.ok(Array.isArray(result.postmortem.staleUnresolvedDebts),
+      "staleUnresolvedDebts must be an array");
+  });
+
+  it("staleUnresolvedDebts contains the open debt entries", () => {
+    const debts = result.postmortem.staleUnresolvedDebts;
+    assert.ok(debts.length >= 1, "must surface at least one stale debt");
+  });
+
+  it("each stale debt has expected fields", () => {
+    for (const debt of result.postmortem.staleUnresolvedDebts) {
+      assert.ok(typeof debt.id         === "string", "id must be string");
+      assert.ok(typeof debt.lesson     === "string", "lesson must be string");
+      assert.ok(typeof debt.severity   === "string", "severity must be string");
+      assert.ok(typeof debt.owner      === "string", "owner must be string");
+      assert.ok(typeof debt.openedCycle === "number", "openedCycle must be number");
+      assert.ok(typeof debt.dueCycle   === "number", "dueCycle must be number");
+      assert.ok(typeof debt.cyclesOpen === "number", "cyclesOpen must be number");
+    }
+  });
+
+  it("negative path: staleUnresolvedDebts is empty when ledger has no open entries", async () => {
+    const emptyDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-t030-nostale-"));
+    try {
+      const reports = {
+        reports: Array.from({ length: 4 }, (_, i) =>
+          makeReport(`2025-03-${String(i + 5).padStart(2, "0")}T12:00:00.000Z`)
+        )
+      };
+      await writeTestJson(emptyDir, "improvement_reports.json", reports);
+      // No ledger file → no stale debts
+      const r = await generateMonthlyPostmortem(makeConfig(emptyDir), "2025-03");
+      assert.ok(Array.isArray(r.postmortem.staleUnresolvedDebts),
+        "staleUnresolvedDebts must still be an array when ledger is absent");
+      assert.equal(r.postmortem.staleUnresolvedDebts.length, 0,
+        "must be empty when no open debts exist");
+    } finally {
+      await fs.rm(emptyDir, { recursive: true, force: true });
+    }
+  });
+});
