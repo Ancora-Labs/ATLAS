@@ -15,6 +15,8 @@ import {
   UNRECOVERABLE_PACKET_REASONS,
   PLANNER_HEALTH_ALIASES,
   normalizeProjectHealthAlias,
+  checkHighRiskPacketConfidence,
+  HIGH_RISK_LOW_CONFIDENCE_REASON,
 } from "../../src/core/prometheus.js";
 import { compilePrompt } from "../../src/core/prompt_compiler.js";
 import { isNonSpecificVerification, validatePlanContract } from "../../src/core/plan_contract_validator.js";
@@ -1991,5 +1993,137 @@ describe("splitWavesIntoMicrowaves", () => {
     const waveNums = [...new Set(result.map((p: any) => p.wave))];
     assert.equal(waveNums.length, 1, "exactly-2-tasks wave with limit-2 must NOT be split");
     assert.equal(waveNums[0], 1, "must remain in wave 1");
+  });
+});
+
+// ── checkHighRiskPacketConfidence — high-risk low-confidence gate ─────────────
+
+describe("checkHighRiskPacketConfidence — high-risk low-confidence gate", () => {
+  function highRiskBase(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      task: "Rewrite orchestrator dispatch path for wave-parallel execution",
+      riskLevel: "high",
+      ...overrides,
+    };
+  }
+
+  it("does not reject a low-risk packet even when premortem and acceptance_criteria are absent", () => {
+    const result = checkHighRiskPacketConfidence({ task: "Improve log output formatting", riskLevel: "low" });
+    assert.equal(result.requiresRejection, false);
+  });
+
+  it("does not reject a medium-risk packet lacking confidence signals", () => {
+    const result = checkHighRiskPacketConfidence({ task: "Harden trust boundary validation", riskLevel: "medium" });
+    assert.equal(result.requiresRejection, false);
+  });
+
+  it("does not reject a high-risk packet that has both premortem and acceptance_criteria", () => {
+    const result = checkHighRiskPacketConfidence(highRiskBase({
+      premortem: {
+        failurePaths: ["Breaks orchestration path under concurrent load"],
+        mitigations: ["Feature flag for incremental rollout"],
+        rollbackPlan: "Revert to previous dispatch commit",
+      },
+      acceptance_criteria: [
+        "All orchestration integration tests pass",
+        "Wave-parallel dispatch logs confirm new code path",
+      ],
+    }));
+    assert.equal(result.requiresRejection, false);
+    assert.equal(result.reason, "sufficient_confidence");
+  });
+
+  it("does not reject a high-risk packet that has acceptance_criteria but no premortem", () => {
+    const result = checkHighRiskPacketConfidence(highRiskBase({
+      acceptance_criteria: ["All integration tests pass after dispatch change"],
+    }));
+    assert.equal(result.requiresRejection, false,
+      "acceptance_criteria alone is sufficient confidence to allow the packet through");
+  });
+
+  it("does not reject a high-risk packet that has premortem but no acceptance_criteria", () => {
+    const result = checkHighRiskPacketConfidence(highRiskBase({
+      premortem: {
+        failurePaths: ["Cascading orchestrator failure"],
+        mitigations: ["Disable parallel dispatch under error budget"],
+        rollbackPlan: "Restore previous orchestrator.ts",
+      },
+    }));
+    assert.equal(result.requiresRejection, false,
+      "premortem alone is sufficient confidence to allow the packet through");
+  });
+
+  it("rejects a high-risk packet that has neither premortem nor acceptance_criteria", () => {
+    const result = checkHighRiskPacketConfidence(highRiskBase());
+    assert.equal(result.requiresRejection, true);
+    assert.equal(result.reason, HIGH_RISK_LOW_CONFIDENCE_REASON);
+  });
+
+  it("rejects a high-risk packet with empty acceptance_criteria and absent premortem", () => {
+    const result = checkHighRiskPacketConfidence(highRiskBase({ acceptance_criteria: [] }));
+    assert.equal(result.requiresRejection, true);
+    assert.equal(result.reason, HIGH_RISK_LOW_CONFIDENCE_REASON);
+  });
+
+  it("rejects a high-risk packet with blank acceptance_criteria entries and absent premortem", () => {
+    const result = checkHighRiskPacketConfidence(highRiskBase({ acceptance_criteria: ["", "   "] }));
+    assert.equal(result.requiresRejection, true,
+      "blank-only criteria must count as absent");
+  });
+
+  it("rejects a high-risk packet with empty premortem object and absent acceptance_criteria", () => {
+    const result = checkHighRiskPacketConfidence(highRiskBase({ premortem: {} }));
+    assert.equal(result.requiresRejection, true,
+      "empty premortem object must count as absent when no acceptance_criteria present");
+  });
+
+  it("rejects a high-risk packet with premortem missing all safety fields and no acceptance_criteria", () => {
+    const result = checkHighRiskPacketConfidence(highRiskBase({
+      premortem: { scenario: "things might break" }, // no failurePaths / mitigations / rollbackPlan
+    }));
+    assert.equal(result.requiresRejection, true,
+      "premortem with only non-safety fields must count as absent");
+  });
+
+  it("accepts a high-risk packet whose premortem has only rollbackPlan populated", () => {
+    const result = checkHighRiskPacketConfidence(highRiskBase({
+      premortem: { rollbackPlan: "Revert commit abc123 and redeploy" },
+    }));
+    assert.equal(result.requiresRejection, false,
+      "rollbackPlan alone in premortem counts as meaningful safety evidence");
+  });
+
+  it("negative path: packet with no riskLevel field is not rejected (inference deferred to normalization)", () => {
+    // A task whose text would infer high-risk but has no explicit riskLevel field
+    const result = checkHighRiskPacketConfidence({
+      task: "Implement critical-path scheduling with dependency-aware waves and parallel dispatcher",
+      // no riskLevel
+    });
+    assert.equal(result.requiresRejection, false,
+      "must not reject at raw stage when riskLevel is absent — inference runs during normalization");
+  });
+
+  it("handles null input without throwing — returns no rejection", () => {
+    assert.doesNotThrow(() => checkHighRiskPacketConfidence(null));
+    assert.equal(checkHighRiskPacketConfidence(null).requiresRejection, false);
+  });
+
+  it("handles undefined input without throwing — returns no rejection", () => {
+    assert.doesNotThrow(() => checkHighRiskPacketConfidence(undefined));
+    assert.equal(checkHighRiskPacketConfidence(undefined).requiresRejection, false);
+  });
+
+  it("HIGH_RISK_LOW_CONFIDENCE_REASON is a non-empty string constant", () => {
+    assert.equal(typeof HIGH_RISK_LOW_CONFIDENCE_REASON, "string");
+    assert.ok(HIGH_RISK_LOW_CONFIDENCE_REASON.length > 0);
+    assert.ok(HIGH_RISK_LOW_CONFIDENCE_REASON.includes("high_risk"));
+  });
+
+  it("riskLevel comparison is case-insensitive (HIGH, High, high all trigger)", () => {
+    for (const level of ["HIGH", "High", "high"]) {
+      const result = checkHighRiskPacketConfidence({ task: "Some task", riskLevel: level });
+      assert.equal(result.requiresRejection, true,
+        `riskLevel="${level}" with no confidence signals must trigger rejection`);
+    }
   });
 });
