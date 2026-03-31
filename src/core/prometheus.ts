@@ -2278,6 +2278,130 @@ export function buildDriftDebtTasks(
   return debtTasks;
 }
 
+// ── Telemetry-adjusted packet ranking ─────────────────────────────────────────
+//
+// Extends the base rank score (requestROI × (1 + capacityDelta)) by blending in
+// realized outcome telemetry from the route ROI ledger.  When history shows that
+// realized outcomes were better/worse than predicted (positive/negative avgRoiDelta),
+// the ranking score is adjusted proportionally within a ±0.5 clamp.
+//
+// Consumers:
+//   - Pass a RealizedTelemetrySummary built from model_policy.summarizeTierTelemetry
+//     (or summarizeRealizedTelemetry for a pre-filtered slice of ledger entries).
+//   - When no telemetry is available (sampleCount=0), adjustment is neutral (×1.0).
+
+/**
+ * Compact telemetry summary consumed by computeTelemetryAdjustedPacketScore.
+ * Produced by summarizeRealizedTelemetry or model_policy.summarizeTierTelemetry.
+ */
+export interface RealizedTelemetrySummary {
+  /** Average realized-minus-expected ROI delta across sampled entries. 0 = no data. */
+  avgRoiDelta: number;
+  /** Number of realized entries that contributed to the average. */
+  sampleCount: number;
+}
+
+/**
+ * Summarize realized outcome telemetry from a raw ledger slice into a compact signal
+ * that packet ranking can consume without coupling to model_policy internals.
+ *
+ * Only entries that are fully realized (realizedAt non-null, roiDelta is a finite number)
+ * contribute to the summary.  Returns { avgRoiDelta: 0, sampleCount: 0 } when no realized
+ * entries are available so callers can distinguish "no data" from "neutral history".
+ *
+ * @param entries  — records with at least { roiDelta?, realizedAt? } fields
+ * @param limit    — max most-recent entries to include (default: 20)
+ */
+export function summarizeRealizedTelemetry(
+  entries: Array<{ roiDelta?: number | null; realizedAt?: string | null }>,
+  limit = 20
+): RealizedTelemetrySummary {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return { avgRoiDelta: 0, sampleCount: 0 };
+  }
+  const realized = entries
+    .filter(
+      e =>
+        e.realizedAt !== null &&
+        e.realizedAt !== undefined &&
+        typeof e.roiDelta === "number" &&
+        Number.isFinite(e.roiDelta)
+    )
+    .slice(-limit);
+  if (realized.length === 0) return { avgRoiDelta: 0, sampleCount: 0 };
+  const sum = realized.reduce((acc, e) => acc + (e.roiDelta as number), 0);
+  return {
+    avgRoiDelta: Math.round((sum / realized.length) * 1000) / 1000,
+    sampleCount: realized.length,
+  };
+}
+
+/**
+ * Maximum telemetry adjustment factor applied to a packet's base rank score.
+ * avgRoiDelta is clamped to ±TELEMETRY_ADJUSTMENT_CLAMP before multiplication.
+ * This prevents runaway adjustment from a small or anomalous sample.
+ */
+export const TELEMETRY_ADJUSTMENT_CLAMP = 0.5 as const;
+
+/**
+ * Compute a telemetry-adjusted ranking score for a single plan packet.
+ *
+ * Extends the base rank score (requestROI × (1 + capacityDelta)) by blending in
+ * realized outcome signals.  The adjustment factor is derived from the historical
+ * avgRoiDelta, clamped to ±TELEMETRY_ADJUSTMENT_CLAMP to limit sample sensitivity.
+ *
+ * Formula: baseScore × (1 + clamp(avgRoiDelta, −0.5, 0.5))
+ *   − Positive avgRoiDelta → outcomes historically beat predictions → score up-ranked
+ *   − Negative avgRoiDelta → outcomes historically missed predictions → score down-ranked
+ *   − sampleCount=0         → telemetryFactor=0, score equals baseline (neutral)
+ *
+ * Plans missing valid capacityDelta or requestROI score 0 (filtered before ranking).
+ *
+ * @param plan             — normalized plan packet (capacityDelta, requestROI required)
+ * @param telemetrySummary — from summarizeRealizedTelemetry or model_policy.summarizeTierTelemetry
+ * @returns adjusted rank score ≥ 0
+ */
+export function computeTelemetryAdjustedPacketScore(
+  plan: Record<string, any>,
+  telemetrySummary: RealizedTelemetrySummary = { avgRoiDelta: 0, sampleCount: 0 }
+): number {
+  if (!plan || typeof plan !== "object") return 0;
+  const roi = Number(plan.requestROI);
+  const delta = Number(plan.capacityDelta);
+  if (!Number.isFinite(roi) || roi <= 0) return 0;
+  if (!Number.isFinite(delta)) return 0;
+  const baseScore = roi * (1 + delta);
+  if (!telemetrySummary || telemetrySummary.sampleCount === 0) return baseScore;
+  const telemetryFactor = Math.max(
+    -TELEMETRY_ADJUSTMENT_CLAMP,
+    Math.min(TELEMETRY_ADJUSTMENT_CLAMP, telemetrySummary.avgRoiDelta)
+  );
+  return Math.max(0, baseScore * (1 + telemetryFactor));
+}
+
+/**
+ * Rank plan packets by telemetry-adjusted composite score, descending.
+ *
+ * Uses computeTelemetryAdjustedPacketScore to score each plan.  Plans missing valid
+ * capacityDelta/requestROI score 0 and sort to the end.  The original array is NOT
+ * mutated — a new sorted array is returned.  Within equal scores, original order is
+ * preserved (stable sort).
+ *
+ * @param plans            — normalized plan packets
+ * @param telemetrySummary — from summarizeRealizedTelemetry (default: no adjustment)
+ * @returns sorted copy, highest adjusted score first
+ */
+export function rankPlansByTelemetryAdjustedScore(
+  plans: any[],
+  telemetrySummary: RealizedTelemetrySummary = { avgRoiDelta: 0, sampleCount: 0 }
+): any[] {
+  if (!Array.isArray(plans)) return [];
+  return [...plans].sort(
+    (a, b) =>
+      computeTelemetryAdjustedPacketScore(b, telemetrySummary) -
+      computeTelemetryAdjustedPacketScore(a, telemetrySummary)
+  );
+}
 
 export async function runPrometheusAnalysis(config, options: any = {}) {
   const stateDir = config.paths?.stateDir || "state";

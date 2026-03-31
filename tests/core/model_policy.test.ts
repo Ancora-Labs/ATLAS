@@ -534,3 +534,96 @@ describe("routeModelWithCompletionROI — completion-yield ROI routing", () => {
     assert.equal(result.roiAdjustment, "none");
   });
 });
+
+// ── Task 1: summarizeTierTelemetry — realized ROI delta signals ───────────────
+
+import { summarizeTierTelemetry } from "../../src/core/model_policy.js";
+
+describe("summarizeTierTelemetry", () => {
+  async function makeTmpConfig() {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tier-tel-test-"));
+    return { config: { paths: { stateDir: dir } }, dir };
+  }
+
+  it("returns zero-signal when no entries exist for the tier", async () => {
+    const { config, dir } = await makeTmpConfig();
+    try {
+      const result = await summarizeTierTelemetry(config, "T2");
+      assert.equal(result.avgRoiDelta, 0);
+      assert.equal(result.sampleCount, 0);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns correct average roiDelta across realized T2 entries", async () => {
+    const { config, dir } = await makeTmpConfig();
+    try {
+      // Append and realize 2 T2 entries: expectedQuality=0.8, realized=0.6 → roiDelta < 0
+      for (let i = 0; i < 2; i++) {
+        await appendRouteROIEntry(config, {
+          taskId: `T-TEL-${i}`,
+          model: "Claude Sonnet 4.6",
+          tier: "T2",
+          estimatedTokens: 1000,
+          expectedQuality: 0.8,
+        });
+        await realizeRouteROIEntry(config, `T-TEL-${i}`, 0.6, "done");
+      }
+      const result = await summarizeTierTelemetry(config, "T2");
+      assert.equal(result.sampleCount, 2, "both realized entries must be included");
+      assert.ok(typeof result.avgRoiDelta === "number", "avgRoiDelta must be a number");
+      assert.ok(result.avgRoiDelta < 0, "negative delta when realized < expected quality");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores unrealized entries (realizedAt=null)", async () => {
+    const { config, dir } = await makeTmpConfig();
+    try {
+      // Append one unrealized entry
+      await appendRouteROIEntry(config, {
+        taskId: "T-UNREAL",
+        model: "Claude Sonnet 4.6",
+        tier: "T1",
+        estimatedTokens: 500,
+        expectedQuality: 0.9,
+      });
+      const result = await summarizeTierTelemetry(config, "T1");
+      assert.equal(result.sampleCount, 0, "unrealized entries must not contribute");
+      assert.equal(result.avgRoiDelta, 0);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores entries from other tiers", async () => {
+    const { config, dir } = await makeTmpConfig();
+    try {
+      await appendRouteROIEntry(config, {
+        taskId: "T-T3",
+        model: "Claude Opus 4.6",
+        tier: "T3",
+        estimatedTokens: 2000,
+        expectedQuality: 0.8,
+      });
+      await realizeRouteROIEntry(config, "T-T3", 0.9, "done");
+      // Query T2 — should be zero (no T2 entries)
+      const result = await summarizeTierTelemetry(config, "T2");
+      assert.equal(result.sampleCount, 0, "T3 entry must not appear in T2 telemetry");
+      assert.equal(result.avgRoiDelta, 0);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("negative path: returns zero-signal gracefully when stateDir does not exist", async () => {
+    const result = await summarizeTierTelemetry(
+      { paths: { stateDir: "/nonexistent/xyzzy-box-test-dir" } },
+      "T1"
+    );
+    assert.equal(result.avgRoiDelta, 0, "missing state dir must not throw — returns zero-signal");
+    assert.equal(result.sampleCount, 0);
+  });
+});

@@ -467,3 +467,35 @@ describe("evaluatePreDispatchGovernanceGate — end-to-end block flow assertions
     assert.ok("budgetEligibility" in result);
   });
 });
+
+// ── Task 2: AUTO_APPROVE_DISPATCH_SIGNAL invariants ───────────────────────────
+
+import { AUTO_APPROVE_DISPATCH_SIGNAL } from "../../src/core/orchestrator.js";
+
+describe("AUTO_APPROVE_DISPATCH_SIGNAL structural invariants", () => {
+  it("exports LOW_RISK_UNCHANGED and HIGH_QUALITY_LOW_RISK", () => {
+    assert.equal(AUTO_APPROVE_DISPATCH_SIGNAL.LOW_RISK_UNCHANGED, "LOW_RISK_UNCHANGED");
+    assert.equal(AUTO_APPROVE_DISPATCH_SIGNAL.HIGH_QUALITY_LOW_RISK, "HIGH_QUALITY_LOW_RISK");
+  });
+
+  it("is frozen (immutable)", () => {
+    assert.ok(Object.isFrozen(AUTO_APPROVE_DISPATCH_SIGNAL), "AUTO_APPROVE_DISPATCH_SIGNAL must be frozen");
+  });
+
+  it("signal values are non-empty strings", () => {
+    for (const [key, val] of Object.entries(AUTO_APPROVE_DISPATCH_SIGNAL)) {
+      assert.equal(typeof val, "string", `${key} must be a string`);
+      assert.ok(val.length > 0, `${key} must be non-empty`);
+    }
+  });
+
+  it("adding auto-approve telemetry does not affect GATE_PRECEDENCE contiguity", () => {
+    // Regression guard: gate precedence must remain a contiguous range from 1
+    // even after adding auto-approve telemetry infrastructure.
+    const values = Object.values(GATE_PRECEDENCE).sort((a, b) => a - b);
+    for (let i = 0; i < values.length; i++) {
+      assert.equal(values[i], i + 1,
+        `GATE_PRECEDENCE must remain contiguous from 1 — gap detected at index ${i} (value=${values[i]})`);
+    }
+  });
+});

@@ -67,6 +67,12 @@ export const ATHENA_FAST_PATH_REASON = Object.freeze({
    * The AI review call was skipped and the cached result was returned.
    */
   LOW_RISK_UNCHANGED: "LOW_RISK_UNCHANGED",
+  /**
+   * All plans are low-risk and every plan scores at or above the high-quality threshold
+   * in the deterministic quality pre-gate.  The AI review call was skipped.
+   * Requires no prior cached fingerprint — high plan quality is sufficient evidence.
+   */
+  HIGH_QUALITY_LOW_RISK: "HIGH_QUALITY_LOW_RISK",
 } as const);
 
 // ── Deterministic plan-batch fingerprinting ───────────────────────────────────
@@ -1795,6 +1801,16 @@ export function rankPlansByROI(plans: any[]): any[] {
 /** Minimum quality score for a plan to pass the deterministic pre-gate. */
 export const PLAN_QUALITY_MIN_SCORE = 40;
 
+/**
+ * Minimum quality score that qualifies all plans for the HIGH_QUALITY_LOW_RISK
+ * auto-approve fast-path (no prior cached fingerprint required).
+ *
+ * Plans must each score ≥ this threshold in scorePlanQuality() for the batch to
+ * qualify. The higher bar (vs PLAN_QUALITY_MIN_SCORE=40) ensures only well-specified,
+ * clearly-measurable low-risk batches bypass AI review without a prior approval.
+ */
+export const AUTO_APPROVE_HIGH_QUALITY_THRESHOLD = 80;
+
 // ── Plan Review (pre-work gate) ─────────────────────────────────────────────
 
 export async function runAthenaPlanReview(config, prometheusAnalysis) {
@@ -1870,11 +1886,15 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
   );
   if (allPlansLowRisk && config?.runtime?.disablePlanReviewCache !== true) {
     const batchFingerprint = computePlanBatchFingerprint(plans);
+    let cachedReviewExists = false;
     try {
       const lastReview = await readJson(
         path.join(stateDir, "athena_plan_review.json"),
         null
       );
+      if (lastReview !== null) {
+        cachedReviewExists = true;
+      }
       if (
         lastReview !== null &&
         lastReview.approved === true &&
@@ -1903,6 +1923,48 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
       }
     } catch {
       // Cache read is best-effort; fall through to AI review on any error.
+    }
+
+    // ── High-quality fast-path (no cached fingerprint required) ─────────────
+    // When every plan scores ≥ AUTO_APPROVE_HIGH_QUALITY_THRESHOLD in the
+    // deterministic quality gate, and there is NO prior cached review on disk,
+    // the batch is well-specified enough to approve without a prior cached review.
+    // If a cached review exists but the fingerprint does not match (plans changed),
+    // we fall through to the AI review so the changed plans are properly re-evaluated.
+    // Guardrail precedence is preserved: quality, pre-mortem, and governance gates
+    // all ran unconditionally before reaching this point.
+    if (!cachedReviewExists) {
+      const highQualityThreshold = typeof config?.runtime?.autoApproveHighQualityThreshold === "number"
+        ? config.runtime.autoApproveHighQualityThreshold
+        : AUTO_APPROVE_HIGH_QUALITY_THRESHOLD;
+      const allHighQuality = plans.length > 0 &&
+        plans.every(p => scorePlanQuality(p).score >= highQualityThreshold);
+      if (allHighQuality) {
+        await appendProgress(
+          config,
+          `[ATHENA] Plan review AUTO-APPROVED — all ${plans.length} low-risk plan(s) score ≥ ${highQualityThreshold}`
+        );
+        chatLog(
+          stateDir,
+          athenaName,
+          `Plan auto-approved (high-quality low-risk batch, threshold=${highQualityThreshold})`
+        );
+        return {
+          approved: true,
+          overallScore: highQualityThreshold,
+          summary: `All ${plans.length} plan(s) are low-risk and scored at or above the high-quality threshold (${highQualityThreshold})`,
+          planReviews: plans.map((p, i) => buildFallbackPlanReview(p, i)),
+          corrections: [],
+          appliedFixes: [],
+          unresolvedIssues: [],
+          autoApproved: true,
+          autoApproveReason: {
+            code: ATHENA_FAST_PATH_REASON.HIGH_QUALITY_LOW_RISK,
+            message: `All plans are low-risk and cleared the high-quality threshold (≥ ${highQualityThreshold})`,
+          },
+          reviewedAt: new Date().toISOString(),
+        };
+      }
     }
   }
 

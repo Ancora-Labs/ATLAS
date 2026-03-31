@@ -603,6 +603,55 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
 }
 
 /**
+ * Machine-readable signal written to state/auto_approve_telemetry.json when the
+ * Athena plan review fast-path bypasses AI review.  Consumers (model_policy telemetry
+ * readers, Prometheus postmortem analysis) can correlate auto-approved cycles with
+ * realized outcomes to improve future fast-path accuracy.
+ */
+export const AUTO_APPROVE_DISPATCH_SIGNAL = Object.freeze({
+  /** Review was skipped because the batch fingerprint matched a prior approved review. */
+  LOW_RISK_UNCHANGED:    "LOW_RISK_UNCHANGED",
+  /** Review was skipped because all plans cleared the high-quality deterministic threshold. */
+  HIGH_QUALITY_LOW_RISK: "HIGH_QUALITY_LOW_RISK",
+} as const);
+
+/**
+ * Append an auto-approve dispatch decision to state/auto_approve_telemetry.json.
+ *
+ * Called by the orchestrator dispatch path whenever Athena returns an auto-approved
+ * result so that downstream telemetry consumers (model_policy ROI ledger, Prometheus)
+ * can correlate fast-path approvals with realized cycle outcomes.
+ *
+ * Fails open: any write error is logged but never propagated so a telemetry failure
+ * cannot block worker dispatch.
+ *
+ * @param config        — BOX config (stateDir resolved from config.paths.stateDir)
+ * @param planReviewResult — Athena plan review result (autoApproved=true required)
+ * @param cycleId       — dispatch cycle identifier for correlation
+ */
+export async function appendAutoApproveTelemetry(
+  config: object,
+  planReviewResult: Record<string, unknown>,
+  cycleId: string
+): Promise<void> {
+  const stateDir = (config as any)?.paths?.stateDir || "state";
+  const filePath = path.join(stateDir, "auto_approve_telemetry.json");
+  try {
+    const existing: unknown[] = await readJsonSafe(filePath, READ_JSON_REASON.FILE_NOT_FOUND, []);
+    const safeList = Array.isArray(existing) ? existing : [];
+    const entry = {
+      cycleId,
+      signal: String((planReviewResult.autoApproveReason as any)?.code || AUTO_APPROVE_DISPATCH_SIGNAL.LOW_RISK_UNCHANGED),
+      planCount: Array.isArray(planReviewResult.planReviews) ? (planReviewResult.planReviews as any[]).length : 0,
+      recordedAt: new Date().toISOString(),
+    };
+    await writeJson(filePath, [...safeList, entry]);
+  } catch (err) {
+    warn(`[orchestrator] auto-approve telemetry write failed (non-fatal): ${String((err as any)?.message || err)}`);
+  }
+}
+
+/**
  * Safe wrapper for updatePipelineProgress.
  *
  * Pipeline progress is observability state — a write failure must NEVER block
