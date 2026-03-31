@@ -126,6 +126,8 @@ export async function saveLedgerFull(config, entries, cycleCounter: number) {
 /**
  * Add new debt entries from postmortem follow-ups.
  * Deduplicates by normalized lesson text.
+ * When a new item matches an existing open entry (same fingerprint), increments
+ * `recurrenceCount` on the canonical entry rather than adding a duplicate.
  *
  * @param {DebtEntry[]} ledger — existing entries
  * @param {Array<{ followUpTask: string, workerName?: string, severity?: string }>} newItems
@@ -136,23 +138,33 @@ export async function saveLedgerFull(config, entries, cycleCounter: number) {
 export function addDebtEntries(ledger, newItems, currentCycle, opts: any = {}) {
   const sla = opts.slaMaxCycles || 3;
   const existing = [...ledger];
-  // Deduplicate by fingerprint; fall back to computing from lesson text for legacy
-  // entries that pre-date this field.
-  const openFingerprints = new Set(
-    existing
-      .filter(e => !e.closedAt)
-      .map(e => e.fingerprint || computeFingerprint(String(e.lesson || "")))
-      .filter(Boolean)
-  );
+
+  // Build fingerprint → open entry map so we can increment recurrenceCount in-place.
+  const openByFingerprint = new Map<string, any>();
+  for (const e of existing) {
+    if (e.closedAt) continue;
+    const fp = e.fingerprint || computeFingerprint(String(e.lesson || ""));
+    if (fp && !openByFingerprint.has(fp)) {
+      openByFingerprint.set(fp, e);
+    }
+  }
 
   for (const item of (newItems || [])) {
     const lesson = String(item.followUpTask || "").trim();
     if (!lesson || lesson.length < 10) continue;
     const fingerprint = computeFingerprint(lesson);
     if (!fingerprint) continue;
-    if (openFingerprints.has(fingerprint)) continue;
 
-    existing.push({
+    const canonicalEntry = openByFingerprint.get(fingerprint);
+    if (canonicalEntry) {
+      // Duplicate: bump recurrence count on the existing canonical entry instead
+      // of creating a new debt item.
+      canonicalEntry.recurrenceCount = (canonicalEntry.recurrenceCount || 1) + 1;
+      canonicalEntry.lastRecurredCycle = currentCycle;
+      continue;
+    }
+
+    const newEntry: any = {
       id: `debt-${currentCycle}-${existing.length}`,
       lesson,
       fingerprint,
@@ -163,8 +175,10 @@ export function addDebtEntries(ledger, newItems, currentCycle, opts: any = {}) {
       closedAt: null,
       closureEvidence: null,
       cyclesOpen: 0,
-    });
-    openFingerprints.add(fingerprint);
+      recurrenceCount: 1,
+    };
+    existing.push(newEntry);
+    openByFingerprint.set(fingerprint, newEntry);
   }
 
   return existing;
@@ -446,10 +460,16 @@ export function clusterDuplicateDebts(ledger: any[]): any[][] {
  *   1. Group open entries by fingerprint.
  *   2. For each group with ≥ 2 open entries:
  *      - Keep the oldest entry (lowest openedCycle, then first insertion order).
- *        It becomes the canonical actionable item with an updated `lesson` that
- *        records the cluster size for operator visibility.
- *      - Close the remaining entries with retirement evidence so they no longer
- *        appear in SLA overdue counts.
+ *        The canonical entry is annotated with recurrence metadata:
+ *          - `recurrenceCount`   total number of times this lesson has been recorded
+ *          - `firstSeenCycle`    the earliest openedCycle in the cluster
+ *          - `lastRecurredCycle` the most recent openedCycle in the cluster
+ *          - `clusterSize`       synonym for recurrenceCount (operator visibility)
+ *          - `clusterFingerprint` stable fingerprint linking all members
+ *      - Close the remaining entries with strict retirement evidence that
+ *        embeds the canonical ID, canonical lesson text (first 120 chars),
+ *        and cluster-fingerprint so entries are fully traceable without
+ *        cross-referencing the rest of the ledger.
  *   3. Return the mutated ledger (in-place), a count of retired entries, and
  *      a summary of clusters processed.
  *
@@ -484,17 +504,40 @@ export function compressLedger(ledger: any[]): {
     const canonical = sorted[0];
     const duplicates = sorted.slice(1);
     const fp = canonical.fingerprint || canonical.clusterFingerprint || "";
+    const clusterSize = duplicates.length + 1;
 
-    // Annotate canonical with cluster metadata for operator visibility
-    if (duplicates.length > 0) {
-      canonical.clusterSize = duplicates.length + 1;
-      canonical.clusterFingerprint = fp;
-    }
+    // Recurrence metadata: reflect how many times this lesson has appeared across
+    // cycles, and the full cycle range to give operators a recurrence timeline.
+    const allCycles = sorted.map(e => e.openedCycle || 0);
+    const firstSeenCycle = Math.min(...allCycles);
+    const lastRecurredCycle = Math.max(...allCycles);
+    // Preserve the highest recurrenceCount already accumulated via addDebtEntries.
+    const priorRecurrence = Math.max(...sorted.map(e => e.recurrenceCount || 1));
+    const resolvedRecurrenceCount = Math.max(clusterSize, priorRecurrence);
 
-    // Retire each duplicate with retirement evidence
+    canonical.clusterSize = clusterSize;
+    canonical.clusterFingerprint = fp;
+    canonical.recurrenceCount = resolvedRecurrenceCount;
+    canonical.firstSeenCycle = firstSeenCycle;
+    canonical.lastRecurredCycle = lastRecurredCycle;
+
+    // Strict closure evidence: include canonical lesson text so retired entries
+    // are fully traceable without a secondary ledger lookup.
+    const canonicalLessonSnippet = String(canonical.lesson || "").slice(0, 120);
+
+    // Retire each duplicate with strict retirement evidence
     for (const dup of duplicates) {
       dup.closedAt = retiredAt;
-      dup.closureEvidence = `retired-by-compression: canonical-id=${canonical.id} cluster-fingerprint=${fp} cluster-size=${duplicates.length + 1}`;
+      dup.closureEvidence = [
+        `retired-by-compression:`,
+        `canonical-id=${canonical.id}`,
+        `cluster-fingerprint=${fp}`,
+        `cluster-size=${clusterSize}`,
+        `recurrence-count=${resolvedRecurrenceCount}`,
+        `first-seen-cycle=${firstSeenCycle}`,
+        `last-recurred-cycle=${lastRecurredCycle}`,
+        `canonical-lesson="${canonicalLessonSnippet}"`,
+      ].join(" ");
       retirementIds.push(dup.id);
       compressedCount++;
     }

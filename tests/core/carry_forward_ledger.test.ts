@@ -811,3 +811,173 @@ describe("compressLedger (Task 2)", () => {
     assert.equal(ledger[0].closedAt, null, "only open entry must remain open");
   });
 });
+
+// ── compressLedger — recurrence metadata ─────────────────────────────────────
+
+describe("compressLedger — recurrence metadata", () => {
+  function makeOpen(id: string, lesson: string, openedCycle = 1): any {
+    return {
+      id,
+      lesson,
+      fingerprint: computeFingerprint(lesson),
+      owner: "evolution-worker",
+      openedCycle,
+      dueCycle: openedCycle + 3,
+      severity: "warning",
+      closedAt: null,
+      closureEvidence: null,
+      cyclesOpen: 0,
+    };
+  }
+
+  it("stamps recurrenceCount equal to cluster size on canonical entry", () => {
+    const lesson = "Fix the worker runner retry loop transient error handling gap";
+    const ledger = [
+      makeOpen("d1", lesson, 1),
+      makeOpen("d2", lesson, 3),
+      makeOpen("d3", lesson, 5),
+    ];
+    compressLedger(ledger);
+    const canonical = ledger.find(e => e.id === "d1")!;
+    assert.equal(canonical.recurrenceCount, 3, "recurrenceCount must equal cluster size");
+  });
+
+  it("stamps firstSeenCycle as minimum openedCycle across the cluster", () => {
+    const lesson = "Fix the governance canary breach detection false negative eval path";
+    const ledger = [
+      makeOpen("d1", lesson, 4),
+      makeOpen("d2", lesson, 2), // earliest — but not first in array
+      makeOpen("d3", lesson, 6),
+    ];
+    compressLedger(ledger);
+    // Canonical is the one with lowest openedCycle (d2, cycle=2)
+    const canonical = ledger.find(e => e.closedAt === null)!;
+    assert.equal(canonical.firstSeenCycle, 2, "firstSeenCycle must be the minimum openedCycle");
+  });
+
+  it("stamps lastRecurredCycle as maximum openedCycle across the cluster", () => {
+    const lesson = "Resolve the carry-forward SLA accounting ledger cycle counter gap";
+    const ledger = [
+      makeOpen("d1", lesson, 1),
+      makeOpen("d2", lesson, 7),
+      makeOpen("d3", lesson, 4),
+    ];
+    compressLedger(ledger);
+    const canonical = ledger.find(e => e.closedAt === null)!;
+    assert.equal(canonical.lastRecurredCycle, 7, "lastRecurredCycle must be the maximum openedCycle");
+  });
+
+  it("retirement evidence includes canonical lesson text (strict linkage)", () => {
+    const lesson = "Fix the worker batch planner wave ordering strict contract breach gap";
+    const ledger = [
+      makeOpen("d1", lesson, 1),
+      makeOpen("d2", lesson, 2),
+    ];
+    compressLedger(ledger);
+    const retired = ledger.find(e => e.id === "d2")!;
+    assert.ok(retired.closureEvidence, "retired entry must have closureEvidence");
+    assert.ok(
+      retired.closureEvidence.includes("canonical-lesson="),
+      "closureEvidence must contain canonical-lesson field"
+    );
+    assert.ok(
+      retired.closureEvidence.includes(lesson.slice(0, 50)),
+      "closureEvidence must embed canonical lesson text for traceable linkage"
+    );
+  });
+
+  it("retirement evidence includes recurrence-count, first-seen-cycle, last-recurred-cycle", () => {
+    const lesson = "Resolve the orchestrator dispatch retry logic gap in carry-forward";
+    const ledger = [
+      makeOpen("d1", lesson, 2),
+      makeOpen("d2", lesson, 5),
+      makeOpen("d3", lesson, 8),
+    ];
+    compressLedger(ledger);
+    for (const retired of ledger.filter(e => e.closedAt)) {
+      assert.ok(retired.closureEvidence.includes("recurrence-count=3"), "must include recurrence-count");
+      assert.ok(retired.closureEvidence.includes("first-seen-cycle=2"), "must include first-seen-cycle");
+      assert.ok(retired.closureEvidence.includes("last-recurred-cycle=8"), "must include last-recurred-cycle");
+    }
+  });
+
+  it("preserves higher recurrenceCount already set by addDebtEntries on the canonical entry", () => {
+    const lesson = "Fix the pipeline progress gate evaluation timing reliability gap";
+    const ledger = [
+      { ...makeOpen("d1", lesson, 1), recurrenceCount: 5 }, // pre-bumped via addDebtEntries
+      makeOpen("d2", lesson, 2),
+    ];
+    compressLedger(ledger);
+    const canonical = ledger.find(e => e.closedAt === null)!;
+    // cluster size = 2, but recurrenceCount was already 5 — must keep the higher value
+    assert.ok(
+      canonical.recurrenceCount >= 5,
+      "compressLedger must not downgrade recurrenceCount already accumulated"
+    );
+  });
+
+  it("negative path: singleton cluster does not receive recurrence metadata", () => {
+    const lesson = "Fix the pipeline progress gate evaluation timing reliability path";
+    const ledger = [makeOpen("d1", lesson, 1)];
+    compressLedger(ledger);
+    const entry = ledger[0];
+    assert.equal(entry.recurrenceCount, undefined, "singleton must not receive recurrenceCount");
+    assert.equal(entry.firstSeenCycle, undefined, "singleton must not receive firstSeenCycle");
+  });
+});
+
+// ── addDebtEntries — recurrence count increment ───────────────────────────────
+
+describe("addDebtEntries — recurrenceCount tracking", () => {
+  it("new entry is created with recurrenceCount=1", () => {
+    const result = addDebtEntries([], [
+      { followUpTask: "Fix flaky test in worker runner module reliability", workerName: "evolution-worker" },
+    ], 5);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].recurrenceCount, 1);
+  });
+
+  it("duplicate recurrence increments recurrenceCount on the canonical open entry", () => {
+    const lesson = "Fix the orchestrator dispatch retry loop transient error gap";
+    const existing = addDebtEntries([], [{ followUpTask: lesson }], 1);
+    assert.equal(existing[0].recurrenceCount, 1);
+
+    // Same lesson re-submitted in cycle 3
+    const updated = addDebtEntries(existing, [{ followUpTask: lesson }], 3);
+    assert.equal(updated.length, 1, "no new entry should be added");
+    assert.equal(updated[0].recurrenceCount, 2, "recurrenceCount must be incremented");
+    assert.equal(updated[0].lastRecurredCycle, 3, "lastRecurredCycle must track latest occurrence");
+  });
+
+  it("multiple duplicate recurrences accumulate correctly", () => {
+    const lesson = "Fix the governance freeze gate risk level evaluation gap";
+    let ledger = addDebtEntries([], [{ followUpTask: lesson }], 1);
+    ledger = addDebtEntries(ledger, [{ followUpTask: lesson }], 2);
+    ledger = addDebtEntries(ledger, [{ followUpTask: lesson }], 3);
+    assert.equal(ledger.length, 1, "still only one entry after three occurrences");
+    assert.equal(ledger[0].recurrenceCount, 3);
+    assert.equal(ledger[0].lastRecurredCycle, 3);
+  });
+
+  it("negative path: closed entry is not treated as a canonical for deduplication", () => {
+    const lesson = "Fix the carry-forward SLA accounting cycle counter bug in ledger";
+    const closedEntry = {
+      id: "debt-1-0",
+      lesson,
+      fingerprint: computeFingerprint(lesson),
+      owner: "w",
+      openedCycle: 1,
+      dueCycle: 4,
+      severity: "warning",
+      closedAt: "2025-01-01T00:00:00Z",
+      closureEvidence: "fixed",
+      cyclesOpen: 3,
+      recurrenceCount: 1,
+    };
+    // Since the only matching entry is closed, a new open entry must be created.
+    const result = addDebtEntries([closedEntry], [{ followUpTask: lesson }], 5);
+    assert.equal(result.length, 2, "new open entry must be created when canonical is closed");
+    const newEntry = result.find(e => !e.closedAt)!;
+    assert.equal(newEntry.recurrenceCount, 1, "new entry starts at recurrenceCount=1");
+  });
+});
