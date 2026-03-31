@@ -39,7 +39,7 @@ import {
 } from "./trust_boundary.js";
 import { validateAllPlans, PLAN_VIOLATION_SEVERITY, PACKET_VIOLATION_CODE } from "./plan_contract_validator.js";
 import { section, compilePrompt, markCacheableSegments } from "./prompt_compiler.js";
-import { computeFingerprint } from "./carry_forward_ledger.js";
+import { computeFingerprint, classifyCarryForwardByRecurrence } from "./carry_forward_ledger.js";
 import { rewriteVerificationCommand } from "./verification_command_registry.js";
 import { checkCarryForwardGate, hardGateRecurrenceToPolicies } from "./learning_policy_compiler.js";
 import {
@@ -243,6 +243,14 @@ async function getLatestResearchArtifactUpdatedAtMs(stateDir: string): Promise<n
  * Prevents unbounded growth when many follow-up tasks accumulate across cycles.
  */
 export const CARRY_FORWARD_MAX_TOKENS = 2000;
+
+/**
+ * Maximum number of low-recurrence carry-forward items included in the planning prompt.
+ * High-recurrence items (>= 3 occurrences) are always included regardless of this cap.
+ * Reduces prompt bulk while preserving visibility of persistent unresolved debt.
+ */
+export const CARRY_FORWARD_MAX_LOW_RECURRENCE_ITEMS = 5;
+
 
 /**
  * Maximum tokens for the behavior-patterns payload in the planning prompt.
@@ -2623,11 +2631,17 @@ Consider whether the root causes are:
           seenFollowUps.add(fp);
           deduped.push(e);
         }
-        deduped.reverse();
-        const items = deduped.slice(-10).map((e, i) =>
-          `${i + 1}. [worker=${e.workerName || "unknown"}, reviewed=${e.reviewedAt || "?"}] ${e.followUpTask}`
+        const classified = classifyCarryForwardByRecurrence(deduped, entries);
+        const highRec = classified.highRecurrence;
+        const lowRec = classified.lowRecurrence.slice(-CARRY_FORWARD_MAX_LOW_RECURRENCE_ITEMS);
+        const combined = [...highRec, ...lowRec];
+        combined.reverse();
+        const suppressedCount = classified.lowRecurrence.length - lowRec.length;
+        const suppressedNote = suppressedCount > 0 ? ` (${suppressedCount} low-recurrence items omitted)` : "";
+        const items = combined.map((e, i) =>
+          `${i + 1}. [worker=${e.workerName || "unknown"}, reviewed=${e.reviewedAt || "?"}, recurrence=${e.recurrenceCount ?? 1}] ${e.followUpTask}`
         ).join("\n");
-        carryForwardSection = `\n\n## MANDATORY_CARRY_FORWARD\nThe following follow-up tasks from previous Athena postmortems have NOT been addressed yet.\nYou MUST include these in your plan unless they are already resolved in the codebase:\n${items}\n`;
+        carryForwardSection = `\n\n## MANDATORY_CARRY_FORWARD\nThe following follow-up tasks from previous Athena postmortems have NOT been addressed yet.\nYou MUST include these in your plan unless they are already resolved in the codebase:${suppressedNote}:\n${items}\n`;
       }
     }
   } catch { /* non-fatal — proceed without pattern analysis */ }

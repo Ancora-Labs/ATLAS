@@ -11,6 +11,7 @@ import {
   compileTieredPrompt,
   markCacheableSegments,
   CACHE_STABLE_SECTION_NAMES,
+  markCycleDeltaSectionsRequired,
 } from "../../src/core/prompt_compiler.js";
 
 describe("prompt_compiler", () => {
@@ -308,5 +309,80 @@ describe("prompt_compiler", () => {
       assert.ok(CACHE_STABLE_SECTION_NAMES.has("role"));
       assert.ok(CACHE_STABLE_SECTION_NAMES.has("system"));
     });
+  });
+});
+
+// ── markCycleDeltaSectionsRequired — cycle-delta bandwidth guarantee ──────────
+
+describe("markCycleDeltaSectionsRequired()", () => {
+  const CYCLE_DELTA_NAMES: ReadonlySet<string> = new Set([
+    "research-intelligence",
+    "topic-memory",
+    "behavior-patterns",
+    "carry-forward",
+  ]);
+
+  it("marks cycle-delta sections as required: true", () => {
+    const sections = [
+      section("research-intelligence", "some research data"),
+      section("context", "some context"),
+    ];
+    const result = markCycleDeltaSectionsRequired(sections, CYCLE_DELTA_NAMES);
+    const deltaSection = result.find(s => s.name === "research-intelligence")!;
+    const otherSection = result.find(s => s.name === "context")!;
+    assert.equal(deltaSection.required, true, "cycle-delta section must be required");
+    assert.equal(otherSection.required, false, "non-delta section must not be required");
+  });
+
+  it("cycle-delta sections survive compilePrompt budget trimming when marked required", () => {
+    const sections = [
+      section("topic-memory", "TOPIC_MEMORY_DATA"),
+      section("large-optional", "X".repeat(100_000)),
+    ];
+    const withRequired = markCycleDeltaSectionsRequired(sections, CYCLE_DELTA_NAMES);
+    const result = compilePrompt(withRequired, { tokenBudget: 50 });
+    assert.ok(result.includes("TOPIC_MEMORY_DATA"), "cycle-delta section must survive token pressure");
+    assert.ok(!result.includes("X".repeat(10)), "large optional section must be dropped");
+  });
+
+  it("does not mutate input sections", () => {
+    const sections = [{ name: "carry-forward", content: "data" }];
+    markCycleDeltaSectionsRequired(sections, CYCLE_DELTA_NAMES);
+    assert.equal((sections[0] as any).required, undefined, "original must be unmodified");
+  });
+
+  it("preserves existing required: true on non-delta sections", () => {
+    const sections = [
+      { ...section("role", "You are Prometheus."), required: true },
+      section("research-intelligence", "delta"),
+    ];
+    const result = markCycleDeltaSectionsRequired(sections, CYCLE_DELTA_NAMES);
+    assert.equal(result[0].required, true, "explicit required:true must be preserved");
+    assert.equal(result[1].required, true, "cycle-delta must be required");
+  });
+
+  it("returns empty array for empty input", () => {
+    const result = markCycleDeltaSectionsRequired([], CYCLE_DELTA_NAMES);
+    assert.deepEqual(result, []);
+  });
+
+  it("negative path: non-delta sections remain required: false by default", () => {
+    const sections = [
+      section("role", "You are X."),
+      section("system", "Instructions."),
+      section("context", "Dynamic data."),
+    ];
+    const result = markCycleDeltaSectionsRequired(sections, CYCLE_DELTA_NAMES);
+    for (const s of result) {
+      assert.equal(s.required, false, `non-delta section "${s.name}" must not be required`);
+    }
+  });
+
+  it("handles all four expected cycle-delta names", () => {
+    const allDelta = Array.from(CYCLE_DELTA_NAMES).map(name => section(name, `content-${name}`));
+    const result = markCycleDeltaSectionsRequired(allDelta, CYCLE_DELTA_NAMES);
+    for (const s of result) {
+      assert.equal(s.required, true, `cycle-delta section "${s.name}" must be required`);
+    }
   });
 });

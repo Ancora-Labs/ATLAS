@@ -81,7 +81,7 @@ import {
   shouldBlockOnDebt,
   autoCloseVerifiedDebt,
 } from "./carry_forward_ledger.js";
-import { reconcileBudgetEligibility, type BudgetEligibilityContract } from "./budget_controller.js";
+import { reconcileBudgetEligibility, computeRollingCompletionYield, type BudgetEligibilityContract, type RollingYieldContract } from "./budget_controller.js";
 import {
   runInterventionOptimizer,
   buildInterventionsFromPlan,
@@ -116,7 +116,9 @@ export const ORCHESTRATOR_STATUS = Object.freeze({
  *   5. GOVERNANCE_CANARY     — canary breach triggers rollback; evaluated before ledger ops
  *   6. CARRY_FORWARD_DEBT    — outstanding critical debt blocks new dispatch
  *   7. MANDATORY_DRIFT_DEBT  — architecture integrity gate before plan validation
- *   8. PLAN_EVIDENCE_COUPLING — last gate; validates individual plan completeness
+ *   8. PLAN_EVIDENCE_COUPLING — validates individual plan completeness
+ *   9. DEPENDENCY_READINESS  — validates dependency confidence metadata
+ *  10. ROLLING_COMPLETION_YIELD — throttles when recent yield is too low (last gate)
  */
 export const GATE_PRECEDENCE = Object.freeze({
   BUDGET_ELIGIBILITY:          1,
@@ -129,6 +131,8 @@ export const GATE_PRECEDENCE = Object.freeze({
   PLAN_EVIDENCE_COUPLING:      8,
   /** Confidence metadata on plans is below the minimum dispatch threshold. */
   DEPENDENCY_READINESS:        9,
+  /** Rolling completion yield is below the throttle threshold — dispatch is paused to prevent waste spirals. */
+  ROLLING_COMPLETION_YIELD:   10,
 });
 
 /**
@@ -153,6 +157,8 @@ export const BLOCK_REASON = Object.freeze({
   PLAN_EVIDENCE_COUPLING_INVALID: "plan_evidence_coupling_invalid",
   /** One or more plans carry confidence metadata below the minimum dispatch threshold. */
   DEPENDENCY_READINESS_INCOMPLETE:"dependency_readiness_incomplete",
+  /** Rolling completion yield fell at or below the throttle threshold. */
+  ROLLING_YIELD_THROTTLE:         "rolling_yield_throttle",
 });
 
 /**
@@ -355,6 +361,11 @@ export interface GovernanceBlockDecision {
    * Present only on DEPENDENCY_READINESS_INCOMPLETE blocks.
    */
   readinessResult?: ReadinessGateResult;
+  /**
+   * Rolling completion yield contract.
+   * Present only on ROLLING_YIELD_THROTTLE blocks for observability.
+   */
+  rollingYieldContract?: RollingYieldContract;
 }
 
 /**
@@ -590,6 +601,27 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
     }
   } catch (readinessErr) {
     warn(`[orchestrator] dependency readiness gate failed (non-fatal): ${String(readinessErr?.message || readinessErr)}`);
+  }
+
+  // ── Gate 10: Rolling completion yield throttle ────────────────────────
+  // If the rolling yield of recent dispatches falls at or below the throttle
+  // threshold, pause dispatch to prevent premium-request waste spirals.
+  try {
+    const yieldContract: RollingYieldContract = await computeRollingCompletionYield(config);
+    if (yieldContract.throttled) {
+      return {
+        blocked: true,
+        reason: `${BLOCK_REASON.ROLLING_YIELD_THROTTLE}:yield=${yieldContract.yield.toFixed(2)},window=${yieldContract.windowSize},threshold=${yieldContract.threshold}`,
+        action: undefined,
+        graphResult,
+        cycleId,
+        budgetEligibility,
+        gateIndex: GATE_PRECEDENCE.ROLLING_COMPLETION_YIELD,
+        rollingYieldContract: yieldContract,
+      };
+    }
+  } catch (yieldErr) {
+    warn(`[orchestrator] rolling yield gate failed (non-fatal): ${String(yieldErr?.message || yieldErr)}`);
   }
 
   return {

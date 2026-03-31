@@ -335,6 +335,36 @@ export function markCacheableSegments(
 }
 
 /**
+ * Mark sections whose names appear in a cycle-delta name set as `required: true`,
+ * guaranteeing they survive token-budget trimming in compilePrompt.
+ *
+ * Cycle-delta sections carry per-cycle reasoning context (research intelligence,
+ * topic memory, carry-forward state) that must not be dropped under token pressure
+ * — unlike large static context that can be safely truncated.
+ *
+ * Original section objects are never mutated — a new array is returned.
+ * Sections not in the cycle-delta set retain their existing `required` field.
+ *
+ * @param sections       - prompt sections to process
+ * @param cycleDeltaNames - set of section names that must be marked required
+ * @returns new array with `required: true` on every cycle-delta section
+ */
+export function markCycleDeltaSectionsRequired<
+  T extends { name: string; content: string; required?: boolean; [key: string]: any }
+>(
+  sections: T[],
+  cycleDeltaNames: ReadonlySet<string>
+): Array<T & { required: boolean }> {
+  return (sections || []).map(s => {
+    const name = String(s?.name || "").toLowerCase();
+    if (cycleDeltaNames.has(name)) {
+      return { ...s, required: true };
+    }
+    return { ...s, required: s?.required === true };
+  });
+}
+
+/**
  * Compile an actionable packet prompt with integrated completeness validation.
  *
  * Wraps compileTieredPrompt and runs validateActionablePacketCompleteness before
