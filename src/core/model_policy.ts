@@ -619,3 +619,47 @@ export async function computeRecentROIForTier(
   const sum = realized.reduce((acc, e) => acc + (e.roi as number), 0);
   return Math.round((sum / realized.length) * 1000) / 1000;
 }
+
+/**
+ * Summarize realized ROI deltas for a complexity tier from the ledger.
+ *
+ * The roiDelta is the learning signal (realized − expected ROI). A positive average
+ * means the tier consistently outperforms predictions; negative means underperformance.
+ * Only fully-realized entries (realizedAt !== null, roiDelta is a finite number) for
+ * the requested tier are included.
+ *
+ * Returns { avgRoiDelta: 0, sampleCount: 0 } when no realized history is available so
+ * callers can distinguish "no data" from "genuinely neutral history" (avgRoiDelta=0 with
+ * sampleCount > 0 means history exists but deltas cancel out).
+ *
+ * @param config  — BOX config object
+ * @param tier    — COMPLEXITY_TIER value ("T1"/"T2"/"T3")
+ * @param limit   — max most-recent entries to include (default: 20)
+ * @returns { avgRoiDelta, sampleCount }
+ */
+export async function summarizeTierTelemetry(
+  config: object,
+  tier: string,
+  limit = 20
+): Promise<{ avgRoiDelta: number; sampleCount: number }> {
+  try {
+    const ledger = await loadRouteROILedger(config);
+    const realized = ledger
+      .filter(
+        e =>
+          e.tier === tier &&
+          e.realizedAt !== null &&
+          typeof e.roiDelta === "number" &&
+          Number.isFinite(e.roiDelta)
+      )
+      .slice(-limit);
+    if (realized.length === 0) return { avgRoiDelta: 0, sampleCount: 0 };
+    const sum = realized.reduce((acc, e) => acc + (e.roiDelta as number), 0);
+    return {
+      avgRoiDelta: Math.round((sum / realized.length) * 1000) / 1000,
+      sampleCount: realized.length,
+    };
+  } catch {
+    return { avgRoiDelta: 0, sampleCount: 0 };
+  }
+}

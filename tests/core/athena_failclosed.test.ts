@@ -630,3 +630,175 @@ describe("correctBoundedPacketDefects — fail-closed guarantees", () => {
   });
 });
 
+// ── Task 2: HIGH_QUALITY_LOW_RISK auto-approve fast-path ──────────────────────
+
+import {
+  ATHENA_FAST_PATH_REASON,
+  AUTO_APPROVE_HIGH_QUALITY_THRESHOLD,
+} from "../../src/core/athena_reviewer.js";
+
+import {
+  AUTO_APPROVE_DISPATCH_SIGNAL,
+  appendAutoApproveTelemetry,
+} from "../../src/core/orchestrator.js";
+
+describe("ATHENA_FAST_PATH_REASON structural invariants", () => {
+  it("exports LOW_RISK_UNCHANGED reason code", () => {
+    assert.equal(ATHENA_FAST_PATH_REASON.LOW_RISK_UNCHANGED, "LOW_RISK_UNCHANGED");
+  });
+
+  it("exports HIGH_QUALITY_LOW_RISK reason code", () => {
+    assert.equal(ATHENA_FAST_PATH_REASON.HIGH_QUALITY_LOW_RISK, "HIGH_QUALITY_LOW_RISK");
+  });
+
+  it("is frozen (immutable)", () => {
+    assert.ok(Object.isFrozen(ATHENA_FAST_PATH_REASON), "ATHENA_FAST_PATH_REASON must be frozen");
+  });
+
+  it("AUTO_APPROVE_HIGH_QUALITY_THRESHOLD is a positive integer above PLAN_QUALITY_MIN_SCORE", () => {
+    assert.ok(Number.isInteger(AUTO_APPROVE_HIGH_QUALITY_THRESHOLD));
+    assert.ok(AUTO_APPROVE_HIGH_QUALITY_THRESHOLD > 40,
+      "high-quality threshold must exceed PLAN_QUALITY_MIN_SCORE=40 to avoid trivial pass-through");
+  });
+});
+
+describe("runAthenaPlanReview — HIGH_QUALITY_LOW_RISK fast-path", () => {
+  let tmpDir;
+
+  // A plan that will score ≥ 80 in scorePlanQuality:
+  //   task ≥ 10 chars, non-vague (+20), role (+20), verification ≥ 5 chars (+20),
+  //   wave defined (+10), capacityDelta+requestROI present (no penalty) = 70+
+  //   With specific file path in task: +10 = 80
+  const HIGH_QUALITY_PLAN = {
+    role: "evolution-worker",
+    task: "Add src/core/worker_runner.ts retry logic with exponential backoff",
+    priority: 1,
+    wave: 1,
+    riskLevel: "low",
+    verification: "npm test -- worker_runner",
+    acceptance_criteria: ["retry count < 3 on transient failures"],
+    target_files: ["src/core/worker_runner.ts"],
+    scope: "src/core/worker_runner.ts",
+    dependencies: [],
+    capacityDelta: 0.1,
+    requestROI: 2.0,
+  };
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-hq-"));
+    await fs.writeFile(path.join(tmpDir, "policy.json"), JSON.stringify({ blockedCommands: [] }), "utf8");
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("auto-approves a high-quality low-risk batch even without a cached fingerprint", async () => {
+    const config = makeConfig(tmpDir);
+    const prometheusOutput = { plans: [HIGH_QUALITY_PLAN], analyzedAt: new Date().toISOString() };
+    const result = await runAthenaPlanReview(config, prometheusOutput);
+
+    // The missing binary ensures AI call would fail; auto-approve must fire first.
+    assert.equal(result.approved, true, "high-quality low-risk batch must auto-approve");
+    assert.equal(result.autoApproved, true, "autoApproved flag must be set");
+    assert.equal(
+      result.autoApproveReason?.code,
+      ATHENA_FAST_PATH_REASON.HIGH_QUALITY_LOW_RISK,
+      "autoApproveReason.code must be HIGH_QUALITY_LOW_RISK"
+    );
+  });
+
+  it("never auto-approves via high-quality path when any plan is high-risk", async () => {
+    const highRiskPlan = {
+      ...HIGH_QUALITY_PLAN,
+      riskLevel: "high",
+      premortem: {
+        riskLevel: "high",
+        scenario: "Migration could corrupt live data if applied during peak traffic.",
+        failurePaths: ["Schema mismatch causes query failures"],
+        mitigations: ["Blue-green deployment with canary"],
+        detectionSignals: ["Error rate spike > 1%"],
+        guardrails: ["Rollback script tested in staging"],
+        rollbackPlan: "Restore from last known good snapshot within 5 minutes",
+      },
+    };
+    const config = makeConfig(tmpDir);
+    const prometheusOutput = { plans: [highRiskPlan], analyzedAt: new Date().toISOString() };
+    const result = await runAthenaPlanReview(config, prometheusOutput);
+
+    assert.equal(result.autoApproved, undefined,
+      "high-risk plan must never qualify for the high-quality fast-path");
+    assert.notEqual(result.autoApproveReason?.code, ATHENA_FAST_PATH_REASON.HIGH_QUALITY_LOW_RISK);
+  });
+
+  it("falls through to AI review when plan quality is below the high-quality threshold", async () => {
+    // Vague task below 10 chars: scorePlanQuality will produce a low score
+    const lowQualityPlan = {
+      ...HIGH_QUALITY_PLAN,
+      task: "Fix stuff",      // short + vague → score < AUTO_APPROVE_HIGH_QUALITY_THRESHOLD
+      verification: "",        // missing verification → score drops further
+    };
+    const config = makeConfig(tmpDir);
+    const prometheusOutput = { plans: [lowQualityPlan], analyzedAt: new Date().toISOString() };
+    const result = await runAthenaPlanReview(config, prometheusOutput);
+
+    // Low quality plan fails pre-gate (score < 40); autoApproved must not be set
+    assert.equal(result.autoApproved, undefined,
+      "low-quality plan must not trigger HIGH_QUALITY_LOW_RISK fast-path");
+  });
+
+  it("respects disablePlanReviewCache=true — high-quality path is also skipped", async () => {
+    const config = makeConfig(tmpDir, { runtime: { disablePlanReviewCache: true } });
+    const prometheusOutput = { plans: [HIGH_QUALITY_PLAN], analyzedAt: new Date().toISOString() };
+    const result = await runAthenaPlanReview(config, prometheusOutput);
+
+    assert.equal(result.autoApproved, undefined,
+      "disablePlanReviewCache=true must suppress all fast-path approval including HIGH_QUALITY_LOW_RISK");
+  });
+});
+
+describe("AUTO_APPROVE_DISPATCH_SIGNAL and appendAutoApproveTelemetry", () => {
+  it("exports LOW_RISK_UNCHANGED and HIGH_QUALITY_LOW_RISK signal codes", () => {
+    assert.equal(AUTO_APPROVE_DISPATCH_SIGNAL.LOW_RISK_UNCHANGED, "LOW_RISK_UNCHANGED");
+    assert.equal(AUTO_APPROVE_DISPATCH_SIGNAL.HIGH_QUALITY_LOW_RISK, "HIGH_QUALITY_LOW_RISK");
+  });
+
+  it("is frozen (immutable)", () => {
+    assert.ok(Object.isFrozen(AUTO_APPROVE_DISPATCH_SIGNAL));
+  });
+
+  it("appendAutoApproveTelemetry writes a telemetry entry to state/auto_approve_telemetry.json", async () => {
+    const tmpDir2 = await fs.mkdtemp(path.join(os.tmpdir(), "box-aat-"));
+    try {
+      const config = { paths: { stateDir: tmpDir2 } };
+      await appendAutoApproveTelemetry(
+        config,
+        {
+          autoApproveReason: { code: AUTO_APPROVE_DISPATCH_SIGNAL.HIGH_QUALITY_LOW_RISK },
+          planReviews: [{}, {}],
+        },
+        "cycle-test-001"
+      );
+      const raw = await fs.readFile(path.join(tmpDir2, "auto_approve_telemetry.json"), "utf8");
+      const entries = JSON.parse(raw);
+      assert.ok(Array.isArray(entries), "file must contain a JSON array");
+      assert.equal(entries.length, 1, "one entry must be written");
+      assert.equal(entries[0].cycleId, "cycle-test-001");
+      assert.equal(entries[0].signal, AUTO_APPROVE_DISPATCH_SIGNAL.HIGH_QUALITY_LOW_RISK);
+      assert.equal(entries[0].planCount, 2);
+      assert.ok(typeof entries[0].recordedAt === "string");
+    } finally {
+      await fs.rm(tmpDir2, { recursive: true, force: true });
+    }
+  });
+
+  it("negative path: appendAutoApproveTelemetry does not throw when stateDir does not exist", async () => {
+    const config = { paths: { stateDir: "/nonexistent/xyzzy-box-aat" } };
+    // Must not throw — fail-open
+    await assert.doesNotReject(
+      () => appendAutoApproveTelemetry(config, { autoApproveReason: { code: "LOW_RISK_UNCHANGED" } }, "c-001"),
+      "appendAutoApproveTelemetry must be fail-open — no throw on missing state dir"
+    );
+  });
+});
+
