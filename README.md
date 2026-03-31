@@ -1,97 +1,89 @@
-# BOX Orchestrator
+<p align="center">
+	<img src="public/Cube.gif" alt="BOX Showroom" width="280" />
+</p>
 
-`BOX` is a Node.js-based orchestration runtime for autonomous software delivery. It coordinates leader/worker agent loops, reads project state, dispatches tasks, and records progress under `state/`.
+# BOX
 
-## What is in this repository
+BOX is an orchestration runtime designed for autonomous software delivery.
+It is not a simple one-command script; it is a multi-role operating model
+that decides, plans, executes, observes, and attempts to improve itself.
 
-- Runtime entrypoint: `src/cli.ts`
-- Config loader: `src/config.ts`
-- Main orchestration loop: `src/core/orchestrator.ts`
-- Leadership coordination: `src/core/jesus_supervisor.ts`, `src/core/athena_reviewer.ts`
-- Worker conversation runner: `src/core/worker_runner.ts`
+At its core, BOX does this:
 
-## Requirements
+- Reads system state.
+- Distributes tasks to the right roles.
+- Evaluates outputs.
+- Records what happened.
+- Tries to perform better in the next cycle.
 
-- Node.js `>=20.0.0`
-- Docker (for compose flow and worker container workflows)
-- Copilot CLI available on PATH (`copilot` by default)
-- GitHub token access for the target repo
+## Development Status
 
-## Quick start
+BOX is in active development.
 
-1. Copy env template:
+That means:
 
-```bash
-cp .env.example .env
-```
+- The architecture and worker behaviors are still evolving.
+- Some decision mechanisms are calibrated frequently.
+- The system aims to become a bit smarter and a bit safer every cycle.
 
-2. Fill at least:
+In short: this is less a "finished product" showroom and more a live R&D lab.
 
-- `GITHUB_TOKEN`
-- `TARGET_REPO` (format: `owner/repo`)
-- `COPILOT_GITHUB_TOKEN` (or legacy fallback `GITHUB_FINEGRADED`)
+## The Agent Roster
 
-3. Install deps and run one cycle:
+### Leadership Layer
 
-```bash
-npm install
-npm run box:once
-```
+**Jesus** — CEO Supervisor  
+Maintains the high-level strategy and makes critical decisions about what BOX should focus on next. Reads the cycle state, keeps escalations in check, and ensures the system doesn't wander too far off track.
 
-4. Run daemon mode:
+**Prometheus** — Evolution Architect  
+Deep-dives into the codebase, analyzes what BOX could improve about itself, and produces a structured plan. Balances ambition with feasibility; knows when to push forward and when to consolidate.
 
-```bash
-npm run box:start
-npm run box:stop
-```
+**Athena** — Reviewer  
+Reviews plans and implementations with a critical eye. Questions assumptions, validates logic, and acts as the quality gate before major decisions move forward.
 
-## NPM scripts
+<p align="center">
+	<img src="public/divider.gif" alt="divider" width="240" />
+</p>
 
-- `box:up` / `box:down`: start/stop docker-compose services.
-- `box:start`: run daemon loop.
-- `box:stop`: request daemon shutdown.
-- `box:once`: run one startup cycle.
-- `box:rebase`: compatibility command (currently returns not-applicable result).
-- `box:dashboard`: run live dashboard process.
-- `worker:run`: runs `src/workers/run_task.ts` — the containerised worker entry point. Requires env vars `WORKER_ROLE`, `TASK_PAYLOAD`, `TARGET_REPO`, `GITHUB_TOKEN`. See `docker/worker/Dockerfile` for the container contract.
-- `doctor`: checks basic tool and env readiness.
+### Research Layer
 
-## Environment variables
+**Research Scout** — Knowledge Hunter  
+Searches the open internet for cutting-edge technical insights, best practices, and emerging patterns relevant to autonomous agent systems. Brings raw findings back to the team.
 
-Authoritative source is `src/config.ts`; `.env.example` mirrors the currently supported env surface.
+**Research Synthesizer** — Knowledge Organizer  
+Takes the Scout's raw findings and transforms them into structured, actionable insights. Distills noise into signal so the planning layer has high-quality input for decision-making.
 
-Practical minimum for real GitHub operations:
+<p align="center">
+	<img src="public/divider.gif" alt="divider" width="240" />
+</p>
 
-- `GITHUB_TOKEN`
-- `TARGET_REPO`
-- `COPILOT_GITHUB_TOKEN` (or `GITHUB_FINEGRADED`)
+### Worker Layer
 
-Common optional overrides:
+**Evolution Worker** — Codebase Improver  
+Focuses on runtime evolution, refactoring, and core system improvements. Tends to suggest "we can do this better" and is usually right about it.
 
-- `TARGET_BASE_BRANCH` (default: `main`)
-- `BOX_BUDGET_USD` (default: `15`)
-- `BOX_MODE` (default: `local`)
-- `CLAUDE_API_KEY` and `CLAUDE_MODEL` (for Anthropic reviewer/planner paths)
+**quality-worker** — Test Specialist  
+Ensures test coverage, validates behavior, and pushes back on untested changes. Takes quality seriously; sees green checks as a starting point, not an end.
 
-## Dependency audit (documentation-only)
+**governance-worker** — Policy Enforcer  
+Manages state governance, audit trails, and compliance with system policies. Keeps records clean and decisions traceable; the discipline backbone of the system.
 
-Audit scope: `package.json`, lockfile metadata presence, and Dockerfiles.
+**infrastructure-worker** — Foundation Layer  
+Handles orchestration, deployment, containerization, and the runtime infrastructure. Works quietly most of the time; deeply missed when something breaks.
 
-Potential upgrade candidates (not upgraded in this change):
+**integration-worker** — Connector  
+Bridges separate components and ensures they communicate reliably. If it says "these two systems work together," you can trust it.
 
-- `dotenv` (`^16.4.5`) - review against latest stable line.
-- `eslint` (`^10.0.3`) - verify intended version line and ecosystem compatibility.
-- `docker/worker/Dockerfile` pins `COPILOT_VERSION=v1.0.3` - review for newer Copilot CLI release.
+**observation-worker** — Signal Collector  
+Gathers metrics, health signals, and system telemetry. Detects anomalies and raises flags when patterns shift. Tends to be right.
 
-To verify outdated and vulnerable packages in your environment:
+<p align="center">
+	<img src="public/divider.gif" alt="divider" width="240" />
+</p>
 
-```bash
-npm outdated
-npm audit
-npm audit --omit=dev
-```
+## BOX Mindset
 
-## Notes from docs audit
+BOX is ambitious not because it is flawless, but because it can learn.
+Its goal is not to be perfect in one shot, but to become more robust,
+more intelligent, and more autonomous with each cycle.
 
-- `src/config.ts` supports legacy env key `GITHUB_FINEGRADED` (spelling preserved for backward compatibility). Prefer `COPILOT_GITHUB_TOKEN` in new setups.
-- Some historical README sections referenced files that are not present in this repo snapshot; this README now reflects current paths and scripts only.
