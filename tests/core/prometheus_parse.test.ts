@@ -30,6 +30,10 @@ import {
   CLOSURE_YIELD_LOW_THRESHOLD,
   CLOSURE_YIELD_BOOST_AMOUNT,
   CLOSURE_YIELD_BOOST_DIMENSIONS,
+  computeNoveltyScore,
+  seedDiscoveryGapPackets,
+  NOVELTY_COLLAPSE_THRESHOLD,
+  NOVELTY_SEED_DIMENSIONS,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments } from "../../src/core/prompt_compiler.js";
 import { isNonSpecificVerification, validatePlanContract } from "../../src/core/plan_contract_validator.js";
@@ -2928,5 +2932,182 @@ describe("carry-forward prompt bulk reduction", () => {
       CARRY_FORWARD_MAX_TOKENS,
       "the item cap and the token cap must not be equal — they measure different things"
     );
+  });
+});
+
+// ── Novelty / discovery-gap scoring ───────────────────────────────────────────
+
+describe("computeNoveltyScore", () => {
+  it("returns score 1.0 with empty novelCount when currentPlans is empty", () => {
+    const result = computeNoveltyScore([], [{ task: "fix something" }]);
+    assert.equal(result.score, 1.0);
+    assert.equal(result.totalCount, 0);
+    assert.equal(result.novelCount, 0);
+    assert.deepEqual(result.repeatedTasks, []);
+  });
+
+  it("returns score 1.0 for all plans when historicalPlans is empty (first cycle)", () => {
+    const current = [{ task: "add observability tracing" }, { task: "refactor module boundaries" }];
+    const result = computeNoveltyScore(current, []);
+    assert.equal(result.score, 1.0);
+    assert.equal(result.novelCount, 2);
+    assert.equal(result.totalCount, 2);
+    assert.deepEqual(result.repeatedTasks, []);
+  });
+
+  it("identifies repeated plans when task text has ≥2 significant keyword overlaps with history", () => {
+    const historical = [{ task: "fix verification harness false failures" }];
+    const current = [
+      { task: "fix verification harness race conditions" }, // ≥2 overlapping words with history
+      { task: "add distributed tracing spans" },           // no overlap
+    ];
+    const result = computeNoveltyScore(current, historical);
+    assert.equal(result.totalCount, 2);
+    assert.equal(result.repeatedTasks.length, 1, "one plan should be classified as repeated");
+    assert.equal(result.novelCount, 1);
+    assert.ok(result.score > 0 && result.score < 1.0, "score should be between 0 and 1");
+  });
+
+  it("returns score 0 when all current plans are repeated", () => {
+    const historical = [{ task: "implement dependency graph resolver logic" }];
+    const current   = [{ task: "implement dependency graph resolver retry" }];
+    const result = computeNoveltyScore(current, historical);
+    assert.equal(result.novelCount, 0);
+    assert.equal(result.score, 0);
+    assert.equal(result.repeatedTasks.length, 1);
+  });
+
+  it("returns score 1.0 when no plan shares ≥2 keywords with history", () => {
+    const historical = [{ task: "fix authentication token expiry" }];
+    const current = [
+      { task: "add observability metrics dashboard" },
+      { task: "refactor database connection pooling" },
+    ];
+    const result = computeNoveltyScore(current, historical);
+    assert.equal(result.score, 1.0);
+    assert.equal(result.novelCount, 2);
+    assert.deepEqual(result.repeatedTasks, []);
+  });
+
+  it("score is a rounded finite number in [0, 1]", () => {
+    const historical = [
+      { task: "fix carry forward ledger entries" },
+      { task: "improve worker dispatch batching" },
+    ];
+    const current = [
+      { task: "fix carry forward ledger cleanup" },  // repeated
+      { task: "add circuit breaker pattern" },         // novel
+      { task: "improve worker dispatch concurrency" }, // repeated
+    ];
+    const result = computeNoveltyScore(current, historical);
+    assert.ok(Number.isFinite(result.score));
+    assert.ok(result.score >= 0 && result.score <= 1.0);
+  });
+
+  it("negative path: handles null/undefined inputs gracefully", () => {
+    const r1 = computeNoveltyScore(null as any, null as any);
+    assert.equal(r1.score, 1.0);
+    assert.equal(r1.totalCount, 0);
+    const r2 = computeNoveltyScore(undefined as any, [{ task: "some task" }]);
+    assert.equal(r2.totalCount, 0);
+  });
+});
+
+describe("seedDiscoveryGapPackets", () => {
+  it("returns empty array when novelty score is at or above threshold", () => {
+    // All plans are novel (score = 1.0) — no seeding needed
+    const current = [{ task: "add observability tracing" }];
+    const result = seedDiscoveryGapPackets(current, []);
+    assert.deepEqual(result, []);
+  });
+
+  it("returns empty array when currentPlans is empty", () => {
+    const result = seedDiscoveryGapPackets([], [{ task: "fix something" }]);
+    assert.deepEqual(result, []);
+  });
+
+  it("seeds packets when novelty collapses below NOVELTY_COLLAPSE_THRESHOLD", () => {
+    // Construct a scenario where all current plans are repeated from history
+    const historical = [
+      { task: "fix verification harness false failures", leverage_rank: ["quality"] },
+      { task: "implement carry forward ledger cleanup", leverage_rank: ["quality"] },
+      { task: "add worker dispatch concurrency batching", leverage_rank: ["performance"] },
+    ];
+    const current = [
+      { task: "fix verification harness race conditions", leverage_rank: ["quality"] },
+      { task: "implement carry forward ledger expiry", leverage_rank: ["quality"] },
+      { task: "add worker dispatch concurrency throttle", leverage_rank: ["performance"] },
+    ];
+    const result = seedDiscoveryGapPackets(current, historical);
+    // novelty score should be 0 (all repeated) → below NOVELTY_COLLAPSE_THRESHOLD
+    assert.ok(result.length > 0, "seeds must be generated when novelty collapses");
+    // Each seed must be flagged
+    for (const seed of result) {
+      assert.equal(seed._discoveryGapSeed, true);
+      assert.ok(typeof seed.task === "string" && seed.task.length > 0);
+      assert.equal(seed.verification, "npm test");
+      assert.ok(Array.isArray(seed.leverage_rank) && seed.leverage_rank.length > 0);
+    }
+  });
+
+  it("respects maxSeeds option", () => {
+    const historical = [
+      { task: "fix verification harness false", leverage_rank: ["quality"] },
+      { task: "implement carry forward ledger", leverage_rank: ["quality"] },
+    ];
+    const current = [
+      { task: "fix verification harness race", leverage_rank: ["quality"] },
+      { task: "implement carry forward expiry", leverage_rank: ["quality"] },
+    ];
+    const result = seedDiscoveryGapPackets(current, historical, { maxSeeds: 1 });
+    assert.ok(result.length <= 1, "maxSeeds must be respected");
+  });
+
+  it("does not seed dimensions that are already covered", () => {
+    const historical = [
+      { task: "fix verification harness false", leverage_rank: ["observability", "security"] },
+    ];
+    const current = [
+      { task: "fix verification harness race", leverage_rank: ["observability", "security"] },
+    ];
+    const result = seedDiscoveryGapPackets(current, historical);
+    // observability and security are covered — seeds should not include those
+    for (const seed of result) {
+      assert.ok(
+        !seed.leverage_rank.includes("observability"),
+        "covered dimension must not be seeded"
+      );
+      assert.ok(
+        !seed.leverage_rank.includes("security"),
+        "covered dimension must not be seeded"
+      );
+    }
+  });
+
+  it("does not mutate input arrays", () => {
+    const current  = [{ task: "fix verify harness false race", leverage_rank: ["quality"] }];
+    const historical = [{ task: "fix verify harness false fails", leverage_rank: ["quality"] }];
+    const origCurrent = current[0].task;
+    seedDiscoveryGapPackets(current, historical);
+    assert.equal(current[0].task, origCurrent, "input must not be mutated");
+  });
+
+  it("negative path: returns empty array for non-array inputs", () => {
+    assert.deepEqual(seedDiscoveryGapPackets(null as any, null as any), []);
+  });
+});
+
+describe("NOVELTY_COLLAPSE_THRESHOLD and NOVELTY_SEED_DIMENSIONS", () => {
+  it("NOVELTY_COLLAPSE_THRESHOLD is a finite number in (0, 1)", () => {
+    assert.ok(Number.isFinite(NOVELTY_COLLAPSE_THRESHOLD));
+    assert.ok(NOVELTY_COLLAPSE_THRESHOLD > 0 && NOVELTY_COLLAPSE_THRESHOLD < 1);
+  });
+
+  it("NOVELTY_SEED_DIMENSIONS is a non-empty Set of strings", () => {
+    assert.ok(NOVELTY_SEED_DIMENSIONS instanceof Set);
+    assert.ok(NOVELTY_SEED_DIMENSIONS.size > 0);
+    for (const dim of NOVELTY_SEED_DIMENSIONS) {
+      assert.equal(typeof dim, "string");
+    }
   });
 });

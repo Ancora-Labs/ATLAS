@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { scanProject } from "../../src/core/project_scanner.js";
+import { scanProject, computeScanNoveltySignal } from "../../src/core/project_scanner.js";
 
 describe("project_scanner", () => {
   let rootDir: string;
@@ -42,6 +42,45 @@ describe("project_scanner", () => {
     assert.equal(result.hasPackageJson, false);
     assert.equal(result.commands.install, "npm ci");
     assert.equal(result.commands.build, null);
+  });
+});
+
+describe("computeScanNoveltySignal", () => {
+  it("returns low signal when all current domains were already known", () => {
+    const result = computeScanNoveltySignal(["backend", "quality"], ["backend", "quality", "devops"]);
+    assert.equal(result.noveltySignal, "low");
+    assert.deepEqual(result.newDomains, []);
+  });
+
+  it("returns medium signal when one new domain is discovered", () => {
+    const result = computeScanNoveltySignal(["backend", "quality", "devops"], ["backend", "quality"]);
+    assert.equal(result.noveltySignal, "medium");
+    assert.deepEqual(result.newDomains, ["devops"]);
+  });
+
+  it("returns high signal when more than half the current domains are new", () => {
+    const result = computeScanNoveltySignal(["devops", "security", "backend"], ["backend"]);
+    assert.equal(result.noveltySignal, "high");
+    assert.ok(result.newDomains.includes("devops"));
+    assert.ok(result.newDomains.includes("security"));
+  });
+
+  it("returns high signal when all current domains are new (first run against empty baseline)", () => {
+    const result = computeScanNoveltySignal(["backend", "quality"], []);
+    assert.equal(result.noveltySignal, "high");
+    assert.deepEqual(result.newDomains, ["backend", "quality"]);
+  });
+
+  it("returns low signal for empty currentDomains", () => {
+    const result = computeScanNoveltySignal([], ["backend"]);
+    assert.equal(result.noveltySignal, "low");
+    assert.deepEqual(result.newDomains, []);
+  });
+
+  it("negative path: handles null/undefined inputs gracefully", () => {
+    const result = computeScanNoveltySignal(null as any, null as any);
+    assert.equal(result.noveltySignal, "low");
+    assert.deepEqual(result.newDomains, []);
   });
 });
 

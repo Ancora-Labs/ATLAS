@@ -2502,6 +2502,185 @@ export function rankPlansByClosureYield(plans: any[], closureYield: number): any
   });
 }
 
+// ── Novelty / discovery-gap scoring ───────────────────────────────────────────
+//
+// Novelty measures what fraction of current plan packets address task areas
+// that were NOT seen in recent historical plans.  When novelty collapses (score
+// below NOVELTY_COLLAPSE_THRESHOLD) the system seeds fresh discovery packets
+// that target dimensions absent from both current and historical work.  This
+// prevents planning cycles from becoming closed loops on previously-attempted
+// tasks with diminishing returns.
+
+/** Threshold below which plan novelty is treated as "collapsed" — triggers seeding. */
+export const NOVELTY_COLLAPSE_THRESHOLD = 0.35 as const;
+
+/**
+ * Canonical discovery dimensions used when seeding packets on novelty collapse.
+ * Each dimension represents a capability area that should periodically be explored.
+ */
+export const NOVELTY_SEED_DIMENSIONS: ReadonlySet<string> = new Set([
+  "observability",
+  "reliability",
+  "performance",
+  "security",
+  "testing",
+  "architecture",
+  "documentation",
+  "refactor",
+]) as ReadonlySet<string>;
+
+/** Result returned by computeNoveltyScore. */
+export interface NoveltyScoreResult {
+  /** Fraction of current plans that are novel vs. history (0–1). 1.0 when no history. */
+  score: number;
+  /** Number of current plans considered novel (no significant overlap with history). */
+  novelCount: number;
+  /** Total current plans evaluated. */
+  totalCount: number;
+  /** Task texts of plans that were classified as repeated from history. */
+  repeatedTasks: string[];
+}
+
+/**
+ * Compute a novelty score for current plan packets relative to historical plans.
+ *
+ * A plan is classified as "repeated" when its task text shares ≥2 significant words
+ * (≥4 chars) with any historical plan — the same keyword-overlap strategy used by
+ * computeBottleneckCoverage to keep measurement consistent across the system.
+ *
+ * Returns { score: 1.0, novelCount: 0, totalCount: 0, repeatedTasks: [] } when
+ * currentPlans is empty so callers can distinguish "no work" from "zero novelty".
+ * Returns score: 1.0 (all novel) when historicalPlans is empty (first cycle).
+ *
+ * @param currentPlans    — plan packets from the current planning cycle
+ * @param historicalPlans — plan packets from recent prior cycles
+ */
+export function computeNoveltyScore(
+  currentPlans: any[],
+  historicalPlans: any[],
+): NoveltyScoreResult {
+  const current = Array.isArray(currentPlans) ? currentPlans : [];
+  const historical = Array.isArray(historicalPlans) ? historicalPlans : [];
+
+  if (current.length === 0) {
+    return { score: 1.0, novelCount: 0, totalCount: 0, repeatedTasks: [] };
+  }
+  if (historical.length === 0) {
+    return { score: 1.0, novelCount: current.length, totalCount: current.length, repeatedTasks: [] };
+  }
+
+  // Pre-build word sets for all historical plans to avoid repeated tokenization.
+  const historicalWordSets = historical.map(plan => {
+    const text = `${String(plan?.task || "")} ${String(plan?.title || "")}`.toLowerCase();
+    return text.split(/[^a-z0-9]+/).filter(w => w.length >= 4);
+  });
+
+  const repeatedTasks: string[] = [];
+  let novelCount = 0;
+
+  for (const plan of current) {
+    const taskText = String(plan?.task || plan?.title || "").trim();
+    const planWords = `${taskText} ${String(plan?.title || "")}`.toLowerCase()
+      .split(/[^a-z0-9]+/).filter(w => w.length >= 4);
+
+    const isRepeated = planWords.length > 0 && historicalWordSets.some(histWords => {
+      const matches = planWords.filter(w => histWords.includes(w));
+      return matches.length >= 2;
+    });
+
+    if (isRepeated) {
+      repeatedTasks.push(taskText);
+    } else {
+      novelCount++;
+    }
+  }
+
+  return {
+    score: Math.round((novelCount / current.length) * 1000) / 1000,
+    novelCount,
+    totalCount: current.length,
+    repeatedTasks,
+  };
+}
+
+/**
+ * Seed fresh implementation packets when novelty collapses.
+ *
+ * When computeNoveltyScore returns a score below NOVELTY_COLLAPSE_THRESHOLD,
+ * this function generates minimal discovery-gap packets targeting dimensions that
+ * are absent from both current and historical plans.  This prevents the planning
+ * cycle from becoming a closed loop on previously-attempted work with diminishing
+ * returns on system capacity.
+ *
+ * Returns [] when:
+ *   - novelty is at or above NOVELTY_COLLAPSE_THRESHOLD (no seeding needed), or
+ *   - currentPlans is empty (no work to compare against), or
+ *   - all NOVELTY_SEED_DIMENSIONS are already covered.
+ *
+ * Does NOT mutate input arrays.  Seed packets are flagged with _discoveryGapSeed: true
+ * so callers can identify them and handle them separately if needed.
+ *
+ * @param currentPlans    — plan packets from the current cycle
+ * @param historicalPlans — plan packets from recent prior cycles
+ * @param options.maxSeeds — maximum seed packets to generate (default: 3)
+ */
+export function seedDiscoveryGapPackets(
+  currentPlans: any[],
+  historicalPlans: any[],
+  options: { maxSeeds?: number } = {},
+): any[] {
+  const noveltyResult = computeNoveltyScore(currentPlans, historicalPlans);
+  if (noveltyResult.score >= NOVELTY_COLLAPSE_THRESHOLD || noveltyResult.totalCount === 0) {
+    return [];
+  }
+
+  const maxSeeds =
+    Number.isFinite(Number(options?.maxSeeds)) && Number(options.maxSeeds) > 0
+      ? Math.floor(Number(options.maxSeeds))
+      : 3;
+
+  // Collect dimensions already addressed in current + historical plans.
+  const coveredDimensions = new Set<string>();
+  const allPlans = [
+    ...(Array.isArray(currentPlans) ? currentPlans : []),
+    ...(Array.isArray(historicalPlans) ? historicalPlans : []),
+  ];
+  for (const plan of allPlans) {
+    const leverageRank = Array.isArray(plan?.leverage_rank) ? plan.leverage_rank : [];
+    for (const dim of leverageRank) {
+      coveredDimensions.add(String(dim || "").toLowerCase().trim());
+    }
+    // Also extract seed dimension keywords from task text for best-effort coverage.
+    const taskText = `${String(plan?.task || "")} ${String(plan?.title || "")}`.toLowerCase();
+    for (const dim of NOVELTY_SEED_DIMENSIONS) {
+      if (taskText.includes(dim)) coveredDimensions.add(dim);
+    }
+  }
+
+  const uncoveredDimensions = [...NOVELTY_SEED_DIMENSIONS].filter(
+    dim => !coveredDimensions.has(dim),
+  );
+
+  if (uncoveredDimensions.length === 0) {
+    return [];
+  }
+
+  return uncoveredDimensions.slice(0, maxSeeds).map((dim, i) => ({
+    task: `Discovery: explore ${dim} improvements and implementation gaps`,
+    title: `Discovery gap seed — ${dim}`,
+    role: "evolution-worker",
+    wave: 1,
+    priority: 99 + i,
+    verification: "npm test",
+    verification_commands: ["npm test"],
+    capacityDelta: 0.05,
+    requestROI: 0.8,
+    leverage_rank: [dim],
+    _discoveryGapSeed: true,
+    _noveltyCollapseScore: noveltyResult.score,
+  }));
+}
+
 export async function runPrometheusAnalysis(config, options: any = {}) {
   const stateDir = config.paths?.stateDir || "state";
 

@@ -298,3 +298,37 @@ export async function scanProject(config) {
 
   return result;
 }
+
+/**
+ * Compute a discovery novelty signal by comparing the current scan's detected
+ * domains against a known baseline set from a prior scan.
+ *
+ * A "new" domain is one present in currentDomains but absent from baselineDomains.
+ * The noveltySignal categorises the discovery gap:
+ *   "high"   — more than half of detected domains are new (unexplored territory)
+ *   "medium" — at least one new domain detected
+ *   "low"    — all domains were already known (no new discovery)
+ *
+ * Returns { newDomains: [], noveltySignal: "low" } for empty or equal inputs.
+ *
+ * @param currentDomains  — domains detected in the current project scan
+ * @param baselineDomains — domains from a prior scan (or known baseline)
+ */
+export function computeScanNoveltySignal(
+  currentDomains: string[],
+  baselineDomains: string[],
+): { newDomains: string[]; noveltySignal: "high" | "medium" | "low" } {
+  const current = Array.isArray(currentDomains) ? currentDomains : [];
+  const baseline = new Set(Array.isArray(baselineDomains) ? baselineDomains : []);
+
+  const newDomains = current.filter(d => !baseline.has(d));
+
+  const noveltySignal: "high" | "medium" | "low" =
+    current.length > 0 && newDomains.length > current.length / 2
+      ? "high"
+      : newDomains.length > 0
+        ? "medium"
+        : "low";
+
+  return { newDomains, noveltySignal };
+}
