@@ -6,6 +6,10 @@ import {
   PLAN_VIOLATION_SEVERITY,
   PACKET_VIOLATION_CODE,
   isNonSpecificVerification,
+  isAmbiguousTask,
+  AMBIGUOUS_TASK_PATTERNS,
+  MAX_ACCEPTANCE_CRITERIA_PER_TASK,
+  MAX_FILES_IN_SCOPE_PER_TASK,
 } from "../../src/core/plan_contract_validator.js";
 import { checkForbiddenCommands } from "../../src/core/verification_command_registry.js";
 
@@ -1006,5 +1010,185 @@ describe("plan_contract_validator — additional forbidden shell-pattern regress
         `"${cmd}" must produce at least one violation`
       );
     }
+  });
+});
+
+// ── isAmbiguousTask — ambiguity detection ─────────────────────────────────────
+
+describe("isAmbiguousTask", () => {
+  it("identifies generic single-action descriptions as ambiguous", () => {
+    const ambiguous = [
+      "fix bugs",
+      "fix issues",
+      "update code",
+      "update system",
+      "improve system",
+      "improve code",
+      "refactor code",
+      "clean up code",
+      "cleanup",
+      "misc changes",
+      "misc fixes",
+      "miscellaneous updates",
+      "general cleanup",
+      "general refactor",
+      "various updates",
+      "add tests",
+      "write tests",
+    ];
+    for (const task of ambiguous) {
+      assert.equal(isAmbiguousTask(task), true, `"${task}" must be detected as ambiguous`);
+    }
+  });
+
+  it("identifies specific task descriptions as NOT ambiguous", () => {
+    const specific = [
+      "Add deterministic decomposition caps to prometheus.ts to prevent oversized plans",
+      "Fix verification glob false-fail in Windows CI by rewriting path separator logic",
+      "Implement trust boundary validation for planner output packets",
+      "Harden plan_contract_validator to detect ambiguous task descriptions",
+      "Refactor orchestrator wave dispatch to use dependency-aware scheduling",
+    ];
+    for (const task of specific) {
+      assert.equal(isAmbiguousTask(task), false, `"${task}" must NOT be detected as ambiguous`);
+    }
+  });
+
+  it("returns true for empty string", () => {
+    assert.equal(isAmbiguousTask(""), true);
+    assert.equal(isAmbiguousTask("   "), true);
+  });
+
+  it("is case-insensitive", () => {
+    assert.equal(isAmbiguousTask("FIX BUGS"), true);
+    assert.equal(isAmbiguousTask("Update Code"), true);
+    assert.equal(isAmbiguousTask("MISC CHANGES"), true);
+  });
+
+  it("AMBIGUOUS_TASK_PATTERNS is a frozen non-empty array of RegExps", () => {
+    assert.ok(Array.isArray(AMBIGUOUS_TASK_PATTERNS));
+    assert.ok(AMBIGUOUS_TASK_PATTERNS.length > 0);
+    for (const p of AMBIGUOUS_TASK_PATTERNS) {
+      assert.ok(p instanceof RegExp, "every entry must be a RegExp");
+    }
+    assert.throws(() => { (AMBIGUOUS_TASK_PATTERNS as any).push(/extra/); },
+      "AMBIGUOUS_TASK_PATTERNS must be frozen");
+  });
+
+  it("negative path: descriptive tasks with action verbs are NOT ambiguous", () => {
+    // A sentence that starts with a known verb but contains specifics is not ambiguous.
+    assert.equal(isAmbiguousTask("Fix the parser confidence penalty computation in prometheus.ts"), false);
+    assert.equal(isAmbiguousTask("Update worker_batch_planner to respect microwave caps"), false);
+  });
+});
+
+// ── validatePlanContract — TASK_TOO_LARGE and TASK_AMBIGUOUS ─────────────────
+
+describe("validatePlanContract — decomposition caps and ambiguity", () => {
+  function baseValidPlan(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      task: "Implement deterministic decomposition cap for Prometheus output packets",
+      role: "evolution-worker",
+      wave: 1,
+      verification: "tests/core/prometheus_parse.test.ts — test: checkDecompositionCaps",
+      dependencies: [],
+      acceptance_criteria: ["Cap applied when batch exceeds MAX_DECOMPOSITION_PLANS"],
+      capacityDelta: 0.1,
+      requestROI: 2.0,
+      ...overrides,
+    };
+  }
+
+  it("accepts a plan with exactly MAX_ACCEPTANCE_CRITERIA_PER_TASK criteria", () => {
+    const ac = Array.from({ length: MAX_ACCEPTANCE_CRITERIA_PER_TASK }, (_, i) => `Criterion ${i + 1}`);
+    const result = validatePlanContract(baseValidPlan({ acceptance_criteria: ac }));
+    assert.ok(
+      !result.violations.some(v => v.code === PACKET_VIOLATION_CODE.TASK_TOO_LARGE),
+      "exactly MAX_ACCEPTANCE_CRITERIA_PER_TASK must NOT produce TASK_TOO_LARGE"
+    );
+  });
+
+  it("emits TASK_TOO_LARGE (WARNING) when acceptance_criteria exceeds the cap", () => {
+    const ac = Array.from({ length: MAX_ACCEPTANCE_CRITERIA_PER_TASK + 1 }, (_, i) => `Criterion ${i + 1}`);
+    const result = validatePlanContract(baseValidPlan({ acceptance_criteria: ac }));
+    const v = result.violations.find(x => x.code === PACKET_VIOLATION_CODE.TASK_TOO_LARGE && x.field === "acceptance_criteria");
+    assert.ok(v, "must have TASK_TOO_LARGE violation on acceptance_criteria");
+    assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.WARNING);
+  });
+
+  it("plan remains valid (no CRITICAL) when only TASK_TOO_LARGE is triggered via oversized AC", () => {
+    const ac = Array.from({ length: MAX_ACCEPTANCE_CRITERIA_PER_TASK + 1 }, (_, i) => `Criterion ${i + 1}`);
+    const result = validatePlanContract(baseValidPlan({ acceptance_criteria: ac }));
+    // WARNING-only; plan is still valid unless there are CRITICALs
+    assert.ok(result.violations.every(v => v.severity !== PLAN_VIOLATION_SEVERITY.CRITICAL),
+      "only WARNING violations expected for oversized AC");
+  });
+
+  it("emits TASK_TOO_LARGE (WARNING) for filesInScope exceeding the cap", () => {
+    const files = Array.from({ length: MAX_FILES_IN_SCOPE_PER_TASK + 1 }, (_, i) => `src/file${i}.ts`);
+    const result = validatePlanContract(baseValidPlan({ filesInScope: files }));
+    const v = result.violations.find(x => x.code === PACKET_VIOLATION_CODE.TASK_TOO_LARGE && x.field === "filesInScope");
+    assert.ok(v, "must have TASK_TOO_LARGE violation on filesInScope");
+    assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.WARNING);
+  });
+
+  it("emits TASK_TOO_LARGE (WARNING) for target_files exceeding the cap", () => {
+    const files = Array.from({ length: MAX_FILES_IN_SCOPE_PER_TASK + 1 }, (_, i) => `src/file${i}.ts`);
+    const result = validatePlanContract(baseValidPlan({ target_files: files }));
+    const v = result.violations.find(x => x.code === PACKET_VIOLATION_CODE.TASK_TOO_LARGE && x.field === "filesInScope");
+    assert.ok(v, "must have TASK_TOO_LARGE violation on target_files (reported as filesInScope)");
+  });
+
+  it("does NOT emit TASK_TOO_LARGE when filesInScope is exactly MAX_FILES_IN_SCOPE_PER_TASK", () => {
+    const files = Array.from({ length: MAX_FILES_IN_SCOPE_PER_TASK }, (_, i) => `src/file${i}.ts`);
+    const result = validatePlanContract(baseValidPlan({ filesInScope: files }));
+    assert.ok(
+      !result.violations.some(v => v.code === PACKET_VIOLATION_CODE.TASK_TOO_LARGE && v.field === "filesInScope"),
+      "exactly MAX_FILES_IN_SCOPE_PER_TASK must NOT produce TASK_TOO_LARGE"
+    );
+  });
+
+  it("emits TASK_AMBIGUOUS (WARNING) for a generic task description", () => {
+    const result = validatePlanContract(baseValidPlan({ task: "fix bugs" }));
+    const v = result.violations.find(x => x.code === PACKET_VIOLATION_CODE.TASK_AMBIGUOUS);
+    assert.ok(v, "must have TASK_AMBIGUOUS violation for generic description");
+    assert.equal(v!.field, "task");
+    assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.WARNING);
+  });
+
+  it("does NOT emit TASK_AMBIGUOUS for a specific task description", () => {
+    const result = validatePlanContract(baseValidPlan());
+    assert.ok(
+      !result.violations.some(v => v.code === PACKET_VIOLATION_CODE.TASK_AMBIGUOUS),
+      "specific task must not produce TASK_AMBIGUOUS"
+    );
+  });
+
+  it("does NOT emit TASK_AMBIGUOUS when TASK_TOO_SHORT fires (no duplicate errors)", () => {
+    // Very short task hits TASK_TOO_SHORT — TASK_AMBIGUOUS must not fire on the same field.
+    const result = validatePlanContract(baseValidPlan({ task: "fix" }));
+    assert.ok(
+      result.violations.some(v => v.code === PACKET_VIOLATION_CODE.TASK_TOO_SHORT),
+      "TASK_TOO_SHORT must fire for a 3-char task"
+    );
+    assert.ok(
+      !result.violations.some(v => v.code === PACKET_VIOLATION_CODE.TASK_AMBIGUOUS),
+      "TASK_AMBIGUOUS must not co-occur with TASK_TOO_SHORT"
+    );
+  });
+
+  it("TASK_TOO_LARGE and TASK_AMBIGUOUS codes exist in PACKET_VIOLATION_CODE", () => {
+    assert.equal(typeof PACKET_VIOLATION_CODE.TASK_TOO_LARGE, "string");
+    assert.equal(typeof PACKET_VIOLATION_CODE.TASK_AMBIGUOUS, "string");
+    assert.equal(PACKET_VIOLATION_CODE.TASK_TOO_LARGE, "task_too_large");
+    assert.equal(PACKET_VIOLATION_CODE.TASK_AMBIGUOUS, "task_ambiguous");
+  });
+
+  it("MAX_ACCEPTANCE_CRITERIA_PER_TASK is 10", () => {
+    assert.equal(MAX_ACCEPTANCE_CRITERIA_PER_TASK, 10);
+  });
+
+  it("MAX_FILES_IN_SCOPE_PER_TASK is 30", () => {
+    assert.equal(MAX_FILES_IN_SCOPE_PER_TASK, 30);
   });
 });

@@ -472,6 +472,46 @@ export const UNRECOVERABLE_PACKET_REASONS = Object.freeze({
 export const HIGH_RISK_LOW_CONFIDENCE_REASON = "high_risk_low_confidence" as const;
 
 /**
+ * Maximum number of plans a single Prometheus decomposition cycle may produce.
+ * Batches exceeding this cap are trimmed to the first MAX_DECOMPOSITION_PLANS
+ * entries; the excess is logged for diagnostics.  The cap prevents runaway AI
+ * decomposition from overwhelming the dispatch pipeline with unreviewed tasks.
+ */
+export const MAX_DECOMPOSITION_PLANS = 20;
+
+/** Reason code emitted when a plans batch is trimmed by the decomposition cap. */
+export const DECOMPOSITION_CAP_REASON = "decomposition_cap_exceeded" as const;
+
+/**
+ * Check whether a raw plans array exceeds the decomposition cap.
+ *
+ * Returns a result indicating whether capping occurred, the original plan
+ * count, the capped count, and the reason string.  Pure function — does not
+ * mutate the input.
+ *
+ * @param rawPlans - the plans array as emitted by the AI, before normalization
+ * @returns {{ capped: boolean; originalCount: number; cappedCount: number; reason: string }}
+ */
+export function checkDecompositionCaps(rawPlans: unknown[]): {
+  capped: boolean;
+  originalCount: number;
+  cappedCount: number;
+  reason: string;
+} {
+  const plans = Array.isArray(rawPlans) ? rawPlans : [];
+  const originalCount = plans.length;
+  if (originalCount <= MAX_DECOMPOSITION_PLANS) {
+    return { capped: false, originalCount, cappedCount: originalCount, reason: "within_cap" };
+  }
+  return {
+    capped: true,
+    originalCount,
+    cappedCount: MAX_DECOMPOSITION_PLANS,
+    reason: DECOMPOSITION_CAP_REASON,
+  };
+}
+
+/**
  * Component confidence thresholds for the strict high-risk gate.
  *
  * When a component score falls below its threshold, the component is considered
@@ -2562,6 +2602,19 @@ Consider whether the root causes are:
   // by non-rawPlans paths (alternative shapes, drift debt tasks).
   const rawParsedInput = aiResult?.parsed || buildNarrativeFallbackParsed({ ...aiResult, raw });
   if (Array.isArray(rawParsedInput.plans) && rawParsedInput.plans.length > 0) {
+    // ── Decomposition cap gate ────────────────────────────────────────────
+    // Trim oversized batches before any per-packet validation so subsequent
+    // gates operate on a bounded set and log output stays tractable.
+    const capResult = checkDecompositionCaps(rawParsedInput.plans);
+    if (capResult.capped) {
+      rawParsedInput.plans = rawParsedInput.plans.slice(0, MAX_DECOMPOSITION_PLANS);
+      rawParsedInput._decompositionCapApplied = true;
+      rawParsedInput._decompositionCapOriginalCount = capResult.originalCount;
+      await appendProgress(config,
+        `[PROMETHEUS][PACKET_GATE] Decomposition cap applied — trimmed ${capResult.originalCount} plans to ${MAX_DECOMPOSITION_PLANS} (reason: ${DECOMPOSITION_CAP_REASON})`
+      );
+    }
+
     const incompletePackets: Array<{ index: number; reasons: string[] }> = [];
     rawParsedInput.plans = rawParsedInput.plans.filter((plan: any, i: number) => {
       const check = checkPacketCompleteness(plan);

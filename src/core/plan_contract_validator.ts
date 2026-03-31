@@ -58,6 +58,18 @@ export const PACKET_VIOLATION_CODE = Object.freeze({
   /** dependencies field is absent or not an array. */
   MISSING_DEPENDENCIES:          "missing_dependencies",
 
+  // ── Decomposition / size ──────────────────────────────────────────────────
+  /**
+   * Task has too many acceptance criteria or files in scope — it is an oversized
+   * compound task that must be decomposed into smaller work items.
+   */
+  TASK_TOO_LARGE:                "task_too_large",
+  /**
+   * Task description is too generic/vague — it does not specify a concrete
+   * artifact, system component, or measurable outcome.
+   */
+  TASK_AMBIGUOUS:                "task_ambiguous",
+
   // ── Scoring fields (shared with generation-boundary gate) ────────────────
   /** capacityDelta is absent. */
   MISSING_CAPACITY_DELTA:        "missing_capacity_delta",
@@ -84,6 +96,52 @@ export const NON_SPECIFIC_VERIFICATION_PATTERNS = [
   /^run\s+tests?\s*$/i,
   /^tests?\s+pass\s*$/i,
 ];
+
+/**
+ * Maximum number of acceptance criteria a single plan task may declare.
+ * Plans exceeding this threshold are oversized compound tasks that should be
+ * decomposed into smaller, independently-verifiable work items.
+ */
+export const MAX_ACCEPTANCE_CRITERIA_PER_TASK = 10;
+
+/**
+ * Maximum number of files a single plan task may declare in its scope
+ * (filesInScope or target_files). Plans with broader file coverage are
+ * oversized compound tasks.
+ */
+export const MAX_FILES_IN_SCOPE_PER_TASK = 30;
+
+/**
+ * Regex patterns matching ambiguous, underspecified task descriptions.
+ * A description is ambiguous when it contains only generic action/noun
+ * vocabulary without specifying a concrete artifact, system component, or
+ * measurable outcome.
+ */
+export const AMBIGUOUS_TASK_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /^fix\s*(bugs?|issues?|things?|stuff|it|that|this|them)?\s*$/i,
+  /^update\s*(code|system|things?|stuff|it|that|this|them)?\s*$/i,
+  /^improve\s*(system|code|things?|stuff|it|performance|quality)?\s*$/i,
+  /^refactor\s*(code|things?|stuff|it|that|this|them)?\s*$/i,
+  /^clean\s*up\s*(code|things?|stuff|it|that|this|them)?\s*$/i,
+  /^misc(ellaneous)?\s*(changes?|updates?|fixes?)?\s*$/i,
+  /^general\s*(cleanup|refactor|update|fix|improvement|changes?)?\s*$/i,
+  /^various\s*(updates?|changes?|fixes?|improvements?)?\s*$/i,
+  /^add\s+tests?\s*$/i,
+  /^write\s+tests?\s*$/i,
+]);
+
+/**
+ * Determine whether a task description is ambiguous/underspecified.
+ * Returns true when the description matches a known generic-vocabulary pattern.
+ *
+ * @param {string} value - the plan's `task` field
+ * @returns {boolean} true when the task is ambiguous
+ */
+export function isAmbiguousTask(value: string): boolean {
+  if (!value || !String(value).trim()) return true;
+  const v = String(value).trim();
+  return AMBIGUOUS_TASK_PATTERNS.some(pattern => pattern.test(v));
+}
 
 /**
  * Determine whether a `verification` field value is non-specific.
@@ -157,6 +215,15 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
       severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
       code: PACKET_VIOLATION_CODE.TASK_TOO_SHORT,
     });
+  } else if (isAmbiguousTask(String(plan.task))) {
+    // Only flag ambiguity when the task passes the length check (avoids duplicate errors).
+    violations.push({
+      field: "task",
+      message: `Task description is too generic/ambiguous: "${String(plan.task).trim().slice(0, 80)}". ` +
+        "Specify a concrete artifact, system component, or measurable outcome.",
+      severity: PLAN_VIOLATION_SEVERITY.WARNING,
+      code: PACKET_VIOLATION_CODE.TASK_AMBIGUOUS,
+    });
   }
 
   if (!plan.role || String(plan.role).trim().length === 0) {
@@ -212,6 +279,31 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
       message: "Acceptance criteria must be a non-empty array — plans without measurable AC are rejected",
       severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
       code: PACKET_VIOLATION_CODE.MISSING_ACCEPTANCE_CRITERIA,
+    });
+  } else if (plan.acceptance_criteria.length > MAX_ACCEPTANCE_CRITERIA_PER_TASK) {
+    // Oversized AC list — the task is compound and must be decomposed.
+    violations.push({
+      field: "acceptance_criteria",
+      message: `Task has ${plan.acceptance_criteria.length} acceptance criteria (max ${MAX_ACCEPTANCE_CRITERIA_PER_TASK}). ` +
+        "Oversized tasks must be decomposed into smaller, independently-verifiable work items.",
+      severity: PLAN_VIOLATION_SEVERITY.WARNING,
+      code: PACKET_VIOLATION_CODE.TASK_TOO_LARGE,
+    });
+  }
+
+  // Decomposition cap: files-in-scope ceiling.
+  const inScopeFiles: unknown[] | null = Array.isArray(plan.filesInScope)
+    ? plan.filesInScope
+    : Array.isArray(plan.target_files)
+      ? plan.target_files
+      : null;
+  if (inScopeFiles !== null && inScopeFiles.length > MAX_FILES_IN_SCOPE_PER_TASK) {
+    violations.push({
+      field: "filesInScope",
+      message: `Task declares ${inScopeFiles.length} files in scope (max ${MAX_FILES_IN_SCOPE_PER_TASK}). ` +
+        "Tasks with broad file coverage are oversized — decompose into focused work items.",
+      severity: PLAN_VIOLATION_SEVERITY.WARNING,
+      code: PACKET_VIOLATION_CODE.TASK_TOO_LARGE,
     });
   }
 
