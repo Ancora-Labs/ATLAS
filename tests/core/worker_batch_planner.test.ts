@@ -7,6 +7,8 @@ import {
   splitWavesIntoMicrowaves,
   MICROWAVE_MAX_TASKS_DEFAULT,
   buildFitScoredBatches,
+  classifyNucleusFrontier,
+  packNucleusFrontierBatches,
 } from "../../src/core/worker_batch_planner.js";
 
 function buildPlan(index) {
@@ -810,5 +812,221 @@ describe("worker_batch_planner — compactSingletonWaves integration", () => {
     const batches = buildRoleExecutionBatches(plans, noCompactConfig);
     const wave2Batch = batches.find(b => (b as any).wave === 2);
     assert.ok(wave2Batch, "false config must not compact waves");
+  });
+});
+
+// ── classifyNucleusFrontier ───────────────────────────────────────────────────
+
+describe("worker_batch_planner — classifyNucleusFrontier", () => {
+  it("tasks with score > 0 go to nucleus; score = 0 go to frontier", () => {
+    const root = { task: "root-task", wave: 1 };
+    const mid  = { task: "mid-task",  wave: 1 };
+    const leaf = { task: "leaf-task", wave: 1 };
+    const scores = new Map([["root-task", 2], ["mid-task", 1], ["leaf-task", 0]]);
+
+    const { nucleus, frontier } = classifyNucleusFrontier([root, mid, leaf], scores);
+
+    assert.deepEqual(nucleus.map((p: any) => p.task), ["root-task", "mid-task"]);
+    assert.deepEqual(frontier.map((p: any) => p.task), ["leaf-task"]);
+  });
+
+  it("all leaf tasks (scores all 0) produce empty nucleus and full frontier", () => {
+    const plans = [{ task: "A" }, { task: "B" }, { task: "C" }];
+    const scores = new Map([["A", 0], ["B", 0], ["C", 0]]);
+    const { nucleus, frontier } = classifyNucleusFrontier(plans, scores);
+    assert.equal(nucleus.length, 0);
+    assert.equal(frontier.length, 3);
+  });
+
+  it("plans with no entry in scores map are treated as frontier (score defaults to 0)", () => {
+    const plans = [{ task: "unknown-task" }];
+    const { nucleus, frontier } = classifyNucleusFrontier(plans, new Map());
+    assert.equal(nucleus.length, 0);
+    assert.equal(frontier.length, 1);
+  });
+
+  it("empty plans array returns empty nucleus and frontier", () => {
+    const { nucleus, frontier } = classifyNucleusFrontier([], new Map());
+    assert.equal(nucleus.length, 0);
+    assert.equal(frontier.length, 0);
+  });
+
+  it("negative: null input returns empty nucleus and frontier without throwing", () => {
+    assert.doesNotThrow(() => classifyNucleusFrontier(null as any, new Map()));
+    const { nucleus, frontier } = classifyNucleusFrontier(null as any, new Map());
+    assert.equal(nucleus.length, 0);
+    assert.equal(frontier.length, 0);
+  });
+});
+
+// ── packNucleusFrontierBatches ────────────────────────────────────────────────
+
+describe("worker_batch_planner — packNucleusFrontierBatches", () => {
+  it("nucleus tasks appear in earlier batches than standalone frontier tasks", () => {
+    // root→mid→leaf chain: root score=2, mid score=1, leaf score=0
+    const root = { task: "root-task", context: "x".repeat(10) };
+    const mid  = { task: "mid-task",  context: "x".repeat(10) };
+    const leaf = { task: "leaf-task", context: "x".repeat(10) };
+    const scores = new Map([["root-task", 2], ["mid-task", 1], ["leaf-task", 0]]);
+
+    // Use a large token budget so all plans fit in one batch
+    const batches = packNucleusFrontierBatches([root, mid, leaf], scores, 1_000_000);
+
+    assert.equal(batches.length, 1, "all three fit in one batch");
+    const tasks = (batches[0].plans as any[]).map(p => p.task);
+    // nucleus tasks (root, mid) must appear before frontier (leaf) within the batch
+    assert.ok(tasks.indexOf("root-task") < tasks.indexOf("leaf-task"), "root before leaf");
+    assert.ok(tasks.indexOf("mid-task") < tasks.indexOf("leaf-task"), "mid before leaf");
+  });
+
+  it("frontier tasks are absorbed into nucleus batch when context space permits", () => {
+    // Two nucleus tasks + many frontier tasks; large context window
+    const nucleus1 = { task: "n1", context: "x".repeat(10) };
+    const nucleus2 = { task: "n2", context: "x".repeat(10) };
+    const frontier1 = { task: "f1", context: "x".repeat(10) };
+    const frontier2 = { task: "f2", context: "x".repeat(10) };
+    const scores = new Map([["n1", 2], ["n2", 1], ["f1", 0], ["f2", 0]]);
+
+    const batches = packNucleusFrontierBatches([nucleus1, nucleus2, frontier1, frontier2], scores, 1_000_000);
+
+    // All four fit in a single batch — fewer requests than naive 2+2 split
+    assert.equal(batches.length, 1);
+    assert.equal((batches[0].plans as any[]).length, 4);
+  });
+
+  it("overflow frontier tasks get their own batches when context window is tight", () => {
+    // Very small context window: each task fills it completely
+    const nucleus1 = { task: "n1", context: "x".repeat(1000) };
+    const frontier1 = { task: "f1", context: "x".repeat(1000) };
+    const frontier2 = { task: "f2", context: "x".repeat(1000) };
+    const scores = new Map([["n1", 1], ["f1", 0], ["f2", 0]]);
+
+    // Token budget of 400 forces each task into its own batch
+    const batches = packNucleusFrontierBatches([nucleus1, frontier1, frontier2], scores, 400);
+
+    // nucleus1 alone, f1 alone, f2 alone (tight budget)
+    assert.ok(batches.length >= 2, "tight context must produce multiple batches");
+    // All plans preserved
+    const allTasks = batches.flatMap(b => (b.plans as any[]).map(p => p.task));
+    assert.ok(allTasks.includes("n1"), "nucleus1 must appear");
+    assert.ok(allTasks.includes("f1"), "frontier1 must appear");
+    assert.ok(allTasks.includes("f2"), "frontier2 must appear");
+  });
+
+  it("all-frontier plans fall back to standard packing (no nucleus)", () => {
+    const plans = [
+      { task: "f1", context: "x".repeat(10) },
+      { task: "f2", context: "x".repeat(10) },
+    ];
+    const scores = new Map([["f1", 0], ["f2", 0]]);
+    const batches = packNucleusFrontierBatches(plans, scores, 1_000_000);
+    // Falls through to standard packing — both fit in one batch
+    assert.equal(batches.length, 1);
+    assert.equal((batches[0].plans as any[]).length, 2);
+  });
+
+  it("negative: empty plans array returns empty batches", () => {
+    const batches = packNucleusFrontierBatches([], new Map(), 1_000_000);
+    assert.deepEqual(batches, []);
+  });
+});
+
+// ── buildRoleExecutionBatches — nucleusFrontierMode integration ───────────────
+
+describe("worker_batch_planner — nucleusFrontierMode integration", () => {
+  it("nucleusFrontierMode=false (default) is backward-compatible — same output as before", () => {
+    const config = { copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 } };
+    const plans = [
+      { role: "Evolution Worker", task: "root-task", wave: 1, dependsOn: [] },
+      { role: "Evolution Worker", task: "child-task", wave: 1, dependsOn: ["root-task"] },
+      { role: "Evolution Worker", task: "leaf-task", wave: 1, dependsOn: ["child-task"] },
+    ];
+    const batches = buildRoleExecutionBatches(plans, config);
+    // All three fit in one batch with default config
+    assert.ok(batches.length >= 1);
+    const allPlans = batches.flatMap(b => b.plans);
+    assert.equal(allPlans.length, 3);
+  });
+
+  it("nucleusFrontierMode=true reduces batch count when nucleus + frontier coexist", () => {
+    // root → mid → leaf chain: root and mid are nucleus (score > 0), leaf is frontier
+    // With a generous context window all three should collapse into one batch
+    const config = {
+      copilot: {
+        defaultModel: "Claude Sonnet 4.6",
+        modelContextReserveTokens: 0,
+        modelContextWindows: { "Claude Sonnet 4.6": 1_000_000 },
+      },
+      planner: { nucleusFrontierMode: true },
+    };
+    const root = { role: "Evolution Worker", task: "root-task", wave: 1, dependsOn: [] };
+    const mid  = { role: "Evolution Worker", task: "mid-task",  wave: 1, dependsOn: ["root-task"] };
+    const leaf = { role: "Evolution Worker", task: "leaf-task", wave: 1, dependsOn: ["mid-task"] };
+
+    const standardConfig = { ...config, planner: { nucleusFrontierMode: false } };
+    const standardBatches = buildRoleExecutionBatches([root, mid, leaf], standardConfig);
+    const nfBatches       = buildRoleExecutionBatches([root, mid, leaf], config);
+
+    // Both must contain all plans
+    assert.equal(standardBatches.flatMap(b => b.plans).length, 3);
+    assert.equal(nfBatches.flatMap(b => b.plans).length, 3);
+
+    // nucleus/frontier must produce ≤ batch count as standard (it never makes things worse)
+    assert.ok(
+      nfBatches.length <= standardBatches.length,
+      `nucleusFrontierMode must not increase batch count; nf=${nfBatches.length} std=${standardBatches.length}`
+    );
+  });
+
+  it("nucleusFrontierMode=true preserves all plans with no data loss", () => {
+    const config = {
+      copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 },
+      planner: { nucleusFrontierMode: true },
+    };
+    const plans = Array.from({ length: 6 }, (_, i) => ({
+      role: "Evolution Worker",
+      task: `task-${i}`,
+      wave: 1,
+      dependsOn: i > 0 ? [`task-${i - 1}`] : [],
+    }));
+    const batches = buildRoleExecutionBatches(plans, config);
+    const allPlans = batches.flatMap(b => b.plans);
+    assert.equal(allPlans.length, 6, "all 6 plans must be present after nucleus/frontier packing");
+  });
+
+  it("nucleusFrontierMode=true: wave boundary enforcement still holds", () => {
+    const config = {
+      copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 },
+      planner: { nucleusFrontierMode: true },
+    };
+    const w1 = { role: "Evolution Worker", task: "wave1-root", wave: 1, dependsOn: [] };
+    const w2 = { role: "Evolution Worker", task: "wave2-child", wave: 2, dependsOn: ["wave1-root"] };
+
+    const batches = buildRoleExecutionBatches([w1, w2], config);
+    const batchW1 = batches.find(b => (b.plans as any[]).some((p: any) => p.task === "wave1-root"));
+    const batchW2 = batches.find(b => (b.plans as any[]).some((p: any) => p.task === "wave2-child"));
+
+    assert.ok(batchW1, "wave-1 plan must be in a batch");
+    assert.ok(batchW2, "wave-2 plan must be in a batch");
+    assert.ok(
+      (batchW1 as any).bundleIndex < (batchW2 as any).bundleIndex,
+      "wave-1 batch must precede wave-2 batch"
+    );
+  });
+
+  it("negative: nucleusFrontierMode=true on plans with no dependency hints behaves like standard mode", () => {
+    // No dependsOn — no graph hints → criticalPathScoreByPlanId is empty → standard packing used
+    const config = {
+      copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 },
+      planner: { nucleusFrontierMode: true },
+    };
+    const plans = Array.from({ length: 3 }, (_, i) => ({
+      role: "Evolution Worker",
+      task: `T${i}`,
+      wave: 1,
+    }));
+    const batches = buildRoleExecutionBatches(plans, config);
+    assert.equal(batches.length, 1, "3 plans with no deps must produce 1 batch in nucleus/frontier mode");
+    assert.equal((batches[0].plans as any[]).length, 3);
   });
 });

@@ -852,3 +852,106 @@ describe("pipeline matrix — full composition (block scenarios)", () => {
     assert.equal(result.blocked, false, "drift gate must be skipped when disableDriftDebtGate=true");
   });
 });
+
+// ── Nucleus/Frontier model — pipeline matrix integration ─────────────────────
+
+import {
+  buildRoleExecutionBatches as buildBatches,
+  classifyNucleusFrontier,
+  packNucleusFrontierBatches,
+  computeCriticalPathScores,
+} from "../../src/core/worker_batch_planner.js";
+
+describe("pipeline matrix — nucleus/frontier execution model", () => {
+  const baseConfig = {
+    copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 },
+  };
+  const nfConfig = {
+    copilot: {
+      defaultModel: "Claude Sonnet 4.6",
+      modelContextReserveTokens: 0,
+      modelContextWindows: { "Claude Sonnet 4.6": 1_000_000 },
+    },
+    planner: { nucleusFrontierMode: true },
+  };
+
+  it("nucleus/frontier mode produces the same or fewer batches than standard mode", () => {
+    // 4-plan chain: A→B→C + independent D
+    // A,B,C are nucleus; D is frontier — nucleus/frontier should not increase batch count
+    const plans = [
+      { role: "Evolution Worker", task: "A", wave: 1, dependsOn: [] },
+      { role: "Evolution Worker", task: "B", wave: 1, dependsOn: ["A"] },
+      { role: "Evolution Worker", task: "C", wave: 1, dependsOn: ["B"] },
+      { role: "Evolution Worker", task: "D", wave: 1, dependsOn: [] },
+    ];
+    const std = buildBatches(plans, baseConfig);
+    const nf  = buildBatches(plans, nfConfig);
+
+    assert.ok(
+      nf.length <= std.length,
+      `nucleus/frontier (${nf.length}) must not exceed standard (${std.length}) batch count`
+    );
+    // All plans preserved in both modes
+    assert.equal(std.flatMap(b => b.plans).length, 4);
+    assert.equal(nf.flatMap(b => b.plans).length, 4);
+  });
+
+  it("classifyNucleusFrontier is dependency-safe: nucleus score > 0 means blocked dependents", () => {
+    // Linear chain: A is nucleus (B depends on it), B is nucleus (C depends on it), C is frontier
+    const tasks = [
+      { id: "A", dependsOn: [] },
+      { id: "B", dependsOn: ["A"] },
+      { id: "C", dependsOn: ["B"] },
+    ];
+    const scores = computeCriticalPathScores(tasks);
+    const plans = tasks.map(t => ({ task: t.id }));
+    const { nucleus, frontier } = classifyNucleusFrontier(plans, scores);
+
+    const nucleusTasks = nucleus.map((p: any) => p.task);
+    const frontierTasks = frontier.map((p: any) => p.task);
+
+    // A and B must be nucleus (they have downstream work)
+    assert.ok(nucleusTasks.includes("A"), "A must be nucleus (B and C depend on it)");
+    assert.ok(nucleusTasks.includes("B"), "B must be nucleus (C depends on it)");
+    // C must be frontier (no dependents)
+    assert.ok(frontierTasks.includes("C"), "C must be frontier (no dependents)");
+  });
+
+  it("packNucleusFrontierBatches never loses plans vs standard packing", () => {
+    const tasks = [
+      { id: "root", dependsOn: [] },
+      { id: "child1", dependsOn: ["root"] },
+      { id: "child2", dependsOn: ["root"] },
+      { id: "leaf1", dependsOn: ["child1"] },
+      { id: "leaf2", dependsOn: ["child2"] },
+    ];
+    const scores = computeCriticalPathScores(tasks);
+    const plans = tasks.map(t => ({ task: t.id, context: "ctx" }));
+
+    const nfBatches = packNucleusFrontierBatches(plans, scores, 1_000_000);
+    const allTasks = nfBatches.flatMap(b => (b.plans as any[]).map(p => p.task));
+
+    assert.equal(allTasks.length, 5, "all 5 plans must be present in nucleus/frontier batches");
+    for (const t of tasks) {
+      assert.ok(allTasks.includes(t.id), `${t.id} must appear in nucleus/frontier output`);
+    }
+  });
+
+  it("negative: nucleus/frontier mode disabled leaves batch structure unchanged", () => {
+    const plans = [
+      { role: "Evolution Worker", task: "A", wave: 1, dependsOn: [] },
+      { role: "Evolution Worker", task: "B", wave: 1, dependsOn: ["A"] },
+    ];
+    const std = buildBatches(plans, baseConfig);
+    const disabledConfig = { ...baseConfig, planner: { nucleusFrontierMode: false } };
+    const withDisabled = buildBatches(plans, disabledConfig);
+
+    // Disabled mode must match default (no mode flag) behavior
+    assert.equal(std.length, withDisabled.length, "disabled mode must equal default mode batch count");
+    assert.equal(
+      std.flatMap(b => b.plans).length,
+      withDisabled.flatMap(b => b.plans).length,
+      "plan count must match between default and disabled mode"
+    );
+  });
+});
