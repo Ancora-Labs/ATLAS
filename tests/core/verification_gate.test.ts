@@ -15,6 +15,7 @@ import {
   NAMED_TEST_PROOF_PATTERN,
   normalizeReportValue,
   CANONICAL_REPORT_VALUES,
+  applyConfigOverrides,
 } from "../../src/core/verification_gate.js";
 
 describe("verification_gate parse helpers", () => {
@@ -1818,6 +1819,170 @@ describe("verification_gate — optional field failure tracking in evidence", ()
     );
     assert.ok(optFails.includes("api"),
       `'api' must be in optionalFieldFailures; got: [${optFails.join(", ")}]`
+    );
+  });
+});
+
+// ── applyConfigOverrides — promotedFields tracking ────────────────────────────
+
+import { getVerificationProfile } from "../../src/core/verification_profiles.js";
+
+describe("verification_gate — applyConfigOverrides promotedFields tracking", () => {
+  it("promotes build from optional to required when requireBuild=true", () => {
+    const profile = getVerificationProfile("test"); // test role: build=optional
+    assert.equal(profile.evidence.build, "optional", "pre-condition: test role build must be optional");
+    const upgraded = applyConfigOverrides(profile, { requireBuild: true });
+    assert.equal(upgraded.evidence.build, "required", "build must be promoted to required");
+  });
+
+  it("tracks promoted field in promotedFields Set", () => {
+    const profile = getVerificationProfile("test");
+    const upgraded = applyConfigOverrides(profile, { requireBuild: true });
+    assert.ok(upgraded.promotedFields instanceof Set, "promotedFields must be a Set");
+    assert.ok(upgraded.promotedFields.has("build"), "promoted field 'build' must be in promotedFields");
+  });
+
+  it("does not include non-promoted fields in promotedFields", () => {
+    const profile = getVerificationProfile("test");
+    const upgraded = applyConfigOverrides(profile, { requireBuild: true });
+    assert.ok(!upgraded.promotedFields.has("tests"), "tests was not promoted and must not be in promotedFields");
+  });
+
+  it("does not promote exempt fields even when config flag is set", () => {
+    // For test role: security=exempt — requireSecurityScan must not change it
+    const profile = getVerificationProfile("test");
+    const upgraded = applyConfigOverrides(profile, { requireSecurityScan: true });
+    assert.equal(upgraded.evidence.security, "exempt", "exempt field must not be promoted");
+    assert.ok(!upgraded.promotedFields.has("security"), "exempt field must not appear in promotedFields");
+  });
+
+  it("does not promote already-required fields (idempotent promotion guard)", () => {
+    // backend role: build=required — promoting again must not double-add to promotedFields
+    const profile = getVerificationProfile("backend");
+    assert.equal(profile.evidence.build, "required", "pre-condition: backend build is already required");
+    const upgraded = applyConfigOverrides(profile, { requireBuild: true });
+    // build stays required but must NOT be added to promotedFields (it was already required)
+    assert.ok(!upgraded.promotedFields.has("build"),
+      "already-required field must not be added to promotedFields"
+    );
+  });
+
+  it("promotes multiple fields when multiple flags are set", () => {
+    const profile = getVerificationProfile("test"); // build=optional, security=exempt, tests=required
+    const upgraded = applyConfigOverrides(profile, { requireBuild: true, requireTests: false });
+    assert.ok(upgraded.promotedFields.has("build"), "build must be promoted");
+    assert.ok(!upgraded.promotedFields.has("tests"), "tests was already required, not promoted");
+  });
+
+  it("returns original profile unchanged when no relevant flags are set", () => {
+    const profile = getVerificationProfile("test");
+    const result = applyConfigOverrides(profile, {});
+    assert.deepEqual(result.evidence, profile.evidence);
+    assert.ok(result.promotedFields instanceof Set && result.promotedFields.size === 0,
+      "no promotions should occur with empty gatesConfig"
+    );
+  });
+
+  it("returns original profile unchanged when gatesConfig is null/undefined", () => {
+    const profile = getVerificationProfile("test");
+    assert.strictEqual(applyConfigOverrides(profile, null), profile);
+    assert.strictEqual(applyConfigOverrides(profile, undefined), profile);
+  });
+});
+
+// ── Globally-promoted BUILD: n/a is allowed (false completion block prevention) ─
+
+describe("verification_gate — globally-promoted BUILD allows n/a (no false completion block)", () => {
+  const FULL_ARTIFACT = [
+    "BOX_MERGED_SHA=abc1234",
+    "===NPM TEST OUTPUT START===",
+    "# tests 10 pass 10 fail 0",
+    "===NPM TEST OUTPUT END===",
+  ].join("\n");
+
+  it("test role with requireBuild=true and BUILD=n/a passes (no false block)", () => {
+    // test role: build=optional → promoted to required by config.
+    // Worker doing a test-only task has no compilation step → reports BUILD=n/a.
+    // This must NOT produce a gap — globally-promoted fields allow n/a.
+    const result = validateWorkerContract("test", {
+      status: "done",
+      fullOutput: [
+        FULL_ARTIFACT,
+        "VERIFICATION_REPORT: BUILD=n/a; TESTS=pass; EDGE_CASES=pass",
+      ].join("\n"),
+    }, { gatesConfig: { requireBuild: true } });
+
+    const buildGap = result.gaps.find(g => /BUILD.*required.*n\/a|BUILD.*was.*n\/a/i.test(g));
+    assert.equal(
+      buildGap, undefined,
+      `globally-promoted BUILD=n/a must not produce a gap; gaps: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("test role with requireBuild=true and BUILD=fail is still rejected (failure is always a gap)", () => {
+    const result = validateWorkerContract("test", {
+      status: "done",
+      fullOutput: [
+        FULL_ARTIFACT,
+        "VERIFICATION_REPORT: BUILD=fail; TESTS=pass; EDGE_CASES=pass",
+      ].join("\n"),
+    }, { gatesConfig: { requireBuild: true } });
+
+    assert.equal(result.passed, false, "promoted BUILD=fail must still block the gate");
+    assert.ok(result.gaps.some(g => /BUILD.*FAIL/i.test(g)),
+      `BUILD fail must produce a gap; gaps: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("test role with requireBuild=true and BUILD=pass passes cleanly", () => {
+    const result = validateWorkerContract("test", {
+      status: "done",
+      fullOutput: [
+        FULL_ARTIFACT,
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass",
+      ].join("\n"),
+    }, { gatesConfig: { requireBuild: true } });
+
+    const buildGap = result.gaps.find(g => /BUILD/i.test(g));
+    assert.equal(
+      buildGap, undefined,
+      `BUILD=pass must produce no gap; gaps: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("test role with requireBuild=true and BUILD missing from report produces a gap", () => {
+    // Missing from report entirely is still an error — n/a must be explicit.
+    const result = validateWorkerContract("test", {
+      status: "done",
+      fullOutput: [
+        FULL_ARTIFACT,
+        "VERIFICATION_REPORT: TESTS=pass; EDGE_CASES=pass",
+        // No BUILD field at all
+      ].join("\n"),
+    }, { gatesConfig: { requireBuild: true } });
+
+    assert.equal(result.passed, false, "promoted BUILD missing from report must still block");
+    assert.ok(result.gaps.some(g => /BUILD.*missing|BUILD.*required/i.test(g)),
+      `BUILD missing from report must produce a gap; gaps: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("negative path: non-promoted required BUILD=n/a still creates a gap", () => {
+    // backend role: build=required (NOT optional, so no promotion) — n/a must still fail.
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        FULL_ARTIFACT,
+        "VERIFICATION_REPORT: BUILD=n/a; TESTS=pass; EDGE_CASES=pass; SECURITY=n/a",
+        "BOX_PR_URL=https://github.com/org/repo/pull/1",
+      ].join("\n"),
+    }, { gatesConfig: { requireBuild: true } });
+
+    assert.equal(result.passed, false,
+      "non-promoted required BUILD=n/a must still block the gate"
+    );
+    assert.ok(result.gaps.some(g => /BUILD.*n\/a|BUILD.*required/i.test(g)),
+      `originally-required BUILD=n/a must produce a gap; gaps: [${result.gaps.join("; ")}]`
     );
   });
 });

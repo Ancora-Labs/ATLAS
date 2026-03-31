@@ -153,3 +153,89 @@ describe("worker_runner — precomputedArtifact single-evaluation contract", () 
     assert.ok(hasArtifactGap, `artifact gap must be reported; gaps: [${result.gaps.join("; ")}]`);
   });
 });
+
+// ── worker_runner completion path — gatesConfig propagation ──────────────────
+// Verifies that validateWorkerContract is called with gatesConfig from the
+// runner config so globally-promoted BUILD requirements are applied correctly,
+// and that n/a is accepted for promoted fields (false completion block prevention).
+
+describe("worker_runner completion path — globally-promoted BUILD allows n/a", () => {
+  const FULL_ARTIFACT_OUTPUT = [
+    "BOX_MERGED_SHA=abc1234f",
+    "===NPM TEST OUTPUT START===",
+    "# tests 10 pass 10 fail 0",
+    "===NPM TEST OUTPUT END===",
+  ].join("\n");
+
+  it("test role with requireBuild=true and BUILD=n/a passes gate (no false block)", () => {
+    // Simulates the worker_runner completion path calling validateWorkerContract
+    // with gatesConfig — test role has build:optional, promoted to required by config.
+    // Worker reports BUILD=n/a (legitimate for test-only task). Must not be blocked.
+    const result = validateWorkerContract("test", {
+      status: "done",
+      fullOutput: [
+        FULL_ARTIFACT_OUTPUT,
+        "VERIFICATION_REPORT: BUILD=n/a; TESTS=pass; EDGE_CASES=pass",
+      ].join("\n"),
+    }, { gatesConfig: { requireBuild: true } });
+
+    const buildGap = result.gaps.find(g => /BUILD.*required.*n\/a|BUILD.*was.*n\/a/i.test(g));
+    assert.equal(
+      buildGap, undefined,
+      `globally-promoted BUILD=n/a must not produce a false-block gap; gaps: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("test role with requireBuild=true and BUILD=fail is correctly rejected", () => {
+    const result = validateWorkerContract("test", {
+      status: "done",
+      fullOutput: [
+        FULL_ARTIFACT_OUTPUT,
+        "VERIFICATION_REPORT: BUILD=fail; TESTS=pass; EDGE_CASES=pass",
+      ].join("\n"),
+    }, { gatesConfig: { requireBuild: true } });
+
+    assert.equal(result.passed, false, "promoted BUILD=fail must block gate");
+    assert.ok(result.gaps.some(g => /BUILD.*FAIL/i.test(g)),
+      `BUILD fail must produce a gap; gaps: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("gatesConfig=undefined (no config.gates) treats build as optional for test role", () => {
+    // Without gatesConfig, build is optional for test role → no build gap regardless of value.
+    const result = validateWorkerContract("test", {
+      status: "done",
+      fullOutput: [
+        FULL_ARTIFACT_OUTPUT,
+        "VERIFICATION_REPORT: TESTS=pass; EDGE_CASES=pass",
+        // BUILD absent from report entirely — optional, so no gap
+      ].join("\n"),
+    }, { gatesConfig: undefined });
+
+    const buildGap = result.gaps.find(g => /BUILD/i.test(g));
+    assert.equal(
+      buildGap, undefined,
+      `without gatesConfig, optional BUILD missing from report must not produce a gap; gaps: [${result.gaps.join("; ")}]`
+    );
+  });
+
+  it("negative path: backend role with BUILD=n/a and requireBuild=true still fails (non-promoted)", () => {
+    // backend role: build=required (already required, not optional → not a promoted field).
+    // Even with requireBuild=true in gatesConfig, n/a must remain a gap.
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        FULL_ARTIFACT_OUTPUT,
+        "VERIFICATION_REPORT: BUILD=n/a; TESTS=pass; EDGE_CASES=pass; SECURITY=n/a",
+        "BOX_PR_URL=https://github.com/org/repo/pull/1",
+      ].join("\n"),
+    }, { gatesConfig: { requireBuild: true } });
+
+    assert.equal(result.passed, false,
+      "originally-required BUILD=n/a must still block even with requireBuild=true in gatesConfig"
+    );
+    assert.ok(result.gaps.some(g => /BUILD.*n\/a|BUILD.*required/i.test(g)),
+      `non-promoted required BUILD=n/a must produce a gap; gaps: [${result.gaps.join("; ")}]`
+    );
+  });
+});

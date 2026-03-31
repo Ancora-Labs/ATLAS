@@ -1138,6 +1138,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       fullOutput: parsed.fullOutput,
       summary: parsed.summary
     }, {
+      gatesConfig: config?.gates as Record<string, unknown> | undefined,
       taskKind: instruction.taskKind,
       verificationText: String(instruction.verification || "").trim() || null,
       precomputedArtifact,

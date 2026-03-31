@@ -298,6 +298,12 @@ export function buildArtifactAuditEntry(
  *
  * Exempt fields are never upgraded — exempt means not applicable for the role.
  *
+ * Promoted fields are tracked in a `promotedFields` Set on the returned profile.
+ * The validation loop uses this to allow `n/a` for globally-promoted fields —
+ * the config promotes to catch build failures when a build step exists, but must
+ * not produce false completion blocks for tasks where the field is genuinely
+ * non-applicable (e.g., test-only tasks where no compilation step runs).
+ *
  * @param {object} profile — profile from getVerificationProfile()
  * @param {object} gatesConfig — config.gates from box.config.json
  * @returns {object} — new profile with evidence overrides applied (original is not mutated)
@@ -306,6 +312,11 @@ export function applyConfigOverrides(profile, gatesConfig) {
   if (!gatesConfig) return profile;
 
   const evidence = { ...profile.evidence };
+
+  // Carry forward any already-promoted fields from a prior applyConfigOverrides call.
+  const promotedFields = new Set<string>(
+    profile.promotedFields instanceof Set ? profile.promotedFields : []
+  );
 
   // Map config gate flags to their corresponding evidence field names
   const fieldMap = {
@@ -317,10 +328,11 @@ export function applyConfigOverrides(profile, gatesConfig) {
   for (const [configKey, evidenceField] of Object.entries(fieldMap)) {
     if (gatesConfig[configKey] === true && evidence[evidenceField] === "optional") {
       evidence[evidenceField] = "required";
+      promotedFields.add(evidenceField);
     }
   }
 
-  return { ...profile, evidence };
+  return { ...profile, evidence, promotedFields };
 }
 
 /**
@@ -579,6 +591,15 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
     if (field === "prUrl") continue;
 
     const value = report?.[field];
+
+    // Globally-promoted fields allow n/a — the config promotes to enforce coverage
+    // when a build/test step exists, but must not produce false completion blocks
+    // for tasks where the field is genuinely non-applicable (e.g., test-only tasks
+    // where no compilation step runs, or doc tasks with no test suite to execute).
+    const isGloballyPromoted =
+      profile.promotedFields instanceof Set && profile.promotedFields.has(field);
+    if (isGloballyPromoted && value === "n/a") continue;
+
     if (!value || value === "n/a") {
       gaps.push(`${field.toUpperCase()} is required but was ${value || "missing"}`);
     } else if (value === "fail") {
