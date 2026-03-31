@@ -592,7 +592,60 @@ export function routeModelWithCompletionROI(
   };
 }
 
+// ── Closure-yield routing — quality floor tightening ─────────────────────────
+//
+// Low closure yield (few carry-forward items shipped with verified evidence) signals
+// the system is struggling to deliver improvements.  Under these conditions, prefer
+// stronger models to increase the probability of successful task completion.
+
+/** Closure yield below this value triggers quality floor tightening. */
+export const CLOSURE_YIELD_LOW_THRESHOLD = 0.5;
+
+/** Quality floor increase applied when closure yield is below the threshold. */
+const CLOSURE_YIELD_TIGHTEN_AMOUNT = 0.10;
+
 /**
+ * Route to a model with quality floor adjusted by realized closure yield.
+ *
+ * Low closure yield (> 0 and < CLOSURE_YIELD_LOW_THRESHOLD) tightens the floor,
+ * biasing selection toward stronger models when the system has a track record of
+ * failing to ship verifiably.  Zero yield (no data) leaves the floor unchanged so
+ * the function is safe to call before any closure history exists.
+ *
+ * The effective floor is always clamped to [MIN_QUALITY_FLOOR, MAX_QUALITY_FLOOR].
+ *
+ * @param taskHints    — task scope for complexity-tier derivation
+ * @param modelOptions — model pool; efficientModel / defaultModel / strongModel
+ *                       and optional qualityByModel score overrides
+ * @param qualityFloor — caller-supplied minimum quality score (default 0.7)
+ * @param closureYield — realized closure yield (0–1; 0 = no data / no history)
+ */
+export function routeModelWithClosureYield(
+  taskHints: TaskHints = {},
+  modelOptions: ModelOptions & { qualityByModel?: Record<string, number> } = {},
+  qualityFloor = 0.7,
+  closureYield = 0,
+): { model: string; tier: string; reason: string; meetsQualityFloor: boolean; effectiveFloor: number; closureYieldAdjustment: string } {
+  let effectiveFloor = qualityFloor;
+  let closureYieldAdjustment = "none";
+
+  if (closureYield > 0 && closureYield < CLOSURE_YIELD_LOW_THRESHOLD) {
+    effectiveFloor = qualityFloor + CLOSURE_YIELD_TIGHTEN_AMOUNT;
+    closureYieldAdjustment = `tightened (closureYield=${closureYield} < ${CLOSURE_YIELD_LOW_THRESHOLD})`;
+  }
+
+  effectiveFloor = Math.max(MIN_QUALITY_FLOOR, Math.min(MAX_QUALITY_FLOOR, effectiveFloor));
+  effectiveFloor = Math.round(effectiveFloor * 1000) / 1000;
+
+  const base = routeModelByCost(taskHints, modelOptions, effectiveFloor);
+  return {
+    ...base,
+    effectiveFloor,
+    closureYieldAdjustment,
+    reason: `closure-yield-adjusted(${closureYieldAdjustment}): ${base.reason}`,
+  };
+}
+
 /**
  * Route model selection by combining uncertainty-awareness with quality-floor enforcement.
  *

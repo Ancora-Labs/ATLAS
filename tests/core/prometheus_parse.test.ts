@@ -25,6 +25,11 @@ import {
   MAX_DECOMPOSITION_PLANS,
   DECOMPOSITION_CAP_REASON,
   CARRY_FORWARD_MAX_LOW_RECURRENCE_ITEMS,
+  computeClosureYield,
+  rankPlansByClosureYield,
+  CLOSURE_YIELD_LOW_THRESHOLD,
+  CLOSURE_YIELD_BOOST_AMOUNT,
+  CLOSURE_YIELD_BOOST_DIMENSIONS,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments } from "../../src/core/prompt_compiler.js";
 import { isNonSpecificVerification, validatePlanContract } from "../../src/core/plan_contract_validator.js";
@@ -2435,6 +2440,182 @@ describe("checkDecompositionCaps", () => {
     const plans = Array.from({ length: MAX_DECOMPOSITION_PLANS }, (_, i) => ({ task: `Task ${i + 1}` }));
     const result = checkDecompositionCaps(plans);
     assert.equal(result.capped, false, "exactly MAX_DECOMPOSITION_PLANS must not trigger capping");
+  });
+});
+
+// ── Task 1: computeClosureYield + rankPlansByClosureYield ─────────────────────
+
+describe("computeClosureYield — realized closure yield from carry-forward ledger", () => {
+  it("returns zero-signal when ledger is empty", () => {
+    const result = computeClosureYield([]);
+    assert.equal(result.yield, 0);
+    assert.equal(result.closed, 0);
+    assert.equal(result.attempted, 0);
+  });
+
+  it("returns zero-signal when no entries have closedAt set", () => {
+    const ledger = [
+      { id: "e1", closedAt: null, closureEvidence: null },
+      { id: "e2", closedAt: null, closureEvidence: "PR #1" },
+    ];
+    const result = computeClosureYield(ledger);
+    assert.equal(result.yield, 0);
+    assert.equal(result.attempted, 0);
+  });
+
+  it("counts attempted as entries with closedAt set regardless of evidence", () => {
+    const ledger = [
+      { id: "e1", closedAt: "2025-01-01", closureEvidence: null },
+      { id: "e2", closedAt: "2025-01-02", closureEvidence: "" },
+      { id: "e3", closedAt: null, closureEvidence: null },
+    ];
+    const result = computeClosureYield(ledger);
+    assert.equal(result.attempted, 2, "only entries with closedAt contribute to attempted");
+    assert.equal(result.closed, 0, "no evidence → zero closed");
+    assert.equal(result.yield, 0);
+  });
+
+  it("computes yield correctly when all attempted closures have evidence", () => {
+    const ledger = [
+      { id: "e1", closedAt: "2025-01-01", closureEvidence: "PR #1" },
+      { id: "e2", closedAt: "2025-01-02", closureEvidence: "PR #2" },
+    ];
+    const result = computeClosureYield(ledger);
+    assert.equal(result.attempted, 2);
+    assert.equal(result.closed, 2);
+    assert.equal(result.yield, 1, "100% yield when all closures have evidence");
+  });
+
+  it("computes fractional yield when some closures lack evidence", () => {
+    const ledger = [
+      { id: "e1", closedAt: "2025-01-01", closureEvidence: "PR #1" },
+      { id: "e2", closedAt: "2025-01-02", closureEvidence: null },
+      { id: "e3", closedAt: "2025-01-03", closureEvidence: "PR #3" },
+      { id: "e4", closedAt: "2025-01-04", closureEvidence: null },
+    ];
+    const result = computeClosureYield(ledger);
+    assert.equal(result.attempted, 4);
+    assert.equal(result.closed, 2);
+    assert.equal(result.yield, 0.5, "2 of 4 attempted → yield 0.5");
+  });
+
+  it("ignores null entries in the array without throwing", () => {
+    const ledger = [
+      null,
+      { id: "e1", closedAt: "2025-01-01", closureEvidence: "PR #1" },
+      undefined,
+    ];
+    const result = computeClosureYield(ledger as any[]);
+    assert.equal(result.attempted, 1);
+    assert.equal(result.closed, 1);
+    assert.equal(result.yield, 1);
+  });
+
+  it("negative path: null input returns zero-signal without throwing", () => {
+    const result = computeClosureYield(null as any);
+    assert.equal(result.yield, 0);
+    assert.equal(result.attempted, 0);
+    assert.equal(result.closed, 0);
+  });
+
+  it("CLOSURE_YIELD_LOW_THRESHOLD is 0.5", () => {
+    assert.equal(CLOSURE_YIELD_LOW_THRESHOLD, 0.5);
+  });
+
+  it("CLOSURE_YIELD_BOOST_AMOUNT is 0.05", () => {
+    assert.equal(CLOSURE_YIELD_BOOST_AMOUNT, 0.05);
+  });
+});
+
+describe("rankPlansByClosureYield — planning rank boost for low yield", () => {
+  function makePlan(overrides: Record<string, any> = {}): Record<string, any> {
+    return {
+      task: "Default task",
+      capacityDelta: 0.2,
+      requestROI: 1.5,
+      leverage_rank: [],
+      ...overrides,
+    };
+  }
+
+  it("returns a copy of plans unchanged when closureYield is 0 (no data)", () => {
+    const plans = [makePlan({ leverage_rank: ["learning"] })];
+    const result = rankPlansByClosureYield(plans, 0);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].capacityDelta, 0.2, "no boost when closureYield=0");
+    assert.notStrictEqual(result, plans, "must return a new array");
+  });
+
+  it("returns plans unchanged when closureYield is at or above threshold (0.5)", () => {
+    const plans = [makePlan({ leverage_rank: ["learning"], capacityDelta: 0.3 })];
+    const resultAt = rankPlansByClosureYield(plans, 0.5);
+    assert.equal(resultAt[0].capacityDelta, 0.3, "no boost at exactly threshold");
+    const resultAbove = rankPlansByClosureYield(plans, 0.8);
+    assert.equal(resultAbove[0].capacityDelta, 0.3, "no boost above threshold");
+  });
+
+  it("boosts capacityDelta for plans with 'learning' in leverage_rank when yield is low", () => {
+    const plans = [makePlan({ leverage_rank: ["learning"], capacityDelta: 0.2 })];
+    const result = rankPlansByClosureYield(plans, 0.3);
+    assert.equal(result[0].capacityDelta, 0.25, "capacityDelta must be boosted by CLOSURE_YIELD_BOOST_AMOUNT");
+  });
+
+  it("boosts capacityDelta for plans with 'quality' in leverage_rank when yield is low", () => {
+    const plans = [makePlan({ leverage_rank: ["quality"], capacityDelta: 0.4 })];
+    const result = rankPlansByClosureYield(plans, 0.2);
+    assert.equal(result[0].capacityDelta, 0.45);
+  });
+
+  it("boosts capacityDelta for plans with 'task-quality' in leverage_rank when yield is low", () => {
+    const plans = [makePlan({ leverage_rank: ["speed", "task-quality"], capacityDelta: 0.1 })];
+    const result = rankPlansByClosureYield(plans, 0.1);
+    assert.equal(result[0].capacityDelta, 0.15);
+  });
+
+  it("does NOT boost plans whose leverage_rank does not include a boost dimension", () => {
+    const plans = [makePlan({ leverage_rank: ["architecture", "speed"], capacityDelta: 0.3 })];
+    const result = rankPlansByClosureYield(plans, 0.1);
+    assert.equal(result[0].capacityDelta, 0.3, "non-targeted dimensions must not be boosted");
+  });
+
+  it("boosts only the qualifying plan in a mixed batch", () => {
+    const plans = [
+      makePlan({ leverage_rank: ["architecture"], capacityDelta: 0.3 }),
+      makePlan({ leverage_rank: ["learning"], capacityDelta: 0.2 }),
+    ];
+    const result = rankPlansByClosureYield(plans, 0.3);
+    assert.equal(result[0].capacityDelta, 0.3, "architecture plan must not be boosted");
+    assert.equal(result[1].capacityDelta, 0.25, "learning plan must be boosted");
+  });
+
+  it("clamps boosted capacityDelta to 1.0", () => {
+    const plans = [makePlan({ leverage_rank: ["learning"], capacityDelta: 0.99 })];
+    const result = rankPlansByClosureYield(plans, 0.1);
+    assert.equal(result[0].capacityDelta, 1.0, "boost must not exceed 1.0");
+  });
+
+  it("does not mutate the input array", () => {
+    const plans = [makePlan({ leverage_rank: ["learning"], capacityDelta: 0.2 })];
+    rankPlansByClosureYield(plans, 0.1);
+    assert.equal(plans[0].capacityDelta, 0.2, "input plan must not be mutated");
+  });
+
+  it("negative path: returns empty array for non-array input", () => {
+    const result = rankPlansByClosureYield(null as any, 0.1);
+    assert.deepEqual(result, []);
+  });
+
+  it("negative path: NaN closureYield returns unchanged copy", () => {
+    const plans = [makePlan({ leverage_rank: ["learning"], capacityDelta: 0.2 })];
+    const result = rankPlansByClosureYield(plans, NaN);
+    assert.equal(result[0].capacityDelta, 0.2);
+  });
+
+  it("CLOSURE_YIELD_BOOST_DIMENSIONS includes learning, quality, task-quality, learning loop", () => {
+    assert.ok(CLOSURE_YIELD_BOOST_DIMENSIONS.has("learning"));
+    assert.ok(CLOSURE_YIELD_BOOST_DIMENSIONS.has("quality"));
+    assert.ok(CLOSURE_YIELD_BOOST_DIMENSIONS.has("task-quality"));
+    assert.ok(CLOSURE_YIELD_BOOST_DIMENSIONS.has("learning loop"));
   });
 });
 

@@ -2411,6 +2411,97 @@ export function rankPlansByTelemetryAdjustedScore(
   );
 }
 
+// ── Realized closure yield — planning/routing rank adjustment ─────────────────
+//
+// Closure yield measures what fraction of carry-forward items that were marked
+// closed (closedAt non-null) actually shipped with verifiable evidence
+// (closureEvidence non-empty).  Low yield signals the system is declaring items
+// done without proving they were fixed, which should bias plan ranking toward
+// tasks that close the learning loop and bias routing toward stronger models.
+
+/** Threshold below which closure yield is treated as "low" — triggers rank boosts. */
+export const CLOSURE_YIELD_LOW_THRESHOLD = 0.5 as const;
+
+/** Dimensions whose plans receive a capacityDelta boost when closure yield is low. */
+export const CLOSURE_YIELD_BOOST_DIMENSIONS: ReadonlySet<string> = new Set([
+  "learning",
+  "quality",
+  "task-quality",
+  "learning loop",
+]) as ReadonlySet<string>;
+
+/** capacityDelta boost applied to qualifying plans when closure yield is below the threshold. */
+export const CLOSURE_YIELD_BOOST_AMOUNT = 0.05 as const;
+
+/** Result type returned by computeClosureYield. */
+export interface ClosureYieldResult {
+  /** Fraction of attempted closures with verified evidence (0–1; 0 when no attempts). */
+  yield: number;
+  /** Entries with both closedAt and non-empty closureEvidence. */
+  closed: number;
+  /** Entries with closedAt set (system declared them closed). */
+  attempted: number;
+}
+
+/**
+ * Compute the realized closure yield from carry-forward ledger entries.
+ *
+ * Yield = closed / attempted, where:
+ *   - attempted = entries with closedAt non-null (system declared them closed)
+ *   - closed    = entries with BOTH closedAt AND non-empty closureEvidence (verifiably shipped)
+ *
+ * Returns { yield: 0, closed: 0, attempted: 0 } when no entries have been attempted
+ * so callers can distinguish "no history" from "genuinely zero yield".
+ *
+ * @param ledgerEntries — carry-forward ledger entry objects
+ */
+export function computeClosureYield(ledgerEntries: any[]): ClosureYieldResult {
+  const entries = Array.isArray(ledgerEntries) ? ledgerEntries : [];
+  const attempted = entries.filter(e => e != null && e.closedAt != null).length;
+  if (attempted === 0) return { yield: 0, closed: 0, attempted: 0 };
+  const closed = entries.filter(e => e != null && e.closedAt && e.closureEvidence).length;
+  return {
+    yield: Math.round((closed / attempted) * 1000) / 1000,
+    closed,
+    attempted,
+  };
+}
+
+/**
+ * Rank plan packets by applying a closure-yield boost to plans that target the
+ * learning/quality feedback-loop dimensions when realized closure yield is low.
+ *
+ * When closureYield < CLOSURE_YIELD_LOW_THRESHOLD (and > 0), plans whose
+ * leverage_rank includes any CLOSURE_YIELD_BOOST_DIMENSIONS entry have their
+ * capacityDelta raised by CLOSURE_YIELD_BOOST_AMOUNT (clamped to 1.0).  This
+ * surfaces fix-the-loop plans higher in dispatch without altering unrelated plans.
+ *
+ * Returns a new array (does not mutate input).  When yield is 0 or at/above the
+ * threshold the input is copied unchanged (caller still gets a new array).
+ *
+ * @param plans        — normalized plan packets with capacityDelta and leverage_rank
+ * @param closureYield — from computeClosureYield().yield (0 = no data; no adjustment)
+ */
+export function rankPlansByClosureYield(plans: any[], closureYield: number): any[] {
+  if (!Array.isArray(plans)) return [];
+  if (!Number.isFinite(closureYield) || closureYield <= 0 || closureYield >= CLOSURE_YIELD_LOW_THRESHOLD) {
+    return [...plans];
+  }
+  return plans.map(plan => {
+    if (!plan || typeof plan !== "object") return plan;
+    const leverageRank = Array.isArray(plan.leverage_rank) ? plan.leverage_rank : [];
+    const hasBoostDimension = leverageRank.some(
+      (d: any) => CLOSURE_YIELD_BOOST_DIMENSIONS.has(String(d || "").toLowerCase())
+    );
+    if (!hasBoostDimension) return { ...plan };
+    const current = Number.isFinite(Number(plan.capacityDelta)) ? Number(plan.capacityDelta) : 0.1;
+    return {
+      ...plan,
+      capacityDelta: Math.min(1.0, Math.round((current + CLOSURE_YIELD_BOOST_AMOUNT) * 1000) / 1000),
+    };
+  });
+}
+
 export async function runPrometheusAnalysis(config, options: any = {}) {
   const stateDir = config.paths?.stateDir || "state";
 

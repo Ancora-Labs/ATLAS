@@ -22,6 +22,8 @@ import {
   MAX_LEDGER_SIZE,
   routeModelByCost,
   routeModelWithCompletionROI,
+  routeModelWithClosureYield,
+  CLOSURE_YIELD_LOW_THRESHOLD,
 } from "../../src/core/model_policy.js";
 
 describe("model_policy — complexity tiers", () => {
@@ -696,5 +698,85 @@ describe("routeModelUnderQualityFloor — uncertainty + quality floor", () => {
     const result = routeModelUnderQualityFloor({}, {}, { recentROI: 0 }, 0.5);
     assert.ok(result.model, "must return a model even with empty options");
     assert.ok(typeof result.meetsQualityFloor === "boolean");
+  });
+});
+
+// ── routeModelWithClosureYield — closure-yield-adjusted quality floor routing ──
+
+describe("routeModelWithClosureYield — closure-yield routing", () => {
+  const modelOptions = {
+    efficientModel: "Claude Haiku 4",
+    defaultModel:   "Claude Sonnet 4.6",
+    strongModel:    "Claude Opus 4.6",
+    qualityByModel: {
+      "Claude Haiku 4":    0.70,
+      "Claude Sonnet 4.6": 0.85,
+      "Claude Opus 4.6":   0.95,
+    },
+  };
+
+  it("zero closureYield (no history) leaves floor unchanged", () => {
+    const result = routeModelWithClosureYield({}, modelOptions, 0.65, 0);
+    assert.equal(result.effectiveFloor, 0.65, "floor must be unchanged when closureYield=0");
+    assert.equal(result.closureYieldAdjustment, "none");
+    assert.equal(result.model, "Claude Haiku 4", "cheapest model meeting floor 0.65 must be selected");
+    assert.equal(result.meetsQualityFloor, true);
+  });
+
+  it("low closureYield (< 0.5, > 0) tightens the floor, forcing a better model", () => {
+    // base floor 0.65 → tightened: 0.65 + 0.10 = 0.75 → Haiku (0.70) fails → Sonnet (0.85) selected
+    const result = routeModelWithClosureYield({}, modelOptions, 0.65, 0.3);
+    assert.ok(result.effectiveFloor > 0.65, "floor must be tightened when closureYield is low");
+    assert.equal(result.model, "Claude Sonnet 4.6", "Sonnet must be selected after floor tightening");
+    assert.ok(result.closureYieldAdjustment.includes("tightened"), "adjustment must say tightened");
+    assert.ok(result.reason.includes("closure-yield-adjusted"), "reason must include closure-yield-adjusted");
+  });
+
+  it("low closureYield with moderate floor forces Opus when Sonnet no longer qualifies", () => {
+    // base floor 0.80, closureYield=0.1 → tightened: 0.80 + 0.10 = 0.90
+    // Haiku (0.70) no, Sonnet (0.85) no, Opus (0.95) yes
+    const result = routeModelWithClosureYield({}, modelOptions, 0.80, 0.1);
+    assert.equal(result.model, "Claude Opus 4.6", "Opus must be selected when floor tightens past Sonnet");
+    assert.equal(result.meetsQualityFloor, true);
+  });
+
+  it("closureYield at exactly threshold (0.5) does NOT tighten the floor", () => {
+    const result = routeModelWithClosureYield({}, modelOptions, 0.65, CLOSURE_YIELD_LOW_THRESHOLD);
+    assert.equal(result.effectiveFloor, 0.65, "floor at exactly threshold must not be tightened");
+    assert.equal(result.closureYieldAdjustment, "none");
+  });
+
+  it("closureYield above threshold (0.8) does NOT tighten the floor", () => {
+    const result = routeModelWithClosureYield({}, modelOptions, 0.65, 0.8);
+    assert.equal(result.effectiveFloor, 0.65, "floor above threshold must not be adjusted");
+    assert.equal(result.closureYieldAdjustment, "none");
+  });
+
+  it("effective floor is clamped to MAX_QUALITY_FLOOR (0.99) even with low yield + very high base floor", () => {
+    // base floor 0.95, yield=0.1 → tightened: 0.95 + 0.10 = 1.05 → clamped to 0.99
+    const result = routeModelWithClosureYield({}, modelOptions, 0.95, 0.1);
+    assert.ok(result.effectiveFloor <= 0.99, `effectiveFloor (${result.effectiveFloor}) must not exceed 0.99`);
+  });
+
+  it("result always includes meetsQualityFloor boolean", () => {
+    const result = routeModelWithClosureYield({}, modelOptions, 0.99, 0);
+    assert.equal(typeof result.meetsQualityFloor, "boolean", "meetsQualityFloor must be a boolean");
+    assert.equal(result.model, "Claude Opus 4.6", "strongest model used when floor unattainable");
+  });
+
+  it("reason string references closure-yield-adjusted and the base routing reason", () => {
+    const result = routeModelWithClosureYield({}, modelOptions, 0.65, 0.2);
+    assert.ok(result.reason.startsWith("closure-yield-adjusted"), "reason must start with closure-yield-adjusted");
+    assert.ok(result.reason.includes("tightened"), "reason must reference tightening");
+  });
+
+  it("negative path: no model options falls back to default model", () => {
+    const result = routeModelWithClosureYield({}, {}, 0.5, 0);
+    assert.ok(result.model, "must return a model even with empty options");
+    assert.ok(typeof result.meetsQualityFloor === "boolean");
+  });
+
+  it("CLOSURE_YIELD_LOW_THRESHOLD is 0.5", () => {
+    assert.equal(CLOSURE_YIELD_LOW_THRESHOLD, 0.5);
   });
 });
