@@ -650,3 +650,95 @@ describe("run_task.js — Docker entrypoint conformance and canonical named test
   });
 });
 
+// ── Discovery-safe bypass — non-merge task kinds must not be done-blocked ─────
+//
+// Verifies that discovery-safe (non-merge) task kinds are exempt from the
+// post-merge artifact gate and that the strict merge evidence gate is
+// preserved for implementation/rework task kinds.
+//
+// Referenced by: src/core/verification_gate.ts — isDiscoverySafeTask,
+//                DISCOVERY_SAFE_TASK_KINDS, NON_MERGE_TASK_KINDS
+
+describe("run_task.js — discovery-safe bypass for non-merge task kinds", () => {
+  it("DISCOVERY_SAFE: NON_MERGE_TASK_KINDS includes all canonical non-merge kinds", async () => {
+    const { NON_MERGE_TASK_KINDS } = await import("../../src/core/verification_gate.js");
+    const expected = ["scan", "doc", "observation", "diagnosis", "discovery", "research", "review", "audit"];
+    for (const kind of expected) {
+      assert.ok(
+        NON_MERGE_TASK_KINDS.has(kind),
+        `NON_MERGE_TASK_KINDS must include "${kind}" — non-merge tasks must bypass the artifact gate`
+      );
+    }
+  });
+
+  it("DISCOVERY_SAFE: DISCOVERY_SAFE_TASK_KINDS is a superset of NON_MERGE_TASK_KINDS", async () => {
+    const { NON_MERGE_TASK_KINDS, DISCOVERY_SAFE_TASK_KINDS } = await import("../../src/core/verification_gate.js");
+    for (const kind of NON_MERGE_TASK_KINDS) {
+      assert.ok(
+        DISCOVERY_SAFE_TASK_KINDS.has(kind),
+        `"${kind}" is in NON_MERGE_TASK_KINDS but not in DISCOVERY_SAFE_TASK_KINDS — every non-merge kind must be discovery-safe`
+      );
+    }
+  });
+
+  it("DISCOVERY_SAFE: isDiscoverySafeTask returns true for all discovery-safe kinds", async () => {
+    const { isDiscoverySafeTask } = await import("../../src/core/verification_gate.js");
+    const safeKinds = ["scan", "doc", "observation", "diagnosis", "discovery", "research", "review", "audit"];
+    for (const kind of safeKinds) {
+      assert.equal(
+        isDiscoverySafeTask(kind),
+        true,
+        `isDiscoverySafeTask("${kind}") must return true — discovery-safe tasks bypass the artifact gate`
+      );
+    }
+  });
+
+  it("DISCOVERY_SAFE: isDiscoverySafeTask returns false for merge-oriented kinds", async () => {
+    const { isDiscoverySafeTask } = await import("../../src/core/verification_gate.js");
+    const mergeKinds = ["implementation", "rework", "backend", "frontend", "devops", "infrastructure"];
+    for (const kind of mergeKinds) {
+      assert.equal(
+        isDiscoverySafeTask(kind),
+        false,
+        `isDiscoverySafeTask("${kind}") must return false — merge tasks require artifact evidence`
+      );
+    }
+  });
+
+  it("DISCOVERY_SAFE: isDiscoverySafeTask returns false for null/undefined/empty inputs", async () => {
+    const { isDiscoverySafeTask } = await import("../../src/core/verification_gate.js");
+    assert.equal(isDiscoverySafeTask(null), false, "null must not be discovery-safe");
+    assert.equal(isDiscoverySafeTask(undefined), false, "undefined must not be discovery-safe");
+    assert.equal(isDiscoverySafeTask(""), false, "empty string must not be discovery-safe");
+  });
+
+  it("DISCOVERY_SAFE: isArtifactGateRequired returns false for all discovery-safe task kinds", async () => {
+    const { isArtifactGateRequired, DISCOVERY_SAFE_TASK_KINDS } = await import("../../src/core/verification_gate.js");
+    for (const kind of DISCOVERY_SAFE_TASK_KINDS) {
+      assert.equal(
+        isArtifactGateRequired("backend", kind),
+        false,
+        `isArtifactGateRequired("backend", "${kind}") must return false — discovery-safe tasks must never be artifact-gated`
+      );
+    }
+  });
+
+  it("DISCOVERY_SAFE: isArtifactGateRequired returns true for merge-oriented task kinds (strict gate preserved)", async () => {
+    const { isArtifactGateRequired } = await import("../../src/core/verification_gate.js");
+    const mergeKinds = ["implementation", "rework", null, undefined];
+    for (const kind of mergeKinds) {
+      assert.equal(
+        isArtifactGateRequired("backend", kind),
+        true,
+        `isArtifactGateRequired("backend", ${JSON.stringify(kind)}) must return true — merge tasks must pass the strict artifact gate`
+      );
+    }
+  });
+
+  it("negative: DISCOVERY_SAFE: 'rework' kind is NOT discovery-safe — strict gate applies", async () => {
+    const { isDiscoverySafeTask, isArtifactGateRequired } = await import("../../src/core/verification_gate.js");
+    assert.equal(isDiscoverySafeTask("rework"), false, "rework tasks must not bypass the artifact gate");
+    assert.equal(isArtifactGateRequired("backend", "rework"), true, "rework tasks must pass the strict artifact gate");
+  });
+});
+

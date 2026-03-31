@@ -440,7 +440,47 @@ export const NON_MERGE_TASK_KINDS = Object.freeze(new Set([
   "doc",
   "observation",
   "diagnosis",
+  "discovery",
+  "research",
+  "review",
+  "audit",
 ]));
+
+/**
+ * Task kinds that are safe to execute even when dispatch strictness is BLOCKED.
+ * These tasks do not modify code, so they cannot introduce regressions and
+ * are exempt from the post-merge artifact gate (adaptive throttle bypass).
+ *
+ * DISCOVERY_SAFE_TASK_KINDS is a superset of NON_MERGE_TASK_KINDS — every
+ * non-merge task is discovery-safe, but future non-merge kinds that carry
+ * deployment risk may be excluded from the discovery-safe bypass while still
+ * being excluded from the artifact gate.
+ */
+export const DISCOVERY_SAFE_TASK_KINDS = Object.freeze(new Set([
+  "scan",
+  "doc",
+  "observation",
+  "diagnosis",
+  "discovery",
+  "research",
+  "review",
+  "audit",
+]));
+
+/**
+ * Check whether a task kind qualifies for the discovery-safe bypass.
+ *
+ * Discovery-safe tasks:
+ *   1. Are exempt from the post-merge artifact gate (they don't produce merges).
+ *   2. May proceed even when dispatch strictness is BLOCKED (adaptive throttle bypass).
+ *
+ * @param taskKind — task kind string from the instruction
+ * @returns true when the task is discovery-safe (read-only / no-commit)
+ */
+export function isDiscoverySafeTask(taskKind?: string | null): boolean {
+  if (!taskKind) return false;
+  return DISCOVERY_SAFE_TASK_KINDS.has(String(taskKind).toLowerCase());
+}
 
 /**
  * Determine whether the post-merge artifact gate should run for a given
@@ -448,7 +488,8 @@ export const NON_MERGE_TASK_KINDS = Object.freeze(new Set([
  *
  * Returns false (gate skipped) when:
  *   - The worker role is fully exempt (all evidence fields = "exempt"), OR
- *   - The task kind is a non-merge task (scan, doc, observation, diagnosis).
+ *   - The task kind is a non-merge task (scan, doc, observation, diagnosis,
+ *     discovery, research, review, audit).
  *
  * @param {string} workerKind — role kind (e.g. "backend", "scanA")
  * @param {string|null|undefined} taskKind — instruction task kind

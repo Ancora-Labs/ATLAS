@@ -22,7 +22,7 @@ import { appendProgress, appendLineageEntry, appendFailureClassification } from 
 import { buildAgentArgs, nameToSlug } from "./agent_loader.js";
 import { buildVerificationChecklist } from "./verification_profiles.js";
 import { getVerificationCommands } from "./verification_command_registry.js";
-import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, extractMergedSha, buildArtifactAuditEntry } from "./verification_gate.js";
+import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry } from "./verification_gate.js";
 import { enforceModelPolicy, routeModelWithUncertainty, classifyComplexityTier, COMPLEXITY_TIER } from "./model_policy.js";
 import { deriveRoutingAdjustments, buildPromptHardConstraints } from "./learning_policy_compiler.js";
 import { loadPolicy, getProtectedPathMatches, getRolePathViolations } from "./policy_engine.js";
@@ -1068,12 +1068,18 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     taskId: instruction.taskId || instruction.task || null
   });
 
-  // ── Unconditional artifact hard-block ──────────────────────────────────────
+  // ── Unconditional artifact hard-block (strict merge evidence gate) ───────────
   // For any worker+task combination that requires a post-merge artifact
   // (determined by role kind AND task kind), the gate is NON-BYPASSABLE —
   // it runs regardless of config.runtime.requireTaskContract.
-  // Non-merge task kinds (scan, doc, observation, diagnosis) are exempt even
-  // for done-capable roles, eliminating false completion loss on read-only tasks.
+  //
+  // Discovery-safe task kinds (scan, doc, observation, diagnosis, discovery,
+  // research, review, audit) are exempt even for done-capable roles, eliminating
+  // false completion loss on read-only / non-merge tasks (adaptive throttle bypass).
+  //
+  // Explicit telemetry is emitted for both gate paths:
+  //   - discoveryBypass=true  → task is non-merge; artifact gate skipped
+  //   - discoveryBypass=false → merge task blocked due to missing artifact evidence
   //
   // The artifact is computed once here and reused by both this hard-block check
   // and the subsequent validateWorkerContract call, avoiding a duplicate evaluation
@@ -1083,10 +1089,27 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     ? checkPostMergeArtifact(parsed.fullOutput || parsed.summary || "")
     : undefined;
 
+  // Telemetry: emit bypass signal when discovery-safe task passes without artifact check
+  if (parsed.status === "done" && !isArtifactRequired && isDiscoverySafeTask(instruction.taskKind)) {
+    try {
+      appendProgress(config,
+        `[ARTIFACT GATE] ${roleName} taskKind=${instruction.taskKind} discoveryBypass=true — non-merge task bypasses artifact gate`
+      );
+    } catch { /* non-critical */ }
+  }
+
   if (isArtifactRequired) {
     const artifact = precomputedArtifact!;
     if (!artifact.hasArtifact) {
       const artifactGaps = collectArtifactGaps(artifact);
+
+      // Explicit telemetry for strict gate block (merge task without required artifact)
+      try {
+        appendProgress(config,
+          `[ARTIFACT GATE] ${roleName} hard-blocked taskKind=${instruction.taskKind || "unknown"} discoveryBypass=false hasSha=${artifact.hasSha} hasTestOutput=${artifact.hasTestOutput} gaps=${artifactGaps.length}`
+        );
+      } catch { /* non-critical */ }
+
       parsed.status = "blocked";
       parsed.summary = `[ARTIFACT GATE] done hard-blocked — ${artifactGaps.join("; ")}\n${parsed.summary}`;
 
