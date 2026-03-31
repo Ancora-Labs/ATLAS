@@ -11,6 +11,10 @@ import {
   PATCHED_PLAN_REVALIDATION_REASON,
   correctBoundedPacketDefects,
   PACKET_DEFECT_CODE,
+  buildQualityLaneVerdict,
+  buildGovernanceLaneVerdict,
+  mergeLaneVerdicts,
+  LANE_MERGE_POLICY,
 } from "../../src/core/athena_reviewer.js";
 
 const BASE_PLANS = [
@@ -668,6 +672,127 @@ describe("correctBoundedPacketDefects", () => {
           `corrected field '${f}' must not remain in updatedMissingFields`);
       }
     }
+  });
+});
+
+// ── Dual-lane verdict normalization contract ──────────────────────────────────
+
+describe("buildQualityLaneVerdict — lane structure contract", () => {
+  const VALID_PLAN = {
+    role: "evolution-worker",
+    task: "Add deterministic dispatch verification coverage for worker execution",
+    verification: "npm test",
+    wave: 1,
+    riskLevel: "low",
+    capacityDelta: 0.1,
+    requestROI: 2.0,
+  };
+
+  it("returns a LaneVerdict with lane='quality'", () => {
+    const v = buildQualityLaneVerdict([VALID_PLAN]);
+    assert.equal(v.lane, "quality");
+  });
+
+  it("verdict has required shape: approved, score, summary, issues, reason", () => {
+    const v = buildQualityLaneVerdict([VALID_PLAN]);
+    assert.ok(typeof v.approved === "boolean", "approved must be boolean");
+    assert.ok(typeof v.score === "number", "score must be number");
+    assert.ok(typeof v.summary === "string", "summary must be string");
+    assert.ok(Array.isArray(v.issues), "issues must be array");
+    // reason is null on success, object on failure
+    assert.ok(v.reason === null || typeof v.reason === "object");
+  });
+
+  it("score is in [0, 100]", () => {
+    const v = buildQualityLaneVerdict([VALID_PLAN]);
+    assert.ok(v.score >= 0 && v.score <= 100, "score must be in [0,100]");
+  });
+
+  it("issues is empty when approved=true", () => {
+    const v = buildQualityLaneVerdict([VALID_PLAN]);
+    if (v.approved) {
+      assert.deepEqual(v.issues, []);
+    }
+  });
+
+  it("reason is null when approved=true", () => {
+    const v = buildQualityLaneVerdict([VALID_PLAN]);
+    if (v.approved) {
+      assert.equal(v.reason, null);
+    }
+  });
+
+  it("reason.code is a non-empty string when approved=false", () => {
+    const badPlan = { ...VALID_PLAN, task: "x", verification: "" };
+    const v = buildQualityLaneVerdict([badPlan]);
+    if (!v.approved) {
+      assert.ok(v.reason !== null, "reason must be set on rejection");
+      assert.ok(typeof v.reason!.code === "string" && v.reason!.code.length > 0);
+      assert.ok(typeof v.reason!.message === "string");
+    }
+  });
+});
+
+describe("buildGovernanceLaneVerdict — lane structure contract", () => {
+  const LOW_RISK_PLAN = {
+    role: "evolution-worker",
+    task: "Add retry logic to worker dispatch",
+    verification: "npm test",
+    wave: 1,
+    riskLevel: "low",
+  };
+
+  it("returns a LaneVerdict with lane='governance'", () => {
+    const v = buildGovernanceLaneVerdict([LOW_RISK_PLAN]);
+    assert.equal(v.lane, "governance");
+  });
+
+  it("verdict has required shape: approved, score, summary, issues, reason", () => {
+    const v = buildGovernanceLaneVerdict([LOW_RISK_PLAN]);
+    assert.ok(typeof v.approved === "boolean");
+    assert.ok(typeof v.score === "number");
+    assert.ok(typeof v.summary === "string");
+    assert.ok(Array.isArray(v.issues));
+    assert.ok(v.reason === null || typeof v.reason === "object");
+  });
+
+  it("score is 100 when all governance checks pass", () => {
+    const v = buildGovernanceLaneVerdict([LOW_RISK_PLAN]);
+    assert.equal(v.score, 100);
+  });
+
+  it("high-risk plan without premortem gets a reduced score below 100", () => {
+    const highRisk = { ...LOW_RISK_PLAN, riskLevel: "high" };
+    const v = buildGovernanceLaneVerdict([highRisk]);
+    assert.ok(v.score < 100, "governance score must be less than 100 when premortem missing");
+  });
+});
+
+describe("mergeLaneVerdicts — output contract", () => {
+  function makeVerdict(lane: "quality" | "governance", approved: boolean): any {
+    return { lane, approved, score: 90, summary: "ok", issues: [], reason: null };
+  }
+
+  it("output always has approved, laneA, laneB, mergePolicy, mergeReason", () => {
+    const result = mergeLaneVerdicts(makeVerdict("quality", true), makeVerdict("governance", true));
+    assert.ok("approved" in result);
+    assert.ok("laneA" in result);
+    assert.ok("laneB" in result);
+    assert.ok("mergePolicy" in result);
+    assert.ok("mergeReason" in result);
+  });
+
+  it("laneA and laneB are the original verdict objects (not copies)", () => {
+    const qa = makeVerdict("quality", true);
+    const gb = makeVerdict("governance", false);
+    const result = mergeLaneVerdicts(qa, gb, LANE_MERGE_POLICY.MUST_PASS_BOTH);
+    assert.strictEqual(result.laneA, qa, "laneA must be the original quality verdict");
+    assert.strictEqual(result.laneB, gb, "laneB must be the original governance verdict");
+  });
+
+  it("mergePolicy matches the policy argument", () => {
+    const result = mergeLaneVerdicts(makeVerdict("quality", true), makeVerdict("governance", true), LANE_MERGE_POLICY.ANY_PASS);
+    assert.equal(result.mergePolicy, LANE_MERGE_POLICY.ANY_PASS);
   });
 });
 

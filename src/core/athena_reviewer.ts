@@ -2847,3 +2847,299 @@ export function computeReviewerPrecisionRecall(postmortems: any[]): ReviewerPrec
     computedAt: new Date().toISOString()
   };
 }
+
+// ── Dual-Lane Athena Verdicts ─────────────────────────────────────────────────
+
+/**
+ * Policy identifiers for merging dual-lane Athena verdicts.
+ *
+ * MUST_PASS_BOTH     — both quality and governance lanes must approve (fail-closed default)
+ * QUALITY_GATE_ONLY  — quality lane is authoritative; governance lane is advisory
+ * GOVERNANCE_GATE_ONLY — governance lane is authoritative; quality lane is advisory
+ * ANY_PASS           — either lane approving is sufficient (least strict, opt-in only)
+ *
+ * @enum {string}
+ */
+export const LANE_MERGE_POLICY = Object.freeze({
+  MUST_PASS_BOTH:       "MUST_PASS_BOTH",
+  QUALITY_GATE_ONLY:    "QUALITY_GATE_ONLY",
+  GOVERNANCE_GATE_ONLY: "GOVERNANCE_GATE_ONLY",
+  ANY_PASS:             "ANY_PASS",
+} as const);
+
+/** A verdict produced by one review lane. */
+export interface LaneVerdict {
+  /** Which lane produced this verdict ("quality" or "governance"). */
+  lane: "quality" | "governance";
+  /** Whether this lane approves the plan batch. */
+  approved: boolean;
+  /** Numeric quality/governance score [0–100] for this lane. */
+  score: number;
+  /** Human-readable summary of the lane's findings. */
+  summary: string;
+  /** Machine-readable issue strings (empty when approved). */
+  issues: string[];
+  /** Machine-readable reason code + message (set on rejection). */
+  reason: { code: string; message: string } | null;
+}
+
+/** The result of merging two lane verdicts via a merge policy. */
+export interface DualLaneVerdict {
+  /** Final merged approval decision. */
+  approved: boolean;
+  /** Quality lane verdict (Lane A). */
+  laneA: LaneVerdict;
+  /** Governance lane verdict (Lane B). */
+  laneB: LaneVerdict;
+  /** Policy used to merge the two lanes. */
+  mergePolicy: string;
+  /** Human-readable explanation of the merge decision. */
+  mergeReason: string;
+}
+
+/**
+ * Resolve the effective lane merge policy from config.
+ * Falls back to MUST_PASS_BOTH (fail-closed default) when not configured
+ * or when an unknown value is supplied.
+ *
+ * @param config — BOX runtime config object
+ * @returns one of LANE_MERGE_POLICY values
+ */
+export function resolveEffectiveLaneMergePolicy(config: any): string {
+  const raw = String(config?.runtime?.laneMergePolicy || "").trim().toUpperCase();
+  const validPolicies = Object.values(LANE_MERGE_POLICY) as string[];
+  return validPolicies.includes(raw) ? raw : LANE_MERGE_POLICY.MUST_PASS_BOTH;
+}
+
+/**
+ * Build a deterministic quality lane verdict from plan scoring.
+ *
+ * Lane A (quality) uses the existing deterministic scorePlanQuality function
+ * to assess structural completeness. A plan batch passes when every plan
+ * scores at or above the configured minimum quality threshold.
+ *
+ * @param plans — plans from Prometheus analysis
+ * @param config — BOX runtime config (optional; uses defaults when absent)
+ * @returns LaneVerdict for the quality lane
+ */
+export function buildQualityLaneVerdict(plans: any[], config?: any): LaneVerdict {
+  if (!Array.isArray(plans) || plans.length === 0) {
+    return {
+      lane: "quality",
+      approved: false,
+      score: 0,
+      summary: "No plans provided — quality lane cannot approve an empty batch",
+      issues: ["no plans provided"],
+      reason: { code: "NO_PLANS", message: "Plan batch is empty" },
+    };
+  }
+
+  const qualityMinScore: number = typeof config?.runtime?.planQualityMinScore === "number"
+    ? config.runtime.planQualityMinScore
+    : PLAN_QUALITY_MIN_SCORE;
+
+  const failures: string[] = [];
+  let totalScore = 0;
+
+  for (let i = 0; i < plans.length; i++) {
+    const { score, issues } = scorePlanQuality(plans[i]);
+    totalScore += score;
+    if (score < qualityMinScore) {
+      const label = String(plans[i]?.task || plans[i]?.role || `plan[${i}]`).slice(0, 60);
+      failures.push(`plan[${i}] "${label}": score=${score} — ${issues.join("; ")}`);
+    }
+  }
+
+  const avgScore = Math.round(totalScore / plans.length);
+
+  if (failures.length > 0) {
+    const msg = `${failures.length} plan(s) below quality threshold (${qualityMinScore})`;
+    return {
+      lane: "quality",
+      approved: false,
+      score: avgScore,
+      summary: msg,
+      issues: failures,
+      reason: { code: "LOW_PLAN_QUALITY", message: msg },
+    };
+  }
+
+  return {
+    lane: "quality",
+    approved: true,
+    score: avgScore,
+    summary: `All ${plans.length} plan(s) meet quality threshold (≥${qualityMinScore})`,
+    issues: [],
+    reason: null,
+  };
+}
+
+/**
+ * Build a deterministic governance lane verdict from plan governance checks.
+ *
+ * Lane B (governance) validates:
+ *   1. High-risk plans have valid pre-mortems (checkPlanPremortemGate).
+ *   2. No plan specifies a forbidden verification command.
+ *   3. Risk levels are declared and valid.
+ *
+ * @param plans — plans from Prometheus analysis
+ * @returns LaneVerdict for the governance lane
+ */
+export function buildGovernanceLaneVerdict(plans: any[]): LaneVerdict {
+  if (!Array.isArray(plans) || plans.length === 0) {
+    return {
+      lane: "governance",
+      approved: false,
+      score: 0,
+      summary: "No plans provided — governance lane cannot approve an empty batch",
+      issues: ["no plans provided"],
+      reason: { code: "NO_PLANS", message: "Plan batch is empty" },
+    };
+  }
+
+  const issues: string[] = [];
+
+  // Check 1: High-risk plans require valid pre-mortems.
+  const preMortemViolations = checkPlanPremortemGate(plans);
+  for (const v of preMortemViolations) {
+    issues.push(`PREMORTEM_VIOLATION: ${v}`);
+  }
+
+  // Check 2: No plan may use forbidden verification commands.
+  for (let i = 0; i < plans.length; i++) {
+    const verification = String(plans[i]?.verification || "").trim();
+    if (verification.length > 0) {
+      const forbidden = checkForbiddenCommands(verification);
+      if (forbidden.forbidden) {
+        for (const v of forbidden.violations) {
+          issues.push(`plan[${i}]: FORBIDDEN_COMMAND: ${v.reason}`);
+        }
+      }
+    }
+  }
+
+  // Check 3: All plans must have a declared risk level.
+  for (let i = 0; i < plans.length; i++) {
+    const riskLevel = String(plans[i]?.riskLevel || "").trim().toLowerCase();
+    if (!riskLevel) {
+      issues.push(`plan[${i}]: MISSING_RISK_LEVEL: riskLevel field is absent`);
+    }
+  }
+
+  const totalChecks = plans.length * 3;
+  const failedChecks = issues.length;
+  const score = Math.max(0, Math.round(((totalChecks - failedChecks) / totalChecks) * 100));
+
+  if (issues.length > 0) {
+    const msg = `${issues.length} governance violation(s) found`;
+    return {
+      lane: "governance",
+      approved: false,
+      score,
+      summary: msg,
+      issues,
+      reason: { code: "GOVERNANCE_VIOLATIONS", message: msg },
+    };
+  }
+
+  return {
+    lane: "governance",
+    approved: true,
+    score: 100,
+    summary: `All ${plans.length} plan(s) passed governance checks`,
+    issues: [],
+    reason: null,
+  };
+}
+
+/**
+ * Merge two lane verdicts into a single dual-lane decision via a merge policy.
+ *
+ * Policy semantics:
+ *   MUST_PASS_BOTH     — approved only when both lanes approve (fail-closed)
+ *   QUALITY_GATE_ONLY  — approved when quality lane (laneA) approves
+ *   GOVERNANCE_GATE_ONLY — approved when governance lane (laneB) approves
+ *   ANY_PASS           — approved when either lane approves
+ *
+ * The default policy is MUST_PASS_BOTH.
+ *
+ * @param laneA — quality lane verdict
+ * @param laneB — governance lane verdict
+ * @param policy — one of LANE_MERGE_POLICY values (defaults to MUST_PASS_BOTH)
+ * @returns DualLaneVerdict with the merged decision
+ */
+export function mergeLaneVerdicts(
+  laneA: LaneVerdict,
+  laneB: LaneVerdict,
+  policy: string = LANE_MERGE_POLICY.MUST_PASS_BOTH,
+): DualLaneVerdict {
+  const effectivePolicy = (Object.values(LANE_MERGE_POLICY) as string[]).includes(policy)
+    ? policy
+    : LANE_MERGE_POLICY.MUST_PASS_BOTH;
+
+  let approved: boolean;
+  let mergeReason: string;
+
+  switch (effectivePolicy) {
+    case LANE_MERGE_POLICY.MUST_PASS_BOTH:
+      approved = laneA.approved && laneB.approved;
+      if (approved) {
+        mergeReason = "Both quality and governance lanes approved";
+      } else if (!laneA.approved && !laneB.approved) {
+        mergeReason = `Both lanes rejected — quality: ${laneA.reason?.code ?? "rejected"}; governance: ${laneB.reason?.code ?? "rejected"}`;
+      } else if (!laneA.approved) {
+        mergeReason = `Quality lane rejected: ${laneA.reason?.code ?? "rejected"}`;
+      } else {
+        mergeReason = `Governance lane rejected: ${laneB.reason?.code ?? "rejected"}`;
+      }
+      break;
+
+    case LANE_MERGE_POLICY.QUALITY_GATE_ONLY:
+      approved = laneA.approved;
+      mergeReason = approved
+        ? "Quality lane approved (governance is advisory)"
+        : `Quality lane rejected: ${laneA.reason?.code ?? "rejected"} (governance lane is advisory)`;
+      break;
+
+    case LANE_MERGE_POLICY.GOVERNANCE_GATE_ONLY:
+      approved = laneB.approved;
+      mergeReason = approved
+        ? "Governance lane approved (quality is advisory)"
+        : `Governance lane rejected: ${laneB.reason?.code ?? "rejected"} (quality lane is advisory)`;
+      break;
+
+    case LANE_MERGE_POLICY.ANY_PASS:
+      approved = laneA.approved || laneB.approved;
+      mergeReason = approved
+        ? `At least one lane approved (quality=${laneA.approved}, governance=${laneB.approved})`
+        : "Both lanes rejected — batch is blocked";
+      break;
+
+    default:
+      // Unknown policy → fail-closed: treat as MUST_PASS_BOTH
+      approved = laneA.approved && laneB.approved;
+      mergeReason = `Unknown policy '${effectivePolicy}' — defaulted to MUST_PASS_BOTH`;
+  }
+
+  return { approved, laneA, laneB, mergePolicy: effectivePolicy, mergeReason };
+}
+
+/**
+ * Run both review lanes deterministically and merge via the configured policy.
+ *
+ * This is a pure deterministic function (no AI calls). It runs the quality and
+ * governance lanes against the given plans and returns a merged dual-lane verdict.
+ *
+ * Use `runAthenaPlanReview` for the full AI-backed plan review cycle.
+ * Use `runDualLanePlanReview` for offline/deterministic dual-lane scoring.
+ *
+ * @param plans  — plans from Prometheus analysis
+ * @param config — BOX runtime config (optional; uses defaults when absent)
+ * @returns DualLaneVerdict with both lanes and merged decision
+ */
+export function runDualLanePlanReview(plans: any[], config?: any): DualLaneVerdict {
+  const laneA = buildQualityLaneVerdict(plans, config);
+  const laneB = buildGovernanceLaneVerdict(plans);
+  const policy = resolveEffectiveLaneMergePolicy(config);
+  return mergeLaneVerdicts(laneA, laneB, policy);
+}

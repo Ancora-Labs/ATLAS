@@ -23,6 +23,12 @@ import {
   correctBoundedPacketDefects,
   PACKET_DEFECT_CODE,
   normalizeAthenaReviewPayload,
+  LANE_MERGE_POLICY,
+  mergeLaneVerdicts,
+  buildQualityLaneVerdict,
+  buildGovernanceLaneVerdict,
+  runDualLanePlanReview,
+  resolveEffectiveLaneMergePolicy,
 } from "../../src/core/athena_reviewer.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -799,6 +805,307 @@ describe("AUTO_APPROVE_DISPATCH_SIGNAL and appendAutoApproveTelemetry", () => {
       () => appendAutoApproveTelemetry(config, { autoApproveReason: { code: "LOW_RISK_UNCHANGED" } }, "c-001"),
       "appendAutoApproveTelemetry must be fail-open — no throw on missing state dir"
     );
+  });
+});
+
+// ── Dual-Lane Athena Verdicts ─────────────────────────────────────────────────
+
+describe("LANE_MERGE_POLICY structural invariants", () => {
+  it("exports all four policy codes", () => {
+    assert.equal(LANE_MERGE_POLICY.MUST_PASS_BOTH, "MUST_PASS_BOTH");
+    assert.equal(LANE_MERGE_POLICY.QUALITY_GATE_ONLY, "QUALITY_GATE_ONLY");
+    assert.equal(LANE_MERGE_POLICY.GOVERNANCE_GATE_ONLY, "GOVERNANCE_GATE_ONLY");
+    assert.equal(LANE_MERGE_POLICY.ANY_PASS, "ANY_PASS");
+  });
+
+  it("is frozen (immutable)", () => {
+    assert.ok(Object.isFrozen(LANE_MERGE_POLICY), "LANE_MERGE_POLICY must be frozen");
+  });
+});
+
+describe("resolveEffectiveLaneMergePolicy", () => {
+  it("returns MUST_PASS_BOTH when no policy configured (fail-closed default)", () => {
+    assert.equal(resolveEffectiveLaneMergePolicy({}), LANE_MERGE_POLICY.MUST_PASS_BOTH);
+    assert.equal(resolveEffectiveLaneMergePolicy(null), LANE_MERGE_POLICY.MUST_PASS_BOTH);
+    assert.equal(resolveEffectiveLaneMergePolicy(undefined), LANE_MERGE_POLICY.MUST_PASS_BOTH);
+  });
+
+  it("returns the configured policy when a valid value is set", () => {
+    const cfg = { runtime: { laneMergePolicy: "ANY_PASS" } };
+    assert.equal(resolveEffectiveLaneMergePolicy(cfg), LANE_MERGE_POLICY.ANY_PASS);
+  });
+
+  it("falls back to MUST_PASS_BOTH for unknown policy values (negative path)", () => {
+    const cfg = { runtime: { laneMergePolicy: "UNKNOWN_POLICY" } };
+    assert.equal(resolveEffectiveLaneMergePolicy(cfg), LANE_MERGE_POLICY.MUST_PASS_BOTH);
+  });
+});
+
+describe("mergeLaneVerdicts — MUST_PASS_BOTH policy (fail-closed)", () => {
+  function makeVerdict(lane: "quality" | "governance", approved: boolean): any {
+    return {
+      lane,
+      approved,
+      score: approved ? 90 : 30,
+      summary: approved ? "All checks passed" : "Issues found",
+      issues: approved ? [] : ["some issue"],
+      reason: approved ? null : { code: "SOME_FAILURE", message: "failed" },
+    };
+  }
+
+  it("approves when both lanes approve", () => {
+    const result = mergeLaneVerdicts(makeVerdict("quality", true), makeVerdict("governance", true), LANE_MERGE_POLICY.MUST_PASS_BOTH);
+    assert.equal(result.approved, true, "both lanes passing must yield approved=true");
+    assert.equal(result.mergePolicy, LANE_MERGE_POLICY.MUST_PASS_BOTH);
+  });
+
+  it("rejects when quality lane fails (negative path)", () => {
+    const result = mergeLaneVerdicts(makeVerdict("quality", false), makeVerdict("governance", true), LANE_MERGE_POLICY.MUST_PASS_BOTH);
+    assert.equal(result.approved, false, "quality lane failure must block approval");
+    assert.ok(result.mergeReason.length > 0, "mergeReason must explain the rejection");
+  });
+
+  it("rejects when governance lane fails (negative path)", () => {
+    const result = mergeLaneVerdicts(makeVerdict("quality", true), makeVerdict("governance", false), LANE_MERGE_POLICY.MUST_PASS_BOTH);
+    assert.equal(result.approved, false, "governance lane failure must block approval");
+    assert.ok(result.mergeReason.includes("governance") || result.mergeReason.length > 0);
+  });
+
+  it("rejects when both lanes fail", () => {
+    const result = mergeLaneVerdicts(makeVerdict("quality", false), makeVerdict("governance", false), LANE_MERGE_POLICY.MUST_PASS_BOTH);
+    assert.equal(result.approved, false);
+  });
+
+  it("defaults to MUST_PASS_BOTH when an unknown policy is supplied (fail-closed)", () => {
+    const result = mergeLaneVerdicts(makeVerdict("quality", false), makeVerdict("governance", true), "UNKNOWN_POLICY");
+    assert.equal(result.approved, false, "unknown policy must default to MUST_PASS_BOTH (fail-closed)");
+  });
+});
+
+describe("mergeLaneVerdicts — ANY_PASS policy", () => {
+  function makeVerdict(lane: "quality" | "governance", approved: boolean): any {
+    return { lane, approved, score: approved ? 90 : 30, summary: "", issues: [], reason: null };
+  }
+
+  it("approves when only quality lane passes", () => {
+    const result = mergeLaneVerdicts(makeVerdict("quality", true), makeVerdict("governance", false), LANE_MERGE_POLICY.ANY_PASS);
+    assert.equal(result.approved, true, "ANY_PASS: quality-only approval must pass");
+  });
+
+  it("approves when only governance lane passes", () => {
+    const result = mergeLaneVerdicts(makeVerdict("quality", false), makeVerdict("governance", true), LANE_MERGE_POLICY.ANY_PASS);
+    assert.equal(result.approved, true, "ANY_PASS: governance-only approval must pass");
+  });
+
+  it("rejects when both lanes reject", () => {
+    const result = mergeLaneVerdicts(makeVerdict("quality", false), makeVerdict("governance", false), LANE_MERGE_POLICY.ANY_PASS);
+    assert.equal(result.approved, false, "ANY_PASS: both failing must still reject");
+  });
+});
+
+describe("mergeLaneVerdicts — QUALITY_GATE_ONLY and GOVERNANCE_GATE_ONLY", () => {
+  function makeVerdict(lane: "quality" | "governance", approved: boolean): any {
+    return { lane, approved, score: approved ? 90 : 30, summary: "", issues: [], reason: null };
+  }
+
+  it("QUALITY_GATE_ONLY: approves when quality passes regardless of governance", () => {
+    const result = mergeLaneVerdicts(makeVerdict("quality", true), makeVerdict("governance", false), LANE_MERGE_POLICY.QUALITY_GATE_ONLY);
+    assert.equal(result.approved, true);
+  });
+
+  it("QUALITY_GATE_ONLY: rejects when quality fails even if governance passes", () => {
+    const result = mergeLaneVerdicts(makeVerdict("quality", false), makeVerdict("governance", true), LANE_MERGE_POLICY.QUALITY_GATE_ONLY);
+    assert.equal(result.approved, false);
+  });
+
+  it("GOVERNANCE_GATE_ONLY: approves when governance passes regardless of quality", () => {
+    const result = mergeLaneVerdicts(makeVerdict("quality", false), makeVerdict("governance", true), LANE_MERGE_POLICY.GOVERNANCE_GATE_ONLY);
+    assert.equal(result.approved, true);
+  });
+
+  it("GOVERNANCE_GATE_ONLY: rejects when governance fails even if quality passes", () => {
+    const result = mergeLaneVerdicts(makeVerdict("quality", true), makeVerdict("governance", false), LANE_MERGE_POLICY.GOVERNANCE_GATE_ONLY);
+    assert.equal(result.approved, false);
+  });
+});
+
+describe("buildQualityLaneVerdict — deterministic quality lane", () => {
+  const GOOD_PLAN = {
+    role: "evolution-worker",
+    task: "Add deterministic dispatch verification for worker execution",
+    verification: "npm test",
+    wave: 1,
+    riskLevel: "low",
+    capacityDelta: 0.1,
+    requestROI: 2.0,
+  };
+
+  it("approves a well-formed plan batch", () => {
+    const verdict = buildQualityLaneVerdict([GOOD_PLAN]);
+    assert.equal(verdict.lane, "quality");
+    assert.equal(verdict.approved, true);
+    assert.equal(verdict.issues.length, 0);
+    assert.equal(verdict.reason, null);
+    assert.ok(verdict.score > 0, "score must be positive for a passing plan");
+  });
+
+  it("rejects a plan with a vague task below quality threshold", () => {
+    const badPlan = { ...GOOD_PLAN, task: "Fix stuff", verification: "" };
+    const verdict = buildQualityLaneVerdict([badPlan]);
+    assert.equal(verdict.approved, false);
+    assert.ok(verdict.issues.length > 0, "must surface quality issues");
+    assert.ok(verdict.reason !== null, "reason must be set on rejection");
+    assert.equal(verdict.reason!.code, "LOW_PLAN_QUALITY");
+  });
+
+  it("returns approved=false for empty plans (negative path)", () => {
+    const verdict = buildQualityLaneVerdict([]);
+    assert.equal(verdict.approved, false);
+    assert.equal(verdict.reason!.code, "NO_PLANS");
+  });
+
+  it("returns approved=false for null input (negative path)", () => {
+    const verdict = buildQualityLaneVerdict(null as any);
+    assert.equal(verdict.approved, false);
+  });
+
+  it("respects planQualityMinScore override from config", () => {
+    const plan = { role: "evolution-worker", task: "Add deterministic dispatch", verification: "npm test", wave: 1, riskLevel: "low", capacityDelta: 0.1, requestROI: 2.0 };
+    // Score without full fields won't be very high — set a very low threshold so it passes
+    const config = { runtime: { planQualityMinScore: 1 } };
+    const verdict = buildQualityLaneVerdict([plan], config);
+    assert.equal(verdict.approved, true, "plan must pass with a very low quality threshold");
+  });
+});
+
+describe("buildGovernanceLaneVerdict — deterministic governance lane", () => {
+  const LOW_RISK_PLAN = {
+    role: "evolution-worker",
+    task: "Add retry logic to worker dispatch with exponential backoff",
+    verification: "npm test",
+    wave: 1,
+    riskLevel: "low",
+  };
+
+  const HIGH_RISK_PLAN_VALID = {
+    role: "evolution-worker",
+    task: "Migrate database schema with zero-downtime deployment",
+    verification: "npm test",
+    wave: 1,
+    riskLevel: "high",
+    premortem: {
+      riskLevel: "high",
+      scenario: "Schema migration could corrupt live data if applied during peak traffic.",
+      failurePaths: ["Partial migration leaves tables in inconsistent state"],
+      mitigations: ["Blue-green deployment with canary rollout"],
+      detectionSignals: ["Error rate spike > 1%"],
+      guardrails: ["Rollback script tested in staging"],
+      rollbackPlan: "Restore from last known good snapshot within 5 minutes",
+    },
+  };
+
+  it("approves a low-risk plan with riskLevel set", () => {
+    const verdict = buildGovernanceLaneVerdict([LOW_RISK_PLAN]);
+    assert.equal(verdict.lane, "governance");
+    assert.equal(verdict.approved, true);
+    assert.equal(verdict.issues.length, 0);
+    assert.equal(verdict.reason, null);
+    assert.equal(verdict.score, 100);
+  });
+
+  it("approves a high-risk plan with a valid premortem", () => {
+    const verdict = buildGovernanceLaneVerdict([HIGH_RISK_PLAN_VALID]);
+    assert.equal(verdict.approved, true, "high-risk plan with valid premortem must be approved by governance lane");
+  });
+
+  it("rejects a high-risk plan missing premortem (negative path)", () => {
+    const plan = { ...LOW_RISK_PLAN, riskLevel: "high" };
+    const verdict = buildGovernanceLaneVerdict([plan]);
+    assert.equal(verdict.approved, false);
+    assert.ok(verdict.issues.some(i => /PREMORTEM_VIOLATION/i.test(i)), "must surface premortem violation");
+    assert.equal(verdict.reason!.code, "GOVERNANCE_VIOLATIONS");
+  });
+
+  it("rejects a plan with a forbidden verification command (negative path)", () => {
+    const plan = { ...LOW_RISK_PLAN, verification: "node --test tests/**/*.test.ts" };
+    const verdict = buildGovernanceLaneVerdict([plan]);
+    assert.equal(verdict.approved, false);
+    assert.ok(verdict.issues.some(i => /FORBIDDEN_COMMAND/i.test(i)));
+  });
+
+  it("rejects a plan missing riskLevel (negative path)", () => {
+    const plan = { role: "evolution-worker", task: "Add retry logic", verification: "npm test" };
+    const verdict = buildGovernanceLaneVerdict([plan]);
+    assert.equal(verdict.approved, false);
+    assert.ok(verdict.issues.some(i => /MISSING_RISK_LEVEL/i.test(i)));
+  });
+
+  it("returns approved=false for empty plans (negative path)", () => {
+    const verdict = buildGovernanceLaneVerdict([]);
+    assert.equal(verdict.approved, false);
+    assert.equal(verdict.reason!.code, "NO_PLANS");
+  });
+});
+
+describe("runDualLanePlanReview — policy-driven merged verdict", () => {
+  const GOOD_PLAN = {
+    role: "evolution-worker",
+    task: "Add deterministic dispatch verification for worker execution path",
+    verification: "npm test",
+    wave: 1,
+    riskLevel: "low",
+    capacityDelta: 0.1,
+    requestROI: 2.0,
+  };
+
+  it("approves a well-formed low-risk batch under MUST_PASS_BOTH policy", () => {
+    const result = runDualLanePlanReview([GOOD_PLAN]);
+    assert.equal(result.approved, true, "good low-risk plan must be approved by both lanes");
+    assert.equal(result.laneA.lane, "quality");
+    assert.equal(result.laneB.lane, "governance");
+    assert.equal(result.mergePolicy, LANE_MERGE_POLICY.MUST_PASS_BOTH);
+  });
+
+  it("rejects a batch with a vague plan (quality lane fails)", () => {
+    // Remove capacityDelta/requestROI so score is below the default 40 threshold:
+    //   task "Fix" (short): -30, verification missing: -20, capacityDelta missing: -15, requestROI missing: -15 → score=20
+    const vagueplan = { role: "evolution-worker", task: "Fix", verification: "", wave: 1, riskLevel: "low" };
+    const result = runDualLanePlanReview([vagueplan]);
+    assert.equal(result.approved, false, "low-quality plan must be rejected");
+    assert.equal(result.laneA.approved, false, "quality lane must reject");
+  });
+
+  it("rejects a high-risk batch with missing premortem (governance lane fails)", () => {
+    const highRiskPlan = { ...GOOD_PLAN, riskLevel: "high" };
+    const result = runDualLanePlanReview([highRiskPlan]);
+    assert.equal(result.approved, false, "high-risk plan without premortem must be rejected");
+    assert.equal(result.laneB.approved, false, "governance lane must reject missing premortem");
+  });
+
+  it("uses configured merge policy from config", () => {
+    const config = { runtime: { laneMergePolicy: "QUALITY_GATE_ONLY" } };
+    // Governance will fail (no riskLevel declared in plan)
+    const plan = { ...GOOD_PLAN, riskLevel: "" };
+    const result = runDualLanePlanReview([plan], config);
+    // Quality gate only — approved depends solely on quality lane
+    assert.equal(result.mergePolicy, LANE_MERGE_POLICY.QUALITY_GATE_ONLY);
+  });
+
+  it("negative path: empty plans array is rejected by both lanes", () => {
+    const result = runDualLanePlanReview([]);
+    assert.equal(result.approved, false);
+    assert.equal(result.laneA.approved, false);
+    assert.equal(result.laneB.approved, false);
+  });
+
+  it("result always includes laneA, laneB, mergePolicy, mergeReason, and approved", () => {
+    const result = runDualLanePlanReview([GOOD_PLAN]);
+    assert.ok("approved" in result, "approved must be present");
+    assert.ok("laneA" in result, "laneA must be present");
+    assert.ok("laneB" in result, "laneB must be present");
+    assert.ok("mergePolicy" in result, "mergePolicy must be present");
+    assert.ok("mergeReason" in result, "mergeReason must be present");
+    assert.ok(typeof result.mergeReason === "string" && result.mergeReason.length > 0);
   });
 });
 

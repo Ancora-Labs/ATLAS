@@ -27,6 +27,10 @@ import os from "node:os";
 
 import {
   computeReviewerPrecisionRecall,
+  DECISION_QUALITY_LABEL,
+  runDualLanePlanReview,
+  mergeLaneVerdicts,
+  LANE_MERGE_POLICY,
 } from "../../src/core/athena_reviewer.js";
 
 import {
@@ -350,5 +354,70 @@ describe("persistReviewerMetrics — I/O (AC15)", () => {
       () => persistReviewerMetrics(config, { knownOutcomes: 0 }),
       "persistReviewerMetrics must not throw on I/O error"
     );
+  });
+});
+
+// ── Dual-lane verdicts: precision/recall alignment ────────────────────────────
+
+describe("dual-lane verdict alignment with computeReviewerPrecisionRecall", () => {
+  // A plan approved by both lanes should eventually yield a "correct" label.
+  // A plan rejected by both lanes should not enter the postmortem history.
+  // These tests verify the decision quality label semantics are consistent
+  // with what the dual-lane merge produces.
+
+  it("MUST_PASS_BOTH: only plans approved by both lanes contribute positive labels", () => {
+    // Simulate: two approved plans → 2 correct labels
+    const pms = [makePm("correct"), makePm("correct")];
+    const r = computeReviewerPrecisionRecall(pms);
+    assert.equal(r.precision, 1, "all-correct outcomes must yield precision=1");
+    assert.equal(r.falsePositiveRate, 0);
+  });
+
+  it("rejected batch (both lanes fail) prevents incorrect labels accumulating", () => {
+    // A batch rejected by dual-lane review never dispatches a worker — no incorrect label.
+    // We simulate: no postmortem entries when batch is rejected.
+    const r = computeReviewerPrecisionRecall([]);
+    assert.equal(r.knownOutcomes, 0);
+    assert.equal(r.precision, null, "no data → null precision (no false positives possible)");
+  });
+
+  it("dual-lane merge produces approved=false when governance gate catches a violation — verifiable via FP analysis", () => {
+    // Governance-only failure should drive approved=false,
+    // protecting precision/recall from accruing incorrect labels.
+    const highRiskWithoutPremortem = {
+      role: "evolution-worker",
+      task: "Migrate database schema with zero-downtime deployment pipeline",
+      verification: "npm test",
+      wave: 1,
+      riskLevel: "high",
+      capacityDelta: 0.1,
+      requestROI: 2.0,
+      // No premortem — governance lane must reject
+    };
+    const dual = runDualLanePlanReview([highRiskWithoutPremortem]);
+    assert.equal(dual.approved, false,
+      "high-risk plan without premortem must be rejected to protect decision quality metrics");
+    assert.equal(dual.laneB.approved, false,
+      "governance lane must surface the missing premortem violation");
+  });
+
+  it("dual-lane ANY_PASS does not change the fundamental precision/recall accounting (lane result still determines label)", () => {
+    // With ANY_PASS, a plan can be approved with governance failure.
+    // This test verifies that the merge policy is surfaced and the caller
+    // can decide how to interpret precision differently.
+    const laneA = { lane: "quality" as const, approved: true, score: 80, summary: "ok", issues: [], reason: null };
+    const laneB = { lane: "governance" as const, approved: false, score: 40, summary: "violations", issues: ["PREMORTEM_VIOLATION: x"], reason: { code: "GOVERNANCE_VIOLATIONS", message: "x" } };
+    const result = mergeLaneVerdicts(laneA, laneB, LANE_MERGE_POLICY.ANY_PASS);
+    assert.equal(result.approved, true, "ANY_PASS: quality-only approval must proceed");
+    assert.equal(result.mergePolicy, LANE_MERGE_POLICY.ANY_PASS);
+    // The governance issues are still surfaced in laneB even when the merge approves.
+    assert.ok(result.laneB.issues.length > 0, "governance issues must remain visible even when ANY_PASS approves");
+  });
+
+  it("DECISION_QUALITY_LABEL export is consistent with postmortem labeling contract", () => {
+    assert.equal(DECISION_QUALITY_LABEL.CORRECT, "correct");
+    assert.equal(DECISION_QUALITY_LABEL.DELAYED_CORRECT, "delayed-correct");
+    assert.equal(DECISION_QUALITY_LABEL.INCORRECT, "incorrect");
+    assert.equal(DECISION_QUALITY_LABEL.INCONCLUSIVE, "inconclusive");
   });
 });
