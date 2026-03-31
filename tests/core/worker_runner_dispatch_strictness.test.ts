@@ -31,6 +31,12 @@ import {
 
 import type { BaselineRecoveryRecord } from "../../src/core/parser_baseline_recovery.js";
 
+import {
+  isDiscoverySafeTask,
+  DISCOVERY_SAFE_TASK_KINDS,
+  NON_MERGE_TASK_KINDS,
+} from "../../src/core/verification_gate.js";
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeReplayState(regressionCount: number, totalCount: number): ReplayRegressionState {
@@ -464,3 +470,113 @@ describe("end-to-end: replayCorpus → persist → computeDispatchStrictness", (
     assert.equal(strictness.strictness, DISPATCH_STRICTNESS.STRICT);
   });
 });
+
+// ── Discovery-safe bypass — strict gate vs. non-merge task interaction ─────────
+//
+// When dispatch strictness is BLOCKED (regression rate > 50%), merge tasks must
+// be prevented.  Discovery-safe tasks (scan, doc, discovery, research, etc.)
+// qualify for the adaptive throttle bypass — they do not produce code changes
+// and cannot introduce regressions, so they can proceed even at BLOCKED level.
+//
+// These tests verify that:
+//   1. DISCOVERY_SAFE_TASK_KINDS is consistent with NON_MERGE_TASK_KINDS.
+//   2. isDiscoverySafeTask correctly classifies all task kinds.
+//   3. At BLOCKED dispatch strictness, discovery-safe tasks are identifiable
+//      as bypass candidates while merge tasks remain blocked.
+
+describe("discovery-safe bypass — dispatch strictness interaction", () => {
+  it("all NON_MERGE_TASK_KINDS are also DISCOVERY_SAFE_TASK_KINDS (non-merge implies discovery-safe)", () => {
+    for (const kind of NON_MERGE_TASK_KINDS) {
+      assert.ok(
+        DISCOVERY_SAFE_TASK_KINDS.has(kind),
+        `"${kind}" is in NON_MERGE_TASK_KINDS but not in DISCOVERY_SAFE_TASK_KINDS — every non-merge kind must qualify for the discovery bypass`
+      );
+    }
+  });
+
+  it("DISCOVERY_SAFE_TASK_KINDS contains the full expected set of discovery-safe kinds", () => {
+    const expectedKinds = ["scan", "doc", "observation", "diagnosis", "discovery", "research", "review", "audit"];
+    for (const kind of expectedKinds) {
+      assert.ok(
+        DISCOVERY_SAFE_TASK_KINDS.has(kind),
+        `DISCOVERY_SAFE_TASK_KINDS must include "${kind}"`
+      );
+    }
+  });
+
+  it("isDiscoverySafeTask returns true for all discovery-safe kinds", () => {
+    for (const kind of DISCOVERY_SAFE_TASK_KINDS) {
+      assert.equal(
+        isDiscoverySafeTask(kind),
+        true,
+        `isDiscoverySafeTask("${kind}") must return true`
+      );
+    }
+  });
+
+  it("isDiscoverySafeTask returns false for merge-oriented kinds (strict gate preserved at BLOCKED)", () => {
+    const mergeKinds = ["implementation", "rework", "backend", "frontend", "devops", "infrastructure"];
+    for (const kind of mergeKinds) {
+      assert.equal(
+        isDiscoverySafeTask(kind),
+        false,
+        `isDiscoverySafeTask("${kind}") must return false — merge tasks must remain blocked`
+      );
+    }
+  });
+
+  it("isDiscoverySafeTask returns false for null/undefined/empty (fail-safe: unknown tasks are not auto-bypassed)", () => {
+    assert.equal(isDiscoverySafeTask(null), false);
+    assert.equal(isDiscoverySafeTask(undefined), false);
+    assert.equal(isDiscoverySafeTask(""), false);
+  });
+
+  it("BLOCKED dispatch strictness does not affect isDiscoverySafeTask — bypass decision is independent of regression state", () => {
+    const blockedResult = computeDispatchStrictness(
+      makeReplayState(8, 10),   // 80% regression rate → BLOCKED
+      makeRecoveryRecord()
+    );
+    assert.equal(blockedResult.strictness, DISPATCH_STRICTNESS.BLOCKED);
+
+    // Discovery-safe tasks qualify for bypass regardless of BLOCKED state
+    assert.equal(isDiscoverySafeTask("scan"), true,
+      "scan must remain discovery-safe even when dispatch strictness is BLOCKED"
+    );
+    assert.equal(isDiscoverySafeTask("discovery"), true,
+      "discovery must remain discovery-safe even when dispatch strictness is BLOCKED"
+    );
+    assert.equal(isDiscoverySafeTask("research"), true,
+      "research must remain discovery-safe even when dispatch strictness is BLOCKED"
+    );
+
+    // Merge tasks are NOT bypass candidates at BLOCKED strictness
+    assert.equal(isDiscoverySafeTask("implementation"), false,
+      "implementation must not bypass the strict gate even if discovery-safe logic is queried"
+    );
+  });
+
+  it("negative: BLOCKED dispatch strictness correctly rejects non-discovery tasks", () => {
+    const blockedResult = computeDispatchStrictness(
+      makeReplayState(6, 10),   // 60% → BLOCKED
+      makeRecoveryRecord()
+    );
+    assert.equal(blockedResult.strictness, DISPATCH_STRICTNESS.BLOCKED);
+    assert.equal(isDiscoverySafeTask("implementation"), false,
+      "implementation is a merge task and must not qualify for the discovery bypass"
+    );
+    assert.equal(isDiscoverySafeTask("rework"), false,
+      "rework is a merge task and must not qualify for the discovery bypass"
+    );
+  });
+
+  it("NORMAL dispatch strictness still respects discovery bypass classification (bypass applies at all strictness levels)", () => {
+    const normalResult = computeDispatchStrictness(null, null);
+    assert.equal(normalResult.strictness, DISPATCH_STRICTNESS.NORMAL);
+
+    // Even at NORMAL strictness, discovery-safe tasks are correctly classified
+    assert.equal(isDiscoverySafeTask("doc"), true);
+    assert.equal(isDiscoverySafeTask("audit"), true);
+    assert.equal(isDiscoverySafeTask("implementation"), false);
+  });
+});
+
