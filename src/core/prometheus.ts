@@ -3646,3 +3646,112 @@ Consider whether the root causes are:
 
   return analysis;
 }
+
+// ── Fallback provenance and low-confidence quarantine ─────────────────────────
+//
+// Fallback packets (produced by narrative extraction, wave-derivation, or
+// parser recovery modes) carry lower-confidence plans than direct JSON parses.
+// Attaching explicit provenance lets downstream gates (Athena, validateAllPlans)
+// reason about plan origin; quarantine prevents low-confidence packets from
+// being dispatched at all.
+
+/**
+ * Canonical provenance tags for fallback plan packets.
+ * `direct` = JSON plans parsed directly from model output (highest confidence).
+ * All others indicate fallback / recovery paths with reduced confidence.
+ */
+export const FALLBACK_PROVENANCE_TAG = Object.freeze({
+  DIRECT:               "direct",
+  NARRATIVE:            "narrative-extracted",
+  WAVE_DERIVED:         "wave-derived",
+  PARSER_FALLBACK:      "parser-fallback",
+  UNCERTAINTY_FALLBACK: "uncertainty-fallback",
+} as const);
+
+export type FallbackProvenanceTag = typeof FALLBACK_PROVENANCE_TAG[keyof typeof FALLBACK_PROVENANCE_TAG];
+
+/**
+ * Packets whose `_provenance.confidence` is below this threshold are quarantined
+ * and excluded from worker dispatch by `quarantineLowConfidencePackets`.
+ */
+export const QUARANTINE_CONFIDENCE_THRESHOLD = 0.5 as const;
+
+/**
+ * Attach provenance metadata to a fallback plan packet.
+ *
+ * Returns a new object with `_provenance` set — the original packet is not mutated.
+ * Non-object inputs are returned unchanged (safe for piping through pipelines).
+ *
+ * @param packet — the plan packet to annotate
+ * @param opts   — { source, reason, confidence (0-1), tag }
+ */
+export function attachFallbackProvenance(
+  packet: any,
+  opts: {
+    source?:     string;
+    reason?:     string;
+    confidence?: number;
+    tag?:        FallbackProvenanceTag | string;
+  } = {},
+): any {
+  if (!packet || typeof packet !== "object") return packet;
+  const confidence = typeof opts.confidence === "number"
+    ? Math.max(0, Math.min(1, opts.confidence))
+    : 0.5;
+  return {
+    ...packet,
+    _provenance: {
+      source:     String(opts.source  || "parser"),
+      reason:     String(opts.reason  || "fallback"),
+      confidence,
+      tag:        opts.tag || FALLBACK_PROVENANCE_TAG.PARSER_FALLBACK,
+      attachedAt: new Date().toISOString(),
+    },
+  };
+}
+
+/**
+ * Partition plan packets into allowed and quarantined sets.
+ *
+ * A packet is quarantined when its `_provenance.confidence` is present and
+ * strictly less than `threshold`.  Packets without provenance metadata are
+ * treated as high-confidence (backward compatible with pre-provenance plans).
+ *
+ * Quarantined packets are tagged with `_quarantined: true` and a
+ * `_quarantineReason` string; allowed packets are returned unchanged.
+ *
+ * @param packets  — plan packets to partition
+ * @param opts     — { threshold } override (default: QUARANTINE_CONFIDENCE_THRESHOLD)
+ * @returns {{ allowed: any[], quarantined: any[] }}
+ */
+export function quarantineLowConfidencePackets(
+  packets: any[],
+  opts: { threshold?: number } = {},
+): { allowed: any[]; quarantined: any[] } {
+  if (!Array.isArray(packets)) return { allowed: [], quarantined: [] };
+
+  const threshold = typeof opts.threshold === "number"
+    ? opts.threshold
+    : QUARANTINE_CONFIDENCE_THRESHOLD;
+
+  const allowed: any[]     = [];
+  const quarantined: any[] = [];
+
+  for (const packet of packets) {
+    const provConfidence = packet?._provenance?.confidence;
+    // No provenance → assume max confidence (backward compatible)
+    const confidence = typeof provConfidence === "number" ? provConfidence : 1.0;
+
+    if (confidence < threshold) {
+      quarantined.push({
+        ...packet,
+        _quarantined:      true,
+        _quarantineReason: `confidence ${confidence} < threshold ${threshold}`,
+      });
+    } else {
+      allowed.push(packet);
+    }
+  }
+
+  return { allowed, quarantined };
+}

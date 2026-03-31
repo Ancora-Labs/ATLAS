@@ -176,3 +176,64 @@ export function computeCapacityIndex(cycleData: any = {}, previousIndex = null) 
 function clamp(v) {
   return Math.max(0, Math.min(1, Number(v) || 0));
 }
+
+// ── ROI-weighted capacity index ───────────────────────────────────────────────
+
+/**
+ * Compute the capacity index with the `modelTaskFit` dimension weighted by
+ * realized tier ROI.
+ *
+ * When realized ROI data is available it replaces the heuristic `premiumEfficiency`
+ * estimate for the `modelTaskFit` dimension, then applies a boost/penalty factor:
+ *   - tierROI >= 0.8 → roiWeight = 1.1 (productive tier; slight boost)
+ *   - 0 < tierROI < 0.3 → roiWeight = 0.85 (underperforming; penalty)
+ *   - otherwise → roiWeight = 1.0 (neutral / no history)
+ *
+ * All other dimensions are computed identically to computeCapacityIndex.
+ *
+ * @param cycleData     — same shape as computeCapacityIndex's cycleData
+ * @param tierROI       — recent average realized ROI for the current tier (0 = no data)
+ * @param previousIndex — optional previous index for delta computation
+ * @returns {{ dimensions, composite, deltas, roiWeight }}
+ */
+export function computeROIWeightedCapacityIndex(
+  cycleData: any = {},
+  tierROI = 0,
+  previousIndex = null,
+): { dimensions: any; composite: number; deltas: Record<string, number> | null; roiWeight: number } {
+  // Determine ROI weight factor
+  let roiWeight = 1.0;
+  if (tierROI > 0 && tierROI >= 0.8)  roiWeight = 1.1;
+  else if (tierROI > 0 && tierROI < 0.3) roiWeight = 0.85;
+
+  // Derive base model-task-fit from realized ROI when available
+  const baseModelTaskFit = (tierROI > 0)
+    ? Math.min(1, tierROI)
+    : (cycleData.premiumEfficiency ?? 0.5);
+
+  const adjustedCycleData = {
+    ...cycleData,
+    // avgTierROI triggers the high-fidelity path inside computeCapacityIndex
+    avgTierROI: tierROI > 0 ? Math.min(1, tierROI * roiWeight) : undefined,
+  };
+
+  const base = computeCapacityIndex(adjustedCycleData, previousIndex);
+
+  // Re-derive dimensions with ROI weighting applied to modelTaskFit
+  const roiAdjustedModelTaskFit = clamp(baseModelTaskFit * roiWeight);
+  const dimensions = { ...base.dimensions, modelTaskFit: roiAdjustedModelTaskFit };
+
+  const values = Object.values(dimensions) as number[];
+  const composite = Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 100) / 100;
+
+  let deltas: Record<string, number> | null = null;
+  if (previousIndex && (previousIndex as any).dimensions) {
+    deltas = {};
+    for (const [key, val] of Object.entries(dimensions)) {
+      const prev = ((previousIndex as any).dimensions[key] as number) ?? (val as number);
+      deltas[key] = Math.round(((val as number) - prev) * 1000) / 1000;
+    }
+  }
+
+  return { dimensions, composite, deltas, roiWeight };
+}

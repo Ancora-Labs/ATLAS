@@ -468,3 +468,129 @@ describe("learning_policy_compiler", () => {
     });
   });
 });
+
+// ── Task: closure evidence and retirement criteria ─────────────────────────────
+
+import {
+  buildPolicyClosureEvidence,
+  evaluateRetirementEligibility,
+  filterRetiredPolicies,
+  RETIREMENT_MIN_CLOSURES,
+  RETIREMENT_MIN_CLEAN_CYCLES,
+} from "../../src/core/learning_policy_compiler.js";
+
+describe("buildPolicyClosureEvidence", () => {
+  it("creates a closure evidence record with required fields", () => {
+    const evidence = buildPolicyClosureEvidence("glob-false-fail", "Issue resolved by switching to npm test");
+    assert.equal(evidence.policyId, "glob-false-fail");
+    assert.equal(typeof evidence.resolvedAt, "string");
+    assert.equal(evidence.resolvedBy, "manual");
+    assert.ok(evidence.evidence.includes("npm test"));
+  });
+
+  it("accepts resolvedBy and cycleId overrides", () => {
+    const evidence = buildPolicyClosureEvidence("lint-failure", "Lint fixed", { resolvedBy: "health-audit", cycleId: "cycle-001" });
+    assert.equal(evidence.resolvedBy, "health-audit");
+    assert.equal(evidence.cycleId, "cycle-001");
+  });
+
+  it("truncates evidence to 500 characters", () => {
+    const long = "x".repeat(600);
+    const evidence = buildPolicyClosureEvidence("lint-failure", long);
+    assert.ok(evidence.evidence.length <= 500);
+  });
+
+  it("negative: throws when policyId is empty", () => {
+    assert.throws(() => buildPolicyClosureEvidence("", "evidence"), /policyId is required/);
+  });
+});
+
+describe("evaluateRetirementEligibility", () => {
+  it("returns eligible=false when no closure evidence exists", () => {
+    const result = evaluateRetirementEligibility("glob-false-fail", [], [], {});
+    assert.equal(result.eligible, false);
+    assert.ok(result.reason.includes("Insufficient closure evidence"));
+    assert.equal(result.closureCount, 0);
+  });
+
+  it("returns eligible=false when not enough clean cycles have passed", () => {
+    const closure = buildPolicyClosureEvidence("glob-false-fail", "Fixed");
+    // Only 1 clean postmortem after closure (minCleanCycles=3 by default)
+    const pms = [{ lessonLearned: "unrelated lesson", reviewedAt: new Date().toISOString() }];
+    const result = evaluateRetirementEligibility("glob-false-fail", [closure], pms, {});
+    assert.equal(result.eligible, false);
+    assert.ok(result.reason.includes("Insufficient clean cycles"));
+  });
+
+  it("returns eligible=true when closure evidence and enough clean cycles exist", () => {
+    // Create a closure in the past
+    const past = new Date(Date.now() - 10_000).toISOString();
+    const closure = { policyId: "lint-failure", resolvedAt: past, resolvedBy: "manual", evidence: "fixed" };
+    // 3 clean postmortems after closure (matching the minCleanCycles default)
+    const pms = Array.from({ length: 3 }, (_, i) => ({
+      lessonLearned: "Improved documentation coverage",
+      reviewedAt: new Date(Date.now() - (9_000 - i * 100)).toISOString(),
+    }));
+    const result = evaluateRetirementEligibility("lint-failure", [closure], pms, { minCleanCycles: 3 });
+    assert.equal(result.eligible, true);
+    assert.equal(result.closureCount, 1);
+    assert.equal(result.cyclesSinceClosure, 3);
+  });
+
+  it("returns eligible=false when lesson recurs after closure", () => {
+    const past = new Date(Date.now() - 10_000).toISOString();
+    const closure = { policyId: "glob-false-fail", resolvedAt: past, resolvedBy: "manual", evidence: "fixed" };
+    // A postmortem AFTER closure that triggers the glob pattern
+    const pms = [
+      { lessonLearned: "The glob pattern fails on Windows again", reviewedAt: new Date(Date.now() - 5_000).toISOString() },
+    ];
+    const result = evaluateRetirementEligibility("glob-false-fail", [closure], pms, { minCleanCycles: 1 });
+    assert.equal(result.eligible, false);
+    assert.ok(result.reason.includes("recurrence"));
+  });
+
+  it("negative: no postmortems after closure counts zero clean cycles", () => {
+    const closure = buildPolicyClosureEvidence("syntax-error", "Fixed");
+    const result = evaluateRetirementEligibility("syntax-error", [closure], [], { minCleanCycles: 1 });
+    assert.equal(result.eligible, false);
+    assert.equal(result.cyclesSinceClosure, 0);
+  });
+
+  it("RETIREMENT_MIN_CLOSURES defaults are exported as positive integers", () => {
+    assert.ok(RETIREMENT_MIN_CLOSURES >= 1);
+    assert.ok(RETIREMENT_MIN_CLEAN_CYCLES >= 1);
+  });
+});
+
+describe("filterRetiredPolicies", () => {
+  it("returns all active when no closure evidence exists", () => {
+    const policies = [
+      { id: "glob-false-fail", severity: "critical" },
+      { id: "lint-failure", severity: "warning" },
+    ];
+    const { active, retired } = filterRetiredPolicies(policies, [], []);
+    assert.equal(active.length, 2);
+    assert.equal(retired.length, 0);
+  });
+
+  it("moves eligible policy to retired list", () => {
+    const past = new Date(Date.now() - 10_000).toISOString();
+    const closure = { policyId: "lint-failure", resolvedAt: past, resolvedBy: "manual", evidence: "fixed" };
+    const pms = Array.from({ length: 3 }, (_, i) => ({
+      lessonLearned: "Improved documentation coverage",
+      reviewedAt: new Date(Date.now() - (9_000 - i * 100)).toISOString(),
+    }));
+    const policies = [{ id: "lint-failure", severity: "warning" }];
+    const { active, retired } = filterRetiredPolicies(policies, [closure], pms, { minCleanCycles: 3 });
+    assert.equal(retired.length, 1, "lint-failure must be retired");
+    assert.equal(active.length, 0);
+    assert.ok(retired[0]._retiredAt, "_retiredAt must be set");
+    assert.ok(typeof retired[0]._retirementReason === "string");
+  });
+
+  it("negative: returns empty active and retired for non-array input", () => {
+    const { active, retired } = filterRetiredPolicies(null as any, [], []);
+    assert.deepEqual(active, []);
+    assert.deepEqual(retired, []);
+  });
+});

@@ -474,3 +474,202 @@ export function buildPromptHardConstraints(policies) {
 
   return constraints;
 }
+
+// ── Closure evidence and retirement criteria ──────────────────────────────────
+
+/**
+ * Closure evidence for a compiled policy binding.
+ * Records that a recurring lesson was verifiably resolved so the policy
+ * can be evaluated for retirement after sufficient clean cycles.
+ */
+export interface PolicyClosureEvidence {
+  /** ID of the compiled policy that was resolved. */
+  policyId:   string;
+  /** ISO timestamp when closure was recorded. */
+  resolvedAt: string;
+  /** Who or what provided the closure evidence. */
+  resolvedBy: string;
+  /** Human-readable description of the evidence. */
+  evidence:   string;
+  /** Optional cycle identifier (e.g. from pipeline_progress). */
+  cycleId?:   string;
+}
+
+/** Retirement evaluation result for a single policy binding. */
+export interface RetirementEvaluation {
+  policyId:            string;
+  eligible:            boolean;
+  reason:              string;
+  closureCount:        number;
+  cyclesSinceClosure:  number;
+  lastClosedAt:        string | null;
+}
+
+/** Minimum number of closure evidence records before retirement is considered. */
+export const RETIREMENT_MIN_CLOSURES = 1;
+
+/**
+ * Minimum number of postmortem cycles that must pass after the last closure
+ * without any recurrence of the lesson before the policy can be retired.
+ */
+export const RETIREMENT_MIN_CLEAN_CYCLES = 3;
+
+/**
+ * Build a PolicyClosureEvidence record for a given policy.
+ *
+ * @param policyId  — ID of the compiled policy being closed
+ * @param evidence  — human-readable description of the resolution evidence
+ * @param opts      — optional resolvedBy and cycleId overrides
+ */
+export function buildPolicyClosureEvidence(
+  policyId: string,
+  evidence: string,
+  opts: { resolvedBy?: string; cycleId?: string } = {},
+): PolicyClosureEvidence {
+  if (!policyId || !String(policyId).trim()) {
+    throw new Error("policyId is required for buildPolicyClosureEvidence");
+  }
+  return {
+    policyId:   String(policyId).trim(),
+    resolvedAt: new Date().toISOString(),
+    resolvedBy: String(opts.resolvedBy || "manual"),
+    evidence:   String(evidence || "").slice(0, 500),
+    ...(opts.cycleId ? { cycleId: String(opts.cycleId) } : {}),
+  };
+}
+
+/**
+ * Evaluate whether a compiled policy binding is eligible for retirement.
+ *
+ * Retirement requires:
+ *   1. At least `minClosures` closure evidence records for the policy.
+ *   2. No recurrences of the triggering lesson in postmortems after the last closure.
+ *   3. At least `minCleanCycles` postmortem cycles after the last closure with no recurrence.
+ *
+ * @param policyId         — ID of the policy to evaluate
+ * @param closureHistory   — all recorded PolicyClosureEvidence entries
+ * @param recentPostmortems — postmortem entries (must have `reviewedAt` and `lessonLearned`)
+ * @param opts             — { minClosures?, minCleanCycles? }
+ */
+export function evaluateRetirementEligibility(
+  policyId: string,
+  closureHistory: PolicyClosureEvidence[],
+  recentPostmortems: any[],
+  opts: { minClosures?: number; minCleanCycles?: number } = {},
+): RetirementEvaluation {
+  const minClosures    = opts.minClosures    ?? RETIREMENT_MIN_CLOSURES;
+  const minCleanCycles = opts.minCleanCycles ?? RETIREMENT_MIN_CLEAN_CYCLES;
+
+  const policyClosures = Array.isArray(closureHistory)
+    ? closureHistory.filter(e => e?.policyId === policyId)
+    : [];
+
+  if (policyClosures.length < minClosures) {
+    return {
+      policyId,
+      eligible:           false,
+      reason:             `Insufficient closure evidence (${policyClosures.length} < ${minClosures})`,
+      closureCount:       policyClosures.length,
+      cyclesSinceClosure: 0,
+      lastClosedAt:       null,
+    };
+  }
+
+  // Most-recent closure
+  const sorted       = [...policyClosures].sort((a, b) => new Date(b.resolvedAt).getTime() - new Date(a.resolvedAt).getTime());
+  const lastClosedAt = sorted[0].resolvedAt;
+  const lastClosedMs = new Date(lastClosedAt).getTime();
+
+  // Find the known pattern for this policyId so we can detect recurrences
+  const template = COMPILABLE_PATTERNS.find(p => p.id === policyId);
+
+  const pms = Array.isArray(recentPostmortems) ? recentPostmortems : [];
+
+  // Postmortems AFTER the last closure (by reviewedAt; default to include if timestamp missing)
+  const pmsAfterClosure = pms.filter(pm => {
+    const ts = pm?.reviewedAt ? new Date(pm.reviewedAt).getTime() : Infinity;
+    return ts >= lastClosedMs;
+  });
+
+  // Postmortems that re-trigger the policy pattern
+  const recurrencesAfterClosure = template
+    ? pmsAfterClosure.filter(pm => template.pattern.test(String(pm?.lessonLearned || ""))).length
+    : 0;
+
+  const cleanCycles = pmsAfterClosure.length - recurrencesAfterClosure;
+
+  if (recurrencesAfterClosure > 0) {
+    return {
+      policyId,
+      eligible:           false,
+      reason:             `Policy still triggering — ${recurrencesAfterClosure} recurrence(s) since last closure`,
+      closureCount:       policyClosures.length,
+      cyclesSinceClosure: cleanCycles,
+      lastClosedAt,
+    };
+  }
+
+  if (cleanCycles < minCleanCycles) {
+    return {
+      policyId,
+      eligible:           false,
+      reason:             `Insufficient clean cycles since closure (${cleanCycles} < ${minCleanCycles})`,
+      closureCount:       policyClosures.length,
+      cyclesSinceClosure: cleanCycles,
+      lastClosedAt,
+    };
+  }
+
+  return {
+    policyId,
+    eligible:           true,
+    reason:             `Policy has ${policyClosures.length} closure(s) and ${cleanCycles} clean cycles — eligible for retirement`,
+    closureCount:       policyClosures.length,
+    cyclesSinceClosure: cleanCycles,
+    lastClosedAt,
+  };
+}
+
+/**
+ * Partition an active policy list into active and retired policies.
+ *
+ * Each policy is evaluated via evaluateRetirementEligibility. Policies
+ * meeting the retirement criteria are moved to the `retired` list with
+ * `_retiredAt` and `_retirementReason` metadata attached.
+ *
+ * @param policies         — active compiled policies
+ * @param closureHistory   — all recorded closure evidence
+ * @param recentPostmortems — recent postmortems used to detect recurrences
+ * @param opts             — { minClosures?, minCleanCycles? }
+ */
+export function filterRetiredPolicies(
+  policies: any[],
+  closureHistory: PolicyClosureEvidence[],
+  recentPostmortems: any[],
+  opts: { minClosures?: number; minCleanCycles?: number } = {},
+): { active: any[]; retired: any[] } {
+  if (!Array.isArray(policies)) return { active: [], retired: [] };
+
+  const active  = [];
+  const retired = [];
+
+  for (const policy of policies) {
+    const evaluation = evaluateRetirementEligibility(
+      policy?.id,
+      closureHistory,
+      recentPostmortems,
+      opts,
+    );
+    if (evaluation.eligible) {
+      retired.push({
+        ...policy,
+        _retiredAt:        new Date().toISOString(),
+        _retirementReason: evaluation.reason,
+      });
+    } else {
+      active.push(policy);
+    }
+  }
+
+  return { active, retired };
+}

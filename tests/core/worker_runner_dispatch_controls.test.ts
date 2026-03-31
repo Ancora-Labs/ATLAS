@@ -383,3 +383,54 @@ describe("routeModelUnderQualityFloor — dispatch routing with quality floor", 
     );
   });
 });
+
+// ── Realized ROI dispatch controls ───────────────────────────────────────────
+
+describe("worker_runner — realized ROI dispatch controls", () => {
+  let stateDir: string;
+
+  before(() => {
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "box-roi-dispatch-"));
+  });
+
+  after(() => {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("routeModelWithRealizedROI returns a model and tier for a simple task", async () => {
+    const { routeModelWithRealizedROI } = await import("../../src/core/model_policy.js");
+    const config = makeConfig(stateDir);
+    const result = await routeModelWithRealizedROI(config, { taskComplexity: "simple" }, {});
+    assert.ok(result.model, "must return a model");
+    assert.ok(typeof result.tier === "string", "must return a tier string");
+    assert.equal(typeof result.explorationLimited, "boolean");
+    assert.equal(typeof result.meetsQualityFloor, "boolean");
+  });
+
+  it("routeModelWithRealizedROI reason encodes roi and tier", async () => {
+    const { routeModelWithRealizedROI } = await import("../../src/core/model_policy.js");
+    const config = makeConfig(stateDir);
+    const result = await routeModelWithRealizedROI(config, {}, {});
+    assert.ok(result.reason.includes("roi="), `reason must include roi=, got: ${result.reason}`);
+    assert.ok(result.reason.includes("tier="), `reason must include tier=, got: ${result.reason}`);
+  });
+
+  it("EXPLORATION_BOUND is 0.15 and controls bounded exploration", async () => {
+    const { EXPLORATION_BOUND, routeModelWithRealizedROI } = await import("../../src/core/model_policy.js");
+    assert.equal(EXPLORATION_BOUND, 0.15);
+
+    // With explorationBound forced to 1.0, any positive ROI would be below bound.
+    // Since ledger is empty, realizedROI=0 → no exploration limit.
+    const config = makeConfig(stateDir);
+    const result = await routeModelWithRealizedROI(config, {}, {}, { explorationBound: 1.0 });
+    assert.equal(result.explorationLimited, false, "empty ledger → no exploration limit regardless of bound");
+  });
+
+  it("negative: missing stateDir does not crash — returns realizedROI=0", async () => {
+    const { routeModelWithRealizedROI } = await import("../../src/core/model_policy.js");
+    const config = makeConfig("/nonexistent/path/for/dispatch-roi-test");
+    const result = await routeModelWithRealizedROI(config, {}, {});
+    assert.equal(result.realizedROI, 0, "ledger read failure must silently yield roi=0");
+    assert.ok(result.model, "still returns a model");
+  });
+});

@@ -761,3 +761,97 @@ export async function summarizeTierTelemetry(
     return { avgRoiDelta: 0, sampleCount: 0 };
   }
 }
+
+// ── Realized-ROI-dominant routing with bounded exploration ────────────────────
+//
+// Uses the actual realized ROI from the ledger as the primary adaptive signal
+// rather than a caller-supplied estimate.  Bounded exploration prevents the
+// system from indefinitely trying expensive models on tiers with consistently
+// poor outcomes.
+
+/**
+ * Maximum fraction of dispatch cycles that may explore stronger models when
+ * realized ROI is very low.  Below this threshold the system switches to
+ * conservative floor-tightening rather than continued exploration.
+ */
+export const EXPLORATION_BOUND = 0.15 as const;
+
+/** Realized ROI below this value triggers exploration limiting. */
+const EXPLORATION_LIMIT_THRESHOLD = EXPLORATION_BOUND;
+
+/** Additional quality floor increase applied when exploration is limited. */
+const EXPLORATION_LIMIT_TIGHTEN = 0.15;
+
+/**
+ * Route model selection using the realized ROI from the ROI ledger as the
+ * dominant adaptive signal.
+ *
+ * Steps:
+ *   1. Read `computeRecentROIForTier` for the task's complexity tier.
+ *   2. Apply bounded exploration: when realizedROI > 0 but < EXPLORATION_BOUND,
+ *      tighten the quality floor to prevent continued wasteful exploration.
+ *   3. Delegate to `routeModelWithCompletionROI` with the effective floor and
+ *      realized ROI.
+ *
+ * Zero realizedROI (no ledger data) leaves the floor unchanged — the function
+ * is safe to call before any history exists.
+ *
+ * @param config       — BOX config object (config.paths.stateDir for ledger)
+ * @param taskHints    — task scope for complexity-tier derivation
+ * @param modelOptions — model pool; efficientModel / defaultModel / strongModel
+ * @param opts         — qualityFloor (default 0.7), explorationBound override
+ */
+export async function routeModelWithRealizedROI(
+  config: object,
+  taskHints: TaskHints = {},
+  modelOptions: ModelOptions & { qualityByModel?: Record<string, number> } = {},
+  opts: { qualityFloor?: number; explorationBound?: number } = {},
+): Promise<{
+  model: string;
+  tier: string;
+  reason: string;
+  realizedROI: number;
+  uncertainty: string;
+  meetsQualityFloor: boolean;
+  explorationLimited: boolean;
+}> {
+  const qualityFloor    = opts.qualityFloor    ?? 0.7;
+  const explorationBound = opts.explorationBound ?? EXPLORATION_LIMIT_THRESHOLD;
+
+  const { tier } = classifyComplexityTier(taskHints);
+
+  let realizedROI = 0;
+  try {
+    realizedROI = await computeRecentROIForTier(config, tier);
+  } catch {
+    // keep realizedROI = 0 (no data → no adjustment)
+  }
+
+  // Bounded exploration: very low ROI means exploration has been wasteful — tighten
+  let explorationLimited = false;
+  let effectiveFloor     = qualityFloor;
+
+  if (realizedROI > 0 && realizedROI < explorationBound) {
+    effectiveFloor     = Math.min(MAX_QUALITY_FLOOR, qualityFloor + EXPLORATION_LIMIT_TIGHTEN);
+    explorationLimited = true;
+  }
+
+  const base = routeModelWithCompletionROI(taskHints, modelOptions, effectiveFloor, realizedROI);
+
+  let uncertainty: string;
+  if (realizedROI === 0)       uncertainty = "low";     // no data → no signal
+  else if (realizedROI < 0.3)  uncertainty = "high";
+  else if (realizedROI < 0.7)  uncertainty = "medium";
+  else                          uncertainty = "low";
+
+  const explorationTag = explorationLimited ? " [exploration-limited]" : "";
+  return {
+    model:              base.model,
+    tier,
+    reason:             `realized-roi(roi=${realizedROI}, tier=${tier})${explorationTag}: ${base.reason}`,
+    realizedROI,
+    uncertainty,
+    meetsQualityFloor:  base.meetsQualityFloor,
+    explorationLimited,
+  };
+}
