@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { computeNextWaves, computeFrontier, microBatch, computeCriticalPathLength, computeWaveParallelismBound, conflictAwareMicroBatch } from "../../src/core/dag_scheduler.js";
+import { computeNextWaves, computeFrontier, microBatch, computeCriticalPathLength, computeWaveParallelismBound, conflictAwareMicroBatch, compactSingletonWaves } from "../../src/core/dag_scheduler.js";
 
 describe("dag_scheduler", () => {
   describe("computeNextWaves", () => {
@@ -302,5 +302,113 @@ describe("dag_scheduler — conflictAwareMicroBatch", () => {
     const tasks = Array.from({ length: 7 }, (_, i) => ({ task: `T${i}` }));
     const batches = conflictAwareMicroBatch(tasks);
     assert.equal(batches[0].length, 3, "default maxConcurrent must be 3 when no opts given");
+  });
+});
+
+// ── compactSingletonWaves ─────────────────────────────────────────────────────
+
+describe("dag_scheduler — compactSingletonWaves", () => {
+  it("returns empty array for empty input", () => {
+    assert.deepEqual(compactSingletonWaves([]), []);
+  });
+
+  it("returns same plans unchanged when only one wave exists", () => {
+    const plans = [
+      { task: "A", wave: 1 },
+      { task: "B", wave: 1 },
+    ];
+    const result = compactSingletonWaves(plans);
+    assert.equal(result.length, 2);
+    assert.ok(result.every(p => p.wave === 1), "single-wave plans must remain in wave 1");
+  });
+
+  it("compacts a non-dependent singleton wave-2 task into wave 1", () => {
+    const plans = [
+      { task: "A", wave: 1 },
+      { task: "B", wave: 1 },
+      { task: "C", wave: 2 }, // singleton with no deps
+    ];
+    const result = compactSingletonWaves(plans);
+    const taskC = result.find(p => p.task === "C")!;
+    assert.equal(taskC.wave, 1, "non-dependent singleton in wave 2 must be compacted to wave 1");
+  });
+
+  it("preserves wave isolation for singleton tasks that have dependencies", () => {
+    const plans = [
+      { task: "A", wave: 1 },
+      { task: "B", wave: 2, dependencies: ["A"] }, // singleton WITH dep
+    ];
+    const result = compactSingletonWaves(plans);
+    const taskB = result.find(p => p.task === "B")!;
+    assert.equal(taskB.wave, 2, "singleton with dependency must not be compacted");
+  });
+
+  it("preserves wave isolation for singleton tasks with dependsOn", () => {
+    const plans = [
+      { task: "root", wave: 1 },
+      { task: "child", wave: 2, dependsOn: ["root"] },
+    ];
+    const result = compactSingletonWaves(plans);
+    const child = result.find(p => p.task === "child")!;
+    assert.equal(child.wave, 2, "singleton with dependsOn must not be compacted");
+  });
+
+  it("compacts multiple non-dependent singleton waves into the base wave", () => {
+    const plans = [
+      { task: "A", wave: 1 },
+      { task: "B", wave: 2 }, // singleton, no deps
+      { task: "C", wave: 3 }, // singleton, no deps
+    ];
+    const result = compactSingletonWaves(plans);
+    const taskB = result.find(p => p.task === "B")!;
+    const taskC = result.find(p => p.task === "C")!;
+    assert.equal(taskB.wave, 1, "wave-2 non-dependent singleton must compact to wave 1");
+    assert.equal(taskC.wave, 1, "wave-3 non-dependent singleton must compact to wave 1");
+  });
+
+  it("preserves a multi-task wave even when all tasks have no dependencies", () => {
+    const plans = [
+      { task: "A", wave: 1 },
+      { task: "B", wave: 2 },
+      { task: "D", wave: 2 }, // wave 2 has 2 tasks — not a singleton wave
+    ];
+    const result = compactSingletonWaves(plans);
+    const taskB = result.find(p => p.task === "B")!;
+    const taskD = result.find(p => p.task === "D")!;
+    assert.equal(taskB.wave, 2, "multi-task wave must not be compacted (preserve wave 2 for B)");
+    assert.equal(taskD.wave, 2, "multi-task wave must not be compacted (preserve wave 2 for D)");
+  });
+
+  it("does not mutate original plan objects", () => {
+    const planB = { task: "B", wave: 2 };
+    const plans = [{ task: "A", wave: 1 }, planB];
+    compactSingletonWaves(plans);
+    assert.equal(planB.wave, 2, "original plan object must not be mutated");
+  });
+
+  it("all plans are preserved (no loss)", () => {
+    const plans = [
+      { task: "A", wave: 1 },
+      { task: "B", wave: 2 },
+      { task: "C", wave: 3, dependencies: ["A"] },
+    ];
+    const result = compactSingletonWaves(plans);
+    assert.equal(result.length, plans.length, "all plans must appear in the result");
+    for (const p of plans) {
+      assert.ok(result.some(r => r.task === p.task), `plan ${p.task} must appear in result`);
+    }
+  });
+
+  it("negative: a dependent singleton keeps its wave while non-dependent sibling is compacted", () => {
+    const plans = [
+      { task: "root", wave: 1 },
+      { task: "free",  wave: 2 },                    // no deps → compact
+      { task: "child", wave: 3, dependsOn: ["root"] }, // dep → keep
+    ];
+    const result = compactSingletonWaves(plans);
+    const free  = result.find(p => p.task === "free")!;
+    const child = result.find(p => p.task === "child")!;
+    assert.equal(free.wave,  1, "free singleton must be compacted to wave 1");
+    assert.equal(child.wave, 3, "dependent singleton must retain its original wave");
   });
 });

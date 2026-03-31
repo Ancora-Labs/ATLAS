@@ -605,3 +605,64 @@ describe("BLOCKED_VERIFICATION_CMDS — execution-time glob blocking", () => {
     }
   });
 });
+
+// ── buildScopeViolationRecoveryPlan — branch cleanliness recovery ─────────────
+
+import { buildScopeViolationRecoveryPlan } from "../../src/core/evolution_executor.js";
+
+describe("buildScopeViolationRecoveryPlan", () => {
+  it("returns the unrelated files as filesToRecover", () => {
+    const scopeCheck = {
+      ok: false,
+      unrelatedFiles: ["src/dashboard/live.ts", "scripts/deploy.sh"],
+      recoveryInstruction: "SCOPE VIOLATION: ...",
+    };
+    const plan = buildScopeViolationRecoveryPlan(scopeCheck, "T-001");
+    assert.deepEqual(plan.filesToRecover, ["src/dashboard/live.ts", "scripts/deploy.sh"]);
+  });
+
+  it("includes the task id in the recovery description", () => {
+    const scopeCheck = {
+      ok: false,
+      unrelatedFiles: ["src/foo.ts"],
+      recoveryInstruction: "SCOPE VIOLATION: ...",
+    };
+    const plan = buildScopeViolationRecoveryPlan(scopeCheck, "T-042");
+    assert.ok(plan.recoveryDescription.includes("T-042"), "description must reference the task id");
+  });
+
+  it("returns empty filesToRecover and empty description when scopeCheck is clean (no unrelated files)", () => {
+    const scopeCheck = {
+      ok: true,
+      unrelatedFiles: [],
+      recoveryInstruction: "",
+    };
+    const plan = buildScopeViolationRecoveryPlan(scopeCheck, "T-999");
+    assert.deepEqual(plan.filesToRecover, []);
+    assert.equal(plan.recoveryDescription, "");
+  });
+
+  it("handles undefined taskId gracefully", () => {
+    const scopeCheck = {
+      ok: false,
+      unrelatedFiles: ["src/extra.ts"],
+      recoveryInstruction: "SCOPE VIOLATION: ...",
+    };
+    const plan = buildScopeViolationRecoveryPlan(scopeCheck, undefined);
+    assert.ok(plan.recoveryDescription.includes("unknown"), "undefined taskId must produce 'unknown' in description");
+  });
+
+  it("negative: multiple unrelated files all appear in filesToRecover", () => {
+    const unrelated = ["README.md", "package.json", ".env"];
+    const scopeCheck = {
+      ok: false,
+      unrelatedFiles: unrelated,
+      recoveryInstruction: "SCOPE VIOLATION: ...",
+    };
+    const plan = buildScopeViolationRecoveryPlan(scopeCheck, "T-007");
+    assert.equal(plan.filesToRecover.length, 3);
+    for (const f of unrelated) {
+      assert.ok(plan.filesToRecover.includes(f), `filesToRecover must include ${f}`);
+    }
+  });
+});

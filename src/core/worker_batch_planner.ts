@@ -2,6 +2,7 @@ import { getRoleRegistry } from "./role_registry.js";
 import { enforceModelPolicy } from "./model_policy.js";
 import { resolveDependencyGraph, GRAPH_STATUS } from "./dependency_graph_resolver.js";
 import { enforceLaneDiversity, selectWorkerByFitScore, LanePerformanceLedger } from "./capability_pool.js";
+import { compactSingletonWaves } from "./dag_scheduler.js";
 
 const CHARS_PER_TOKEN = 4;
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 100000;
@@ -398,6 +399,15 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
   let inputPlans = microwaveMax > 0
     ? splitWavesIntoMicrowaves(plans as any[], microwaveMax)
     : (plans as any[]);
+
+  // Compact non-dependent singleton waves into earlier waves when enabled.
+  // This reduces unnecessary serial execution stages by merging singleton waves
+  // whose sole task has no dependencies into the earliest eligible wave.
+  // Opt-in via config.planner.compactSingletonWaves — backward-compatible (default: off).
+  if ((config as any)?.planner?.compactSingletonWaves === true) {
+    inputPlans = compactSingletonWaves(inputPlans);
+  }
+
   const enforceDependencyAwareWaves = (config as any)?.planner?.requireDependencyAwareWaves !== false;
   const splitConflictingPlansAcrossBatches = shouldSplitConflictingPlansAcrossBatches(config);
 

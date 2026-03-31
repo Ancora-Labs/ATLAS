@@ -318,3 +318,65 @@ export function conflictAwareMicroBatch(
 
   return batches;
 }
+
+/**
+ * Compact non-dependent singleton waves into earlier eligible waves, reducing
+ * unnecessary serial execution stages while preserving dependency-required isolation.
+ *
+ * A wave is eligible for compaction when:
+ *   - It contains exactly one task (singleton), AND
+ *   - That task has no declared dependencies (empty or absent dependsOn/dependencies)
+ *
+ * Compaction merges eligible singleton waves into the earliest (lowest-numbered)
+ * wave, allowing them to run concurrently rather than sequentially.
+ *
+ * Waves with multiple tasks, or singleton waves whose task has dependencies,
+ * are preserved as-is — dependency-required isolation is never violated.
+ *
+ * @param allPlans - plans with wave, dependsOn, and/or dependencies fields
+ * @returns new plans array with compacted wave assignments; originals are not mutated
+ */
+export function compactSingletonWaves(allPlans: any[]): any[] {
+  if (!Array.isArray(allPlans) || allPlans.length === 0) return [];
+
+  // Group plans by their declared wave number (default to 1 when absent/invalid)
+  const waveMap = new Map<number, any[]>();
+  for (const plan of allPlans) {
+    const w = Number.isFinite(Number(plan?.wave)) && Number(plan.wave) > 0
+      ? Number(plan.wave) : 1;
+    if (!waveMap.has(w)) waveMap.set(w, []);
+    waveMap.get(w)!.push(plan);
+  }
+
+  if (waveMap.size <= 1) {
+    // Single wave or empty — nothing to compact
+    return allPlans.map(p => ({ ...p }));
+  }
+
+  const sortedWaves = [...waveMap.keys()].sort((a, b) => a - b);
+  const baseWave = sortedWaves[0];
+  const result: any[] = [];
+
+  for (const waveNum of sortedWaves) {
+    const wavePlans = waveMap.get(waveNum)!;
+
+    if (waveNum !== baseWave && wavePlans.length === 1) {
+      const plan = wavePlans[0];
+      const deps = Array.isArray(plan?.dependsOn) ? plan.dependsOn
+        : Array.isArray(plan?.dependencies) ? plan.dependencies
+        : [];
+      if (deps.length === 0) {
+        // Non-dependent singleton — compact into the base wave
+        result.push({ ...plan, wave: baseWave });
+        continue;
+      }
+    }
+
+    // Multi-task wave or singleton with dependencies — preserve wave assignment
+    for (const plan of wavePlans) {
+      result.push({ ...plan });
+    }
+  }
+
+  return result;
+}

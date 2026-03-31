@@ -733,3 +733,82 @@ describe("buildFitScoredBatches — fit-score-based worker assignment", () => {
     assert.deepEqual(batches, []);
   });
 });
+
+// ── Singleton wave compaction integration ─────────────────────────────────────
+
+describe("worker_batch_planner — compactSingletonWaves integration", () => {
+  const baseConfig = { copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 } };
+  const compactConfig = {
+    copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 },
+    planner: { compactSingletonWaves: true },
+  };
+
+  it("without compactSingletonWaves config, singleton wave-2 plan stays in its own batch (backward-compatible)", () => {
+    const plans = [
+      { role: "Evolution Worker", task: "wave1-a", wave: 1 },
+      { role: "Evolution Worker", task: "wave1-b", wave: 1 },
+      { role: "Evolution Worker", task: "wave2-solo", wave: 2 }, // singleton, no deps
+    ];
+    const batches = buildRoleExecutionBatches(plans, baseConfig);
+    // Default: compaction disabled — wave-2 singleton stays in its own batch
+    const wave2Batch = batches.find(b => (b as any).wave === 2);
+    assert.ok(wave2Batch, "wave-2 singleton must remain in its own batch when compaction is disabled");
+  });
+
+  it("with compactSingletonWaves=true, non-dependent singleton wave is compacted into wave 1", () => {
+    const plans = [
+      { role: "Evolution Worker", task: "wave1-a", wave: 1 },
+      { role: "Evolution Worker", task: "wave1-b", wave: 1 },
+      { role: "Evolution Worker", task: "wave2-solo", wave: 2 }, // singleton, no deps
+    ];
+    const batches = buildRoleExecutionBatches(plans, compactConfig);
+    // Compaction enabled: wave2-solo should be in wave 1
+    const soloInWave2 = batches.find(b => (b as any).wave === 2);
+    assert.ok(!soloInWave2, "wave-2 singleton must be compacted; no wave-2 batch should exist");
+    const wave1Batches = batches.filter(b => (b as any).wave === 1);
+    const allWave1Plans = wave1Batches.flatMap(b => b.plans) as any[];
+    assert.ok(
+      allWave1Plans.some(p => p.task === "wave2-solo"),
+      "wave2-solo must appear in wave-1 batches after compaction"
+    );
+  });
+
+  it("with compactSingletonWaves=true, dependent singleton wave is NOT compacted", () => {
+    const plans = [
+      { role: "Evolution Worker", task: "root-task",  wave: 1 },
+      { role: "Evolution Worker", task: "child-task", wave: 2, dependsOn: ["root-task"] },
+    ];
+    const batches = buildRoleExecutionBatches(plans, compactConfig);
+    // child-task has a dep on root-task — must stay in wave 2
+    const childBatch = batches.find(b => (b.plans as any[]).some((p: any) => p.task === "child-task"));
+    assert.ok(childBatch, "child-task must appear in some batch");
+    assert.equal((childBatch as any).wave, 2, "dependent singleton must not be compacted");
+  });
+
+  it("all plans are preserved after compaction", () => {
+    const plans = [
+      { role: "Evolution Worker", task: "A", wave: 1 },
+      { role: "Evolution Worker", task: "B", wave: 2 },
+      { role: "Evolution Worker", task: "C", wave: 3, dependencies: ["A"] },
+    ];
+    const batches = buildRoleExecutionBatches(plans, compactConfig);
+    const allPlanTasks = batches.flatMap(b => b.plans).map((p: any) => p.task);
+    assert.ok(allPlanTasks.includes("A"), "A must be present");
+    assert.ok(allPlanTasks.includes("B"), "B must be present");
+    assert.ok(allPlanTasks.includes("C"), "C must be present");
+  });
+
+  it("negative: compactSingletonWaves=false is same as default (no compaction)", () => {
+    const noCompactConfig = {
+      copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 },
+      planner: { compactSingletonWaves: false },
+    };
+    const plans = [
+      { role: "Evolution Worker", task: "w1", wave: 1 },
+      { role: "Evolution Worker", task: "w2-solo", wave: 2 },
+    ];
+    const batches = buildRoleExecutionBatches(plans, noCompactConfig);
+    const wave2Batch = batches.find(b => (b as any).wave === 2);
+    assert.ok(wave2Batch, "false config must not compact waves");
+  });
+});

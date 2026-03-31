@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseWorkerResponse } from "../../src/core/worker_runner.js";
+import { parseWorkerResponse, detectRepoContamination, attemptBranchCleanlinessRecovery } from "../../src/core/worker_runner.js";
 import { isProcessAlive } from "../../src/core/daemon_control.js";
 
 // ── parseWorkerResponse ──────────────────────────────────────────────────────
@@ -112,6 +112,117 @@ describe("parseWorkerResponse", () => {
     const raw = "BOX_STATUS=done\nSome text";
     const result = parseWorkerResponse(raw, "");
     assert.equal(result.fullOutput, raw);
+  });
+});
+
+// ── detectRepoContamination ──────────────────────────────────────────────────
+
+describe("detectRepoContamination", () => {
+  it("returns isContamination=false when summary is clean and no scope declared", () => {
+    const result = detectRepoContamination("All good, task complete.", [], []);
+    assert.equal(result.isContamination, false);
+    assert.deepEqual(result.unrelatedFiles, []);
+  });
+
+  it("returns isContamination=true when summary contains SCOPE VIOLATION marker", () => {
+    const result = detectRepoContamination("SCOPE VIOLATION: 1 file modified outside scope.", [], []);
+    assert.equal(result.isContamination, true);
+  });
+
+  it("returns isContamination=true when summary contains 'unrelated file'", () => {
+    const result = detectRepoContamination("Worker touched unrelated file src/foo.ts", [], []);
+    assert.equal(result.isContamination, true);
+  });
+
+  it("returns isContamination=true when summary contains 'git checkout --'", () => {
+    const result = detectRepoContamination("Recovery: revert with git checkout -- src/bar.ts", [], []);
+    assert.equal(result.isContamination, true);
+  });
+
+  it("returns unrelatedFiles when touched files fall outside declared scope", () => {
+    const result = detectRepoContamination(
+      "Task done.",
+      ["src/core/foo.ts", "src/dashboard/live.ts"],
+      ["src/core/foo.ts"]
+    );
+    assert.equal(result.isContamination, true);
+    assert.ok(result.unrelatedFiles.includes("src/dashboard/live.ts"));
+    assert.ok(!result.unrelatedFiles.includes("src/core/foo.ts"));
+  });
+
+  it("returns isContamination=false when all touched files are within scope", () => {
+    const result = detectRepoContamination(
+      "Task done.",
+      ["src/core/foo.ts", "tests/core/foo.test.ts"],
+      ["src/core/foo.ts", "tests/core/foo.test.ts"]
+    );
+    assert.equal(result.isContamination, false);
+    assert.deepEqual(result.unrelatedFiles, []);
+  });
+
+  it("returns isContamination=false when no files_hint declared (cannot enforce)", () => {
+    const result = detectRepoContamination(
+      "Task done.",
+      ["src/core/foo.ts", "src/dashboard/live.ts"],
+      []
+    );
+    assert.equal(result.isContamination, false);
+    assert.deepEqual(result.unrelatedFiles, []);
+  });
+
+  it("normalizes Windows backslash paths when checking scope", () => {
+    const result = detectRepoContamination(
+      "Task done.",
+      ["src\\core\\foo.ts"],
+      ["src/core/foo.ts"]
+    );
+    assert.equal(result.isContamination, false, "backslash paths must be normalized for scope check");
+    assert.deepEqual(result.unrelatedFiles, []);
+  });
+
+  it("negative: clean summary with no unrelated files returns false", () => {
+    const result = detectRepoContamination(
+      "Build passed, PR created.",
+      ["src/core/orchestrator.ts", "tests/core/orchestrator.test.ts"],
+      ["src/core/orchestrator.ts", "tests/core/orchestrator.test.ts"]
+    );
+    assert.equal(result.isContamination, false);
+  });
+});
+
+// ── attemptBranchCleanlinessRecovery ────────────────────────────────────────
+
+describe("attemptBranchCleanlinessRecovery", () => {
+  it("returns recovered=true immediately when no files are specified", async () => {
+    const result = await attemptBranchCleanlinessRecovery({}, [], 2);
+    assert.equal(result.recovered, true);
+    assert.equal(result.attemptsMade, 0);
+    assert.deepEqual(result.errors, []);
+  });
+
+  it("returns recovered=true when filesToRecover is null-like (empty array)", async () => {
+    const result = await attemptBranchCleanlinessRecovery({}, null as unknown as string[], 2);
+    assert.equal(result.recovered, true);
+    assert.equal(result.attemptsMade, 0);
+  });
+
+  it("returns a result object with the expected shape", async () => {
+    // Non-empty file list will fail (git not in a repo here), but shape must be correct
+    const result = await attemptBranchCleanlinessRecovery({}, ["non_existent_file.ts"], 1);
+    assert.ok("recovered" in result, "result must have recovered field");
+    assert.ok("attemptsMade" in result, "result must have attemptsMade field");
+    assert.ok("errors" in result, "result must have errors field");
+    assert.ok(Array.isArray(result.errors), "errors must be an array");
+    // With a non-existent file, git will fail — recovered should be false
+    assert.equal(result.recovered, false);
+    assert.equal(result.attemptsMade, 1);
+  });
+
+  it("negative: exhausts maxAttempts without giving up early", async () => {
+    const result = await attemptBranchCleanlinessRecovery({}, ["missing_file_1.ts", "missing_file_2.ts"], 2);
+    // Both attempts should be made since files cannot be recovered
+    assert.equal(result.attemptsMade, 2);
+    assert.equal(result.recovered, false);
   });
 });
 

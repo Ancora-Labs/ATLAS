@@ -288,6 +288,107 @@ function findWorkerByName(config, roleName) {
   return null;
 }
 
+// ── Repo contamination detection and recovery ────────────────────────────────
+
+/** Patterns in worker output that indicate repo contamination (out-of-scope file modifications). */
+const CONTAMINATION_INDICATORS = [
+  /scope\s+violation/i,
+  /unrelated\s+file/i,
+  /modified\s+outside\s+(declared\s+)?scope/i,
+  /git\s+checkout\s+--/i,
+];
+
+/**
+ * Detect whether a worker's output indicates repo contamination — i.e., files
+ * were modified outside the declared task scope.
+ *
+ * Returns isContamination=true when the summary text contains known contamination
+ * markers OR when filesTouched contains entries that fall outside filesHint scope.
+ *
+ * @param summary      - worker summary text (may contain SCOPE VIOLATION markers)
+ * @param filesTouched - files the worker reported touching
+ * @param filesHint    - declared scope from the task (empty means "no scope declared")
+ */
+export function detectRepoContamination(
+  summary: string,
+  filesTouched: string[],
+  filesHint: string[],
+): { isContamination: boolean; unrelatedFiles: string[] } {
+  const text = String(summary || "");
+  const markerFound = CONTAMINATION_INDICATORS.some(r => r.test(text));
+
+  let unrelatedFiles: string[] = [];
+  if (Array.isArray(filesHint) && filesHint.length > 0
+      && Array.isArray(filesTouched) && filesTouched.length > 0) {
+    const normalizedHints = filesHint.map(h => h.replace(/\\/g, "/").toLowerCase());
+    unrelatedFiles = filesTouched.filter(file => {
+      const normalized = file.replace(/\\/g, "/").toLowerCase();
+      return !normalizedHints.some(hint => {
+        if (normalized === hint) return true;
+        if (normalized.startsWith(hint.endsWith("/") ? hint : hint + "/")) return true;
+        const hintBase = hint.replace(/\.(ts|js)$/, "");
+        return normalized.includes(hintBase);
+      });
+    });
+  }
+
+  return {
+    isContamination: markerFound || unrelatedFiles.length > 0,
+    unrelatedFiles,
+  };
+}
+
+/**
+ * Attempt to recover branch cleanliness by reverting files outside the task scope.
+ * Runs `git checkout -- <file>` for each file in filesToRecover.
+ *
+ * This is a best-effort, deterministic recovery: it retries up to maxAttempts times.
+ * A blocked/partial closure is only permitted after all recovery attempts are exhausted.
+ *
+ * @param config         - runner config (used for path resolution context)
+ * @param filesToRecover - files to revert via git checkout
+ * @param maxAttempts    - max attempts before giving up (default 2)
+ */
+export async function attemptBranchCleanlinessRecovery(
+  config: WorkerRunnerConfig,
+  filesToRecover: string[],
+  maxAttempts: number = 2,
+): Promise<{ recovered: boolean; attemptsMade: number; errors: string[] }> {
+  if (!Array.isArray(filesToRecover) || filesToRecover.length === 0) {
+    return { recovered: true, attemptsMade: 0, errors: [] };
+  }
+
+  const errors: string[] = [];
+  let attempt = 0;
+  let pending = [...filesToRecover];
+
+  while (attempt < maxAttempts && pending.length > 0) {
+    attempt++;
+    const failedThisAttempt: string[] = [];
+    for (const file of pending) {
+      try {
+        const r = await spawnAsync("git", ["checkout", "--", file], {
+          env: { ...process.env },
+        }) as SpawnAsyncResult;
+        if (r.status !== 0) {
+          failedThisAttempt.push(file);
+          errors.push(
+            `[attempt ${attempt}] git checkout -- ${file} exit=${r.status}: ${String(r.stderr || "").slice(0, 80)}`
+          );
+        }
+      } catch (e: unknown) {
+        failedThisAttempt.push(file);
+        errors.push(
+          `[attempt ${attempt}] git checkout -- ${file}: ${String((e as Error)?.message || e).slice(0, 80)}`
+        );
+      }
+    }
+    pending = failedThisAttempt;
+  }
+
+  return { recovered: pending.length === 0, attemptsMade: attempt, errors };
+}
+
 // ── Task-aware model resolution ───────────────────────────────────────────────
 // Priority: taskKind → role preference → worker model → uncertainty-aware routing → default
 // Policy adjustments from compiled lessons may override the candidate after selection.

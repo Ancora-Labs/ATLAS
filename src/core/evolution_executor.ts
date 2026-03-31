@@ -21,7 +21,7 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { readJson, writeJson } from "./fs_utils.js";
-import { runWorkerConversation } from "./worker_runner.js";
+import { runWorkerConversation, attemptBranchCleanlinessRecovery } from "./worker_runner.js";
 import { runAthenaPostmortem } from "./athena_reviewer.js";
 import { appendProgress } from "./state_tracker.js";
 import { buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
@@ -225,6 +225,27 @@ export function checkScopeConformance(
   ].join("\n");
 
   return { ok: false, unrelatedFiles, recoveryInstruction };
+}
+
+/**
+ * Build a recovery plan descriptor for a scope violation.
+ * Encapsulates which files need reverting and a description for progress tracking.
+ *
+ * This is a pure function — actual recovery is performed by
+ * `attemptBranchCleanlinessRecovery` from worker_runner.
+ *
+ * @param scopeCheck - result from checkScopeConformance
+ * @param taskId     - task identifier for progress messages
+ */
+export function buildScopeViolationRecoveryPlan(
+  scopeCheck: ScopeConformanceResult,
+  taskId: string | undefined,
+): { filesToRecover: string[]; recoveryDescription: string } {
+  const filesToRecover = Array.isArray(scopeCheck.unrelatedFiles) ? scopeCheck.unrelatedFiles : [];
+  const recoveryDescription = filesToRecover.length > 0
+    ? `scope-violation for ${taskId ?? "unknown"}: revert ${filesToRecover.length} unrelated file(s): ${filesToRecover.join(", ")}`
+    : "";
+  return { filesToRecover, recoveryDescription };
 }
 
 const ATHENA_RETRYABLE_REVIEW_PATTERNS = [
@@ -1121,13 +1142,25 @@ export async function runEvolutionLoop(config, options: { fromTaskId?: string; d
         activeTask.files_hint || []
       );
       if (!scopeCheck.ok) {
+        // Require deterministic branch cleanliness recovery before scheduling rework.
+        // This ensures contaminated files are reverted so subsequent attempts start clean.
+        const recoveryPlan = buildScopeViolationRecoveryPlan(scopeCheck, task.task_id);
+        let recoveryNote: string;
+        try {
+          const recovery = await attemptBranchCleanlinessRecovery(config, recoveryPlan.filesToRecover);
+          recoveryNote = recovery.recovered
+            ? `branch recovery succeeded (${scopeCheck.unrelatedFiles.length} file(s) reverted after ${recovery.attemptsMade} attempt(s))`
+            : `branch recovery failed after ${recovery.attemptsMade} attempt(s) — ${recovery.errors.slice(0, 2).join("; ")}`;
+        } catch (recErr) {
+          recoveryNote = `branch recovery threw: ${String((recErr as Error)?.message || recErr).slice(0, 80)}`;
+        }
         taskState.status = "rework";
-        taskState.error = `scope-violation: ${scopeCheck.unrelatedFiles.join(", ")}`;
+        taskState.error = `scope-violation: ${scopeCheck.unrelatedFiles.join(", ")} | ${recoveryNote}`;
         await appendProgress(config,
-          `[EVO] ${task.task_id} — scope conformance gate failed: ${scopeCheck.unrelatedFiles.length} unrelated file(s) touched`
+          `[EVO] ${task.task_id} — scope conformance gate failed: ${scopeCheck.unrelatedFiles.length} unrelated file(s) touched; ${recoveryNote}`
         );
         await saveProgress(stateDir, progress);
-        console.warn(`[evolution] Scope violation — scheduling rework\n${scopeCheck.recoveryInstruction}`);
+        console.warn(`[evolution] Scope violation — ${recoveryNote}\n${scopeCheck.recoveryInstruction}`);
         continue;
       }
 
