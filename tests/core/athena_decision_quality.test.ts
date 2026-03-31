@@ -360,3 +360,166 @@ describe("getDecisionQualityTrend — data-contract (AC3, AC12)", () => {
     assert.equal(result.total, 0);
   });
 });
+
+// ── computeEvidenceCompleteness ───────────────────────────────────────────────
+
+import {
+  EVIDENCE_COMPLETENESS_REASON,
+  computeEvidenceCompleteness,
+  computeDecisionQualityLabelWithEvidence,
+} from "../../src/core/athena_reviewer.js";
+
+describe("computeEvidenceCompleteness — positive path", () => {
+  it("returns complete=true for a fully-populated evidence envelope", () => {
+    const evidence = {
+      roleName: "worker-alpha",
+      status: "done",
+      summary: "All tests passed and build succeeded without errors.",
+      verificationEvidence: { build: "pass", tests: "pass" },
+    };
+    const result = computeEvidenceCompleteness(evidence);
+    assert.equal(result.complete, true);
+    assert.equal(result.reason, EVIDENCE_COMPLETENESS_REASON.EVIDENCE_COMPLETE);
+    assert.deepEqual(result.missing, []);
+  });
+});
+
+describe("computeEvidenceCompleteness — negative path: null/undefined", () => {
+  it("returns complete=false for null input", () => {
+    const result = computeEvidenceCompleteness(null);
+    assert.equal(result.complete, false);
+    assert.equal(result.reason, EVIDENCE_COMPLETENESS_REASON.MISSING_EVIDENCE);
+  });
+
+  it("returns complete=false for undefined input", () => {
+    const result = computeEvidenceCompleteness(undefined);
+    assert.equal(result.complete, false);
+    assert.equal(result.reason, EVIDENCE_COMPLETENESS_REASON.MISSING_EVIDENCE);
+  });
+
+  it("returns complete=false for array input", () => {
+    const result = computeEvidenceCompleteness([]);
+    assert.equal(result.complete, false);
+    assert.equal(result.reason, EVIDENCE_COMPLETENESS_REASON.MISSING_EVIDENCE);
+  });
+});
+
+describe("computeEvidenceCompleteness — negative path: missing fields", () => {
+  it("flags missing roleName", () => {
+    const evidence = {
+      status: "done",
+      summary: "All tests passed and build succeeded.",
+      verificationEvidence: { build: "pass", tests: "pass" },
+    };
+    const result = computeEvidenceCompleteness(evidence);
+    assert.equal(result.complete, false);
+    assert.equal(result.reason, EVIDENCE_COMPLETENESS_REASON.INCOMPLETE_EVIDENCE);
+    assert.ok(result.missing.includes("roleName"), `expected roleName in missing; got ${result.missing}`);
+  });
+
+  it("flags summary too short (under 10 chars)", () => {
+    const evidence = {
+      roleName: "worker-alpha",
+      status: "done",
+      summary: "short",  // only 5 chars
+      verificationEvidence: { build: "pass", tests: "pass" },
+    };
+    const result = computeEvidenceCompleteness(evidence);
+    assert.equal(result.complete, false);
+    assert.ok(result.missing.includes("summary:too_short"));
+  });
+
+  it("flags missing verificationEvidence", () => {
+    const evidence = {
+      roleName: "worker-alpha",
+      status: "done",
+      summary: "All tests passed and build succeeded.",
+    };
+    const result = computeEvidenceCompleteness(evidence);
+    assert.equal(result.complete, false);
+    assert.ok(result.missing.includes("verificationEvidence"));
+  });
+
+  it("flags missing verificationEvidence.build", () => {
+    const evidence = {
+      roleName: "worker-alpha",
+      status: "done",
+      summary: "All tests passed and build succeeded.",
+      verificationEvidence: { tests: "pass" },  // missing build
+    };
+    const result = computeEvidenceCompleteness(evidence);
+    assert.equal(result.complete, false);
+    assert.ok(result.missing.includes("verificationEvidence.build"));
+  });
+});
+
+// ── computeDecisionQualityLabelWithEvidence ───────────────────────────────────
+
+describe("computeDecisionQualityLabelWithEvidence — positive path", () => {
+  const fullEvidence = {
+    roleName: "worker-alpha",
+    status: "done",
+    summary: "All tests passed and build succeeded without errors.",
+    verificationEvidence: { build: "pass", tests: "pass" },
+  };
+
+  it("returns correct label with evidenceComplete=true when outcome=merged + full evidence", () => {
+    const result = computeDecisionQualityLabelWithEvidence("merged", fullEvidence);
+    assert.equal(result.label, DECISION_QUALITY_LABEL.CORRECT);
+    assert.equal(result.evidenceComplete, true);
+    assert.equal(result.status, "ok");
+  });
+
+  it("returns delayed-correct label with evidenceComplete=true when outcome=reopen", () => {
+    const result = computeDecisionQualityLabelWithEvidence("reopen", fullEvidence);
+    assert.equal(result.label, DECISION_QUALITY_LABEL.DELAYED_CORRECT);
+    assert.equal(result.evidenceComplete, true);
+  });
+
+  it("returns incorrect label with evidenceComplete=true when outcome=rollback", () => {
+    const result = computeDecisionQualityLabelWithEvidence("rollback", fullEvidence);
+    assert.equal(result.label, DECISION_QUALITY_LABEL.INCORRECT);
+    assert.equal(result.evidenceComplete, true);
+  });
+});
+
+describe("computeDecisionQualityLabelWithEvidence — negative path: missing evidence", () => {
+  it("downgrades non-inconclusive label to inconclusive when evidence is null", () => {
+    const result = computeDecisionQualityLabelWithEvidence("merged", null);
+    assert.equal(result.label, DECISION_QUALITY_LABEL.INCONCLUSIVE);
+    assert.equal(result.evidenceComplete, false);
+    assert.equal(result.status, "degraded");
+    assert.equal(result.evidenceReason, EVIDENCE_COMPLETENESS_REASON.MISSING_EVIDENCE);
+  });
+
+  it("downgrades to inconclusive when evidence is incomplete (missing summary)", () => {
+    const incomplete = {
+      roleName: "worker-alpha",
+      status: "done",
+      // missing summary and verificationEvidence
+    };
+    const result = computeDecisionQualityLabelWithEvidence("merged", incomplete);
+    assert.equal(result.label, DECISION_QUALITY_LABEL.INCONCLUSIVE);
+    assert.equal(result.evidenceComplete, false);
+    assert.ok(result.evidenceMissing.length > 0);
+  });
+
+  it("still returns inconclusive for unknown outcome even with full evidence (outcome gate fires first)", () => {
+    const fullEvidence = {
+      roleName: "worker-alpha",
+      status: "done",
+      summary: "All tests passed and build succeeded without errors.",
+      verificationEvidence: { build: "pass", tests: "pass" },
+    };
+    const result = computeDecisionQualityLabelWithEvidence("unknown_outcome", fullEvidence);
+    // Unknown outcome maps to inconclusive regardless of evidence
+    assert.equal(result.label, DECISION_QUALITY_LABEL.INCONCLUSIVE);
+  });
+
+  it("returns inconclusive with degraded status when no evidence provided (omitted arg)", () => {
+    const result = computeDecisionQualityLabelWithEvidence("merged");
+    assert.equal(result.label, DECISION_QUALITY_LABEL.INCONCLUSIVE);
+    assert.equal(result.evidenceComplete, false);
+    assert.equal(result.evidenceReason, EVIDENCE_COMPLETENESS_REASON.MISSING_EVIDENCE);
+  });
+});

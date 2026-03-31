@@ -56,7 +56,12 @@ import { compileLessonsToPolicies } from "./learning_policy_compiler.js";
 import { assignWorkersToPlans, enforceLaneDiversity } from "./capability_pool.js";
 import { runDoctor } from "./doctor.js";
 import { validateAllPlans } from "./plan_contract_validator.js";
-import { resolveDependencyGraph, GRAPH_STATUS } from "./dependency_graph_resolver.js";
+import {
+  resolveDependencyGraph,
+  computeReadinessGate,
+  GRAPH_STATUS,
+  type ReadinessGateResult,
+} from "./dependency_graph_resolver.js";
 import { isGovernanceCanaryBreachActive } from "./governance_canary.js";
 import { executeRollback, ROLLBACK_LEVEL, ROLLBACK_TRIGGER } from "./rollback_engine.js";
 import { initializeAggregateLiveLog, appendAggregateLiveLogSync } from "./live_log.js";
@@ -114,14 +119,16 @@ export const ORCHESTRATOR_STATUS = Object.freeze({
  *   8. PLAN_EVIDENCE_COUPLING — last gate; validates individual plan completeness
  */
 export const GATE_PRECEDENCE = Object.freeze({
-  BUDGET_ELIGIBILITY:     1,
-  GUARDRAIL_PAUSE:        2,
-  GOVERNANCE_FREEZE:      3,
-  LINEAGE_CYCLE:          4,
-  GOVERNANCE_CANARY:      5,
-  CARRY_FORWARD_DEBT:     6,
-  MANDATORY_DRIFT_DEBT:   7,
-  PLAN_EVIDENCE_COUPLING: 8,
+  BUDGET_ELIGIBILITY:          1,
+  GUARDRAIL_PAUSE:             2,
+  GOVERNANCE_FREEZE:           3,
+  LINEAGE_CYCLE:               4,
+  GOVERNANCE_CANARY:           5,
+  CARRY_FORWARD_DEBT:          6,
+  MANDATORY_DRIFT_DEBT:        7,
+  PLAN_EVIDENCE_COUPLING:      8,
+  /** Confidence metadata on plans is below the minimum dispatch threshold. */
+  DEPENDENCY_READINESS:        9,
 });
 
 /**
@@ -144,6 +151,8 @@ export const BLOCK_REASON = Object.freeze({
   CRITICAL_DEBT_OVERDUE:          "critical_debt_overdue",
   MANDATORY_DRIFT_DEBT_UNRESOLVED:"mandatory_drift_debt_unresolved",
   PLAN_EVIDENCE_COUPLING_INVALID: "plan_evidence_coupling_invalid",
+  /** One or more plans carry confidence metadata below the minimum dispatch threshold. */
+  DEPENDENCY_READINESS_INCOMPLETE:"dependency_readiness_incomplete",
 });
 
 /**
@@ -341,6 +350,11 @@ export interface GovernanceBlockDecision {
    * Present only on MANDATORY_DRIFT_DEBT_UNRESOLVED blocks.
    */
   mandatoryDriftPaths?: string[];
+  /**
+   * Readiness gate evaluation result.
+   * Present only on DEPENDENCY_READINESS_INCOMPLETE blocks.
+   */
+  readinessResult?: ReadinessGateResult;
 }
 
 /**
@@ -548,6 +562,34 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
         gateIndex: GATE_PRECEDENCE.PLAN_EVIDENCE_COUPLING,
       };
     }
+  }
+
+  // ── Dependency readiness gate ─────────────────────────────────────────────
+  // Gate dispatch when any plan carries explicit confidence metadata below the
+  // minimum threshold.  Only fires for tasks that OPT IN by declaring at least
+  // one of: shapeConfidence, budgetConfidence, or dependencyConfidence.
+  // Plans without confidence fields pass through (fail-open for legacy plans).
+  // Threshold configurable via config.runtime.minPlanConfidence (default: 0.5).
+  //
+  // Fail-open: any error during readiness evaluation is logged but never blocks.
+  try {
+    const readinessResult = computeReadinessGate(Array.isArray(plans) ? plans : [], {
+      minConfidence: config?.runtime?.minPlanConfidence,
+    });
+    if (!readinessResult.ready) {
+      return {
+        blocked: true,
+        reason: `${BLOCK_REASON.DEPENDENCY_READINESS_INCOMPLETE}:${readinessResult.reason}`,
+        action: undefined,
+        graphResult,
+        cycleId,
+        budgetEligibility,
+        gateIndex: GATE_PRECEDENCE.DEPENDENCY_READINESS,
+        readinessResult,
+      };
+    }
+  } catch (readinessErr) {
+    warn(`[orchestrator] dependency readiness gate failed (non-fatal): ${String(readinessErr?.message || readinessErr)}`);
   }
 
   return {

@@ -558,11 +558,152 @@ export function normalizeDecisionQualityLabel(pm) {
   return validLabels.has(existing) ? existing : DECISION_QUALITY_LABEL.INCONCLUSIVE;
 }
 
+// ── Evidence completeness gate ────────────────────────────────────────────────
+
 /**
- * Reason codes returned by normalizePostmortemVerdict.
- * Callers must check this field before trusting `pass`.
+ * Reason codes returned by computeDecisionQualityLabelWithEvidence.
+ * Extends DECISION_QUALITY_REASON with completeness-specific codes.
  *
  * @enum {string}
+ */
+export const EVIDENCE_COMPLETENESS_REASON = Object.freeze({
+  /** Evidence envelope is null/undefined — cannot assign non-inconclusive label. */
+  MISSING_EVIDENCE:    "MISSING_EVIDENCE",
+  /** Evidence is present but one or more required fields are absent or invalid. */
+  INCOMPLETE_EVIDENCE: "INCOMPLETE_EVIDENCE",
+  /** Evidence meets minimum completeness; label derived from outcome. */
+  EVIDENCE_COMPLETE:   "EVIDENCE_COMPLETE",
+} as const);
+
+/**
+ * Minimum evidence fields required for a non-inconclusive decision quality label.
+ *
+ * A postmortem evidence envelope must have ALL of these fields present and
+ * non-empty before Athena can assign "correct", "delayed-correct", or "incorrect".
+ * If any field is missing or empty, the label is downgraded to "inconclusive".
+ *
+ *   roleName         — the worker role that produced the outcome
+ *   status           — terminal BOX_STATUS emitted by the worker
+ *   summary          — human-readable outcome summary (min 10 chars)
+ *   verificationEvidence — slot-level pass/fail evidence (build + tests fields)
+ */
+const EVIDENCE_REQUIRED_FIELDS = ["roleName", "status", "summary"] as const;
+const EVIDENCE_MIN_SUMMARY_LEN = 10;
+
+/**
+ * Check whether a postmortem evidence envelope has the minimum completeness
+ * required to support a non-inconclusive decision quality label.
+ *
+ * @param evidence — postmortem evidence object (EvidenceEnvelope or similar)
+ * @returns {{ complete: boolean, reason: string, missing: string[] }}
+ */
+export function computeEvidenceCompleteness(evidence: any): {
+  complete: boolean;
+  reason: string;
+  missing: string[];
+} {
+  if (evidence === null || evidence === undefined) {
+    return { complete: false, reason: EVIDENCE_COMPLETENESS_REASON.MISSING_EVIDENCE, missing: ["evidence"] };
+  }
+  if (typeof evidence !== "object" || Array.isArray(evidence)) {
+    return { complete: false, reason: EVIDENCE_COMPLETENESS_REASON.MISSING_EVIDENCE, missing: ["evidence"] };
+  }
+
+  const missing: string[] = [];
+
+  for (const field of EVIDENCE_REQUIRED_FIELDS) {
+    const value = evidence[field];
+    if (value === null || value === undefined || (typeof value === "string" && value.trim() === "")) {
+      missing.push(field);
+    }
+  }
+
+  // summary must meet minimum length
+  const summary = typeof evidence.summary === "string" ? evidence.summary.trim() : "";
+  if (!missing.includes("summary") && summary.length < EVIDENCE_MIN_SUMMARY_LEN) {
+    missing.push("summary:too_short");
+  }
+
+  // verificationEvidence must be present with at least build and tests fields
+  const ve = evidence.verificationEvidence;
+  if (!ve || typeof ve !== "object" || Array.isArray(ve)) {
+    missing.push("verificationEvidence");
+  } else {
+    if (!ve.build) missing.push("verificationEvidence.build");
+    if (!ve.tests) missing.push("verificationEvidence.tests");
+  }
+
+  if (missing.length > 0) {
+    return { complete: false, reason: EVIDENCE_COMPLETENESS_REASON.INCOMPLETE_EVIDENCE, missing };
+  }
+
+  return { complete: true, reason: EVIDENCE_COMPLETENESS_REASON.EVIDENCE_COMPLETE, missing: [] };
+}
+
+/**
+ * Compute the decision quality label for a postmortem outcome while enforcing
+ * minimum evidence completeness before assigning non-inconclusive labels.
+ *
+ * Calibration requirement:
+ *   A non-inconclusive label (correct, delayed-correct, incorrect) may only be
+ *   assigned when the evidence envelope is present and complete.  If evidence is
+ *   absent or incomplete, the label is downgraded to "inconclusive" regardless
+ *   of the outcome value, and `evidenceComplete=false` is set on the result.
+ *
+ * @param outcome  — worker result outcome string (merged | reopen | rollback | timeout | ...)
+ * @param evidence — optional postmortem evidence envelope
+ * @returns {{ label, reason, status, evidenceComplete, evidenceReason, evidenceMissing }}
+ */
+export function computeDecisionQualityLabelWithEvidence(
+  outcome: any,
+  evidence?: any,
+): {
+  label: string;
+  reason: string;
+  status: "ok" | "degraded";
+  evidenceComplete: boolean;
+  evidenceReason: string;
+  evidenceMissing: string[];
+} {
+  // Step 1: derive label from outcome (handles null/invalid outcome → inconclusive)
+  const base = computeDecisionQualityLabel(outcome);
+
+  // Step 2: if already inconclusive (due to bad outcome), skip evidence check
+  if (base.label === DECISION_QUALITY_LABEL.INCONCLUSIVE) {
+    const completeness = computeEvidenceCompleteness(evidence);
+    return {
+      ...base,
+      status: base.status as "ok" | "degraded",
+      evidenceComplete: completeness.complete,
+      evidenceReason: completeness.reason,
+      evidenceMissing: completeness.missing,
+    };
+  }
+
+  // Step 3: non-inconclusive label requires complete evidence
+  const completeness = computeEvidenceCompleteness(evidence);
+  if (!completeness.complete) {
+    // Downgrade to inconclusive — evidence is insufficient to certify this label
+    return {
+      label: DECISION_QUALITY_LABEL.INCONCLUSIVE,
+      reason: DECISION_QUALITY_REASON.OK, // outcome was valid; downgrade is evidence-driven
+      status: "degraded",
+      evidenceComplete: false,
+      evidenceReason: completeness.reason,
+      evidenceMissing: completeness.missing,
+    };
+  }
+
+  return {
+    ...base,
+    status: base.status as "ok" | "degraded",
+    evidenceComplete: true,
+    evidenceReason: completeness.reason,
+    evidenceMissing: [],
+  };
+}
+
+/**
  */
 export const POSTMORTEM_PARSE_REASON = Object.freeze({
   OK: "OK",

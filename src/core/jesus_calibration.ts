@@ -70,6 +70,11 @@ export interface JesusCalibrationRecord {
     prometheusMatch: boolean;
     overall: number;
   };
+  /**
+   * Whether the evidence envelope for this calibration record was complete.
+   * null when evidence was not provided; true/false when explicitly evaluated.
+   */
+  evidenceComplete: boolean | null;
 }
 
 export interface JesusCalibrationSummary {
@@ -195,6 +200,7 @@ export function scoreCalibration(
  *
  * @param prevDirective - The previous directive that contains `expectedOutcome`.
  * @param realizedState - Observed state from the current Jesus cycle.
+ * @param evidenceComplete - Optional: whether the evidence envelope was complete (null if not evaluated).
  */
 export function computeCalibrationRecord(
   prevDirective: {
@@ -207,7 +213,8 @@ export function computeCalibrationRecord(
     athenaActivated: boolean;
     prometheusRan: boolean;
     workItemCount: number;
-  }
+  },
+  evidenceComplete: boolean | null = null,
 ): JesusCalibrationRecord | null {
   if (!prevDirective?.expectedOutcome || !prevDirective.decidedAt) {
     return null;
@@ -229,6 +236,7 @@ export function computeCalibrationRecord(
     expected: prevDirective.expectedOutcome,
     realized,
     scores,
+    evidenceComplete: evidenceComplete !== undefined ? evidenceComplete : null,
   };
 }
 

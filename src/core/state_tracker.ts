@@ -321,6 +321,73 @@ export async function appendAlert(config, alert) {
   });
 }
 
+// ── Cache outcome tracking ─────────────────────────────────────────────────────
+
+/**
+ * Valid completion outcomes for cache outcome records.
+ * Maps directly to LABEL_OUTCOME_MAP keys used by Athena.
+ */
+export const CACHE_COMPLETION_OUTCOME = Object.freeze({
+  MERGED:   "merged",
+  REOPEN:   "reopen",
+  ROLLBACK: "rollback",
+  TIMEOUT:  "timeout",
+  UNKNOWN:  "unknown",
+} as const);
+
+/**
+ * Persist a cache hit/miss record alongside its completion outcome.
+ *
+ * Persists to: state/cache_outcomes.jsonl  (NDJSON append log)
+ * Entries are trimmed to the last 500 to prevent unbounded growth.
+ *
+ * Fail-open: write errors return { ok: false, reason } and are never thrown.
+ *
+ * @param {object} config
+ * @param {{ correlationId?: string, cacheHit: boolean, completionOutcome: string, stage?: string }} record
+ * @returns {Promise<{ ok: boolean, reason?: string }>}
+ */
+export async function appendCacheOutcome(
+  config,
+  record: {
+    correlationId?: string;
+    cacheHit: boolean;
+    completionOutcome: string;
+    stage?: string;
+  },
+): Promise<{ ok: boolean; reason?: string }> {
+  const cacheFile = path.join(
+    config?.paths?.stateDir || "state",
+    "cache_outcomes.jsonl",
+  );
+
+  try {
+    if (record === null || record === undefined) {
+      return { ok: false, reason: "record is required (got null/undefined)" };
+    }
+    if (typeof record.cacheHit !== "boolean") {
+      return { ok: false, reason: "record.cacheHit must be a boolean" };
+    }
+    const validOutcomes = new Set<string>(Object.values(CACHE_COMPLETION_OUTCOME));
+    const outcome = String(record.completionOutcome || CACHE_COMPLETION_OUTCOME.UNKNOWN);
+    if (!validOutcomes.has(outcome)) {
+      return { ok: false, reason: `unknown completionOutcome: '${outcome}'` };
+    }
+
+    const entry = JSON.stringify({
+      correlationId: String(record.correlationId || `cache-${Date.now()}`),
+      cacheHit: record.cacheHit,
+      completionOutcome: outcome,
+      stage: String(record.stage || "unknown"),
+      recordedAt: new Date().toISOString(),
+    });
+    await fs.appendFile(cacheFile, entry + "\n", "utf8");
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: String((err as any)?.message || err) };
+  }
+}
+
 // ── Lineage graph — append-only task fingerprint graph ────────────────────────
 
 /**

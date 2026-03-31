@@ -196,12 +196,12 @@ describe("evaluatePreDispatchGovernanceGate — gateIndex on blocked results", (
     );
   });
 
-  it("plan evidence coupling gate has highest precedence number (fires last)", () => {
+  it("dependency readiness gate has highest precedence number (fires last)", () => {
     const maxPrecedence = Math.max(...Object.values(GATE_PRECEDENCE));
     assert.equal(
-      GATE_PRECEDENCE.PLAN_EVIDENCE_COUPLING,
+      GATE_PRECEDENCE.DEPENDENCY_READINESS,
       maxPrecedence,
-      "PLAN_EVIDENCE_COUPLING must have the highest precedence number (fires last)"
+      "DEPENDENCY_READINESS must have the highest precedence number (fires last)"
     );
   });
 
