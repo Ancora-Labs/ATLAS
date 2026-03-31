@@ -223,6 +223,119 @@ export function packPlansIntoContextBatches(plans = [], usableTokens) {
   return batches;
 }
 
+/**
+ * Nucleus/Frontier classification result.
+ * - nucleus: plans with critical-path score > 0 (they have downstream dependents that must be
+ *   unblocked promptly; dispatching them first minimises downstream idle time).
+ * - frontier: plans with critical-path score = 0 (leaf tasks — no other work depends on them;
+ *   they can be packed aggressively to maximise context utilisation and reduce request count).
+ */
+export interface NucleusFrontierClassification {
+  nucleus: any[];
+  frontier: any[];
+}
+
+/**
+ * Classify plans into nucleus (critical-path blockers) and frontier (dependency-ready leaves).
+ *
+ * Plans whose critical-path score > 0 are assigned to the nucleus — they have downstream
+ * work waiting and must be dispatched first. Plans with score 0 are assigned to the frontier —
+ * they can safely be co-batched with nucleus tasks to fill context window space, reducing
+ * the total number of API requests without compromising dependency safety.
+ *
+ * @param plans              - plan objects (must be the same objects passed to computeCriticalPathScores)
+ * @param criticalPathScores - map from plan id to downstream depth score
+ * @returns classification with nucleus and frontier arrays (original order preserved within each)
+ */
+export function classifyNucleusFrontier(
+  plans: any[],
+  criticalPathScores: Map<string, number>
+): NucleusFrontierClassification {
+  if (!Array.isArray(plans) || plans.length === 0) return { nucleus: [], frontier: [] };
+
+  const nucleus: any[] = [];
+  const frontier: any[] = [];
+
+  for (const plan of plans) {
+    const id = String(plan?.task_id || plan?.task || plan?.role || "");
+    const score = criticalPathScores.get(id) ?? 0;
+    if (score > 0) {
+      nucleus.push(plan);
+    } else {
+      frontier.push(plan);
+    }
+  }
+
+  return { nucleus, frontier };
+}
+
+/**
+ * Pack plans into context batches using the nucleus/frontier model.
+ *
+ * Strategy (reduces API request count vs naive sequential packing):
+ *  1. Classify plans into nucleus (score > 0) and frontier (score = 0).
+ *  2. Pack nucleus tasks into batches first — their ordering matters.
+ *  3. Greedily absorb frontier tasks into each nucleus batch, filling the
+ *     remaining context window space. Frontier tasks have no downstream
+ *     dependents, so co-batching them with nucleus work is dependency-safe.
+ *  4. Any frontier tasks that did not fit into nucleus batches are packed
+ *     into additional frontier-only batches appended at the end.
+ *
+ * When no nucleus tasks exist (all plans are frontier), falls back to
+ * standard packPlansIntoContextBatches.
+ *
+ * @param plans              - plan objects for one wave/sub-group
+ * @param criticalPathScores - scores from computeCriticalPathScores
+ * @param usableTokens       - usable context window size in tokens
+ * @returns array of { plans, estimatedTokens } — same shape as packPlansIntoContextBatches
+ */
+export function packNucleusFrontierBatches(
+  plans: any[],
+  criticalPathScores: Map<string, number>,
+  usableTokens: number
+): Array<{ plans: unknown[]; estimatedTokens: number }> {
+  if (!Array.isArray(plans) || plans.length === 0) return [];
+
+  const maxTokens = Math.max(1, normalizePositiveNumber(usableTokens, 1));
+  const { nucleus, frontier } = classifyNucleusFrontier(plans, criticalPathScores);
+
+  if (nucleus.length === 0) {
+    // All plans are frontier tasks (no critical-path blockers) — standard packing suffices.
+    return packPlansIntoContextBatches(plans, maxTokens);
+  }
+
+  // Pack nucleus tasks into ordered batches.
+  const nucleusBatches = packPlansIntoContextBatches(nucleus, maxTokens);
+
+  // Greedily fill each nucleus batch with frontier tasks that fit within the context window.
+  let remainingFrontier = [...frontier];
+  for (const batch of nucleusBatches) {
+    if (remainingFrontier.length === 0) break;
+    const batchPlans = batch.plans as any[];
+    const absorbed: any[] = [];
+    for (const fp of remainingFrontier) {
+      const proposed = [...batchPlans, ...absorbed, fp];
+      if (estimateBatchTokens(proposed) <= maxTokens) {
+        absorbed.push(fp);
+      }
+    }
+    if (absorbed.length > 0) {
+      batch.plans = [...batchPlans, ...absorbed];
+      batch.estimatedTokens = estimateBatchTokens(batch.plans as any[]);
+      const absorbedSet = new Set(absorbed);
+      remainingFrontier = remainingFrontier.filter(p => !absorbedSet.has(p));
+    }
+  }
+
+  // Pack any frontier tasks that could not be absorbed into nucleus batches.
+  if (remainingFrontier.length > 0) {
+    const frontierBatches = packPlansIntoContextBatches(remainingFrontier, maxTokens);
+    return [...nucleusBatches, ...frontierBatches];
+  }
+
+  return nucleusBatches;
+}
+
 function chooseModelForRolePlans(config, roleName, plans, taskKind) {
   const taskHints = aggregateTaskHints(plans);
   const candidates = collectCandidateModels(config, roleName, taskKind, taskHints);
@@ -655,9 +768,21 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
       }
 
       const sortedWaves = [...plansByWave.keys()].sort((a, b) => a - b);
+      // Nucleus/frontier mode: opt-in via config.planner.nucleusFrontierMode.
+      // When enabled, nucleus tasks (critical-path score > 0) are packed first
+      // and frontier tasks (score = 0) are greedily absorbed into nucleus batches
+      // to maximise context utilisation and reduce total request count.
+      const nucleusFrontierMode = (config as any)?.planner?.nucleusFrontierMode === true;
       for (const waveNum of sortedWaves) {
         const wavePlans = plansByWave.get(waveNum)!;
         const selection = chooseModelForRolePlans(config, roleName, wavePlans, taskKind);
+
+        // When nucleus/frontier mode is active, replace the standard sequential
+        // batches with nucleus-first / frontier-fill batches.  This reduces the
+        // total number of API requests while preserving dependency ordering.
+        const activeBatches = nucleusFrontierMode && criticalPathScoreByPlanId.size > 0
+          ? packNucleusFrontierBatches(wavePlans, criticalPathScoreByPlanId, selection.usableContextTokens)
+          : selection.batches;
 
         // ── Dependency-sensitive batch splitting ──────────────────────────
         // When any plan in a model-selected batch carries explicit dependency
@@ -669,7 +794,7 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
           MAX_PLANS_PER_DEPENDENCY_BATCH
         );
         const splitBatches: Array<{ plans: unknown[]; estimatedTokens: number }> = [];
-        for (const batch of selection.batches) {
+        for (const batch of activeBatches) {
           const batchPlans = batch.plans as any[];
           const hasDeps = batchPlans.some((p) => hasExplicitDependencies(p));
           if (hasDeps && batchPlans.length > maxDepBatch) {
