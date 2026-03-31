@@ -106,6 +106,86 @@ describe("capacity_scoreboard", () => {
     });
   });
 
+  describe("completionYield and verificationLatencyMs in CapacityEntry", () => {
+    it("appendCapacityEntry persists completionYield when provided", async () => {
+      const tmpDir = await (await import("node:fs/promises")).mkdtemp(
+        (await import("node:path")).join((await import("node:os")).tmpdir(), "box-cap-yield-")
+      );
+      try {
+        const config = { paths: { stateDir: tmpDir } };
+        await appendCapacityEntry(config, {
+          parserConfidence: 0.8,
+          planCount: 5,
+          projectHealth: "healthy",
+          optimizerStatus: "ok",
+          budgetUsed: 100,
+          budgetLimit: 500,
+          workersDone: 4,
+          completionYield: 0.6,
+          verificationLatencyMs: 1_200_000,
+        });
+        const entries = await getRecentCapacity(config, 1);
+        assert.equal(entries.length, 1);
+        assert.equal(entries[0].completionYield, 0.6);
+        assert.equal(entries[0].verificationLatencyMs, 1_200_000);
+      } finally {
+        await (await import("node:fs/promises")).rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("computeTrend tracks completionYield degradation independently", () => {
+      const entries = [
+        { completionYield: 0.9 },
+        { completionYield: 0.85 },
+        { completionYield: 0.82 },
+        { completionYield: 0.7 },
+        { completionYield: 0.55 },
+        { completionYield: 0.3 },
+      ];
+      const trend = computeTrend(entries, "completionYield");
+      assert.equal(trend, "degrading", "should detect yield degradation trend");
+    });
+
+    it("computeTrend on verificationLatencyMs detects worsening latency", () => {
+      const entries = [
+        { verificationLatencyMs: 500_000 },
+        { verificationLatencyMs: 800_000 },
+        { verificationLatencyMs: 900_000 },
+        { verificationLatencyMs: 1_500_000 },
+        { verificationLatencyMs: 2_000_000 },
+        { verificationLatencyMs: 3_000_000 },
+      ];
+      // Higher verificationLatencyMs = worsening — computeTrend uses raw delta,
+      // so "improving" here means values are increasing (latency is growing = degrading)
+      const trend = computeTrend(entries, "verificationLatencyMs");
+      assert.equal(trend, "improving", "computeTrend reflects the numeric direction; caller interprets per-field semantics");
+    });
+
+    it("appendCapacityEntry tolerates missing completionYield (backward-compatible)", async () => {
+      const tmpDir = await (await import("node:fs/promises")).mkdtemp(
+        (await import("node:path")).join((await import("node:os")).tmpdir(), "box-cap-compat-")
+      );
+      try {
+        const config = { paths: { stateDir: tmpDir } };
+        await appendCapacityEntry(config, {
+          parserConfidence: 0.7,
+          planCount: 3,
+          projectHealth: "warning",
+          optimizerStatus: "ok",
+          budgetUsed: 200,
+          budgetLimit: 500,
+          workersDone: 2,
+          // completionYield and verificationLatencyMs intentionally omitted
+        });
+        const entries = await getRecentCapacity(config, 1);
+        assert.equal(entries.length, 1);
+        assert.equal(entries[0].completionYield, undefined, "absent field must be undefined, not zero-filled");
+      } finally {
+        await (await import("node:fs/promises")).rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("parser trend tracking — independent from contextual penalties", () => {
     it("parserQuality uses parserCoreConfidence when provided", () => {
       // Core confidence is high (good structural parsing), but aggregate is lower due to context penalties

@@ -33,7 +33,7 @@ import { EVENTS, EVENT_DOMAIN } from "./event_schema.js";
 import { readJson, readJsonSafe, writeJson, cleanupStaleTempFiles, READ_JSON_REASON } from "./fs_utils.js";
 import { updatePipelineProgress, readPipelineProgress } from "./pipeline_progress.js";
 import { loadEscalationQueue, sortEscalationQueue } from "./escalation_queue.js";
-import { computeCycleSLOs, persistSloMetrics } from "./slo_checker.js";
+import { computeCycleSLOs, persistSloMetrics, detectCoupledAlerts } from "./slo_checker.js";
 import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealth, CYCLE_PHASE } from "./cycle_analytics.js";
 import { computeBaselineRecoveryState, persistBaselineMetrics, PARSER_CONFIDENCE_RECOVERY_THRESHOLD } from "./parser_baseline_recovery.js";
 import { computeDispatchStrictness, loadReplayRegressionState, DISPATCH_STRICTNESS } from "./parser_replay_harness.js";
@@ -2217,7 +2217,8 @@ async function runSingleCycle(config) {
     // ── Health channel: degrade signals only, separate from KPI semantics ──
     // cycle_health.json changes only when the system genuinely degrades,
     // not when metric definitions change (dual-channel contract).
-    const healthRecord = computeCycleHealth(analyticsRecord);
+    const coupledAlerts = detectCoupledAlerts(sloRecord, analyticsRecord.funnel?.completionRate ?? null);
+    const healthRecord = computeCycleHealth(analyticsRecord, [], coupledAlerts);
     await persistCycleHealth(config, healthRecord);
 
     await appendProgress(config, `[ANALYTICS] Cycle analytics written — confidence=${analyticsRecord.confidence.level} sloStatus=${analyticsRecord.kpis.sloStatus} phase=${analyticsRecord.phase} health=${healthRecord.healthScore}`);

@@ -25,6 +25,10 @@ const MAX_ENTRIES = 100;
  * @property {number} budgetUsed
  * @property {number} budgetLimit
  * @property {number} workersDone — workers completed in last cycle
+ * @property {number} [completionYield] — funnel completionRate (0-1); proportion of dispatched plans that completed successfully.
+ *   Used as the yield signal for coupled alert detection (YIELD_COLLAPSE_WITH_VERIFICATION_BREACH).
+ * @property {number} [verificationLatencyMs] — verificationCompletionMs from the SLO record for this cycle;
+ *   tracked here so the scoreboard can surface the coupled alert precondition as a persistent trend.
  */
 
 /**

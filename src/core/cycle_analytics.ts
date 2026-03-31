@@ -648,6 +648,7 @@ export const CYCLE_HEALTH_SCHEMA = Object.freeze({
       "healthScore",
       "healthReason",
       "sustainedBreachSignatures",
+      "coupledAlerts",
     ],
     healthScoreEnum: Object.freeze([...Object.values(HEALTH_SCORE)]),
   }),
@@ -700,9 +701,11 @@ function deriveHealthReason(
  * @param {object[]} [sustainedBreachSignatures=[]] — output of detectSustainedBreachSignatures();
  *                                               included for retune provenance but not used to
  *                                               derive healthScore (SLO record already covers it)
+ * @param {object[]} [coupledAlerts=[]]         — output of detectCoupledAlerts(); correlated
+ *                                               multi-signal alerts (e.g. yield collapse + SLO breach)
  * @returns {object} Health record conforming to CYCLE_HEALTH_SCHEMA.healthRecord
  */
-export function computeCycleHealth(analyticsRecord: any, sustainedBreachSignatures: any[] = []) {
+export function computeCycleHealth(analyticsRecord: any, sustainedBreachSignatures: any[] = [], coupledAlerts: any[] = []) {
   // Guard sloStatus against invalid enum values: only "ok", "degraded", "unknown"
   // are meaningful to health derivation; anything else is clamped to "unknown".
   const rawSloStatus = analyticsRecord?.kpis?.sloStatus ?? "unknown";
@@ -736,6 +739,9 @@ export function computeCycleHealth(analyticsRecord: any, sustainedBreachSignatur
     ? sustainedBreachSignatures
     : [];
 
+  // Ensure coupledAlerts is always a well-typed array in the record
+  const safeCoupledAlerts = Array.isArray(coupledAlerts) ? coupledAlerts : [];
+
   return {
     cycleId:                  analyticsRecord?.cycleId  ?? null,
     generatedAt:              new Date().toISOString(),
@@ -746,6 +752,7 @@ export function computeCycleHealth(analyticsRecord: any, sustainedBreachSignatur
     healthScore,
     healthReason,
     sustainedBreachSignatures: safeSustainedSignatures,
+    coupledAlerts: safeCoupledAlerts,
   };
 }
 

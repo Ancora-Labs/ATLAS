@@ -593,7 +593,150 @@ describe("computeCycleSLOs — negative paths and edge cases", () => {
   });
 });
 
-// ── detectSustainedBreachSignatures ───────────────────────────────────────────
+// ── detectCoupledAlerts ───────────────────────────────────────────────────────
+
+import {
+  COUPLED_ALERT_TYPE,
+  COUPLED_ALERT_DEFAULT_YIELD_THRESHOLD,
+  detectCoupledAlerts,
+} from "../../src/core/slo_checker.js";
+
+describe("COUPLED_ALERT_TYPE enum", () => {
+  it("exports YIELD_COLLAPSE_WITH_VERIFICATION_BREACH", () => {
+    assert.equal(
+      COUPLED_ALERT_TYPE.YIELD_COLLAPSE_WITH_VERIFICATION_BREACH,
+      "YIELD_COLLAPSE_WITH_VERIFICATION_BREACH",
+    );
+    assert.ok(Object.isFrozen(COUPLED_ALERT_TYPE));
+  });
+});
+
+describe("COUPLED_ALERT_DEFAULT_YIELD_THRESHOLD", () => {
+  it("is 0.5", () => {
+    assert.equal(COUPLED_ALERT_DEFAULT_YIELD_THRESHOLD, 0.5);
+  });
+});
+
+describe("detectCoupledAlerts — contract", () => {
+  function makeVerificationBreach(overrides: any = {}) {
+    return {
+      cycleId: "c1",
+      sloBreaches: [{
+        metric: SLO_METRIC.VERIFICATION_COMPLETION,
+        actual: 5_000_000,
+        threshold: 3_600_000,
+        severity: SLO_BREACH_SEVERITY.CRITICAL,
+        ...overrides,
+      }],
+    };
+  }
+
+  it("returns [] when sloRecord is null", () => {
+    assert.deepEqual(detectCoupledAlerts(null, 0.3), []);
+  });
+
+  it("returns [] when sloRecord is not an object", () => {
+    assert.deepEqual(detectCoupledAlerts("bad", 0.3), []);
+    assert.deepEqual(detectCoupledAlerts(42, 0.3), []);
+  });
+
+  it("returns [] when no verification breach is present", () => {
+    const sloRecord = {
+      cycleId: "c1",
+      sloBreaches: [{
+        metric: SLO_METRIC.DECISION_LATENCY,
+        actual: 200_000,
+        threshold: 120_000,
+        severity: SLO_BREACH_SEVERITY.HIGH,
+      }],
+    };
+    assert.deepEqual(detectCoupledAlerts(sloRecord, 0.2), []);
+  });
+
+  it("returns [] when sloBreaches is empty — no breach to couple with", () => {
+    const sloRecord = { cycleId: "c1", sloBreaches: [] };
+    assert.deepEqual(detectCoupledAlerts(sloRecord, 0.2), []);
+  });
+
+  it("returns [] when completionYield is null", () => {
+    assert.deepEqual(detectCoupledAlerts(makeVerificationBreach(), null), []);
+  });
+
+  it("returns [] when completionYield is not a finite number", () => {
+    assert.deepEqual(detectCoupledAlerts(makeVerificationBreach(), NaN), []);
+    assert.deepEqual(detectCoupledAlerts(makeVerificationBreach(), Infinity), []);
+  });
+
+  it("returns [] when completionYield is at or above the default threshold (no collapse)", () => {
+    // exactly at threshold — should NOT fire
+    assert.deepEqual(detectCoupledAlerts(makeVerificationBreach(), 0.5), []);
+    // above threshold — should NOT fire
+    assert.deepEqual(detectCoupledAlerts(makeVerificationBreach(), 0.8), []);
+  });
+
+  it("fires alert when verification breached AND yield is below default threshold", () => {
+    const sloRecord = makeVerificationBreach();
+    const alerts = detectCoupledAlerts(sloRecord, 0.3);
+    assert.equal(alerts.length, 1);
+    const alert = alerts[0];
+    assert.equal(alert.type, COUPLED_ALERT_TYPE.YIELD_COLLAPSE_WITH_VERIFICATION_BREACH);
+    assert.equal(alert.completionYield, 0.3);
+    assert.equal(alert.yieldCollapseThreshold, COUPLED_ALERT_DEFAULT_YIELD_THRESHOLD);
+    assert.equal(alert.cycleId, "c1");
+    assert.ok(typeof alert.verificationBreachActualMs === "number");
+    assert.ok(typeof alert.verificationBreachThresholdMs === "number");
+    assert.ok(typeof alert.verificationBreachSeverity === "string");
+  });
+
+  it("fires alert when yield is exactly 0 (total failure)", () => {
+    const alerts = detectCoupledAlerts(makeVerificationBreach(), 0);
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0].completionYield, 0);
+  });
+
+  it("respects custom yieldCollapseThreshold — fires when yield is below custom threshold", () => {
+    const alerts = detectCoupledAlerts(makeVerificationBreach(), 0.7, { yieldCollapseThreshold: 0.8 });
+    assert.equal(alerts.length, 1, "yield=0.7 is below custom threshold=0.8 — alert must fire");
+  });
+
+  it("respects custom yieldCollapseThreshold — suppresses when yield meets custom threshold", () => {
+    const alerts = detectCoupledAlerts(makeVerificationBreach(), 0.9, { yieldCollapseThreshold: 0.8 });
+    assert.deepEqual(alerts, [], "yield=0.9 meets threshold=0.8 — no alert");
+  });
+
+  it("carries verification breach details into the alert (provenance)", () => {
+    const sloRecord = makeVerificationBreach({ actual: 7_200_000, threshold: 3_600_000, severity: "critical" });
+    const alerts = detectCoupledAlerts(sloRecord, 0.1);
+    assert.equal(alerts[0].verificationBreachActualMs, 7_200_000);
+    assert.equal(alerts[0].verificationBreachThresholdMs, 3_600_000);
+    assert.equal(alerts[0].verificationBreachSeverity, "critical");
+  });
+
+  it("cycleId is null when sloRecord has no cycleId", () => {
+    const sloRecord = {
+      sloBreaches: [{
+        metric: SLO_METRIC.VERIFICATION_COMPLETION,
+        actual: 5_000_000,
+        threshold: 3_600_000,
+        severity: "high",
+      }],
+    };
+    const alerts = detectCoupledAlerts(sloRecord, 0.2);
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0].cycleId, null);
+  });
+
+  it("does NOT fire when only non-verification metrics breach (negative path)", () => {
+    const sloRecord = {
+      cycleId: "c2",
+      sloBreaches: [
+        { metric: SLO_METRIC.DECISION_LATENCY,  actual: 200_000, threshold: 120_000, severity: "high" },
+        { metric: SLO_METRIC.DISPATCH_LATENCY,   actual: 60_000,  threshold: 30_000,  severity: "high" },
+      ],
+    };
+    assert.deepEqual(detectCoupledAlerts(sloRecord, 0.1), []);
+  });
+});
 
 import {
   SLO_SUSTAINED_BREACH_DEFAULTS,

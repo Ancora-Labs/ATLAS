@@ -369,6 +369,84 @@ export async function readSloMetrics(config) {
   });
 }
 
+// ── Coupled alert detection ───────────────────────────────────────────────────
+
+/**
+ * Coupled alert type codes.
+ * A coupled alert fires when two correlated failure signals are active simultaneously.
+ */
+export const COUPLED_ALERT_TYPE = Object.freeze({
+  /**
+   * Fires when verificationCompletionMs has an active SLO breach AND completion
+   * yield (funnel.completionRate) collapses below the configured threshold in the
+   * same cycle.  Both signals together indicate a systemic pipeline degradation —
+   * jobs take too long AND fewer complete successfully.
+   */
+  YIELD_COLLAPSE_WITH_VERIFICATION_BREACH: "YIELD_COLLAPSE_WITH_VERIFICATION_BREACH",
+});
+
+/** Default completion yield threshold (0–1). Yield below this value is treated as collapsed. */
+export const COUPLED_ALERT_DEFAULT_YIELD_THRESHOLD = 0.5;
+
+/**
+ * @typedef {object} CoupledAlert
+ * @property {string} type                          - COUPLED_ALERT_TYPE value
+ * @property {number} verificationBreachActualMs    - Actual verificationCompletionMs from the breach
+ * @property {number} verificationBreachThresholdMs - Threshold that was exceeded
+ * @property {string} verificationBreachSeverity    - SLO breach severity (SLO_BREACH_SEVERITY)
+ * @property {number} completionYield               - Funnel completionRate at the time of alert
+ * @property {number} yieldCollapseThreshold        - Threshold used for yield-collapse detection
+ * @property {string|null} cycleId                  - Cycle identifier from sloRecord
+ */
+
+/**
+ * Detect coupled alerts for the current cycle.
+ *
+ * Fires YIELD_COLLAPSE_WITH_VERIFICATION_BREACH when:
+ *   1. sloRecord contains an active SLO breach for verificationCompletionMs, AND
+ *   2. completionYield is below the configured yieldCollapseThreshold.
+ *
+ * Pure function — no file I/O.
+ *
+ * @param {object|null} sloRecord       - Output of computeCycleSLOs(). May be null.
+ * @param {number|null} completionYield - funnel.completionRate (0–1) from computeCycleAnalytics(). May be null.
+ * @param {object}      opts
+ * @param {number}      [opts.yieldCollapseThreshold] - Collapse threshold (default: COUPLED_ALERT_DEFAULT_YIELD_THRESHOLD)
+ * @returns {CoupledAlert[]}
+ */
+export function detectCoupledAlerts(
+  sloRecord: any,
+  completionYield: number | null,
+  opts: { yieldCollapseThreshold?: number } = {},
+): any[] {
+  if (!sloRecord || typeof sloRecord !== "object") return [];
+
+  const breaches: any[] = Array.isArray(sloRecord.sloBreaches) ? sloRecord.sloBreaches : [];
+  const verificationBreach = breaches.find(b => b?.metric === SLO_METRIC.VERIFICATION_COMPLETION);
+  if (!verificationBreach) return [];
+
+  const yieldValue = (typeof completionYield === "number" && Number.isFinite(completionYield))
+    ? completionYield
+    : null;
+  if (yieldValue === null) return [];
+
+  const threshold = (typeof opts?.yieldCollapseThreshold === "number" && Number.isFinite(opts.yieldCollapseThreshold))
+    ? opts.yieldCollapseThreshold
+    : COUPLED_ALERT_DEFAULT_YIELD_THRESHOLD;
+
+  if (yieldValue >= threshold) return [];
+
+  return [{
+    type: COUPLED_ALERT_TYPE.YIELD_COLLAPSE_WITH_VERIFICATION_BREACH,
+    verificationBreachActualMs: verificationBreach.actual,
+    verificationBreachThresholdMs: verificationBreach.threshold,
+    verificationBreachSeverity: verificationBreach.severity,
+    completionYield: yieldValue,
+    yieldCollapseThreshold: threshold,
+    cycleId: sloRecord.cycleId ?? null,
+  }];
+}
+
 // ── Sustained breach detection ────────────────────────────────────────────────
 
 /** Default configuration for sustained breach signature detection. */
