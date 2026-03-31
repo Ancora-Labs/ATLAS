@@ -196,3 +196,65 @@ export async function readBaselineMetrics(
   const filePath = path.join(stateDir, BASELINE_METRICS_FILE);
   return readJson(filePath, null);
 }
+
+// ── Quarantine recommendation ─────────────────────────────────────────────────
+
+/**
+ * Confidence threshold below which a parser component is considered critically
+ * under-confident.  Mirrors the quarantine threshold used by prometheus.ts and
+ * plan_contract_validator.ts so all three modules share the same gate value.
+ */
+export const QUARANTINE_CONFIDENCE_THRESHOLD = 0.5 as const;
+
+/** Result of a quarantine recommendation computation. */
+export interface QuarantineRecommendation {
+  shouldQuarantine:        boolean;
+  reason:                  string;
+  lowConfidenceComponents: string[];
+}
+
+/**
+ * Derive a quarantine recommendation from a baseline recovery record.
+ *
+ * When one or more parser components score below `threshold`, the recommendation
+ * is to quarantine plans produced in that cycle from worker dispatch until the
+ * parser confidence recovers.
+ *
+ * @param record  — output of computeBaselineRecoveryState(), or null/undefined
+ * @param opts    — { threshold } override (default: QUARANTINE_CONFIDENCE_THRESHOLD)
+ * @returns QuarantineRecommendation
+ */
+export function computeQuarantineRecommendation(
+  record: BaselineRecoveryRecord | null | undefined,
+  opts: { threshold?: number } = {},
+): QuarantineRecommendation {
+  const threshold = typeof opts.threshold === "number"
+    ? opts.threshold
+    : QUARANTINE_CONFIDENCE_THRESHOLD;
+
+  if (!record) {
+    return {
+      shouldQuarantine:        false,
+      reason:                  "no recovery record available",
+      lowConfidenceComponents: [],
+    };
+  }
+
+  const lowConfidenceComponents = Object.entries(record.componentMetrics || {})
+    .filter(([, score]) => typeof score === "number" && (score as number) < threshold)
+    .map(([name]) => name);
+
+  if (lowConfidenceComponents.length > 0) {
+    return {
+      shouldQuarantine: true,
+      reason:           `${lowConfidenceComponents.length} component(s) below confidence threshold ${threshold}: ${lowConfidenceComponents.join(", ")}`,
+      lowConfidenceComponents,
+    };
+  }
+
+  return {
+    shouldQuarantine:        false,
+    reason:                  "all components meet confidence threshold",
+    lowConfidenceComponents: [],
+  };
+}

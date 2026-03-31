@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { ALERT_SEVERITY, appendProgress, loadTestsState, updateTaskInTestsState, CACHE_COMPLETION_OUTCOME, appendCacheOutcome } from "../../src/core/state_tracker.js";
+import { ALERT_SEVERITY, appendProgress, loadTestsState, updateTaskInTestsState, CACHE_COMPLETION_OUTCOME, appendCacheOutcome, appendPolicyClosureEvidence, loadPolicyClosureHistory } from "../../src/core/state_tracker.js";
 
 describe("state_tracker", () => {
   let stateDir: string;
@@ -140,6 +140,78 @@ describe("appendCacheOutcome — negative path", () => {
     const result = await appendCacheOutcome(config, { cacheHit: true, completionOutcome: "invalid_outcome" as any });
     assert.equal(result.ok, false);
     assert.ok(result.reason?.includes("invalid_outcome"));
+  });
+});
+
+// ── appendPolicyClosureEvidence / loadPolicyClosureHistory ─────────────────────
+
+describe("appendPolicyClosureEvidence", () => {
+  let closureStateDir: string;
+
+  beforeEach(async () => {
+    closureStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-closure-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(closureStateDir, { recursive: true, force: true });
+  });
+
+  it("persists a closure evidence record and reads it back", async () => {
+    const config = { paths: { stateDir: closureStateDir } };
+    const record = { policyId: "lint-failure", resolvedAt: new Date().toISOString(), resolvedBy: "manual", evidence: "Fixed" };
+    const result = await appendPolicyClosureEvidence(config, record);
+    assert.equal(result.ok, true);
+
+    const history = await loadPolicyClosureHistory(config);
+    assert.equal(history.length, 1);
+    assert.equal(history[0].policyId, "lint-failure");
+  });
+
+  it("appends multiple records in order", async () => {
+    const config = { paths: { stateDir: closureStateDir } };
+    const rec1 = { policyId: "p1", resolvedAt: new Date().toISOString(), resolvedBy: "manual", evidence: "ev1" };
+    const rec2 = { policyId: "p2", resolvedAt: new Date().toISOString(), resolvedBy: "auto", evidence: "ev2" };
+    await appendPolicyClosureEvidence(config, rec1);
+    await appendPolicyClosureEvidence(config, rec2);
+
+    const history = await loadPolicyClosureHistory(config);
+    assert.equal(history.length, 2);
+    assert.equal(history[0].policyId, "p1");
+    assert.equal(history[1].policyId, "p2");
+  });
+
+  it("returns ok=false when record is null", async () => {
+    const config = { paths: { stateDir: closureStateDir } };
+    const result = await appendPolicyClosureEvidence(config, null as any);
+    assert.equal(result.ok, false);
+  });
+});
+
+describe("loadPolicyClosureHistory", () => {
+  let closureStateDir2: string;
+
+  beforeEach(async () => {
+    closureStateDir2 = await fs.mkdtemp(path.join(os.tmpdir(), "box-closure2-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(closureStateDir2, { recursive: true, force: true });
+  });
+
+  it("returns empty array when no history file exists", async () => {
+    const config = { paths: { stateDir: closureStateDir2 } };
+    const history = await loadPolicyClosureHistory(config);
+    assert.deepEqual(history, []);
+  });
+
+  it("skips malformed lines silently", async () => {
+    const config = { paths: { stateDir: closureStateDir2 } };
+    const filePath = path.join(closureStateDir2, "policy_closure_evidence.jsonl");
+    await fs.writeFile(filePath, '{"policyId":"ok"}\nNOT JSON\n{"policyId":"also-ok"}\n');
+    const history = await loadPolicyClosureHistory(config);
+    assert.equal(history.length, 2);
+    assert.equal(history[0].policyId, "ok");
+    assert.equal(history[1].policyId, "also-ok");
   });
 });
 

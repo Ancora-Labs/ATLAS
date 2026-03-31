@@ -34,6 +34,10 @@ import {
   seedDiscoveryGapPackets,
   NOVELTY_COLLAPSE_THRESHOLD,
   NOVELTY_SEED_DIMENSIONS,
+  attachFallbackProvenance,
+  quarantineLowConfidencePackets,
+  FALLBACK_PROVENANCE_TAG,
+  QUARANTINE_CONFIDENCE_THRESHOLD,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments } from "../../src/core/prompt_compiler.js";
 import { isNonSpecificVerification, validatePlanContract } from "../../src/core/plan_contract_validator.js";
@@ -3109,5 +3113,91 @@ describe("NOVELTY_COLLAPSE_THRESHOLD and NOVELTY_SEED_DIMENSIONS", () => {
     for (const dim of NOVELTY_SEED_DIMENSIONS) {
       assert.equal(typeof dim, "string");
     }
+  });
+});
+
+// ── attachFallbackProvenance / quarantineLowConfidencePackets ──────────────────
+
+describe("attachFallbackProvenance", () => {
+  it("attaches _provenance to a plan packet", () => {
+    const packet = { task: "do work", confidence: 0.4 };
+    const tagged = attachFallbackProvenance(packet, { reason: "parser-fallback" });
+    assert.ok(tagged._provenance, "_provenance must be attached");
+    assert.equal(tagged._provenance.tag, FALLBACK_PROVENANCE_TAG.PARSER_FALLBACK);
+    assert.equal(typeof tagged._provenance.attachedAt, "string");
+    assert.ok(!isNaN(Date.parse(tagged._provenance.attachedAt)));
+  });
+
+  it("uses the provided confidence when supplied", () => {
+    const packet = { task: "do work" };
+    const tagged = attachFallbackProvenance(packet, { confidence: 0.3 });
+    assert.equal(tagged._provenance.confidence, 0.3);
+  });
+
+  it("does not mutate the original packet object", () => {
+    const packet = { task: "original" };
+    const tagged = attachFallbackProvenance(packet, {});
+    assert.ok(tagged !== packet, "must be a new object");
+    assert.equal((packet as any)._provenance, undefined, "original must not be mutated");
+  });
+
+  it("passes non-object values through unchanged", () => {
+    assert.equal(attachFallbackProvenance(null as any, {}), null);
+    assert.equal(attachFallbackProvenance("string" as any, {}), "string");
+    assert.equal(attachFallbackProvenance(42 as any, {}), 42);
+  });
+
+  it("FALLBACK_PROVENANCE_TAG is frozen and has expected keys", () => {
+    assert.ok(Object.isFrozen(FALLBACK_PROVENANCE_TAG));
+    assert.ok("PARSER_FALLBACK" in FALLBACK_PROVENANCE_TAG);
+    assert.ok("UNCERTAINTY_FALLBACK" in FALLBACK_PROVENANCE_TAG);
+  });
+});
+
+describe("quarantineLowConfidencePackets", () => {
+  it("quarantines packets with confidence below threshold", () => {
+    const packets = [
+      { task: "a", _provenance: { confidence: 0.3, tag: "parser-fallback", attachedAt: new Date().toISOString() } },
+      { task: "b", _provenance: { confidence: 0.8, tag: "parser-fallback", attachedAt: new Date().toISOString() } },
+    ];
+    const { allowed, quarantined } = quarantineLowConfidencePackets(packets);
+    assert.equal(quarantined.length, 1, "one packet below threshold must be quarantined");
+    assert.equal(quarantined[0].task, "a");
+    assert.equal(allowed.length, 1);
+    assert.equal(allowed[0].task, "b");
+  });
+
+  it("quarantined packets have _quarantined=true", () => {
+    const packets = [
+      { task: "low", _provenance: { confidence: 0.1, tag: "parser-fallback", attachedAt: new Date().toISOString() } },
+    ];
+    const { quarantined } = quarantineLowConfidencePackets(packets);
+    assert.equal(quarantined[0]._quarantined, true);
+  });
+
+  it("packets without _provenance are not quarantined (backward compatible)", () => {
+    const packets = [{ task: "no-provenance" }];
+    const { allowed, quarantined } = quarantineLowConfidencePackets(packets);
+    assert.equal(allowed.length, 1);
+    assert.equal(quarantined.length, 0);
+  });
+
+  it("negative: empty input returns empty allowed and quarantined", () => {
+    const { allowed, quarantined } = quarantineLowConfidencePackets([]);
+    assert.deepEqual(allowed, []);
+    assert.deepEqual(quarantined, []);
+  });
+
+  it("respects custom threshold option", () => {
+    const packets = [
+      { task: "mid", _provenance: { confidence: 0.6, tag: "parser-fallback", attachedAt: new Date().toISOString() } },
+    ];
+    // With threshold=0.7, a confidence of 0.6 should be quarantined
+    const { quarantined } = quarantineLowConfidencePackets(packets, { threshold: 0.7 });
+    assert.equal(quarantined.length, 1);
+  });
+
+  it("QUARANTINE_CONFIDENCE_THRESHOLD is exported as 0.5", () => {
+    assert.equal(QUARANTINE_CONFIDENCE_THRESHOLD, 0.5);
   });
 });

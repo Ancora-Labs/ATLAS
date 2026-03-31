@@ -17,8 +17,10 @@ import {
   computeBaselineRecoveryState,
   persistBaselineMetrics,
   readBaselineMetrics,
+  computeQuarantineRecommendation,
   PARSER_CONFIDENCE_RECOVERY_THRESHOLD,
   BASELINE_METRICS_SCHEMA_VERSION,
+  QUARANTINE_CONFIDENCE_THRESHOLD,
 } from "../../src/core/parser_baseline_recovery.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -241,5 +243,53 @@ describe("persistBaselineMetrics + readBaselineMetrics", () => {
 
     const state = await readBaselineMetrics(config);
     assert.equal(state!.lastRecord.cycleId, "new");
+  });
+});
+
+// ── computeQuarantineRecommendation ───────────────────────────────────────────
+
+describe("computeQuarantineRecommendation", () => {
+  it("returns shouldQuarantine=false when record is null", () => {
+    const rec = computeQuarantineRecommendation(null);
+    assert.equal(rec.shouldQuarantine, false);
+    assert.ok(rec.reason.includes("no recovery record"));
+    assert.deepEqual(rec.lowConfidenceComponents, []);
+  });
+
+  it("returns shouldQuarantine=false when all components are above threshold", () => {
+    const analysis = makeFullAnalysis({ parserConfidence: 0.95 });
+    const record = computeBaselineRecoveryState(analysis, "cycle-ok");
+    const rec = computeQuarantineRecommendation(record);
+    assert.equal(rec.shouldQuarantine, false);
+    assert.deepEqual(rec.lowConfidenceComponents, []);
+  });
+
+  it("returns shouldQuarantine=true when a component is below threshold", () => {
+    const analysis = makeFullAnalysis({
+      parserConfidence: 0.3,
+      parserConfidenceComponents: { plansShape: 0.2, healthField: 0.9, requestBudget: 0.9, dependencyGraph: 0.9 },
+    });
+    const record = computeBaselineRecoveryState(analysis, "cycle-low");
+    const rec = computeQuarantineRecommendation(record);
+    assert.equal(rec.shouldQuarantine, true);
+    assert.ok(rec.lowConfidenceComponents.length > 0);
+    assert.ok(rec.reason.includes("threshold"));
+  });
+
+  it("respects a custom threshold override", () => {
+    const analysis = makeFullAnalysis({ parserConfidence: 0.75 });
+    const record = computeBaselineRecoveryState(analysis, "cycle-x");
+    // With an unusually high threshold, all components should fail
+    const rec = computeQuarantineRecommendation(record, { threshold: 1.1 });
+    assert.equal(rec.shouldQuarantine, true);
+  });
+
+  it("negative: undefined record returns no-quarantine result", () => {
+    const rec = computeQuarantineRecommendation(undefined);
+    assert.equal(rec.shouldQuarantine, false);
+  });
+
+  it("QUARANTINE_CONFIDENCE_THRESHOLD is exported and equals 0.5", () => {
+    assert.equal(QUARANTINE_CONFIDENCE_THRESHOLD, 0.5);
   });
 });

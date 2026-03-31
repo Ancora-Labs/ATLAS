@@ -773,3 +773,57 @@ export async function aggregateTierCounts(config, cycleId: string | null = null)
   return counts;
 }
 
+// ── Policy closure evidence persistence ──────────────────────────────────────
+
+/**
+ * Append a PolicyClosureEvidence record to state/policy_closure_evidence.jsonl.
+ *
+ * Used by the learning-policy lifecycle to track when recurring lessons are
+ * verifiably resolved so compiled policies can later be evaluated for retirement.
+ *
+ * Storage: append-only JSONL (one JSON object per line).
+ * Fail-open: write errors return { ok: false, reason } and are never thrown.
+ *
+ * @param config  — BOX config object (config.paths.stateDir)
+ * @param record  — PolicyClosureEvidence from learning_policy_compiler.buildPolicyClosureEvidence
+ * @returns {{ ok: boolean, reason?: string }}
+ */
+export async function appendPolicyClosureEvidence(
+  config,
+  record: { policyId: string; resolvedAt: string; resolvedBy: string; evidence: string; cycleId?: string },
+): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    if (!record || !record.policyId) {
+      return { ok: false, reason: "record.policyId is required" };
+    }
+    const filePath = path.join(config?.paths?.stateDir || "state", "policy_closure_evidence.jsonl");
+    const entry = JSON.stringify({ ...record, appendedAt: new Date().toISOString() });
+    await fs.appendFile(filePath, entry + "\n", "utf8");
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: String((err as any)?.message || err) };
+  }
+}
+
+/**
+ * Load the full policy closure evidence history from state/policy_closure_evidence.jsonl.
+ *
+ * Returns an empty array when the file does not exist or is empty.
+ * Malformed lines are silently skipped (fail-open).
+ *
+ * @param config — BOX config object
+ * @returns PolicyClosureEvidence[]
+ */
+export async function loadPolicyClosureHistory(config): Promise<any[]> {
+  try {
+    const filePath = path.join(config?.paths?.stateDir || "state", "policy_closure_evidence.jsonl");
+    const raw = await fs.readFile(filePath, "utf8").catch(() => "");
+    if (!raw.trim()) return [];
+    return raw.trim().split("\n").map(line => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+

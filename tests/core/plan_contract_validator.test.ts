@@ -10,6 +10,8 @@ import {
   AMBIGUOUS_TASK_PATTERNS,
   MAX_ACCEPTANCE_CRITERIA_PER_TASK,
   MAX_FILES_IN_SCOPE_PER_TASK,
+  isPacketQuarantined,
+  QUARANTINE_CONFIDENCE_THRESHOLD,
 } from "../../src/core/plan_contract_validator.js";
 import { checkForbiddenCommands } from "../../src/core/verification_command_registry.js";
 
@@ -1190,5 +1192,54 @@ describe("validatePlanContract — decomposition caps and ambiguity", () => {
 
   it("MAX_FILES_IN_SCOPE_PER_TASK is 30", () => {
     assert.equal(MAX_FILES_IN_SCOPE_PER_TASK, 30);
+  });
+});
+
+// ── isPacketQuarantined ───────────────────────────────────────────────────────
+
+describe("isPacketQuarantined", () => {
+  it("returns true when _quarantined flag is set", () => {
+    assert.equal(isPacketQuarantined({ _quarantined: true, task: "x" }), true);
+  });
+
+  it("returns true when _provenance.confidence is below threshold", () => {
+    const packet = {
+      task: "low-conf",
+      _provenance: { confidence: 0.3, tag: "parser-fallback", attachedAt: new Date().toISOString() },
+    };
+    assert.equal(isPacketQuarantined(packet), true);
+  });
+
+  it("returns false when _provenance.confidence is exactly at threshold", () => {
+    const packet = {
+      task: "borderline",
+      _provenance: { confidence: QUARANTINE_CONFIDENCE_THRESHOLD, tag: "parser-fallback", attachedAt: new Date().toISOString() },
+    };
+    assert.equal(isPacketQuarantined(packet), false);
+  });
+
+  it("returns false when _provenance.confidence is above threshold", () => {
+    const packet = {
+      task: "high-conf",
+      _provenance: { confidence: 0.9, tag: "parser-fallback", attachedAt: new Date().toISOString() },
+    };
+    assert.equal(isPacketQuarantined(packet), false);
+  });
+
+  it("returns false when packet has no provenance metadata (backward compatible)", () => {
+    assert.equal(isPacketQuarantined({ task: "no provenance" }), false);
+  });
+
+  it("negative: returns false for null input", () => {
+    assert.equal(isPacketQuarantined(null), false);
+  });
+
+  it("negative: returns false for non-object input", () => {
+    assert.equal(isPacketQuarantined("string" as any), false);
+    assert.equal(isPacketQuarantined(42 as any), false);
+  });
+
+  it("QUARANTINE_CONFIDENCE_THRESHOLD is 0.5", () => {
+    assert.equal(QUARANTINE_CONFIDENCE_THRESHOLD, 0.5);
   });
 });

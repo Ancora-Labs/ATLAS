@@ -409,3 +409,32 @@ export function validateAllPlans(plans) {
 
   return { passRate, totalPlans: results.length, validCount, invalidCount, results };
 }
+
+// ── Quarantine gate ───────────────────────────────────────────────────────────
+
+/**
+ * Confidence threshold below which a packet is considered quarantined.
+ * Mirrors the value exported by prometheus.ts so both modules share the same gate.
+ */
+export const QUARANTINE_CONFIDENCE_THRESHOLD = 0.5 as const;
+
+/**
+ * Determine whether a plan packet should be quarantined from dispatch.
+ *
+ * A packet is quarantined when:
+ *   1. It carries `_quarantined: true` (explicitly set by quarantineLowConfidencePackets), or
+ *   2. It has a `_provenance.confidence` value that is strictly below QUARANTINE_CONFIDENCE_THRESHOLD.
+ *
+ * Packets without provenance metadata pass through (backward compatible).
+ *
+ * @param packet — any plan object
+ * @returns true when the packet must not be dispatched
+ */
+export function isPacketQuarantined(packet: any): boolean {
+  if (!packet || typeof packet !== "object") return false;
+  if (packet._quarantined === true) return true;
+  if (typeof packet._provenance?.confidence === "number") {
+    return packet._provenance.confidence < QUARANTINE_CONFIDENCE_THRESHOLD;
+  }
+  return false;
+}
