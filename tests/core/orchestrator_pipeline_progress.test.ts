@@ -1227,6 +1227,169 @@ describe("plan evidence coupling gate — pre-dispatch governance gate (Task 3 h
   });
 });
 
+// ── Dependency readiness gate — evaluatePreDispatchGovernanceGate integration ──
+
+describe("dependency readiness gate — pre-dispatch governance gate integration", () => {
+  let tmpDir;
+  let config;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-readiness-gate-"));
+    config = {
+      paths: { stateDir: tmpDir },
+      env: { copilotCliCommand: "__missing__", targetRepo: "CanerDoqdu/Box" },
+      systemGuardian: { enabled: false },
+      canary:          { enabled: false },
+    };
+    await fs.writeFile(
+      path.join(tmpDir, "policy.json"),
+      JSON.stringify({ blockedCommands: [] }, null, 2),
+      "utf8"
+    );
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("allows dispatch when plans have no confidence metadata (fail-open for legacy plans)", async () => {
+    const plans = [
+      {
+        id: "T1",
+        task: "implement feature",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["tests pass"],
+        dependsOn: [],
+        filesInScope: [],
+      }
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(config, plans, "readiness-no-confidence");
+    assert.equal(result.blocked, false,
+      "plans without confidence fields must not trigger readiness gate (fail-open)");
+  });
+
+  it("allows dispatch when all confidence values meet the default threshold", async () => {
+    const plans = [
+      {
+        id: "T1",
+        task: "implement feature",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["tests pass"],
+        dependsOn: [],
+        filesInScope: [],
+        shapeConfidence: 0.8,
+        budgetConfidence: 0.7,
+        dependencyConfidence: 0.9,
+      }
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(config, plans, "readiness-above-threshold");
+    assert.equal(result.blocked, false,
+      "plans with all confidence values above threshold must not be blocked by readiness gate");
+  });
+
+  it("NEGATIVE PATH: blocks dispatch when a plan's shapeConfidence is below the default threshold", async () => {
+    const plans = [
+      {
+        id: "T1",
+        task: "implement feature",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["tests pass"],
+        dependsOn: [],
+        filesInScope: [],
+        shapeConfidence: 0.2,  // below 0.5 default threshold
+      }
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(config, plans, "readiness-below-threshold");
+    assert.equal(result.blocked, true,
+      "plan with shapeConfidence below threshold must block dispatch via readiness gate");
+    assert.ok(
+      result.reason?.startsWith(BLOCK_REASON.DEPENDENCY_READINESS_INCOMPLETE),
+      `reason must start with dependency_readiness_incomplete; got: ${result.reason}`
+    );
+    assert.equal(result.gateIndex, 9, "gateIndex must be 9 for DEPENDENCY_READINESS");
+  });
+
+  it("NEGATIVE PATH: blocks dispatch when budgetConfidence is below threshold", async () => {
+    const plans = [
+      {
+        id: "T2",
+        task: "refactor module",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["tests pass"],
+        dependsOn: [],
+        filesInScope: [],
+        budgetConfidence: 0.1,
+      }
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(config, plans, "readiness-budget-low");
+    assert.equal(result.blocked, true);
+    assert.ok(result.reason?.includes("dependency_readiness_incomplete"));
+    assert.ok(result.readinessResult, "readinessResult must be present when readiness gate blocks");
+  });
+
+  it("NEGATIVE PATH: blocks dispatch when a confidence value is non-numeric (MISSING_CONFIDENCE)", async () => {
+    const plans = [
+      {
+        id: "T3",
+        task: "add tests",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["all tests pass"],
+        dependsOn: [],
+        filesInScope: [],
+        shapeConfidence: "high",  // non-numeric — triggers MISSING_CONFIDENCE
+      }
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(config, plans, "readiness-non-numeric");
+    assert.equal(result.blocked, true);
+    assert.ok(result.reason?.includes("dependency_readiness_incomplete"));
+  });
+
+  it("respects custom minConfidence threshold from config.runtime.minPlanConfidence", async () => {
+    const plans = [
+      {
+        id: "T4",
+        task: "add tests",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["tests pass"],
+        dependsOn: [],
+        filesInScope: [],
+        shapeConfidence: 0.4,  // below 0.5 default but above 0.3 custom
+      }
+    ];
+
+    // With default threshold (0.5): blocked
+    const blockedResult = await evaluatePreDispatchGovernanceGate(config, plans, "readiness-custom-default");
+    assert.equal(blockedResult.blocked, true);
+
+    // With custom threshold (0.3): allowed
+    const customConfig = { ...config, runtime: { minPlanConfidence: 0.3 } };
+    const passResult = await evaluatePreDispatchGovernanceGate(customConfig, plans, "readiness-custom-lower");
+    assert.equal(passResult.blocked, false,
+      "plan with shapeConfidence=0.4 must pass when minPlanConfidence is set to 0.3");
+  });
+
+  it("readiness gate fires after plan evidence coupling gate (gate precedence 9 > 8)", async () => {
+    // Plan has low confidence AND missing acceptance_criteria:
+    // evidence coupling (gate 8) must block BEFORE readiness (gate 9)
+    const plans = [
+      {
+        id: "T5",
+        task: "do work",
+        verification_commands: ["npm test"],
+        // missing acceptance_criteria — triggers evidence coupling gate
+        shapeConfidence: 0.1,  // would trigger readiness gate if coupling didn't fire first
+      }
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(config, plans, "readiness-precedence");
+    assert.equal(result.blocked, true);
+    assert.ok(
+      result.reason?.startsWith("plan_evidence_coupling_invalid"),
+      `evidence coupling must fire before readiness gate; got: ${result.reason}`
+    );
+    assert.equal(result.gateIndex, 8, "gateIndex must be 8 (evidence coupling), not 9 (readiness)");
+  });
+});
+
 // ── Terminology drift prevention ──────────────────────────────────────────────
 //
 // These tests pin the exact canonical terminology used across:
@@ -1311,6 +1474,7 @@ describe("pipeline progress — terminology drift prevention (stage IDs)", () =>
       CRITICAL_DEBT_OVERDUE:          "critical_debt_overdue",
       MANDATORY_DRIFT_DEBT_UNRESOLVED:"mandatory_drift_debt_unresolved",
       PLAN_EVIDENCE_COUPLING_INVALID: "plan_evidence_coupling_invalid",
+      DEPENDENCY_READINESS_INCOMPLETE:"dependency_readiness_incomplete",
     };
 
     for (const [key, expectedValue] of Object.entries(CANONICAL_BLOCK_REASONS)) {

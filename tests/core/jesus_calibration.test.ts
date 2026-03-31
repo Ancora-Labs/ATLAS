@@ -370,3 +370,49 @@ describe("appendCalibrationHistory + getCalibrationSummary", () => {
     assert.equal(summary.averageOverallScore, null);
   });
 });
+
+// ── computeCalibrationRecord — evidenceComplete field ────────────────────────
+
+describe("computeCalibrationRecord — evidenceComplete field", () => {
+  const prevDirective = {
+    decidedAt: "2026-03-27T10:00:00.000Z",
+    expectedOutcome: {
+      expectedSystemHealthAfter: "good",
+      expectedNextDecision: "tactical",
+      expectedAthenaActivated: true,
+      expectedPrometheusRan: false,
+      expectedWorkItemCount: 2,
+      forecastConfidence: "medium",
+    },
+  };
+  const realizedState = {
+    systemHealth: "good",
+    decision: "tactical",
+    athenaActivated: true,
+    prometheusRan: false,
+    workItemCount: 2,
+  };
+
+  it("sets evidenceComplete=true when third arg is true", () => {
+    const record = computeCalibrationRecord(prevDirective, realizedState, true);
+    assert.ok(record !== null);
+    assert.equal(record!.evidenceComplete, true);
+  });
+
+  it("sets evidenceComplete=false when third arg is false", () => {
+    const record = computeCalibrationRecord(prevDirective, realizedState, false);
+    assert.ok(record !== null);
+    assert.equal(record!.evidenceComplete, false);
+  });
+
+  it("sets evidenceComplete=null when third arg is omitted (backward compat)", () => {
+    const record = computeCalibrationRecord(prevDirective, realizedState);
+    assert.ok(record !== null);
+    assert.equal(record!.evidenceComplete, null);
+  });
+
+  it("NEGATIVE PATH: still returns null when prevDirective is null regardless of evidenceComplete", () => {
+    const result = computeCalibrationRecord(null as any, realizedState, true);
+    assert.equal(result, null);
+  });
+});

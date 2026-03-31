@@ -23,12 +23,17 @@ import {
   persistGraphDiagnostics,
   validateGraphTask,
   normalizeFilePath,
+  computeReadinessGate,
   GRAPH_STATUS,
   GRAPH_REASON,
   GATE_REASON,
   CONFLICT_REASON,
   TASK_ERROR_CODE,
   GRAPH_DIAGNOSTICS_SCHEMA_VERSION,
+  READINESS_STATUS,
+  READINESS_REASON,
+  READINESS_CONFIDENCE_THRESHOLD_DEFAULT,
+  READINESS_CONFIDENCE_DIMENSION,
 } from "../../src/core/dependency_graph_resolver.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -608,5 +613,164 @@ describe("enum exports", () => {
     assert.equal(TASK_ERROR_CODE.INVALID_TYPE, "INVALID_TYPE");
     assert.equal(TASK_ERROR_CODE.MISSING_FIELD, "MISSING_FIELD");
     assert.equal(TASK_ERROR_CODE.INVALID_FIELD, "INVALID_FIELD");
+  });
+
+  it("READINESS_STATUS is frozen and contains required values", () => {
+    assert.ok(Object.isFrozen(READINESS_STATUS));
+    assert.equal(READINESS_STATUS.READY, "ready");
+    assert.equal(READINESS_STATUS.INCOMPLETE, "incomplete");
+    assert.equal(READINESS_STATUS.INVALID_INPUT, "invalid_input");
+  });
+
+  it("READINESS_REASON is frozen and contains required values", () => {
+    assert.ok(Object.isFrozen(READINESS_REASON));
+    assert.equal(READINESS_REASON.READY, "READY");
+    assert.equal(READINESS_REASON.MISSING_CONFIDENCE, "MISSING_CONFIDENCE");
+    assert.equal(READINESS_REASON.BELOW_THRESHOLD, "BELOW_THRESHOLD");
+    assert.equal(READINESS_REASON.INVALID_INPUT, "INVALID_INPUT");
+  });
+
+  it("READINESS_CONFIDENCE_DIMENSION exports the three dimension keys", () => {
+    assert.equal(READINESS_CONFIDENCE_DIMENSION.SHAPE, "shapeConfidence");
+    assert.equal(READINESS_CONFIDENCE_DIMENSION.BUDGET, "budgetConfidence");
+    assert.equal(READINESS_CONFIDENCE_DIMENSION.DEPENDENCY, "dependencyConfidence");
+    assert.ok(Object.isFrozen(READINESS_CONFIDENCE_DIMENSION));
+  });
+
+  it("READINESS_CONFIDENCE_THRESHOLD_DEFAULT is 0.5", () => {
+    assert.equal(READINESS_CONFIDENCE_THRESHOLD_DEFAULT, 0.5);
+  });
+});
+
+// ── computeReadinessGate ──────────────────────────────────────────────────────
+
+describe("computeReadinessGate — positive paths", () => {
+  it("returns ready=true for empty tasks array", () => {
+    const result = computeReadinessGate([]);
+    assert.equal(result.ready, true);
+    assert.equal(result.status, READINESS_STATUS.READY);
+    assert.equal(result.reason, READINESS_REASON.READY);
+    assert.equal(result.checkedTasks, 0);
+    assert.deepEqual(result.missingDimensions, []);
+    assert.deepEqual(result.belowThresholdTasks, []);
+  });
+
+  it("returns ready=true for tasks without any confidence fields (opt-in, no constraint)", () => {
+    const tasks = [{ id: "t1" }, { id: "t2" }];
+    const result = computeReadinessGate(tasks);
+    assert.equal(result.ready, true);
+    assert.equal(result.status, READINESS_STATUS.READY);
+    assert.equal(result.checkedTasks, 2);
+  });
+
+  it("returns ready=true when all confidence values meet the default threshold", () => {
+    const tasks = [
+      { id: "t1", shapeConfidence: 0.8, budgetConfidence: 0.9, dependencyConfidence: 0.7 },
+      { id: "t2", shapeConfidence: 0.6, budgetConfidence: 0.5, dependencyConfidence: 1.0 },
+    ];
+    const result = computeReadinessGate(tasks);
+    assert.equal(result.ready, true);
+    assert.equal(result.status, READINESS_STATUS.READY);
+    assert.equal(result.belowThresholdTasks.length, 0);
+  });
+
+  it("returns ready=true when confidence exactly equals the threshold", () => {
+    const tasks = [{ id: "t1", shapeConfidence: 0.5 }];
+    const result = computeReadinessGate(tasks, { minConfidence: 0.5 });
+    assert.equal(result.ready, true);
+  });
+
+  it("returns ready=true with custom minConfidence option", () => {
+    const tasks = [{ id: "t1", shapeConfidence: 0.3 }];
+    const result = computeReadinessGate(tasks, { minConfidence: 0.2 });
+    assert.equal(result.ready, true);
+  });
+
+  it("returns ready=true when only some dimensions are present and all meet threshold", () => {
+    const tasks = [{ id: "t1", shapeConfidence: 0.9 }]; // budgetConfidence absent → ok
+    const result = computeReadinessGate(tasks);
+    assert.equal(result.ready, true);
+  });
+});
+
+describe("computeReadinessGate — negative paths", () => {
+  it("NEGATIVE PATH: returns ready=false when a confidence value is below threshold", () => {
+    const tasks = [{ id: "t1", shapeConfidence: 0.3 }];
+    const result = computeReadinessGate(tasks, { minConfidence: 0.5 });
+    assert.equal(result.ready, false);
+    assert.equal(result.status, READINESS_STATUS.INCOMPLETE);
+    assert.equal(result.reason, READINESS_REASON.BELOW_THRESHOLD);
+    assert.equal(result.belowThresholdTasks.length, 1);
+    assert.equal(result.belowThresholdTasks[0].id, "t1");
+    assert.equal(result.belowThresholdTasks[0].dimension, "shapeConfidence");
+    assert.equal(result.belowThresholdTasks[0].value, 0.3);
+    assert.equal(result.belowThresholdTasks[0].threshold, 0.5);
+  });
+
+  it("NEGATIVE PATH: returns ready=false when budgetConfidence is below threshold", () => {
+    const tasks = [{ id: "t2", budgetConfidence: 0.1 }];
+    const result = computeReadinessGate(tasks);
+    assert.equal(result.ready, false);
+    assert.equal(result.reason, READINESS_REASON.BELOW_THRESHOLD);
+    assert.equal(result.belowThresholdTasks[0].dimension, "budgetConfidence");
+  });
+
+  it("NEGATIVE PATH: returns ready=false when dependencyConfidence is below threshold", () => {
+    const tasks = [{ id: "t3", dependencyConfidence: 0.0 }];
+    const result = computeReadinessGate(tasks);
+    assert.equal(result.ready, false);
+    assert.equal(result.reason, READINESS_REASON.BELOW_THRESHOLD);
+  });
+
+  it("NEGATIVE PATH: reports MISSING_CONFIDENCE for non-numeric confidence value", () => {
+    const tasks = [{ id: "t1", shapeConfidence: "high" }]; // string, not number
+    const result = computeReadinessGate(tasks);
+    assert.equal(result.ready, false);
+    assert.equal(result.status, READINESS_STATUS.INCOMPLETE);
+    assert.equal(result.reason, READINESS_REASON.MISSING_CONFIDENCE);
+    assert.ok(result.missingDimensions.includes("shapeConfidence"));
+  });
+
+  it("NEGATIVE PATH: reports MISSING_CONFIDENCE for NaN confidence value", () => {
+    const tasks = [{ id: "t1", budgetConfidence: NaN }];
+    const result = computeReadinessGate(tasks);
+    assert.equal(result.ready, false);
+    assert.equal(result.reason, READINESS_REASON.MISSING_CONFIDENCE);
+  });
+
+  it("NEGATIVE PATH: returns invalid_input for non-array tasks argument", () => {
+    const result = computeReadinessGate(null as any);
+    assert.equal(result.ready, false);
+    assert.equal(result.status, READINESS_STATUS.INVALID_INPUT);
+    assert.equal(result.reason, READINESS_REASON.INVALID_INPUT);
+    assert.equal(result.checkedTasks, 0);
+  });
+
+  it("NEGATIVE PATH: returns invalid_input for string input", () => {
+    const result = computeReadinessGate("not-an-array" as any);
+    assert.equal(result.ready, false);
+    assert.equal(result.status, READINESS_STATUS.INVALID_INPUT);
+  });
+
+  it("reports all below-threshold tasks across multiple tasks and dimensions", () => {
+    const tasks = [
+      { id: "a", shapeConfidence: 0.2, budgetConfidence: 0.8 },
+      { id: "b", shapeConfidence: 0.9, dependencyConfidence: 0.1 },
+    ];
+    const result = computeReadinessGate(tasks, { minConfidence: 0.5 });
+    assert.equal(result.ready, false);
+    assert.equal(result.belowThresholdTasks.length, 2);
+    const dims = result.belowThresholdTasks.map(t => `${t.id}:${t.dimension}`).sort();
+    assert.deepEqual(dims, ["a:shapeConfidence", "b:dependencyConfidence"].sort());
+  });
+
+  it("result includes checkedTasks count equal to input length", () => {
+    const tasks = [
+      { id: "x1", shapeConfidence: 0.7 },
+      { id: "x2", shapeConfidence: 0.8 },
+      { id: "x3" },
+    ];
+    const result = computeReadinessGate(tasks);
+    assert.equal(result.checkedTasks, 3);
   });
 });

@@ -447,11 +447,15 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
   if (hasGraphHints) {
     try {
       const graphTasks = (inputPlans as any[]).map(p => ({
-        id:          String(p.task_id || p.task || p.role || ""),
-        dependsOn:   Array.isArray(p.dependsOn)    ? p.dependsOn
-                   : Array.isArray(p.dependencies) ? p.dependencies
-                   : [],
-        filesInScope: Array.isArray(p.filesInScope) ? p.filesInScope : [],
+        id:                 String(p.task_id || p.task || p.role || ""),
+        dependsOn:          Array.isArray(p.dependsOn)    ? p.dependsOn
+                          : Array.isArray(p.dependencies) ? p.dependencies
+                          : [],
+        filesInScope:       Array.isArray(p.filesInScope) ? p.filesInScope : [],
+        // Confidence metadata (opt-in): carry through for the readiness gate
+        ...(typeof p.shapeConfidence      === "number" ? { shapeConfidence:      p.shapeConfidence      } : {}),
+        ...(typeof p.budgetConfidence     === "number" ? { budgetConfidence:     p.budgetConfidence     } : {}),
+        ...(typeof p.dependencyConfidence === "number" ? { dependencyConfidence: p.dependencyConfidence } : {}),
       }));
       const graph = resolveDependencyGraph(graphTasks);
       if (graph.status === GRAPH_STATUS.OK) {

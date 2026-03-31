@@ -612,6 +612,177 @@ export function resolveDependencyGraph(tasks) {
   };
 }
 
+// ── Readiness gate ────────────────────────────────────────────────────────────
+
+/**
+ * Confidence dimension field names expected on each graph task.
+ * Plans produced by Prometheus may carry any or all of these fields.
+ * Presence of a dimension with a numeric value opts that task into readiness checking.
+ */
+export const READINESS_CONFIDENCE_DIMENSION = Object.freeze({
+  SHAPE:       "shapeConfidence",
+  BUDGET:      "budgetConfidence",
+  DEPENDENCY:  "dependencyConfidence",
+} as const);
+
+/**
+ * Default minimum confidence value required for a task dimension to be considered
+ * "ready" for dispatch.  Values below this threshold cause the readiness gate to block.
+ * Configurable via options.minConfidence passed to computeReadinessGate.
+ */
+export const READINESS_CONFIDENCE_THRESHOLD_DEFAULT = 0.5;
+
+/**
+ * Status codes for ReadinessGateResult.
+ */
+export const READINESS_STATUS = Object.freeze({
+  /** All tasks with confidence metadata meet the minimum threshold. */
+  READY:         "ready",
+  /** One or more tasks have confidence below threshold or carry invalid values. */
+  INCOMPLETE:    "incomplete",
+  /** The tasks input itself was invalid (not an array). */
+  INVALID_INPUT: "invalid_input",
+} as const);
+
+/**
+ * Reason codes for ReadinessGateResult.
+ */
+export const READINESS_REASON = Object.freeze({
+  /** Gate passed — all tasks are ready for dispatch. */
+  READY:              "READY",
+  /** One or more tasks carry a confidence dimension with a non-numeric (invalid) value. */
+  MISSING_CONFIDENCE: "MISSING_CONFIDENCE",
+  /** One or more tasks have a confidence dimension below the minimum threshold. */
+  BELOW_THRESHOLD:    "BELOW_THRESHOLD",
+  /** Tasks input was not an array. */
+  INVALID_INPUT:      "INVALID_INPUT",
+} as const);
+
+/** Typed result produced by computeReadinessGate. */
+export interface ReadinessGateResult {
+  /** True when all tasks with confidence metadata meet the minimum threshold. */
+  ready: boolean;
+  /** One of READINESS_STATUS values. */
+  status: string;
+  /** One of READINESS_REASON values. */
+  reason: string;
+  /** Dimension names that carried non-numeric (invalid) confidence values. */
+  missingDimensions: string[];
+  /** Tasks whose numeric confidence values are below the threshold. */
+  belowThresholdTasks: Array<{ id: string; dimension: string; value: number; threshold: number }>;
+  /** Number of tasks evaluated. */
+  checkedTasks: number;
+}
+
+/**
+ * Evaluate whether all tasks in a plan set have valid and sufficient confidence
+ * metadata for dispatch.
+ *
+ * Confidence dimensions checked (all optional per-task):
+ *   shapeConfidence      — confidence in the task's scope/shape definition
+ *   budgetConfidence     — confidence in the effort/budget estimate
+ *   dependencyConfidence — confidence in the dependency ordering
+ *
+ * Blocking rules:
+ *   - A dimension is present with a NON-numeric value → reason=MISSING_CONFIDENCE
+ *   - A dimension is present with a numeric value BELOW minConfidence → reason=BELOW_THRESHOLD
+ *   - A dimension is ABSENT from a task → no constraint (opt-in metric; absence is allowed)
+ *
+ * The gate is fail-open for tasks that simply don't carry confidence fields.
+ * It only blocks when confidence is explicitly declared but invalid or insufficient.
+ *
+ * @param tasks   — array of graph task descriptors (must have `id` string field)
+ * @param options — optional { minConfidence: number } (default 0.5)
+ * @returns ReadinessGateResult — never throws
+ */
+export function computeReadinessGate(
+  tasks: any[],
+  options?: { minConfidence?: number }
+): ReadinessGateResult {
+  if (!Array.isArray(tasks)) {
+    return {
+      ready: false,
+      status: READINESS_STATUS.INVALID_INPUT,
+      reason: READINESS_REASON.INVALID_INPUT,
+      missingDimensions: [],
+      belowThresholdTasks: [],
+      checkedTasks: 0,
+    };
+  }
+
+  if (tasks.length === 0) {
+    return {
+      ready: true,
+      status: READINESS_STATUS.READY,
+      reason: READINESS_REASON.READY,
+      missingDimensions: [],
+      belowThresholdTasks: [],
+      checkedTasks: 0,
+    };
+  }
+
+  const minConfidence =
+    typeof options?.minConfidence === "number" && options.minConfidence >= 0
+      ? options.minConfidence
+      : READINESS_CONFIDENCE_THRESHOLD_DEFAULT;
+
+  const dimensions = Object.values(READINESS_CONFIDENCE_DIMENSION);
+  const missingDimensionSet = new Set<string>();
+  const belowThresholdTasks: Array<{ id: string; dimension: string; value: number; threshold: number }> = [];
+
+  for (const task of tasks) {
+    const id = String(task?.id || "");
+    for (const dim of dimensions) {
+      const value = (task as any)?.[dim];
+      // Absent dimension → opt-in, skip (no constraint)
+      if (value === undefined || value === null) continue;
+
+      const numValue = Number(value);
+      if (!Number.isFinite(numValue)) {
+        // Present but not a valid number → missing/corrupt confidence data
+        missingDimensionSet.add(dim);
+        continue;
+      }
+
+      if (numValue < minConfidence) {
+        belowThresholdTasks.push({ id, dimension: dim, value: numValue, threshold: minConfidence });
+      }
+    }
+  }
+
+  if (missingDimensionSet.size > 0) {
+    return {
+      ready: false,
+      status: READINESS_STATUS.INCOMPLETE,
+      reason: READINESS_REASON.MISSING_CONFIDENCE,
+      missingDimensions: Array.from(missingDimensionSet),
+      belowThresholdTasks,
+      checkedTasks: tasks.length,
+    };
+  }
+
+  if (belowThresholdTasks.length > 0) {
+    const dims = [...new Set(belowThresholdTasks.map(t => t.dimension))];
+    return {
+      ready: false,
+      status: READINESS_STATUS.INCOMPLETE,
+      reason: READINESS_REASON.BELOW_THRESHOLD,
+      missingDimensions: dims,
+      belowThresholdTasks,
+      checkedTasks: tasks.length,
+    };
+  }
+
+  return {
+    ready: true,
+    status: READINESS_STATUS.READY,
+    reason: READINESS_REASON.READY,
+    missingDimensions: [],
+    belowThresholdTasks: [],
+    checkedTasks: tasks.length,
+  };
+}
+
 // ── Persistence (AC5) ─────────────────────────────────────────────────────────
 
 /**
