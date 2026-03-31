@@ -19,6 +19,9 @@ import {
   HIGH_RISK_LOW_CONFIDENCE_REASON,
   computeHighRiskComponentGate,
   HIGH_RISK_COMPONENT_GATE_THRESHOLDS,
+  checkDecompositionCaps,
+  MAX_DECOMPOSITION_PLANS,
+  DECOMPOSITION_CAP_REASON,
 } from "../../src/core/prometheus.js";
 import { compilePrompt } from "../../src/core/prompt_compiler.js";
 import { isNonSpecificVerification, validatePlanContract } from "../../src/core/plan_contract_validator.js";
@@ -2243,5 +2246,71 @@ describe("checkHighRiskPacketConfidence — high-risk low-confidence gate", () =
       assert.equal(result.requiresRejection, true,
         `riskLevel="${level}" with no confidence signals must trigger rejection`);
     }
+  });
+});
+
+// ── checkDecompositionCaps — deterministic decomposition ceiling ─────────────
+
+describe("checkDecompositionCaps", () => {
+  it("returns capped=false when plans count is within MAX_DECOMPOSITION_PLANS", () => {
+    const plans = Array.from({ length: MAX_DECOMPOSITION_PLANS }, (_, i) => ({ task: `Task ${i + 1}` }));
+    const result = checkDecompositionCaps(plans);
+    assert.equal(result.capped, false);
+    assert.equal(result.originalCount, MAX_DECOMPOSITION_PLANS);
+    assert.equal(result.cappedCount, MAX_DECOMPOSITION_PLANS);
+    assert.equal(result.reason, "within_cap");
+  });
+
+  it("returns capped=false for an empty array", () => {
+    const result = checkDecompositionCaps([]);
+    assert.equal(result.capped, false);
+    assert.equal(result.originalCount, 0);
+    assert.equal(result.cappedCount, 0);
+  });
+
+  it("returns capped=true when plans count exceeds MAX_DECOMPOSITION_PLANS", () => {
+    const plans = Array.from({ length: MAX_DECOMPOSITION_PLANS + 1 }, (_, i) => ({ task: `Task ${i + 1}` }));
+    const result = checkDecompositionCaps(plans);
+    assert.equal(result.capped, true);
+    assert.equal(result.originalCount, MAX_DECOMPOSITION_PLANS + 1);
+    assert.equal(result.cappedCount, MAX_DECOMPOSITION_PLANS);
+    assert.equal(result.reason, DECOMPOSITION_CAP_REASON);
+  });
+
+  it("reports the correct originalCount and cappedCount for a large batch", () => {
+    const plans = Array.from({ length: 50 }, (_, i) => ({ task: `Task ${i + 1}` }));
+    const result = checkDecompositionCaps(plans);
+    assert.equal(result.capped, true);
+    assert.equal(result.originalCount, 50);
+    assert.equal(result.cappedCount, MAX_DECOMPOSITION_PLANS);
+  });
+
+  it("treats non-array input as empty (capped=false)", () => {
+    const result = checkDecompositionCaps(null as any);
+    assert.equal(result.capped, false);
+    assert.equal(result.originalCount, 0);
+  });
+
+  it("is a pure function — does not mutate input array", () => {
+    const plans = Array.from({ length: MAX_DECOMPOSITION_PLANS + 5 }, (_, i) => ({ task: `Task ${i + 1}` }));
+    const lengthBefore = plans.length;
+    checkDecompositionCaps(plans);
+    assert.equal(plans.length, lengthBefore, "input array must not be mutated");
+  });
+
+  it("MAX_DECOMPOSITION_PLANS is 20", () => {
+    assert.equal(MAX_DECOMPOSITION_PLANS, 20);
+  });
+
+  it("DECOMPOSITION_CAP_REASON is a non-empty string", () => {
+    assert.equal(typeof DECOMPOSITION_CAP_REASON, "string");
+    assert.ok(DECOMPOSITION_CAP_REASON.length > 0);
+    assert.ok(DECOMPOSITION_CAP_REASON.includes("decomposition"));
+  });
+
+  it("negative path: exactly MAX_DECOMPOSITION_PLANS plans is NOT capped", () => {
+    const plans = Array.from({ length: MAX_DECOMPOSITION_PLANS }, (_, i) => ({ task: `Task ${i + 1}` }));
+    const result = checkDecompositionCaps(plans);
+    assert.equal(result.capped, false, "exactly MAX_DECOMPOSITION_PLANS must not trigger capping");
   });
 });
