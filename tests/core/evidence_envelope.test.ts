@@ -14,7 +14,11 @@
 
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { validateEvidenceEnvelope, validatePlanEvidenceCoupling } from "../../src/core/evidence_envelope.js";
+import {
+  validateEvidenceEnvelope,
+  validatePlanEvidenceCoupling,
+  envelopeFieldHasPlaceholderResidue,
+} from "../../src/core/evidence_envelope.js";
 
 const VALID_EVIDENCE = { build: "pass", tests: "pass", lint: "n/a" };
 
@@ -373,6 +377,114 @@ describe("runAthenaPostmortem — Athena consumption boundary validation", () =>
         `valid envelope must not trigger validation error; got: ${err.message}`
       );
     }
+  });
+});
+
+// ── envelopeFieldHasPlaceholderResidue — deterministic template residue check ─
+
+describe("envelopeFieldHasPlaceholderResidue", () => {
+  it("returns false for a normal summary string without any placeholder", () => {
+    assert.equal(envelopeFieldHasPlaceholderResidue("Task completed. All tests pass."), false);
+  });
+
+  it("returns true when POST_MERGE_TEST_OUTPUT literal is present", () => {
+    assert.equal(envelopeFieldHasPlaceholderResidue("POST_MERGE_TEST_OUTPUT\nSHA: abc"), true);
+  });
+
+  it("returns true when SHA placeholder literal is present", () => {
+    assert.equal(
+      envelopeFieldHasPlaceholderResidue("SHA: <paste git rev-parse HEAD here>"),
+      true,
+      "SHA template placeholder must be detected"
+    );
+  });
+
+  it("returns true when npm output placeholder literal is present", () => {
+    assert.equal(
+      envelopeFieldHasPlaceholderResidue("output:\n<paste full raw npm test stdout here>"),
+      true,
+      "npm output template placeholder must be detected"
+    );
+  });
+
+  it("returns false for an empty string", () => {
+    assert.equal(envelopeFieldHasPlaceholderResidue(""), false);
+  });
+
+  it("returns false for a long realistic summary without placeholders", () => {
+    const summary = [
+      "Implemented trust boundary check in src/core/trust_boundary.ts.",
+      "BOX_MERGED_SHA=abc1234f",
+      "All 42 tests pass.",
+      "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; LINT=pass",
+    ].join("\n");
+    assert.equal(envelopeFieldHasPlaceholderResidue(summary), false);
+  });
+
+  it("negative path: partial placeholder text that does not match any known literal returns false", () => {
+    // A string that contains 'paste' but is not a known placeholder literal
+    assert.equal(envelopeFieldHasPlaceholderResidue("please paste your output here in text"), false);
+  });
+});
+
+// ── validateEvidenceEnvelope — placeholder residue in summary field ───────────
+
+describe("validateEvidenceEnvelope — rejects summary with template placeholder residue", () => {
+  it("rejects summary containing POST_MERGE_TEST_OUTPUT literal", () => {
+    const result = validateEvidenceEnvelope({
+      ...validEnvelope(),
+      summary: "POST_MERGE_TEST_OUTPUT\nSHA: abc\n# tests 5 pass",
+    });
+    assert.equal(result.valid, false,
+      "summary with POST_MERGE_TEST_OUTPUT placeholder must be rejected");
+    assert.ok(result.errors.some(e => /summary.*placeholder|placeholder.*summary/i.test(e)),
+      `expected placeholder error in summary; got: [${result.errors.join("; ")}]`);
+  });
+
+  it("rejects summary containing SHA template placeholder", () => {
+    const result = validateEvidenceEnvelope({
+      ...validEnvelope(),
+      summary: "SHA: <paste git rev-parse HEAD here>",
+    });
+    assert.equal(result.valid, false,
+      "summary with SHA placeholder must be rejected");
+    assert.ok(result.errors.some(e => /placeholder/i.test(e)),
+      `expected placeholder error; got: [${result.errors.join("; ")}]`);
+  });
+
+  it("rejects summary containing npm output template placeholder", () => {
+    const result = validateEvidenceEnvelope({
+      ...validEnvelope(),
+      summary: "npm test output:\n<paste full raw npm test stdout here>",
+    });
+    assert.equal(result.valid, false,
+      "summary with npm output placeholder must be rejected");
+    assert.ok(result.errors.some(e => /placeholder/i.test(e)),
+      `expected placeholder error; got: [${result.errors.join("; ")}]`);
+  });
+
+  it("accepts summary that is fully filled with real content (no placeholder residue)", () => {
+    const result = validateEvidenceEnvelope({
+      ...validEnvelope(),
+      summary: "BOX_MERGED_SHA=abc1234f\n# tests 42 pass 42 fail 0\nAll done.",
+    });
+    assert.equal(result.valid, true,
+      "summary with real content (no placeholders) must pass validation");
+    assert.deepEqual(result.errors, []);
+  });
+
+  it("negative path: only summary placeholder rejected; other fields valid", () => {
+    const result = validateEvidenceEnvelope({
+      roleName: "evolution-worker",
+      status: "done",
+      summary: "<paste full raw npm test stdout here>",
+      verificationEvidence: { build: "pass", tests: "pass", lint: "n/a" },
+    });
+    assert.equal(result.valid, false);
+    assert.equal(result.errors.length, 1,
+      `expected exactly 1 error (summary placeholder); got ${result.errors.length}: [${result.errors.join("; ")}]`);
+    assert.ok(result.errors[0].includes("placeholder"),
+      `error must mention placeholder; got: "${result.errors[0]}"`);
   });
 });
 

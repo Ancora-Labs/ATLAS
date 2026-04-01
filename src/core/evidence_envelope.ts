@@ -78,11 +78,42 @@ export type EvidenceEnvelope = {
 const VALID_EVIDENCE_VALUES = new Set(["pass", "fail", "n/a"]);
 
 /**
+ * Known template placeholder literals that constitute unfilled post-merge artifact residue.
+ * Any of these appearing in envelope string fields indicate the worker did not
+ * replace the output template with real content.
+ *
+ * These must stay in sync with the constants exported from verification_gate.ts.
+ * They are intentionally duplicated here (rather than imported) to avoid a
+ * circular dependency: evidence_envelope ← verification_gate would form a cycle
+ * because verification_gate already imports from evidence_envelope indirectly.
+ */
+const ENVELOPE_PLACEHOLDER_RESIDUES: readonly string[] = Object.freeze([
+  "POST_MERGE_TEST_OUTPUT",
+  "<paste git rev-parse HEAD here>",
+  "<paste full raw npm test stdout here>",
+]);
+
+/**
+ * Determine whether a string field in the envelope contains unfilled template
+ * placeholder residue that must be rejected before the envelope reaches Athena.
+ *
+ * @param value — string value of an envelope field
+ * @returns true when the value contains a known unfilled placeholder literal
+ */
+export function envelopeFieldHasPlaceholderResidue(value: string): boolean {
+  return ENVELOPE_PLACEHOLDER_RESIDUES.some(p => value.includes(p));
+}
+
+/**
  * Validate the structure of an EvidenceEnvelope before it is passed to Athena.
  *
  * Required fields: roleName (string), status (string), summary (string),
  * verificationEvidence (object with build/tests/lint slots).
  * Each evidence slot must be "pass" | "fail" | "n/a".
+ *
+ * Additionally, the summary field must not contain unfilled post-merge artifact
+ * template placeholders — such residue indicates the worker did not complete
+ * the required artifact fields before submitting.
  *
  * @param envelope — value to validate (untrusted)
  * @returns { valid: boolean; errors: string[] }
@@ -104,6 +135,8 @@ export function validateEvidenceEnvelope(envelope: unknown): { valid: boolean; e
   }
   if (typeof e.summary !== "string" || e.summary.trim() === "") {
     errors.push("summary must be a non-empty string");
+  } else if (envelopeFieldHasPlaceholderResidue(e.summary)) {
+    errors.push("summary contains unfilled template placeholder residue — replace placeholder text with actual content");
   }
 
   const ev = e.verificationEvidence;

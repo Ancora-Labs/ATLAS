@@ -120,6 +120,29 @@ const NPM_TEST_BLOCK_PATTERN = /={3,}\s*NPM TEST OUTPUT\s*(?:START\s*)?={3,}[\s\
 export const POST_MERGE_PLACEHOLDER = "POST_MERGE_TEST_OUTPUT";
 
 /**
+ * Template placeholder for the git SHA field inside the post-merge artifact block.
+ * Workers must replace this with the actual output of `git rev-parse HEAD`.
+ */
+export const POST_MERGE_SHA_PLACEHOLDER = "<paste git rev-parse HEAD here>";
+
+/**
+ * Template placeholder for the npm test output field inside the post-merge artifact block.
+ * Workers must replace this with the actual stdout from `npm test`.
+ */
+export const POST_MERGE_OUTPUT_PLACEHOLDER = "<paste full raw npm test stdout here>";
+
+/**
+ * All known template placeholder literals that constitute unfilled residue.
+ * A worker output containing any of these strings has not completed the
+ * post-merge artifact template and must be rejected deterministically.
+ */
+export const ALL_POST_MERGE_PLACEHOLDERS: readonly string[] = Object.freeze([
+  POST_MERGE_PLACEHOLDER,
+  POST_MERGE_SHA_PLACEHOLDER,
+  POST_MERGE_OUTPUT_PLACEHOLDER,
+]);
+
+/**
  * Canonical artifact-gate gap reason strings.
  * Shared by worker_runner and evolution_executor so failure reasons are identical
  * regardless of which finalization path triggers the artifact check.
@@ -171,7 +194,9 @@ export function checkPostMergeArtifact(output) {
   const hasExplicitTestBlock = NPM_TEST_BLOCK_PATTERN.test(text);
   const hasTestOutput = hasExplicitTestBlock || NPM_TEST_OUTPUT_PATTERN.test(text);
 
-  const hasUnfilledPlaceholder = text.includes(POST_MERGE_PLACEHOLDER);
+  // Deterministic rejection: any known template placeholder literal means the
+  // worker did not fill in the artifact fields.  Check all known residues.
+  const hasUnfilledPlaceholder = ALL_POST_MERGE_PLACEHOLDERS.some(p => text.includes(p));
 
   return {
     hasArtifact: hasSha && hasTestOutput && !hasUnfilledPlaceholder,

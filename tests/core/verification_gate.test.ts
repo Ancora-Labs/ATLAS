@@ -8,6 +8,9 @@ import {
   validateWorkerContract,
   checkPostMergeArtifact,
   POST_MERGE_PLACEHOLDER,
+  POST_MERGE_SHA_PLACEHOLDER,
+  POST_MERGE_OUTPUT_PLACEHOLDER,
+  ALL_POST_MERGE_PLACEHOLDERS,
   NON_MERGE_TASK_KINDS,
   isArtifactGateRequired,
   checkNamedTestProof,
@@ -1984,5 +1987,163 @@ describe("verification_gate — globally-promoted BUILD allows n/a (no false com
     assert.ok(result.gaps.some(g => /BUILD.*n\/a|BUILD.*required/i.test(g)),
       `originally-required BUILD=n/a must produce a gap; gaps: [${result.gaps.join("; ")}]`
     );
+  });
+});
+
+// ── Template-complete post-merge placeholders (T-1 hardening) ─────────────────
+// Verifies that ALL template placeholder residues are exported as constants and
+// that checkPostMergeArtifact rejects each of them deterministically.
+
+describe("verification_gate — POST_MERGE_SHA_PLACEHOLDER and POST_MERGE_OUTPUT_PLACEHOLDER constants", () => {
+  it("exports POST_MERGE_SHA_PLACEHOLDER as a non-empty string", () => {
+    assert.ok(typeof POST_MERGE_SHA_PLACEHOLDER === "string" && POST_MERGE_SHA_PLACEHOLDER.length > 0,
+      "POST_MERGE_SHA_PLACEHOLDER must be a non-empty string");
+  });
+
+  it("exports POST_MERGE_OUTPUT_PLACEHOLDER as a non-empty string", () => {
+    assert.ok(typeof POST_MERGE_OUTPUT_PLACEHOLDER === "string" && POST_MERGE_OUTPUT_PLACEHOLDER.length > 0,
+      "POST_MERGE_OUTPUT_PLACEHOLDER must be a non-empty string");
+  });
+
+  it("POST_MERGE_SHA_PLACEHOLDER contains the expected template text", () => {
+    assert.ok(POST_MERGE_SHA_PLACEHOLDER.includes("paste") && POST_MERGE_SHA_PLACEHOLDER.includes("rev-parse"),
+      `expected SHA placeholder to reference git rev-parse; got: "${POST_MERGE_SHA_PLACEHOLDER}"`);
+  });
+
+  it("POST_MERGE_OUTPUT_PLACEHOLDER contains the expected template text", () => {
+    assert.ok(POST_MERGE_OUTPUT_PLACEHOLDER.includes("paste") && POST_MERGE_OUTPUT_PLACEHOLDER.includes("npm"),
+      `expected output placeholder to reference npm test; got: "${POST_MERGE_OUTPUT_PLACEHOLDER}"`);
+  });
+
+  it("exports ALL_POST_MERGE_PLACEHOLDERS as a frozen array containing all three literals", () => {
+    assert.ok(Array.isArray(ALL_POST_MERGE_PLACEHOLDERS), "ALL_POST_MERGE_PLACEHOLDERS must be an array");
+    assert.ok(Object.isFrozen(ALL_POST_MERGE_PLACEHOLDERS), "ALL_POST_MERGE_PLACEHOLDERS must be frozen");
+    assert.ok(ALL_POST_MERGE_PLACEHOLDERS.includes(POST_MERGE_PLACEHOLDER),
+      "ALL_POST_MERGE_PLACEHOLDERS must include POST_MERGE_PLACEHOLDER");
+    assert.ok(ALL_POST_MERGE_PLACEHOLDERS.includes(POST_MERGE_SHA_PLACEHOLDER),
+      "ALL_POST_MERGE_PLACEHOLDERS must include POST_MERGE_SHA_PLACEHOLDER");
+    assert.ok(ALL_POST_MERGE_PLACEHOLDERS.includes(POST_MERGE_OUTPUT_PLACEHOLDER),
+      "ALL_POST_MERGE_PLACEHOLDERS must include POST_MERGE_OUTPUT_PLACEHOLDER");
+  });
+
+  it("ALL_POST_MERGE_PLACEHOLDERS contains at least three entries", () => {
+    assert.ok(ALL_POST_MERGE_PLACEHOLDERS.length >= 3,
+      `expected ≥3 placeholder entries; got ${ALL_POST_MERGE_PLACEHOLDERS.length}`);
+  });
+});
+
+describe("verification_gate — checkPostMergeArtifact rejects all template placeholder residues", () => {
+  it("hasUnfilledPlaceholder=true when POST_MERGE_SHA_PLACEHOLDER is present", () => {
+    const output = `SHA: ${POST_MERGE_SHA_PLACEHOLDER}\nnpm test output:\n# tests 5 pass 5`;
+    const result = checkPostMergeArtifact(output);
+    assert.equal(result.hasUnfilledPlaceholder, true,
+      "SHA placeholder residue must set hasUnfilledPlaceholder=true");
+    assert.equal(result.hasArtifact, false,
+      "artifact must be incomplete when SHA placeholder is present");
+  });
+
+  it("hasUnfilledPlaceholder=true when POST_MERGE_OUTPUT_PLACEHOLDER is present", () => {
+    const output = `BOX_MERGED_SHA=abc1234\nnpm test output:\n${POST_MERGE_OUTPUT_PLACEHOLDER}`;
+    const result = checkPostMergeArtifact(output);
+    assert.equal(result.hasUnfilledPlaceholder, true,
+      "test output placeholder residue must set hasUnfilledPlaceholder=true");
+    assert.equal(result.hasArtifact, false,
+      "artifact must be incomplete when test output placeholder is present");
+  });
+
+  it("hasUnfilledPlaceholder=true when POST_MERGE_PLACEHOLDER (main marker) is present", () => {
+    const output = `${POST_MERGE_PLACEHOLDER}\nSHA: abc1234\n# tests 5 pass 5`;
+    const result = checkPostMergeArtifact(output);
+    assert.equal(result.hasUnfilledPlaceholder, true,
+      "main placeholder residue must set hasUnfilledPlaceholder=true");
+  });
+
+  it("hasUnfilledPlaceholder=false for fully-filled artifact with no template residue", () => {
+    const output = [
+      "BOX_MERGED_SHA=abc1234f",
+      "===NPM TEST OUTPUT START===",
+      "# tests 10 pass 10 fail 0",
+      "===NPM TEST OUTPUT END===",
+    ].join("\n");
+    const result = checkPostMergeArtifact(output);
+    assert.equal(result.hasUnfilledPlaceholder, false,
+      "no placeholder residue expected in a fully-filled artifact");
+    assert.equal(result.hasArtifact, true,
+      "fully-filled artifact must have hasArtifact=true");
+  });
+
+  it("collectArtifactGaps emits UNFILLED_PLACEHOLDER for SHA placeholder residue", () => {
+    const output = `SHA: ${POST_MERGE_SHA_PLACEHOLDER}`;
+    const artifact = checkPostMergeArtifact(output);
+    assert.equal(artifact.hasUnfilledPlaceholder, true);
+    const gaps = collectArtifactGaps(artifact);
+    assert.ok(gaps.includes(ARTIFACT_GAP.UNFILLED_PLACEHOLDER),
+      `UNFILLED_PLACEHOLDER gap expected; got: [${gaps.join("; ")}]`);
+  });
+
+  it("negative path: output with only inline SHA placeholder (no full template marker) is still rejected", () => {
+    // Even when POST_MERGE_TEST_OUTPUT is absent, the SHA placeholder alone is enough to reject.
+    const output = `BOX_MERGED_SHA=abc1234\n${POST_MERGE_SHA_PLACEHOLDER}`;
+    const result = checkPostMergeArtifact(output);
+    assert.equal(result.hasUnfilledPlaceholder, true,
+      "SHA placeholder alone must trigger hasUnfilledPlaceholder");
+  });
+
+  it("negative path: output with only output placeholder is still rejected", () => {
+    const output = `BOX_MERGED_SHA=abc1234\n# tests 5 pass 5\n${POST_MERGE_OUTPUT_PLACEHOLDER}`;
+    const result = checkPostMergeArtifact(output);
+    assert.equal(result.hasUnfilledPlaceholder, true,
+      "test output placeholder alone must trigger hasUnfilledPlaceholder");
+  });
+});
+
+describe("verification_gate — validateWorkerContract rejects inline template placeholder residues", () => {
+  it("backend done with SHA placeholder in output is rejected as unfilled placeholder", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        `SHA: ${POST_MERGE_SHA_PLACEHOLDER}`,
+        "# tests 5 pass 5",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=n/a; API=n/a; RESPONSIVE=n/a",
+        "BOX_PR_URL=https://github.com/org/repo/pull/1",
+      ].join("\n"),
+    });
+    assert.equal(result.passed, false,
+      "SHA placeholder residue must cause done gate to fail");
+    assert.ok(result.gaps.some(g => /placeholder/i.test(g)),
+      `expected placeholder gap; got: [${result.gaps.join("; ")}]`);
+  });
+
+  it("backend done with output placeholder in output is rejected as unfilled placeholder", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234",
+        POST_MERGE_OUTPUT_PLACEHOLDER,
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=n/a; API=n/a; RESPONSIVE=n/a",
+        "BOX_PR_URL=https://github.com/org/repo/pull/1",
+      ].join("\n"),
+    });
+    assert.equal(result.passed, false,
+      "test output placeholder residue must cause done gate to fail");
+    assert.ok(result.gaps.some(g => /placeholder/i.test(g)),
+      `expected placeholder gap; got: [${result.gaps.join("; ")}]`);
+  });
+
+  it("negative path: done with all three placeholders removed and real content passes artifact gate", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234f",
+        "===NPM TEST OUTPUT START===",
+        "# tests 12 pass 12 fail 0",
+        "===NPM TEST OUTPUT END===",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=n/a; API=n/a; RESPONSIVE=n/a",
+        "BOX_PR_URL=https://github.com/org/repo/pull/1",
+      ].join("\n"),
+    });
+    const artifactGap = result.gaps.find(g => /placeholder|sha|test output/i.test(g));
+    assert.equal(artifactGap, undefined,
+      `no artifact gap expected when all placeholders are replaced; gaps: [${result.gaps.join("; ")}]`);
   });
 });
