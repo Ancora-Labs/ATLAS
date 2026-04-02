@@ -3969,3 +3969,57 @@ export function quarantineLowConfidencePackets(
 
   return { allowed, quarantined };
 }
+
+// ── Benchmark ground-truth section for planning prompt ────────────────────────
+
+/**
+ * Read benchmark_ground_truth.json from the state directory.
+ * Returns null when the file does not exist or cannot be parsed.
+ */
+export async function readBenchmarkGroundTruth(config: any): Promise<any | null> {
+  const stateDir = config?.paths?.stateDir || "state";
+  const filePath = path.join(stateDir, "benchmark_ground_truth.json");
+  try {
+    return await readJson(filePath, null);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build a concise benchmark status section for injection into the Prometheus
+ * planning prompt.
+ *
+ * Shows the most-recent cycle's research recommendation statuses so Prometheus
+ * can see which prior research has been implemented and what still needs work.
+ * Returns empty string when no benchmark data is available.
+ *
+ * @param benchmarkData — parsed benchmark_ground_truth.json content
+ */
+export function buildBenchmarkSection(benchmarkData: any): string {
+  if (!benchmarkData || !Array.isArray(benchmarkData.entries) || benchmarkData.entries.length === 0) {
+    return "";
+  }
+
+  const latest = benchmarkData.entries[0];
+  if (!latest || !Array.isArray(latest.recommendations) || latest.recommendations.length === 0) {
+    return "";
+  }
+
+  const lines = latest.recommendations.map((rec: any) => {
+    const status = String(rec.implementationStatus || "pending").toUpperCase();
+    const score = typeof rec.benchmarkScore === "number"
+      ? ` score=${rec.benchmarkScore.toFixed(2)}`
+      : "";
+    const gain = typeof rec.capacityGain === "number"
+      ? ` gain=${rec.capacityGain.toFixed(2)}`
+      : "";
+    const summary = String(rec.summary || "").slice(0, 120);
+    const topic   = String(rec.topic || rec.id || "?");
+    return `  - [${status}${score}${gain}] ${topic} — ${summary}`;
+  }).join("\n");
+
+  const cycleLabel = latest.cycleId ? ` (cycle ${latest.cycleId})` : "";
+  return `\n\n## RESEARCH BENCHMARK STATUS${cycleLabel}\nPrior research recommendation tracking — avoid re-proposing implemented items; prioritize pending ones:\n${lines}`;
+}
+

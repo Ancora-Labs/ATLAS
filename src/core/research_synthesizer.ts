@@ -18,7 +18,7 @@
 import path from "node:path";
 import fs from "node:fs/promises";
 import { appendFileSync } from "node:fs";
-import { writeJson, spawnAsync } from "./fs_utils.js";
+import { readJson, writeJson, spawnAsync } from "./fs_utils.js";
 import { appendProgress } from "./state_tracker.js";
 import { buildAgentArgs } from "./agent_loader.js";
 import { section, compilePrompt } from "./prompt_compiler.js";
@@ -357,6 +357,126 @@ ${scoutRawText}`),
 
   return output;
 }
+
+// ── Benchmark ground-truth: implementation-status accounting ──────────────────
+
+/**
+ * Possible implementation status values for a research recommendation.
+ * Used in benchmark_ground_truth.json to track each recommendation lifecycle.
+ */
+export const IMPLEMENTATION_STATUS = Object.freeze({
+  PENDING:     "pending",
+  IN_PROGRESS: "in-progress",
+  IMPLEMENTED: "implemented",
+  FAILED:      "failed",
+  RETIRED:     "retired",
+});
+
+/** Schema version for benchmark_ground_truth.json entries. */
+export const BENCHMARK_ENTRY_SCHEMA_VERSION = 1;
+
+/** A single tracked research recommendation entry. */
+export interface ResearchRecommendation {
+  id: string;
+  topic: string;
+  summary: string;
+  implementationStatus: string;
+  benchmarkScore: number | null;
+  capacityGain: number | null;
+  evidence: string;
+}
+
+/**
+ * Extract a flat list of recommendations from synthesis topics.
+ * Each topic produces one recommendation, initially with status "pending".
+ *
+ * Summary preference: prometheusReadySummary > extractedContent > applicableIdeas > topic name.
+ */
+export function extractRecommendationsList(
+  topics: Array<Record<string, unknown>>,
+): ResearchRecommendation[] {
+  if (!Array.isArray(topics)) return [];
+
+  return topics.map((t, idx) => {
+    const topicName = String(t.topic || `topic-${idx}`);
+    const sources = Array.isArray(t.sources) ? t.sources as Array<Record<string, unknown>> : [];
+
+    let summary = "";
+    for (const src of sources) {
+      if (src.prometheusReadySummary) { summary = String(src.prometheusReadySummary).slice(0, 300); break; }
+      if (src.extractedContent)       { summary = String(src.extractedContent).slice(0, 300); break; }
+    }
+    if (!summary) {
+      const ideas = Array.isArray(t.applicableIdeas) ? (t.applicableIdeas as string[]).join("; ") : "";
+      summary = ideas || topicName;
+    }
+
+    // Deterministic stable ID: topic slug + position index
+    const slug = topicName.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-").slice(0, 40);
+    const id = `rec-${slug}-${idx}`;
+
+    return {
+      id,
+      topic: topicName,
+      summary: summary.slice(0, 300),
+      implementationStatus: IMPLEMENTATION_STATUS.PENDING,
+      benchmarkScore: null,
+      capacityGain: null,
+      evidence: "",
+    };
+  });
+}
+
+/**
+ * Build a benchmark ground-truth entry for a cycle from synthesis topics.
+ * Returns an object ready for append to benchmark_ground_truth.json.
+ */
+export function buildBenchmarkEntry(
+  cycleId: string,
+  topics: Array<Record<string, unknown>>,
+): { cycleId: string; evaluatedAt: string; schemaVersion: number; recommendations: ResearchRecommendation[] } {
+  return {
+    cycleId: String(cycleId || ""),
+    evaluatedAt: new Date().toISOString(),
+    schemaVersion: BENCHMARK_ENTRY_SCHEMA_VERSION,
+    recommendations: extractRecommendationsList(topics),
+  };
+}
+
+/**
+ * Persist a benchmark ground-truth entry to state/benchmark_ground_truth.json.
+ * Prepends the new entry; trims history to 50 entries.
+ * Non-blocking — analytics failure must never stop main orchestration flow.
+ */
+export async function persistBenchmarkEntry(
+  config: any,
+  cycleId: string,
+  topics: Array<Record<string, unknown>>,
+): Promise<void> {
+  const stateDir = config?.paths?.stateDir || "state";
+  const filePath = path.join(stateDir, "benchmark_ground_truth.json");
+  try {
+    const entry = buildBenchmarkEntry(cycleId, topics);
+    const existing = await readJson(filePath, {
+      schemaVersion: BENCHMARK_ENTRY_SCHEMA_VERSION,
+      updatedAt: null,
+      entries: [],
+    });
+    const entries: unknown[] = Array.isArray(existing.entries) ? existing.entries : [];
+    entries.unshift(entry);
+    if (entries.length > 50) entries.length = 50;
+    await writeJson(filePath, {
+      schemaVersion: BENCHMARK_ENTRY_SCHEMA_VERSION,
+      updatedAt: new Date().toISOString(),
+      entries,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[research_synthesizer] persistBenchmarkEntry failed: ${msg}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Build a compact prompt section from the synthesis for injection into Prometheus.
