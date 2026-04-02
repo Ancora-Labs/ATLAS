@@ -65,7 +65,7 @@ import {
 import { isGovernanceCanaryBreachActive } from "./governance_canary.js";
 import { executeRollback, ROLLBACK_LEVEL, ROLLBACK_TRIGGER } from "./rollback_engine.js";
 import { initializeAggregateLiveLog, appendAggregateLiveLogSync } from "./live_log.js";
-import { buildRoleExecutionBatches } from "./worker_batch_planner.js";
+import { buildRoleExecutionBatches, buildTokenFirstBatches } from "./worker_batch_planner.js";
 import { agentFileExists, nameToSlug } from "./agent_loader.js";
 import { getRoleRegistry } from "./role_registry.js";
 import {
@@ -90,6 +90,8 @@ import {
   OPTIMIZER_STATUS,
 } from "./intervention_optimizer.js";
 import { validatePlanEvidenceCoupling } from "./evidence_envelope.js";
+import { runResearchScout } from "./research_scout.js";
+import { runResearchSynthesizer } from "./research_synthesizer.js";
 
 /**
  * Orchestrator health status enum.
@@ -305,6 +307,128 @@ type CriticalReadResult = {
     message?: string;
   } | null;
 };
+
+const PLAN_IMPLEMENTATION_STATUS = Object.freeze({
+  IMPLEMENTED_CORRECTLY: "implemented_correctly",
+  IMPLEMENTED_PARTIALLY: "implemented_partially",
+  NOT_IMPLEMENTED: "not_implemented",
+  UNKNOWN: "unknown",
+});
+
+function normalizePlanIdentity(value: unknown): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeImplementationStatus(rawStatus: unknown): string {
+  const status = String(rawStatus || "").toLowerCase().trim();
+  if (status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_CORRECTLY) return status;
+  if (status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_PARTIALLY) return status;
+  if (status === PLAN_IMPLEMENTATION_STATUS.NOT_IMPLEMENTED) return status;
+  return PLAN_IMPLEMENTATION_STATUS.UNKNOWN;
+}
+
+async function loadCompletedTaskIdentities(stateDir: string): Promise<Set<string>> {
+  const done = new Set<string>();
+
+  try {
+    const postmortems = await readJson(path.join(stateDir, "athena_postmortems.json"), null);
+    const entries = Array.isArray(postmortems?.entries)
+      ? postmortems.entries
+      : Array.isArray(postmortems)
+        ? postmortems
+        : [];
+    for (const entry of entries) {
+      if (!entry || typeof entry !== "object") continue;
+      if (entry.taskCompleted !== true) continue;
+      const identity = normalizePlanIdentity(entry.followUpTask || entry.expectedOutcome || entry.actualOutcome);
+      if (identity) done.add(identity);
+    }
+  } catch {
+    // Best-effort signal only.
+  }
+
+  return done;
+}
+
+function extractEvidencePaths(evidence: unknown): string[] {
+  if (!Array.isArray(evidence)) return [];
+  return evidence
+    .map(item => String(item || "").trim())
+    .filter(Boolean)
+    .map(item => {
+      const m = item.match(/(?:src|tests|scripts|docs)\/[A-Za-z0-9_./-]+/);
+      return m ? m[0].replace(/[),.;:]+$/, "") : "";
+    })
+    .filter(Boolean);
+}
+
+type PlanNoveltyFilterResult = {
+  actionablePlans: any[];
+  skippedPlans: Array<{ plan: any; reason: string }>;
+};
+
+async function filterAlreadyImplementedPlans(stateDir: string, plans: any[]): Promise<PlanNoveltyFilterResult> {
+  const actionablePlans: any[] = [];
+  const skippedPlans: Array<{ plan: any; reason: string }> = [];
+  const completedTaskIdentities = await loadCompletedTaskIdentities(stateDir);
+
+  for (const plan of Array.isArray(plans) ? plans : []) {
+    const status = normalizeImplementationStatus(plan?.implementationStatus);
+    const evidencePaths = extractEvidencePaths(plan?.implementationEvidence);
+    const planIdentity = normalizePlanIdentity(plan?.task || plan?.title || plan?.task_id || plan?.id);
+    const matchesCompletedHistory = planIdentity && completedTaskIdentities.has(planIdentity);
+
+    if (status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_CORRECTLY) {
+      skippedPlans.push({
+        plan,
+        reason: evidencePaths.length > 0
+          ? "implementationStatus=implemented_correctly with evidence"
+          : "implementationStatus=implemented_correctly"
+      });
+      continue;
+    }
+
+    if (status === PLAN_IMPLEMENTATION_STATUS.UNKNOWN && matchesCompletedHistory) {
+      skippedPlans.push({
+        plan,
+        reason: "task appears in completed Athena history"
+      });
+      continue;
+    }
+
+    actionablePlans.push(plan);
+  }
+
+  return { actionablePlans, skippedPlans };
+}
+
+function buildNoveltyReplanPrompt(basePrompt: string, skippedPlans: Array<{ plan: any; reason: string }>): string {
+  const skippedList = skippedPlans
+    .slice(0, 20)
+    .map((item, idx) => {
+      const title = String(item?.plan?.title || item?.plan?.task || item?.plan?.task_id || `plan-${idx + 1}`);
+      return `${idx + 1}. ${title} [${item.reason}]`;
+    })
+    .join("\n");
+
+  return [
+    String(basePrompt || "Full repository self-evolution analysis").trim(),
+    "",
+    "ADDITIONAL ORCHESTRATOR GATE CONTEXT:",
+    "The following proposed plans are already implemented correctly or already completed in system history. Do not re-propose them:",
+    skippedList || "(none)",
+    "",
+    "MANDATORY OUTPUT UPDATE:",
+    "- Return only net-new plans or delta plans for partially implemented capabilities.",
+    "- For each plan include precise target files, acceptance criteria, and verification commands.",
+    "- For each plan include implementationStatus and implementationEvidence.",
+    "- If everything is already implemented correctly, return plans: [] and explain why.",
+  ].join("\n");
+}
 
 /** Write orchestrator health record to state/orchestrator_health.json. Exported for downstream use. */
 export async function writeOrchestratorHealth(stateDir, status, reason, details = null) {
@@ -942,7 +1066,7 @@ function isDispatchCheckpointCompleteForTotal(checkpoint, totalPlans) {
   return Number(checkpoint.completedPlans || 0) >= Number(totalPlans || 0);
 }
 
-async function beginDispatchCheckpoint(config, plans) {
+async function beginDispatchCheckpoint(config, plans, actualPlanCount?: number) {
   const nowIso = new Date().toISOString();
   const checkpoint = {
     schemaVersion: 1,
@@ -950,6 +1074,8 @@ async function beginDispatchCheckpoint(config, plans) {
     createdAt: nowIso,
     updatedAt: nowIso,
     totalPlans: Array.isArray(plans) ? plans.length : 0,
+    // planCount stores actual Prometheus plan count (totalPlans stores batch count)
+    planCount: Number.isFinite(actualPlanCount) ? actualPlanCount : (Array.isArray(plans) ? plans.length : 0),
     completedPlans: 0
   };
   await writeDispatchCheckpoint(config, checkpoint);
@@ -988,7 +1114,11 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
     ? athenaReview.patchedPlans
     : (Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans : []);
   if (!athenaReview?.approved || plans.length === 0) return false;
-  const workerBatches = buildRoleExecutionBatches(plans, config);
+  const _normalizedPlansResume = plans.map((p: any) => {
+    const resolved = resolveWorkerRole(p?.role, p?.taskKind || p?.kind || "implementation");
+    return resolved !== (p?.role || "") ? { ...p, role: resolved } : p;
+  });
+  const workerBatches = buildRoleExecutionBatches(_normalizedPlansResume, config);
   if (workerBatches.length === 0) return false;
 
   let checkpoint = await readDispatchCheckpoint(config);
@@ -1002,7 +1132,7 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
     if (!force && checkpoint && checkpoint.status === "complete" && checkpointMatchesTotal) {
       return false;
     }
-    checkpoint = await beginDispatchCheckpoint(config, workerBatches);
+    checkpoint = await beginDispatchCheckpoint(config, workerBatches, plans.length);
   }
 
   const startIndex = Math.max(0, Math.min(Number(checkpoint.completedPlans || 0), workerBatches.length));
@@ -1502,14 +1632,28 @@ async function countCompletedPlans(config, plans) {
   const stateDir = config.paths?.stateDir || "state";
 
   const checkpoint = await readJson(path.join(stateDir, DISPATCH_CHECKPOINT_FILE), null);
-  if (checkpoint && Number(checkpoint.totalPlans || 0) === plans.length) {
-    const completedCount = Math.max(0, Math.min(Number(checkpoint.completedPlans || 0), plans.length));
+  // Match on planCount (actual plan count) if present, fall back to legacy totalPlans comparison
+  const checkpointPlanCount = Number(checkpoint?.planCount ?? checkpoint?.totalPlans ?? 0);
+  if (checkpoint && checkpointPlanCount === plans.length) {
+    // When all batches have completed the checkpoint status is set to "complete"
+    // and completedPlans is set to totalPlans (batch count). Treat that as all plans done.
+    if (checkpoint.status === "complete") {
+      return {
+        completed: plans.map((plan) => ({ plan, workerState: null, lastLog: null })),
+        pending: []
+      };
+    }
+    // Otherwise use the batch-progress ratio to approximate plan progress
+    const batchTotal = Number(checkpoint.totalPlans || 1);
+    const batchDone = Math.min(Number(checkpoint.completedPlans || 0), batchTotal);
+    const completedCount = Math.round((batchDone / batchTotal) * plans.length);
     return {
       completed: plans.slice(0, completedCount).map((plan) => ({ plan, workerState: null, lastLog: null })),
       pending: plans.slice(completedCount)
     };
   }
 
+  // Fallback: inspect individual worker state files
   const completed = [];
   const pending = [];
 
@@ -1522,7 +1666,8 @@ async function countCompletedPlans(config, plans) {
       continue;
     }
     const lastLog = Array.isArray(ws.activityLog) ? ws.activityLog[ws.activityLog.length - 1] : null;
-    if (lastLog?.status === "done") {
+    // Accept both "done" and "partial" — partial means work was submitted (PR opened)
+    if (lastLog?.status === "done" || lastLog?.status === "partial") {
       completed.push({ plan, workerState: ws, lastLog });
     } else {
       pending.push(plan);
@@ -1536,6 +1681,15 @@ async function countCompletedPlans(config, plans) {
 
 async function runSingleCycle(config) {
   const stateDir = config.paths?.stateDir || "state";
+  const cycleStartedAt = new Date().toISOString();
+  let _cycleRequests = 0;
+  const spendPremium = async (agentLabel: string, reason: string) => {
+    _cycleRequests += 1;
+    await appendProgress(config, `[PREMIUM_USAGE] spent=${_cycleRequests} agent=${agentLabel} reason=${reason}`);
+    return _cycleRequests;
+  };
+  await appendProgress(config, `[CYCLE] ════════════════════════════════════════`);
+  await appendProgress(config, `[CYCLE START] ${cycleStartedAt}`);
 
   // Clean up any leftover .tmp files from a previous crash before reading state.
   const cleanupResult = await cleanupStaleTempFiles(stateDir);
@@ -1601,7 +1755,7 @@ async function runSingleCycle(config) {
 
   // Step 1: Jesus analyzes state and decides what to do (1 request)
   await appendProgress(config, "[CYCLE] ── Step 1: Jesus analyzing system state ──");
-  await appendProgress(config, "[AGENT] JESUS ACTIVATED");
+  await appendProgress(config, `[AGENT] ★ ═══[ JESUS ]═══ ★  req#${_cycleRequests + 1} this cycle`);
 
   // ── Closure SLA audit: flag stale escalations (advisory) ────────────────
   try {
@@ -1629,13 +1783,73 @@ async function runSingleCycle(config) {
     return;
   }
 
+  await spendPremium("jesus", "cycle_directive");
+  await appendProgress(config, `[JESUS] ✓ Done — requests this cycle: ${_cycleRequests}`);
+
   await safeUpdatePipelineProgress(config, "jesus_decided", "Jesus decision ready", {
     jesusDecision: typeof jesusDecision === "object" ? String(jesusDecision.thinking || "").slice(0, 200) : ""
   });
 
+  // Step 1.5: Research Scout — conditional trigger before Prometheus
+  // Gate: only run Scout if synthesis is stale (>48h) AND Prometheus topic memory
+  // has no more than `maxActiveResearchTopics` active (unfinished) topics.
+  // This prevents Scout from piling on new topics when Prometheus hasn't acted on existing ones.
+  try {
+    const stateDir = config.paths?.stateDir || "state";
+    const scoutIntervalHours = Number(config.runtime?.scoutIntervalHours ?? 48);
+    const maxActiveResearchTopics = Number(config.runtime?.scoutMaxActiveTopics ?? 30);
+
+    // Check synthesis age
+    const synthesisPath = path.join(stateDir, "research_synthesis.json");
+    let synthesisAgeHours = Infinity;
+    try {
+      const synthJson = await readJson(synthesisPath, null);
+      if (synthJson?.synthesizedAt) {
+        synthesisAgeHours = (Date.now() - new Date(synthJson.synthesizedAt).getTime()) / (1000 * 60 * 60);
+      }
+    } catch { /* ok — file missing means first run */ }
+
+    // Check active topic count in Prometheus topic memory
+    const topicMemoryPath = path.join(stateDir, "prometheus_topic_memory.json");
+    let activeTopicCount = 0;
+    try {
+      const topicMemory = await readJson(topicMemoryPath, null);
+      if (Array.isArray(topicMemory?.active)) {
+        activeTopicCount = topicMemory.active.length;
+      }
+    } catch { /* ok */ }
+
+    const scoutStale = synthesisAgeHours >= scoutIntervalHours;
+    const topicsUnderThreshold = activeTopicCount <= maxActiveResearchTopics;
+
+    if (scoutStale && topicsUnderThreshold) {
+      await appendProgress(config, `[CYCLE] ── Step 1.5: Research Scout (synthesisAge=${synthesisAgeHours.toFixed(1)}h >= ${scoutIntervalHours}h, activeTopics=${activeTopicCount} <= ${maxActiveResearchTopics}) ──`);
+      await appendProgress(config, `[AGENT] ↯↯↯ RESEARCH SCOUT ↯↯↯  req#${_cycleRequests + 1} this cycle`);
+      try {
+        const scoutResult = await runResearchScout(config);
+        if (scoutResult.success && scoutResult.sourceCount > 0) {
+          await appendProgress(config, `[RESEARCH_SCOUT] Collected ${scoutResult.sourceCount} sources — running synthesizer`);
+          await runResearchSynthesizer(config, scoutResult);
+          await appendProgress(config, "[RESEARCH_SCOUT] Synthesis complete — Prometheus will receive updated research context");
+          await spendPremium("research-scout", "scheduled_refresh");
+          await appendProgress(config, `[RESEARCH_SCOUT] ✓ Done — requests this cycle: ${_cycleRequests}`);
+        } else {
+          await appendProgress(config, `[RESEARCH_SCOUT] Scout returned no sources (success=${scoutResult.success}) — skipping synthesis`);
+        }
+      } catch (scoutErr) {
+        warn(`[orchestrator] Research Scout failed (non-fatal): ${String((scoutErr as any)?.message || scoutErr)}`);
+        await appendProgress(config, `[RESEARCH_SCOUT] Failed (non-fatal): ${String((scoutErr as any)?.message || scoutErr)}`);
+      }
+    } else {
+      await appendProgress(config, `[CYCLE] Research Scout skipped — synthesisAge=${synthesisAgeHours.toFixed(1)}h (threshold=${scoutIntervalHours}h) activeTopics=${activeTopicCount} (threshold=${maxActiveResearchTopics})`);
+    }
+  } catch (scoutGateErr) {
+    warn(`[orchestrator] Scout gate evaluation failed (non-fatal): ${String((scoutGateErr as any)?.message || scoutGateErr)}`);
+  }
+
   // Step 2: Prometheus plans (single-prompt, no autopilot)
   await appendProgress(config, "[CYCLE] ── Step 2: Prometheus scanning & planning ──");
-  await appendProgress(config, "[AGENT] PROMETHEUS ACTIVATED");
+  await appendProgress(config, `[AGENT] ⚡⚡ PROMETHEUS ⚡⚡  req#${_cycleRequests + 1} this cycle`);
   await safeUpdatePipelineProgress(config, "prometheus_starting", "Prometheus starting repository scan");
 
   // ── Architecture drift check: run before Prometheus to surface stale refs ──
@@ -1778,13 +1992,118 @@ async function runSingleCycle(config) {
     warn(`[orchestrator] Dispatch strictness gate failed (non-fatal): ${String(err?.message || err)}`);
   }
 
+  // ── Plan novelty gate ─────────────────────────────────────────────────────
+  // Skip plans that Prometheus itself marked as already implemented correctly.
+  // If all plans are already implemented, force one fresh re-plan with an
+  // explicit "net-new or delta only" instruction and continue with that output.
+  let noveltyResult = await filterAlreadyImplementedPlans(stateDir, prometheusAnalysis.plans);
+  if (noveltyResult.skippedPlans.length > 0) {
+    await appendProgress(
+      config,
+      `[CYCLE] Plan novelty gate skipped ${noveltyResult.skippedPlans.length}/${prometheusAnalysis.plans.length} already-implemented plan(s)`
+    );
+  }
+
+  if (noveltyResult.actionablePlans.length === 0) {
+    await appendProgress(config,
+      "[CYCLE] All Prometheus plans are already implemented/completed — refreshing Scout+Synth before requesting net-new plans"
+    );
+
+    const refinedPrompt = buildNoveltyReplanPrompt(
+      jesusDecision.briefForPrometheus || jesusDecision.thinking || "Full repository analysis",
+      noveltyResult.skippedPlans
+    );
+
+    try {
+      // Refresh research context first so Prometheus re-plans from fresh Scout output,
+      // not only from existing stale synthesis.
+      try {
+        await appendProgress(config, "[CYCLE] Novelty gate triggering Research Scout refresh");
+        const scoutRefresh = await runResearchScout(config);
+        if (scoutRefresh.success && scoutRefresh.sourceCount > 0) {
+          await appendProgress(config, `[RESEARCH_SCOUT] Refresh collected ${scoutRefresh.sourceCount} source(s) — running synthesizer`);
+          await runResearchSynthesizer(config, scoutRefresh);
+          await spendPremium("research-scout", "novelty_gate_refresh");
+          await appendProgress(config, `[RESEARCH_SCOUT] ✓ Refresh complete — requests this cycle: ${_cycleRequests}`);
+        } else {
+          await appendProgress(config, `[RESEARCH_SCOUT] Refresh produced no sources (success=${scoutRefresh.success}) — continuing with novelty re-plan`);
+        }
+      } catch (refreshErr) {
+        warn(`[orchestrator] Novelty gate Scout/Synth refresh failed (non-fatal): ${String((refreshErr as any)?.message || refreshErr)}`);
+        await appendProgress(config,
+          `[CYCLE] Scout/Synth refresh failed (non-fatal) — continuing with novelty re-plan: ${String((refreshErr as any)?.message || refreshErr)}`
+        );
+      }
+
+      const replanned = await runPrometheusAnalysis(config, {
+        prompt: refinedPrompt,
+        requestedBy: "OrchestratorNoveltyGate",
+        driftReport: architectureDriftReport,
+        bypassCache: true,
+        bypassReason: "all_plans_already_implemented_or_completed"
+      });
+
+      await spendPremium("prometheus", "novelty_replan");
+      await appendProgress(config, `[PROMETHEUS] ↺ Re-plan run complete — requests this cycle: ${_cycleRequests}`);
+
+      if (!replanned || !Array.isArray(replanned.plans) || replanned.plans.length === 0) {
+        await appendProgress(config, "[CYCLE] Re-plan returned no plans — cycle complete");
+        await safeUpdatePipelineProgress(config, "cycle_complete", "No net-new actionable plans after novelty re-plan");
+        return;
+      }
+
+      const replannedConfidence = replanned.parserConfidence ?? 1.0;
+      if (replannedConfidence < PARSER_CONFIDENCE_THRESHOLD) {
+        await appendProgress(config,
+          `[CYCLE] Re-plan parser confidence too low (${replannedConfidence} < ${PARSER_CONFIDENCE_THRESHOLD}) — blocking dispatch`
+        );
+        await appendAlert(config, {
+          severity: ALERT_SEVERITY.HIGH,
+          source: "orchestrator",
+          title: "Low parser confidence on novelty re-plan — dispatch blocked",
+          message: `parserConfidence=${replannedConfidence} threshold=${PARSER_CONFIDENCE_THRESHOLD}. Re-planned plans not dispatched.`
+        });
+        await safeUpdatePipelineProgress(config, "cycle_complete", `Re-plan parser confidence too low (${replannedConfidence})`);
+        return;
+      }
+
+      noveltyResult = await filterAlreadyImplementedPlans(stateDir, replanned.plans);
+      if (noveltyResult.actionablePlans.length === 0) {
+        await appendProgress(config,
+          "[CYCLE] Re-plan still produced only already-implemented/completed items — cycle complete"
+        );
+        await safeUpdatePipelineProgress(config, "cycle_complete", "No net-new actionable plans after novelty filtering");
+        return;
+      }
+
+      prometheusAnalysis = {
+        ...replanned,
+        plans: noveltyResult.actionablePlans,
+      };
+    } catch (replanErr) {
+      warn(`[orchestrator] Novelty re-plan failed (non-fatal): ${String((replanErr as any)?.message || replanErr)}`);
+      await appendProgress(config,
+        `[CYCLE] Novelty re-plan failed — stopping cycle to avoid redispatching already-implemented plans: ${String((replanErr as any)?.message || replanErr)}`
+      );
+      await safeUpdatePipelineProgress(config, "cycle_complete", "Novelty re-plan failed");
+      return;
+    }
+  } else {
+    prometheusAnalysis = {
+      ...prometheusAnalysis,
+      plans: noveltyResult.actionablePlans,
+    };
+  }
+
   await safeUpdatePipelineProgress(config, "prometheus_done", `Prometheus complete — ${prometheusAnalysis.plans.length} plan(s)`, {
     planCount: prometheusAnalysis.plans.length
   });
+  await spendPremium("prometheus", "primary_planning");
+  await appendProgress(config, `[PROMETHEUS] ✓ Done — ${prometheusAnalysis.plans.length} plan(s) — requests this cycle: ${_cycleRequests}`);
 
   // Step 3: Athena validates the plan (1 request)
   await appendProgress(config, "[CYCLE] ── Step 3: Athena reviewing plan ──");
-  await appendProgress(config, "[AGENT] ATHENA ACTIVATED");
+  await appendProgress(config, `[AGENT] ◈◈◈ ATHENA ◈◈◈  req#${_cycleRequests + 1} this cycle`);
   await safeUpdatePipelineProgress(config, "athena_reviewing", "Athena reviewing Prometheus plan");
   let planReview;
   try {
@@ -1836,6 +2155,8 @@ async function runSingleCycle(config) {
   }
 
   await safeUpdatePipelineProgress(config, "athena_approved", "Athena approved the plan");
+  await spendPremium("athena", "plan_review");
+  await appendProgress(config, `[ATHENA] ✓ Done — plan approved — requests this cycle: ${_cycleRequests}`);
 
   // Step 4: Dispatch workers sequentially (1 request per worker)
   const rawPlans = Array.isArray(planReview.patchedPlans) && planReview.patchedPlans.length > 0
@@ -2098,13 +2419,103 @@ async function runSingleCycle(config) {
     }
   }
 
-  const workerBatches = buildRoleExecutionBatches(plans, config, capabilityPoolResult);
+  // Normalize analysis-only roles before batch planning so plans that will
+  // be redirected to evolution-worker are co-batched together instead of
+  // producing one thin batch per logical role (prometheus/athena/orchestrator).
+  const normalizedPlansForBatching = plans.map((p: any) => {
+    const resolved = resolveWorkerRole(p?.role, p?.taskKind || p?.kind || "implementation");
+    return resolved !== (p?.role || "") ? { ...p, role: resolved } : p;
+  });
+  const redirectedCount = normalizedPlansForBatching.filter((p: any, i: number) => p.role !== (plans as any[])[i]?.role).length;
+  if (redirectedCount > 0) {
+    await appendProgress(config, `[BATCH_PLANNER] Normalized ${redirectedCount} analysis-only role(s) → evolution-worker for co-batching`);
+  }
+
+  // ── Token-first batch path ──────────────────────────────────────────────────
+  // Use when:
+  //   (a) Athena already ran deterministic rebatch (_batchIndex present), OR
+  //   (b) config.planner.tokenFirstPacking === true (explicit opt-in)
+  // Falls back to role-split path otherwise (backward-compatible).
+  const athenaPreBatched = normalizedPlansForBatching.length > 0 &&
+    Number.isFinite(Number((normalizedPlansForBatching[0] as any)?._batchIndex));
+  const tokenFirstEnabled = (config as any)?.planner?.tokenFirstPacking !== false; // default ON
+  const useTokenFirst = athenaPreBatched || tokenFirstEnabled;
+
+  // If Athena already assigned deterministic batch indexes, keep those batches
+  // and worker choices as-is instead of re-packing in orchestrator.
+  const workerBatches = athenaPreBatched
+    ? (() => {
+        const grouped = new Map<number, any[]>();
+        for (const plan of normalizedPlansForBatching as any[]) {
+          const bi = Number(plan?._batchIndex);
+          const idx = Number.isFinite(bi) && bi > 0 ? Math.floor(bi) : 1;
+          if (!grouped.has(idx)) grouped.set(idx, []);
+          grouped.get(idx)!.push(plan);
+        }
+
+        const sortedIndexes = [...grouped.keys()].sort((a, b) => a - b);
+        return sortedIndexes.map((batchIndex, pos) => {
+          const batchPlans = grouped.get(batchIndex) || [];
+          const role = String(
+            batchPlans[0]?._batchWorkerRole
+            || batchPlans[0]?.role
+            || "evolution-worker"
+          ).trim() || "evolution-worker";
+          const wave = Number(batchPlans[0]?._batchWave || batchPlans[0]?.wave || 1);
+          return {
+            role,
+            plans: batchPlans,
+            wave,
+            roleBatchIndex: pos + 1,
+            roleBatchTotal: sortedIndexes.length,
+            bundleIndex: pos + 1,
+            totalBundles: sortedIndexes.length,
+            githubFinalizer: pos === sortedIndexes.length - 1,
+            tokenFirstPacked: true,
+            athenaBatchAssigned: true,
+          };
+        });
+      })()
+    : (useTokenFirst
+      ? await (async () => {
+          try {
+            const { readCalibrationState } = await import("./token_calibration.js");
+            const calState = await readCalibrationState(config);
+            return buildTokenFirstBatches(normalizedPlansForBatching, config, { calibrationState: calState });
+          } catch {
+            return buildTokenFirstBatches(normalizedPlansForBatching, config);
+          }
+        })()
+      : buildRoleExecutionBatches(normalizedPlansForBatching, config, capabilityPoolResult));
+
+  if (useTokenFirst) {
+    const reroutes = (workerBatches as any[])?.[0]?.specialistReroutes;
+    const rerouteMsg = Array.isArray(reroutes) && reroutes.length > 0
+      ? ` | specialist→evo reroutes: ${reroutes.join(", ")}`
+      : "";
+    await appendProgress(config,
+      `[BATCH_PLANNER] Token-first packing: ${normalizedPlansForBatching.length} plan(s) → ${workerBatches.length} batch(es)${
+        athenaPreBatched ? " (Athena-selected batches applied)" : ""
+      }${rerouteMsg}`
+    );
+  }
+
+  // ── Premium request gate ───────────────────────────────────────────────────
+  // Warn when batch count is unexpectedly high relative to plan count.
+  // minPossibleBatches = ceil(totalEstimatedTokens / usableContextTokens); we use
+  // plan count as a practical proxy. If batches > plans + 1, log a warning.
+  if (workerBatches.length > normalizedPlansForBatching.length + 1) {
+    await appendProgress(config,
+      `[BATCH_PLANNER] WARNING: generated ${workerBatches.length} batches for ${normalizedPlansForBatching.length} plan(s) — possible over-split; check estimatedExecutionTokens`
+    );
+  }
+
   await safeUpdatePipelineProgress(config, "workers_dispatching", `Dispatching ${workerBatches.length} worker batch(es)`, {
     workersTotal: workerBatches.length,
     workersDone: 0
   });
 
-  const dispatchCheckpoint = await beginDispatchCheckpoint(config, workerBatches);
+  const dispatchCheckpoint = await beginDispatchCheckpoint(config, workerBatches, plans.length);
   let workersDone = 0;
   const allWorkerResults: Array<{ roleName: string; status: string }> = [];
   // Collects (taskText, verificationEvidence) from successful workers for
@@ -2145,7 +2556,8 @@ async function runSingleCycle(config) {
       workersDone,
       currentWorker: batch.role
     });
-    await appendProgress(config, `[WORKER_BATCH] BATCH ${workersDone + 1}/${workerBatches.length} STARTED role=${batch.role}`);
+    await spendPremium(String(batch.role || "worker"), "worker_batch_dispatch");
+    await appendProgress(config, `[AGENT] » WORKER · ${batch.role} · batch=${workersDone + 1}/${workerBatches.length} · req#${_cycleRequests} this cycle`);
 
     let workerResult;
     let transientRetries = 0;
@@ -2198,7 +2610,28 @@ async function runSingleCycle(config) {
       }
     }
 
-    await appendProgress(config, `[WORKER_BATCH] BATCH ${workersDone}/${workerBatches.length} DONE role=${batch.role} status=${workerResult?.status || "unknown"}`);
+    await appendProgress(config, `[WORKER_BATCH] ✓ BATCH ${workersDone}/${workerBatches.length} DONE  role=${batch.role}  status=${workerResult?.status || "unknown"}  total_req=${_cycleRequests}`);
+
+    // ── Token calibration: record estimated vs proxy-actual tokens ──────────
+    // Use worker response length as a proxy for actual token consumption.
+    // Real provider-level token counts can replace this when available.
+    try {
+      const rawLen = String(workerResult?.raw || "").length;
+      if (rawLen > 0 && Number.isFinite((batch as any).estimatedTokens) && (batch as any).estimatedTokens > 0) {
+        const { recordCalibrationSample } = await import("./token_calibration.js");
+        // Proxy: response chars / 4 + estimated input ≈ total session tokens
+        const proxyActual = Math.ceil(rawLen / 4) + (batch as any).estimatedTokens;
+        await recordCalibrationSample(
+          config,
+          String(batch.role || "evolution-worker"),
+          (batch as any).estimatedTokens,
+          proxyActual
+        );
+      }
+    } catch {
+      // Calibration is advisory — never block dispatch
+    }
+
     await updateDispatchCheckpointProgress(config, dispatchCheckpoint, workersDone);
     await waitForWorkersToFinish(config);
 
@@ -2218,6 +2651,7 @@ async function runSingleCycle(config) {
   });
 
   await appendProgress(config, "[CYCLE] ── All workers dispatched — cycle complete ──");
+  await appendProgress(config, `[CYCLE DONE] ════════ ${_cycleRequests} premium requests | ${workerBatches.length} batch(es) | elapsed=${Math.round((Date.now() - new Date(cycleStartedAt).getTime()) / 1000)}s ════════`);
   await appendProgress(config, `[RUN] RUN DONE — ${workerBatches.length} batch(es) completed`);
   await safeUpdatePipelineProgress(config, "cycle_complete", `Cycle complete — ${workerBatches.length} worker batch(es) processed`, {
     workersTotal: workerBatches.length,

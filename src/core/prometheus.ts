@@ -45,6 +45,7 @@ import { checkCarryForwardGate, hardGateRecurrenceToPolicies } from "./learning_
 import {
   splitWavesIntoMicrowaves as _splitWavesIntoMicrowaves,
   MICROWAVE_MAX_TASKS_DEFAULT as _MICROWAVE_MAX_TASKS_DEFAULT,
+  estimatePlanExecutionTokens,
 } from "./worker_batch_planner.js";
 
 // Re-export so existing callers that import from prometheus.ts continue to work
@@ -181,13 +182,19 @@ function computeResearchCoverageTarget(topicCount: number, sourceCount: number, 
 function buildResearchPromptSection(
   synthesis: unknown,
   scout: unknown,
-  planningPolicy: { maxTasks?: number } | Record<string, unknown>
+  planningPolicy: { maxTasks?: number } | Record<string, unknown>,
+  artifactAgeMs?: number
 ): {
   sectionText: string;
   topicCount: number;
   sourceCount: number;
   coverageTarget: number;
 } {
+  // Staleness: if research artifacts are older than 72 h, flag them as stale
+  // so Prometheus deprioritises re-injecting the same cached signal each cycle.
+  const STALE_THRESHOLD_MS = 72 * 60 * 60 * 1000;
+  const isStale = typeof artifactAgeMs === "number" && artifactAgeMs > 0
+    && (Date.now() - artifactAgeMs) > STALE_THRESHOLD_MS;
   const synthesisObj = (synthesis && typeof synthesis === "object") ? synthesis as Record<string, unknown> : {};
   const scoutObj = (scout && typeof scout === "object") ? scout as Record<string, unknown> : {};
   const topics = extractResearchTopics(synthesis, scout);
@@ -203,22 +210,41 @@ function buildResearchPromptSection(
     return { sectionText: "", topicCount: 0, sourceCount: 0, coverageTarget: 0 };
   }
 
-  const topicPreviewLimit = 5;
-  const sourcePreviewLimit = 3;
-  const topicLines = topics.slice(0, topicPreviewLimit).map((topic, i) => `${i + 1}. ${topic}`).join("\n");
-  const hiddenTopicCount = Math.max(0, topicCount - topicPreviewLimit);
+  // When stale, reduce source preview to reduce bloat with outdated data.
+  // Topics and cross-topic connections are always fully injected — they are the
+  // richest planning signal and must not be truncated.
+  const sourcePreviewLimit = isStale ? 5 : 15;
+  const topicLines = topics.map((topic, i) => `${i + 1}. ${topic}`).join("\n");
+  const hiddenTopicCount = 0; // all topics always shown
   const sourceSignals = (Array.isArray(scoutObj.sources) ? scoutObj.sources : [])
     .slice(0, sourcePreviewLimit)
     .map((source, i: number) => {
       const sourceObj = (source && typeof source === "object") ? source as Record<string, unknown> : {};
-      const title = sanitizePromptLine(sourceObj.title || "Untitled source", 120);
-      const why = sanitizePromptLine(sourceObj.whyImportant || "", 160);
+      const title = sanitizePromptLine(sourceObj.title || "Untitled source", 160);
+      const why = sanitizePromptLine(sourceObj.whyImportant || "", 280);
       return `${i + 1}. ${title}${why ? ` — ${why}` : ""}`;
     })
     .join("\n");
-  const gapsPreview = sanitizePromptLine(synthesisObj.researchGaps || "", 420);
+  // Research gaps: inject in full — these directly tell Prometheus what was NOT covered.
+  const gapsPreview = String(synthesisObj.researchGaps || "").slice(0, 4000);
 
-  const sectionText = `\n\n## EXTERNAL RESEARCH INTELLIGENCE\nResearch signal available for this cycle: ${topicCount} topic(s), ${sourceCount} source(s).\n\nResearch coverage target: ${coverageTarget > 0 ? coverageTarget : "AUTO"} research-backed packet(s) when materially applicable.\nDo NOT ignore this section. For each high-confidence unresolved topic, either:\n1) produce an actionable packet with concrete target_files and verification, or\n2) state that it is already implemented and cite exact file evidence in before_state/after_state.\n\nTop topics:\n${topicLines || "(none)"}${hiddenTopicCount > 0 ? `\n... plus ${hiddenTopicCount} additional topic signal(s) omitted from the prompt for budget control.` : ""}${sourceSignals ? `\n\nSource signals:\n${sourceSignals}` : ""}${gapsPreview ? `\n\nResearch gaps to consider:\n${gapsPreview}` : ""}`;
+  // Cross-topic connections are the RICHEST actionable content: they show which topics
+  // must be implemented together and why. Inject ALL connections at full fidelity.
+  const crossTopicLines = (Array.isArray(synthesisObj.crossTopicConnections) ? synthesisObj.crossTopicConnections : [])
+    .map((c: unknown, i: number) => `${i + 1}. ${sanitizePromptLine(c, 3000)}`)
+    .join("\n");
+
+  const stalenessNote = isStale
+    ? `\n⚠️  STALE: Research artifacts are >72 h old. Do NOT produce redundant plans for topics already in ACCUMULATED TOPIC KNOWLEDGE. Only generate NEW packets for genuinely unaddressed gaps.`
+    : "";
+
+  // Inject the full synthesis rawText — this is the Synthesizer's complete analysis
+  // with deep per-topic breakdowns, implementation recommendations, and cross-references.
+  // This is the richest signal Prometheus can receive from the research pipeline.
+  const rawText = String(synthesisObj.rawText || "").trim();
+  const rawTextBlock = rawText ? `\n\n### FULL RESEARCH SYNTHESIS (Synthesizer output — read carefully)\n${rawText}` : "";
+
+  const sectionText = `\n\n## EXTERNAL RESEARCH INTELLIGENCE${stalenessNote}\nResearch signal available for this cycle: ${topicCount} topic(s), ${sourceCount} source(s).\n\nResearch coverage target: ${coverageTarget > 0 ? coverageTarget : "AUTO"} research-backed packet(s) when materially applicable.\nDo NOT ignore this section. For each high-confidence unresolved topic, either:\n1) produce an actionable packet with concrete target_files and verification, or\n2) state that it is already implemented and cite exact file evidence in before_state/after_state.\n\nAll research topics:\n${topicLines || "(none)"}${crossTopicLines ? `\n\nCross-topic implementation dependencies (act on these together — these are your highest-priority planning inputs):\n${crossTopicLines}` : ""}${sourceSignals ? `\n\nSource signals:\n${sourceSignals}` : ""}${gapsPreview ? `\n\nResearch gaps to address next (areas the Scout did NOT cover — generate packets for these):\n${gapsPreview}` : ""}${rawTextBlock}`;
 
   return { sectionText, topicCount, sourceCount, coverageTarget };
 }
@@ -236,6 +262,48 @@ async function getLatestResearchArtifactUpdatedAtMs(stateDir: string): Promise<n
     }
   }
   return latest;
+}
+
+// ── Source Code & State Injection for Deep Context ──────────────────────────
+// These builders give Prometheus direct visibility into the actual codebase and
+// system state — not just file names. This enables dramatically better planning.
+
+/**
+ * Priority source files — DEPRECATED.
+ * Prometheus now reads files autonomously via allowAll tools.
+ * Kept as empty array for backward compatibility with any code referencing it.
+ */
+const PRIORITY_SOURCE_FILES: string[] = [];
+
+/**
+ * DEPRECATED — Prometheus now reads files autonomously.
+ */
+const LARGE_FILE_HEAD_LINES = 600;
+
+/**
+ * DEPRECATED — Prometheus now reads files autonomously.
+ */
+const SOURCE_CODE_SECTION_MAX_CHARS = 600_000;
+
+/**
+ * DEPRECATED — Prometheus reads files autonomously via allowAll tools.
+ * Returns empty string. Kept for backward compatibility.
+ */
+async function buildSourceCodeSection(_repoRoot: string): Promise<string> {
+  return "";
+}
+
+/**
+ * Key state files — DEPRECATED. Prometheus reads these autonomously.
+ */
+const STATE_FILES_TO_INJECT: Array<{ file: string; label: string; maxChars: number }> = [];
+
+/**
+ * DEPRECATED — Prometheus reads state files autonomously via allowAll tools.
+ * Returns empty string. Kept for backward compatibility.
+ */
+async function buildSystemStateSection(_stateDir: string): Promise<string> {
+  return "";
 }
 
 /**
@@ -257,7 +325,7 @@ export const CARRY_FORWARD_MAX_LOW_RECURRENCE_ITEMS = 5;
  */
 export const BEHAVIOR_PATTERNS_MAX_TOKENS = 1500;
 
-export const DEFAULT_PROMETHEUS_RESEARCH_SECTION_MAX_TOKENS = 1400;
+export const DEFAULT_PROMETHEUS_RESEARCH_SECTION_MAX_TOKENS = 16000;
 export const DEFAULT_PROMETHEUS_TOPIC_MEMORY_MAX_TOKENS = 1800;
 export const DEFAULT_PROMETHEUS_TIMEOUT_MINUTES = 20;
 
@@ -306,6 +374,25 @@ function topicKey(topic: string): string {
 }
 
 /**
+ * Resolve a canonical key for a new topic against the existing topic map.
+ * If an existing key is a word-prefix of the new key (≥4 chars), the shorter
+ * canonical key is returned to prevent topic fragmentation (e.g., "evaluation"
+ * absorbs "evaluation-framework", "evaluate-systematically-braintrust", etc.).
+ */
+export function findCanonicalTopicKey(newKey: string, existingKeys: string[]): string {
+  if (!newKey || existingKeys.length === 0) return newKey;
+  let bestMatch = "";
+  for (const existing of existingKeys) {
+    if (existing.length < 4) continue;
+    // existing is a prefix-segment of newKey: "evaluation" matches "evaluation-framework"
+    if (newKey.startsWith(existing + "-") || newKey === existing) {
+      if (existing.length > bestMatch.length) bestMatch = existing;
+    }
+  }
+  return bestMatch || newKey;
+}
+
+/**
  * Update topic memory with new knowledge from this run's research and plans.
  * For each active research topic, adds new knowledge fragments extracted from
  * the research synthesis and generated plans.
@@ -321,8 +408,10 @@ export function updateTopicKnowledge(
   const synthTopics = Array.isArray(synthesisObj.topics) ? synthesisObj.topics : [];
 
   for (const rawTopic of researchTopics) {
-    const key = topicKey(rawTopic);
-    if (!key) continue;
+    const rawKey = topicKey(rawTopic);
+    if (!rawKey) continue;
+    // Route to canonical key if a parent topic already exists (dedup)
+    const key = findCanonicalTopicKey(rawKey, Object.keys(memory.topics));
 
     if (!memory.topics[key]) {
       memory.topics[key] = {
@@ -341,7 +430,9 @@ export function updateTopicKnowledge(
     entry.runCount++;
     entry.lastUpdatedAt = now;
 
-    // Extract knowledge from synthesis for this topic
+    // Extract knowledge from synthesis for this topic.
+    // Synthesis topics in the current format only carry 'topic', 'confidence', 'freshness'.
+    // Fall back to confidence/freshness as a lightweight evidence fragment.
     for (const st of synthTopics) {
       const stObj = (st && typeof st === "object") ? st as Record<string, unknown> : {};
       const stName = String(stObj.topic || "").toLowerCase();
@@ -349,6 +440,28 @@ export function updateTopicKnowledge(
         const findings = String(stObj.findings || stObj.keyFindings || stObj.summary || "").trim();
         if (findings && findings.length > 10 && !entry.knowledgeFragments.includes(findings)) {
           entry.knowledgeFragments.push(findings.slice(0, 500));
+        }
+        // Use confidence/freshness as a lightweight fragment when findings is absent
+        const conf = String(stObj.confidence || "").trim();
+        const fresh = String(stObj.freshness || "").trim();
+        if (!findings && (conf || fresh)) {
+          const fragment = `Research signal: confidence=${conf.slice(0, 80)} freshness=${fresh.slice(0, 120)}`;
+          if (!entry.knowledgeFragments.includes(fragment)) {
+            entry.knowledgeFragments.push(fragment);
+          }
+        }
+      }
+    }
+
+    // Extract knowledge from crossTopicConnections that mention this topic
+    const crossConnections = Array.isArray(synthesisObj.crossTopicConnections) ? synthesisObj.crossTopicConnections : [];
+    const topicWords = rawTopic.toLowerCase().split(/\s+/).filter(w => w.length > 4);
+    for (const conn of crossConnections) {
+      const connText = String(conn || "").toLowerCase();
+      if (topicWords.some(w => connText.includes(w))) {
+        const fragment = sanitizePromptLine(conn, 400);
+        if (fragment.length > 20 && !entry.knowledgeFragments.includes(fragment)) {
+          entry.knowledgeFragments.push(fragment);
         }
       }
     }
@@ -1061,10 +1174,13 @@ export function buildDeterministicRequestBudget(plans = [], executionStrategy: a
 
   const estimatedPremiumRequestsTotal = Math.max(1, 3 + byWave.reduce((acc, w) => acc + w.estimatedRequests, 0));
   const errorMarginPercent = 15;
+  // hardCap must be at least planCount: the optimizer must not reject plans
+  // that Prometheus itself produced. Plans > estimatedTotal are allowed up to planCount.
+  const minHardCap = (plans as any[]).length;
   return {
     estimatedPremiumRequestsTotal,
     errorMarginPercent,
-    hardCapTotal: Math.max(1, Math.ceil(estimatedPremiumRequestsTotal * (1 + errorMarginPercent / 100))),
+    hardCapTotal: Math.max(minHardCap, Math.ceil(estimatedPremiumRequestsTotal * (1 + errorMarginPercent / 100))),
     confidence: "medium",
     byWave,
     byRole,
@@ -1104,13 +1220,32 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
   const beforeAfter = deriveBeforeAfterState(src, taskText, normalizedAcceptanceCriteria);
   const riskLevel = String(src.riskLevel || "").trim().toLowerCase() || inferRiskLevel(taskText);
   const premortem = ensureValidPremortem(riskLevel, src.premortem, taskText, targetFiles);
+  const requestedRole = String(src.role || "evolution-worker").trim() || "evolution-worker";
+  const normalizedRole = ["prometheus", "athena", "jesus"].includes(requestedRole.toLowerCase())
+    ? "evolution-worker"
+    : requestedRole;
+  const estimatedExecutionTokens = Number.isFinite(Number(src.estimatedExecutionTokens)) && Number(src.estimatedExecutionTokens) > 0
+    ? Math.floor(Number(src.estimatedExecutionTokens))
+    : Number.isFinite(Number(src.estimated_execution_tokens)) && Number(src.estimated_execution_tokens) > 0
+      ? Math.floor(Number(src.estimated_execution_tokens))
+      : Number.isFinite(Number(src.estimated_tokens)) && Number(src.estimated_tokens) > 0
+        ? Math.floor(Number(src.estimated_tokens))
+        : Math.max(1, estimatePlanExecutionTokens({
+          ...src,
+          task: taskText,
+          scope,
+          target_files: targetFiles,
+          acceptance_criteria: normalizedAcceptanceCriteria,
+          verification: compiled.verification || initialVerification,
+          riskLevel,
+        }));
 
   return {
     ...src,
-    role: String(src.role || "evolution-worker").trim() || "evolution-worker",
+    role: normalizedRole,
     // owner is a required packet field (ACTIONABLE IMPROVEMENT PACKET FORMAT).
     // Preserve the explicit owner when provided; fall back to role.
-    owner: String(src.owner || src.role || "evolution-worker").trim() || "evolution-worker",
+    owner: String(src.owner || normalizedRole || "evolution-worker").trim() || "evolution-worker",
     task: taskText,
     priority: Number.isFinite(Number(src.priority)) ? Number(src.priority) : index + 1,
     wave,
@@ -1157,6 +1292,9 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
     requestROI: Number.isFinite(Number(src.requestROI)) && Number(src.requestROI) > 0
       ? Number(src.requestROI)
       : 1.0,
+    // estimatedExecutionTokens: approximate total tokens this task is expected
+    // to consume in a worker run; used for token-capacity-aware batching.
+    estimatedExecutionTokens,
   };
 }
 
@@ -1180,7 +1318,10 @@ function compactWavesForDependencyAwarePlanning(plans = []) {
 
   const hasAnyDependencies = normalized.some((item) => item.deps.length > 0);
   if (!hasAnyDependencies) {
-    return plans.map((plan) => ({ ...plan, wave: 1, waveDepends: [] }));
+    // No explicit deps — preserve the wave assignments Prometheus already set
+    // instead of collapsing everything to wave 1. Collapsing removes ordering
+    // information that Athena uses to restructure execution waves.
+    return plans;
   }
 
   try {
@@ -1909,6 +2050,16 @@ You MUST answer these explicitly in a dedicated section titled "Mandatory Answer
 6. Does the worker behavior model and code structure help self-improvement, or block it?
 7. In this cycle, what are the highest-leverage changes that make the system not only safer, but also smarter and deeper in reasoning?`),
 
+  mandatoryDepthChain: ivs("mandatory-depth-chain", `## MANDATORY_DEPTH_CHAIN
+For every high-priority packet, you MUST explicitly map all four links:
+1. **Evidence** — concrete file/function/runtime signal proving the issue exists now.
+2. **Root Cause** — why the issue occurs in current architecture/logic.
+3. **Implementation Change** — exact code-level intervention that addresses the cause.
+4. **Verification Evidence** — exact test/log/assertion that proves the change worked.
+
+If any link is missing, that packet is incomplete and must be revised before final output.
+Do NOT emit shallow recommendations that skip code-level implementation mapping.`),
+
   outputFormat: ivs("output-format", `## OUTPUT FORMAT
 Write a substantial senior-level narrative master plan.
 The plan must be centered on TOTAL SYSTEM CAPACITY INCREASE, not generic hardening.
@@ -1939,6 +2090,10 @@ Each packet MUST contain ALL of the following fields:
 - **owner**: Which component/agent/worker should execute this (e.g., evolution-worker, prometheus, athena, orchestrator)
 - **wave**: Positive integer (≥1). Tasks in the same wave run in parallel; all wave N tasks complete before wave N+1 starts.
 - **role**: Worker role identifier (e.g., "evolution-worker", "orchestrator", "prometheus")
+  Role assignment policy: default to "evolution-worker". Use specialized roles
+  (e.g., governance-worker, observation-worker, infrastructure-worker) ONLY when
+  the task requires that role's unique domain behavior. Do not spread easy or
+  generic implementation tasks across multiple specialized roles.
 - **scope**: Module or directory boundary that this task is contained within (e.g., "src/core/orchestrator.js" or "src/workers/")
 - **target_files**: Array of real file paths. ONLY use paths from the ## EXISTING REPOSITORY FILES section above. For new files, name the existing module that imports it and the exact call site.
 - **before_state**: Observable CURRENT behavior — describe what specific function, code path, or measurable gap exists right now. Must be specific, not generic.
@@ -1951,6 +2106,7 @@ Each packet MUST contain ALL of the following fields:
 - **leverage_rank**: Which dimension(s) from the EQUAL DIMENSION SET this improves
 - **capacityDelta** (REQUIRED): Finite number ∈ [-1.0, 1.0] — expected net change in system capacity if this plan succeeds. Positive = capacity gain, negative = capacity regression, zero = neutral. Used for plan ranking.
 - **requestROI** (REQUIRED): Positive finite number — expected return-on-investment for the premium request consumed (e.g., 2.0 = doubles value spent). Used for plan ranking.
+- **estimatedExecutionTokens** (REQUIRED): Positive integer — approximate total tokens this packet is expected to consume in one worker execution (prompt + reasoning + verification). Use realistic values (e.g., 12000, 28000), not placeholders.
 
 ## PACKET FIELD ENFORCEMENT RULES
 These rules are enforced by the quality gate. Violations cause plan rejection:
@@ -1962,6 +2118,9 @@ These rules are enforced by the quality gate. Violations cause plan rejection:
 6. **riskLevel + premortem**: Any task modifying orchestration paths, plan parsing, or dispatch logic is automatically high-risk and requires a compliant premortem.
 7. **requestBudget**: Compute byWave and byRole from actual plan distribution. Never emit _fallback:true. byWave and byRole arrays must not be empty if plans exist.
 8. **capacityDelta + requestROI**: Both are REQUIRED on every plan. Omitting either causes plan rejection by the contract validator.
+9. **estimatedExecutionTokens**: REQUIRED on every plan and must be a positive integer. This is used by Athena and the batch planner to fill model context efficiently and reduce wasted premium requests.
+10. **role minimization**: Minimize distinct roles per cycle. If a task does not require specialized domain behavior, assign role="evolution-worker" to reduce unnecessary worker sessions and premium requests.
+11. **analysis-role ban in executable packets**: Do NOT emit role values "prometheus", "athena", or "jesus" in plans[].role. Those are analysis/review roles, not implementation workers.
 
 Write the entire response in English only.
 If you include recommendations, rank them by capacity-increase leverage, not by fear or surface risk alone.
@@ -1998,10 +2157,12 @@ The JSON block must contain all of the following fields:
     "verification": "tests/core/foo.test.ts — test: expected description",
     "premortem": null,
     "capacityDelta": <number ∈ [-1.0, 1.0]>,
-    "requestROI": <positive number>
+    "requestROI": <positive number>,
+    "estimatedExecutionTokens": <positive integer>
   }]
 }
 Do NOT omit target_files, before_state, after_state, scope, acceptance_criteria, capacityDelta, or requestROI from any plan entry.
+Do NOT omit estimatedExecutionTokens from any plan entry.
 Do NOT emit requestBudget with _fallback:true — compute byWave and byRole from the actual plan list.
 Keep diagnostic findings in analysis or strategicNarrative and include only actionable redesign work in plans.
 Wrap the JSON companion with markers:
@@ -2774,7 +2935,8 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     ]);
     researchSynthesisData = researchSynthesis;
     researchTopicsList = extractResearchTopics(researchSynthesis, researchScout);
-    const researchContext = buildResearchPromptSection(researchSynthesis, researchScout, planningPolicy);
+    const researchArtifactUpdatedAtMs = await getLatestResearchArtifactUpdatedAtMs(stateDir);
+    const researchContext = buildResearchPromptSection(researchSynthesis, researchScout, planningPolicy, researchArtifactUpdatedAtMs);
     researchSectionText = researchContext.sectionText;
     researchTopicCount = researchContext.topicCount;
     researchSourceCount = researchContext.sourceCount;
@@ -2919,12 +3081,35 @@ Consider whether the root causes are:
   // ── Build real file listing for prompt (prevents fabricated target_files) ─
   let repoFileListingSection = "";
   try {
-    const coreFiles = await fs.readdir(path.join(repoRoot, "src", "core")).catch(() => []);
-    const testFiles = await fs.readdir(path.join(repoRoot, "tests", "core")).catch(() => []);
-    const srcList = coreFiles.filter(f => f.endsWith(".ts") || f.endsWith(".js") || f.endsWith(".mts") || f.endsWith(".cjs")).map(f => `src/core/${f}`).join("\n");
-    const tstList = testFiles.filter(f => f.endsWith(".test.ts") || f.endsWith(".test.js")).map(f => `tests/core/${f}`).join("\n");
-    if (srcList || tstList) {
-      repoFileListingSection = `\n\n## EXISTING REPOSITORY FILES\nYou MUST only reference paths from this list in target_files. Do NOT invent new module names.\n### src/core/ (source modules)\n${srcList}\n### tests/core/ (test files)\n${tstList}\n`;
+    const listDir = async (dir: string, prefix: string) => {
+      try {
+        const files = await fs.readdir(path.join(repoRoot, dir));
+        return files
+          .filter(f => f.endsWith(".ts") || f.endsWith(".js") || f.endsWith(".mts") || f.endsWith(".cjs"))
+          .map(f => `${prefix}/${f}`);
+      } catch { return []; }
+    };
+    const [coreFiles, workerFiles, dashFiles, typeFiles, providerFiles, rootSrcFiles, testCoreFiles, testFiles] = await Promise.all([
+      listDir("src/core", "src/core"),
+      listDir("src/workers", "src/workers"),
+      listDir("src/dashboard", "src/dashboard"),
+      listDir("src/types", "src/types"),
+      listDir("src/providers", "src/providers"),
+      listDir("src", "src"),
+      listDir("tests/core", "tests/core"),
+      listDir("tests", "tests"),
+    ]);
+    const sections: string[] = [];
+    if (coreFiles.length) sections.push(`### src/core/ (core modules)\n${coreFiles.join("\n")}`);
+    if (workerFiles.length) sections.push(`### src/workers/\n${workerFiles.join("\n")}`);
+    if (dashFiles.length) sections.push(`### src/dashboard/\n${dashFiles.join("\n")}`);
+    if (typeFiles.length) sections.push(`### src/types/\n${typeFiles.join("\n")}`);
+    if (providerFiles.length) sections.push(`### src/providers/\n${providerFiles.join("\n")}`);
+    if (rootSrcFiles.length) sections.push(`### src/ (root)\n${rootSrcFiles.join("\n")}`);
+    if (testCoreFiles.length) sections.push(`### tests/core/ (test files)\n${testCoreFiles.join("\n")}`);
+    if (testFiles.length) sections.push(`### tests/ (root test files)\n${testFiles.join("\n")}`);
+    if (sections.length) {
+      repoFileListingSection = `\n\n## EXISTING REPOSITORY FILES\nYou MUST only reference paths from this list in target_files. Do NOT invent new module names.\n${sections.join("\n")}\n`;
     }
   } catch { /* non-fatal */ }
 
@@ -2960,76 +3145,105 @@ Consider whether the root causes are:
     driftSummarySection = `\n\n## ARCHITECTURE DRIFT REPORT (unresolved — generated this cycle)\nScanned ${driftReport.scannedDocs.length} documentation file(s). Found ${driftReport.staleCount} stale file reference(s) and ${driftReport.deprecatedTokenCount} deprecated token usage(s).\nThese represent gaps between docs and the current codebase. You MUST include remediation tasks for items you cannot immediately resolve.\n${staleLines ? `\n### Stale File References\n${staleLines}${moreMsgStale}` : ""}${tokenLines ? `\n\n### Deprecated Token Usage\n${tokenLines}${moreMsgToken}` : ""}`;
   }
 
-  // ── Build prompt from static and dynamic sections ────────────────────────
-  // Static sections are invariant across cycles and stored in PROMETHEUS_STATIC_SECTIONS.
-  // Dynamic (cycle-delta) sections carry per-cycle data; they are marked REQUIRED so
-  // that under token-budget pressure they are retained over large optional context such as
-  // the repo file listing. maxTokens caps prevent individual sections from consuming the
-  // entire budget — trimming is applied deterministically. Static sections are marked
-  // INVARIANT (via ivs() in PROMETHEUS_STATIC_SECTIONS) so they are never trimmed.
-  // Contextual sections (repo-file-listing, drift-summary, repair-feedback) are EXPANDABLE
-  // — they fill remaining budget and are dropped when budget is exhausted.
-  const carryFwdSection = Object.assign(
-    section("carry-forward", carryForwardSection),
-    { maxTokens: CARRY_FORWARD_MAX_TOKENS, required: true as const, partitionBudget: PROMPT_BUDGET_PARTITION.REQUIRED }
-  );
-  const behaviorSection = Object.assign(
-    section("behavior-patterns", behaviorPatternsSection),
-    { maxTokens: BEHAVIOR_PATTERNS_MAX_TOKENS, required: true as const, partitionBudget: PROMPT_BUDGET_PARTITION.REQUIRED }
-  );
-  const researchSection = Object.assign(
-    section("research-intelligence", researchSectionText),
-    {
-      maxTokens: Number(config?.runtime?.prometheusResearchSectionMaxTokens ?? DEFAULT_PROMETHEUS_RESEARCH_SECTION_MAX_TOKENS),
-      required: true as const,
-      partitionBudget: PROMPT_BUDGET_PARTITION.REQUIRED,
-    }
-  );
-  const topicMemSection = Object.assign(
-    section("topic-memory", topicMemorySection),
-    {
-      maxTokens: Number(config?.runtime?.prometheusTopicMemoryMaxTokens ?? TOPIC_MEMORY_MAX_TOKENS),
-      required: true as const,
-      partitionBudget: PROMPT_BUDGET_PARTITION.REQUIRED,
-    }
-  );
-  const rawSections = [
-    // REQUIRED: task context and planning policy must survive token pressure
-    Object.assign(section("context", `TARGET REPO: ${config.env?.targetRepo || "unknown"}\nREPO PATH: ${repoRoot}\n\n## OPERATOR OBJECTIVE\n${userPrompt}`), { required: true as const, partitionBudget: PROMPT_BUDGET_PARTITION.REQUIRED }),
-    // INVARIANT: static sections that define Prometheus identity — never trimmed
-    PROMETHEUS_STATIC_SECTIONS.evolutionDirective,
-    PROMETHEUS_STATIC_SECTIONS.mandatorySelfCritique,
-    PROMETHEUS_STATIC_SECTIONS.mandatoryOperatorQuestions,
-    // REQUIRED: planning policy drives packet generation — must be present
-    Object.assign(section("planning-policy", `## PLANNING POLICY\n- maxTasks: ${planningPolicy.maxTasks > 0 ? planningPolicy.maxTasks : "UNLIMITED — FILL YOUR ENTIRE CONTEXT WINDOW"}\n- maxWorkersPerWave: ${planningPolicy.maxWorkersPerWave}\n- preferFewestWorkers: ${planningPolicy.preferFewestWorkers}\n- requireDependencyAwareWaves: ${planningPolicy.requireDependencyAwareWaves}\n- researchCoverageTarget: ${researchCoverageTarget > 0 ? researchCoverageTarget : "AUTO(0 when no research artifacts)"}\n- Do NOT create extra waves without explicit task-level dependsOn/dependencies evidence.\n- Avoid single-task waves unless dependency constraints force them.\n- CRITICAL: You MUST use your FULL model capacity. Do NOT stop early. Produce as many materially distinct actionable improvement packets as you can find. Keep generating plans until you have exhausted all meaningful improvement opportunities across ALL dimensions. There is NO plan count limit.\n- If EXTERNAL RESEARCH INTELLIGENCE is present, convert unresolved high-confidence topics into actionable packets (with concrete target_files + verification), not vague notes.\n- If ACCUMULATED TOPIC KNOWLEDGE is present, leverage all accumulated knowledge from previous runs to produce deeper, more informed plans. Do NOT re-research topics marked as completed.`), { required: true as const, partitionBudget: PROMPT_BUDGET_PARTITION.REQUIRED }),
-    // REQUIRED cycle-delta sections (with maxTokens caps for deterministic trimming)
-    researchSection,
-    topicMemSection,
-    behaviorSection,
-    carryFwdSection,
-    // EXPANDABLE: contextual sections fill remaining budget; dropped when exhausted
-    section("repo-file-listing", repoFileListingSection),
-    section("drift-summary", driftSummarySection),
-    section("repair-feedback", repairFeedbackSection),
-    // INVARIANT: output format defines the required response structure — never dropped
-    PROMETHEUS_STATIC_SECTIONS.outputFormat,
-  ];
-  // Mark static sections as cacheable so prompt-caching layers can skip re-tokenising them.
-  const compilableSections = markCacheableSegments(rawSections, {
-    stableNames: Array.from(PROMETHEUS_STATIC_SECTION_NAMES),
-  });
-  const contextPrompt = compilePrompt(compilableSections);
+  // ── Build minimal directive prompt ──────────────────────────────────────
+  // Prometheus now reads files autonomously via allowAll tools.
+  // No source code or state data is injected — Prometheus decides what to read.
+  // Only cycle-delta context (carry-forward, behavior patterns, research topics,
+  // repair feedback, drift summary) and planning policy are passed in the prompt.
+  // The static identity sections (evolution directive, self-critique, output format)
+  // are defined in prometheus.agent.md and loaded automatically by the agent runtime.
+
+  // Build compact cycle-delta context sections
+  const cycleDeltaParts: string[] = [];
+
+  // Planning policy
+  cycleDeltaParts.push(`## PLANNING POLICY
+- maxTasks: ${planningPolicy.maxTasks > 0 ? planningPolicy.maxTasks : "UNLIMITED"}
+- maxWorkersPerWave: ${planningPolicy.maxWorkersPerWave}
+- preferFewestWorkers: ${planningPolicy.preferFewestWorkers}
+- requireDependencyAwareWaves: ${planningPolicy.requireDependencyAwareWaves}
+- researchCoverageTarget: ${researchCoverageTarget > 0 ? researchCoverageTarget : "AUTO(0 when no research artifacts)"}
+- Do NOT create extra waves without explicit task-level dependsOn/dependencies evidence.
+- Avoid single-task waves unless dependency constraints force them.
+
+## BUNDLED WORK PACKAGES — MANDATORY
+Each plan packet you produce is ONE AI worker call consuming the model's FULL context window (~160k tokens for Claude Sonnet, ~400k for GPT-5 Codex). A single-sentence task is a catastrophic waste of this capacity.
+
+RULE: Every packet MUST contain enough work to justify a full AI context call. This means:
+1. GROUP related sub-tasks into a single packet. If you find 5 small fixes in the same area, bundle ALL of them into ONE packet with ordered steps.
+2. A packet's task field must describe a COMPLETE feature or improvement area, not a single micro-fix.
+3. TARGET 3-5 packets per cycle maximum. More packets = more premium requests = more cost.
+4. Each packet's scope should cover multiple related files and multiple related behaviors.
+5. EXCEPTION: Only create separate packets when there is a HARD dependency ordering requirement.
+
+## STRUCTURAL CORRECTNESS — LEARN THESE PATTERNS
+### dependencies — use EXACT packet titles, never aliases
+### acceptance_criteria — every item MUST contain a numeric threshold
+### wave assignments — tasks with dependencies must be in a later wave`);
+
+  // Research intelligence summary (topics only — Prometheus reads full synthesis file itself)
+  if (researchTopicsList.length > 0) {
+    const topicLines = researchTopicsList.map((topic, i) => `${i + 1}. ${topic}`).join("\n");
+    cycleDeltaParts.push(`## RESEARCH INTELLIGENCE AVAILABLE
+${researchTopicsList.length} topic(s) from ${researchSourceCount} source(s) available.
+Research coverage target: ${researchCoverageTarget > 0 ? researchCoverageTarget : "AUTO"} research-backed packet(s).
+
+Topics identified:
+${topicLines}
+
+IMPORTANT: Read state/research_synthesis.json for full extracted content from each source.
+The synthesis contains real technical details — algorithm names, benchmark numbers, code examples, architecture patterns.
+Use this data to produce evidence-backed plans, not vague strategic recommendations.`);
+  }
+
+  // Topic memory (compact)
+  if (topicMemorySection) cycleDeltaParts.push(topicMemorySection);
+
+  // Behavior patterns from postmortems
+  if (behaviorPatternsSection) cycleDeltaParts.push(behaviorPatternsSection);
+
+  // Carry-forward follow-ups
+  if (carryForwardSection) cycleDeltaParts.push(carryForwardSection);
+
+  // Repair feedback (if Athena rejected previous plan)
+  if (repairFeedbackSection) cycleDeltaParts.push(repairFeedbackSection);
+
+  // Architecture drift summary
+  if (driftSummarySection) cycleDeltaParts.push(driftSummarySection);
+
+  const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
+REPO PATH: ${repoRoot}
+STATE DIR: ${stateDir}
+
+## OPERATOR OBJECTIVE
+${userPrompt}
+
+## YOUR WORKFLOW
+You have full read and write access to the repository and state directory.
+1. Read state/research_synthesis.json for the latest research intelligence (extracted content from internet sources).
+2. Read key state files to understand system health: state/cycle_analytics.json, state/capacity_scoreboard.json, state/cycle_health.json, state/evolution_progress.json, state/athena_postmortems.json, state/intervention_optimizer_log.json, state/dependency_graph_diagnostics.json
+3. Read source files you need to understand for planning — browse src/core/, src/workers/, src/types/ as needed.
+4. Produce your self-evolution master plan following your agent definition's output format.
+5. Your plan MUST end with a JSON companion block wrapped in ===DECISION=== / ===END=== markers containing a plans array.
+
+The JSON plans array is MANDATORY — the orchestrator reads it to dispatch workers.
+Each plan in the array must have: title, task, owner, role, wave, scope, target_files, before_state, after_state, riskLevel, dependencies, acceptance_criteria, verification, premortem (if medium/high risk), capacityDelta, requestROI.
+
+${cycleDeltaParts.join("\n\n")}`;
 
   appendPromptPreviewSync(stateDir, contextPrompt);
 
-  await appendPrometheusLiveLog(stateDir, "leadership_live", `[${ts()}] ${prometheusName.padEnd(20)} Calling Copilot CLI (agent=prometheus)...`);
+  await appendPrometheusLiveLog(stateDir, "leadership_live", `[${ts()}] ${prometheusName.padEnd(20)} Calling Copilot CLI (agent=prometheus, allowAll=true)...`);
 
-  // ── Call Copilot CLI with real-time streaming to live log ──────────────────
+  // ── Call Copilot CLI with full tool access ────────────────────────────────
+  // Prometheus reads files autonomously — no code/state injection from Node.js.
+  // allowAll: true gives read + write + list_dir + search so Prometheus can
+  // explore the repo, read research synthesis, read state files, and write its plan.
   const args = buildAgentArgs({
     agentSlug: "prometheus",
     prompt: contextPrompt,
     model: prometheusModel,
-    allowAll: false,
+    allowAll: true,
     maxContinues: undefined
   });
 

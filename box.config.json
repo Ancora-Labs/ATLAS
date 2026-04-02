@@ -96,14 +96,14 @@
     "staleIssueMaxAgeHours": 24,
     "staleIssueCloseGraceHours": 2,
     "runtimeBudget": {
-      "maxTasksPerCycle": 12,
-      "maxWorkerSpawnsPerCycle": 12,
+      "maxTasksPerCycle": 20,
+      "maxWorkerSpawnsPerCycle": 20,
       "maxSplitsPerCycle": 8
     },
     "interBatchDelayMs": 90000,
     "maxCapacityMode": false,
-    "maxPlansPerDependencyBatch": 6,
-    "workerContextTokenLimit": 100000,
+    "maxPlansPerDependencyBatch": 15,
+    "workerContextTokenLimit": 150000,
     "trustBoundaryMode": "warn",
     "planQualityMinScore": 0
   },
@@ -146,10 +146,13 @@
     "maxTasks": 0,
     "enforcePrometheusExecutionStrategy": true,
     "defaultMaxWorkersPerWave": 10,
+    "specialistFillThreshold": 1,
     "preferFewestWorkers": true,
     "allowSameCycleFollowUps": false,
     "requireDependencyAwareWaves": true,
-    "splitConflictingPlansAcrossBatches": false
+    "splitConflictingPlansAcrossBatches": false,
+    "nucleusFrontierMode": true,
+    "compactSingletonWaves": true
   },
   "selfImprovement": {
     "enabled": true,

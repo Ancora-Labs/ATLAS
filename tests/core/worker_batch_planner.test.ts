@@ -9,6 +9,9 @@ import {
   buildFitScoredBatches,
   classifyNucleusFrontier,
   packNucleusFrontierBatches,
+  buildTokenFirstBatches,
+  estimatePlanTokens,
+  getUsableModelContextTokens,
 } from "../../src/core/worker_batch_planner.js";
 
 function buildPlan(index) {
@@ -1028,5 +1031,187 @@ describe("worker_batch_planner — nucleusFrontierMode integration", () => {
     const batches = buildRoleExecutionBatches(plans, config);
     assert.equal(batches.length, 1, "3 plans with no deps must produce 1 batch in nucleus/frontier mode");
     assert.equal((batches[0].plans as any[]).length, 3);
+  });
+});
+
+// ── buildTokenFirstBatches: specialist threshold routing ──────────────────────
+
+describe("buildTokenFirstBatches — specialist threshold routing", () => {
+  const config = {
+    copilot: {
+      defaultModel: "Claude Sonnet 4.6",
+      modelContextReserveTokens: 0,
+    },
+  };
+
+  function makePlan(role: string, task: string) {
+    return {
+      role,
+      task,
+      wave: 1,
+      priority: 1,
+      taskKind: "implementation",
+    };
+  }
+
+  it("reroutes specialist plans to evolution-worker when below fill threshold", () => {
+    // governance-worker with one tiny task — well below 100% of context
+    const plans = [
+      makePlan("evolution-worker", "Big evo task " + "x".repeat(200)),
+      makePlan("governance-worker", "Small gov task"),
+    ];
+
+    const batches = buildTokenFirstBatches(plans, config);
+
+    // Both plans should be in evolution-worker batches (governance rerouted)
+    for (const batch of batches) {
+      assert.equal(batch.role, "evolution-worker",
+        "governance-worker should be rerouted to evolution-worker when below threshold");
+    }
+    // Should produce fewer batches than 2
+    assert.ok(batches.length <= 2, "should not produce more than 2 batches");
+  });
+
+  it("keeps specialist batch when fill threshold is met", () => {
+    // Default threshold is 100%, so set an explicit lower threshold for this test.
+    const thresholdConfig = {
+      ...config,
+      planner: { specialistFillThreshold: 0.35 },
+    };
+    // Create a specialist with enough work to exceed 35% threshold.
+    const bigTask = "x".repeat(250000);
+    const plans = [
+      makePlan("evolution-worker", "evo task"),
+      makePlan("governance-worker", bigTask),
+    ];
+
+    const batches = buildTokenFirstBatches(plans, thresholdConfig);
+    const roles = new Set(batches.map(b => b.role));
+    assert.ok(roles.has("governance-worker"),
+      "governance-worker should keep its own batch when above threshold");
+    assert.ok(roles.has("evolution-worker"));
+  });
+
+  it("respects custom specialistFillThreshold from config", () => {
+    const customConfig = {
+      ...config,
+      planner: { specialistFillThreshold: 0.001 }, // 0.1% threshold = 160 tokens
+    };
+    const plans = [
+      makePlan("quality-worker", "Small quality task " + "x".repeat(400)),
+    ];
+
+    const batches = buildTokenFirstBatches(plans, customConfig);
+    // With threshold at 0.1%, a task with ~400 chars should keep specialist role
+    assert.equal(batches.length, 1);
+    assert.equal(batches[0].role, "quality-worker");
+  });
+
+  it("tags rerouted plans with _originalSpecialistRole", () => {
+    const plans = [
+      makePlan("observation-worker", "tiny obs task"),
+    ];
+
+    const batches = buildTokenFirstBatches(plans, config);
+    assert.equal(batches[0].role, "evolution-worker");
+    const plan = (batches[0].plans as any[])[0];
+    assert.equal(plan._originalSpecialistRole, "observation-worker");
+  });
+
+  it("never reroutes evolution-worker (exempt role)", () => {
+    const plans = [
+      makePlan("evolution-worker", "tiny task"),
+    ];
+
+    const batches = buildTokenFirstBatches(plans, config);
+    assert.equal(batches.length, 1);
+    assert.equal(batches[0].role, "evolution-worker");
+  });
+
+  it("preserves wave boundaries when rerouting", () => {
+    const plans = [
+      { ...makePlan("governance-worker", "gov w1"), wave: 1, dependsOn: [] },
+      { ...makePlan("governance-worker", "gov w2"), wave: 2, dependencies: ["gov w1"] },
+    ];
+
+    const batches = buildTokenFirstBatches(plans, config);
+    // Waves should be preserved after reroute
+    const waves = batches.map(b => b.wave);
+    assert.ok(waves.includes(1));
+    assert.ok(waves.includes(2));
+  });
+
+  it("includes specialistReroutes metadata when rerouting occurs", () => {
+    const plans = [
+      makePlan("governance-worker", "small task"),
+    ];
+
+    const batches = buildTokenFirstBatches(plans, config);
+    const reroutes = (batches[0] as any).specialistReroutes;
+    assert.ok(Array.isArray(reroutes), "should have specialistReroutes array");
+    assert.ok(reroutes.length > 0, "should have at least one reroute entry");
+    assert.ok(reroutes[0].includes("governance-worker"), "reroute should mention governance-worker");
+  });
+});
+
+// ── buildTokenFirstBatches: calibration coefficient ────────────────────────────
+
+describe("buildTokenFirstBatches — calibration coefficient", () => {
+  const config = {
+    copilot: {
+      defaultModel: "Claude Sonnet 4.6",
+      modelContextReserveTokens: 0,
+    },
+  };
+
+  it("applies calibration coefficient to token estimates", () => {
+    const plan = {
+      role: "evolution-worker",
+      task: "Calibration test " + "x".repeat(200),
+      wave: 1,
+    };
+    const baseTokens = estimatePlanTokens(plan);
+    const calibratedTokens = estimatePlanTokens(plan, 1.5);
+
+    assert.ok(calibratedTokens > baseTokens, "calibrated tokens should be higher with coeff > 1");
+    assert.ok(Math.abs(calibratedTokens - Math.round(baseTokens * 1.5)) <= 1,
+      "calibrated tokens should equal base * coefficient");
+  });
+
+  it("passes calibrationState through to packing", () => {
+    const plan = {
+      role: "evolution-worker",
+      task: "x".repeat(200),
+      wave: 1,
+    };
+
+    const batchesNoCalib = buildTokenFirstBatches([plan], config);
+    const batchesWithCalib = buildTokenFirstBatches([plan], config, {
+      calibrationState: { globalCoefficient: 2.0, roleCoefficients: {} },
+    });
+
+    const estNoCal = (batchesNoCalib[0] as any).estimatedTokens;
+    const estWithCal = (batchesWithCalib[0] as any).estimatedTokens;
+    assert.ok(estWithCal > estNoCal,
+      "calibration coefficient 2.0 should inflate estimated tokens");
+  });
+
+  it("falls back to 1.0 when no calibration state provided", () => {
+    const plan = {
+      role: "evolution-worker",
+      task: "x".repeat(200),
+      wave: 1,
+    };
+
+    const batchesDefault = buildTokenFirstBatches([plan], config);
+    const batchesExplicit = buildTokenFirstBatches([plan], config, {
+      calibrationState: { globalCoefficient: 1.0, roleCoefficients: {} },
+    });
+
+    assert.equal(
+      (batchesDefault[0] as any).estimatedTokens,
+      (batchesExplicit[0] as any).estimatedTokens,
+      "no calibration should equal coefficient 1.0"
+    );
   });
 });
