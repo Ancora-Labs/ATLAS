@@ -673,3 +673,86 @@ export function filterRetiredPolicies(
 
   return { active, retired };
 }
+
+// ── Curriculum-based policy promotion ────────────────────────────────────────
+
+/**
+ * Minimum weight threshold for a curriculum item to be promoted to a policy.
+ * Mirrors CURRICULUM_PROMOTION_THRESHOLD from lesson_halflife — kept here
+ * as an independent constant so learning_policy_compiler has no external deps.
+ */
+export const CURRICULUM_PROMOTION_THRESHOLD = 0.4;
+
+/**
+ * Convert curriculum items (from lesson_halflife.selectCurriculumItems) into
+ * compiled policy checks.
+ *
+ * Each curriculum item that matches a COMPILABLE_PATTERN produces a policy
+ * with a "curriculum-" prefix on the ID so it is distinguishable from
+ * hard-gate and early-warning policies.  Items without a matching pattern
+ * produce a generic "curriculum-custom-" policy.
+ *
+ * Research-backed items (researchBacked=true) are promoted to "critical" severity
+ * so they receive maximum enforcement weight in the dispatch pipeline.
+ *
+ * @param {Array<{ lesson: string, weight: number, researchBacked: boolean, reviewedAt?: string }>} curriculumItems
+ * @param {{ existingPolicyIds?: string[] }} opts
+ * @returns {CompiledPolicy[]}
+ */
+export function compileCurriculumToPolicies(
+  curriculumItems: Array<{ lesson: string; weight: number; researchBacked: boolean; reviewedAt?: string }>,
+  opts: { existingPolicyIds?: string[] } = {},
+): any[] {
+  if (!Array.isArray(curriculumItems)) return [];
+
+  const existing = new Set(opts.existingPolicyIds || []);
+  const policies: any[] = [];
+  const seen = new Set<string>();
+
+  for (const item of curriculumItems) {
+    const lesson = String(item?.lesson || "").trim();
+    if (lesson.length < 5) continue;
+
+    let compiled = false;
+    for (const template of COMPILABLE_PATTERNS) {
+      if (!template.pattern.test(lesson)) continue;
+      const policyId = `curriculum-${template.id}`;
+      if (seen.has(policyId) || existing.has(policyId)) { compiled = true; break; }
+      seen.add(policyId);
+      existing.add(policyId);
+      policies.push({
+        id: policyId,
+        assertion: template.assertion,
+        severity: item.researchBacked ? "critical" : template.severity,
+        sourceLesson: lesson.slice(0, 200),
+        detectedAt: item.reviewedAt || new Date().toISOString(),
+        _curriculumWeight: item.weight,
+        _researchBacked: Boolean(item.researchBacked),
+        reasonCode: REASON_CODES.RECURRENCE_HARD_GATE,
+      });
+      compiled = true;
+      break;
+    }
+
+    if (!compiled) {
+      const slug = lesson.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-").slice(0, 30);
+      const policyId = `curriculum-custom-${slug}`;
+      if (seen.has(policyId) || existing.has(policyId)) continue;
+      seen.add(policyId);
+      existing.add(policyId);
+      policies.push({
+        id: policyId,
+        assertion: `Curriculum lesson (weight=${item.weight}): ${lesson.slice(0, 120)}`,
+        severity: item.researchBacked ? "critical" : "warning",
+        sourceLesson: lesson.slice(0, 200),
+        detectedAt: item.reviewedAt || new Date().toISOString(),
+        _curriculumWeight: item.weight,
+        _researchBacked: Boolean(item.researchBacked),
+        reasonCode: REASON_CODES.RECURRENCE_HARD_GATE,
+      });
+    }
+  }
+
+  return policies;
+}
+

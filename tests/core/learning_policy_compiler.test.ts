@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { compileLessonsToPolicies, validatePlanAgainstPolicies, COMPILABLE_PATTERNS, hardGateRecurrenceToPolicies, checkCarryForwardGate, deriveRoutingAdjustments, buildPromptHardConstraints, REASON_CODES } from "../../src/core/learning_policy_compiler.js";
+import { compileLessonsToPolicies, validatePlanAgainstPolicies, COMPILABLE_PATTERNS, hardGateRecurrenceToPolicies, checkCarryForwardGate, deriveRoutingAdjustments, buildPromptHardConstraints, REASON_CODES, compileCurriculumToPolicies, CURRICULUM_PROMOTION_THRESHOLD } from "../../src/core/learning_policy_compiler.js";
 
 describe("learning_policy_compiler", () => {
   describe("compileLessonsToPolicies", () => {
@@ -592,5 +592,108 @@ describe("filterRetiredPolicies", () => {
     const { active, retired } = filterRetiredPolicies(null as any, [], []);
     assert.deepEqual(active, []);
     assert.deepEqual(retired, []);
+  });
+});
+
+// ── Curriculum-based policy promotion ─────────────────────────────────────────
+
+describe("compileCurriculumToPolicies", () => {
+  it("returns empty array for null input", () => {
+    assert.deepEqual(compileCurriculumToPolicies(null as any), []);
+  });
+
+  it("returns empty array for empty curriculum", () => {
+    assert.deepEqual(compileCurriculumToPolicies([]), []);
+  });
+
+  it("exports CURRICULUM_PROMOTION_THRESHOLD as a number >= 0 and <= 1", () => {
+    assert.equal(typeof CURRICULUM_PROMOTION_THRESHOLD, "number");
+    assert.ok(CURRICULUM_PROMOTION_THRESHOLD >= 0 && CURRICULUM_PROMOTION_THRESHOLD <= 1);
+  });
+
+  it("compiles a glob-matching curriculum item to a curriculum-prefixed policy", () => {
+    const items = [
+      { lesson: "The glob pattern expansion fails on Windows due to path issues", weight: 0.8, researchBacked: false, reviewedAt: "2026-01-01T00:00:00Z" },
+    ];
+    const policies = compileCurriculumToPolicies(items);
+    assert.ok(policies.length > 0, "at least one policy must be emitted");
+    const p = policies[0];
+    assert.ok(p.id.startsWith("curriculum-"), `ID must start with 'curriculum-', got: ${p.id}`);
+    assert.equal(typeof p.assertion, "string");
+    assert.ok(["critical", "warning"].includes(p.severity));
+  });
+
+  it("promotes research-backed items to critical severity", () => {
+    const items = [
+      { lesson: "The glob pattern expansion fails on Windows", weight: 0.6, researchBacked: true, reviewedAt: "2026-01-01T00:00:00Z" },
+    ];
+    const policies = compileCurriculumToPolicies(items);
+    assert.ok(policies.length > 0);
+    assert.equal(policies[0].severity, "critical", "research-backed items must be promoted to critical");
+    assert.equal(policies[0]._researchBacked, true);
+  });
+
+  it("non-research-backed items keep pattern severity (not forced to critical)", () => {
+    const items = [
+      { lesson: "Run npm run lint before shipping to catch unused imports", weight: 0.5, researchBacked: false },
+    ];
+    const policies = compileCurriculumToPolicies(items);
+    assert.ok(policies.length > 0);
+    // lint-failure pattern has severity "warning" — should NOT be forced to critical
+    assert.equal(policies[0].severity, "warning");
+    assert.equal(policies[0]._researchBacked, false);
+  });
+
+  it("produces generic curriculum-custom- policy when no pattern matches", () => {
+    const items = [
+      { lesson: "Always validate zorp configuration schema before deployment", weight: 0.7, researchBacked: false },
+    ];
+    const policies = compileCurriculumToPolicies(items);
+    assert.ok(policies.length > 0);
+    assert.ok(policies[0].id.startsWith("curriculum-custom-"), `expected curriculum-custom- prefix, got: ${policies[0].id}`);
+    assert.ok(policies[0].assertion.includes("Curriculum lesson"));
+  });
+
+  it("deduplicates policies when two items match the same pattern", () => {
+    const items = [
+      { lesson: "The glob pattern fails on Windows again", weight: 0.8, researchBacked: false },
+      { lesson: "Another glob wildcard issue in test command output", weight: 0.6, researchBacked: false },
+    ];
+    const policies = compileCurriculumToPolicies(items);
+    const ids = policies.map(p => p.id);
+    assert.equal(ids.length, new Set(ids).size, "policy IDs must be unique");
+  });
+
+  it("excludes items already in existingPolicyIds", () => {
+    const items = [
+      { lesson: "The glob pattern expansion fails on Windows", weight: 0.8, researchBacked: false },
+    ];
+    // Pre-populate the existing set with the expected curriculum-prefixed ID
+    const policies = compileCurriculumToPolicies(items, { existingPolicyIds: ["curriculum-glob-false-fail"] });
+    const ids = policies.map(p => p.id);
+    assert.ok(!ids.includes("curriculum-glob-false-fail"), "already-existing policy must not be re-emitted");
+  });
+
+  it("emits RECURRENCE_HARD_GATE reasonCode on all curriculum policies", () => {
+    const items = [
+      { lesson: "The glob pattern expansion fails", weight: 0.9, researchBacked: true },
+    ];
+    const policies = compileCurriculumToPolicies(items);
+    assert.ok(policies.length > 0);
+    assert.equal(policies[0].reasonCode, REASON_CODES.RECURRENCE_HARD_GATE);
+  });
+
+  it("attaches _curriculumWeight to emitted policies", () => {
+    const items = [
+      { lesson: "The glob pattern expansion fails on Windows", weight: 0.75, researchBacked: false },
+    ];
+    const policies = compileCurriculumToPolicies(items);
+    assert.ok(policies.length > 0);
+    assert.equal(policies[0]._curriculumWeight, 0.75);
+  });
+
+  it("negative: skips items with lesson shorter than 5 characters", () => {
+    const items = [{ lesson: "hi", weight: 0.9, researchBacked: true }];
+    assert.deepEqual(compileCurriculumToPolicies(items), []);
   });
 });

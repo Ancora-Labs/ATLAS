@@ -3201,3 +3201,75 @@ describe("quarantineLowConfidencePackets", () => {
     assert.equal(QUARANTINE_CONFIDENCE_THRESHOLD, 0.5);
   });
 });
+
+// ── buildBenchmarkSection ──────────────────────────────────────────────────────
+
+import { buildBenchmarkSection } from "../../src/core/prometheus.js";
+
+describe("buildBenchmarkSection", () => {
+  it("returns empty string for null input", () => {
+    assert.equal(buildBenchmarkSection(null), "");
+  });
+
+  it("returns empty string for benchmarkData with no entries", () => {
+    assert.equal(buildBenchmarkSection({ entries: [] }), "");
+  });
+
+  it("returns empty string when latest entry has no recommendations", () => {
+    assert.equal(buildBenchmarkSection({ entries: [{ cycleId: "c1", recommendations: [] }] }), "");
+  });
+
+  it("builds section string with recommendation statuses", () => {
+    const benchmarkData = {
+      entries: [
+        {
+          cycleId: "2026-01-01T00:00:00.000Z",
+          recommendations: [
+            { id: "rec-ai-0", topic: "AI Code Generation", summary: "Use AI for scaffolding", implementationStatus: "pending", benchmarkScore: null, capacityGain: null },
+            { id: "rec-eval-1", topic: "Evaluation Framework", summary: "Add braintrust evals", implementationStatus: "implemented", benchmarkScore: 1.0, capacityGain: 0.8 },
+          ],
+        },
+      ],
+    };
+    const section = buildBenchmarkSection(benchmarkData);
+    assert.ok(section.length > 0, "section must be non-empty");
+    assert.ok(section.includes("RESEARCH BENCHMARK STATUS"), "must contain section header");
+    assert.ok(section.includes("PENDING"), "pending item must appear");
+    assert.ok(section.includes("IMPLEMENTED"), "implemented item must appear");
+    assert.ok(section.includes("AI Code Generation"), "topic name must appear");
+  });
+
+  it("includes benchmarkScore in section when present", () => {
+    const benchmarkData = {
+      entries: [
+        {
+          cycleId: "c1",
+          recommendations: [
+            { id: "rec-x-0", topic: "Test Topic", summary: "Some summary", implementationStatus: "pending", benchmarkScore: 0.75, capacityGain: null },
+          ],
+        },
+      ],
+    };
+    const section = buildBenchmarkSection(benchmarkData);
+    assert.ok(section.includes("0.75"), "benchmarkScore must appear in section");
+  });
+
+  it("includes cycleId in section header when available", () => {
+    const benchmarkData = {
+      entries: [
+        {
+          cycleId: "cycle-abc-123",
+          recommendations: [
+            { id: "r", topic: "T", summary: "S", implementationStatus: "pending", benchmarkScore: null, capacityGain: null },
+          ],
+        },
+      ],
+    };
+    const section = buildBenchmarkSection(benchmarkData);
+    assert.ok(section.includes("cycle-abc-123"), "cycleId must appear in section header");
+  });
+
+  it("negative: malformed entries array does not throw", () => {
+    assert.doesNotThrow(() => buildBenchmarkSection({ entries: [null] }));
+  });
+});

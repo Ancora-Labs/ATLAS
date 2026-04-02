@@ -851,3 +851,100 @@ export async function persistCycleHealth(config, healthRecord) {
 export async function readCycleHealth(config) {
   return readJson(cycleHealthPath(config), null);
 }
+
+// ── Benchmark ground-truth evaluation loop ────────────────────────────────────
+
+/**
+ * Schema descriptor for benchmark_ground_truth.json.
+ * Used by callers to validate structure before reading.
+ */
+export const BENCHMARK_SCHEMA = Object.freeze({
+  schemaVersion: 1,
+  required: ["schemaVersion", "updatedAt", "entries"],
+  entryRequired: ["cycleId", "evaluatedAt", "schemaVersion", "recommendations"],
+  recommendationStatusEnum: Object.freeze([
+    "pending", "in-progress", "implemented", "failed", "retired",
+  ]),
+});
+
+/**
+ * Evaluate benchmark ground-truth entries against a cycle outcome.
+ *
+ * Sets `benchmarkScore` on each recommendation in the most-recent entry:
+ *   1.0 — cycle succeeded (success outcome)
+ *   completionRate or 0.5 — partial outcome
+ *   0.0 — failed outcome
+ *   null — outcome unknown / not enough data
+ *
+ * Returns the annotated recommendations array for the latest entry.
+ * Pure function — no file I/O.
+ *
+ * @param benchmarkEntries — array from benchmark_ground_truth.json `entries`
+ * @param cycleOutcome     — { status, tasksCompleted, tasksDispatched }
+ */
+export function evaluateBenchmarkGroundTruth(
+  benchmarkEntries: any[],
+  cycleOutcome: { status: string; tasksCompleted: number | null; tasksDispatched: number | null },
+): any[] {
+  if (!Array.isArray(benchmarkEntries) || benchmarkEntries.length === 0) return [];
+
+  const latest = benchmarkEntries[0];
+  if (!latest || !Array.isArray(latest.recommendations)) return [];
+
+  const completionRate =
+    typeof cycleOutcome?.tasksCompleted === "number" &&
+    typeof cycleOutcome?.tasksDispatched === "number" &&
+    cycleOutcome.tasksDispatched > 0
+      ? cycleOutcome.tasksCompleted / cycleOutcome.tasksDispatched
+      : null;
+
+  return latest.recommendations.map((rec: any) => {
+    let benchmarkScore: number | null = null;
+    if (cycleOutcome?.status === "success")  benchmarkScore = 1.0;
+    else if (cycleOutcome?.status === "partial") benchmarkScore = completionRate ?? 0.5;
+    else if (cycleOutcome?.status === "failed")  benchmarkScore = 0.0;
+    return { ...rec, benchmarkScore };
+  });
+}
+
+/**
+ * Compute aggregate research capacity gain across a sliding window of cycles.
+ *
+ * Capacity gain = average `benchmarkScore` over all scored recommendations
+ *                 in the most-recent `windowCycles` entries.
+ *
+ * Returns null when no scored recommendations exist in the window.
+ *
+ * @param benchmarkEntries — array from benchmark_ground_truth.json `entries`
+ * @param windowCycles     — how many recent entries to consider (default: 5)
+ */
+export function computeResearchCapacityGain(
+  benchmarkEntries: any[],
+  windowCycles = 5,
+): { capacityGain: number | null; evaluatedCount: number; windowCycles: number } {
+  if (!Array.isArray(benchmarkEntries) || benchmarkEntries.length === 0) {
+    return { capacityGain: null, evaluatedCount: 0, windowCycles };
+  }
+
+  const window = benchmarkEntries.slice(0, Math.max(1, windowCycles));
+  const scores: number[] = [];
+
+  for (const entry of window) {
+    if (!Array.isArray(entry?.recommendations)) continue;
+    for (const rec of entry.recommendations) {
+      if (typeof rec?.benchmarkScore === "number") {
+        scores.push(rec.benchmarkScore);
+      }
+    }
+  }
+
+  if (scores.length === 0) return { capacityGain: null, evaluatedCount: 0, windowCycles };
+
+  const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+  return {
+    capacityGain:   Math.round(avg * 1000) / 1000,
+    evaluatedCount: scores.length,
+    windowCycles,
+  };
+}
+
