@@ -46,6 +46,12 @@ import {
   saveLedgerFull,
   compressLedger,
 } from "./carry_forward_ledger.js";
+import {
+  estimatePlanExecutionTokens,
+  estimatePlanTokens as _estimatePlanTokens,
+  getUsableModelContextTokens as _getUsableModelContextTokens,
+  buildTokenFirstBatches,
+} from "./worker_batch_planner.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
 
 // ── Span contract emitter ─────────────────────────────────────────────────────
@@ -1477,6 +1483,13 @@ export function normalizePatchedPlansForDispatch(plans: unknown[]): Record<strin
   return plans.map((plan) => {
     if (!plan || typeof plan !== "object") return plan as Record<string, unknown>;
     const p = plan as Record<string, unknown>;
+    const estimatedExecutionTokens = Number.isFinite(Number(p.estimatedExecutionTokens)) && Number(p.estimatedExecutionTokens) > 0
+      ? Math.floor(Number(p.estimatedExecutionTokens))
+      : Number.isFinite(Number(p.estimated_execution_tokens)) && Number(p.estimated_execution_tokens) > 0
+        ? Math.floor(Number(p.estimated_execution_tokens))
+        : Number.isFinite(Number(p.estimated_tokens)) && Number(p.estimated_tokens) > 0
+          ? Math.floor(Number(p.estimated_tokens))
+          : Math.max(1, estimatePlanExecutionTokens(p));
     return {
       ...p,
       // Normalise target_files alias so dispatch always finds the canonical field.
@@ -1488,6 +1501,8 @@ export function normalizePatchedPlansForDispatch(plans: unknown[]): Record<strin
       role: p.role && String(p.role).trim() ? String(p.role).trim() : "evolution-worker",
       // wave must be a positive integer; malformed values fall back to 1.
       wave: Number.isFinite(Number(p.wave)) && Number(p.wave) >= 1 ? Number(p.wave) : 1,
+      // token estimate powers context-capacity-aware plan packing.
+      estimatedExecutionTokens,
     };
   });
 }
@@ -1532,6 +1547,99 @@ export function preparePatchedPlansForDispatch(plans: unknown[]): {
     violations: check.violations,
     code: check.code,
   };
+}
+
+/**
+ * Deterministic token-first rebatch after Athena review.
+ *
+ * Runs once after preparePatchedPlansForDispatch. Takes the normalized
+ * patchedPlans and writes _batchIndex + _batchTotal onto every plan so the
+ * orchestrator can dispatch batches in order without calling buildRoleExecutionBatches.
+ *
+ * Rules:
+ *  - Plans without any explicit dependencies are compacted to wave 1 so the
+ *    whole set can be globally packed.
+ *  - Within each wave, plans are packed greedily into context-capacity batches
+ *    (token-first, role-agnostic).
+ *  - A new batch is opened only when usable context tokens would be exceeded.
+ *  - The dominant role in each batch wins; mixed batches fall back to evolution-worker.
+ *
+ * Idempotent: already-reindexed plans (with _batchIndex) pass through unchanged.
+ *
+ * @param plans  — output of preparePatchedPlansForDispatch (normalized)
+ * @param config — BOX config (for model context window resolution)
+ * @returns new array with _batchIndex, _batchTotal, _batchWave added to each plan
+ */
+export async function rebatchPatchedPlansTokenFirst(
+  plans: Record<string, unknown>[],
+  config?: object
+): Promise<Record<string, unknown>[]> {
+  if (!Array.isArray(plans) || plans.length === 0) return [];
+
+  // Already reindexed — idempotent pass-through
+  if (Number.isFinite(Number(plans[0]?._batchIndex))) return plans;
+
+  // Load calibration state for token estimate accuracy
+  let calOpts: { calibrationState?: object } | undefined;
+  try {
+    const { readCalibrationState } = await import("./token_calibration.js");
+    calOpts = { calibrationState: await readCalibrationState(config || {}) };
+  } catch {
+    // Calibration is advisory — fall through without it
+  }
+
+  const batches = buildTokenFirstBatches(plans, config, calOpts);
+  if (batches.length === 0) return plans;
+
+  const normalizeBatchWorkerRole = (roleValue: unknown) => {
+    const requestedRole = String(roleValue || "evolution-worker").trim() || "evolution-worker";
+    return ["prometheus", "athena", "jesus"].includes(requestedRole.toLowerCase())
+      ? "evolution-worker"
+      : requestedRole;
+  };
+
+  // Build plan → batch assignment lookup
+  const planToBatch = new Map<Record<string, unknown>, {
+    index: number;
+    total: number;
+    wave: number;
+    role: string;
+  }>();
+  for (let bi = 0; bi < batches.length; bi++) {
+    const batch = batches[bi];
+    const batchPlans = Array.isArray(batch.plans) ? batch.plans : [];
+    const batchRole = normalizeBatchWorkerRole(batch.role);
+    for (const p of batchPlans) {
+      planToBatch.set(p as Record<string, unknown>, {
+        index: bi + 1,
+        total: batches.length,
+        wave: Number(batch.wave) || 1,
+        role: batchRole,
+      });
+    }
+  }
+
+  // Tag original plans with batch metadata.
+  // buildTokenFirstBatches may have created new plan object refs (via spread);
+  // fall back to position matching for plans not found in the map.
+  const tagged = plans.map((plan, i) => {
+    const meta = planToBatch.get(plan) ?? {
+      index: i + 1,
+      total: plans.length,
+      wave: Number(plan.wave) || 1,
+      role: normalizeBatchWorkerRole(plan.role),
+    };
+    return {
+      ...plan,
+      role: meta.role,
+      _batchIndex: meta.index,
+      _batchTotal: meta.total,
+      _batchWave: meta.wave,
+      _batchWorkerRole: meta.role,
+    };
+  });
+
+  return tagged;
 }
 
 /**
@@ -1968,6 +2076,40 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
     }
   }
 
+  // ── Cross-cycle similarity gate ───────────────────────────────────────────
+  // Load the previously dispatched plan tasks from dispatch_checkpoint.json.
+  // If ≥60% of new plan task keywords overlap with the previous cycle, inject
+  // a novelty-warning into Athena's prompt so it can flag repetitive plans.
+  let similarityWarning = "";
+  try {
+    const prevCheckpoint = await readJson(
+      path.join(stateDir, "dispatch_checkpoint.json"),
+      null
+    );
+    const prevTasks: string[] = [];
+    if (prevCheckpoint && Array.isArray(prevCheckpoint.plans)) {
+      for (const p of prevCheckpoint.plans) {
+        const t = String(p?.task || p?.title || "").toLowerCase().trim();
+        if (t.length > 5) prevTasks.push(t);
+      }
+    }
+    if (prevTasks.length > 0 && plans.length > 0) {
+      const prevWords = new Set(prevTasks.flatMap(t => t.split(/\W+/).filter(w => w.length > 4)));
+      let matchCount = 0;
+      for (const plan of plans) {
+        const words = String(plan?.task || "").toLowerCase().split(/\W+/).filter(w => w.length > 4);
+        if (words.some(w => prevWords.has(w))) matchCount++;
+      }
+      const overlapRatio = matchCount / plans.length;
+      if (overlapRatio >= 0.6) {
+        similarityWarning = `\n\n## ⚠️ NOVELTY WARNING\nApproximately ${Math.round(overlapRatio * 100)}% of the incoming plans share key themes with the PREVIOUS cycle's dispatched plans. This is a strong signal of repetitive planning.\nFor each plan, verify: is this task semantically distinct from what was dispatched last cycle? If not, flag it in unresolvedIssues and set approved=false unless the prior implementation demonstrably failed and a retry is warranted.\nPrevious cycle task themes: ${prevTasks.slice(0, 8).join(" | ")}`;
+        await appendProgress(config, `[ATHENA] Similarity gate: ${Math.round(overlapRatio * 100)}% overlap with previous cycle — novelty warning injected into review prompt`);
+      }
+    }
+  } catch {
+    // Non-fatal: proceed without similarity context.
+  }
+
   const plansSummary = plans.map((p, i) => {
     const preMortemTag = p.riskLevel === "high" ? " [HIGH-RISK:premortem=present]" : "";
     const targetFiles = Array.isArray(p.target_files)
@@ -1986,12 +2128,13 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
        before_state="${truncatePromptText(p.before_state || p.beforeState || "", 120)}"
        after_state="${truncatePromptText(p.after_state || p.afterState || "", 120)}"
        acceptance_criteria=${acceptancePreview}${ac.length > 3 ? ` (+${ac.length - 3} more)` : ""}
+       estimatedExecutionTokens=${Number.isFinite(Number(p.estimatedExecutionTokens)) ? Number(p.estimatedExecutionTokens) : "unknown"}
        premortem=${summarizePremortemForPrompt(p)}
        verification="${truncatePromptText(p.verification || "NONE", 120)}"`;
   }).join("\n");
 
   const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
-
+${similarityWarning}
 ## YOUR MISSION — PLAN QUALITY REVIEW & IN-PLACE REPAIR
 
 You are Athena — BOX Quality Gate & Plan Editor.
@@ -2009,6 +2152,8 @@ Prometheus has produced a plan. Your job is to validate it AND FIX any issues yo
 3. Is the verification method concrete? (a test, a command, a check — not "verify it works")
 4. Are file paths and scope specified?
 5. Are dependencies between plans correct? (if two plans touch the same file, prefer explicit ordering dependencies first; only split into different waves when cross-role parallel execution would create a write race)
+5b. Premium request efficiency: if low/medium-risk plans can be executed by the same role without dependency conflict, keep them in the SAME wave and use dependencies for order instead of creating extra singleton waves.
+5c. Token-capacity efficiency: use estimatedExecutionTokens to avoid tiny batches; prefer filling one worker context meaningfully before splitting.
 6. Do acceptance_criteria contain measurable numeric thresholds where applicable?
 7. For HIGH-RISK plans (riskLevel=high): does the pre-mortem cover failure paths, mitigations, and guardrails?
 
@@ -2016,9 +2161,13 @@ Prometheus has produced a plan. Your job is to validate it AND FIX any issues yo
 - Two plans touching the same file in the same wave:
   - if same role and safely orderable, keep same wave and add dependency from later plan to earlier plan
   - if different roles or true parallel race risk, move later plan to next wave and add dependency
+- Mergeable small plans policy:
+  - if same role + low/medium risk + no hard dependency barrier, merge into one role session/wave and keep deterministic order via dependencies
+  - only split into another wave when there is a true dependency or cross-role race barrier
 - Vague acceptance criteria → rewrite with numeric threshold (e.g., "fallback rate < 5%")
 - Missing verification → add a concrete test command
 - Missing scope → fill from target_files
+- Missing estimatedExecutionTokens → add a realistic positive integer per plan
 
 ## PROMETHEUS PLAN TO REVIEW
 
@@ -2057,7 +2206,8 @@ Respond with your assessment, then:
       "after_state": "desired state",
       "acceptance_criteria": ["measurable criteria with numeric thresholds"],
       "verification": "concrete test command",
-      "riskLevel": "low"
+      "riskLevel": "low",
+      "estimatedExecutionTokens": 12000
     }
   ],
   "planReviews": [
@@ -2281,7 +2431,20 @@ IMPORTANT: Always include "patchedPlans" with the FULL corrected plan array. Eve
         reason: blockReason,
       };
     }
-    result.patchedPlans = handoff.plans;
+
+    // ── Token-first deterministic rebatch ───────────────────────────────────
+    // After contract validation, repack plans into minimal context-capacity
+    // batches (token-first, wave-aware). Writes _batchIndex/_batchTotal/_batchWave
+    // onto each plan so the orchestrator can dispatch in correct order without
+    // running buildRoleExecutionBatches role-split logic.
+    const rebatched = await rebatchPatchedPlansTokenFirst(handoff.plans, config);
+    const batchCount = rebatched.length > 0
+      ? Math.max(...rebatched.map(p => Number(p._batchTotal ?? 1)))
+      : 0;
+    await appendProgress(config,
+      `[ATHENA] Token-first rebatch: ${handoff.plans.length} plan(s) → ${batchCount} batch(es)`
+    );
+    result.patchedPlans = rebatched;
   }
 
   await writeJson(path.join(stateDir, "athena_plan_review.json"), {

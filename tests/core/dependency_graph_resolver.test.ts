@@ -547,6 +547,90 @@ describe("persistGraphDiagnostics", () => {
   });
 });
 
+// ── persistGraphDiagnostics — guaranteed parseable NDJSON contract ────────────
+// Each appended line must be independently parseable as valid JSON.
+// This contract ensures diagnostics files remain machine-readable even after
+// partial writes, concurrent appends, or multi-cycle accumulation.
+
+describe("persistGraphDiagnostics — guaranteed parseable NDJSON contract", () => {
+  let tmpDir;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-dgr-ndjson-"));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("every line in the file is independently valid JSON (single entry)", async () => {
+    const subDir = await fs.mkdtemp(path.join(tmpDir, "ndjson-single-"));
+    const resolution = resolveDependencyGraph([makeTask("a"), makeTask("b", { dependsOn: ["a"] })]);
+    await persistGraphDiagnostics(subDir, resolution);
+
+    const raw = await fs.readFile(path.join(subDir, "dependency_graph_diagnostics.json"), "utf8");
+    const lines = raw.split("\n").filter(l => l.trim().length > 0);
+    assert.ok(lines.length >= 1, "at least one line must be written");
+    for (const line of lines) {
+      assert.doesNotThrow(
+        () => JSON.parse(line),
+        `each NDJSON line must be valid JSON; failed on: "${line.slice(0, 80)}"`
+      );
+    }
+  });
+
+  it("every line in the file is independently valid JSON (multiple entries)", async () => {
+    const subDir = await fs.mkdtemp(path.join(tmpDir, "ndjson-multi-"));
+    const r1 = resolveDependencyGraph([makeTask("x1")]);
+    const r2 = resolveDependencyGraph([makeTask("x2"), makeTask("x3", { dependsOn: ["x2"] })]);
+    const r3 = resolveDependencyGraph([makeTask("y", { dependsOn: ["y"] })]);
+    await persistGraphDiagnostics(subDir, r1, { run: "first" });
+    await persistGraphDiagnostics(subDir, r2, { run: "second" });
+    await persistGraphDiagnostics(subDir, r3, { run: "third" });
+
+    const raw = await fs.readFile(path.join(subDir, "dependency_graph_diagnostics.json"), "utf8");
+    const lines = raw.split("\n").filter(l => l.trim().length > 0);
+    assert.equal(lines.length, 3, "three entries must be appended");
+    for (const line of lines) {
+      assert.doesNotThrow(
+        () => JSON.parse(line),
+        `each NDJSON line must be independently parseable; failed on: "${line.slice(0, 80)}"`
+      );
+    }
+  });
+
+  it("each line contains all required schema fields", async () => {
+    const subDir = await fs.mkdtemp(path.join(tmpDir, "ndjson-schema-"));
+    const resolution = resolveDependencyGraph([makeTask("m1"), makeTask("m2")]);
+    await persistGraphDiagnostics(subDir, resolution, { correlationId: "schema-check" });
+
+    const raw = await fs.readFile(path.join(subDir, "dependency_graph_diagnostics.json"), "utf8");
+    const entry = JSON.parse(raw.trim().split("\n")[0]);
+    const requiredFields = [
+      "schemaVersion", "persistedAt", "status", "reasonCode",
+      "totalTasks", "waves", "conflictPairs", "cycles",
+    ];
+    for (const field of requiredFields) {
+      assert.ok(field in entry, `required field "${field}" must be present in every NDJSON entry`);
+    }
+  });
+
+  it("NEGATIVE PATH: each independently-parsed line does not depend on prior lines", async () => {
+    // Simulate reading only the second line (as if the first was corrupted/missing).
+    const subDir = await fs.mkdtemp(path.join(tmpDir, "ndjson-independent-"));
+    await persistGraphDiagnostics(subDir, resolveDependencyGraph([makeTask("p1")]), { seq: 1 });
+    await persistGraphDiagnostics(subDir, resolveDependencyGraph([makeTask("p2")]), { seq: 2 });
+
+    const raw = await fs.readFile(path.join(subDir, "dependency_graph_diagnostics.json"), "utf8");
+    const lines = raw.split("\n").filter(l => l.trim().length > 0);
+    // Parse only the second line — must not throw or reference first line
+    const secondEntry = JSON.parse(lines[1]);
+    assert.equal(secondEntry.seq, 2,
+      "second line must be independently parseable without requiring the first");
+    assert.equal(secondEntry.schemaVersion, GRAPH_DIAGNOSTICS_SCHEMA_VERSION);
+  });
+});
+
 // ── Integration: conflict + explicit dep combined ─────────────────────────────
 
 describe("resolveDependencyGraph — combined explicit deps and conflicts", () => {

@@ -2147,3 +2147,124 @@ describe("verification_gate — validateWorkerContract rejects inline template p
       `no artifact gap expected when all placeholders are replaced; gaps: [${result.gaps.join("; ")}]`);
   });
 });
+
+// ── Carry-forward backlog closure verification (#1-#5) ────────────────────────
+// Machine-checkable tests proving each item in state/carry_forward_backlog.json
+// has a concrete gate that prevents the failure pattern from recurring.
+
+import {
+  checkForbiddenCommands,
+} from "../../src/core/verification_command_registry.js";
+
+describe("verification_gate — carry-forward backlog closure (#1-#5)", () => {
+  // CF-001: Workers not including BOX_MERGED_SHA
+  it("CF-001: collectArtifactGaps emits ARTIFACT_GAP.MISSING_SHA when SHA is absent", () => {
+    const artifact = checkPostMergeArtifact(
+      "===NPM TEST OUTPUT START===\n# pass 5\n===NPM TEST OUTPUT END===\n"
+    );
+    assert.equal(artifact.hasSha, false, "hasSha must be false when no SHA in output");
+    const gaps = collectArtifactGaps(artifact);
+    assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_SHA),
+      `MISSING_SHA gap must be emitted; got: [${gaps.join("; ")}]`);
+  });
+
+  it("CF-001: ARTIFACT_GAP.MISSING_SHA constant is a non-empty string", () => {
+    assert.equal(typeof ARTIFACT_GAP.MISSING_SHA, "string");
+    assert.ok(ARTIFACT_GAP.MISSING_SHA.length > 0);
+  });
+
+  // CF-002: Workers not including ===NPM TEST OUTPUT START=== block
+  it("CF-002: collectArtifactGaps emits ARTIFACT_GAP.MISSING_TEST_OUTPUT when npm block is absent", () => {
+    const artifact = checkPostMergeArtifact("BOX_MERGED_SHA=abc1234f\nsome output without npm block\n");
+    assert.equal(artifact.hasTestOutput, false, "hasTestOutput must be false when npm block is absent");
+    const gaps = collectArtifactGaps(artifact);
+    assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_TEST_OUTPUT),
+      `MISSING_TEST_OUTPUT gap must be emitted; got: [${gaps.join("; ")}]`);
+  });
+
+  it("CF-002: ARTIFACT_GAP.MISSING_TEST_OUTPUT constant is a non-empty string", () => {
+    assert.equal(typeof ARTIFACT_GAP.MISSING_TEST_OUTPUT, "string");
+    assert.ok(ARTIFACT_GAP.MISSING_TEST_OUTPUT.length > 0);
+  });
+
+  // CF-003: Workers using node --test tests/** glob patterns
+  it("CF-003: checkForbiddenCommands rejects node --test tests/** glob pattern", () => {
+    const result = checkForbiddenCommands("node --test tests/**");
+    assert.equal(result.forbidden, true,
+      "node --test tests/** must be forbidden (glob pattern, not npm test)");
+    assert.ok(result.violations.length > 0, "must have at least one violation");
+  });
+
+  it("CF-003: checkForbiddenCommands rejects node --test with deep glob path", () => {
+    const result = checkForbiddenCommands("node --test tests/core/**/*.test.js");
+    assert.equal(result.forbidden, true,
+      "node --test with deep glob must be forbidden");
+  });
+
+  // CF-004: Workers using bash/sh scripts
+  it("CF-004: checkForbiddenCommands rejects bare bash invocation", () => {
+    const result = checkForbiddenCommands("bash scripts/test.sh");
+    assert.equal(result.forbidden, true,
+      "bash scripts/test.sh must be forbidden");
+    assert.ok(result.violations.length > 0, "must have at least one violation");
+  });
+
+  it("CF-004: checkForbiddenCommands rejects sh script invocation (negative path: npm test is allowed)", () => {
+    const allowed = checkForbiddenCommands("npm test");
+    assert.equal(allowed.forbidden, false,
+      "npm test must NOT be a forbidden command (it is the canonical command)");
+  });
+
+  // CF-005: Workers using unfilled template placeholders
+  it("CF-005: checkPostMergeArtifact sets hasUnfilledPlaceholder=true for SHA placeholder residue", () => {
+    const output = [
+      `BOX_MERGED_SHA=${POST_MERGE_SHA_PLACEHOLDER}`,
+      "===NPM TEST OUTPUT START===\n# pass 5\n===NPM TEST OUTPUT END===",
+    ].join("\n");
+    const artifact = checkPostMergeArtifact(output);
+    assert.equal(artifact.hasUnfilledPlaceholder, true,
+      "SHA placeholder residue must set hasUnfilledPlaceholder=true");
+  });
+
+  it("CF-005: collectArtifactGaps emits ARTIFACT_GAP.UNFILLED_PLACEHOLDER for placeholder residue", () => {
+    const output = `SHA: ${POST_MERGE_SHA_PLACEHOLDER}`;
+    const artifact = checkPostMergeArtifact(output);
+    assert.equal(artifact.hasUnfilledPlaceholder, true);
+    const gaps = collectArtifactGaps(artifact);
+    assert.ok(gaps.includes(ARTIFACT_GAP.UNFILLED_PLACEHOLDER),
+      `UNFILLED_PLACEHOLDER gap must be emitted; got: [${gaps.join("; ")}]`);
+  });
+
+  it("CF-005: ALL_POST_MERGE_PLACEHOLDERS contains both placeholder constants", () => {
+    assert.ok(ALL_POST_MERGE_PLACEHOLDERS.includes(POST_MERGE_SHA_PLACEHOLDER),
+      "ALL_POST_MERGE_PLACEHOLDERS must include POST_MERGE_SHA_PLACEHOLDER");
+    assert.ok(ALL_POST_MERGE_PLACEHOLDERS.includes(POST_MERGE_OUTPUT_PLACEHOLDER),
+      "ALL_POST_MERGE_PLACEHOLDERS must include POST_MERGE_OUTPUT_PLACEHOLDER");
+  });
+
+  // Integration path: validateWorkerContract blocks done for all five failure patterns
+  it("integration: done with missing SHA is blocked (CF-001 + CF-002 combined)", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=n/a",
+    });
+    assert.equal(result.passed, false, "done without SHA or npm output must be blocked");
+    assert.ok(result.gaps.some(g => /sha/i.test(g)),
+      `SHA gap expected; got: [${result.gaps.join("; ")}]`);
+    assert.ok(result.gaps.some(g => /test output|npm/i.test(g)),
+      `test output gap expected; got: [${result.gaps.join("; ")}]`);
+  });
+
+  it("integration: done with unfilled placeholder is blocked (CF-005)", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        POST_MERGE_OUTPUT_PLACEHOLDER,
+        "VERIFICATION_REPORT: BUILD=pass",
+      ].join("\n"),
+    });
+    assert.equal(result.passed, false, "done with placeholder residue must be blocked");
+    assert.ok(result.gaps.some(g => /placeholder/i.test(g)),
+      `placeholder gap expected; got: [${result.gaps.join("; ")}]`);
+  });
+});

@@ -9,6 +9,28 @@ const DEFAULT_CONTEXT_WINDOW_TOKENS = 100000;
 const DEFAULT_CONTEXT_RESERVE_TOKENS = 12000;
 
 /**
+ * Default minimum context-fill ratio (0–1) for a specialist worker to keep its
+ * own batch.  Below this threshold, the specialist's plans are rerouted to
+ * evolution-worker and co-packed with other evo-worker tasks.
+ *
+ * Configurable via config.planner.specialistFillThreshold (default: 1.0 = 100%).
+ */
+export const DEFAULT_SPECIALIST_FILL_THRESHOLD = 1.0;
+
+/** Roles that are always dispatched as-is (never rerouted by specialist threshold). */
+const SPECIALIST_EXEMPT_ROLES = new Set(["evolution-worker"]);
+
+/**
+ * Resolve the specialist fill threshold from config.
+ * Returns a number in [0, 1]. Values outside range are clamped.
+ */
+function resolveSpecialistFillThreshold(config: any): number {
+  const raw = Number(config?.planner?.specialistFillThreshold);
+  if (!Number.isFinite(raw)) return DEFAULT_SPECIALIST_FILL_THRESHOLD;
+  return Math.max(0, Math.min(1, raw));
+}
+
+/**
  * Maximum number of plans per batch when any plan in the batch carries explicit
  * dependency declarations (dependsOn / dependencies fields).  Dependency-linked
  * plans must be kept small so a worker can reason about the full dependency chain
@@ -149,7 +171,13 @@ export function getUsableModelContextTokens(config, modelName) {
   return Math.max(1, windowTokens - reserveTokens);
 }
 
-export function estimatePlanTokens(plan) {
+export function estimatePlanTokens(plan, calibrationCoefficient?: number) {
+  const explicitEstimate = Number(
+    plan?.estimatedExecutionTokens
+    ?? plan?.estimated_execution_tokens
+    ?? plan?.estimated_tokens
+  );
+
   const payload = [
     plan?.task,
     plan?.context,
@@ -176,8 +204,21 @@ export function estimatePlanTokens(plan) {
   const baseOverhead = 300;
   const fileReadOverhead = fileCount * 150; // estimated tokens per file the worker will read
   const reasoningOverhead = Math.ceil(payloadTokens * 0.3 * riskMultiplier); // model reasoning space
+  const heuristicEstimate = Math.max(1, payloadTokens + baseOverhead + fileReadOverhead + reasoningOverhead);
 
-  return Math.max(1, payloadTokens + baseOverhead + fileReadOverhead + reasoningOverhead);
+  // If planner/reviewer provides an explicit estimate, trust it but never go below
+  // heuristic floor to avoid over-packing worker context.
+  const rawEstimate = (Number.isFinite(explicitEstimate) && explicitEstimate > 0)
+    ? Math.max(heuristicEstimate, Math.floor(explicitEstimate))
+    : heuristicEstimate;
+
+  // Apply calibration coefficient if provided (from token_calibration EWMA).
+  // coefficient > 1 means we historically underestimate → inflate.
+  // coefficient < 1 means we historically overestimate → deflate.
+  const coeff = Number.isFinite(calibrationCoefficient) && (calibrationCoefficient as number) > 0
+    ? calibrationCoefficient as number
+    : 1.0;
+  return Math.max(1, Math.round(rawEstimate * coeff));
 }
 
 /**
@@ -905,6 +946,171 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
     bundleIndex: index + 1,
     totalBundles: flattened.length,
     diversityViolation,
+  }));
+}
+
+/**
+ * Token-first global batching.
+ *
+ * Unlike buildRoleExecutionBatches (which applies role bucketing, optional lane
+ * conflict splitting and additional reshaping), this function performs a direct
+ * token-first pack with strict role isolation:
+ *  - never merge different roles into one batch
+ *  - within each (wave, role) bucket, fill context capacity before opening
+ *    the next batch
+ *
+ * Wave boundaries are still hard barriers: wave N fully completes before wave N+1.
+ * Plans without any explicit dependency declarations are all collapsed to wave 1
+ * so they can be packed together.
+ *
+ * This minimises premium request consumption by filling each model context window
+ * before opening a new batch.  3 small tasks with no dependencies → 1 batch.
+ *
+ * @param plans  — normalized plan objects (after role normalization)
+ * @param config — BOX config
+ * @param opts   — optional: { calibrationState } for token estimate calibration
+ * @returns flattened batch array in dispatch order, same shape as buildRoleExecutionBatches
+ */
+export function buildTokenFirstBatches(
+  plans: any[],
+  config?: object,
+  opts?: { calibrationState?: { globalCoefficient?: number; roleCoefficients?: Record<string, number> } }
+): ReturnType<typeof buildRoleExecutionBatches> {
+  if (!Array.isArray(plans) || plans.length === 0) return [];
+
+  // ── Wave compaction ────────────────────────────────────────────────────────
+  // When no plan has explicit dependencies the whole plan set can run in one
+  // wave; collapse all plan wave fields to 1 to enable maximum consolidation.
+  const hasAnyDeps = plans.some(p => hasExplicitDependencies(p));
+  const workingPlans: any[] = hasAnyDeps
+    ? plans
+    : plans.map(p => ({ ...p, wave: 1 }));
+
+  // ── Group by wave × role ──────────────────────────────────────────────────
+  // Different roles must never be merged into the same worker batch.
+  const byWaveRole = new Map<string, { wave: number; role: string; plans: any[] }>();
+  for (const plan of workingPlans) {
+    const w = Number.isFinite(Number(plan.wave)) && Number(plan.wave) >= 1
+      ? Number(plan.wave)
+      : 1;
+    const role = String(plan.role || "evolution-worker").trim() || "evolution-worker";
+    const key = `${w}::${role}`;
+    if (!byWaveRole.has(key)) byWaveRole.set(key, { wave: w, role, plans: [] });
+    byWaveRole.get(key)!.plans.push(plan);
+  }
+
+  const defaultModel = (config as any)?.copilot?.defaultModel || "Claude Sonnet 4.6";
+  const contextWindowTokens = getModelContextWindowTokens(config, defaultModel);
+  const usableTokens = getUsableModelContextTokens(config, defaultModel);
+  const flattened: any[] = [];
+
+  // ── Calibration coefficient resolver ──────────────────────────────────────
+  const calState = opts?.calibrationState;
+  const getCoeff = (role: string): number => {
+    if (!calState) return 1.0;
+    const roleCoeff = calState.roleCoefficients?.[role];
+    if (Number.isFinite(roleCoeff) && (roleCoeff as number) > 0) return roleCoeff as number;
+    const g = calState.globalCoefficient;
+    return (Number.isFinite(g) && (g as number) > 0) ? g as number : 1.0;
+  };
+
+  // ── Specialist-threshold routing ──────────────────────────────────────────
+  // For each (wave, role) group where the role is a specialist (not evolution-worker),
+  // check if total estimated tokens fill at least specialistFillThreshold of usable
+  // context.  If not, reroute those plans to evolution-worker for co-packing.
+  const specialistThreshold = resolveSpecialistFillThreshold(config);
+  const minSpecialistTokens = Math.floor(usableTokens * specialistThreshold);
+  const reroutedRoles: string[] = [];
+
+  for (const [key, group] of byWaveRole) {
+    if (SPECIALIST_EXEMPT_ROLES.has(group.role)) continue;
+    const groupCoeff = getCoeff(group.role);
+    const groupTokens = group.plans.reduce((sum, p) => sum + estimatePlanTokens(p, groupCoeff), 0);
+    if (groupTokens < minSpecialistTokens) {
+      // Below threshold — reroute to evolution-worker
+      reroutedRoles.push(`${group.role}(wave${group.wave},${groupTokens}tok)`);
+      const evoKey = `${group.wave}::evolution-worker`;
+      if (!byWaveRole.has(evoKey)) {
+        byWaveRole.set(evoKey, { wave: group.wave, role: "evolution-worker", plans: [] });
+      }
+      // Tag plans with original role for observability, then move them
+      for (const plan of group.plans) {
+        plan._originalSpecialistRole = group.role;
+        plan.role = "evolution-worker";
+        byWaveRole.get(evoKey)!.plans.push(plan);
+      }
+      byWaveRole.delete(key);
+    }
+  }
+
+  // Sort groups: ascending wave, then role (deterministic)
+  const sortedGroups = [...byWaveRole.values()].sort((a, b) => {
+    const waveDelta = a.wave - b.wave;
+    if (waveDelta !== 0) return waveDelta;
+    return a.role.localeCompare(b.role);
+  });
+
+  for (const group of sortedGroups) {
+    const { wave: waveNum, role, plans: groupPlans } = group;
+
+    // Sort by priority within group (lower number = higher priority = dispatched first)
+    groupPlans.sort((a, b) => Number(a.priority ?? 99) - Number(b.priority ?? 99));
+
+    // ── Greedy token-first packing within the group ────────────────────────
+    // All plans in a group share the same role; open a new batch only when
+    // context capacity is full.
+    const roleCoeff = getCoeff(role);
+    const batches: Array<{ plans: any[]; tokens: number }> = [];
+    for (const plan of groupPlans) {
+      const planTokens = estimatePlanTokens(plan, roleCoeff);
+      let placed = false;
+      for (const batch of batches) {
+        if (batch.tokens + planTokens <= usableTokens) {
+          batch.plans.push(plan);
+          batch.tokens += planTokens;
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        batches.push({ plans: [plan], tokens: planTokens });
+      }
+    }
+
+    batches.forEach((batch, index) => {
+      const taskKind = String(
+        batch.plans[0]?.taskKind || batch.plans[0]?.kind || "implementation"
+      );
+      const sharedBranch = buildSharedBranchName(role, batch.plans);
+      const utilization = usableTokens > 0
+        ? Math.round((batch.tokens / usableTokens) * 100)
+        : 0;
+
+      flattened.push({
+        role,
+        plans: batch.plans,
+        model: defaultModel,
+        contextWindowTokens,
+        usableContextTokens: usableTokens,
+        estimatedTokens: batch.tokens,
+        contextUtilizationPercent: utilization,
+        taskKind,
+        sharedBranch,
+        wave: waveNum,
+        roleBatchIndex: index + 1,
+        roleBatchTotal: batches.length,
+        githubFinalizer: index === batches.length - 1,
+        tokenFirstPacked: true,
+        diversityViolation: null,
+      });
+    });
+  }
+
+  return flattened.map((batch, index) => ({
+    ...batch,
+    bundleIndex: index + 1,
+    totalBundles: flattened.length,
+    ...(reroutedRoles.length > 0 ? { specialistReroutes: reroutedRoles } : {}),
   }));
 }
 

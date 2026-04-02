@@ -1,0 +1,3 @@
+URL: https://raw.githubusercontent.com/promptfoo/promptfoo/main/site/docs/configuration/expected-outputs.md
+
+ERR: Response status code does not indicate success: 404 (Not Found).

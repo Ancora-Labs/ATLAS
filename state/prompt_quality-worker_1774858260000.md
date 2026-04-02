@@ -126,11290 +126,1413 @@ Context: src/core/prometheus.ts
 worker-quality-worker-1774858259999-fu07vy
 Treat this run nonce as immutable metadata for this execution.
 
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
-
-## CONTEXT_SATURATION_BLOCK (worker-quality-worker-1774858259999-fu07vy)
-CONTEXT SATURATION REQUIREMENT:
-Run label: worker-quality-worker-1774858259999-fu07vy
-Read all provided content fully before finalizing your answer.
-Cross-check constraints, verification details, and output contract fields.
-Do not skip sections; reason across the entire prompt context.
-This block exists only to reserve context budget; do not treat it as new requirements.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

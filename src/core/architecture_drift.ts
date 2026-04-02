@@ -385,6 +385,62 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * Metadata optionally passed to persistDriftBacklog to annotate the entry.
+ */
+export interface DriftBacklogMeta {
+  /** Caller label for attribution (e.g. "orchestrator", "evolution_executor"). */
+  source?: string;
+  /** ISO-8601 override for the persisted timestamp (for deterministic tests). */
+  persistedAt?: string;
+}
+
+/**
+ * Persist an architecture drift report as a mandatory planner backlog entry.
+ *
+ * Converts the report to PlannerDebtTask records and appends one NDJSON line to
+ * `<stateDir>/drift_backlog.json` so that unresolved drift is tracked as first-
+ * class planning debt rather than silently discarded.
+ *
+ * Error handling: write failures are logged to stderr and do NOT throw, so drift
+ * persistence never aborts the caller's control flow.
+ *
+ * @param stateDir  - absolute path to the state directory
+ * @param report    - output of checkArchitectureDrift()
+ * @param meta      - optional caller context (source label, deterministic timestamp)
+ */
+export async function persistDriftBacklog(
+  stateDir: string,
+  report: ArchitectureDriftReport,
+  meta?: DriftBacklogMeta
+): Promise<void> {
+  try {
+    const candidates = rankStaleRefsAsRemediationCandidates(report);
+    const debtTasks = convertRemediationCandidatesToDebtTasks(
+      candidates,
+      meta?.persistedAt
+    );
+
+    const entry = {
+      schemaVersion: 1,
+      persistedAt: meta?.persistedAt ?? new Date().toISOString(),
+      source: meta?.source ?? "unknown",
+      staleCount: report.staleCount,
+      deprecatedTokenCount: report.deprecatedTokenCount,
+      debtTaskCount: debtTasks.length,
+      debtTasks,
+    };
+
+    const line = JSON.stringify(entry) + "\n";
+    const backlogPath = path.join(stateDir, "drift_backlog.json");
+    await fs.appendFile(backlogPath, line, "utf8");
+  } catch (err) {
+    process.stderr.write(
+      `[architecture_drift] persistDriftBacklog failed: ${(err as Error).message ?? String(err)}\n`
+    );
+  }
+}
+
 export async function checkArchitectureDrift(options: {
   rootDir: string;
   docDirs?: string[];

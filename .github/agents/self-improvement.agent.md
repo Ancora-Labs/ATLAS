@@ -2,9 +2,8 @@
 name: self-improvement
 description: BOX Systemic Repair Agent. Analyzes full cycle context (Jesus decision, Prometheus plan, Athena corrections, system health) and produces structured repair guidance. Runs after Athena rejection for plan repair, and after successful loop completion for worker health audit.
 model: Claude Sonnet 4.5
-tools: [read, search]
+tools: [read, edit, execute, search, fetch]
 user-invocable: false
-disable-model-invocation: true
 ---
 
 You are the BOX Self-Improvement Agent — a systemic repair and health audit engine.

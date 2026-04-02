@@ -15,6 +15,7 @@
  */
 
 import path from "node:path";
+import { appendFileSync } from "node:fs";
 import { readJson, readJsonSafe, writeJson, spawnAsync } from "./fs_utils.js";
 import { appendProgress, appendAlert, ALERT_SEVERITY } from "./state_tracker.js";
 import { getRoleRegistry } from "./role_registry.js";
@@ -68,15 +69,43 @@ export function emitJesusSpanTransition(
   );
 }
 
-async function callCopilotAgent(command, agentSlug, contextPrompt) {
+async function _callCopilotAgent(command, agentSlug, contextPrompt) {
   const args = buildAgentArgs({ agentSlug, prompt: contextPrompt, allowAll: true, noAskUser: true });
-  const result: any = await spawnAsync(command, args, { env: process.env });
+  const result: any = await spawnAsync(command, args, {
+    env: process.env,
+    timeoutMs: 180_000,
+  });
   const stdout = result.stdout;
   const stderr = result.stderr;
   if (result.status !== 0) {
     return { ok: false, raw: stdout || stderr, parsed: null, thinking: "", error: `exited ${result.status}` };
   }
   return parseAgentOutput(stdout || stderr);
+}
+
+function liveLogPath(stateDir: string): string {
+  return path.join(stateDir, "live_worker_jesus.log");
+}
+
+function appendLiveLogSync(stateDir: string, text: string): void {
+  try {
+    appendFileSync(liveLogPath(stateDir), text, "utf8");
+  } catch { /* best-effort */ }
+}
+
+function appendPromptPreviewSync(stateDir: string, promptText: string): void {
+  const prompt = String(promptText || "").trim();
+  if (!prompt) return;
+  appendLiveLogSync(
+    stateDir,
+    [
+      "",
+      "[jesus_runtime_prompt_start]",
+      prompt,
+      "[jesus_runtime_prompt_end]",
+      ""
+    ].join("\n")
+  );
 }
 
 // ── Hierarchical System Health Audit ─────────────────────────────────────────
@@ -495,6 +524,7 @@ export async function runJesusCycle(config) {
 
   await appendProgress(config, `[JESUS] ${jesusName} awakening — analyzing system state`);
   chatLog(stateDir, jesusName, "Awakening — reading system state...");
+  chatLog(stateDir, jesusName, "[LIVE] loading state snapshots (directive, coordination, prometheus, github, sessions)");
 
   // Read all state (no budget)
   const [
@@ -511,8 +541,16 @@ export async function runJesusCycle(config) {
     readJson(path.join(stateDir, "worker_sessions.json"), {})
   ]);
 
+  chatLog(
+    stateDir,
+    jesusName,
+    `[LIVE] state loaded issues=${githubState.issues.length} prs=${githubState.pullRequests.length} failedCI=${githubState.failedCiRuns.length} activeSessions=${Object.keys(sessions).filter(k => sessions[k]?.status === "working").length}`
+  );
+
   // ── Hierarchical Health Audit — detect what lower layers missed ──────────
+  chatLog(stateDir, jesusName, "[LIVE] running hierarchical health audit");
   const healthFindings = await runSystemHealthAudit(config, githubState, AthenaCoordination, sessions);
+  chatLog(stateDir, jesusName, `[LIVE] health audit complete findings=${healthFindings.length}`);
   if (healthFindings.length > 0) {
     const criticalCount = healthFindings.filter(f => f.severity === "critical").length;
     await appendProgress(config, `[JESUS][AUDIT] ${healthFindings.length} finding(s) — ${criticalCount} critical`);
@@ -557,6 +595,7 @@ export async function runJesusCycle(config) {
 
   // Calibrate previous directive's expected outcome against realized current state.
   // We do this AFTER the fresh-directive check so we only calibrate on real new cycles.
+  chatLog(stateDir, jesusName, "[LIVE] calibration start (expected vs realized)");
   try {
     const calibrationHealthFindings = await runSystemHealthAudit(config, githubState, AthenaCoordination, sessions);
     const criticalCount = calibrationHealthFindings.filter(f => f.severity === "critical").length;
@@ -591,6 +630,7 @@ export async function runJesusCycle(config) {
       );
     }
   } catch { /* calibration is non-critical — never block the main cycle */ }
+  chatLog(stateDir, jesusName, "[LIVE] calibration complete");
 
   const prometheusAgeHours = prometheusAnalysis?.analyzedAt
     ? (now - new Date(prometheusAnalysis.analyzedAt).getTime()) / 3600000
@@ -683,8 +723,47 @@ ${healthFindings.filter(f => f.area === "capability-gap").length > 0 ? "\n⚠️
 **Available Workers:**
 ${workersList}`;
 
+  appendPromptPreviewSync(stateDir, contextPrompt);
+  chatLog(stateDir, jesusName, `Calling Copilot CLI (agent=jesus, allowAll=true)...`);
+
+  const jesusTimeoutMs = Math.max(60_000, Number(config?.runtime?.jesusTimeoutMs || 180_000));
+  chatLog(stateDir, jesusName, `[LIVE] invoking agent=jesus model=${jesusModel} timeout=${Math.floor(jesusTimeoutMs / 1000)}s`);
   chatLog(stateDir, jesusName, "Calling AI for strategic analysis...");
-  const aiResult = await callCopilotAgent(command, "jesus", contextPrompt);
+  appendLiveLogSync(stateDir, `\n[copilot_stream_start] ${new Date().toISOString().replace("T", " ").slice(0, 19)}\n`);
+
+  const aiCallStartedAt = Date.now();
+  const heartbeatIntervalMs = Math.max(30_000, Number(config?.runtime?.jesusHeartbeatIntervalMs || 30_000));
+  const heartbeatTimer = setInterval(() => {
+    const elapsedSec = Math.floor((Date.now() - aiCallStartedAt) / 1000);
+    chatLog(stateDir, jesusName, `[LIVE] AI analysis in progress elapsed=${elapsedSec}s`);
+  }, heartbeatIntervalMs);
+
+  const args = buildAgentArgs({ agentSlug: "jesus", prompt: contextPrompt, allowAll: true, noAskUser: true });
+  let rawResult: any;
+  try {
+    rawResult = await spawnAsync(command, args, {
+      env: process.env,
+      timeoutMs: jesusTimeoutMs,
+      onStdout(chunk) {
+        appendLiveLogSync(stateDir, chunk.toString("utf8"));
+      },
+      onStderr(chunk) {
+        appendLiveLogSync(stateDir, chunk.toString("utf8"));
+      },
+    });
+  } finally {
+    clearInterval(heartbeatTimer);
+  }
+
+  appendLiveLogSync(stateDir, `\n[copilot_stream_end] ${new Date().toISOString().replace("T", " ").slice(0, 19)} exit=${rawResult?.status}\n`);
+
+  const elapsedSec = Math.floor((Date.now() - aiCallStartedAt) / 1000);
+  chatLog(stateDir, jesusName, `[LIVE] AI call completed elapsed=${elapsedSec}s ok=${Boolean(rawResult?.status === 0)}`);
+
+  const rawOut = String(rawResult?.stdout || rawResult?.stderr || "");
+  const aiResult = rawResult?.status === 0
+    ? parseAgentOutput(rawOut)
+    : { ok: false, raw: rawOut, parsed: null, thinking: "", error: rawResult?.timedOut ? `timed out after ${Math.floor(jesusTimeoutMs / 1000)}s` : `exited ${rawResult?.status}` };
 
   if (!aiResult.ok || !aiResult.parsed) {
     await appendProgress(config, `[JESUS] AI call failed — ${(aiResult as any).error || "no JSON"}`);

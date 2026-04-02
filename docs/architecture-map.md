@@ -51,14 +51,17 @@ Key output:
 Files:
 - `src/core/project_scanner.ts`
 - `src/core/prometheus.ts`
-- `src/core/prometheus.ts`
 - `src/core/orchestrator.ts`
+- `src/core/dependency_graph_resolver.ts`
+- `src/core/intervention_optimizer.ts`
 
 Responsibilities:
 - Generate repository summary and domain signals.
 - Convert summary into roadmap tasks and complexity roof.
 - Create normalized task contracts.
 - Enqueue, prune, deduplicate, split, and recover tasks.
+- Resolve task dependency graphs, detect cycles, serialize conflicting tasks into waves.
+- Optimize intervention strategies across active worker lanes.
 
 ### Layer D: Worker Execution
 
@@ -78,8 +81,7 @@ Responsibilities:
 
 Files:
 - `src/core/verification_gate.ts`
-- `src/providers/reviewer/copilot_reviewer.ts`
-- `src/providers/reviewer/claude_reviewer.ts`
+- `src/core/verification_command_registry.ts`
 - `src/core/escalation_queue.ts`
 - `src/core/policy_engine.ts`
 
@@ -88,6 +90,19 @@ Responsibilities:
 - Approve or reject task outcomes via reviewer.
 - Escalate unresolved or environment-blocked failures (`L1 -> L4`).
 - Enforce protected-path and blocked-command policies.
+- Enforce Windows-safe verification command canonicals and forbidden-pattern rejection.
+- Gate done-path worker outputs: require BOX_MERGED_SHA and npm test artifact block.
+
+### Layer H: Architecture Health
+
+Files:
+- `src/core/architecture_drift.ts`
+
+Responsibilities:
+- Scan documentation for stale file references and deprecated API tokens.
+- Convert drift findings into ranked remediation candidates for Prometheus.
+- Persist drift backlog entries to `state/drift_backlog.json` for mandatory closure tracking.
+- Prevent ghost-file-path planning by detecting and surfacing documentation staleness.
 
 ### Layer F: Observability and Control Plane
 
@@ -215,6 +230,10 @@ Primary runtime files under `state/`:
 - `self_analysis.json`: cycle-by-cycle self-analysis reports.
 - `engineering_knowledge_base.json`: persisted problem/solution learnings with confidence.
 - `experiments.json`: A/B experiment records and candidate winners.
+- `dependency_graph_diagnostics.json`: NDJSON diagnostics from dependency graph resolution (one entry per call, schema defined in `state/diagnostics_schema.json`).
+- `drift_backlog.json`: NDJSON architecture drift backlog entries from `persistDriftBacklog()` (mandatory planner debt — one entry per drift scan).
+- `carry_forward_backlog.json`: machine-checkable closure records for carry-forward verification debt items #1-#5.
+- `diagnostics_schema.json`: canonical schema definitions for all diagnostics and state files.
 
 ## 8) Gates and Exit Codes
 
@@ -238,7 +257,6 @@ Config and policy sources:
 - `box.config.json -> runtime`, `copilot`, `planner`
 - `src/config.ts`
 - `src/providers/coder/copilot_cli_provider.ts`
-- `src/providers/reviewer/copilot_reviewer.ts`
 
 Current runtime pattern:
 - Reviewer provider is configurable (`copilot` or `claude`).

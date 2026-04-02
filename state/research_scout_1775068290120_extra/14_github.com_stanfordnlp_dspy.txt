@@ -1,0 +1,435 @@
+URL: https://github.com/stanfordnlp/dspy
+
+Title: GitHub - stanfordnlp/dspy: DSPy: The framework for programming—not prompting—language models
+
+URL Source: http://github.com/stanfordnlp/dspy
+
+Markdown Content:
+# GitHub - stanfordnlp/dspy: DSPy: The framework for programming—not prompting—language models · GitHub
+
+[Skip to content](http://github.com/stanfordnlp/dspy#start-of-content)
+## Navigation Menu
+
+Toggle navigation
+
+[](http://github.com/)
+
+[Sign in](http://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fstanfordnlp%2Fdspy)
+
+Appearance settings
+
+*   
+Platform
+
+    *   
+AI CODE CREATION
+        *   [GitHub Copilot Write better code with AI](https://github.com/features/copilot)
+        *   [GitHub Spark Build and deploy intelligent apps](https://github.com/features/spark)
+        *   [GitHub Models Manage and compare prompts](https://github.com/features/models)
+        *   [MCP Registry New Integrate external tools](https://github.com/mcp)
+
+    *   
+DEVELOPER WORKFLOWS
+        *   [Actions Automate any workflow](https://github.com/features/actions)
+        *   [Codespaces Instant dev environments](https://github.com/features/codespaces)
+        *   [Issues Plan and track work](https://github.com/features/issues)
+        *   [Code Review Manage code changes](https://github.com/features/code-review)
+
+    *   
+APPLICATION SECURITY
+        *   [GitHub Advanced Security Find and fix vulnerabilities](https://github.com/security/advanced-security)
+        *   [Code security Secure your code as you build](https://github.com/security/advanced-security/code-security)
+        *   [Secret protection Stop leaks before they start](https://github.com/security/advanced-security/secret-protection)
+
+    *   
+EXPLORE
+        *   [Why GitHub](https://github.com/why-github)
+        *   [Documentation](https://docs.github.com/)
+        *   [Blog](https://github.blog/)
+        *   [Changelog](https://github.blog/changelog)
+        *   [Marketplace](https://github.com/marketplace)
+
+[View all features](https://github.com/features)
+
+*   
+Solutions
+
+    *   
+BY COMPANY SIZE
+        *   [Enterprises](https://github.com/enterprise)
+        *   [Small and medium teams](https://github.com/team)
+        *   [Startups](https://github.com/enterprise/startups)
+        *   [Nonprofits](https://github.com/solutions/industry/nonprofits)
+
+    *   
+BY USE CASE
+        *   [App Modernization](https://github.com/solutions/use-case/app-modernization)
+        *   [DevSecOps](https://github.com/solutions/use-case/devsecops)
+        *   [DevOps](https://github.com/solutions/use-case/devops)
+        *   [CI/CD](https://github.com/solutions/use-case/ci-cd)
+        *   [View all use cases](https://github.com/solutions/use-case)
+
+    *   
+BY INDUSTRY
+        *   [Healthcare](https://github.com/solutions/industry/healthcare)
+        *   [Financial services](https://github.com/solutions/industry/financial-services)
+        *   [Manufacturing](https://github.com/solutions/industry/manufacturing)
+        *   [Government](https://github.com/solutions/industry/government)
+        *   [View all industries](https://github.com/solutions/industry)
+
+[View all solutions](https://github.com/solutions)
+
+*   
+Resources
+
+    *   
+EXPLORE BY TOPIC
+        *   [AI](https://github.com/resources/articles?topic=ai)
+        *   [Software Development](https://github.com/resources/articles?topic=software-development)
+        *   [DevOps](https://github.com/resources/articles?topic=devops)
+        *   [Security](https://github.com/resources/articles?topic=security)
+        *   [View all topics](https://github.com/resources/articles)
+
+    *   
+EXPLORE BY TYPE
+        *   [Customer stories](https://github.com/customer-stories)
+        *   [Events & webinars](https://github.com/resources/events)
+        *   [Ebooks & reports](https://github.com/resources/whitepapers)
+        *   [Business insights](https://github.com/solutions/executive-insights)
+        *   [GitHub Skills](https://skills.github.com/)
+
+    *   
+SUPPORT & SERVICES
+        *   [Documentation](https://docs.github.com/)
+        *   [Customer support](https://support.github.com/)
+        *   [Community forum](https://github.com/orgs/community/discussions)
+        *   [Trust center](https://github.com/trust-center)
+        *   [Partners](https://github.com/partners)
+
+[View all resources](https://github.com/resources)
+
+*   
+Open Source
+
+    *   
+COMMUNITY
+        *   [GitHub Sponsors Fund open source developers](https://github.com/sponsors)
+
+    *   
+PROGRAMS
+        *   [Security Lab](https://securitylab.github.com/)
+        *   [Maintainer Community](https://maintainers.github.com/)
+        *   [Accelerator](https://github.com/accelerator)
+        *   [GitHub Stars](https://stars.github.com/)
+        *   [Archive Program](https://archiveprogram.github.com/)
+
+    *   
+REPOSITORIES
+        *   [Topics](https://github.com/topics)
+        *   [Trending](https://github.com/trending)
+        *   [Collections](https://github.com/collections)
+
+*   
+Enterprise
+
+    *   
+ENTERPRISE SOLUTIONS
+        *   [Enterprise platform AI-powered developer platform](https://github.com/enterprise)
+
+    *   
+AVAILABLE ADD-ONS
+        *   [GitHub Advanced Security Enterprise-grade security features](https://github.com/security/advanced-security)
+        *   [Copilot for Business Enterprise-grade AI features](https://github.com/features/copilot/copilot-business)
+        *   [Premium Support Enterprise-grade 24/7 support](https://github.com/premium-support)
+
+*   [Pricing](https://github.com/pricing)
+
+Search or jump to...
+
+# Search code, repositories, users, issues, pull requests...
+
+ Search  
+
+Clear
+
+[Search syntax tips](https://docs.github.com/search-github/github-code-search/understanding-github-code-search-syntax)
+
+# Provide feedback
+
+We read every piece of feedback, and take your input very seriously.
+
+- [x] Include my email address so I can be contacted 
+
+ Cancel  Submit feedback 
+
+# Saved searches
+
+## Use saved searches to filter your results more quickly
+
+Name 
+
+Query 
+
+To see all available qualifiers, see our [documentation](https://docs.github.com/search-github/github-code-search/understanding-github-code-search-syntax).
+
+ Cancel  Create saved search 
+
+[Sign in](http://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fstanfordnlp%2Fdspy)
+
+[Sign up](http://github.com/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=stanfordnlp%2Fdspy)
+
+Appearance settings
+
+Resetting focus
+
+You signed in with another tab or window. [Reload](http://github.com/stanfordnlp/dspy) to refresh your session.You signed out in another tab or window. [Reload](http://github.com/stanfordnlp/dspy) to refresh your session.You switched accounts on another tab or window. [Reload](http://github.com/stanfordnlp/dspy) to refresh your session.Dismiss alert
+
+{{ message }}
+
+[stanfordnlp](http://github.com/stanfordnlp)/**[dspy](http://github.com/stanfordnlp/dspy)**Public
+
+*   [Notifications](http://github.com/login?return_to=%2Fstanfordnlp%2Fdspy)You must be signed in to change notification settings
+*   [Fork 2.7k](http://github.com/login?return_to=%2Fstanfordnlp%2Fdspy)
+*   [Star 33.4k](http://github.com/login?return_to=%2Fstanfordnlp%2Fdspy) 
+
+*   [Code](http://github.com/stanfordnlp/dspy)
+*   [Issues 290](http://github.com/stanfordnlp/dspy/issues)
+*   [Pull requests 184](http://github.com/stanfordnlp/dspy/pulls)
+*   [Discussions](http://github.com/stanfordnlp/dspy/discussions)
+*   [Actions](http://github.com/stanfordnlp/dspy/actions)
+*   [Projects](http://github.com/stanfordnlp/dspy/projects)
+*   [Security and quality 0](http://github.com/stanfordnlp/dspy/security)
+*   [Insights](http://github.com/stanfordnlp/dspy/pulse)
+
+Additional navigation options
+
+*   [Code](http://github.com/stanfordnlp/dspy)
+*   [Issues](http://github.com/stanfordnlp/dspy/issues)
+*   [Pull requests](http://github.com/stanfordnlp/dspy/pulls)
+*   [Discussions](http://github.com/stanfordnlp/dspy/discussions)
+*   [Actions](http://github.com/stanfordnlp/dspy/actions)
+*   [Projects](http://github.com/stanfordnlp/dspy/projects)
+*   [Security and quality](http://github.com/stanfordnlp/dspy/security)
+*   [Insights](http://github.com/stanfordnlp/dspy/pulse)
+
+[](http://github.com/stanfordnlp/dspy)
+
+# stanfordnlp/dspy
+
+main
+
+[**516**Branches](http://github.com/stanfordnlp/dspy/branches)[**110**Tags](http://github.com/stanfordnlp/dspy/tags)
+
+[](http://github.com/stanfordnlp/dspy/branches)[](http://github.com/stanfordnlp/dspy/tags)
+
+Go to file
+
+Code
+
+Open more actions menu
+
+## Folders and files
+
+| Name | Name | Last commit message | Last commit date |
+| --- | --- | --- | --- |
+| ## Latest commit ![Image 1: isaacbmiller](https://avatars.githubusercontent.com/u/17116851?v=4&size=40)![Image 2: factory-droid[bot]](https://avatars.githubusercontent.com/in/358017?v=4&size=40) [isaacbmiller](http://github.com/stanfordnlp/dspy/commits?author=isaacbmiller) and [factory-droid[bot]](http://github.com/stanfordnlp/dspy/commits?author=factory-droid%5Bbot%5D) [fix(deps): pin typeguard==4.4.3 to prevent supply chain attacks (](http://github.com/stanfordnlp/dspy/commit/9cdb0aac28b2a04b064e40697ccd301872cf6a43)[#9551](https://github.com/stanfordnlp/dspy/pull/9551)[)](http://github.com/stanfordnlp/dspy/commit/9cdb0aac28b2a04b064e40697ccd301872cf6a43) Open commit details success Mar 31, 2026 [9cdb0aa](http://github.com/stanfordnlp/dspy/commit/9cdb0aac28b2a04b064e40697ccd301872cf6a43)·Mar 31, 2026 ## History [4,438 Commits](http://github.com/stanfordnlp/dspy/commits/main/) Open commit details [](http://github.com/stanfordnlp/dspy/commits/main/)4,438 Commits |
+| [.github](http://github.com/stanfordnlp/dspy/tree/main/.github ".github") | [.github](http://github.com/stanfordnlp/dspy/tree/main/.github ".github") | [fix(ci): correct setup-node SHA typo in docs-push workflow (](http://github.com/stanfordnlp/dspy/commit/e947dda884532ea788457517e535e0c35c29bff1 "fix(ci): correct setup-node SHA typo in docs-push workflow (#9528) The actions/setup-node pin from #9509 had a single-character typo (e210 vs e610). The correct hash points to the v3.9.1 release. Co-authored-by: factory-droid[bot] <138933559+factory-droid[bot]@users.noreply.github.com>")[#9528](https://github.com/stanfordnlp/dspy/pull/9528)[)](http://github.com/stanfordnlp/dspy/commit/e947dda884532ea788457517e535e0c35c29bff1 "fix(ci): correct setup-node SHA typo in docs-push workflow (#9528) The actions/setup-node pin from #9509 had a single-character typo (e210 vs e610). The correct hash points to the v3.9.1 release. Co-authored-by: factory-droid[bot] <138933559+factory-droid[bot]@users.noreply.github.com>") | Mar 26, 2026 |
+| [docs](http://github.com/stanfordnlp/dspy/tree/main/docs "docs") | [docs](http://github.com/stanfordnlp/dspy/tree/main/docs "docs") | [Refactor: Move model capability checks to BaseLM to remove litellm fr…](http://github.com/stanfordnlp/dspy/commit/d0b893209a3c55549064788d55d0f0757a59e4b7 "Refactor: Move model capability checks to BaseLM to remove litellm from adapters (#9516) * refactor: move model capability checks from litellm to BaseLM/LM Adapters query model capabilities (function calling, reasoning, structured output) by calling litellm directly. This means adapters only work with dspy.LM, not custom BaseLM subclasses. This PR: 1. Adds capability properties to BaseLM with safe defaults 2. Overrides them in LM using litellm 3. Updates adapters to use lm.supports_* instead of litellm.supports_*() 4. Removes all runtime litellm imports from dspy/adapters/ Properties added to BaseLM (safe defaults): - supports_function_calling (False) - supports_reasoning (False) - supports_response_schema (False) - supported_params (empty set) After this change, adapters work with any BaseLM subclass — not just the litellm-backed dspy.LM. * Use uncached LM capability properties") | Mar 27, 2026 |
+| [dspy](http://github.com/stanfordnlp/dspy/tree/main/dspy "dspy") | [dspy](http://github.com/stanfordnlp/dspy/tree/main/dspy "dspy") | [refactor: type-hint adapters with BaseLM instead of LM (](http://github.com/stanfordnlp/dspy/commit/9406291243487ee17054db9c3b38f5937e1d2f38 "refactor: type-hint adapters with BaseLM instead of LM (#9522) Adapters only use capabilities defined on BaseLM (forward, supports_*), never LM-specific features. Update type annotations to reflect the actual contract: adapters accept any BaseLM subclass. Move LM imports to TYPE_CHECKING where they were runtime imports. Change TwoStepAdapter isinstance check from LM to BaseLM.")[#9522](https://github.com/stanfordnlp/dspy/pull/9522)[)](http://github.com/stanfordnlp/dspy/commit/9406291243487ee17054db9c3b38f5937e1d2f38 "refactor: type-hint adapters with BaseLM instead of LM (#9522) Adapters only use capabilities defined on BaseLM (forward, supports_*), never LM-specific features. Update type annotations to reflect the actual contract: adapters accept any BaseLM subclass. Move LM imports to TYPE_CHECKING where they were runtime imports. Change TwoStepAdapter isinstance check from LM to BaseLM.") | Mar 27, 2026 |
+| [tests](http://github.com/stanfordnlp/dspy/tree/main/tests "tests") | [tests](http://github.com/stanfordnlp/dspy/tree/main/tests "tests") | [Refactor: Introduce DSPy-owned `ContextWindowExceededError` to decoup…](http://github.com/stanfordnlp/dspy/commit/0d390ad2151c7a512d1db1fb38442919358751ad "Refactor: Introduce DSPy-owned `ContextWindowExceededError` to decouple error handling (#9521) * Refactor ContextWindowExceededError to use keyword-only args - Make both args keyword-only and optional (model, message) - Default message to 'Context window exceeded' - Catch litellm's error in LM.forward/aforward and re-raise as dspy's own - Switch react.py and chat_adapter.py to import from dspy.utils.exceptions - Export ContextWindowExceededError from dspy.__init__ - Document Raises in BaseLM.forward/aforward docstrings - Add tests for ContextWindowExceededError construction * Move default message to parameter signature in ContextWindowExceededError") | Mar 27, 2026 |
+| [.gitignore](http://github.com/stanfordnlp/dspy/blob/main/.gitignore ".gitignore") | [.gitignore](http://github.com/stanfordnlp/dspy/blob/main/.gitignore ".gitignore") | [feat(rlm): Add RLM Module and improve PythonInterpreter (](http://github.com/stanfordnlp/dspy/commit/87930f25ea4a5101a7ce515592cf04a4d4605506 "feat(rlm): Add RLM Module and improve PythonInterpreter (#9193) * initial RLm implementation * Refactor tutorial content and improve code execution examples - Updated math tutorial to streamline markdown formatting and enhance clarity in advanced strategies for reasoning tasks. - Revised program of thought tutorial to replace `PythonInterpreter` with `LocalSandbox`, reflecting the latest implementation changes and improving code execution examples. - Added Python setup code templates in `runner.js` to facilitate better handling of user code execution, including stdout capture and exception management. * remove cell outputs * clear other cell outputs * ruff * add ignored local sandbox * change type import * Fix PoT * ruff * TO REVERT: Remove E2B integration * block invalid variable names * make tool usage thread safe * make req_ids use dates in ids * validate input types and allow tuples and sets * add multiple output support * decompose forward method * validate tools * add async and consolidate tests * rename sandbox to interpreter * fix instr string * ruff * force sync interpreter tools and files * Refactor action instructions template and enhance output field descriptions in RLM module * fix instrs * separate repl types, combine sync and async * combine bench notebooks * update test imports * adjust main prompt and remove fallbackswithout a signature from runner * add back default final to fix PoT * rename local interpreter to python_interpreter * docstring cleanup and remove unused/duplicate tests * rm notebook temporarily * rename interpreter to CodeInterpreter and Add experimental marking * update comments * Enhance RLM functionality with FINAL_VAR method, add __call__ alias for forward. Improve error handling in PythonInterpreter for mixed-type sets.")[#9193](https://github.com/stanfordnlp/dspy/pull/9193)[)](http://github.com/stanfordnlp/dspy/commit/87930f25ea4a5101a7ce515592cf04a4d4605506 "feat(rlm): Add RLM Module and improve PythonInterpreter (#9193) * initial RLm implementation * Refactor tutorial content and improve code execution examples - Updated math tutorial to streamline markdown formatting and enhance clarity in advanced strategies for reasoning tasks. - Revised program of thought tutorial to replace `PythonInterpreter` with `LocalSandbox`, reflecting the latest implementation changes and improving code execution examples. - Added Python setup code templates in `runner.js` to facilitate better handling of user code execution, including stdout capture and exception management. * remove cell outputs * clear other cell outputs * ruff * add ignored local sandbox * change type import * Fix PoT * ruff * TO REVERT: Remove E2B integration * block invalid variable names * make tool usage thread safe * make req_ids use dates in ids * validate input types and allow tuples and sets * add multiple output support * decompose forward method * validate tools * add async and consolidate tests * rename sandbox to interpreter * fix instr string * ruff * force sync interpreter tools and files * Refactor action instructions template and enhance output field descriptions in RLM module * fix instrs * separate repl types, combine sync and async * combine bench notebooks * update test imports * adjust main prompt and remove fallbackswithout a signature from runner * add back default final to fix PoT * rename local interpreter to python_interpreter * docstring cleanup and remove unused/duplicate tests * rm notebook temporarily * rename interpreter to CodeInterpreter and Add experimental marking * update comments * Enhance RLM functionality with FINAL_VAR method, add __call__ alias for forward. Improve error handling in PythonInterpreter for mixed-type sets.") | Jan 16, 2026 |
+| [.pre-commit-config.yaml](http://github.com/stanfordnlp/dspy/blob/main/.pre-commit-config.yaml ".pre-commit-config.yaml") | [.pre-commit-config.yaml](http://github.com/stanfordnlp/dspy/blob/main/.pre-commit-config.yaml ".pre-commit-config.yaml") | [fix(precommit): remove hardcoded python version (](http://github.com/stanfordnlp/dspy/commit/88ea7fd38ade278cf31e9035ca455db3530e8cc5 "fix(precommit): remove hardcoded python version (#9346) * remove python version * fix(pre-commit): use managed ruff hook Amp-Thread-ID: https://ampcode.com/threads/T-019cbed2-9583-77ea-8f09-c642c8b92aeb Co-authored-by: Amp <amp@ampcode.com> * build(pre-commit): bump ruff hook to v0.15.0 Amp-Thread-ID: https://ampcode.com/threads/T-019cbed2-9583-77ea-8f09-c642c8b92aeb Co-authored-by: Amp <amp@ampcode.com> --------- Co-authored-by: Amp <amp@ampcode.com>")[#9346](https://github.com/stanfordnlp/dspy/pull/9346)[)](http://github.com/stanfordnlp/dspy/commit/88ea7fd38ade278cf31e9035ca455db3530e8cc5 "fix(precommit): remove hardcoded python version (#9346) * remove python version * fix(pre-commit): use managed ruff hook Amp-Thread-ID: https://ampcode.com/threads/T-019cbed2-9583-77ea-8f09-c642c8b92aeb Co-authored-by: Amp <amp@ampcode.com> * build(pre-commit): bump ruff hook to v0.15.0 Amp-Thread-ID: https://ampcode.com/threads/T-019cbed2-9583-77ea-8f09-c642c8b92aeb Co-authored-by: Amp <amp@ampcode.com> --------- Co-authored-by: Amp <amp@ampcode.com>") | Mar 5, 2026 |
+| [CONTRIBUTING.md](http://github.com/stanfordnlp/dspy/blob/main/CONTRIBUTING.md "CONTRIBUTING.md") | [CONTRIBUTING.md](http://github.com/stanfordnlp/dspy/blob/main/CONTRIBUTING.md "CONTRIBUTING.md") | [docs: add note on Python version for pre-commit (](http://github.com/stanfordnlp/dspy/commit/fe03eadd78c71cd45ee555fe0483d50bcf737950 "docs: add note on Python version for pre-commit (#9028) * docs: add note on Python version for pre-commit * docs: update dev setup instructions to use Python 3.10")[#9028](https://github.com/stanfordnlp/dspy/pull/9028)[)](http://github.com/stanfordnlp/dspy/commit/fe03eadd78c71cd45ee555fe0483d50bcf737950 "docs: add note on Python version for pre-commit (#9028) * docs: add note on Python version for pre-commit * docs: update dev setup instructions to use Python 3.10") | Nov 12, 2025 |
+| [LICENSE](http://github.com/stanfordnlp/dspy/blob/main/LICENSE "LICENSE") | [LICENSE](http://github.com/stanfordnlp/dspy/blob/main/LICENSE "LICENSE") | [Add License](http://github.com/stanfordnlp/dspy/commit/73facc01f0d3d416193f7a37469a9f9a5e3970ad "Add License") | Jan 24, 2023 |
+| [README.md](http://github.com/stanfordnlp/dspy/blob/main/README.md "README.md") | [README.md](http://github.com/stanfordnlp/dspy/blob/main/README.md "README.md") | [fix: broken PyPI downloads badge from pepy.tech in README and docs ho…](http://github.com/stanfordnlp/dspy/commit/31b96afbc9bf6ba59045555f6bcd9b5c51c9f962 "fix: broken PyPI downloads badge from pepy.tech in README and docs home page (#8995) * fix: update broken pypi download badge in readme * fix: update broken pypi download badge in docs home page") | Oct 30, 2025 |
+| [SECURITY.md](http://github.com/stanfordnlp/dspy/blob/main/SECURITY.md "SECURITY.md") | [SECURITY.md](http://github.com/stanfordnlp/dspy/blob/main/SECURITY.md "SECURITY.md") | [Create SECURITY.md (](http://github.com/stanfordnlp/dspy/commit/0af442e24bea263420e1d2db42a7b51110ac45ca "Create SECURITY.md (#9529) * Create SECURITY.md Signed-off-by: Isaac Miller <17116851+isaacbmiller@users.noreply.github.com> * Update SECURITY.md Signed-off-by: Isaac Miller <17116851+isaacbmiller@users.noreply.github.com> --------- Signed-off-by: Isaac Miller <17116851+isaacbmiller@users.noreply.github.com>")[#9529](https://github.com/stanfordnlp/dspy/pull/9529)[)](http://github.com/stanfordnlp/dspy/commit/0af442e24bea263420e1d2db42a7b51110ac45ca "Create SECURITY.md (#9529) * Create SECURITY.md Signed-off-by: Isaac Miller <17116851+isaacbmiller@users.noreply.github.com> * Update SECURITY.md Signed-off-by: Isaac Miller <17116851+isaacbmiller@users.noreply.github.com> --------- Signed-off-by: Isaac Miller <17116851+isaacbmiller@users.noreply.github.com>") | Mar 26, 2026 |
+| [pyproject.toml](http://github.com/stanfordnlp/dspy/blob/main/pyproject.toml "pyproject.toml") | [pyproject.toml](http://github.com/stanfordnlp/dspy/blob/main/pyproject.toml "pyproject.toml") | [fix(deps): pin typeguard==4.4.3 to prevent supply chain attacks (](http://github.com/stanfordnlp/dspy/commit/9cdb0aac28b2a04b064e40697ccd301872cf6a43 "fix(deps): pin typeguard==4.4.3 to prevent supply chain attacks (#9551) Co-authored-by: factory-droid[bot] <138933559+factory-droid[bot]@users.noreply.github.com>")[#9551](https://github.com/stanfordnlp/dspy/pull/9551)[)](http://github.com/stanfordnlp/dspy/commit/9cdb0aac28b2a04b064e40697ccd301872cf6a43 "fix(deps): pin typeguard==4.4.3 to prevent supply chain attacks (#9551) Co-authored-by: factory-droid[bot] <138933559+factory-droid[bot]@users.noreply.github.com>") | Mar 31, 2026 |
+| [uv.lock](http://github.com/stanfordnlp/dspy/blob/main/uv.lock "uv.lock") | [uv.lock](http://github.com/stanfordnlp/dspy/blob/main/uv.lock "uv.lock") | [fix(deps): pin typeguard==4.4.3 to prevent supply chain attacks (](http://github.com/stanfordnlp/dspy/commit/9cdb0aac28b2a04b064e40697ccd301872cf6a43 "fix(deps): pin typeguard==4.4.3 to prevent supply chain attacks (#9551) Co-authored-by: factory-droid[bot] <138933559+factory-droid[bot]@users.noreply.github.com>")[#9551](https://github.com/stanfordnlp/dspy/pull/9551)[)](http://github.com/stanfordnlp/dspy/commit/9cdb0aac28b2a04b064e40697ccd301872cf6a43 "fix(deps): pin typeguard==4.4.3 to prevent supply chain attacks (#9551) Co-authored-by: factory-droid[bot] <138933559+factory-droid[bot]@users.noreply.github.com>") | Mar 31, 2026 |
+| View all files |
+
+## Repository files navigation
+
+*   [README](http://github.com/stanfordnlp/dspy#)
+*   [Contributing](http://github.com/stanfordnlp/dspy#)
+*   [MIT license](http://github.com/stanfordnlp/dspy#)
+*   [Security](http://github.com/stanfordnlp/dspy#)
+
+[![Image 3](http://github.com/stanfordnlp/dspy/raw/main/docs/docs/static/img/dspy_logo.png)](http://github.com/stanfordnlp/dspy/blob/main/docs/docs/static/img/dspy_logo.png)
+
+## DSPy: _Programming_—not prompting—Foundation Models
+
+[](http://github.com/stanfordnlp/dspy#dspy-programmingnot-promptingfoundation-models)
+
+**Documentation:**[DSPy Docs](https://dspy.ai/)
+
+[![Image 4: PyPI Downloads](https://camo.githubusercontent.com/06ac24ed0f3da66a313a6601de2b0b61709b0a0ad3053914e56f46e3c010c081/68747470733a2f2f7374617469632e706570792e746563682f706572736f6e616c697a65642d62616467652f647370793f706572696f643d6d6f6e74686c79)](https://pepy.tech/projects/dspy)
+
+* * *
+
+DSPy is the framework for _programming—rather than prompting—language models_. It allows you to iterate fast on **building modular AI systems** and offers algorithms for **optimizing their prompts and weights**, whether you're building simple classifiers, sophisticated RAG pipelines, or Agent loops.
+
+DSPy stands for Declarative Self-improving Python. Instead of brittle prompts, you write compositional _Python code_ and use DSPy to **teach your LM to deliver high-quality outputs**. Learn more via our [official documentation site](https://dspy.ai/) or meet the community, seek help, or start contributing via this GitHub repo and our [Discord server](https://discord.gg/XCGy2WDCQB).
+
+## Documentation: [dspy.ai](https://dspy.ai/)
+
+[](http://github.com/stanfordnlp/dspy#documentation-dspyai)
+
+**Please go to the [DSPy Docs at dspy.ai](https://dspy.ai/)**
+
+## Installation
+
+[](http://github.com/stanfordnlp/dspy#installation)
+
+undefinedshell
+pip install dspy
+undefined
+
+To install the very latest from `main`:
+
+undefinedshell
+pip install git+https://github.com/stanfordnlp/dspy.git
+undefined
+
+## 📜 Citation & Reading More
+
+[](http://github.com/stanfordnlp/dspy#-citation--reading-more)
+
+If you're looking to understand the framework, please go to the [DSPy Docs at dspy.ai](https://dspy.ai/).
+
+If you're looking to understand the underlying research, this is a set of our papers:
+
+**[Jul'25] [GEPA: Reflective Prompt Evolution Can Outperform Reinforcement Learning](https://arxiv.org/abs/2507.19457)**
+
+**[Jun'24] [Optimizing Instructions and Demonstrations for Multi-Stage Language Model Programs](https://arxiv.org/abs/2406.11695)**
+
+**[Oct'23] [DSPy: Compiling Declarative Language Model Calls into Self-Improving Pipelines](https://arxiv.org/abs/2310.03714)**
+
+ [Jul'24] [Fine-Tuning and Prompt Optimization: Two Great Steps that Work Better Together](https://arxiv.org/abs/2407.10930)
+
+ [Jun'24] [Prompts as Auto-Optimized Training Hyperparameters](https://arxiv.org/abs/2406.11706)
+
+ [Feb'24] [Assisting in Writing Wikipedia-like Articles From Scratch with Large Language Models](https://arxiv.org/abs/2402.14207)
+
+ [Jan'24] [In-Context Learning for Extreme Multi-Label Classification](https://arxiv.org/abs/2401.12178)
+
+ [Dec'23] [DSPy Assertions: Computational Constraints for Self-Refining Language Model Pipelines](https://arxiv.org/abs/2312.13382)
+
+ [Dec'22] [Demonstrate-Search-Predict: Composing Retrieval & Language Models for Knowledge-Intensive NLP](https://arxiv.org/abs/2212.14024.pdf)
+
+To stay up to date or learn more, follow [@DSPyOSS](https://twitter.com/DSPyOSS) on Twitter or the DSPy page on LinkedIn.
+
+The **DSPy** logo is designed by **Chuyi Zhang**.
+
+If you use DSPy or DSP in a research paper, please cite our work as follows:
+
+```
+@inproceedings{khattab2024dspy,
+  title={DSPy: Compiling Declarative Language Model Calls into Self-Improving Pipelines},
+  author={Khattab, Omar and Singhvi, Arnav and Maheshwari, Paridhi and Zhang, Zhiyuan and Santhanam, Keshav and Vardhamanan, Sri and Haq, Saiful and Sharma, Ashutosh and Joshi, Thomas T. and Moazam, Hanna and Miller, Heather and Zaharia, Matei and Potts, Christopher},
+  journal={The Twelfth International Conference on Learning Representations},
+  year={2024}
+}
+@article{khattab2022demonstrate,
+  title={Demonstrate-Search-Predict: Composing Retrieval and Language Models for Knowledge-Intensive {NLP}},
+  author={Khattab, Omar and Santhanam, Keshav and Li, Xiang Lisa and Hall, David and Liang, Percy and Potts, Christopher and Zaharia, Matei},
+  journal={arXiv preprint arXiv:2212.14024},
+  year={2022}
+}
+```
+
+## About
+
+DSPy: The framework for programming—not prompting—language models
+
+[dspy.ai](https://dspy.ai/ "https://dspy.ai")
+
+### Resources
+
+[Readme](http://github.com/stanfordnlp/dspy#readme-ov-file)
+
+### License
+
+[MIT license](http://github.com/stanfordnlp/dspy#MIT-1-ov-file)
+
+### Contributing
+
+[Contributing](http://github.com/stanfordnlp/dspy#contributing-ov-file)
+
+### Security policy
+
+[Security policy](http://github.com/stanfordnlp/dspy#security-ov-file)
+
+### Uh oh!
+
+There was an error while loading. [Please reload this page](http://github.com/stanfordnlp/dspy).
+
+[Activity](http://github.com/stanfordnlp/dspy/activity)
+
+[Custom properties](http://github.com/stanfordnlp/dspy/custom-properties)
+
+### Stars
+
+[**33.4k** stars](http://github.com/stanfordnlp/dspy/stargazers)
+
+### Watchers
+
+[**193** watching](http://github.com/stanfordnlp/dspy/watchers)
+
+### Forks
+
+[**2.7k** forks](http://github.com/stanfordnlp/dspy/forks)
+
+[Report repository](http://github.com/contact/report-content?content_url=https%3A%2F%2Fgithub.com%2Fstanfordnlp%2Fdspy&report=stanfordnlp+%28user%29)
+
+## [Releases 106](http://github.com/stanfordnlp/dspy/releases)
+
+[3.1.3 Latest Feb 5, 2026](http://github.com/stanfordnlp/dspy/releases/tag/3.1.3)
+
+[+ 105 releases](http://github.com/stanfordnlp/dspy/releases)
+
+## [Used by 1.6k](http://github.com/stanfordnlp/dspy/network/dependents)
+
+[* ![Image 5: @superlinked](https://avatars.githubusercontent.com/u/94243920?s=64&v=4) * ![Image 6: @arthrod](https://avatars.githubusercontent.com/u/89408329?s=64&v=4) * ![Image 7: @arthrod](https://avatars.githubusercontent.com/u/89408329?s=64&v=4) * ![Image 8: @arthrod](https://avatars.githubusercontent.com/u/89408329?s=64&v=4) * ![Image 9: @arthrod](https://avatars.githubusercontent.com/u/89408329?s=64&v=4) * ![Image 10: @arthrod](https://avatars.githubusercontent.com/u/89408329?s=64&v=4) * ![Image 11: @rafelafrance](https://avatars.githubusercontent.com/u/11902400?s=64&v=4) * ![Image 12: @jb9k62](https://avatars.githubusercontent.com/u/78347192?s=64&v=4) + 1,603](http://github.com/stanfordnlp/dspy/network/dependents)
+
+## [Contributors 394](http://github.com/stanfordnlp/dspy/graphs/contributors)
+
+*   [![Image 13: @okhat](https://avatars.githubusercontent.com/u/963532?s=64&v=4)](https://github.com/okhat)
+*   [![Image 14: @arnavsinghvi11](https://avatars.githubusercontent.com/u/54859892?s=64&v=4)](https://github.com/arnavsinghvi11)
+*   [![Image 15: @krypticmouse](https://avatars.githubusercontent.com/u/43719685?s=64&v=4)](https://github.com/krypticmouse)
+*   [![Image 16: @TomeHirata](https://avatars.githubusercontent.com/u/33407409?s=64&v=4)](https://github.com/TomeHirata)
+*   [![Image 17: @isaacbmiller](https://avatars.githubusercontent.com/u/17116851?s=64&v=4)](https://github.com/isaacbmiller)
+*   [![Image 18: @thomasahle](https://avatars.githubusercontent.com/u/946355?s=64&v=4)](https://github.com/thomasahle)
+*   [![Image 19: @CShorten](https://avatars.githubusercontent.com/u/25864937?s=64&v=4)](https://github.com/CShorten)
+*   [![Image 20: @klopsahlong](https://avatars.githubusercontent.com/u/115955237?s=64&v=4)](https://github.com/klopsahlong)
+*   [![Image 21: @Shangyint](https://avatars.githubusercontent.com/u/27798077?s=64&v=4)](https://github.com/Shangyint)
+*   [![Image 22: @Anindyadeep](https://avatars.githubusercontent.com/u/58508471?s=64&v=4)](https://github.com/Anindyadeep)
+*   [![Image 23: @dilarasoylu](https://avatars.githubusercontent.com/u/21346670?s=64&v=4)](https://github.com/dilarasoylu)
+*   [![Image 24: @manishshettym](https://avatars.githubusercontent.com/u/32712232?s=64&v=4)](https://github.com/manishshettym)
+*   [![Image 25: @XenonMolecule](https://avatars.githubusercontent.com/u/14205166?s=64&v=4)](https://github.com/XenonMolecule)
+*   [![Image 26: @dbczumar](https://avatars.githubusercontent.com/u/39497902?s=64&v=4)](https://github.com/dbczumar)
+
+[+ 380 contributors](http://github.com/stanfordnlp/dspy/graphs/contributors)
+
+## Languages
+
+*   [Python 99.3%](http://github.com/stanfordnlp/dspy/search?l=python)
+*   [JavaScript 0.7%](http://github.com/stanfordnlp/dspy/search?l=javascript)
+
+## Footer
+
+[](https://github.com/) © 2026 GitHub,Inc. 
+
+### Footer navigation
+
+*   [Terms](https://docs.github.com/site-policy/github-terms/github-terms-of-service)
+*   [Privacy](https://docs.github.com/site-policy/privacy-policies/github-privacy-statement)
+*   [Security](https://github.com/security)
+*   [Status](https://www.githubstatus.com/)
+*   [Community](https://github.community/)
+*   [Docs](https://docs.github.com/)
+*   [Contact](https://support.github.com/?tags=dotcom-footer)
+*    Manage cookies 
+*    Do not share my personal information 
+
+ You can’t perform that action at this time.
+

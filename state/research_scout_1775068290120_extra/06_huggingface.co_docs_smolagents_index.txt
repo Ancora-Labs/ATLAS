@@ -1,0 +1,95 @@
+URL: https://huggingface.co/docs/smolagents/index
+
+Title: smolagents · Hugging Face
+
+URL Source: http://huggingface.co/docs/smolagents/index
+
+Markdown Content:
+## [](http://huggingface.co/docs/smolagents/index#smolagents)smolagents
+
+![Image 1](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/smolagents/license_to_call.png)
+
+## [](http://huggingface.co/docs/smolagents/index#what-is-smolagents)What is smolagents?
+
+`smolagents` is an open-source Python library designed to make it extremely easy to build and run agents using just a few lines of code.
+
+Key features of `smolagents` include:
+
+✨ **Simplicity**: The logic for agents fits in ~thousand lines of code. We kept abstractions to their minimal shape above raw code!
+
+🧑‍💻 **First-class support for Code Agents**: [`CodeAgent`](https://huggingface.co/docs/smolagents/reference/agents#smolagents.CodeAgent) writes its actions in code (as opposed to “agents being used to write code”) to invoke tools or perform computations, enabling natural composability (function nesting, loops, conditionals). To make it secure, we support [executing in sandboxed environment](https://huggingface.co/docs/smolagents/tutorials/secure_code_execution) via [Modal](https://modal.com/), [Blaxel](https://blaxel.ai/), [E2B](https://e2b.dev/), or Docker.
+
+📡 **Common Tool-Calling Agent Support**: In addition to CodeAgents, [`ToolCallingAgent`](https://huggingface.co/docs/smolagents/reference/agents#smolagents.ToolCallingAgent) supports usual JSON/text-based tool-calling for scenarios where that paradigm is preferred.
+
+🤗 **Hub integrations**: Seamlessly share and load agents and tools to/from the Hub as Gradio Spaces.
+
+🌐 **Model-agnostic**: Easily integrate any large language model (LLM), whether it’s hosted on the Hub via [Inference providers](https://huggingface.co/docs/inference-providers/index), accessed via APIs such as OpenAI, Anthropic, or many others via LiteLLM integration, or run locally using Transformers or Ollama. Powering an agent with your preferred LLM is straightforward and flexible.
+
+👁️ **Modality-agnostic**: Beyond text, agents can handle vision, video, and audio inputs, broadening the range of possible applications. Check out [this tutorial](https://huggingface.co/docs/smolagents/examples/web_browser) for vision.
+
+🛠️ **Tool-agnostic**: You can use tools from any [MCP server](https://huggingface.co/docs/smolagents/reference/tools#smolagents.ToolCollection.from_mcp), from [LangChain](https://huggingface.co/docs/smolagents/reference/tools#smolagents.Tool.from_langchain), you can even use a [Hub Space](https://huggingface.co/docs/smolagents/reference/tools#smolagents.Tool.from_space) as a tool.
+
+💻 **CLI Tools**: Comes with command-line utilities (smolagent, webagent) for quickly running agents without writing boilerplate code.
+
+## [](http://huggingface.co/docs/smolagents/index#quickstart)Quickstart
+
+Get started with smolagents in just a few minutes! This guide will show you how to create and run your first agent.
+
+### [](http://huggingface.co/docs/smolagents/index#installation)Installation
+
+Install smolagents with pip:
+
+pip install 'smolagents[toolkit]'  
+
+### [](http://huggingface.co/docs/smolagents/index#create-your-first-agent)Create Your First Agent
+
+Here’s a minimal example to create and run an agent:
+
+from smolagents import CodeAgent, InferenceClientModel
+
+model = InferenceClientModel()  
+
+agent = CodeAgent(tools=[], model=model)
+
+result = agent.run("Calculate the sum of numbers from 1 to 10")
+print(result)
+
+That’s it! Your agent will use Python code to solve the task and return the result.
+
+### [](http://huggingface.co/docs/smolagents/index#adding-tools)Adding Tools
+
+Let’s make our agent more capable by adding some tools:
+
+from smolagents import CodeAgent, InferenceClientModel, DuckDuckGoSearchTool
+
+model = InferenceClientModel()
+agent = CodeAgent(
+    tools=[DuckDuckGoSearchTool()],
+    model=model,
+)
+
+result = agent.run("What is the current weather in Paris?")
+print(result)
+
+### [](http://huggingface.co/docs/smolagents/index#using-different-models)Using Different Models
+
+You can use various models with your agent:
+
+model = InferenceClientModel(model_id="meta-llama/Llama-2-70b-chat-hf")
+
+from smolagents import LiteLLMModel
+model = LiteLLMModel(model_id="gpt-4")
+
+from smolagents import TransformersModel
+model = TransformersModel(model_id="meta-llama/Llama-2-7b-chat-hf")
+
+## [](http://huggingface.co/docs/smolagents/index#next-steps)Next Steps
+
+*   Learn how to set up smolagents with various models and tools in the [Installation Guide](https://huggingface.co/docs/smolagents/installation)
+*   Check out the [Guided Tour](https://huggingface.co/docs/smolagents/guided_tour) for more advanced features
+*   Learn about [building custom tools](https://huggingface.co/docs/smolagents/tutorials/tools)
+*   Explore [secure code execution](https://huggingface.co/docs/smolagents/tutorials/secure_code_execution)
+*   See how to create [multi-agent systems](https://huggingface.co/docs/smolagents/tutorials/building_good_agents)
+
+[Update on GitHub](https://github.com/huggingface/smolagents/blob/main/docs/source/en/index.md)
+

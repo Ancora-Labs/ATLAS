@@ -1,0 +1,1395 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../../../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Handoffs &#8212; AutoGen</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!-- 
+    this give us a css class that will be invisible only if js is disabled 
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../../_static/styles/theme.css?digest=26a4bc78f4c0ddb94549" rel="stylesheet" />
+<link href="../../../_static/styles/pydata-sphinx-theme.css?digest=26a4bc78f4c0ddb94549" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/graphviz.css?v=4ae1632d" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/mystnb.4510f1fc1dee50b3e5859aac5469c37c29e427902b24a333a5f9fcb2f0b3ac41.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/autodoc_pydantic.css" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=069332a8" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../../../_static/scripts/fontawesome.js?digest=26a4bc78f4c0ddb94549"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../../_static/scripts/bootstrap.js?digest=26a4bc78f4c0ddb94549" />
+<link rel="preload" as="script" href="../../../_static/scripts/pydata-sphinx-theme.js?digest=26a4bc78f4c0ddb94549" />
+
+    <script src="../../../_static/documentation_options.js?v=ea3bebfc"></script>
+    <script src="../../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../../../_static/copybutton.js?v=f281be69"></script>
+    <script>(function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+})(window, document, "clarity", "script", "lnxpe6skj1");</script>
+    <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'user-guide/core-user-guide/design-patterns/handoffs';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.16.0';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://raw.githubusercontent.com/microsoft/autogen/refs/heads/main/docs/switcher.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = 'stable';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner = true;
+        </script>
+    <script src="../../../_static/custom-icon.js?v=a32026ea"></script>
+    <script src="../../../_static/banner-override.js?v=8cd4f749"></script>
+    <script src="../../../_static/custom.js?v=70c1e88a"></script>
+    <link rel="canonical" href="/autogen/stable//user-guide/core-user-guide/design-patterns/handoffs.html" />
+    <link rel="icon" href="../../../_static/favicon-512x512.png"/>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Mixture of Agents" href="mixture-of-agents.html" />
+    <link rel="prev" title="Group Chat" href="group-chat.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="0.4" />
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class=" navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../../../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../../../_static/logo.svg" class="logo__image only-light" alt="AutoGen - Home"/>
+    <img src="../../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="AutoGen - Home"/>
+  
+  
+</a></div>
+    
+      <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-2"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-2"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-2"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-2">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+    
+  </div>
+  
+  <div class=" navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../agentchat-user-guide/index.html">
+    AgentChat
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="../index.html">
+    Core
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../extensions-user-guide/index.html">
+    Extensions
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../autogenstudio-user-guide/index.html">
+    Studio
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../../reference/index.html">
+    API Reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://microsoft.github.io/autogen/dotnet/">
+    .NET
+  </a>
+</li>
+
+            <li class="nav-item dropdown">
+                <button class="btn dropdown-toggle nav-item" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-controls="pst-nav-more-links">
+                    More
+                </button>
+                <ul id="pst-nav-more-links" class="dropdown-menu">
+                    
+<li class=" ">
+  <a class="nav-link dropdown-item nav-external" href="https://microsoft.github.io/autogen/0.2/">
+    0.2 Docs
+  </a>
+</li>
+
+                </ul>
+            </li>
+            
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/microsoft/autogen" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://aka.ms/autogen-discord" title="Discord" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-discord fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">Discord</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://twitter.com/pyautogen" title="Twitter" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-twitter fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">Twitter</span></a>
+        </li>
+</ul></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../agentchat-user-guide/index.html">
+    AgentChat
+  </a>
+</li>
+
+
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="../index.html">
+    Core
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../extensions-user-guide/index.html">
+    Extensions
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../autogenstudio-user-guide/index.html">
+    Studio
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../../reference/index.html">
+    API Reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://microsoft.github.io/autogen/dotnet/">
+    .NET
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://microsoft.github.io/autogen/0.2/">
+    0.2 Docs
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/microsoft/autogen" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://aka.ms/autogen-discord" title="Discord" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-discord fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">Discord</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://twitter.com/pyautogen" title="Twitter" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-twitter fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">Twitter</span></a>
+        </li>
+</ul></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+<nav class="bd-docs-nav bd-links" aria-label="Section Navigation">
+    <div class="bd-toc-item navbar-nav"><ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../quickstart.html">Quick Start</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Core Concepts</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../core-concepts/agent-and-multi-agent-application.html">Agent and Multi-Agent Applications</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../core-concepts/architecture.html">Agent Runtime Environments</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../core-concepts/application-stack.html">Application Stack</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../core-concepts/agent-identity-and-lifecycle.html">Agent Identity and Lifecycle</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../core-concepts/topic-and-subscription.html">Topic and Subscription</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Framework Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../framework/agent-and-agent-runtime.html">Agent and Agent Runtime</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../framework/message-and-communication.html">Message and Communication</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../framework/logging.html">Logging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../framework/telemetry.html">Open Telemetry</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../framework/distributed-agent-runtime.html">Distributed Agent Runtime</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../framework/component-config.html">Component config</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Components Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../components/model-clients.html">Model Clients</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../components/model-context.html">Model Context</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../components/tools.html">Tools</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../components/workbench.html">Workbench (and MCP)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../components/command-line-code-executors.html">Command Line Code Executors</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Multi-Agent Design Patterns</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="intro.html">Intro</a></li>
+<li class="toctree-l1"><a class="reference internal" href="concurrent-agents.html">Concurrent Agents</a></li>
+<li class="toctree-l1"><a class="reference internal" href="sequential-workflow.html">Sequential Workflow</a></li>
+<li class="toctree-l1"><a class="reference internal" href="group-chat.html">Group Chat</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Handoffs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="mixture-of-agents.html">Mixture of Agents</a></li>
+<li class="toctree-l1"><a class="reference internal" href="multi-agent-debate.html">Multi-Agent Debate</a></li>
+<li class="toctree-l1"><a class="reference internal" href="reflection.html">Reflection</a></li>
+<li class="toctree-l1"><a class="reference internal" href="code-execution-groupchat.html">Code Execution</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">More</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../cookbook/index.html">Cookbook</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../cookbook/azure-openai-with-aad-auth.html">Azure OpenAI with AAD Auth</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cookbook/termination-with-intervention.html">Termination using Intervention Handler</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cookbook/tool-use-with-intervention.html">User Approval for Tool Execution using Intervention Handler</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cookbook/extracting-results-with-an-agent.html">Extracting Results with an Agent</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cookbook/openai-assistant-agent.html">OpenAI Assistant Agent</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cookbook/langgraph-agent.html">Using LangGraph-Backed Agent</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cookbook/llamaindex-agent.html">Using LlamaIndex-Backed Agent</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cookbook/local-llms-ollama-litellm.html">Local LLMs with LiteLLM &amp; Ollama</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cookbook/instrumenting.html">Instrumentating your code locally</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cookbook/topic-subscription-scenarios.html">Topic and Subscription Example Scenarios</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cookbook/structured-output-agent.html">Structured output using GPT-4o models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cookbook/llm-usage-logger.html">Tracking LLM usage with a logger</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../faqs.html">FAQs</a></li>
+</ul>
+<ul class="nav bd-sidenav">
+            <li class="toctree-l1">
+                <a class="reference internal" href="../../../reference/python/autogen_core.html">
+                    <i class="fa-solid fa-file-code"></i>
+                    API Reference
+                </a>
+            </li>
+            <li class="toctree-l1">
+                <a target="_blank" class="reference internal" href="https://pypi.org/project/autogen-core/">
+                    <i class="fa-brands fa-python"></i>
+                    PyPi
+                    <i class="fa-solid fa-arrow-up-right-from-square fa-2xs"></i>
+                </a>
+            </li>
+            <li class="toctree-l1">
+                <a target="_blank" class="reference internal"
+                    href="https://github.com/microsoft/autogen/tree/main/python/packages/autogen-core">
+                    <i class="fa-brands fa-github"></i>
+                    Source
+                    <i class="fa-solid fa-arrow-up-right-from-square fa-2xs"></i>
+                </a>
+            </li>
+        </ul>
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+  
+  <div id="rtd-footer-container"></div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../../../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="../index.html" class="nav-link">Core</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Handoffs</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="handoffs">
+<h1>Handoffs<a class="headerlink" href="#handoffs" title="Link to this heading">#</a></h1>
+<p>Handoff is a multi-agent design pattern introduced by OpenAI in an experimental project called <a class="reference external" href="https://github.com/openai/swarm">Swarm</a>.
+The key idea is to let agent delegate tasks to other agents using a special tool call.</p>
+<p>We can use the AutoGen Core API to implement the handoff pattern using event-driven agents.
+Using AutoGen (v0.4+) provides the following advantages over the OpenAI implementation and the previous version (v0.2):</p>
+<ol class="arabic simple">
+<li><p>It can scale to distributed environment by using distributed agent runtime.</p></li>
+<li><p>It affords the flexibility of bringing your own agent implementation.</p></li>
+<li><p>The natively async API makes it easy to integrate with UI and other systems.</p></li>
+</ol>
+<p>This notebook demonstrates a simple implementation of the handoff pattern.
+It is recommended to read <a class="reference internal" href="../core-concepts/topic-and-subscription.html"><span class="std std-doc">Topics and Subscriptions</span></a>
+to understand the basic concepts of pub-sub and event-driven agents.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>We are currently working on a high-level API for the handoff pattern in <a class="reference internal" href="../../agentchat-user-guide/index.html"><span class="std std-doc">AgentChat</span></a> so you can get started
+much more quickly.</p>
+</div>
+<section id="scenario">
+<h2>Scenario<a class="headerlink" href="#scenario" title="Link to this heading">#</a></h2>
+<p>This scenario is modified based on the <a class="reference external" href="https://github.com/openai/openai-cookbook/blob/main/examples/Orchestrating_agents.ipynb">OpenAI example</a>.</p>
+<p>Consider a customer service scenario where a customer is trying to get a refund for a product, or purchase a new product from a chatbot.
+The chatbot is a multi-agent team consisting of three AI agents and one human agent:</p>
+<ul class="simple">
+<li><p>Triage Agent, responsible for understanding the customer’s request and deciding which other agents to hand off to.</p></li>
+<li><p>Refund Agent, responsible for processing refund requests.</p></li>
+<li><p>Sales Agent, responsible for processing sales requests.</p></li>
+<li><p>Human Agent, responsible for handling complex requests that the AI agents can’t handle.</p></li>
+</ul>
+<p>In this scenario, the customer interacts with the chatbot through a User Agent.</p>
+<p>The diagram below shows the interaction topology of the agents in this scenario.</p>
+<p><img alt="Handoffs" src="../../../_images/handoffs.svg" /></p>
+<p>Let’s implement this scenario using AutoGen Core. First, we need to import the necessary modules.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">uuid</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">List</span><span class="p">,</span> <span class="n">Tuple</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">autogen_core</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">FunctionCall</span><span class="p">,</span>
+    <span class="n">MessageContext</span><span class="p">,</span>
+    <span class="n">RoutedAgent</span><span class="p">,</span>
+    <span class="n">SingleThreadedAgentRuntime</span><span class="p">,</span>
+    <span class="n">TopicId</span><span class="p">,</span>
+    <span class="n">TypeSubscription</span><span class="p">,</span>
+    <span class="n">message_handler</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">autogen_core.models</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">AssistantMessage</span><span class="p">,</span>
+    <span class="n">ChatCompletionClient</span><span class="p">,</span>
+    <span class="n">FunctionExecutionResult</span><span class="p">,</span>
+    <span class="n">FunctionExecutionResultMessage</span><span class="p">,</span>
+    <span class="n">LLMMessage</span><span class="p">,</span>
+    <span class="n">SystemMessage</span><span class="p">,</span>
+    <span class="n">UserMessage</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">autogen_core.tools</span><span class="w"> </span><span class="kn">import</span> <span class="n">FunctionTool</span><span class="p">,</span> <span class="n">Tool</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">autogen_ext.models.openai</span><span class="w"> </span><span class="kn">import</span> <span class="n">OpenAIChatCompletionClient</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseModel</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="message-protocol">
+<h2>Message Protocol<a class="headerlink" href="#message-protocol" title="Link to this heading">#</a></h2>
+<p>Before everything, we need to define the message protocol for the agents to communicate.
+We are using event-driven pub-sub communication, so these message types will be used as events.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">UserLogin</span></code> is a message published by the runtime when a user logs in and starts a new session.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">UserTask</span></code> is a message containing the chat history of the user session. When an AI agent hands off a task to other agents, it also publishes a <code class="docutils literal notranslate"><span class="pre">UserTask</span></code> message.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">AgentResponse</span></code> is a message published by the AI agents and the Human Agent, it also contains the chat history as well as a topic type for the customer to reply to.</p></li>
+</ul>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">UserLogin</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="k">pass</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">UserTask</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">context</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">LLMMessage</span><span class="p">]</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">AgentResponse</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">reply_to_topic_type</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">context</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">LLMMessage</span><span class="p">]</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="ai-agent">
+<h2>AI Agent<a class="headerlink" href="#ai-agent" title="Link to this heading">#</a></h2>
+<p>We start with the <code class="docutils literal notranslate"><span class="pre">AIAgent</span></code> class, which is the class for all AI agents
+(i.e., Triage, Sales, and Issue and Repair Agents) in the multi-agent chatbot.
+An <code class="docutils literal notranslate"><span class="pre">AIAgent</span></code> uses a <a class="reference internal" href="../../../reference/python/autogen_core.models.html#autogen_core.models.ChatCompletionClient" title="autogen_core.models.ChatCompletionClient"><code class="xref py py-class docutils literal notranslate"><span class="pre">ChatCompletionClient</span></code></a>
+to generate responses.
+It can use regular tools directly or delegate tasks to other agents using <code class="docutils literal notranslate"><span class="pre">delegate_tools</span></code>.
+It subscribes to topic type <code class="docutils literal notranslate"><span class="pre">agent_topic_type</span></code> to receive messages from the customer,
+and sends message to the customer by publishing to the topic type <code class="docutils literal notranslate"><span class="pre">user_topic_type</span></code>.</p>
+<p>In the <code class="docutils literal notranslate"><span class="pre">handle_task</span></code> method, the agent first generates a response using the model.
+If the response contains a handoff tool call, the agent delegates the task to another agent
+by publishing a <code class="docutils literal notranslate"><span class="pre">UserTask</span></code> message to the topic specified in the tool call result.
+If the response is a regular tool call, the agent executes the tool and makes
+another call to the model to generate the next response, until the response is not a tool call.</p>
+<p>When the model response is not a tool call, the agent sends an <code class="docutils literal notranslate"><span class="pre">AgentResponse</span></code> message to the customer
+by publishing to the <code class="docutils literal notranslate"><span class="pre">user_topic_type</span></code>.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">AIAgent</span><span class="p">(</span><span class="n">RoutedAgent</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">description</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">system_message</span><span class="p">:</span> <span class="n">SystemMessage</span><span class="p">,</span>
+        <span class="n">model_client</span><span class="p">:</span> <span class="n">ChatCompletionClient</span><span class="p">,</span>
+        <span class="n">tools</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Tool</span><span class="p">],</span>
+        <span class="n">delegate_tools</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Tool</span><span class="p">],</span>
+        <span class="n">agent_topic_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">user_topic_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">description</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_system_message</span> <span class="o">=</span> <span class="n">system_message</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_model_client</span> <span class="o">=</span> <span class="n">model_client</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_tools</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">([(</span><span class="n">tool</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">tool</span><span class="p">)</span> <span class="k">for</span> <span class="n">tool</span> <span class="ow">in</span> <span class="n">tools</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_tool_schema</span> <span class="o">=</span> <span class="p">[</span><span class="n">tool</span><span class="o">.</span><span class="n">schema</span> <span class="k">for</span> <span class="n">tool</span> <span class="ow">in</span> <span class="n">tools</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_delegate_tools</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">([(</span><span class="n">tool</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">tool</span><span class="p">)</span> <span class="k">for</span> <span class="n">tool</span> <span class="ow">in</span> <span class="n">delegate_tools</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_delegate_tool_schema</span> <span class="o">=</span> <span class="p">[</span><span class="n">tool</span><span class="o">.</span><span class="n">schema</span> <span class="k">for</span> <span class="n">tool</span> <span class="ow">in</span> <span class="n">delegate_tools</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_agent_topic_type</span> <span class="o">=</span> <span class="n">agent_topic_type</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_user_topic_type</span> <span class="o">=</span> <span class="n">user_topic_type</span>
+
+    <span class="nd">@message_handler</span>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle_task</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">:</span> <span class="n">UserTask</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">MessageContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="c1"># Send the task to the LLM.</span>
+        <span class="n">llm_result</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_model_client</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
+            <span class="n">messages</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_system_message</span><span class="p">]</span> <span class="o">+</span> <span class="n">message</span><span class="o">.</span><span class="n">context</span><span class="p">,</span>
+            <span class="n">tools</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_tool_schema</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">_delegate_tool_schema</span><span class="p">,</span>
+            <span class="n">cancellation_token</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">cancellation_token</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="s1">&#39;-&#39;</span><span class="o">*</span><span class="mi">80</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">type</span><span class="si">}</span><span class="s2">:</span><span class="se">\n</span><span class="si">{</span><span class="n">llm_result</span><span class="o">.</span><span class="n">content</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="c1"># Process the LLM result.</span>
+        <span class="k">while</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">llm_result</span><span class="o">.</span><span class="n">content</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">all</span><span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">m</span><span class="p">,</span> <span class="n">FunctionCall</span><span class="p">)</span> <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="n">llm_result</span><span class="o">.</span><span class="n">content</span><span class="p">):</span>
+            <span class="n">tool_call_results</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">FunctionExecutionResult</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="n">delegate_targets</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">UserTask</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="c1"># Process each function call.</span>
+            <span class="k">for</span> <span class="n">call</span> <span class="ow">in</span> <span class="n">llm_result</span><span class="o">.</span><span class="n">content</span><span class="p">:</span>
+                <span class="n">arguments</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">call</span><span class="o">.</span><span class="n">arguments</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">call</span><span class="o">.</span><span class="n">name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_tools</span><span class="p">:</span>
+                    <span class="c1"># Execute the tool directly.</span>
+                    <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_tools</span><span class="p">[</span><span class="n">call</span><span class="o">.</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">run_json</span><span class="p">(</span><span class="n">arguments</span><span class="p">,</span> <span class="n">ctx</span><span class="o">.</span><span class="n">cancellation_token</span><span class="p">)</span>
+                    <span class="n">result_as_str</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_tools</span><span class="p">[</span><span class="n">call</span><span class="o">.</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">return_value_as_string</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+                    <span class="n">tool_call_results</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                        <span class="n">FunctionExecutionResult</span><span class="p">(</span><span class="n">call_id</span><span class="o">=</span><span class="n">call</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="n">content</span><span class="o">=</span><span class="n">result_as_str</span><span class="p">,</span> <span class="n">is_error</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="n">call</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+                    <span class="p">)</span>
+                <span class="k">elif</span> <span class="n">call</span><span class="o">.</span><span class="n">name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_delegate_tools</span><span class="p">:</span>
+                    <span class="c1"># Execute the tool to get the delegate agent&#39;s topic type.</span>
+                    <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_delegate_tools</span><span class="p">[</span><span class="n">call</span><span class="o">.</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">run_json</span><span class="p">(</span><span class="n">arguments</span><span class="p">,</span> <span class="n">ctx</span><span class="o">.</span><span class="n">cancellation_token</span><span class="p">)</span>
+                    <span class="n">topic_type</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_delegate_tools</span><span class="p">[</span><span class="n">call</span><span class="o">.</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">return_value_as_string</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+                    <span class="c1"># Create the context for the delegate agent, including the function call and the result.</span>
+                    <span class="n">delegate_messages</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">message</span><span class="o">.</span><span class="n">context</span><span class="p">)</span> <span class="o">+</span> <span class="p">[</span>
+                        <span class="n">AssistantMessage</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="p">[</span><span class="n">call</span><span class="p">],</span> <span class="n">source</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">type</span><span class="p">),</span>
+                        <span class="n">FunctionExecutionResultMessage</span><span class="p">(</span>
+                            <span class="n">content</span><span class="o">=</span><span class="p">[</span>
+                                <span class="n">FunctionExecutionResult</span><span class="p">(</span>
+                                    <span class="n">call_id</span><span class="o">=</span><span class="n">call</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+                                    <span class="n">content</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;Transferred to </span><span class="si">{</span><span class="n">topic_type</span><span class="si">}</span><span class="s2">. Adopt persona immediately.&quot;</span><span class="p">,</span>
+                                    <span class="n">is_error</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                                    <span class="n">name</span><span class="o">=</span><span class="n">call</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+                                <span class="p">)</span>
+                            <span class="p">]</span>
+                        <span class="p">),</span>
+                    <span class="p">]</span>
+                    <span class="n">delegate_targets</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">topic_type</span><span class="p">,</span> <span class="n">UserTask</span><span class="p">(</span><span class="n">context</span><span class="o">=</span><span class="n">delegate_messages</span><span class="p">)))</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown tool: </span><span class="si">{</span><span class="n">call</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">delegate_targets</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="c1"># Delegate the task to other agents by publishing messages to the corresponding topics.</span>
+                <span class="k">for</span> <span class="n">topic_type</span><span class="p">,</span> <span class="n">task</span> <span class="ow">in</span> <span class="n">delegate_targets</span><span class="p">:</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="s1">&#39;-&#39;</span><span class="o">*</span><span class="mi">80</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">type</span><span class="si">}</span><span class="s2">:</span><span class="se">\n</span><span class="s2">Delegating to </span><span class="si">{</span><span class="n">topic_type</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                    <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">publish_message</span><span class="p">(</span><span class="n">task</span><span class="p">,</span> <span class="n">topic_id</span><span class="o">=</span><span class="n">TopicId</span><span class="p">(</span><span class="n">topic_type</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">key</span><span class="p">))</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">tool_call_results</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="s1">&#39;-&#39;</span><span class="o">*</span><span class="mi">80</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">type</span><span class="si">}</span><span class="s2">:</span><span class="se">\n</span><span class="si">{</span><span class="n">tool_call_results</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                <span class="c1"># Make another LLM call with the results.</span>
+                <span class="n">message</span><span class="o">.</span><span class="n">context</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
+                    <span class="p">[</span>
+                        <span class="n">AssistantMessage</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="n">llm_result</span><span class="o">.</span><span class="n">content</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">type</span><span class="p">),</span>
+                        <span class="n">FunctionExecutionResultMessage</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="n">tool_call_results</span><span class="p">),</span>
+                    <span class="p">]</span>
+                <span class="p">)</span>
+                <span class="n">llm_result</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_model_client</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
+                    <span class="n">messages</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_system_message</span><span class="p">]</span> <span class="o">+</span> <span class="n">message</span><span class="o">.</span><span class="n">context</span><span class="p">,</span>
+                    <span class="n">tools</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_tool_schema</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">_delegate_tool_schema</span><span class="p">,</span>
+                    <span class="n">cancellation_token</span><span class="o">=</span><span class="n">ctx</span><span class="o">.</span><span class="n">cancellation_token</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="s1">&#39;-&#39;</span><span class="o">*</span><span class="mi">80</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">type</span><span class="si">}</span><span class="s2">:</span><span class="se">\n</span><span class="si">{</span><span class="n">llm_result</span><span class="o">.</span><span class="n">content</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="c1"># The task has been delegated, so we are done.</span>
+                <span class="k">return</span>
+        <span class="c1"># The task has been completed, publish the final result.</span>
+        <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">llm_result</span><span class="o">.</span><span class="n">content</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span>
+        <span class="n">message</span><span class="o">.</span><span class="n">context</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">AssistantMessage</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="n">llm_result</span><span class="o">.</span><span class="n">content</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">type</span><span class="p">))</span>
+        <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">publish_message</span><span class="p">(</span>
+            <span class="n">AgentResponse</span><span class="p">(</span><span class="n">context</span><span class="o">=</span><span class="n">message</span><span class="o">.</span><span class="n">context</span><span class="p">,</span> <span class="n">reply_to_topic_type</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_agent_topic_type</span><span class="p">),</span>
+            <span class="n">topic_id</span><span class="o">=</span><span class="n">TopicId</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_user_topic_type</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">key</span><span class="p">),</span>
+        <span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="human-agent">
+<h2>Human Agent<a class="headerlink" href="#human-agent" title="Link to this heading">#</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">HumanAgent</span></code> class is a proxy for the human in the chatbot. It is used
+to handle requests that the AI agents can’t handle. The <code class="docutils literal notranslate"><span class="pre">HumanAgent</span></code> subscribes to the
+topic type <code class="docutils literal notranslate"><span class="pre">agent_topic_type</span></code> to receive messages and publishes to the topic type <code class="docutils literal notranslate"><span class="pre">user_topic_type</span></code>
+to send messages to the customer.</p>
+<p>In this implementation, the <code class="docutils literal notranslate"><span class="pre">HumanAgent</span></code> simply uses console to
+get your input. In a real-world application, you can improve this design as follows:</p>
+<ul class="simple">
+<li><p>In the <code class="docutils literal notranslate"><span class="pre">handle_user_task</span></code> method, send a notification via a chat application like Teams or Slack.</p></li>
+<li><p>The chat application publishes the human’s response via the runtime to the topic specified by <code class="docutils literal notranslate"><span class="pre">agent_topic_type</span></code></p></li>
+<li><p>Create another message handler to process the human’s response and send it back to the customer.</p></li>
+</ul>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">HumanAgent</span><span class="p">(</span><span class="n">RoutedAgent</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">description</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">agent_topic_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">user_topic_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">description</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_agent_topic_type</span> <span class="o">=</span> <span class="n">agent_topic_type</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_user_topic_type</span> <span class="o">=</span> <span class="n">user_topic_type</span>
+
+    <span class="nd">@message_handler</span>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle_user_task</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">:</span> <span class="n">UserTask</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">MessageContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">human_input</span> <span class="o">=</span> <span class="nb">input</span><span class="p">(</span><span class="s2">&quot;Human agent input: &quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="s1">&#39;-&#39;</span><span class="o">*</span><span class="mi">80</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">type</span><span class="si">}</span><span class="s2">:</span><span class="se">\n</span><span class="si">{</span><span class="n">human_input</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">message</span><span class="o">.</span><span class="n">context</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">AssistantMessage</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="n">human_input</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">type</span><span class="p">))</span>
+        <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">publish_message</span><span class="p">(</span>
+            <span class="n">AgentResponse</span><span class="p">(</span><span class="n">context</span><span class="o">=</span><span class="n">message</span><span class="o">.</span><span class="n">context</span><span class="p">,</span> <span class="n">reply_to_topic_type</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_agent_topic_type</span><span class="p">),</span>
+            <span class="n">topic_id</span><span class="o">=</span><span class="n">TopicId</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_user_topic_type</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">key</span><span class="p">),</span>
+        <span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="user-agent">
+<h2>User Agent<a class="headerlink" href="#user-agent" title="Link to this heading">#</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">UserAgent</span></code> class is a proxy for the customer that talks to the chatbot.
+It handles two message types: <code class="docutils literal notranslate"><span class="pre">UserLogin</span></code> and <code class="docutils literal notranslate"><span class="pre">AgentResponse</span></code>.
+When the <code class="docutils literal notranslate"><span class="pre">UserAgent</span></code> receives a <code class="docutils literal notranslate"><span class="pre">UserLogin</span></code> message, it starts a new session with the chatbot
+and publishes a <code class="docutils literal notranslate"><span class="pre">UserTask</span></code> message to the AI agent that subscribes to the topic type <code class="docutils literal notranslate"><span class="pre">agent_topic_type</span></code>.
+When the <code class="docutils literal notranslate"><span class="pre">UserAgent</span></code> receives an <code class="docutils literal notranslate"><span class="pre">AgentResponse</span></code> message, it prompts the user with the response
+from the chatbot.</p>
+<p>In this implementation, the <code class="docutils literal notranslate"><span class="pre">UserAgent</span></code> uses console to get your input.
+In a real-world application, you can improve the human interaction using the same
+idea described in the <code class="docutils literal notranslate"><span class="pre">HumanAgent</span></code> section above.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">UserAgent</span><span class="p">(</span><span class="n">RoutedAgent</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">description</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">user_topic_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">agent_topic_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">description</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_user_topic_type</span> <span class="o">=</span> <span class="n">user_topic_type</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_agent_topic_type</span> <span class="o">=</span> <span class="n">agent_topic_type</span>
+
+    <span class="nd">@message_handler</span>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle_user_login</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">:</span> <span class="n">UserLogin</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">MessageContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="s1">&#39;-&#39;</span><span class="o">*</span><span class="mi">80</span><span class="si">}</span><span class="se">\n</span><span class="s2">User login, session ID: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">key</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="c1"># Get the user&#39;s initial input after login.</span>
+        <span class="n">user_input</span> <span class="o">=</span> <span class="nb">input</span><span class="p">(</span><span class="s2">&quot;User: &quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="s1">&#39;-&#39;</span><span class="o">*</span><span class="mi">80</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">type</span><span class="si">}</span><span class="s2">:</span><span class="se">\n</span><span class="si">{</span><span class="n">user_input</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">publish_message</span><span class="p">(</span>
+            <span class="n">UserTask</span><span class="p">(</span><span class="n">context</span><span class="o">=</span><span class="p">[</span><span class="n">UserMessage</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="n">user_input</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s2">&quot;User&quot;</span><span class="p">)]),</span>
+            <span class="n">topic_id</span><span class="o">=</span><span class="n">TopicId</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_agent_topic_type</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">key</span><span class="p">),</span>
+        <span class="p">)</span>
+
+    <span class="nd">@message_handler</span>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle_task_result</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">:</span> <span class="n">AgentResponse</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">MessageContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="c1"># Get the user&#39;s input after receiving a response from an agent.</span>
+        <span class="n">user_input</span> <span class="o">=</span> <span class="nb">input</span><span class="p">(</span><span class="s2">&quot;User (type &#39;exit&#39; to close the session): &quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="s1">&#39;-&#39;</span><span class="o">*</span><span class="mi">80</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">type</span><span class="si">}</span><span class="s2">:</span><span class="se">\n</span><span class="si">{</span><span class="n">user_input</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">user_input</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">==</span> <span class="s2">&quot;exit&quot;</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="s1">&#39;-&#39;</span><span class="o">*</span><span class="mi">80</span><span class="si">}</span><span class="se">\n</span><span class="s2">User session ended, session ID: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">key</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="n">message</span><span class="o">.</span><span class="n">context</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">UserMessage</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="n">user_input</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s2">&quot;User&quot;</span><span class="p">))</span>
+        <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">publish_message</span><span class="p">(</span>
+            <span class="n">UserTask</span><span class="p">(</span><span class="n">context</span><span class="o">=</span><span class="n">message</span><span class="o">.</span><span class="n">context</span><span class="p">),</span> <span class="n">topic_id</span><span class="o">=</span><span class="n">TopicId</span><span class="p">(</span><span class="n">message</span><span class="o">.</span><span class="n">reply_to_topic_type</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">id</span><span class="o">.</span><span class="n">key</span><span class="p">)</span>
+        <span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="tools-for-the-ai-agents">
+<h2>Tools for the AI agents<a class="headerlink" href="#tools-for-the-ai-agents" title="Link to this heading">#</a></h2>
+<p>The AI agents can use regular tools to complete tasks if they don’t need to hand off the task to other agents.
+We define the tools using simple functions and create the tools using the
+<a class="reference internal" href="../../../reference/python/autogen_core.tools.html#autogen_core.tools.FunctionTool" title="autogen_core.tools.FunctionTool"><code class="xref py py-class docutils literal notranslate"><span class="pre">FunctionTool</span></code></a> wrapper.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">execute_order</span><span class="p">(</span><span class="n">product</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">price</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n\n</span><span class="s2">=== Order Summary ===&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Product: </span><span class="si">{</span><span class="n">product</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Price: $</span><span class="si">{</span><span class="n">price</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;=================</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">confirm</span> <span class="o">=</span> <span class="nb">input</span><span class="p">(</span><span class="s2">&quot;Confirm order? y/n: &quot;</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">confirm</span> <span class="o">==</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Order execution successful!&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="s2">&quot;Success&quot;</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Order cancelled!&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="s2">&quot;User cancelled order.&quot;</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">look_up_item</span><span class="p">(</span><span class="n">search_query</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="n">item_id</span> <span class="o">=</span> <span class="s2">&quot;item_132612938&quot;</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Found item:&quot;</span><span class="p">,</span> <span class="n">item_id</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">item_id</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">execute_refund</span><span class="p">(</span><span class="n">item_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">reason</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;not provided&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n\n</span><span class="s2">=== Refund Summary ===&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Item ID: </span><span class="si">{</span><span class="n">item_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Reason: </span><span class="si">{</span><span class="n">reason</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;=================</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Refund execution successful!&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="s2">&quot;success&quot;</span>
+
+
+<span class="n">execute_order_tool</span> <span class="o">=</span> <span class="n">FunctionTool</span><span class="p">(</span><span class="n">execute_order</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Price should be in USD.&quot;</span><span class="p">)</span>
+<span class="n">look_up_item_tool</span> <span class="o">=</span> <span class="n">FunctionTool</span><span class="p">(</span>
+    <span class="n">look_up_item</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Use to find item ID.</span><span class="se">\n</span><span class="s2">Search query can be a description or keywords.&quot;</span>
+<span class="p">)</span>
+<span class="n">execute_refund_tool</span> <span class="o">=</span> <span class="n">FunctionTool</span><span class="p">(</span><span class="n">execute_refund</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="topic-types-for-the-agents">
+<h2>Topic types for the agents<a class="headerlink" href="#topic-types-for-the-agents" title="Link to this heading">#</a></h2>
+<p>We define the topic types each of the agents will subscribe to.
+Read more about topic types in the <a class="reference internal" href="../core-concepts/topic-and-subscription.html"><span class="std std-doc">Topics and Subscriptions</span></a>.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sales_agent_topic_type</span> <span class="o">=</span> <span class="s2">&quot;SalesAgent&quot;</span>
+<span class="n">issues_and_repairs_agent_topic_type</span> <span class="o">=</span> <span class="s2">&quot;IssuesAndRepairsAgent&quot;</span>
+<span class="n">triage_agent_topic_type</span> <span class="o">=</span> <span class="s2">&quot;TriageAgent&quot;</span>
+<span class="n">human_agent_topic_type</span> <span class="o">=</span> <span class="s2">&quot;HumanAgent&quot;</span>
+<span class="n">user_topic_type</span> <span class="o">=</span> <span class="s2">&quot;User&quot;</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="delegate-tools-for-the-ai-agents">
+<h2>Delegate tools for the AI agents<a class="headerlink" href="#delegate-tools-for-the-ai-agents" title="Link to this heading">#</a></h2>
+<p>Besides regular tools, the AI agents can delegate tasks to other agents using
+special tools called delegate tools. The concept of delegate tool is only used
+in this design pattern, and the delegate tools are also defined as simple functions.
+We differentiate the delegate tools from regular tools in this design pattern
+because when an AI agent calls a delegate tool, we transfer the task to another agent
+instead of continue generating responses using the model in the same agent.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">transfer_to_sales_agent</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">sales_agent_topic_type</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">transfer_to_issues_and_repairs</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">issues_and_repairs_agent_topic_type</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">transfer_back_to_triage</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">triage_agent_topic_type</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">escalate_to_human</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">human_agent_topic_type</span>
+
+
+<span class="n">transfer_to_sales_agent_tool</span> <span class="o">=</span> <span class="n">FunctionTool</span><span class="p">(</span>
+    <span class="n">transfer_to_sales_agent</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Use for anything sales or buying related.&quot;</span>
+<span class="p">)</span>
+<span class="n">transfer_to_issues_and_repairs_tool</span> <span class="o">=</span> <span class="n">FunctionTool</span><span class="p">(</span>
+    <span class="n">transfer_to_issues_and_repairs</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Use for issues, repairs, or refunds.&quot;</span>
+<span class="p">)</span>
+<span class="n">transfer_back_to_triage_tool</span> <span class="o">=</span> <span class="n">FunctionTool</span><span class="p">(</span>
+    <span class="n">transfer_back_to_triage</span><span class="p">,</span>
+    <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Call this if the user brings up a topic outside of your purview,</span><span class="se">\n</span><span class="s2">including escalating to human.&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">escalate_to_human_tool</span> <span class="o">=</span> <span class="n">FunctionTool</span><span class="p">(</span><span class="n">escalate_to_human</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Only call this if explicitly asked to.&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="creating-the-team">
+<h2>Creating the team<a class="headerlink" href="#creating-the-team" title="Link to this heading">#</a></h2>
+<p>We have defined the AI agents, the Human Agent, the User Agent, the tools, and the topic types.
+Now we can create the team of agents.</p>
+<p>For the AI agents, we use the <code class="xref py py-class docutils literal notranslate"><span class="pre">OpenAIChatCompletionClient</span></code>
+and <code class="docutils literal notranslate"><span class="pre">gpt-4o-mini</span></code> model.</p>
+<p>After creating the agent runtime, we register each of the agent by providing
+an agent type and a factory method to create agent instance.
+The runtime is responsible for managing the agent lifecycle so we don’t need to
+instantiate the agents ourselves.
+Read more about agent runtime in <a class="reference internal" href="../core-concepts/architecture.html"><span class="std std-doc">Agent Runtime Environments</span></a>
+and agent lifecycle in <a class="reference internal" href="../core-concepts/agent-identity-and-lifecycle.html"><span class="std std-doc">Agent Identity and Lifecycle</span></a>.</p>
+<p>In the code below, you can see we are using <code class="docutils literal notranslate"><span class="pre">AIAgent</span></code> class to define the Triage, Sales, and Issue and Repair Agents.
+We added regular tools and delegate tools to each of them.
+We also added subscriptions to the topic types for each of the agents.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">runtime</span> <span class="o">=</span> <span class="n">SingleThreadedAgentRuntime</span><span class="p">()</span>
+
+<span class="n">model_client</span> <span class="o">=</span> <span class="n">OpenAIChatCompletionClient</span><span class="p">(</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;gpt-4o-mini&quot;</span><span class="p">,</span>
+    <span class="c1"># api_key=&quot;YOUR_API_KEY&quot;,</span>
+<span class="p">)</span>
+
+<span class="c1"># Register the triage agent.</span>
+<span class="n">triage_agent_type</span> <span class="o">=</span> <span class="k">await</span> <span class="n">AIAgent</span><span class="o">.</span><span class="n">register</span><span class="p">(</span>
+    <span class="n">runtime</span><span class="p">,</span>
+    <span class="nb">type</span><span class="o">=</span><span class="n">triage_agent_topic_type</span><span class="p">,</span>  <span class="c1"># Using the topic type as the agent type.</span>
+    <span class="n">factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">AIAgent</span><span class="p">(</span>
+        <span class="n">description</span><span class="o">=</span><span class="s2">&quot;A triage agent.&quot;</span><span class="p">,</span>
+        <span class="n">system_message</span><span class="o">=</span><span class="n">SystemMessage</span><span class="p">(</span>
+            <span class="n">content</span><span class="o">=</span><span class="s2">&quot;You are a customer service bot for ACME Inc. &quot;</span>
+            <span class="s2">&quot;Introduce yourself. Always be very brief. &quot;</span>
+            <span class="s2">&quot;Gather information to direct the customer to the right department. &quot;</span>
+            <span class="s2">&quot;But make your questions subtle and natural.&quot;</span>
+        <span class="p">),</span>
+        <span class="n">model_client</span><span class="o">=</span><span class="n">model_client</span><span class="p">,</span>
+        <span class="n">tools</span><span class="o">=</span><span class="p">[],</span>
+        <span class="n">delegate_tools</span><span class="o">=</span><span class="p">[</span>
+            <span class="n">transfer_to_issues_and_repairs_tool</span><span class="p">,</span>
+            <span class="n">transfer_to_sales_agent_tool</span><span class="p">,</span>
+            <span class="n">escalate_to_human_tool</span><span class="p">,</span>
+        <span class="p">],</span>
+        <span class="n">agent_topic_type</span><span class="o">=</span><span class="n">triage_agent_topic_type</span><span class="p">,</span>
+        <span class="n">user_topic_type</span><span class="o">=</span><span class="n">user_topic_type</span><span class="p">,</span>
+    <span class="p">),</span>
+<span class="p">)</span>
+<span class="c1"># Add subscriptions for the triage agent: it will receive messages published to its own topic only.</span>
+<span class="k">await</span> <span class="n">runtime</span><span class="o">.</span><span class="n">add_subscription</span><span class="p">(</span><span class="n">TypeSubscription</span><span class="p">(</span><span class="n">topic_type</span><span class="o">=</span><span class="n">triage_agent_topic_type</span><span class="p">,</span> <span class="n">agent_type</span><span class="o">=</span><span class="n">triage_agent_type</span><span class="o">.</span><span class="n">type</span><span class="p">))</span>
+
+<span class="c1"># Register the sales agent.</span>
+<span class="n">sales_agent_type</span> <span class="o">=</span> <span class="k">await</span> <span class="n">AIAgent</span><span class="o">.</span><span class="n">register</span><span class="p">(</span>
+    <span class="n">runtime</span><span class="p">,</span>
+    <span class="nb">type</span><span class="o">=</span><span class="n">sales_agent_topic_type</span><span class="p">,</span>  <span class="c1"># Using the topic type as the agent type.</span>
+    <span class="n">factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">AIAgent</span><span class="p">(</span>
+        <span class="n">description</span><span class="o">=</span><span class="s2">&quot;A sales agent.&quot;</span><span class="p">,</span>
+        <span class="n">system_message</span><span class="o">=</span><span class="n">SystemMessage</span><span class="p">(</span>
+            <span class="n">content</span><span class="o">=</span><span class="s2">&quot;You are a sales agent for ACME Inc.&quot;</span>
+            <span class="s2">&quot;Always answer in a sentence or less.&quot;</span>
+            <span class="s2">&quot;Follow the following routine with the user:&quot;</span>
+            <span class="s2">&quot;1. Ask them about any problems in their life related to catching roadrunners.</span><span class="se">\n</span><span class="s2">&quot;</span>
+            <span class="s2">&quot;2. Casually mention one of ACME&#39;s crazy made-up products can help.</span><span class="se">\n</span><span class="s2">&quot;</span>
+            <span class="s2">&quot; - Don&#39;t mention price.</span><span class="se">\n</span><span class="s2">&quot;</span>
+            <span class="s2">&quot;3. Once the user is bought in, drop a ridiculous price.</span><span class="se">\n</span><span class="s2">&quot;</span>
+            <span class="s2">&quot;4. Only after everything, and if the user says yes, &quot;</span>
+            <span class="s2">&quot;tell them a crazy caveat and execute their order.</span><span class="se">\n</span><span class="s2">&quot;</span>
+            <span class="s2">&quot;&quot;</span>
+        <span class="p">),</span>
+        <span class="n">model_client</span><span class="o">=</span><span class="n">model_client</span><span class="p">,</span>
+        <span class="n">tools</span><span class="o">=</span><span class="p">[</span><span class="n">execute_order_tool</span><span class="p">],</span>
+        <span class="n">delegate_tools</span><span class="o">=</span><span class="p">[</span><span class="n">transfer_back_to_triage_tool</span><span class="p">],</span>
+        <span class="n">agent_topic_type</span><span class="o">=</span><span class="n">sales_agent_topic_type</span><span class="p">,</span>
+        <span class="n">user_topic_type</span><span class="o">=</span><span class="n">user_topic_type</span><span class="p">,</span>
+    <span class="p">),</span>
+<span class="p">)</span>
+<span class="c1"># Add subscriptions for the sales agent: it will receive messages published to its own topic only.</span>
+<span class="k">await</span> <span class="n">runtime</span><span class="o">.</span><span class="n">add_subscription</span><span class="p">(</span><span class="n">TypeSubscription</span><span class="p">(</span><span class="n">topic_type</span><span class="o">=</span><span class="n">sales_agent_topic_type</span><span class="p">,</span> <span class="n">agent_type</span><span class="o">=</span><span class="n">sales_agent_type</span><span class="o">.</span><span class="n">type</span><span class="p">))</span>
+
+<span class="c1"># Register the issues and repairs agent.</span>
+<span class="n">issues_and_repairs_agent_type</span> <span class="o">=</span> <span class="k">await</span> <span class="n">AIAgent</span><span class="o">.</span><span class="n">register</span><span class="p">(</span>
+    <span class="n">runtime</span><span class="p">,</span>
+    <span class="nb">type</span><span class="o">=</span><span class="n">issues_and_repairs_agent_topic_type</span><span class="p">,</span>  <span class="c1"># Using the topic type as the agent type.</span>
+    <span class="n">factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">AIAgent</span><span class="p">(</span>
+        <span class="n">description</span><span class="o">=</span><span class="s2">&quot;An issues and repairs agent.&quot;</span><span class="p">,</span>
+        <span class="n">system_message</span><span class="o">=</span><span class="n">SystemMessage</span><span class="p">(</span>
+            <span class="n">content</span><span class="o">=</span><span class="s2">&quot;You are a customer support agent for ACME Inc.&quot;</span>
+            <span class="s2">&quot;Always answer in a sentence or less.&quot;</span>
+            <span class="s2">&quot;Follow the following routine with the user:&quot;</span>
+            <span class="s2">&quot;1. First, ask probing questions and understand the user&#39;s problem deeper.</span><span class="se">\n</span><span class="s2">&quot;</span>
+            <span class="s2">&quot; - unless the user has already provided a reason.</span><span class="se">\n</span><span class="s2">&quot;</span>
+            <span class="s2">&quot;2. Propose a fix (make one up).</span><span class="se">\n</span><span class="s2">&quot;</span>
+            <span class="s2">&quot;3. ONLY if not satisfied, offer a refund.</span><span class="se">\n</span><span class="s2">&quot;</span>
+            <span class="s2">&quot;4. If accepted, search for the ID and then execute refund.&quot;</span>
+        <span class="p">),</span>
+        <span class="n">model_client</span><span class="o">=</span><span class="n">model_client</span><span class="p">,</span>
+        <span class="n">tools</span><span class="o">=</span><span class="p">[</span>
+            <span class="n">execute_refund_tool</span><span class="p">,</span>
+            <span class="n">look_up_item_tool</span><span class="p">,</span>
+        <span class="p">],</span>
+        <span class="n">delegate_tools</span><span class="o">=</span><span class="p">[</span><span class="n">transfer_back_to_triage_tool</span><span class="p">],</span>
+        <span class="n">agent_topic_type</span><span class="o">=</span><span class="n">issues_and_repairs_agent_topic_type</span><span class="p">,</span>
+        <span class="n">user_topic_type</span><span class="o">=</span><span class="n">user_topic_type</span><span class="p">,</span>
+    <span class="p">),</span>
+<span class="p">)</span>
+<span class="c1"># Add subscriptions for the issues and repairs agent: it will receive messages published to its own topic only.</span>
+<span class="k">await</span> <span class="n">runtime</span><span class="o">.</span><span class="n">add_subscription</span><span class="p">(</span>
+    <span class="n">TypeSubscription</span><span class="p">(</span><span class="n">topic_type</span><span class="o">=</span><span class="n">issues_and_repairs_agent_topic_type</span><span class="p">,</span> <span class="n">agent_type</span><span class="o">=</span><span class="n">issues_and_repairs_agent_type</span><span class="o">.</span><span class="n">type</span><span class="p">)</span>
+<span class="p">)</span>
+
+<span class="c1"># Register the human agent.</span>
+<span class="n">human_agent_type</span> <span class="o">=</span> <span class="k">await</span> <span class="n">HumanAgent</span><span class="o">.</span><span class="n">register</span><span class="p">(</span>
+    <span class="n">runtime</span><span class="p">,</span>
+    <span class="nb">type</span><span class="o">=</span><span class="n">human_agent_topic_type</span><span class="p">,</span>  <span class="c1"># Using the topic type as the agent type.</span>
+    <span class="n">factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">HumanAgent</span><span class="p">(</span>
+        <span class="n">description</span><span class="o">=</span><span class="s2">&quot;A human agent.&quot;</span><span class="p">,</span>
+        <span class="n">agent_topic_type</span><span class="o">=</span><span class="n">human_agent_topic_type</span><span class="p">,</span>
+        <span class="n">user_topic_type</span><span class="o">=</span><span class="n">user_topic_type</span><span class="p">,</span>
+    <span class="p">),</span>
+<span class="p">)</span>
+<span class="c1"># Add subscriptions for the human agent: it will receive messages published to its own topic only.</span>
+<span class="k">await</span> <span class="n">runtime</span><span class="o">.</span><span class="n">add_subscription</span><span class="p">(</span><span class="n">TypeSubscription</span><span class="p">(</span><span class="n">topic_type</span><span class="o">=</span><span class="n">human_agent_topic_type</span><span class="p">,</span> <span class="n">agent_type</span><span class="o">=</span><span class="n">human_agent_type</span><span class="o">.</span><span class="n">type</span><span class="p">))</span>
+
+<span class="c1"># Register the user agent.</span>
+<span class="n">user_agent_type</span> <span class="o">=</span> <span class="k">await</span> <span class="n">UserAgent</span><span class="o">.</span><span class="n">register</span><span class="p">(</span>
+    <span class="n">runtime</span><span class="p">,</span>
+    <span class="nb">type</span><span class="o">=</span><span class="n">user_topic_type</span><span class="p">,</span>
+    <span class="n">factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">UserAgent</span><span class="p">(</span>
+        <span class="n">description</span><span class="o">=</span><span class="s2">&quot;A user agent.&quot;</span><span class="p">,</span>
+        <span class="n">user_topic_type</span><span class="o">=</span><span class="n">user_topic_type</span><span class="p">,</span>
+        <span class="n">agent_topic_type</span><span class="o">=</span><span class="n">triage_agent_topic_type</span><span class="p">,</span>  <span class="c1"># Start with the triage agent.</span>
+    <span class="p">),</span>
+<span class="p">)</span>
+<span class="c1"># Add subscriptions for the user agent: it will receive messages published to its own topic only.</span>
+<span class="k">await</span> <span class="n">runtime</span><span class="o">.</span><span class="n">add_subscription</span><span class="p">(</span><span class="n">TypeSubscription</span><span class="p">(</span><span class="n">topic_type</span><span class="o">=</span><span class="n">user_topic_type</span><span class="p">,</span> <span class="n">agent_type</span><span class="o">=</span><span class="n">user_agent_type</span><span class="o">.</span><span class="n">type</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="running-the-team">
+<h2>Running the team<a class="headerlink" href="#running-the-team" title="Link to this heading">#</a></h2>
+<p>Finally, we can start the runtime and simulate a user session by publishing
+a <code class="docutils literal notranslate"><span class="pre">UserLogin</span></code> message to the runtime.
+The message is published to the topic ID with type set to <code class="docutils literal notranslate"><span class="pre">user_topic_type</span></code>
+and source set to a unique <code class="docutils literal notranslate"><span class="pre">session_id</span></code>.
+This <code class="docutils literal notranslate"><span class="pre">session_id</span></code> will be used to create all topic IDs in this user session and will also be used to create the agent ID
+for all the agents in this user session.
+To read more about how topic ID and agent ID are created, read
+<a class="reference internal" href="../core-concepts/agent-identity-and-lifecycle.html"><span class="std std-doc">Agent Identity and Lifecycle</span></a>.
+and <a class="reference internal" href="../core-concepts/topic-and-subscription.html"><span class="std std-doc">Topics and Subscriptions</span></a>.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># Start the runtime.</span>
+<span class="n">runtime</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+
+<span class="c1"># Create a new session for the user.</span>
+<span class="n">session_id</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">uuid</span><span class="o">.</span><span class="n">uuid4</span><span class="p">())</span>
+<span class="k">await</span> <span class="n">runtime</span><span class="o">.</span><span class="n">publish_message</span><span class="p">(</span><span class="n">UserLogin</span><span class="p">(),</span> <span class="n">topic_id</span><span class="o">=</span><span class="n">TopicId</span><span class="p">(</span><span class="n">user_topic_type</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">session_id</span><span class="p">))</span>
+
+<span class="c1"># Run until completion.</span>
+<span class="k">await</span> <span class="n">runtime</span><span class="o">.</span><span class="n">stop_when_idle</span><span class="p">()</span>
+<span class="k">await</span> <span class="n">model_client</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>--------------------------------------------------------------------------------
+User login, session ID: 7a568cf5-13e7-4e81-8616-8265a01b3f2b.
+--------------------------------------------------------------------------------
+User:
+I want a refund
+--------------------------------------------------------------------------------
+TriageAgent:
+I can help with that! Could I ask what item you&#39;re seeking a refund for?
+--------------------------------------------------------------------------------
+User:
+A pair of shoes I bought
+--------------------------------------------------------------------------------
+TriageAgent:
+[FunctionCall(id=&#39;call_qPx1DXDL2NLcHs8QNo47egsJ&#39;, arguments=&#39;{}&#39;, name=&#39;transfer_to_issues_and_repairs&#39;)]
+--------------------------------------------------------------------------------
+TriageAgent:
+Delegating to IssuesAndRepairsAgent
+--------------------------------------------------------------------------------
+IssuesAndRepairsAgent:
+I see you&#39;re looking for a refund on a pair of shoes. Can you tell me what the issue is with the shoes?
+--------------------------------------------------------------------------------
+User:
+The shoes are too small
+--------------------------------------------------------------------------------
+IssuesAndRepairsAgent:
+I recommend trying a size up as a fix; would that work for you?
+--------------------------------------------------------------------------------
+User:
+no I want a refund
+--------------------------------------------------------------------------------
+IssuesAndRepairsAgent:
+[FunctionCall(id=&#39;call_Ytp8VUQRyKFNEU36mLE6Dkrp&#39;, arguments=&#39;{&quot;search_query&quot;:&quot;shoes&quot;}&#39;, name=&#39;look_up_item&#39;)]
+--------------------------------------------------------------------------------
+IssuesAndRepairsAgent:
+[FunctionExecutionResult(content=&#39;item_132612938&#39;, call_id=&#39;call_Ytp8VUQRyKFNEU36mLE6Dkrp&#39;)]
+--------------------------------------------------------------------------------
+IssuesAndRepairsAgent:
+[FunctionCall(id=&#39;call_bPm6EKKBy5GJ65s9OKt9b1uE&#39;, arguments=&#39;{&quot;item_id&quot;:&quot;item_132612938&quot;,&quot;reason&quot;:&quot;not provided&quot;}&#39;, name=&#39;execute_refund&#39;)]
+--------------------------------------------------------------------------------
+IssuesAndRepairsAgent:
+[FunctionExecutionResult(content=&#39;success&#39;, call_id=&#39;call_bPm6EKKBy5GJ65s9OKt9b1uE&#39;)]
+--------------------------------------------------------------------------------
+IssuesAndRepairsAgent:
+Your refund has been successfully processed! If you have any other questions, feel free to ask.
+--------------------------------------------------------------------------------
+User:
+I want to talk to your manager
+--------------------------------------------------------------------------------
+IssuesAndRepairsAgent:
+I can help with that, let me transfer you to a supervisor.
+--------------------------------------------------------------------------------
+User:
+Okay
+--------------------------------------------------------------------------------
+IssuesAndRepairsAgent:
+[FunctionCall(id=&#39;call_PpmLZvwNoiDPUH8Tva3eAwHX&#39;, arguments=&#39;{}&#39;, name=&#39;transfer_back_to_triage&#39;)]
+--------------------------------------------------------------------------------
+IssuesAndRepairsAgent:
+Delegating to TriageAgent
+--------------------------------------------------------------------------------
+TriageAgent:
+[FunctionCall(id=&#39;call_jSL6IBm5537Dr74UbJSxaj6I&#39;, arguments=&#39;{}&#39;, name=&#39;escalate_to_human&#39;)]
+--------------------------------------------------------------------------------
+TriageAgent:
+Delegating to HumanAgent
+--------------------------------------------------------------------------------
+HumanAgent:
+Hello this is manager
+--------------------------------------------------------------------------------
+User:
+Hi! Thanks for your service. I give you 5 stars!
+--------------------------------------------------------------------------------
+HumanAgent:
+Thanks.
+--------------------------------------------------------------------------------
+User:
+exit
+--------------------------------------------------------------------------------
+User session ended, session ID: 7a568cf5-13e7-4e81-8616-8265a01b3f2b.
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="next-steps">
+<h2>Next steps<a class="headerlink" href="#next-steps" title="Link to this heading">#</a></h2>
+<p>This notebook demonstrates how to implement the handoff pattern using AutoGen Core.
+You can continue to improve this design by adding more agents and tools,
+or create a better user interface for the User Agent and Human Agent.</p>
+<p>You are welcome to share your work on our <a class="reference external" href="https://github.com/microsoft/autogen/discussions">community forum</a>.</p>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="group-chat.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Group Chat</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="mixture-of-agents.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Mixture of Agents</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#scenario">Scenario</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#message-protocol">Message Protocol</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ai-agent">AI Agent</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#human-agent">Human Agent</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#user-agent">User Agent</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tools-for-the-ai-agents">Tools for the AI agents</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#topic-types-for-the-agents">Topic types for the agents</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#delegate-tools-for-the-ai-agents">Delegate tools for the AI agents</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#creating-the-team">Creating the team</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-team">Running the team</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#next-steps">Next steps</a></li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/microsoft/autogen/edit/main/python/docs/src/user-guide/core-user-guide/design-patterns/handoffs.ipynb">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+
+  <div class="tocsection sourcelink">
+    <a href="../../../_sources/user-guide/core-user-guide/design-patterns/handoffs.ipynb.txt">
+      <i class="fa-solid fa-file-lines"></i> Show Source
+    </a>
+  </div>
+</div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../../../_static/scripts/bootstrap.js?digest=26a4bc78f4c0ddb94549"></script>
+<script defer src="../../../_static/scripts/pydata-sphinx-theme.js?digest=26a4bc78f4c0ddb94549"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright 2024, Microsoft.
+      <br/>
+    
+  </p>
+</div>
+      
+    </div>
+  
+  
+    <div class="footer-items__center">
+      
+        <div class="footer-item"><p><a href="https://go.microsoft.com/fwlink/?LinkId=521839">Privacy Policy</a> | <a href="https://go.microsoft.com/fwlink/?linkid=2259814">Consumer Health Privacy</a> </p></div>
+      
+    </div>
+  
+  
+    <div class="footer-items__end">
+      
+        <div class="footer-item">
+<p class="theme-version">
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.16.0.
+</p></div>
+      
+        <div class="footer-item"><script src="_static/banner-override.js"></script></div>
+      
+    </div>
+  
+</div>
+
+  </footer>
+  </body>
+</html>

@@ -97,6 +97,7 @@ export function consumeTypedEvent(raw: unknown): { ok: boolean; event?: Record<s
 export function isTypedEventForDomain(raw: unknown, domain?: string): boolean {
   const result = parseTypedEvent(raw);
   if (!result.ok) return false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   if (domain !== undefined && (result as any).event.domain !== domain) return false;
   return true;
 }
@@ -153,10 +154,14 @@ interface SystemStatusResult {
 }
 
 export function deriveSystemStatus(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   pipelineProgress: Record<string, any>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   orchestratorHealth: Record<string, any>,
   daemonStatus: { running: boolean; pid: number },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   workerSessions: Record<string, any>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   completedEntry: Record<string, any> | null
 ): SystemStatusResult {
   const orchStatus = String(orchestratorHealth?.orchestratorStatus || "").toLowerCase();
@@ -245,6 +250,7 @@ export function deriveSystemStatus(
     };
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hasWorkingWorkers = Object.values(workerSessions || {}).some((s: any) => s?.status === "working");
   if (hasWorkingWorkers) {
     return {
@@ -294,6 +300,7 @@ export async function getDecisionQualityTrend(stateDir?: string): Promise<{ tren
 
   // Bucket by (date, label)
   const VALID_LABELS = new Set(["correct", "delayed-correct", "incorrect", "inconclusive"]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const buckets: Record<string, any> = {};
   for (const pm of entries) {
     if (!pm || typeof pm !== "object") continue;
@@ -333,6 +340,7 @@ function textLooksRelated(a: string, b: string): boolean {
   return false;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getLastWorkerMessage(session: Record<string, any>, roleName: string): any {
   const history = Array.isArray(session?.history) ? session.history : [];
   for (let i = history.length - 1; i >= 0; i -= 1) {
@@ -344,6 +352,7 @@ function getLastWorkerMessage(session: Record<string, any>, roleName: string): a
   return null;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function computePlanStatus(plan: Record<string, any>, workerSessions: Record<string, any>, athenaState: Record<string, any>): string {
   const role = String(plan?.role || "");
   const task = String(plan?.task || "");
@@ -374,12 +383,14 @@ function computePlanStatus(plan: Record<string, any>, workerSessions: Record<str
   return "queued";
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildPrometheusPlanBoard(prometheusAnalysis: Record<string, any>, workerSessions: Record<string, any>, athenaState: Record<string, any>): Record<string, any> {
   const sessions = workerSessions || {};
   const coord = athenaState || {};
 
   const coordMs = coord?.coordinatedAt ? new Date(coord.coordinatedAt).getTime() : Date.now();
   const cycleItems = Object.entries(sessions)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .map(([role, session]: any[], index) => {
       const lastTask = String(session?.lastTask || "").trim();
       if (!lastTask) return null;
@@ -616,6 +627,7 @@ function toFiniteNumber(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseCopilotUsageFromSummary(payload: Record<string, any>): { quota: number | null; used: number | null; remaining: number | null; byModel?: unknown[] } | null {
   // Handle the /users/{username}/settings/billing/premium_request/usage response shape:
   // { timePeriod, user, usageItems: [{ product, sku, grossQuantity, netQuantity, ... }] }
@@ -681,6 +693,7 @@ async function fetchCopilotInternalQuota() {
       }
     });
     if (!r.ok) return null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const j: any = await r.json();
     const snap = j?.quota_snapshots?.premium_interactions;
     if (!snap || typeof snap.entitlement !== "number") return null;
@@ -855,6 +868,7 @@ async function fetchGithubPrDelta() {
     if (!response.ok) {
       return null;
     }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const payload: any = await response.json();
     const nodes = Array.isArray(payload?.data?.repository?.pullRequests?.nodes)
       ? payload.data.repository.pullRequests.nodes
@@ -947,6 +961,7 @@ async function fetchOneTimeClaudeCostUsd() {
         };
       }
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const payload: any = await response.json();
       pagesFetched += 1;
 
@@ -1172,6 +1187,7 @@ function deriveProjectLabel(targetRepo: string, packageName: string | null): str
   return String(packageName || "unknown");
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function deriveTasks(prometheusAnalysis: Record<string, any>, workerSessions: Record<string, any>): Record<string, any> {
   const allPlans = Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans : [];
   // Filter out Issachar/Ezra scan-only tasks (removed from active plan)
@@ -1215,6 +1231,7 @@ function deriveTasks(prometheusAnalysis: Record<string, any>, workerSessions: Re
   return { total: list.length, totals, list };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function deriveAlerts(alertsData: Record<string, any>): Record<string, any> {
   const entries = Array.isArray(alertsData?.entries) ? alertsData.entries : [];
   const recent = entries.slice(-20);
@@ -1230,8 +1247,10 @@ function deriveAlerts(alertsData: Record<string, any>): Record<string, any> {
   };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function derivePremiumUsageByWorker(log: any): Record<string, any> {
   const entries = Array.isArray(log) ? log : (Array.isArray(log?.entries) ? log.entries : []);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const byWorker: Record<string, any> = {};
   for (const e of entries) {
     const w = e.worker || "unknown";
@@ -1255,6 +1274,7 @@ function derivePremiumUsageByWorker(log: any): Record<string, any> {
   return { totalRequests: entries.length, byWorker };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function derivePremiumEstimate(prometheusAnalysisRef: Record<string, any>, usedRequests: number | null, quota: number): Record<string, any> {
   const budget = prometheusAnalysisRef?.requestBudget || {};
   const estimated = Number(budget.estimatedPremiumRequestsTotal || 0);
@@ -1288,6 +1308,7 @@ async function collectDashboardData() {
     premiumUsageLog,
     completedProjects
   ] = await Promise.all([
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     readJsonSafe<Record<string, any>>(path.join(ROOT, "box.config.json"), {}),
     readTailLines(path.join(STATE_DIR, "progress.txt"), 80),
     getHourlyClaudeCost(),
@@ -1319,12 +1340,14 @@ async function collectDashboardData() {
       history: [],
       updatedAt: null,
     }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     collectHypothesisScorecard(STATE_DIR, undefined as any),
   ]);
 
   const [daemonStatus, prDeltaResult, gitActivity] = await Promise.all([getDaemonStatus(), getHourlyPrDeltaStats(), Promise.resolve(getGitActivity())]);
 
   // Read last thinking snippet from each worker's debug file
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const thinkingMap: Record<string, any> = {};
   for (const role of Object.keys(workerSessions || {})) {
     try {
@@ -1478,6 +1501,7 @@ async function collectDashboardData() {
           ? copilotApiUsage.byModel.map(m => ({ model: m.model, qty: m.grossQuantity }))
           : []
       },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       workersActive: Object.entries(workerSessions || {}).filter(([, s]: any) => s?.status === "working").map(([name, s]: any) => ({
         name,
         task: String(s.lastTask || "").slice(0, 80),
@@ -1489,7 +1513,9 @@ async function collectDashboardData() {
     premiumUsageByWorker: derivePremiumUsageByWorker(premiumUsageLog),
     workerActivity: (function() {
       const sessions = workerSessions || {};
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const cleaned: Record<string, any> = {};
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       for (const [role, s] of Object.entries(sessions) as any[]) {
         // Cross-check: if status is "working" but last non-orchestrator history says "done",
         // the worker actually finished — session file is stale
@@ -1799,6 +1825,7 @@ function renderHtml() {
     .passed { background: rgba(124, 214, 178, 0.26); color: #1e6a4f; border: 1px solid rgba(64, 177, 133, 0.38); }
     .failed { background: rgba(255, 182, 167, 0.30); color: #8a3b30; border: 1px solid rgba(219, 114, 96, 0.38); }
     pre { margin: 0; padding: 10px; max-height: 310px; overflow: auto; font-size: 12px; font-family: "IBM Plex Mono", Consolas, monospace; color: #1f3a4c; background: rgba(222, 237, 247, 0.78); }
+    #log-view { background: #0d1117; color: #d1d5db; max-height: 480px; line-height: 1.6; }
     .muted { color: var(--muted); }
     .status-wrap { margin-top: 7px; }
     .status-bar {
@@ -4064,7 +4091,45 @@ function renderHtml() {
         forceBtn.textContent = guardianRunning ? 'Rebase Running...' : 'Force Rebase';
       }
 
-      document.getElementById("log-view").textContent = (data.logs || []).join("\\n") || "No runtime logs yet";
+      document.getElementById("log-view").innerHTML = (function(lines) {
+        if (!lines || lines.length === 0) return '<span style="color:#6b7280">No runtime logs yet</span>';
+        return lines.map(function(line) {
+          var text = line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          var style = 'color:#d1d5db';
+          if (line.includes('[CYCLE START]') || line.includes('[CYCLE DONE]')) {
+            style = 'color:#00d4aa;font-weight:bold;font-size:1.05em';
+          } else if (line.includes('[AGENT]') && line.includes('ACTIVATED')) {
+            style = 'color:#ffd700;font-weight:bold;font-size:1.08em';
+          } else if (line.includes('[JESUS] \u2713')) {
+            style = 'color:#f0a500;font-weight:bold';
+          } else if (line.includes('[PROMETHEUS] \u2713')) {
+            style = 'color:#5b9bd5;font-weight:bold';
+          } else if (line.includes('[ATHENA] \u2713')) {
+            style = 'color:#c084fc;font-weight:bold';
+          } else if (line.includes('[RESEARCH_SCOUT] \u2713')) {
+            style = 'color:#22d3ee;font-weight:bold';
+          } else if (line.includes('[WORKER_BATCH] \u2713')) {
+            style = 'color:#4ade80;font-weight:bold';
+          } else if (line.includes('[WORKER') && (line.includes('Error') || line.includes('error') || line.includes('FAIL'))) {
+            style = 'color:#f87171';
+          } else if (line.includes('[LOOP]')) {
+            style = 'color:#fb923c';
+          } else if (line.includes('[SLO]') && (line.includes('breach') || line.includes('BREACH'))) {
+            style = 'color:#f87171;font-weight:bold';
+          } else if (line.includes('[CYCLE] \u2500\u2500')) {
+            style = 'color:#93c5fd';
+          } else if (line.includes('[RUN]')) {
+            style = 'color:#a3e635;font-weight:bold';
+          } else if (line.includes('[DRIFT_CHECK]') || line.includes('[CAPABILITY_POOL]') || line.includes('[CLOSURE_SLA]')) {
+            style = 'color:#94a3b8';
+          }
+          var bracketEnd = text.indexOf('] ');
+          if (bracketEnd > 0 && text.charAt(0) === '[') {
+            text = '<span style="color:#4b5563">' + text.slice(0, bracketEnd + 1) + '</span>' + text.slice(bracketEnd + 1);
+          }
+          return '<span style="' + style + '">' + text + '</span>';
+        }).join('\\n');
+      })(data.logs || []);
     }
 
     async function triggerForceRebase() {
@@ -4242,6 +4307,7 @@ async function serve(req: http.IncomingMessage, res: http.ServerResponse): Promi
     REBASE_STATE.lastStartedAt = new Date().toISOString();
     REBASE_STATE.lastOutput = "";
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result: any = await runRebaseCommand();
     REBASE_STATE.running = false;
     REBASE_STATE.lastCompletedAt = new Date().toISOString();
@@ -4280,6 +4346,7 @@ async function serve(req: http.IncomingMessage, res: http.ServerResponse): Promi
       if (Array.isArray(data.suggestions?.list)) {
         data.suggestions.list = data.suggestions.list.slice(0, 10);
       }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (data as any).payloadTruncated = true;
       body = JSON.stringify(data);
     }
@@ -4339,6 +4406,7 @@ async function serve(req: http.IncomingMessage, res: http.ServerResponse): Promi
     }
     // Remove stale stop request (daemon.stop.json) before starting — daemon_control.js contract
     try { await fs.rm(path.join(STATE_DIR, "daemon.stop.json"), { force: true }); } catch { /* best effort */ }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result: any = await startDaemonDetached();
     res.writeHead(result.ok ? 200 : 500, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(result));
@@ -4352,6 +4420,7 @@ async function serve(req: http.IncomingMessage, res: http.ServerResponse): Promi
       return;
     }
     if (!requireDashboardAuth(req, res)) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result: any = await stopDaemon();
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(result));

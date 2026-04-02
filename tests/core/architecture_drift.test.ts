@@ -9,6 +9,7 @@ import {
   detectDeprecatedTokensInContent,
   DEPRECATED_TOKENS,
   rankStaleRefsAsRemediationCandidates,
+  persistDriftBacklog,
   type ArchitectureDriftReport,
 } from "../../src/core/architecture_drift.js";
 
@@ -633,5 +634,98 @@ describe("convertRemediationCandidatesToDebtTasks", () => {
     const tasks = convertRemediationCandidatesToDebtTasks(candidates);
     assert.ok(typeof tasks[0].createdAt === "string" && tasks[0].createdAt.length > 0,
       "createdAt must be a non-empty string even when caller omits the timestamp");
+  });
+});
+
+// ── persistDriftBacklog ───────────────────────────────────────────────────────
+
+describe("architecture_drift — persistDriftBacklog", () => {
+  let stateDir: string;
+
+  beforeEach(async () => {
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-drift-backlog-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  const emptyReport: ArchitectureDriftReport = {
+    scannedDocs: [],
+    presentCount: 0,
+    staleCount: 0,
+    staleReferences: [],
+    deprecatedTokenCount: 0,
+    deprecatedTokenRefs: [],
+  };
+
+  const reportWithFindings: ArchitectureDriftReport = {
+    scannedDocs: ["docs/architecture.md"],
+    presentCount: 1,
+    staleCount: 1,
+    staleReferences: [
+      { docPath: "docs/architecture.md", referencedPath: "src/core/missing.ts", line: 5 },
+    ],
+    deprecatedTokenCount: 0,
+    deprecatedTokenRefs: [],
+  };
+
+  it("creates drift_backlog.json in the state directory on first call", async () => {
+    await persistDriftBacklog(stateDir, emptyReport, { persistedAt: "2025-01-01T00:00:00.000Z" });
+    const backlogPath = path.join(stateDir, "drift_backlog.json");
+    const exists = await fs.access(backlogPath).then(() => true).catch(() => false);
+    assert.ok(exists, "drift_backlog.json must be created after persistDriftBacklog");
+  });
+
+  it("writes a valid JSON line (NDJSON) that parses correctly", async () => {
+    await persistDriftBacklog(stateDir, emptyReport, {
+      persistedAt: "2025-01-01T00:00:00.000Z",
+      source: "test-runner",
+    });
+    const backlogPath = path.join(stateDir, "drift_backlog.json");
+    const raw = await fs.readFile(backlogPath, "utf8");
+    const lines = raw.trim().split("\n").filter(l => l.length > 0);
+    assert.equal(lines.length, 1, "one NDJSON line must be written per call");
+    const entry = JSON.parse(lines[0]);
+    assert.equal(entry.schemaVersion, 1);
+    assert.equal(entry.persistedAt, "2025-01-01T00:00:00.000Z");
+    assert.equal(entry.source, "test-runner");
+    assert.equal(entry.staleCount, 0);
+    assert.equal(entry.deprecatedTokenCount, 0);
+    assert.ok(Array.isArray(entry.debtTasks), "debtTasks must be an array");
+  });
+
+  it("appends a new line on successive calls (NDJSON format)", async () => {
+    const meta = { persistedAt: "2025-01-01T00:00:00.000Z", source: "first" };
+    const meta2 = { persistedAt: "2025-01-01T01:00:00.000Z", source: "second" };
+    await persistDriftBacklog(stateDir, emptyReport, meta);
+    await persistDriftBacklog(stateDir, emptyReport, meta2);
+    const raw = await fs.readFile(path.join(stateDir, "drift_backlog.json"), "utf8");
+    const lines = raw.trim().split("\n").filter(l => l.length > 0);
+    assert.equal(lines.length, 2, "each call must append a new NDJSON line");
+    assert.equal(JSON.parse(lines[0]).source, "first");
+    assert.equal(JSON.parse(lines[1]).source, "second");
+  });
+
+  it("includes debtTasks derived from stale references in the entry", async () => {
+    await persistDriftBacklog(stateDir, reportWithFindings, {
+      persistedAt: "2025-06-01T00:00:00.000Z",
+    });
+    const raw = await fs.readFile(path.join(stateDir, "drift_backlog.json"), "utf8");
+    const entry = JSON.parse(raw.trim().split("\n")[0]);
+    assert.equal(entry.staleCount, 1);
+    assert.equal(entry.debtTaskCount, 1);
+    assert.ok(entry.debtTasks[0].taskId.startsWith("drift-"),
+      "debtTask taskId must use drift- prefix");
+    assert.equal(entry.debtTasks[0].debtClass, "architecture_drift");
+  });
+
+  it("NEGATIVE PATH: does not throw when stateDir does not exist (logs to stderr instead)", async () => {
+    const badDir = path.join(stateDir, "nonexistent", "nested");
+    // Must not throw — failure is logged, not propagated
+    await assert.doesNotReject(
+      () => persistDriftBacklog(badDir, emptyReport),
+      "persistDriftBacklog must not throw on write failure"
+    );
   });
 });

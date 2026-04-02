@@ -339,13 +339,28 @@ function parseScoutSources(rawText: string): Array<Record<string, unknown>> {
     const whyMatch = block.match(/\*?\*?Why\s*Important\*?\*?:\s*(.+)/i);
     if (whyMatch) source.whyImportant = whyMatch[1].trim();
 
-    // Extract key findings (bullet points after "Key Findings:")
+    const knowledgeTypeMatch = block.match(/\*?\*?Knowledge\s*Type\*?\*?:\s*(.+)/i);
+    if (knowledgeTypeMatch) source.knowledgeType = knowledgeTypeMatch[1].trim().toLowerCase();
+
+    // Extract key findings (legacy format: bullet points after "Key Findings:")
     const findingsMatch = block.match(/\*?\*?Key\s*Findings\*?\*?:\s*\n([\s\S]*?)(?=\n###|\n\*\*|$)/i);
     if (findingsMatch) {
       source.keyFindings = findingsMatch[1]
         .split("\n")
         .map(l => l.replace(/^[\s-*•]+/, "").trim())
         .filter(l => l.length > 0);
+    }
+
+    // Extract learning note (new format: structured knowledge note after "Learning Note:")
+    const lnMatch = block.match(/\*?\*?Learning\s*Note\*?\*?:\s*\n([\s\S]*?)(?=\n-\s*\*\*Extracted|\n\*\*Extracted|\n###|\n\*\*\s*URL|\n-\s*\*\*URL|$)/i);
+    if (lnMatch) {
+      source.learningNote = lnMatch[1].trim();
+    }
+
+    // Extract full content (new format: free-form text after "Extracted Content:")
+    const ecMatch = block.match(/\*?\*?Extracted\s*Content\*?\*?:\s*\n([\s\S]*?)(?=\n###|\n\*\*\s*URL|\n-\s*\*\*URL|$)/i);
+    if (ecMatch) {
+      source.extractedContent = ecMatch[1].trim();
     }
 
     if (source.url || source.title) {

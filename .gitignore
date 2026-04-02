@@ -12,6 +12,9 @@ dist/
 # Runtime state
 state/*.json
 state/*.txt
+# Schema and reference documents in state/ are committed (not runtime state)
+!state/carry_forward_backlog.json
+!state/diagnostics_schema.json
 
 # Logs
 *.log

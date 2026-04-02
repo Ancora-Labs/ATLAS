@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "description": "Canonical schema definitions for all diagnostics and state files produced by the BOX runtime. Each entry defines the format, required fields, and serialization contract for a specific state file.",
+  "files": {
+    "dependency_graph_diagnostics.json": {
+      "format": "NDJSON",
+      "description": "One JSON object per line, appended by persistGraphDiagnostics() on every dependency graph resolution. Each line is independently parseable — no cross-line references.",
+      "serializedBy": "src/core/dependency_graph_resolver.ts — persistGraphDiagnostics",
+      "requiredFields": {
+        "schemaVersion": "number — value from GRAPH_DIAGNOSTICS_SCHEMA_VERSION constant",
+        "persistedAt": "string — ISO-8601 timestamp set at write time",
+        "status": "string — one of GRAPH_STATUS enum values (ok, cycle_detected, invalid_input, degraded)",
+        "reasonCode": "string — one of GRAPH_REASON enum values",
+        "resolvedAt": "string — ISO-8601 timestamp from resolveDependencyGraph result",
+        "totalTasks": "number — count of tasks in the resolved graph",
+        "waves": "array — wave assignment objects with taskIds and gates",
+        "conflictPairs": "array — file-conflict pair objects",
+        "cycles": "array — cycle path arrays detected during topological sort"
+      },
+      "optionalFields": {
+        "correlationId": "string — caller-supplied correlation identifier",
+        "parallelTasks": "number — count of tasks in waves with >1 task",
+        "serializedTasks": "number — count of tasks serialized by conflict/dep constraints",
+        "waveCount": "number — total number of waves",
+        "conflictCount": "number — total conflict pair count",
+        "cycleCount": "number — total cycle count",
+        "errorMessage": "string | null — error message for invalid_input or cycle_detected status"
+      },
+      "parseContract": "Each line must be parseable with JSON.parse() independently. Readers must iterate lines and parse each individually, skipping empty lines."
+    },
+    "intervention_optimizer_log.json": {
+      "format": "JSON object",
+      "description": "Single JSON object updated atomically by the intervention optimizer. Not NDJSON — the entire file is a single object with an entries array.",
+      "serializedBy": "src/core/intervention_optimizer.ts — via readJson/writeJson",
+      "requiredFields": {
+        "schemaVersion": "number — value 1",
+        "updatedAt": "string — ISO-8601 timestamp of last write",
+        "entries": "array — intervention log entries, each representing one optimization decision"
+      },
+      "parseContract": "The entire file is a single valid JSON object. Read with JSON.parse(fileContents). Use readJson/writeJson for atomic updates to prevent corruption."
+    },
+    "drift_backlog.json": {
+      "format": "NDJSON",
+      "description": "One JSON object per line, appended by persistDriftBacklog() on each architecture drift scan. Each line is an independently parseable backlog entry.",
+      "serializedBy": "src/core/architecture_drift.ts — persistDriftBacklog",
+      "requiredFields": {
+        "schemaVersion": "number — value 1",
+        "persistedAt": "string — ISO-8601 timestamp set at write time",
+        "source": "string — caller label identifying which component persisted this entry",
+        "staleCount": "number — count of stale file references found in this scan",
+        "deprecatedTokenCount": "number — count of deprecated token usages found in this scan",
+        "debtTaskCount": "number — count of PlannerDebtTask objects in debtTasks array",
+        "debtTasks": "array — PlannerDebtTask objects with taskId, task, priority, confidence, type, source, debtClass, createdAt"
+      },
+      "parseContract": "Each line must be parseable with JSON.parse() independently. Readers must iterate lines and parse each individually, skipping empty lines. Use appendFile for writes, never overwrite."
+    },
+    "carry_forward_backlog.json": {
+      "format": "JSON object",
+      "description": "Single JSON object listing machine-checkable closure records for recurring verification debt items. Static reference document — not appended at runtime.",
+      "serializedBy": "state/carry_forward_backlog.json (static)",
+      "requiredFields": {
+        "schemaVersion": "number — value 1",
+        "generatedAt": "string — ISO-8601 timestamp",
+        "description": "string — human-readable description of the backlog",
+        "items": "array — closure record objects with id, title, status, closureEvidence, closedBy, closedAt"
+      },
+      "parseContract": "The entire file is a single valid JSON object. Read with JSON.parse(fileContents)."
+    }
+  }
+}

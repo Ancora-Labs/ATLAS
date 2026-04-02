@@ -1,8 +1,6 @@
-<p align="center">
-	<img src="public/cube.webp" alt="BOX Showroom" width="320" />
-</p>
-
 # BOX
+
+![BOX Showroom](public/cube.webp)
 
 BOX is an orchestration runtime framework for autonomous software delivery operations.
 It should not be interpreted as a single-command automation utility; rather, it is a
@@ -48,9 +46,7 @@ against implementation feasibility and consolidation requirements.
 Executes adversarial review of plans and implementations, validates assumptions,
 and functions as a quality and governance gate prior to major progression events.
 
-<p align="center">
-	<img src="public/divider.gif" alt="divider" width="240" />
-</p>
+---
 
 ### Research Layer
 
@@ -64,9 +60,7 @@ Transforms Scout artifacts into topic-organized, decision-ready synthesis output
 Reduces informational noise, preserves high-signal findings, and supplies planning
 layers with higher-quality strategic inputs.
 
-<p align="center">
-	<img src="public/divider.gif" alt="divider" width="240" />
-</p>
+---
 
 ### Worker Layer
 
@@ -94,9 +88,7 @@ across subsystem boundaries.
 Collects telemetry, health indicators, and runtime signals, then performs anomaly
 detection and early warning escalation when pattern behavior deviates.
 
-<p align="center">
-	<img src="public/divider.gif" alt="divider" width="240" />
-</p>
+---
 
 ## BOX Mindset
 
@@ -104,4 +96,3 @@ BOX is ambitious not because it is static or flawless, but because it is capable
 of institutional learning under iterative constraints.
 Its objective is not one-shot perfection; its objective is progressive gains in
 robustness, intelligence, and autonomy across successive operational cycles.
-

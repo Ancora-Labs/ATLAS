@@ -38,11 +38,31 @@ function appendLiveLogSync(stateDir: string, text: string): void {
 
 /**
  * Parse structured topic sections from the Synthesizer's raw text output.
+ *
+ * New format (librarian model):
+ *   ## Topic: <name>
+ *   **Topic Metadata:** freshness, avg confidence, source count
+ *   **Sources:** each with ### <title>, URL, Date, Confidence, isDuplicate, **Extracted Content:**
+ *
+ * Also supports legacy format (Net Findings / Applicable Ideas) for backward compat.
  */
 function parseSynthesisTopics(rawText: string): Array<Record<string, unknown>> {
   const topics: Array<Record<string, unknown>> = [];
+
+  // Strip tool call log noise — find where the actual synthesis begins.
+  // The synthesis always starts with "## Research Synthesis" or the first "## Topic:".
+  const synthStart = (() => {
+    const h = rawText.indexOf("## Research Synthesis");
+    const t = rawText.indexOf("## Topic:");
+    if (h !== -1 && t !== -1) return Math.min(h, t);
+    if (h !== -1) return h;
+    if (t !== -1) return t;
+    return 0;
+  })();
+  const cleanText = rawText.slice(synthStart);
+
   // Split by topic headers: ## Topic: <name>
-  const blocks = rawText.split(/##\s*Topic:\s*/i).filter(b => b.trim());
+  const blocks = cleanText.split(/##\s*Topic:\s*/i).filter(b => b.trim());
 
   for (const block of blocks) {
     const topic: Record<string, unknown> = {};
@@ -51,7 +71,84 @@ function parseSynthesisTopics(rawText: string): Array<Record<string, unknown>> {
     const firstLine = block.split("\n")[0]?.trim();
     if (firstLine) topic.topic = firstLine;
 
-    // Extract fields
+    // Skip synthesis header/preamble artefacts that can appear before first real topic.
+    if (typeof topic.topic === "string" && /^##\s*Research\s*Synthesis\s*Header/i.test(topic.topic)) {
+      continue;
+    }
+
+    // ── New librarian format: Topic Metadata ──
+    const freshnessMatch = block.match(/\*?\*?Freshness\*?\*?:\s*(.+)/i);
+    if (freshnessMatch) topic.freshness = freshnessMatch[1].trim();
+
+    const avgConfMatch = block.match(/\*?\*?Average\s*Confidence\*?\*?:\s*([\d.]+)/i);
+    if (avgConfMatch) topic.confidence = avgConfMatch[1].trim();
+
+    const srcCountMatch = block.match(/\*?\*?Source\s*Count\*?\*?:\s*(\d+)/i);
+    if (srcCountMatch) topic.sourceCount = parseInt(srcCountMatch[1], 10);
+
+    // ── Parse individual sources within this topic ──
+    const sourceBlocks = block.split(/###\s+/).filter(b => b.trim());
+    const sources: Array<Record<string, unknown>> = [];
+    for (const sb of sourceBlocks) {
+      const source: Record<string, unknown> = {};
+      const sbFirstLine = sb.split("\n")[0]?.trim();
+      if (!sbFirstLine) continue;
+      source.title = sbFirstLine;
+
+      const urlMatch = sb.match(/[-*]*\s*URL:\s*(.+)/i);
+      if (urlMatch) source.url = urlMatch[1].trim();
+
+      const dateMatch = sb.match(/[-*]*\s*Date:\s*(.+)/i);
+      if (dateMatch) source.date = dateMatch[1].trim();
+
+      const confMatch = sb.match(/[-*]*\s*Confidence:\s*([\d.]+)/i);
+      if (confMatch) source.confidence = parseFloat(confMatch[1]);
+
+      const dupMatch = sb.match(/[-*]*\s*isDuplicate:\s*(true|false)/i);
+      if (dupMatch) source.isDuplicate = dupMatch[1].toLowerCase() === "true";
+
+      // Extracted Content: grab everything after the marker until next ### or end
+      const ecMatch = sb.match(/\*?\*?Extracted\s*Content\*?\*?:\s*\n([\s\S]*?)(?=\n---|\n###|$)/i);
+      if (ecMatch) {
+        source.extractedContent = ecMatch[1].trim();
+      }
+
+      // New enricher format: Scout's Findings (verbatim), Synthesizer Enrichment, Prometheus-Ready Summary
+      const scoutFindingsMatch = sb.match(/\*?\*?Scout'?s?\s*Findings\*?\*?:\s*\n([\s\S]*?)(?=\n\*?\*?Synthesizer\s*Enrichment\b|\n---\s*\n|\n###|$)/i);
+      if (scoutFindingsMatch) {
+        source.scoutFindings = scoutFindingsMatch[1].trim();
+      }
+
+      const enrichmentMatch = sb.match(/\*?\*?Synthesizer\s*Enrichment\*?\*?:\s*\n([\s\S]*?)(?=\n\*?\*?Prometheus-?Ready\s*Summary\b|\n---\s*\n|\n###|$)/i);
+      if (enrichmentMatch) {
+        source.synthesizerEnrichment = enrichmentMatch[1].trim();
+      }
+
+      const prometheusMatch = sb.match(/\*?\*?Prometheus-?Ready\s*Summary\*?\*?:\s*\n([\s\S]*?)(?=\n---\s*\n|\n###|$)/i);
+      if (prometheusMatch) {
+        source.prometheusReadySummary = prometheusMatch[1].trim();
+      }
+
+      const ktMatch = sb.match(/[-*]*\s*Knowledge\s*Type:\s*(.+)/i);
+      if (ktMatch) source.knowledgeType = ktMatch[1].trim().toLowerCase();
+
+      const hasMeaningfulPayload = Boolean(
+        source.url
+        || source.extractedContent
+        || source.scoutFindings
+        || source.synthesizerEnrichment
+        || source.prometheusReadySummary
+      );
+      if (hasMeaningfulPayload) {
+        sources.push(source);
+      }
+    }
+    if (sources.length > 0) {
+      topic.sources = sources;
+      topic.sourceList = sources.map(s => String(s.url || s.title || "")).filter(Boolean);
+    }
+
+    // ── Legacy format support: Net Findings / Applicable Ideas ──
     const findingsMatch = block.match(/\*?\*?Net\s*Findings\*?\*?:\s*\n([\s\S]*?)(?=\n\*?\*?Applicable|$)/i);
     if (findingsMatch) {
       topic.netFindings = findingsMatch[1]
@@ -84,18 +181,21 @@ function parseSynthesisTopics(rawText: string): Array<Record<string, unknown>> {
         .filter(l => l.length > 0);
     }
 
-    const confMatch = block.match(/\*?\*?Confidence\*?\*?:\s*(.+)/i);
-    if (confMatch) topic.confidence = confMatch[1].trim();
+    // Legacy confidence field (if not already set by new format)
+    if (!topic.confidence) {
+      const legacyConfMatch = block.match(/\*?\*?Confidence\*?\*?:\s*(.+)/i);
+      if (legacyConfMatch) topic.confidence = legacyConfMatch[1].trim();
+    }
 
-    const freshMatch = block.match(/\*?\*?Freshness\*?\*?:\s*(.+)/i);
-    if (freshMatch) topic.freshness = freshMatch[1].trim();
-
-    const sourcesMatch = block.match(/\*?\*?Sources\*?\*?:\s*\n([\s\S]*?)(?=\n##|$)/i);
-    if (sourcesMatch) {
-      topic.sourceList = sourcesMatch[1]
-        .split("\n")
-        .map(l => l.replace(/^[\s-*•]+/, "").trim())
-        .filter(l => l.length > 0);
+    // Legacy sources list (if not already set by new format)
+    if (!topic.sourceList) {
+      const sourcesMatch = block.match(/\*?\*?Sources\*?\*?:\s*\n([\s\S]*?)(?=\n##|$)/i);
+      if (sourcesMatch) {
+        topic.sourceList = sourcesMatch[1]
+          .split("\n")
+          .map(l => l.replace(/^[\s-*•]+/, "").trim())
+          .filter(l => l.length > 0);
+      }
     }
 
     if (topic.topic) {
@@ -116,17 +216,22 @@ function extractResearchGaps(rawText: string): string {
 
 /**
  * Extract cross-topic connections from synthesizer output.
+ * Returns an array of connection strings (fixes previous bug where this was a flat string).
  */
-function extractCrossTopicConnections(rawText: string): string {
+function extractCrossTopicConnections(rawText: string): string[] {
   const connMatch = rawText.match(/##\s*Cross[- ]Topic\s*Connections?\s*\n([\s\S]*?)(?=\n##|$)/i);
-  return connMatch ? connMatch[1].trim() : "";
+  if (!connMatch) return [];
+  return connMatch[1]
+    .split("\n")
+    .map(l => l.replace(/^[\s-*•\d.]+/, "").trim())
+    .filter(l => l.length > 0);
 }
 
 export interface ResearchSynthesisResult {
   success: boolean;
   topicCount: number;
   topics: Array<Record<string, unknown>>;
-  crossTopicConnections: string;
+  crossTopicConnections: string[];
   researchGaps: string;
   rawText: string;
   synthesizedAt: string;
@@ -144,7 +249,7 @@ export interface ResearchSynthesisResult {
 export async function runResearchSynthesizer(config: any, scoutOutput: any): Promise<ResearchSynthesisResult> {
   const stateDir = config.paths?.stateDir || "state";
   const command = config.env?.copilotCliCommand || "copilot";
-  const model = config.roleRegistry?.researchSynthesizer?.model || "Claude Sonnet 4.6";
+  const model = config.roleRegistry?.researchSynthesizer?.model || "gpt-5.3-codex";
 
   const ts = () => new Date().toISOString().replace("T", " ").slice(0, 19);
 
@@ -172,18 +277,18 @@ ${scoutRawText}`),
   ], {
     tokenBudget: resolveMaxPromptBudget(
       config,
-      String(model || "Claude Sonnet 4.6"),
+      String(model || "gpt-5.3-codex"),
       Number(config?.runtime?.researchSynthesizerPromptTokenBudget)
     ) || undefined,
   });
   const contextPrompt = compiledPrompt;
 
-  // Build args — Synthesizer only needs read/search, not web access
+  // Build args — synthesizer performs second-pass enrichment and may need broad tool access.
   const args = buildAgentArgs({
     agentSlug: "research-synthesizer",
     prompt: contextPrompt,
     model,
-    allowAll: false,
+    allowAll: true,
     maxContinues: undefined,
   });
 
@@ -206,7 +311,7 @@ ${scoutRawText}`),
   const raw = stdout || stderr;
   await appendAgentContextUsage(config, {
     agent: "research-synthesizer",
-    model: String(model || "Claude Sonnet 4.6"),
+    model: String(model || "gpt-5.3-codex"),
     promptText: contextPrompt,
     status: (result as any).status === 0 ? "success" : "failed",
   });
@@ -218,7 +323,7 @@ ${scoutRawText}`),
       success: false,
       topicCount: 0,
       topics: [],
-      crossTopicConnections: "",
+      crossTopicConnections: [],
       researchGaps: "",
       rawText: raw,
       synthesizedAt: new Date().toISOString(),
@@ -256,6 +361,10 @@ ${scoutRawText}`),
 /**
  * Build a compact prompt section from the synthesis for injection into Prometheus.
  * This is what Prometheus actually reads — dense, structured, actionable.
+ *
+ * NOTE: In the new architecture Prometheus reads research_synthesis.json directly
+ * via its read tool. This function is kept for backward compatibility but will
+ * eventually be removed.
  */
 export function buildResearchSectionForPrometheus(synthesis: ResearchSynthesisResult | null): string {
   if (!synthesis || !synthesis.success || synthesis.topicCount === 0) {
@@ -263,23 +372,51 @@ export function buildResearchSectionForPrometheus(synthesis: ResearchSynthesisRe
   }
 
   const topicBlocks = synthesis.topics.map((t, i) => {
-    const findings = Array.isArray(t.netFindings) ? (t.netFindings as string[]).join("\n  - ") : "none";
-    const ideas = Array.isArray(t.applicableIdeas) ? (t.applicableIdeas as string[]).join("\n  - ") : "none";
-    const risks = Array.isArray(t.risks) ? (t.risks as string[]).join("\n  - ") : "none";
+    // New format: sources with extractedContent
+    const sourcesArr = Array.isArray(t.sources) ? t.sources as Array<Record<string, unknown>> : [];
+    let sourcesBlock = "";
+    if (sourcesArr.length > 0) {
+      sourcesBlock = sourcesArr.map(s => {
+        const title = String(s.title || "Untitled");
+        const url = String(s.url || "");
+        const ec = String(s.extractedContent || "").slice(0, 3000);
+        const dup = s.isDuplicate ? " [DUPLICATE]" : "";
+        return `  **${title}**${dup}${url ? ` (${url})` : ""}\n  ${ec}`;
+      }).join("\n\n");
+    }
+
+    // Legacy format fields
+    const findings = Array.isArray(t.netFindings) ? (t.netFindings as string[]).join("\n  - ") : "";
+    const ideas = Array.isArray(t.applicableIdeas) ? (t.applicableIdeas as string[]).join("\n  - ") : "";
+    const risks = Array.isArray(t.risks) ? (t.risks as string[]).join("\n  - ") : "";
     const conflicts = Array.isArray(t.conflictingViews) && (t.conflictingViews as string[]).length > 0
       ? (t.conflictingViews as string[]).join("\n  - ")
-      : "none";
-    const sources = Array.isArray(t.sourceList) ? (t.sourceList as string[]).join(", ") : "n/a";
+      : "";
+    const sourceList = Array.isArray(t.sourceList) ? (t.sourceList as string[]).join(", ") : "";
 
-    return `### ${i + 1}. ${t.topic || "Untitled Topic"}
-  Confidence: ${t.confidence || "unknown"} | Freshness: ${t.freshness || "unknown"}
-  **Net Findings:**
-  - ${findings}
-  **Applicable Ideas for BOX:**
-  - ${ideas}
-  **Risks:** ${risks}
-  **Conflicting Views:** ${conflicts}
-  **Sources:** ${sources}`;
+    let block = `### ${i + 1}. ${t.topic || "Untitled Topic"}
+  Confidence: ${t.confidence || "unknown"} | Freshness: ${t.freshness || "unknown"}`;
+
+    if (sourcesBlock) {
+      block += `\n  **Sources with Extracted Content:**\n${sourcesBlock}`;
+    }
+    if (findings) {
+      block += `\n  **Net Findings:**\n  - ${findings}`;
+    }
+    if (ideas) {
+      block += `\n  **Applicable Ideas for BOX:**\n  - ${ideas}`;
+    }
+    if (risks) {
+      block += `\n  **Risks:** ${risks}`;
+    }
+    if (conflicts) {
+      block += `\n  **Conflicting Views:** ${conflicts}`;
+    }
+    if (sourceList && !sourcesBlock) {
+      block += `\n  **Sources:** ${sourceList}`;
+    }
+
+    return block;
   }).join("\n\n");
 
   let section = `\n\n## EXTERNAL RESEARCH INTELLIGENCE (from Research Scout + Synthesizer)
@@ -288,8 +425,12 @@ Use this research to inform your planning. Prioritize ideas with high confidence
 
 ${topicBlocks}`;
 
-  if (synthesis.crossTopicConnections) {
-    section += `\n\n### Cross-Topic Connections\n${synthesis.crossTopicConnections}`;
+  // crossTopicConnections is now an array
+  if (Array.isArray(synthesis.crossTopicConnections) && synthesis.crossTopicConnections.length > 0) {
+    const connections = synthesis.crossTopicConnections
+      .map((c, i) => `${i + 1}. ${c}`)
+      .join("\n");
+    section += `\n\n### Cross-Topic Connections\n${connections}`;
   }
 
   return section;
