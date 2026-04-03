@@ -37,6 +37,7 @@ import {
   reconcileBudgets,
   runInterventionOptimizer,
   buildInterventionsFromPlan,
+  buildPolicyImpactByInterventionId,
   buildBudgetFromConfig,
 } from "../../src/core/intervention_optimizer.js";
 
@@ -557,6 +558,45 @@ describe("runInterventionOptimizer — happy path", () => {
     const sparse_ev = result.selected.find((s) => s.id === "i-001").ev;
     const well_ev   = result.selected.find((s) => s.id === "well").ev;
     assert.ok(well_ev > sparse_ev, `well-tested EV (${well_ev}) should exceed sparse EV (${sparse_ev})`);
+  });
+
+  it("applies policy impact penalties when decayed effectiveness is low", () => {
+    const interventions = [
+      makeIntervention({ id: "policy-hit", successProbability: 0.8, impact: 0.8, riskCost: 0.2 }),
+      makeIntervention({ id: "policy-miss", successProbability: 0.8, impact: 0.8, riskCost: 0.2 }),
+    ];
+    const result = runInterventionOptimizer(interventions, makeBudget(), {
+      policyImpactByInterventionId: {
+        "policy-hit": { decayedEffectiveness: 0.25 },
+      },
+    });
+    assert.equal(result.policyImpactPenaltiesApplied, 1);
+    const hit = result.selected.find((item) => item.id === "policy-hit");
+    const miss = result.selected.find((item) => item.id === "policy-miss");
+    assert.ok(hit.adjustedSuccessProbability < miss.adjustedSuccessProbability);
+  });
+});
+
+describe("buildPolicyImpactByInterventionId", () => {
+  it("maps matching plans to decayed policy effectiveness", () => {
+    const plans = [
+      { intervention_id: "inv-1", task: "Fix glob false fail in verification", title: "Fix glob false fail", scope: "tests" },
+      { intervention_id: "inv-2", task: "Refactor ui shell", title: "Refactor", scope: "src/ui" },
+    ];
+    const policies = [
+      { id: "glob-false-fail", sourceLesson: "glob false fail", _decayedEffectiveness: 0.2, _inactiveCycles: 4 },
+    ];
+    const map = buildPolicyImpactByInterventionId(plans as any, policies as any);
+    assert.ok(map["inv-1"]);
+    assert.equal(map["inv-1"].policyId, "glob-false-fail");
+    assert.equal(map["inv-1"].decayedEffectiveness, 0.2);
+    assert.equal(map["inv-1"].inactiveCycles, 4);
+    assert.equal(map["inv-2"], undefined);
+  });
+
+  it("negative: returns empty map for non-array inputs", () => {
+    assert.deepEqual(buildPolicyImpactByInterventionId(null as any, []), {});
+    assert.deepEqual(buildPolicyImpactByInterventionId([], null as any), {});
   });
 });
 

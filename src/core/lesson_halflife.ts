@@ -165,3 +165,53 @@ export function applyLessonDecayWindow(
   const factor = Math.max(0, 1 - (decayPerCycle * cycles));
   return Math.round(Math.max(0, Math.min(1, base * factor)) * 1000) / 1000;
 }
+
+/** Default half-life in cycles for policy impact decay. */
+export const DEFAULT_POLICY_HALF_LIFE_CYCLES = 3;
+
+/**
+ * Compute a half-life decay weight using cycle count instead of wall-clock days.
+ *
+ * Formula: weight = 2^(-elapsedCycles / halfLifeCycles)
+ *
+ * @param {number} elapsedCycles
+ * @param {{ halfLifeCycles?: number }} opts
+ * @returns {number} weight in [0, 1]
+ */
+export function computeCycleHalfLifeWeight(
+  elapsedCycles: number,
+  opts: { halfLifeCycles?: number } = {},
+): number {
+  const cycles = Math.max(0, Number.isFinite(Number(elapsedCycles)) ? Number(elapsedCycles) : 0);
+  const halfLifeCycles = Number.isFinite(Number(opts.halfLifeCycles)) && Number(opts.halfLifeCycles) > 0
+    ? Number(opts.halfLifeCycles)
+    : DEFAULT_POLICY_HALF_LIFE_CYCLES;
+  if (cycles <= 0) return 1.0;
+  const weight = Math.pow(2, -cycles / halfLifeCycles);
+  return Math.round(Math.max(0, Math.min(1, weight)) * 1000) / 1000;
+}
+
+/**
+ * Compute policy effectiveness after applying cycle half-life decay to the
+ * observed improvement rate.
+ *
+ * @param {number} improvementRate - historical improvement ratio in [0, 1]
+ * @param {number} inactiveCycles  - consecutive cycles without measurable improvement
+ * @param {{ halfLifeCycles?: number }} opts
+ * @returns {{ halfLifeWeight: number, decayedEffectiveness: number }}
+ */
+export function computeDecayedPolicyEffectiveness(
+  improvementRate: number,
+  inactiveCycles: number,
+  opts: { halfLifeCycles?: number } = {},
+): { halfLifeWeight: number; decayedEffectiveness: number } {
+  const boundedImprovementRate = Math.max(
+    0,
+    Math.min(1, Number.isFinite(Number(improvementRate)) ? Number(improvementRate) : 0),
+  );
+  const halfLifeWeight = computeCycleHalfLifeWeight(inactiveCycles, opts);
+  const decayedEffectiveness = Math.round(
+    Math.max(0, Math.min(1, boundedImprovementRate * halfLifeWeight)) * 1000,
+  ) / 1000;
+  return { halfLifeWeight, decayedEffectiveness };
+}

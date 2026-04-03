@@ -36,7 +36,8 @@ import {
   collectCycleOutcomes,
   OUTCOME_DEGRADED_REASON,
   computeWeightedDecisionScore,
-  DECISION_QUALITY_WEIGHTS
+  DECISION_QUALITY_WEIGHTS,
+  runSelfImprovementCycle,
 } from "../../src/core/self_improvement.js";
 import { DECISION_QUALITY_LABEL } from "../../src/core/athena_reviewer.js";
 
@@ -385,5 +386,85 @@ describe("collectCycleOutcomes — evolution_progress invalid JSON", () => {
     // prometheus_analysis was valid, so plans should be populated
     assert.equal(result.totalPlans, 2,
       "totalPlans should still be populated from prometheus when evolution is the only degraded source");
+  });
+});
+
+describe("runSelfImprovementCycle — policy impact attribution", () => {
+  let tmpDir;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-si-impact-"));
+    await writeTestJson(tmpDir, "prometheus_analysis.json", PROMETHEUS_ANALYSIS);
+    await writeTestJson(tmpDir, "evolution_progress.json", EVOLUTION_PROGRESS);
+    await writeTestJson(tmpDir, "worker_sessions.json", WORKER_SESSIONS);
+    await writeTestJson(tmpDir, "learned_policies.json", [
+      { id: "glob-false-fail", assertion: "Use npm test", severity: "critical", _inactiveCycles: 2 },
+    ]);
+    await writeTestJson(tmpDir, "policy_impact_ledger.json", {
+      schemaVersion: 1,
+      updatedAt: new Date().toISOString(),
+      entries: [
+        {
+          id: "impact-seed-1",
+          policyId: "glob-false-fail",
+          metric: "capacity_score",
+          baseline: 0.9,
+          current: 0.9,
+          delta: 0,
+          improved: false,
+          measuredAt: new Date(Date.now() - 60000).toISOString(),
+          cycleId: "seed-cycle",
+        },
+      ],
+    });
+    await writeTestJson(tmpDir, "knowledge_memory.json", {
+      lessons: [],
+      configTunings: [],
+      promptHints: [],
+      capabilityGaps: [],
+      lastUpdated: null,
+    });
+    await writeTestJson(tmpDir, "cycle_health.json", {
+      plannerHealth: "critical",
+      operationalStatus: "degraded",
+      pipelineStatus: "critical",
+      divergenceState: "both_degraded",
+      isWarning: true,
+      recordedAt: new Date().toISOString(),
+    });
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("persists attributions and retires ineffective policies via half-life", async () => {
+    const mockCopilotPath = path.join(tmpDir, "mock-copilot.cmd");
+    await fs.writeFile(
+      mockCopilotPath,
+      "@echo {\"lessons\":[],\"configSuggestions\":[],\"promptHints\":[],\"workerFeedback\":[],\"systemHealthScore\":70,\"nextCyclePriorities\":[\"policy impact\"],\"capabilityGaps\":[]}\r\n",
+      "utf8",
+    );
+    const config = {
+      rootDir: tmpDir,
+      paths: { stateDir: tmpDir, progressFile: path.join(tmpDir, "evolution_progress.log") },
+      selfImprovement: { enabled: true, maxReports: 20 },
+      systemGuardian: { enabled: false },
+      runtime: { mandatoryTaskCoverageMode: "warn" },
+      env: { copilotCliCommand: mockCopilotPath },
+    };
+    await writeTestJson(tmpDir, "worker_evolution-worker.json", {
+      activityLog: [{ status: "done", taskId: "T-001", at: new Date().toISOString() }],
+    });
+    const report = await runSelfImprovementCycle(config as any);
+    assert.equal(report, null, "cycle should stop when AI analysis is unavailable");
+
+    const impactLedger = JSON.parse(await fs.readFile(path.join(tmpDir, "policy_impact_ledger.json"), "utf8"));
+    assert.ok(Array.isArray(impactLedger.entries), "policy impact ledger entries must be persisted");
+    assert.ok(impactLedger.entries.length > 0, "policy impact ledger must contain at least one entry");
+
+    const retiredPolicies = JSON.parse(await fs.readFile(path.join(tmpDir, "retired_policies.json"), "utf8"));
+    assert.ok(Array.isArray(retiredPolicies));
+    assert.ok(retiredPolicies.length >= 1, "ineffective policy should be retired");
   });
 });

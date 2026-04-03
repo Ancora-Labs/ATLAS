@@ -136,6 +136,51 @@ export const AMBIGUOUS_TASK_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
  */
 export const MANDATORY_EXCLUSION_JUSTIFICATION_MIN_LENGTH = 12;
 
+/** Canonical 10 planning dimensions used by Prometheus/critic leverage scoring. */
+export const EQUAL_DIMENSION_SET = Object.freeze([
+  "architecture",
+  "speed",
+  "task-quality",
+  "prompt-quality",
+  "parser-quality",
+  "worker-specialization",
+  "model-task-fit",
+  "learning-loop",
+  "cost-efficiency",
+  "security",
+]);
+
+const DIMENSION_ALIAS_TO_CANONICAL = Object.freeze({
+  architecture: "architecture",
+  speed: "speed",
+  quality: "task-quality",
+  "task quality": "task-quality",
+  "task-quality": "task-quality",
+  prompts: "prompt-quality",
+  prompt: "prompt-quality",
+  "prompt quality": "prompt-quality",
+  "prompt-quality": "prompt-quality",
+  parser: "parser-quality",
+  normalization: "parser-quality",
+  "parser quality": "parser-quality",
+  "parser-quality": "parser-quality",
+  worker: "worker-specialization",
+  workers: "worker-specialization",
+  "worker specialization": "worker-specialization",
+  "worker-specialization": "worker-specialization",
+  routing: "model-task-fit",
+  "model-task fit": "model-task-fit",
+  "model-task-fit": "model-task-fit",
+  learning: "learning-loop",
+  "learning loop": "learning-loop",
+  "learning-loop": "learning-loop",
+  roi: "cost-efficiency",
+  cost: "cost-efficiency",
+  "cost efficiency": "cost-efficiency",
+  "cost-efficiency": "cost-efficiency",
+  security: "security",
+}) as Readonly<Record<string, string>>;
+
 /**
  * Determine whether a task description is ambiguous/underspecified.
  * Returns true when the description matches a known generic-vocabulary pattern.
@@ -158,6 +203,22 @@ export function isAmbiguousTask(value: string): boolean {
  */
 export function isCycleSpecificExclusionJustification(value: string): boolean {
   return String(value || "").trim().length >= MANDATORY_EXCLUSION_JUSTIFICATION_MIN_LENGTH;
+}
+
+export function normalizeLeverageRank(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  const canonical: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values) {
+    const normalized = String(raw || "").toLowerCase().replace(/[_]+/g, "-").replace(/\s+/g, " ").trim();
+    if (!normalized) continue;
+    const directKey = normalized.replace(/\s+/g, "-");
+    const mapped = DIMENSION_ALIAS_TO_CANONICAL[normalized] || DIMENSION_ALIAS_TO_CANONICAL[directKey];
+    if (!mapped || seen.has(mapped)) continue;
+    seen.add(mapped);
+    canonical.push(mapped);
+  }
+  return canonical;
 }
 
 /**

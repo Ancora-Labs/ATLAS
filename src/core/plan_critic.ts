@@ -8,6 +8,7 @@
  * This is NOT a replacement for Athena; it is a fast, deterministic pre-filter
  * that catches obvious plan deficiencies cheaply (no AI call).
  */
+import { EQUAL_DIMENSION_SET, normalizeLeverageRank } from "./plan_contract_validator.js";
 
 /**
  * Critic rubric dimensions. Each returns a 0-1 score.
@@ -21,6 +22,9 @@ export const CRITIC_DIMENSION = Object.freeze({
   NO_VAGUE_TASK:          "NO_VAGUE_TASK",
   REASONABLE_RISK:        "REASONABLE_RISK",
   HAS_LEVERAGE_RANK:      "HAS_LEVERAGE_RANK",
+  BALANCED_DIMENSIONS:    "BALANCED_DIMENSIONS",
+  CAPACITY_FIRST:         "CAPACITY_FIRST",
+  NON_RIGID_PLAN:         "NON_RIGID_PLAN",
 });
 
 /** Minimum composite score to pass the critic gate (0-1 scale). */
@@ -133,11 +137,39 @@ export function critiquePlan(plan) {
 
   // 7. Leverage rank — plans must declare which capacity dimension(s) they improve.
   // Non-empty leverage_rank signals the plan was intentionally ranked against alternatives.
-  const leverageRank = Array.isArray(plan.leverage_rank) ? plan.leverage_rank.filter(Boolean) : [];
+  const leverageRank = normalizeLeverageRank(plan.leverage_rank);
   const hasLeverageRank = leverageRank.length > 0;
   dimensions[CRITIC_DIMENSION.HAS_LEVERAGE_RANK] = hasLeverageRank ? 1.0 : 0.3;
   if (!hasLeverageRank) {
     issues.push("leverage_rank is empty — plan should declare which capacity dimension(s) it improves");
+  }
+
+  // 8. Balanced dimensions (normalized leverage rank must map to the canonical 10-dim set)
+  const balanceRatio = leverageRank.length > 0
+    ? Math.min(1, leverageRank.length / Math.max(1, EQUAL_DIMENSION_SET.length))
+    : 0;
+  dimensions[CRITIC_DIMENSION.BALANCED_DIMENSIONS] = Math.round(balanceRatio * 100) / 100;
+  if (leverageRank.length === 0) {
+    issues.push("No canonical dimension mapping in leverage_rank");
+  }
+
+  // 9. Capacity-first justification: must include positive capacityDelta and positive requestROI
+  const capacityDelta = Number(plan.capacityDelta);
+  const requestROI = Number(plan.requestROI);
+  const hasCapacityFirst = Number.isFinite(capacityDelta) && capacityDelta > 0
+    && Number.isFinite(requestROI) && requestROI > 1;
+  dimensions[CRITIC_DIMENSION.CAPACITY_FIRST] = hasCapacityFirst ? 1.0 : 0.0;
+  if (!hasCapacityFirst) {
+    issues.push("capacity-first justification missing or weak (capacityDelta>0 and requestROI>1 required)");
+  }
+
+  // 10. Rigidity detection: penalize defensive-only recommendations
+  const planText = `${String(plan.task || "")} ${String(plan.scope || "")} ${String(plan.before_state || "")} ${String(plan.after_state || "")}`.toLowerCase();
+  const defensiveOnly = /(?:ban|block|forbid|deny|freeze|prevent|guardrail|lockdown|hard[- ]?gate)/.test(planText)
+    && !/(?:implement|build|add|create|refactor|optimi[sz]e|improve|automate|ship|wire)/.test(planText);
+  dimensions[CRITIC_DIMENSION.NON_RIGID_PLAN] = defensiveOnly ? 0.0 : 1.0;
+  if (defensiveOnly) {
+    issues.push("Task appears defensive-only/rigid without capacity-building implementation detail");
   }
 
   // Composite score (equal weight)
@@ -226,6 +258,16 @@ export function repairPlan(plan, criticResult) {
       repaired.scope = fileMatch[0];
       repairs.push(`Inferred scope from task: ${fileMatch[0]}`);
     }
+  }
+
+  if (criticResult.dimensions[CRITIC_DIMENSION.CAPACITY_FIRST] < 1.0) {
+    if (!Number.isFinite(Number(repaired.capacityDelta)) || Number(repaired.capacityDelta) <= 0) {
+      repaired.capacityDelta = 0.1;
+    }
+    if (!Number.isFinite(Number(repaired.requestROI)) || Number(repaired.requestROI) <= 1) {
+      repaired.requestROI = 1.2;
+    }
+    repairs.push("Added capacity-first scoring fields");
   }
 
   return { plan: repaired, repaired: repairs.length > 0, repairs };

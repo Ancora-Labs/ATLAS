@@ -23,6 +23,7 @@ import {
   runInterventionOptimizer,
   buildInterventionsFromPlan,
   buildBudgetFromConfig,
+  buildPolicyImpactByInterventionId,
   OPTIMIZER_STATUS,
 } from "./intervention_optimizer.js";
 import {
@@ -42,6 +43,8 @@ import {
   PLAN_VIOLATION_SEVERITY,
   PACKET_VIOLATION_CODE,
   isCycleSpecificExclusionJustification,
+  EQUAL_DIMENSION_SET,
+  normalizeLeverageRank,
 } from "./plan_contract_validator.js";
 import {
   section,
@@ -2157,7 +2160,7 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
   // allowing legitimate narrative-fallback parses (base 0.5 with penalties).
   const PARSER_CONFIDENCE_FLOOR = 0.15;
   const belowFloor = parserConfidence < PARSER_CONFIDENCE_FLOOR;
-  const finalPlans = belowFloor ? [] : plans;
+  const finalPlans = belowFloor ? [] : applyPlanningRubric(plans);
 
   return {
     ...input,
@@ -2422,6 +2425,72 @@ export const PROMETHEUS_PROMPT_DENSITY_MIN = Object.freeze({
   minTaskChars: 120,
   minExecutionTokens: 8000,
 });
+
+export const RIGIDITY_PENALTY = 0.15 as const;
+
+function computePacketRubricScore(plan: Record<string, any>): number {
+  const targetFiles = Array.isArray(plan?.target_files) ? plan.target_files : [];
+  const acceptanceCriteria = Array.isArray(plan?.acceptance_criteria) ? plan.acceptance_criteria : [];
+  const leverageRank = normalizeLeverageRank(plan?.leverage_rank);
+  const normalizedTask = String(plan?.task || "").trim();
+  const verification = String(plan?.verification || "").trim();
+  const scope = String(plan?.scope || "").trim();
+  const beforeState = String(plan?.before_state || "").trim();
+  const afterState = String(plan?.after_state || "").trim();
+  const dependencies = Array.isArray(plan?.dependencies) ? plan.dependencies : [];
+  const capacityDelta = Number(plan?.capacityDelta);
+  const requestROI = Number(plan?.requestROI);
+
+  const dimensions = {
+    architecture: scope.length > 0 && targetFiles.length > 0 ? 1 : 0,
+    speed: Number.isFinite(Number(plan?.estimatedExecutionTokens)) ? 1 : 0,
+    "task-quality": acceptanceCriteria.length >= 2 ? 1 : 0,
+    "prompt-quality": beforeState.length > 0 && afterState.length > 0 ? 1 : 0,
+    "parser-quality": verification.length > 0 ? 1 : 0,
+    "worker-specialization": String(plan?.role || "").trim().length > 0 ? 1 : 0,
+    "model-task-fit": Number.isFinite(requestROI) && requestROI > 0 ? 1 : 0,
+    "learning-loop": leverageRank.includes("learning-loop") ? 1 : 0,
+    "cost-efficiency": Number.isFinite(requestROI) && requestROI > 1 ? 1 : 0,
+    security: /security|auth|trust|guard|policy/i.test(`${normalizedTask} ${scope} ${afterState}`) ? 1 : 0,
+  } as Record<string, number>;
+  const dimensionScore = Object.values(dimensions).reduce((sum, n) => sum + n, 0) / EQUAL_DIMENSION_SET.length;
+
+  const capacityFirst = Number.isFinite(capacityDelta) && capacityDelta > 0 && Number.isFinite(requestROI) && requestROI > 1;
+  const defensiveOnly = /(?:ban|block|forbid|deny|freeze|prevent|guardrail|lockdown|hard[- ]?gate)/i.test(normalizedTask)
+    && !/(?:implement|build|add|create|refactor|optimi[sz]e|improve|automate|ship|wire)/i.test(normalizedTask);
+
+  let score = dimensionScore;
+  if (dependencies.length > 0) score += 0.05;
+  if (capacityFirst) score += 0.25;
+  if (defensiveOnly) score -= RIGIDITY_PENALTY;
+  return Math.round(Math.max(0, Math.min(1, score)) * 1000) / 1000;
+}
+
+export function applyPlanningRubric(plans: any[]): any[] {
+  if (!Array.isArray(plans)) return [];
+  return plans
+    .map((plan) => {
+      if (!plan || typeof plan !== "object") return plan;
+      const rubricScore = computePacketRubricScore(plan);
+      const leverageRank = normalizeLeverageRank(plan.leverage_rank);
+      const defensiveOnly = /(?:ban|block|forbid|deny|freeze|prevent|guardrail|lockdown|hard[- ]?gate)/i.test(String(plan.task || ""))
+        && !/(?:implement|build|add|create|refactor|optimi[sz]e|improve|automate|ship|wire)/i.test(String(plan.task || ""));
+      return {
+        ...plan,
+        leverage_rank: leverageRank,
+        _planningRubric: {
+          score: rubricScore,
+          capacityFirst: Number(plan?.capacityDelta) > 0 && Number(plan?.requestROI) > 1,
+          rigidityPenaltyApplied: defensiveOnly,
+        },
+      };
+    })
+    .sort((a, b) => {
+      const scoreDiff = Number(b?._planningRubric?.score || 0) - Number(a?._planningRubric?.score || 0);
+      if (scoreDiff !== 0) return scoreDiff;
+      return Number(a?.priority || 9999) - Number(b?.priority || 9999);
+    });
+}
 
 // ── Architecture Drift Confidence Binding (Task 4) ──────────────────────────
 
@@ -4027,6 +4096,7 @@ ${compiledCycleDelta}`;
   // Ensure Athena-facing rigor fields exist after all enrichment/repair passes.
   if (Array.isArray(parsed.plans) && parsed.plans.length > 0) {
     parsed.plans = parsed.plans.map((plan, idx) => normalizePlanFromTask(plan, idx, Number(plan.wave) || 1));
+    parsed.plans = applyPlanningRubric(parsed.plans);
   }
 
   // Ensure execution strategy and request budget remain concrete after plan normalization.
@@ -4135,7 +4205,12 @@ ${compiledCycleDelta}`;
     try {
       const interventions = buildInterventionsFromPlan(analysis.plans, config);
       const budget = buildBudgetFromConfig(analysis.requestBudget, config);
-      const optimizerResult = runInterventionOptimizer(interventions, budget);
+      const learnedPolicies = await readJson(path.join(stateDir, "learned_policies.json"), []);
+      const policyImpactByInterventionId = buildPolicyImpactByInterventionId(
+        analysis.plans,
+        Array.isArray(learnedPolicies) ? learnedPolicies : [],
+      );
+      const optimizerResult = runInterventionOptimizer(interventions, budget, { policyImpactByInterventionId });
 
       await appendInterventionOptimizerEntry(config, {
         ...optimizerResult,
@@ -4147,6 +4222,9 @@ ${compiledCycleDelta}`;
 
       const selectedCount = Array.isArray(optimizerResult.selected) ? optimizerResult.selected.length : 0;
       const rejectedCount = Array.isArray(optimizerResult.rejected) ? optimizerResult.rejected.length : 0;
+      const policyImpactPenaltiesApplied = "policyImpactPenaltiesApplied" in optimizerResult
+        ? Number(optimizerResult.policyImpactPenaltiesApplied || 0)
+        : 0;
       await appendProgress(config,
         `[PROMETHEUS] Intervention optimizer: status=${optimizerResult.status} selected=${selectedCount} rejected=${rejectedCount} budgetUsed=${optimizerResult.totalBudgetUsed}/${optimizerResult.totalBudgetLimit} (${optimizerResult.budgetUnit ?? "workerSpawns"})`
       ).catch(() => {});
@@ -4162,6 +4240,7 @@ ${compiledCycleDelta}`;
         reasonCode:       optimizerResult.reasonCode,
         selectedCount,
         rejectedCount,
+        policyImpactPenaltiesApplied,
         totalBudgetUsed:  optimizerResult.totalBudgetUsed,
         totalBudgetLimit: optimizerResult.totalBudgetLimit,
         budgetUnit:       optimizerResult.budgetUnit,

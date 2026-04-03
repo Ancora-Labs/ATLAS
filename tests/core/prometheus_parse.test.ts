@@ -2,6 +2,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizePrometheusParsedOutput,
+  applyPlanningRubric,
+  RIGIDITY_PENALTY,
   filterResolvedCarryForwardItems,
   CARRY_FORWARD_MAX_TOKENS,
   BEHAVIOR_PATTERNS_MAX_TOKENS,
@@ -74,10 +76,13 @@ describe("normalizePrometheusParsedOutput", () => {
     assert.equal(normalized.projectHealth, "needs-work");
     assert.equal(Array.isArray(normalized.plans), true);
     assert.equal(normalized.plans.length, 2);
-    assert.equal(normalized.plans[0].task, "Fix verification harness");
-    assert.equal(normalized.plans[0].wave, 1);
-    assert.equal(normalized.plans[0].verification, "npm test");
-    assert.equal(normalized.plans[1].wave, 2);
+    const harnessPlan = normalized.plans.find((plan: any) => plan.task === "Fix verification harness");
+    const carryForwardPlan = normalized.plans.find((plan: any) => plan.task === "Automate carry-forward escalation");
+    assert.ok(harnessPlan, "expected harness task to be present");
+    assert.ok(carryForwardPlan, "expected carry-forward task to be present");
+    assert.equal(harnessPlan!.wave, 1);
+    assert.equal(harnessPlan!.verification, "npm test");
+    assert.equal(carryForwardPlan!.wave, 2);
   });
 
   it("maps topBottlenecks + string-task waves (GPT analytical format) into planner plans", () => {
@@ -153,6 +158,7 @@ describe("normalizePrometheusParsedOutput", () => {
     assert.equal(normalized.plans[0].role, "evolution-worker");
     assert.equal(normalized.plans[0].verification, "npm test");
     assert.equal(normalized.plans[0].priority, 1);
+    assert.ok(normalized.plans[0]._planningRubric, "planning rubric metadata should be attached");
   });
 
   it("maps DECISION-style waves with string task ids into actionable plans", () => {
@@ -239,6 +245,79 @@ Wave 2
 
     assert.equal(normalized.plans[2].riskLevel, "high");
     assert.ok(normalized.plans[2].target_files.includes("src/core/model_router.ts"));
+  });
+});
+
+describe("applyPlanningRubric", () => {
+  it("scores capacity-first plans above defensive-only plans", () => {
+    const plans = [
+      {
+        task: "Implement dependency-aware scheduling in src/core/dag_scheduler.ts",
+        role: "evolution-worker",
+        target_files: ["src/core/dag_scheduler.ts", "tests/core/dag_scheduler.test.ts"],
+        acceptance_criteria: ["Scheduler passes dependency ordering tests", "No cycle regressions"],
+        verification: "tests/core/dag_scheduler.test.ts — test: preserves dependency order",
+        scope: "src/core/dag_scheduler.ts",
+        before_state: "Wave-only ordering",
+        after_state: "Dependency-aware ordering",
+        leverage_rank: ["architecture", "speed", "task-quality"],
+        capacityDelta: 0.3,
+        requestROI: 2.5,
+        estimatedExecutionTokens: 14000,
+        dependencies: ["T-1"],
+        priority: 2,
+      },
+      {
+        task: "Block all risky changes with hard gate only",
+        role: "evolution-worker",
+        target_files: ["src/core/policy_engine.ts"],
+        acceptance_criteria: ["Gate blocks risky changes", "No new warnings"],
+        verification: "tests/core/policy_engine.test.ts — test: gate blocks restricted writes",
+        scope: "src/core/policy_engine.ts",
+        before_state: "Mixed governance",
+        after_state: "Strict block policy",
+        leverage_rank: ["security"],
+        capacityDelta: 0.1,
+        requestROI: 1.1,
+        estimatedExecutionTokens: 9000,
+        dependencies: [],
+        priority: 1,
+      },
+    ];
+    const ranked = applyPlanningRubric(plans as any);
+    assert.equal(ranked.length, 2);
+    assert.ok(ranked[0]._planningRubric.score >= ranked[1]._planningRubric.score);
+    const defensivePlan = ranked.find(plan => String(plan.task || "").toLowerCase().includes("hard gate only"));
+    assert.ok(defensivePlan, "defensive plan should exist in ranked output");
+    assert.equal(defensivePlan!._planningRubric.rigidityPenaltyApplied, true);
+  });
+
+  it("normalizes leverage_rank aliases to canonical dimensions", () => {
+    const plans = [
+      {
+        task: "Improve parser output",
+        leverage_rank: ["quality", "learning loop", "routing"],
+        target_files: ["src/core/prometheus.ts"],
+        acceptance_criteria: ["Parser emits plans", "No syntax errors"],
+        verification: "tests/core/prometheus_parse.test.ts — test: normalizes parsed output",
+        scope: "src/core/prometheus.ts",
+        before_state: "No alias normalization",
+        after_state: "Alias normalization added",
+        role: "evolution-worker",
+        capacityDelta: 0.2,
+        requestROI: 1.5,
+      },
+    ];
+    const ranked = applyPlanningRubric(plans as any);
+    assert.deepEqual(ranked[0].leverage_rank, ["task-quality", "learning-loop", "model-task-fit"]);
+  });
+
+  it("negative path: empty input returns empty array", () => {
+    assert.deepEqual(applyPlanningRubric(null as any), []);
+  });
+
+  it("exports a positive rigidity penalty constant", () => {
+    assert.ok(RIGIDITY_PENALTY > 0);
   });
 });
 

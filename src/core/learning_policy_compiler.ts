@@ -9,6 +9,7 @@
  *
  * Integration: called by orchestrator after postmortem, before next cycle start.
  */
+import { computeDecayedPolicyEffectiveness } from "./lesson_halflife.js";
 
 /**
  * Known lesson patterns that can be compiled into policy checks.
@@ -764,6 +765,41 @@ export interface PolicyOutcomeDelta {
   cycleWindow: number;
 }
 
+export interface PolicyImpactEntry {
+  policyId: string;
+  metric: string;
+  baseline: number;
+  current: number;
+  delta: number;
+  improved: boolean;
+  measuredAt: string;
+  cycleId?: string;
+}
+
+export interface PolicyImpactTrend {
+  policyId: string;
+  totalMeasurements: number;
+  improvedCount: number;
+  ineffectiveCount: number;
+  improvementRate: number;
+  lastDelta: number;
+  lastMeasuredAt: string | null;
+}
+
+export interface PolicyImpactAttribution {
+  policyId: string;
+  cycleId: string;
+  baselineCapacityScore: number;
+  currentCapacityScore: number;
+  delta: number;
+  improved: boolean;
+  improvementRate: number;
+  inactiveCycles: number;
+  halfLifeWeight: number;
+  decayedEffectiveness: number;
+  shouldRetire: boolean;
+}
+
 export function computePolicyOutcomeDelta(
   policyId: string,
   baseline: number,
@@ -779,6 +815,49 @@ export function computePolicyOutcomeDelta(
     current: safeCurrent,
     delta,
     cycleWindow: Math.max(1, Math.floor(Number(cycleWindow) || 1)),
+  };
+}
+
+export function buildPolicyImpactEntry(
+  policyId: string,
+  metric: string,
+  baseline: number,
+  current: number,
+  opts: { cycleId?: string; measuredAt?: string; minImprovementDelta?: number } = {},
+): PolicyImpactEntry {
+  const deltaObj = computePolicyOutcomeDelta(policyId, baseline, current, 1);
+  const threshold = Number.isFinite(Number(opts.minImprovementDelta)) ? Number(opts.minImprovementDelta) : 0.01;
+  return {
+    policyId: deltaObj.policyId,
+    metric: String(metric || "capacity_delta"),
+    baseline: deltaObj.baseline,
+    current: deltaObj.current,
+    delta: deltaObj.delta,
+    improved: deltaObj.delta >= threshold,
+    measuredAt: String(opts.measuredAt || new Date().toISOString()),
+    ...(opts.cycleId ? { cycleId: String(opts.cycleId) } : {}),
+  };
+}
+
+export function computePolicyImpactTrend(
+  policyId: string,
+  impactEntries: PolicyImpactEntry[],
+): PolicyImpactTrend {
+  const filtered = Array.isArray(impactEntries)
+    ? impactEntries.filter((entry) => String(entry?.policyId || "") === String(policyId || ""))
+    : [];
+  const totalMeasurements = filtered.length;
+  const improvedCount = filtered.filter((entry) => entry.improved === true).length;
+  const ineffectiveCount = totalMeasurements - improvedCount;
+  const last = totalMeasurements > 0 ? filtered[totalMeasurements - 1] : null;
+  return {
+    policyId: String(policyId || "").trim(),
+    totalMeasurements,
+    improvedCount,
+    ineffectiveCount,
+    improvementRate: totalMeasurements > 0 ? Math.round((improvedCount / totalMeasurements) * 1000) / 1000 : 0,
+    lastDelta: Number(last?.delta || 0),
+    lastMeasuredAt: last?.measuredAt || null,
   };
 }
 
@@ -823,5 +902,97 @@ export function applyPolicyDecay(
   }
 
   return { active, retired };
+}
+
+export function applyPolicyHalfLifeRetirement(
+  policies: any[],
+  impactTrends: PolicyImpactTrend[],
+  opts: { halfLifeCycles?: number; minEffectiveness?: number; minInactiveCycles?: number } = {},
+): { active: any[]; retired: any[] } {
+  if (!Array.isArray(policies)) return { active: [], retired: [] };
+  const minEffectiveness = Number.isFinite(Number(opts.minEffectiveness)) ? Number(opts.minEffectiveness) : 0.2;
+  const minInactiveCycles = Number.isFinite(Number(opts.minInactiveCycles)) ? Number(opts.minInactiveCycles) : 2;
+  const trendByPolicyId = new Map(
+    (Array.isArray(impactTrends) ? impactTrends : []).map((trend) => [String(trend?.policyId || ""), trend]),
+  );
+  const active: any[] = [];
+  const retired: any[] = [];
+
+  for (const policy of policies) {
+    const policyId = String(policy?.id || "");
+    const trend = trendByPolicyId.get(policyId);
+    const inactiveCycles = Number.isFinite(Number((policy as any)?._inactiveCycles))
+      ? Number((policy as any)._inactiveCycles)
+      : 0;
+    const improvementRate = Number.isFinite(Number(trend?.improvementRate)) ? Number(trend?.improvementRate) : 0;
+    const { halfLifeWeight, decayedEffectiveness } = computeDecayedPolicyEffectiveness(
+      improvementRate,
+      inactiveCycles,
+      { halfLifeCycles: opts.halfLifeCycles },
+    );
+
+    if (inactiveCycles >= minInactiveCycles && decayedEffectiveness <= minEffectiveness) {
+      retired.push({
+        ...policy,
+        _retiredAt: new Date().toISOString(),
+        _retirementReason: `Policy decayed below effectiveness threshold (${decayedEffectiveness} <= ${minEffectiveness})`,
+        _decayedEffectiveness: decayedEffectiveness,
+      });
+      continue;
+    }
+
+    active.push({
+      ...policy,
+      _halfLifeWeight: halfLifeWeight,
+      _decayedEffectiveness: decayedEffectiveness,
+    });
+  }
+
+  return { active, retired };
+}
+
+export function buildPolicyImpactAttribution(
+  policy: any,
+  trend: PolicyImpactTrend | undefined,
+  baselineCapacityScore: number,
+  currentCapacityScore: number,
+  opts: { cycleId?: string; halfLifeCycles?: number; minEffectiveness?: number; minInactiveCycles?: number; minImprovementDelta?: number } = {},
+): PolicyImpactAttribution {
+  const policyId = String(policy?.id || "").trim();
+  const cycleId = String(opts.cycleId || new Date().toISOString());
+  const minImprovementDelta = Number.isFinite(Number(opts.minImprovementDelta)) ? Number(opts.minImprovementDelta) : 0.01;
+  const safeBaseline = Number.isFinite(Number(baselineCapacityScore)) ? Number(baselineCapacityScore) : 0;
+  const safeCurrent = Number.isFinite(Number(currentCapacityScore)) ? Number(currentCapacityScore) : 0;
+  const delta = Math.round((safeCurrent - safeBaseline) * 1000) / 1000;
+  const improved = delta >= minImprovementDelta;
+  const priorInactiveCycles = Number.isFinite(Number(policy?._inactiveCycles))
+    ? Number(policy._inactiveCycles)
+    : 0;
+  const inactiveCycles = improved ? 0 : priorInactiveCycles + 1;
+  const improvementRate = Number.isFinite(Number(trend?.improvementRate))
+    ? Number(trend?.improvementRate)
+    : 0;
+  const { halfLifeWeight, decayedEffectiveness } = computeDecayedPolicyEffectiveness(
+    improvementRate,
+    inactiveCycles,
+    { halfLifeCycles: opts.halfLifeCycles },
+  );
+  const minEffectiveness = Number.isFinite(Number(opts.minEffectiveness)) ? Number(opts.minEffectiveness) : 0.2;
+  const minInactiveCycles = Number.isFinite(Number(opts.minInactiveCycles)) ? Number(opts.minInactiveCycles) : 2;
+  const shouldRetire = inactiveCycles >= minInactiveCycles && decayedEffectiveness <= minEffectiveness;
+
+  return {
+    policyId,
+    cycleId,
+    baselineCapacityScore: safeBaseline,
+    currentCapacityScore: safeCurrent,
+    delta,
+    improved,
+    improvementRate: Math.round(improvementRate * 1000) / 1000,
+    inactiveCycles,
+    halfLifeWeight,
+    decayedEffectiveness,
+    shouldRetire,
+  };
 }
 

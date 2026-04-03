@@ -37,6 +37,7 @@ import {
 } from "./governance_freeze.js";
 import { isGuardrailActive } from "./guardrail_executor.js";
 import { GUARDRAIL_ACTION } from "./catastrophe_detector.js";
+import { buildPolicyImpactEntry, computePolicyImpactTrend, applyPolicyHalfLifeRetirement, buildPolicyImpactAttribution } from "./learning_policy_compiler.js";
 import {
   loadLedgerMeta,
   prioritizeStaleDebts,
@@ -269,6 +270,142 @@ async function loadKnowledgeMemory(stateDir) {
 async function saveKnowledgeMemory(stateDir, memory) {
   memory.lastUpdated = new Date().toISOString();
   await writeJson(path.join(stateDir, "knowledge_memory.json"), memory);
+}
+
+function loadPolicyImpactLedger(stateDir: string) {
+  return readJson(path.join(stateDir, "policy_impact_ledger.json"), {
+    schemaVersion: 1,
+    entries: [],
+    updatedAt: null,
+  });
+}
+
+async function savePolicyImpactLedger(stateDir: string, ledger: any) {
+  const next = {
+    schemaVersion: 1,
+    entries: Array.isArray(ledger?.entries) ? ledger.entries : [],
+    updatedAt: new Date().toISOString(),
+  };
+  await writeJson(path.join(stateDir, "policy_impact_ledger.json"), next);
+}
+
+function loadCycleHealthSnapshot(stateDir: string) {
+  return readJson(path.join(stateDir, "cycle_health.json"), {
+    plannerHealth: "unknown",
+    operationalStatus: "unknown",
+    pipelineStatus: "unknown",
+    divergenceState: "unknown",
+    isWarning: false,
+    recordedAt: null,
+  });
+}
+
+function estimateCurrentCapacityScore(outcomes: any): number {
+  const totalPlans = Number.isFinite(Number(outcomes?.totalPlans)) ? Number(outcomes.totalPlans) : 0;
+  const completedCount = Number.isFinite(Number(outcomes?.completedCount)) ? Number(outcomes.completedCount) : 0;
+  const completionRatio = totalPlans > 0 ? completedCount / totalPlans : 0;
+  const decisionScore = Number.isFinite(Number(outcomes?.decisionQuality?.score))
+    ? Number(outcomes.decisionQuality.score)
+    : 0;
+  return Math.round(Math.max(0, Math.min(1, (completionRatio * 0.6) + (decisionScore * 0.4))) * 1000) / 1000;
+}
+
+export async function reconcileLearnedPoliciesWithImpact(stateDir: string, outcomes: any) {
+  const learnedPoliciesPath = path.join(stateDir, "learned_policies.json");
+  const learnedPolicies = await readJson(learnedPoliciesPath, []);
+  if (!Array.isArray(learnedPolicies) || learnedPolicies.length === 0) {
+    return { activePolicies: [], retiredPolicies: [], impactEntriesAdded: 0, trends: [] };
+  }
+
+  const policyImpactLedger = await loadPolicyImpactLedger(stateDir);
+  const existingEntries = Array.isArray(policyImpactLedger?.entries) ? policyImpactLedger.entries : [];
+  const capacityScore = estimateCurrentCapacityScore(outcomes);
+  const cycleHealth = await loadCycleHealthSnapshot(stateDir);
+  const cycleId = String(outcomes?.timestamp || new Date().toISOString());
+  const nextEntries = [...existingEntries];
+
+  for (const policy of learnedPolicies) {
+    const policyId = String(policy?.id || "").trim();
+    if (!policyId) continue;
+    const samePolicyEntries = nextEntries.filter((entry) => String(entry?.policyId || "") === policyId);
+    const baseline = samePolicyEntries.length > 0
+      ? Number(samePolicyEntries[samePolicyEntries.length - 1]?.current || capacityScore)
+      : Math.max(0, capacityScore - 0.02);
+    const impactEntry = buildPolicyImpactEntry(policyId, "capacity_score", baseline, capacityScore, { cycleId });
+    nextEntries.push(impactEntry);
+  }
+
+  policyImpactLedger.entries = nextEntries.slice(-500);
+  await savePolicyImpactLedger(stateDir, policyImpactLedger);
+
+  const trendByPolicyId = new Map(
+    learnedPolicies.map((policy) => {
+      const policyId = String(policy?.id || "");
+      return [policyId, computePolicyImpactTrend(policyId, policyImpactLedger.entries)];
+    }),
+  );
+  const trends = [...trendByPolicyId.values()];
+
+  const policyAttributions = learnedPolicies.map((policy) => {
+    const policyId = String(policy?.id || "");
+    const trend = trendByPolicyId.get(policyId);
+    const historyForPolicy = policyImpactLedger.entries.filter(
+      (entry) => String(entry?.policyId || "") === policyId,
+    );
+    const baselineFromHistory = historyForPolicy.length > 1
+      ? Number(historyForPolicy[historyForPolicy.length - 2]?.current || capacityScore)
+      : Number(historyForPolicy[historyForPolicy.length - 1]?.baseline || Math.max(0, capacityScore - 0.02));
+    return buildPolicyImpactAttribution(
+      policy,
+      trend,
+      baselineFromHistory,
+      capacityScore,
+      { cycleId, halfLifeCycles: 3, minEffectiveness: 0.2, minInactiveCycles: 2 },
+    );
+  });
+
+  const attributionByPolicyId = new Map(policyAttributions.map((a) => [a.policyId, a]));
+  const policiesWithInactivity = learnedPolicies.map((policy) => {
+    const policyId = String(policy?.id || "");
+    const trend = trendByPolicyId.get(policyId);
+    const attribution = attributionByPolicyId.get(policyId);
+    if (!trend || !attribution) return policy;
+    return {
+      ...policy,
+      _inactiveCycles: attribution.inactiveCycles,
+      _impactImprovementRate: trend.improvementRate,
+      _lastDelta: attribution.delta,
+      _lastMeasuredAt: trend.lastMeasuredAt,
+      _halfLifeWeight: attribution.halfLifeWeight,
+      _decayedEffectiveness: attribution.decayedEffectiveness,
+      _impactAttribution: attribution,
+    };
+  });
+
+  const retiredByHalfLife = applyPolicyHalfLifeRetirement(policiesWithInactivity, trends, {
+    halfLifeCycles: 3,
+    minEffectiveness: 0.2,
+    minInactiveCycles: 2,
+  });
+
+  const retiredPoliciesPath = path.join(stateDir, "retired_policies.json");
+  const retiredExisting = await readJson(retiredPoliciesPath, []);
+  const retiredCombined = [
+    ...(Array.isArray(retiredExisting) ? retiredExisting : []),
+    ...retiredByHalfLife.retired,
+  ].slice(-500);
+
+  await writeJson(learnedPoliciesPath, retiredByHalfLife.active);
+  await writeJson(retiredPoliciesPath, retiredCombined);
+
+  return {
+    activePolicies: retiredByHalfLife.active,
+    retiredPolicies: retiredByHalfLife.retired,
+    impactEntriesAdded: learnedPolicies.length,
+    trends,
+    attributions: policyAttributions,
+    cycleHealthSnapshot: cycleHealth,
+  };
 }
 
 // ── Cycle Outcome Collector ──────────────────────────────────────────────────
@@ -1646,6 +1783,15 @@ export async function runSelfImprovementCycle(config) {
     return null;
   }
 
+  // 1a. Policy impact attribution and half-life retirement.
+  const policyImpact = await reconcileLearnedPoliciesWithImpact(stateDir, outcomes);
+  if (policyImpact.impactEntriesAdded > 0) {
+    await appendProgress(
+      config,
+      `[SELF-IMPROVEMENT][POLICY_IMPACT] attributed=${policyImpact.impactEntriesAdded} retired=${policyImpact.retiredPolicies.length} active=${policyImpact.activePolicies.length}`
+    );
+  }
+
   // 2. Load existing knowledge
   const knowledgeMemory = await loadKnowledgeMemory(stateDir);
 
@@ -1759,6 +1905,16 @@ export async function runSelfImprovementCycle(config) {
       nextCyclePriorities: analysis.nextCyclePriorities || [],
       workerFeedback: analysis.workerFeedback || [],
       capabilityGaps: newGaps
+    },
+    policyImpact: {
+      measuredCount: policyImpact.impactEntriesAdded,
+      retiredCount: policyImpact.retiredPolicies.length,
+      activeCount: policyImpact.activePolicies.length,
+      trends: policyImpact.trends.slice(-50),
+      attributions: Array.isArray((policyImpact as any).attributions)
+        ? (policyImpact as any).attributions.slice(-50)
+        : [],
+      cycleHealth: (policyImpact as any).cycleHealthSnapshot || null,
     },
     appliedChanges,
     canaryResults

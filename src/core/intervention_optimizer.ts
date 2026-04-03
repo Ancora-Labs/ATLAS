@@ -727,7 +727,9 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
   // failureClassifications: { [role: string]: ClassificationResult }
   // Observable change: adjusted interventions are ranked lower under budget pressure.
   const failureClassifications = options?.failureClassifications;
+  const policyImpactByInterventionId = options?.policyImpactByInterventionId;
   let failureClassificationsApplied = 0;
+  let policyImpactPenaltiesApplied = 0;
   let adjustedInterventions = interventions;
 
   if (failureClassifications && typeof failureClassifications === "object" && !Array.isArray(failureClassifications)) {
@@ -737,6 +739,20 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
       const adjustedSP = applyClassificationToSuccessProbability(intervention.successProbability, classification);
       if (adjustedSP === intervention.successProbability) return intervention;
       failureClassificationsApplied += 1;
+      return { ...intervention, successProbability: adjustedSP };
+    });
+  }
+
+  if (policyImpactByInterventionId && typeof policyImpactByInterventionId === "object" && !Array.isArray(policyImpactByInterventionId)) {
+    adjustedInterventions = adjustedInterventions.map((intervention) => {
+      const entry = policyImpactByInterventionId[String(intervention.id || "")];
+      if (!entry || typeof entry !== "object") return intervention;
+      const decayedEffectiveness = Number(entry.decayedEffectiveness);
+      if (!Number.isFinite(decayedEffectiveness)) return intervention;
+      const bounded = Math.max(0, Math.min(1, decayedEffectiveness));
+      const adjustedSP = Math.round((intervention.successProbability * bounded) * 1000) / 1000;
+      if (adjustedSP === intervention.successProbability) return intervention;
+      policyImpactPenaltiesApplied += 1;
       return { ...intervention, successProbability: adjustedSP };
     });
   }
@@ -752,9 +768,51 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
     generatedAt,
     budgetUnit:     BUDGET_UNIT,
     failureClassificationsApplied,
+    policyImpactPenaltiesApplied,
     benchmarkTelemetryCount: Array.isArray(options?.benchmarkTelemetry) ? options.benchmarkTelemetry.length : 0,
     ...reconciled,
   };
+}
+
+export function buildPolicyImpactByInterventionId(
+  plans: any[],
+  learnedPolicies: any[],
+): Record<string, { policyId: string; decayedEffectiveness: number; inactiveCycles: number }> {
+  if (!Array.isArray(plans) || plans.length === 0 || !Array.isArray(learnedPolicies) || learnedPolicies.length === 0) {
+    return {};
+  }
+  const policyImpactMap: Record<string, { policyId: string; decayedEffectiveness: number; inactiveCycles: number }> = {};
+  for (let i = 0; i < plans.length; i++) {
+    const plan = plans[i];
+    const planId = String(plan?.intervention_id || plan?.id || plan?.task_id || `plan-${i + 1}`);
+    const taskText = `${String(plan?.task || "")} ${String(plan?.title || "")} ${String(plan?.scope || "")}`.toLowerCase();
+    let matched: any = null;
+    for (const policy of learnedPolicies) {
+      const policyId = String(policy?.id || "").toLowerCase();
+      if (!policyId) continue;
+      const policySignal = String(policy?.sourceLesson || policy?.assertion || "").toLowerCase();
+      if (
+        (policySignal && (taskText.includes(policySignal.slice(0, 30)) || policySignal.includes(taskText.slice(0, 30)))) ||
+        (policyId && taskText.includes(policyId.replace(/-/g, " ")))
+      ) {
+        matched = policy;
+        break;
+      }
+    }
+    if (!matched) continue;
+    const decayedEffectiveness = Number.isFinite(Number(matched?._decayedEffectiveness))
+      ? Number(matched._decayedEffectiveness)
+      : 1;
+    const inactiveCycles = Number.isFinite(Number(matched?._inactiveCycles))
+      ? Number(matched._inactiveCycles)
+      : 0;
+    policyImpactMap[planId] = {
+      policyId: String(matched?.id || ""),
+      decayedEffectiveness: Math.max(0, Math.min(1, decayedEffectiveness)),
+      inactiveCycles,
+    };
+  }
+  return policyImpactMap;
 }
 
 // ── Prometheus plan → Intervention adapter ────────────────────────────────────

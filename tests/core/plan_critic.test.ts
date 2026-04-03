@@ -83,6 +83,42 @@ describe("plan_critic", () => {
       const result = critiquePlan(plan);
       assert.equal(result.dimensions[CRITIC_DIMENSION.HAS_LEVERAGE_RANK], 0.3);
     });
+
+    it("scores BALANCED_DIMENSIONS > 0 when leverage_rank maps to canonical dimensions", () => {
+      const plan = {
+        task: "Add validation to src/core/config.js",
+        verification: "npm test passes",
+        leverage_rank: ["quality", "learning loop", "routing"],
+        capacityDelta: 0.2,
+        requestROI: 2.2,
+      };
+      const result = critiquePlan(plan);
+      assert.ok(result.dimensions[CRITIC_DIMENSION.BALANCED_DIMENSIONS] > 0);
+      assert.equal(result.dimensions[CRITIC_DIMENSION.CAPACITY_FIRST], 1.0);
+    });
+
+    it("penalizes defensive-only rigid tasks", () => {
+      const plan = {
+        task: "Block all risky worker actions with hard gate",
+        verification: "npm test passes",
+        leverage_rank: ["security"],
+        capacityDelta: 0.2,
+        requestROI: 2.0,
+      };
+      const result = critiquePlan(plan);
+      assert.equal(result.dimensions[CRITIC_DIMENSION.NON_RIGID_PLAN], 0.0);
+      assert.ok(result.issues.some(i => /rigid/i.test(i)));
+    });
+
+    it("negative path: missing capacity-first fields fails CAPACITY_FIRST dimension", () => {
+      const plan = {
+        task: "Implement parser improvements in src/core/parser.ts",
+        verification: "npm test passes",
+        leverage_rank: ["parser-quality"],
+      };
+      const result = critiquePlan(plan);
+      assert.equal(result.dimensions[CRITIC_DIMENSION.CAPACITY_FIRST], 0.0);
+    });
   });
 
   describe("runCriticPass", () => {

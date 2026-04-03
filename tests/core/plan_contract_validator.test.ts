@@ -12,12 +12,26 @@ import {
   AMBIGUOUS_TASK_PATTERNS,
   MAX_ACCEPTANCE_CRITERIA_PER_TASK,
   MAX_FILES_IN_SCOPE_PER_TASK,
+  EQUAL_DIMENSION_SET,
+  normalizeLeverageRank,
   isPacketQuarantined,
   QUARANTINE_CONFIDENCE_THRESHOLD,
 } from "../../src/core/plan_contract_validator.js";
 import { checkForbiddenCommands } from "../../src/core/verification_command_registry.js";
 
 describe("plan_contract_validator", () => {
+  describe("normalizeLeverageRank", () => {
+    it("maps aliases to canonical dimension set", () => {
+      const normalized = normalizeLeverageRank(["quality", "learning loop", "routing", "security"]);
+      assert.deepEqual(normalized, ["task-quality", "learning-loop", "model-task-fit", "security"]);
+    });
+
+    it("negative path: ignores unknown/empty values and deduplicates", () => {
+      const normalized = normalizeLeverageRank(["", "unknown", "quality", "task-quality", "quality"]);
+      assert.deepEqual(normalized, ["task-quality"]);
+    });
+  });
+
   describe("isNonSpecificVerification", () => {
     it("identifies bare npm test as non-specific", () => {
       assert.equal(isNonSpecificVerification("npm test"), true);
@@ -440,6 +454,23 @@ describe("plan_contract_validator", () => {
       assert.equal(filtered[0].task, "Valid plan with enough chars");
       assert.equal(filtered[1].task, "Another valid plan here");
     });
+  });
+});
+
+describe("EQUAL_DIMENSION_SET", () => {
+  it("exports all 10 canonical planning dimensions", () => {
+    assert.equal(Array.isArray(EQUAL_DIMENSION_SET), true);
+    assert.equal(EQUAL_DIMENSION_SET.length, 10);
+    assert.ok(EQUAL_DIMENSION_SET.includes("architecture"));
+    assert.ok(EQUAL_DIMENSION_SET.includes("speed"));
+    assert.ok(EQUAL_DIMENSION_SET.includes("task-quality"));
+    assert.ok(EQUAL_DIMENSION_SET.includes("prompt-quality"));
+    assert.ok(EQUAL_DIMENSION_SET.includes("parser-quality"));
+    assert.ok(EQUAL_DIMENSION_SET.includes("worker-specialization"));
+    assert.ok(EQUAL_DIMENSION_SET.includes("model-task-fit"));
+    assert.ok(EQUAL_DIMENSION_SET.includes("learning-loop"));
+    assert.ok(EQUAL_DIMENSION_SET.includes("cost-efficiency"));
+    assert.ok(EQUAL_DIMENSION_SET.includes("security"));
   });
 });
 

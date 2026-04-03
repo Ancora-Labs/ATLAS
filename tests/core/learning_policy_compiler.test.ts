@@ -477,6 +477,8 @@ import {
   filterRetiredPolicies,
   RETIREMENT_MIN_CLOSURES,
   RETIREMENT_MIN_CLEAN_CYCLES,
+  buildPolicyImpactAttribution,
+  applyPolicyHalfLifeRetirement,
 } from "../../src/core/learning_policy_compiler.js";
 
 describe("buildPolicyClosureEvidence", () => {
@@ -592,6 +594,52 @@ describe("filterRetiredPolicies", () => {
     const { active, retired } = filterRetiredPolicies(null as any, [], []);
     assert.deepEqual(active, []);
     assert.deepEqual(retired, []);
+  });
+});
+
+describe("buildPolicyImpactAttribution", () => {
+  it("builds improved attribution with half-life metrics", () => {
+    const attribution = buildPolicyImpactAttribution(
+      { id: "glob-false-fail", _inactiveCycles: 0 },
+      { policyId: "glob-false-fail", improvementRate: 0.8 } as any,
+      0.4,
+      0.6,
+      { cycleId: "cycle-1", halfLifeCycles: 3 },
+    );
+    assert.equal(attribution.policyId, "glob-false-fail");
+    assert.equal(attribution.cycleId, "cycle-1");
+    assert.equal(attribution.improved, true);
+    assert.equal(attribution.inactiveCycles, 0);
+    assert.ok(attribution.halfLifeWeight > 0);
+    assert.ok(attribution.decayedEffectiveness > 0);
+    assert.equal(attribution.shouldRetire, false);
+  });
+
+  it("negative: marks policy for retirement when ineffective over inactive cycles", () => {
+    const attribution = buildPolicyImpactAttribution(
+      { id: "lint-failure", _inactiveCycles: 3 },
+      { policyId: "lint-failure", improvementRate: 0.1 } as any,
+      0.7,
+      0.69,
+      { minEffectiveness: 0.2, minInactiveCycles: 2, halfLifeCycles: 2 },
+    );
+    assert.equal(attribution.improved, false);
+    assert.ok(attribution.inactiveCycles >= 4);
+    assert.equal(attribution.shouldRetire, true);
+  });
+});
+
+describe("applyPolicyHalfLifeRetirement", () => {
+  it("adds _halfLifeWeight on active policies", () => {
+    const result = applyPolicyHalfLifeRetirement(
+      [{ id: "policy-a", _inactiveCycles: 1 }],
+      [{ policyId: "policy-a", improvementRate: 0.9 } as any],
+      { halfLifeCycles: 3, minEffectiveness: 0.1, minInactiveCycles: 3 },
+    );
+    assert.equal(result.retired.length, 0);
+    assert.equal(result.active.length, 1);
+    assert.ok(typeof result.active[0]._halfLifeWeight === "number");
+    assert.ok(typeof result.active[0]._decayedEffectiveness === "number");
   });
 });
 
