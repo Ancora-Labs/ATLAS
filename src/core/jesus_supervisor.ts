@@ -15,7 +15,7 @@
  */
 
 import path from "node:path";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, readdirSync } from "node:fs";
 import { readJson, readJsonSafe, writeJson, spawnAsync } from "./fs_utils.js";
 import { appendProgress, appendAlert, ALERT_SEVERITY } from "./state_tracker.js";
 import { getRoleRegistry } from "./role_registry.js";
@@ -114,7 +114,72 @@ function appendPromptPreviewSync(stateDir: string, promptText: string): void {
 // into the Jesus directive as specific remediation items AND fed to the self-
 // improvement system as capability gaps.
 
-async function runSystemHealthAudit(config, githubState, AthenaCoordination, sessions) {
+function collectSourceFiles(dirPath: string): string[] {
+  const entries = readdirSync(dirPath, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectSourceFiles(fullPath));
+      continue;
+    }
+    if (entry.isFile() && (entry.name.endsWith(".ts") || entry.name.endsWith(".js"))) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+function loadSourceEvidenceIndex(repoRoot: string): string {
+  const srcDir = path.join(repoRoot, "src");
+  try {
+    const files = collectSourceFiles(srcDir);
+    return files
+      .map((filePath) => readFileSync(filePath, "utf8"))
+      .join("\n")
+      .toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isCapabilityGapVerifiedPresentInSource(
+  sourceIndex: string,
+  gap: { capability?: unknown; proposedFix?: unknown; gap?: unknown },
+): boolean {
+  if (!sourceIndex) return false;
+  const capability = String(gap?.capability || "").trim().toLowerCase();
+  const proposedFix = String(gap?.proposedFix || "").trim().toLowerCase();
+  const gapText = String(gap?.gap || "").trim().toLowerCase();
+
+  const capabilitySignatures: Record<string, string[]> = {
+    "dispatch-block-reason-reporting": ["dispatchblockreason", "dispatch blocked"],
+    "jesus-findings-to-plan-requirements": ["mandatory_tasks", "buildmandatorytaskspromptsection", "extractmandatoryhealthauditfindings"],
+    "athena-gate-pre-check": ["gateblockrisk"],
+    "athena-gate-feasibility-check": ["gateblockrisk"],
+    "prometheus-plan-structural-lint": ["validateallplans", "plan_contract_validator"],
+    "pre-athena-plan-structural-validation": ["validateallplans", "plan_contract_validator"],
+    "prometheus-token-budget-floor": ["invalid_token_budget", "minimum token budgets", "token floor"],
+  };
+
+  const signatures = capabilitySignatures[capability] || [];
+  if (signatures.length > 0) {
+    return signatures.every((sig) => sourceIndex.includes(sig));
+  }
+
+  if (capability && capability.length > 3 && sourceIndex.includes(capability.replace(/-/g, " "))) {
+    return true;
+  }
+  if (proposedFix && proposedFix.length > 20 && sourceIndex.includes(proposedFix.slice(0, 40))) {
+    return true;
+  }
+  if (gapText && gapText.length > 20 && sourceIndex.includes(gapText.slice(0, 40))) {
+    return true;
+  }
+  return false;
+}
+
+export async function runSystemHealthAudit(config, githubState, AthenaCoordination, sessions) {
   const findings = [];
 
   // 1. CI Health — is main branch green?
@@ -140,7 +205,25 @@ async function runSystemHealthAudit(config, githubState, AthenaCoordination, ses
 
   // 2. Failed CI runs on open PR branches
   if (githubState.failedCiRuns.length > 0) {
+    const latestMainSuccessful = githubState?.latestMainCi?.conclusion === "success";
+    const latestMainUpdatedAt = githubState?.latestMainCi?.updatedAt
+      ? new Date(githubState.latestMainCi.updatedAt).getTime()
+      : Number.NaN;
+    const latestMainHeadSha = String(githubState?.latestMainCi?.headSha || "");
+
     for (const run of githubState.failedCiRuns) {
+      if (latestMainSuccessful) {
+        const runUpdatedAt = run?.updatedAt ? new Date(run.updatedAt).getTime() : Number.NaN;
+        const preHead = Boolean(latestMainHeadSha && run?.headSha && run.headSha !== latestMainHeadSha);
+        const supersededByLatestMain =
+          Number.isFinite(runUpdatedAt) &&
+          Number.isFinite(latestMainUpdatedAt) &&
+          runUpdatedAt <= latestMainUpdatedAt;
+        if (preHead || supersededByLatestMain) {
+          continue;
+        }
+      }
+
       findings.push({
         area: "ci",
         severity: "important",
@@ -216,6 +299,7 @@ async function runSystemHealthAudit(config, githubState, AthenaCoordination, ses
     const km = await readJson(path.join(stateDir, "knowledge_memory.json"), {});
     const criticalLessons = (km.lessons || []).filter(l => l.severity === "critical").slice(-3);
     const capGaps = Array.isArray(km.capabilityGaps) ? km.capabilityGaps.slice(-5) : [];
+    const sourceIndex = loadSourceEvidenceIndex(process.cwd());
 
     if (criticalLessons.length > 0) {
       findings.push({
@@ -229,12 +313,17 @@ async function runSystemHealthAudit(config, githubState, AthenaCoordination, ses
 
     if (capGaps.length > 0) {
       for (const gap of capGaps.slice(0, 3)) {
+        const originalSeverity = String(gap?.severity || "warning").toLowerCase();
+        const verifiedPresent = isCapabilityGapVerifiedPresentInSource(sourceIndex, gap);
+        const shouldDowngrade =
+          verifiedPresent && (originalSeverity === "critical" || originalSeverity === "important");
         findings.push({
           area: "capability-gap",
-          severity: gap.severity || "warning",
+          severity: shouldDowngrade ? "info" : (gap.severity || "warning"),
           finding: `Missing capability: ${gap.gap}`,
           remediation: gap.proposedFix || "Add missing capability to system",
-          capabilityNeeded: gap.capability || "unknown"
+          capabilityNeeded: gap.capability || "unknown",
+          ...(shouldDowngrade ? { note: "verified_present_in_source" } : {})
         });
       }
     }

@@ -8,7 +8,11 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import {
+  runSystemHealthAudit,
   validateDirectivePayload,
   validateExpectedOutcomeMeasurable,
 } from "../../src/core/jesus_supervisor.js";
@@ -198,5 +202,140 @@ describe("jesus_supervisor — validateDirectivePayload", () => {
         `decision type "${decision}" must produce valid:true; gaps: [${result.gaps.join("; ")}]`
       );
     }
+  });
+});
+
+describe("jesus_supervisor — runSystemHealthAudit", () => {
+  function withTempRepo<T>(fn: (ctx: { repoDir: string; stateDir: string }) => Promise<T> | T): Promise<T> {
+    const repoDir = mkdtempSync(path.join(tmpdir(), "jesus-audit-"));
+    const srcDir = path.join(repoDir, "src", "core");
+    const stateDir = path.join(repoDir, "state");
+    mkdirSync(srcDir, { recursive: true });
+    mkdirSync(stateDir, { recursive: true });
+    const previousCwd = process.cwd();
+
+    return Promise.resolve()
+      .then(async () => {
+        process.chdir(repoDir);
+        return await fn({ repoDir, stateDir });
+      })
+      .finally(() => {
+        process.chdir(previousCwd);
+        rmSync(repoDir, { recursive: true, force: true });
+      });
+  }
+
+  it("downgrades verified capability gaps to info with verification note", async () => {
+    await withTempRepo(async ({ stateDir, repoDir }) => {
+      writeFileSync(
+        path.join(repoDir, "src", "core", "prometheus.ts"),
+        "const a='MANDATORY_TASKS'; function buildMandatoryTasksPromptSection(){} function extractMandatoryHealthAuditFindings(){}",
+        "utf8",
+      );
+
+      writeFileSync(
+        path.join(stateDir, "knowledge_memory.json"),
+        JSON.stringify({
+          lessons: [],
+          capabilityGaps: [
+            {
+              gap: "Missing capability: Jesus findings were not fed as mandatory plan tasks",
+              severity: "critical",
+              capability: "jesus-findings-to-plan-requirements",
+              proposedFix: "Inject findings as mandatory tasks",
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        { latestMainCi: null, failedCiRuns: [], pullRequests: [] },
+        {},
+        {},
+      );
+
+      const capGap = findings.find((f: any) => f.area === "capability-gap");
+      assert.ok(capGap, "capability-gap finding should exist");
+      assert.equal(capGap.severity, "info");
+      assert.equal(capGap.note, "verified_present_in_source");
+    });
+  });
+
+  it("keeps unverified capability gaps at original severity", async () => {
+    await withTempRepo(async ({ stateDir, repoDir }) => {
+      writeFileSync(path.join(repoDir, "src", "core", "placeholder.ts"), "export const ok = true;", "utf8");
+      writeFileSync(
+        path.join(stateDir, "knowledge_memory.json"),
+        JSON.stringify({
+          lessons: [],
+          capabilityGaps: [
+            {
+              gap: "Missing impossible capability",
+              severity: "important",
+              capability: "non-existent-capability",
+              proposedFix: "Implement imaginary feature",
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        { latestMainCi: null, failedCiRuns: [], pullRequests: [] },
+        {},
+        {},
+      );
+
+      const capGap = findings.find((f: any) => f.area === "capability-gap");
+      assert.ok(capGap, "capability-gap finding should exist");
+      assert.equal(capGap.severity, "important");
+      assert.equal(capGap.note, undefined);
+    });
+  });
+
+  it("suppresses pre-head failed CI runs when latest main CI is successful", async () => {
+    await withTempRepo(async ({ stateDir, repoDir }) => {
+      writeFileSync(path.join(repoDir, "src", "core", "placeholder.ts"), "export const ok = true;", "utf8");
+      writeFileSync(path.join(stateDir, "knowledge_memory.json"), JSON.stringify({ lessons: [], capabilityGaps: [] }), "utf8");
+
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        {
+          latestMainCi: {
+            conclusion: "success",
+            branch: "main",
+            headSha: "abc123456",
+            commit: "abc1234",
+            updatedAt: "2026-04-03T12:00:00.000Z",
+          },
+          failedCiRuns: [
+            {
+              name: "ci-old",
+              branch: "main",
+              headSha: "old000001",
+              commit: "old0000",
+              updatedAt: "2026-04-03T11:00:00.000Z",
+            },
+            {
+              name: "ci-current",
+              branch: "feature-1",
+              headSha: "abc123456",
+              commit: "abc1234",
+              updatedAt: "2026-04-03T12:30:00.000Z",
+            },
+          ],
+          pullRequests: [],
+        },
+        {},
+        {},
+      );
+
+      const ciFailures = findings.filter((f: any) => f.area === "ci" && f.finding.startsWith("Failed CI:"));
+      assert.equal(ciFailures.length, 1);
+      assert.ok(ciFailures[0].finding.includes("ci-current"));
+    });
   });
 });
