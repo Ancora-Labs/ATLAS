@@ -125,6 +125,7 @@ export const ORCHESTRATOR_STATUS = Object.freeze({
 export const GATE_PRECEDENCE = Object.freeze({
   BUDGET_ELIGIBILITY:          1,
   GUARDRAIL_PAUSE:             2,
+  FORCE_CHECKPOINT:            3.5,
   GOVERNANCE_FREEZE:           3,
   LINEAGE_CYCLE:               4,
   GOVERNANCE_CANARY:           5,
@@ -151,6 +152,7 @@ export const GATE_PRECEDENCE = Object.freeze({
 export const BLOCK_REASON = Object.freeze({
   BUDGET_EXHAUSTED:               "budget_exhausted",
   GUARDRAIL_PAUSE_WORKERS_ACTIVE: "guardrail_pause_workers_active",
+  GUARDRAIL_FORCE_CHECKPOINT_ACTIVE: "force_checkpoint_validation_active",
   GOVERNANCE_FREEZE_ACTIVE:       "governance_freeze_active",
   LINEAGE_CYCLE_DETECTED:         "lineage_cycle_detected",
   GOVERNANCE_CANARY_BREACH:       "governance_canary_breach",
@@ -566,12 +568,12 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       } else {
         return {
           blocked: true,
-          reason: `force_checkpoint_validation_active:${forceCheckpoint.scenarioId || "unknown_scenario"}`,
+          reason: `${BLOCK_REASON.GUARDRAIL_FORCE_CHECKPOINT_ACTIVE}:${forceCheckpoint.scenarioId || "unknown_scenario"}`,
           action: undefined,
           graphResult: null,
           cycleId,
           budgetEligibility,
-          gateIndex: GATE_PRECEDENCE.GUARDRAIL_PAUSE,
+          gateIndex: GATE_PRECEDENCE.FORCE_CHECKPOINT,
         };
       }
     }

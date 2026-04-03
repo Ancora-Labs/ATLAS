@@ -68,8 +68,8 @@ describe("orchestrator governance gate dry-run parity", () => {
       };
       const result = await evaluatePreDispatchGovernanceGate(config, [], "force-checkpoint-block");
       assert.equal(result.blocked, true);
-      assert.ok(String(result.reason || "").startsWith("force_checkpoint_validation_active:"));
-      assert.equal(result.gateIndex, GATE_PRECEDENCE.GUARDRAIL_PAUSE);
+      assert.ok(String(result.reason || "").startsWith(`${BLOCK_REASON.GUARDRAIL_FORCE_CHECKPOINT_ACTIVE}:`));
+      assert.equal(result.gateIndex, GATE_PRECEDENCE.FORCE_CHECKPOINT);
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }

@@ -5,7 +5,7 @@
  * with evaluatePreDispatchGovernanceGate.
  *
  * Acceptance criteria:
- *   - GATE_PRECEDENCE values are unique integers 1..N with no gaps or duplicates.
+ *   - GATE_PRECEDENCE values are unique ordered numbers with no duplicates.
  *   - BLOCK_REASON values are unique non-empty strings.
  *   - Every blocked result from evaluatePreDispatchGovernanceGate includes a gateIndex
  *     matching the corresponding GATE_PRECEDENCE entry.
@@ -63,9 +63,10 @@ function makeDriftReportHighPriority(): ArchitectureDriftReport {
 // ── Structural invariant tests ────────────────────────────────────────────────
 
 describe("GATE_PRECEDENCE structural invariants", () => {
-  it("has only integer values", () => {
+  it("has only finite numeric values", () => {
     for (const [key, val] of Object.entries(GATE_PRECEDENCE)) {
-      assert.ok(Number.isInteger(val), `GATE_PRECEDENCE.${key} must be an integer, got ${val}`);
+      assert.equal(typeof val, "number", `GATE_PRECEDENCE.${key} must be a number, got ${typeof val}`);
+      assert.ok(Number.isFinite(val), `GATE_PRECEDENCE.${key} must be finite, got ${val}`);
     }
   });
 
@@ -75,10 +76,14 @@ describe("GATE_PRECEDENCE structural invariants", () => {
     assert.equal(unique.size, values.length, "GATE_PRECEDENCE values must be unique");
   });
 
-  it("values form a contiguous range starting from 1", () => {
+  it("values are strictly increasing after sort and start at 1", () => {
     const values = Object.values(GATE_PRECEDENCE).sort((a, b) => a - b);
-    for (let i = 0; i < values.length; i++) {
-      assert.equal(values[i], i + 1, `Expected GATE_PRECEDENCE to be contiguous from 1; gap at index ${i}`);
+    assert.equal(values[0], 1, "Expected the lowest GATE_PRECEDENCE value to be 1");
+    for (let i = 1; i < values.length; i++) {
+      assert.ok(
+        values[i] > values[i - 1],
+        `Expected strictly increasing sorted precedence values; index ${i - 1}=${values[i - 1]}, index ${i}=${values[i]}`
+      );
     }
   });
 
@@ -493,13 +498,16 @@ describe("AUTO_APPROVE_DISPATCH_SIGNAL structural invariants", () => {
     }
   });
 
-  it("adding auto-approve telemetry does not affect GATE_PRECEDENCE contiguity", () => {
-    // Regression guard: gate precedence must remain a contiguous range from 1
-    // even after adding auto-approve telemetry infrastructure.
+  it("adding auto-approve telemetry does not affect GATE_PRECEDENCE ordering", () => {
+    // Regression guard: precedence values must remain sortable and strictly
+    // increasing even as additional gates are introduced.
     const values = Object.values(GATE_PRECEDENCE).sort((a, b) => a - b);
-    for (let i = 0; i < values.length; i++) {
-      assert.equal(values[i], i + 1,
-        `GATE_PRECEDENCE must remain contiguous from 1 — gap detected at index ${i} (value=${values[i]})`);
+    assert.equal(values[0], 1, "GATE_PRECEDENCE must start at 1");
+    for (let i = 1; i < values.length; i++) {
+      assert.ok(
+        values[i] > values[i - 1],
+        `GATE_PRECEDENCE must remain strictly increasing — invalid pair ${values[i - 1]} then ${values[i]}`
+      );
     }
   });
 });

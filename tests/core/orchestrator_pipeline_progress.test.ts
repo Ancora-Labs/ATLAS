@@ -1511,6 +1511,7 @@ describe("pipeline progress — terminology drift prevention (stage IDs)", () =>
     const CANONICAL_BLOCK_REASONS: Record<string, string> = {
       BUDGET_EXHAUSTED:               "budget_exhausted",
       GUARDRAIL_PAUSE_WORKERS_ACTIVE: "guardrail_pause_workers_active",
+      GUARDRAIL_FORCE_CHECKPOINT_ACTIVE: "force_checkpoint_validation_active",
       GOVERNANCE_FREEZE_ACTIVE:       "governance_freeze_active",
       LINEAGE_CYCLE_DETECTED:         "lineage_cycle_detected",
       GOVERNANCE_CANARY_BREACH:       "governance_canary_breach",
