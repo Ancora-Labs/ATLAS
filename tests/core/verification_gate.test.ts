@@ -110,6 +110,7 @@ describe("verification_gate worker contract enforcement", () => {
       status: "done",
       fullOutput: [
         "Merged commit abc123d into main",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 10 # pass 10 # fail 0",
         "===NPM TEST OUTPUT END===",
@@ -263,7 +264,7 @@ describe("verification_gate — post-merge artifact (Packet 1/3)", () => {
   });
 
   it("checkPostMergeArtifact detects present SHA and explicit test output block", () => {
-    const result = checkPostMergeArtifact("Commit: abc123d\n===NPM TEST OUTPUT START===\n# tests 5 pass 5 fail 0\n===NPM TEST OUTPUT END===");
+    const result = checkPostMergeArtifact("Commit: abc123d\nCLEAN_TREE_STATUS=clean\n===NPM TEST OUTPUT START===\n# tests 5 pass 5 fail 0\n===NPM TEST OUTPUT END===");
     assert.equal(result.hasSha, true);
     assert.equal(result.hasTestOutput, true);
   });
@@ -274,18 +275,29 @@ describe("verification_gate — post-merge artifact (Packet 1/3)", () => {
   });
 
   it("checkPostMergeArtifact returns clean result for complete explicit artifact", () => {
-    const text = "abc123d\n===NPM TEST OUTPUT START===\n# tests 10 pass\n===NPM TEST OUTPUT END===";
+    const text = "abc123d\nCLEAN_TREE_STATUS=clean\n===NPM TEST OUTPUT START===\n# tests 10 pass\n===NPM TEST OUTPUT END===";
     const result = checkPostMergeArtifact(text);
     assert.equal(result.hasSha, true);
     assert.equal(result.hasTestOutput, true);
+    assert.equal(result.hasCleanTreeEvidence, true);
     assert.equal(result.hasUnfilledPlaceholder, false);
     assert.equal(result.hasArtifact, true);
   });
 
   it("negative path: plain npm summary text without explicit output block does not satisfy test evidence", () => {
-    const result = checkPostMergeArtifact("BOX_MERGED_SHA=abc1234\n# tests 10\n# pass 10\n# fail 0");
+    const result = checkPostMergeArtifact("BOX_MERGED_SHA=abc1234\nCLEAN_TREE_STATUS=clean\n# tests 10\n# pass 10\n# fail 0");
     assert.equal(result.hasSha, true);
     assert.equal(result.hasTestOutput, false);
+    assert.equal(result.hasArtifact, false);
+  });
+
+  it("negative path: explicit SHA and npm test block without clean-tree marker fails artifact completeness", () => {
+    const result = checkPostMergeArtifact(
+      "BOX_MERGED_SHA=abc1234\n===NPM TEST OUTPUT START===\n# tests 5 pass 5\n===NPM TEST OUTPUT END===",
+    );
+    assert.equal(result.hasSha, true);
+    assert.equal(result.hasTestOutput, true);
+    assert.equal(result.hasCleanTreeEvidence, false);
     assert.equal(result.hasArtifact, false);
   });
 });
@@ -318,6 +330,7 @@ describe("verification_gate — SHA + raw npm output enforced across done-capabl
       status: "done",
       fullOutput: [
         "abc123d merged into main",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 10 # pass 10 # fail 0",
         "===NPM TEST OUTPUT END===",
@@ -379,6 +392,7 @@ describe("verification_gate — artifact check mandatory across all completion p
       fullOutput: [
         "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=n/a",
         "Merged at abc1234",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "  3 passing",
         "===NPM TEST OUTPUT END===",
@@ -559,32 +573,38 @@ import {
 
 describe("verification_gate — collectArtifactGaps shared contract", () => {
   it("returns empty array when artifact is complete", () => {
-    const artifact = { hasSha: true, hasTestOutput: true, hasUnfilledPlaceholder: false };
+    const artifact = { hasSha: true, hasTestOutput: true, hasCleanTreeEvidence: true, hasUnfilledPlaceholder: false };
     assert.deepEqual(collectArtifactGaps(artifact), []);
   });
 
   it("returns MISSING_SHA gap when SHA is absent", () => {
-    const artifact = { hasSha: false, hasTestOutput: true, hasUnfilledPlaceholder: false };
+    const artifact = { hasSha: false, hasTestOutput: true, hasCleanTreeEvidence: true, hasUnfilledPlaceholder: false };
     const gaps = collectArtifactGaps(artifact);
     assert.ok(gaps.some(g => /sha/i.test(g)), `expected SHA gap; got: [${gaps.join("; ")}]`);
   });
 
   it("returns MISSING_TEST_OUTPUT gap when test output is absent", () => {
-    const artifact = { hasSha: true, hasTestOutput: false, hasUnfilledPlaceholder: false };
+    const artifact = { hasSha: true, hasTestOutput: false, hasCleanTreeEvidence: true, hasUnfilledPlaceholder: false };
     const gaps = collectArtifactGaps(artifact);
     assert.ok(gaps.some(g => /npm|test output/i.test(g)), `expected test-output gap; got: [${gaps.join("; ")}]`);
   });
 
+  it("returns DIRTY_TREE gap when clean-tree evidence is absent", () => {
+    const artifact = { hasSha: true, hasTestOutput: true, hasCleanTreeEvidence: false, hasUnfilledPlaceholder: false };
+    const gaps = collectArtifactGaps(artifact);
+    assert.ok(gaps.some(g => /clean-tree|clean tree/i.test(g)), `expected clean-tree gap; got: [${gaps.join("; ")}]`);
+  });
+
   it("returns UNFILLED_PLACEHOLDER gap when placeholder is present", () => {
-    const artifact = { hasSha: true, hasTestOutput: true, hasUnfilledPlaceholder: true };
+    const artifact = { hasSha: true, hasTestOutput: true, hasCleanTreeEvidence: true, hasUnfilledPlaceholder: true };
     const gaps = collectArtifactGaps(artifact);
     assert.ok(gaps.some(g => /placeholder/i.test(g)), `expected placeholder gap; got: [${gaps.join("; ")}]`);
   });
 
-  it("collects all three gaps when artifact is fully missing", () => {
+  it("collects all four gaps when artifact is fully missing", () => {
     const artifact = { hasSha: false, hasTestOutput: false, hasUnfilledPlaceholder: true };
     const gaps = collectArtifactGaps(artifact);
-    assert.equal(gaps.length, 3, `expected 3 gaps; got: [${gaps.join("; ")}]`);
+    assert.equal(gaps.length, 4, `expected 4 gaps; got: [${gaps.join("; ")}]`);
   });
 
   it("gap reasons match ARTIFACT_GAP constants exactly", () => {
@@ -593,10 +613,11 @@ describe("verification_gate — collectArtifactGaps shared contract", () => {
     assert.ok(gaps.includes(ARTIFACT_GAP.UNFILLED_PLACEHOLDER), "must include UNFILLED_PLACEHOLDER constant");
     assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_SHA), "must include MISSING_SHA constant");
     assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_TEST_OUTPUT), "must include MISSING_TEST_OUTPUT constant");
+    assert.ok(gaps.includes(ARTIFACT_GAP.DIRTY_TREE), "must include DIRTY_TREE constant");
   });
 
   it("negative path: partial artifact returns only applicable gaps", () => {
-    const artifact = { hasSha: true, hasTestOutput: false, hasUnfilledPlaceholder: false };
+    const artifact = { hasSha: true, hasTestOutput: false, hasCleanTreeEvidence: true, hasUnfilledPlaceholder: false };
     const gaps = collectArtifactGaps(artifact);
     assert.equal(gaps.length, 1);
     assert.equal(gaps[0], ARTIFACT_GAP.MISSING_TEST_OUTPUT);
@@ -643,6 +664,7 @@ describe("verification_gate — artifact gate non-bypassable (Task 1 hardening)"
       status: "done",
       fullOutput: [
         "Merged abc1234 into main",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 5 # pass 5 # fail 0",
         "===NPM TEST OUTPUT END===",
@@ -674,7 +696,7 @@ describe("verification_gate — validateWorkerContract precomputedArtifact optio
     // If validateWorkerContract recomputes from output, it would fail; using the injected
     // value it must pass — proving the pre-computed path is taken.
     const fakeCompleteArtifact = checkPostMergeArtifact(
-      "BOX_MERGED_SHA=abc1234\n===NPM TEST OUTPUT START===\n# tests 5 pass 5 fail 0\n===NPM TEST OUTPUT END==="
+      "BOX_MERGED_SHA=abc1234\nCLEAN_TREE_STATUS=clean\n===NPM TEST OUTPUT START===\n# tests 5 pass 5 fail 0\n===NPM TEST OUTPUT END==="
     );
     assert.equal(fakeCompleteArtifact.hasArtifact, true, "pre-condition: injected artifact must be complete");
 
@@ -701,6 +723,7 @@ describe("verification_gate — validateWorkerContract precomputedArtifact optio
     // injected value it must fail — proving the pre-computed path is taken.
     const validOutput = [
       "BOX_MERGED_SHA=def5678",
+      "CLEAN_TREE_STATUS=clean",
       "===NPM TEST OUTPUT START===",
       "# tests 8 pass 8 fail 0",
       "===NPM TEST OUTPUT END===",
@@ -788,6 +811,7 @@ describe("verification_gate — BOX_MERGED_SHA explicit marker (Task 3)", () => 
   it("checkPostMergeArtifact detects explicit NPM test output block markers", () => {
     const output = [
       "BOX_MERGED_SHA=abc1234",
+      "CLEAN_TREE_STATUS=clean",
       "===NPM TEST OUTPUT START===",
       "# tests 10",
       "# pass 10",
@@ -870,6 +894,7 @@ describe("verification_gate — qa role done-path artifact enforcement (Task 2)"
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234f",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 20",
         "# pass 20",
@@ -923,6 +948,7 @@ describe("verification_gate — security role done-path artifact enforcement (Ta
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=deadbeef",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 15 pass 15 fail 0",
         "===NPM TEST OUTPUT END===",
@@ -960,17 +986,19 @@ import {
 } from "../../src/core/verification_gate.js";
 
 describe("verification_gate — ARTIFACT_GAP_CODE machine-readable codes", () => {
-  it("exports ARTIFACT_GAP_CODE with three canonical codes", () => {
+  it("exports ARTIFACT_GAP_CODE with canonical codes", () => {
     assert.ok(ARTIFACT_GAP_CODE, "ARTIFACT_GAP_CODE must be exported");
     assert.equal(typeof ARTIFACT_GAP_CODE.UNFILLED_PLACEHOLDER, "string");
     assert.equal(typeof ARTIFACT_GAP_CODE.MISSING_SHA, "string");
     assert.equal(typeof ARTIFACT_GAP_CODE.MISSING_TEST_OUTPUT, "string");
+    assert.equal(typeof ARTIFACT_GAP_CODE.DIRTY_TREE, "string");
   });
 
   it("ARTIFACT_GAP_CODE values are prefixed with artifact-gate/", () => {
     assert.ok(ARTIFACT_GAP_CODE.UNFILLED_PLACEHOLDER.startsWith("artifact-gate/"));
     assert.ok(ARTIFACT_GAP_CODE.MISSING_SHA.startsWith("artifact-gate/"));
     assert.ok(ARTIFACT_GAP_CODE.MISSING_TEST_OUTPUT.startsWith("artifact-gate/"));
+    assert.ok(ARTIFACT_GAP_CODE.DIRTY_TREE.startsWith("artifact-gate/"));
   });
 
   it("ARTIFACT_GAP_CODE is frozen (immutable)", () => {
@@ -982,6 +1010,7 @@ describe("verification_gate — ARTIFACT_GAP_CODE machine-readable codes", () =>
       ARTIFACT_GAP_CODE.UNFILLED_PLACEHOLDER,
       ARTIFACT_GAP_CODE.MISSING_SHA,
       ARTIFACT_GAP_CODE.MISSING_TEST_OUTPUT,
+      ARTIFACT_GAP_CODE.DIRTY_TREE,
     ];
     const unique = new Set(codes);
     assert.equal(unique.size, codes.length, "all codes must be distinct");
@@ -992,6 +1021,7 @@ describe("verification_gate — buildArtifactAuditEntry structured audit record"
   const fullArtifact = {
     hasSha: true,
     hasTestOutput: true,
+    hasCleanTreeEvidence: true,
     hasUnfilledPlaceholder: false,
     hasArtifact: true,
     hasExplicitShaMarker: true,
@@ -1002,6 +1032,7 @@ describe("verification_gate — buildArtifactAuditEntry structured audit record"
   const missingArtifact = {
     hasSha: false,
     hasTestOutput: false,
+    hasCleanTreeEvidence: false,
     hasUnfilledPlaceholder: true,
     hasArtifact: false,
     hasExplicitShaMarker: false,
@@ -1035,6 +1066,7 @@ describe("verification_gate — buildArtifactAuditEntry structured audit record"
     assert.ok(entry.reasonCodes.includes(ARTIFACT_GAP_CODE.UNFILLED_PLACEHOLDER));
     assert.ok(entry.reasonCodes.includes(ARTIFACT_GAP_CODE.MISSING_SHA));
     assert.ok(entry.reasonCodes.includes(ARTIFACT_GAP_CODE.MISSING_TEST_OUTPUT));
+    assert.ok(entry.reasonCodes.includes(ARTIFACT_GAP_CODE.DIRTY_TREE));
   });
 
   it("reasonCodes length matches gaps length", () => {
@@ -1121,6 +1153,7 @@ describe("verification_gate — artifact gate across additional done-capable lan
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=cafe1234",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 5",
         "# pass 5",
@@ -1263,6 +1296,7 @@ describe("verification_gate — checkNamedTestProof", () => {
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# Subtest: other_test.test.ts",
         "ok 1 - some test",
@@ -1286,6 +1320,7 @@ describe("verification_gate — checkNamedTestProof", () => {
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# pass 5",
         "===NPM TEST OUTPUT END===",
@@ -1419,6 +1454,7 @@ describe("verification_gate — scanB and quality-worker artifact gate (Task 1 c
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234f",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 10",
         "# pass 10",
@@ -1462,6 +1498,7 @@ describe("verification_gate — packet-named verification proof gate (Task 1)", 
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234f",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# Subtest: other_test.test.ts",
         "ok 1 - some passing test",
@@ -1489,6 +1526,7 @@ describe("verification_gate — packet-named verification proof gate (Task 1)", 
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234f",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# Subtest: foo.test.ts",
         "ok 1 - should handle edge case",
@@ -1513,6 +1551,7 @@ describe("verification_gate — packet-named verification proof gate (Task 1)", 
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234f",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# pass 5",
         "===NPM TEST OUTPUT END===",
@@ -1535,6 +1574,7 @@ describe("verification_gate — packet-named verification proof gate (Task 1)", 
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234f",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# pass 5",
         "===NPM TEST OUTPUT END===",
@@ -1572,6 +1612,7 @@ describe("verification_gate — packet-named verification proof gate (Task 1)", 
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234f",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# Subtest: other.test.ts",
         "# pass 1",
@@ -1676,6 +1717,7 @@ describe("verification_gate — non-canonical required field value gaps", () => 
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
         "# tests 5 pass 5",
         // Sneaks in a non-canonical value that isn't caught by n/a or fail checks
         "VERIFICATION_REPORT: BUILD=xyz; TESTS=pass; EDGE_CASES=pass; SECURITY=n/a; API=n/a; RESPONSIVE=n/a",
@@ -1702,6 +1744,7 @@ describe("verification_gate — non-canonical required field value gaps", () => 
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
         "# tests 5 pass 5",
         "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=n/a; API=n/a; RESPONSIVE=n/a",
         "BOX_PR_URL=https://github.com/org/repo/pull/1",
@@ -1720,6 +1763,7 @@ describe("verification_gate — non-canonical required field value gaps", () => 
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
         "# tests 5 pass 5",
         "VERIFICATION_REPORT: BUILD=passing; TESTS=passed; EDGE_CASES=ok; SECURITY=n/a; API=n/a; RESPONSIVE=n/a",
         "BOX_PR_URL=https://github.com/org/repo/pull/1",
@@ -1738,6 +1782,7 @@ describe("verification_gate — non-canonical required field value gaps", () => 
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
         "# tests 5 pass 5",
         "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=dunno; API=n/a; RESPONSIVE=n/a",
         "BOX_PR_URL=https://github.com/org/repo/pull/1",
@@ -1758,6 +1803,7 @@ describe("verification_gate — optional field failure tracking in evidence", ()
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 5 pass 5",
         "===NPM TEST OUTPUT END===",
@@ -1776,6 +1822,7 @@ describe("verification_gate — optional field failure tracking in evidence", ()
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 5 pass 5",
         "===NPM TEST OUTPUT END===",
@@ -1799,6 +1846,7 @@ describe("verification_gate — optional field failure tracking in evidence", ()
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
         "# tests 5 pass 5",
         "VERIFICATION_REPORT: BUILD=fail; TESTS=pass; EDGE_CASES=pass",
         "BOX_PR_URL=https://github.com/org/repo/pull/1",
@@ -1815,7 +1863,7 @@ describe("verification_gate — optional field failure tracking in evidence", ()
   it("optionalFieldFailures is empty array when VERIFICATION_REPORT is missing", () => {
     const result = validateWorkerContract("backend", {
       status: "done",
-      fullOutput: "BOX_MERGED_SHA=abc1234\n# tests 5 pass 5"
+      fullOutput: "BOX_MERGED_SHA=abc1234\nCLEAN_TREE_STATUS=clean\n# tests 5 pass 5"
     });
     const optFails = (result.evidence as any).optionalFieldFailures;
     assert.ok(Array.isArray(optFails), "optionalFieldFailures must be an array even with no report");
@@ -1828,6 +1876,7 @@ describe("verification_gate — optional field failure tracking in evidence", ()
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 5 pass 5",
         "===NPM TEST OUTPUT END===",
@@ -1920,10 +1969,11 @@ describe("verification_gate — applyConfigOverrides promotedFields tracking", (
 
 describe("verification_gate — globally-promoted BUILD allows n/a (no false completion block)", () => {
   const FULL_ARTIFACT = [
-    "BOX_MERGED_SHA=abc1234",
-    "===NPM TEST OUTPUT START===",
-    "# tests 10 pass 10 fail 0",
-    "===NPM TEST OUTPUT END===",
+      "BOX_MERGED_SHA=abc1234",
+      "CLEAN_TREE_STATUS=clean",
+      "===NPM TEST OUTPUT START===",
+      "# tests 10 pass 10 fail 0",
+      "===NPM TEST OUTPUT END===",
   ].join("\n");
 
   it("test role with requireBuild=true and BUILD=n/a passes (no false block)", () => {
@@ -2084,6 +2134,7 @@ describe("verification_gate — checkPostMergeArtifact rejects all template plac
   it("hasUnfilledPlaceholder=false for fully-filled artifact with no template residue", () => {
     const output = [
       "BOX_MERGED_SHA=abc1234f",
+      "CLEAN_TREE_STATUS=clean",
       "===NPM TEST OUTPUT START===",
       "# tests 10 pass 10 fail 0",
       "===NPM TEST OUTPUT END===",
@@ -2158,6 +2209,7 @@ describe("verification_gate — validateWorkerContract rejects inline template p
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234f",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 12 pass 12 fail 0",
         "===NPM TEST OUTPUT END===",
@@ -2242,6 +2294,7 @@ describe("verification_gate — carry-forward backlog closure (#1-#5)", () => {
   it("CF-005: checkPostMergeArtifact sets hasUnfilledPlaceholder=true for SHA placeholder residue", () => {
     const output = [
       `BOX_MERGED_SHA=${POST_MERGE_SHA_PLACEHOLDER}`,
+      "CLEAN_TREE_STATUS=clean",
       "===NPM TEST OUTPUT START===\n# pass 5\n===NPM TEST OUTPUT END===",
     ].join("\n");
     const artifact = checkPostMergeArtifact(output);

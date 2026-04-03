@@ -3313,7 +3313,9 @@ export async function appendCiFixContext(
           }
         }
       }
-    } catch { /* fail-open */ }
+    } catch (err) {
+      warn(`[orchestrator] CI evidence fetch failed for run ${String(runId)}: ${String(err?.message || err)}`);
+    }
 
     // ── Fallback: state artifact log ────────────────────────────────────────
     if (stateDir) {
@@ -3328,7 +3330,9 @@ export async function appendCiFixContext(
           });
           return baseContext ? `${baseContext}\n\n${block}` : block;
         }
-      } catch { /* fail-open */ }
+      } catch (err) {
+        warn(`[orchestrator] CI evidence fallback read failed: ${String(err?.message || err)}`);
+      }
     }
   }
 
@@ -3345,8 +3349,10 @@ export async function hydrateDispatchContextWithCiEvidence(
   baseContext: string,
 ): Promise<string> {
   try {
-    const taskKind = String(plan?.taskKind || plan?.kind || "").toLowerCase();
-    if (taskKind !== "ci-fix") return baseContext;
+    const taskKind = String(plan?.taskKind || plan?.kind || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
+    const ciFixHint = `${String(plan?.task || "")} ${String(plan?.title || "")}`.toLowerCase();
+    const isCiFixTask = taskKind === "ci-fix" || /\bci[-_\s]?fix\b/.test(ciFixHint);
+    if (!isCiFixTask) return baseContext;
     return await appendCiFixContext(config, plan, baseContext);
   } catch (err) {
     warn(`[orchestrator] CI context hydration failed (non-fatal): ${String(err?.message || err)}`);

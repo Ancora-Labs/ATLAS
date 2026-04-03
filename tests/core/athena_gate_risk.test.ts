@@ -42,5 +42,34 @@ describe("athena gate risk dry-run integration", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("returns high risk when force-checkpoint validation is active for SLO cascading breach", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-gate-risk-force-checkpoint-"));
+    try {
+      const config = {
+        paths: { stateDir },
+        env: { targetRepo: "CanerDoqdu/Box" },
+        canary: { enabled: false },
+        systemGuardian: { enabled: false },
+        governanceFreeze: { enabled: false, manualOverrideActive: false },
+      };
+      await fs.writeFile(
+        path.join(stateDir, "guardrail_force_checkpoint.json"),
+        JSON.stringify({
+          enabled: true,
+          revertedAt: null,
+          scenarioId: "SLO_CASCADING_BREACH",
+          overrideActive: false,
+        }),
+        "utf8",
+      );
+      const result = await assessGovernanceGateBlockRisk(config);
+      assert.equal(result.gateBlockRisk, GATE_BLOCK_RISK.HIGH);
+      assert.equal(result.requiresCorrection, true);
+      assert.ok(result.activeGateSignals.includes("force_checkpoint_validation_active"));
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
 

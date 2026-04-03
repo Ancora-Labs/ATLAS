@@ -226,6 +226,13 @@ describe("computeGateBlockRiskFromSignals", () => {
     assert.ok(result.activeGateSignals.includes("critical_debt_overdue"));
   });
 
+  it("returns high risk when force-checkpoint validation is active", () => {
+    const result = computeGateBlockRiskFromSignals({ forceCheckpointActive: true });
+    assert.equal(result.gateBlockRisk, GATE_BLOCK_RISK.HIGH);
+    assert.equal(result.requiresCorrection, true);
+    assert.ok(result.activeGateSignals.includes("force_checkpoint_validation_active"));
+  });
+
   it("returns low risk when no gate blockers are active", () => {
     const result = computeGateBlockRiskFromSignals({});
     assert.equal(result.gateBlockRisk, GATE_BLOCK_RISK.LOW);

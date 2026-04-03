@@ -148,6 +148,7 @@ export const ARTIFACT_GAP = Object.freeze({
   UNFILLED_PLACEHOLDER: "POST_MERGE_TEST_OUTPUT placeholder is still unfilled — replace it with actual test output",
   MISSING_SHA:          "Post-merge git SHA missing — run 'git rev-parse HEAD' on merged state and include the SHA",
   MISSING_TEST_OUTPUT:  "Post-merge raw npm test output missing — run 'npm test' on merged state and paste raw stdout",
+  DIRTY_TREE:           "Post-merge clean-tree evidence missing — include explicit CLEAN_TREE_STATUS=clean from 'git status --porcelain'",
 });
 
 /** Prefix used in taskState.error when the artifact gate fails. */
@@ -163,6 +164,7 @@ export const ARTIFACT_GAP_CODE = Object.freeze({
   UNFILLED_PLACEHOLDER: "artifact-gate/unfilled-placeholder",
   MISSING_SHA:          "artifact-gate/missing-sha",
   MISSING_TEST_OUTPUT:  "artifact-gate/missing-test-output",
+  DIRTY_TREE:           "artifact-gate/dirty-tree",
   UNKNOWN:              "artifact-gate/unknown",
 });
 
@@ -190,15 +192,17 @@ export function checkPostMergeArtifact(output) {
   // Post-merge test evidence is structural: explicit raw block markers are required.
   const hasExplicitTestBlock = NPM_TEST_BLOCK_PATTERN.test(text);
   const hasTestOutput = hasExplicitTestBlock;
+  const hasCleanTreeEvidence = /CLEAN_TREE_STATUS\s*=\s*clean\b/i.test(text);
 
   // Deterministic rejection: any known template placeholder literal means the
   // worker did not fill in the artifact fields.  Check all known residues.
   const hasUnfilledPlaceholder = ALL_POST_MERGE_PLACEHOLDERS.some(p => text.includes(p));
 
   return {
-    hasArtifact: hasSha && hasTestOutput && !hasUnfilledPlaceholder,
+    hasArtifact: hasSha && hasTestOutput && hasCleanTreeEvidence && !hasUnfilledPlaceholder,
     hasSha,
     hasTestOutput,
+    hasCleanTreeEvidence,
     hasUnfilledPlaceholder,
     mergedSha,
     hasExplicitShaMarker,
@@ -230,17 +234,18 @@ export function extractMergedSha(output: string): string | null {
  *   — result of checkPostMergeArtifact()
  * @returns {string[]} ordered list of gap reason strings (empty when artifact is complete)
  */
-export function collectArtifactGaps(artifact: { hasSha: boolean; hasTestOutput: boolean; hasUnfilledPlaceholder: boolean }): string[] {
+export function collectArtifactGaps(artifact: { hasSha: boolean; hasTestOutput: boolean; hasCleanTreeEvidence?: boolean; hasUnfilledPlaceholder: boolean }): string[] {
   const gaps: string[] = [];
   if (artifact.hasUnfilledPlaceholder) gaps.push(ARTIFACT_GAP.UNFILLED_PLACEHOLDER);
   if (!artifact.hasSha)               gaps.push(ARTIFACT_GAP.MISSING_SHA);
   if (!artifact.hasTestOutput)         gaps.push(ARTIFACT_GAP.MISSING_TEST_OUTPUT);
+  if (artifact.hasCleanTreeEvidence !== true) gaps.push(ARTIFACT_GAP.DIRTY_TREE);
   return gaps;
 }
 
 /** Shape of an artifact gate audit entry written to verification_audit.json. */
 export interface ArtifactAuditEntry {
-  gateSource: "hard-block" | "evolution-gate";
+  gateSource: "hard-block" | "rework-queued" | "evolution-gate";
   workerKind: string;
   roleName: string;
   taskId: string | number | null;
@@ -251,6 +256,7 @@ export interface ArtifactAuditEntry {
   artifactDetail: {
     hasSha: boolean;
     hasTestOutput: boolean;
+    hasCleanTreeEvidence: boolean;
     hasUnfilledPlaceholder: boolean;
     hasExplicitShaMarker: boolean;
     hasExplicitTestBlock: boolean;
@@ -275,7 +281,7 @@ export function buildArtifactAuditEntry(
   artifact: ReturnType<typeof checkPostMergeArtifact>,
   gaps: string[],
   meta: {
-    gateSource: "hard-block" | "evolution-gate";
+    gateSource: "hard-block" | "rework-queued" | "evolution-gate";
     taskId?: string | number | null;
     workerKind?: string;
     roleName?: string;
@@ -286,6 +292,7 @@ export function buildArtifactAuditEntry(
     if (g === ARTIFACT_GAP.UNFILLED_PLACEHOLDER) return ARTIFACT_GAP_CODE.UNFILLED_PLACEHOLDER;
     if (g === ARTIFACT_GAP.MISSING_SHA)          return ARTIFACT_GAP_CODE.MISSING_SHA;
     if (g === ARTIFACT_GAP.MISSING_TEST_OUTPUT)  return ARTIFACT_GAP_CODE.MISSING_TEST_OUTPUT;
+    if (g === ARTIFACT_GAP.DIRTY_TREE)           return ARTIFACT_GAP_CODE.DIRTY_TREE;
     return ARTIFACT_GAP_CODE.UNKNOWN;
   });
 
@@ -301,6 +308,7 @@ export function buildArtifactAuditEntry(
     artifactDetail: {
       hasSha: artifact.hasSha,
       hasTestOutput: artifact.hasTestOutput,
+      hasCleanTreeEvidence: artifact.hasCleanTreeEvidence,
       hasUnfilledPlaceholder: artifact.hasUnfilledPlaceholder,
       hasExplicitShaMarker: artifact.hasExplicitShaMarker,
       hasExplicitTestBlock: artifact.hasExplicitTestBlock,

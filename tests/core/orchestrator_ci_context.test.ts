@@ -63,6 +63,31 @@ describe("orchestrator CI context hydration", () => {
     assert.equal(hydrated, base);
   });
 
+  it("hydrates ci-fix evidence for hyphen/underscore variant taskKind values", async () => {
+    mock.method(globalThis, "fetch", async (url: string) => {
+      if (url.includes("/actions/runs/321/jobs")) {
+        return { ok: true, json: async () => ({ jobs: [{ id: 654, conclusion: "failure" }] }) } as any;
+      }
+      if (url.includes("/actions/jobs/654/logs")) {
+        return {
+          ok: true,
+          text: async () => "not ok 1 - tests/core/variant_ci_fix.test.ts\nError: boom",
+        } as any;
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+
+    const plan = {
+      taskKind: "ci_fix",
+      githubCiContext: {
+        failedCiRuns: [{ runId: 321, headSha: "fedcba987654321" }],
+      },
+    };
+    const hydrated = await hydrateDispatchContextWithCiEvidence(config, plan, "base context");
+    assert.ok(hydrated.includes("## CI_FAILURE_CONTEXT"));
+    assert.ok(hydrated.includes("commit_sha: fedcba987654321"));
+  });
+
   it("keeps compatibility with appendCiFixContext direct use", async () => {
     mock.method(globalThis, "fetch", async () => ({ ok: false, status: 404 } as any));
     await fs.writeFile(

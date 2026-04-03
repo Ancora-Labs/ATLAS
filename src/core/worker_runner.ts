@@ -802,7 +802,9 @@ function buildConversationContext(history, instruction, sessionState: WorkerSess
   parts.push("1. BOX_MERGED_SHA=<7-40 char hex commit SHA from the merged state>");
   parts.push("   Example: BOX_MERGED_SHA=abc1234");
   parts.push("   Run: git rev-parse HEAD   (after merge is confirmed)");
-  parts.push("2. A raw npm test output block wrapped in explicit markers:");
+  parts.push("2. CLEAN_TREE_STATUS=clean from a clean-tree check on merged state:");
+  parts.push("   Run: git status --porcelain   (must be empty), then output CLEAN_TREE_STATUS=clean");
+  parts.push("3. A raw npm test output block wrapped in explicit markers:");
   parts.push("   ===NPM TEST OUTPUT START===");
   parts.push("   <paste full stdout from targeted test run on the merged branch>");
   parts.push("   ===NPM TEST OUTPUT END===");
@@ -1242,22 +1244,37 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     taskId: instruction.taskId || instruction.task || null
   });
 
-  // ── Unconditional artifact hard-block (strict merge evidence gate) ───────────
+  // ── Rework budget — pre-computed so both gates share the same values ─────────
+  // Declared here (before the artifact gate) so the artifact gate can decide
+  // whether to hard-block or to defer to the rework loop.
+  const requireTaskContract = config?.runtime?.requireTaskContract !== false;
+  const maxReworkAttempts = Number(config?.runtime?.maxReworkAttempts ?? 2);
+  // reworkAttempt is set by buildReworkInstruction on re-dispatches; 0 on the first call
+  const currentAttempt = Number(instruction.reworkAttempt || 0);
+
+  // ── Unconditional artifact gate (strict merge evidence gate) ─────────────────
   // For any worker+task combination that requires a post-merge artifact
-  // (determined by role kind AND task kind), the gate is NON-BYPASSABLE —
+  // (determined by role kind AND task kind), this gate is NON-BYPASSABLE —
   // it runs regardless of config.runtime.requireTaskContract.
   //
   // Discovery-safe task kinds (scan, doc, observation, diagnosis, discovery,
   // research, review, audit) are exempt even for done-capable roles, eliminating
   // false completion loss on read-only / non-merge tasks (adaptive throttle bypass).
   //
-  // Explicit telemetry is emitted for both gate paths:
-  //   - discoveryBypass=true  → task is non-merge; artifact gate skipped
-  //   - discoveryBypass=false → merge task blocked due to missing artifact evidence
+  // Rework routing: when the verification gate and rework budget are both active
+  // (requireTaskContract=true, currentAttempt < maxReworkAttempts), the artifact
+  // gate does NOT hard-block immediately — it keeps parsed.status="done" so that
+  // validateWorkerContract catches the same gaps and decideRework can dispatch a
+  // targeted rework instruction to the worker.  Only when rework is exhausted (or
+  // the verification gate is disabled) does the gate hard-block.
   //
-  // The artifact is computed once here and reused by both this hard-block check
-  // and the subsequent validateWorkerContract call, avoiding a duplicate evaluation
-  // of the same output string.
+  // Explicit telemetry is emitted for all gate outcomes:
+  //   - discoveryBypass=true  → non-merge task; artifact gate skipped
+  //   - rework-queued         → artifact missing but rework budget remains
+  //   - hard-blocked          → artifact missing and rework exhausted / gate disabled
+  //
+  // The artifact is computed once here and reused by both this gate and the
+  // subsequent validateWorkerContract call, avoiding duplicate evaluation.
   const isArtifactRequired = parsed.status === "done" && isArtifactGateRequired(workerKind ?? "unknown", instruction.taskKind);
   const precomputedArtifact = isArtifactRequired
     ? checkPostMergeArtifact(parsed.fullOutput || parsed.summary || "")
@@ -1277,17 +1294,26 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     if (!artifact.hasArtifact) {
       const artifactGaps = collectArtifactGaps(artifact);
 
-      // Explicit telemetry for strict gate block (merge task without required artifact)
+      // Rework-capable path: verification gate is active and worker still has budget.
+      // Keep status="done" so validateWorkerContract feeds artifact gaps into decideRework
+      // with a targeted prompt.  Hard-block only when rework is exhausted or disabled.
+      const canRework = requireTaskContract && currentAttempt < maxReworkAttempts;
+
       try {
         appendProgress(config,
-          `[ARTIFACT GATE] ${roleName} hard-blocked taskKind=${instruction.taskKind || "unknown"} discoveryBypass=false hasSha=${artifact.hasSha} hasTestOutput=${artifact.hasTestOutput} gaps=${artifactGaps.length}`
+          `[ARTIFACT GATE] ${roleName} ${canRework ? "rework-queued" : "hard-blocked"} taskKind=${instruction.taskKind || "unknown"} discoveryBypass=false hasSha=${artifact.hasSha} hasTestOutput=${artifact.hasTestOutput} gaps=${artifactGaps.length}`
         );
       } catch { /* non-critical */ }
 
-      parsed.status = "blocked";
-      parsed.summary = `[ARTIFACT GATE] done hard-blocked — ${artifactGaps.join("; ")}\n${parsed.summary}`;
+      if (!canRework) {
+        parsed.status = "blocked";
+        parsed.summary = `[ARTIFACT GATE] done hard-blocked — ${artifactGaps.join("; ")}\n${parsed.summary}`;
+      }
+      // When canRework=true: status stays "done"; validateWorkerContract will catch
+      // the same artifact gaps via collectArtifactGaps(precomputedArtifact) and
+      // decideRework will build a targeted rework instruction for the worker.
 
-      // Write structured audit entry so hard-blocked attempts are traceable
+      // Write structured audit entry so all artifact gate outcomes are traceable
       // in verification_audit.json alongside the soft-verify path entries.
       try {
         const auditPath = path.join(config.paths?.stateDir || "state", "verification_audit.json");
@@ -1300,7 +1326,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
           }
         } catch { audit = []; }
         audit.push(buildArtifactAuditEntry(artifact, artifactGaps, {
-          gateSource: "hard-block",
+          gateSource: canRework ? "rework-queued" : "hard-block",
           workerKind: workerKind ?? "unknown",
           roleName: String(roleName),
           taskId: instruction.taskId || null,
@@ -1316,11 +1342,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // Feature-flagged via config.runtime.requireTaskContract (default: true).
   // Rework threshold: config.runtime.maxReworkAttempts (default: 2, per Athena AC#2 concern).
   // Evidence snapshot schema includes profile, report fields, gaps, attempt, and timestamp (AC#4).
-  const requireTaskContract = config?.runtime?.requireTaskContract !== false;
+  // requireTaskContract / maxReworkAttempts / currentAttempt declared above (shared with artifact gate).
   if (requireTaskContract && parsed.status === "done") {
-    const maxReworkAttempts = Number(config?.runtime?.maxReworkAttempts ?? 2);
-    // reworkAttempt is set by buildReworkInstruction on re-dispatches; 0 on the first call
-    const currentAttempt = Number(instruction.reworkAttempt || 0);
 
     // Artifact check is mandatory for all done-capable workers, even when workerKind is unknown.
     // Unknown workerKind falls back to the DEFAULT_PROFILE (build required, others optional).

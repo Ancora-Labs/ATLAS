@@ -49,6 +49,8 @@ import {
 } from "./carry_forward_ledger.js";
 import { isFreezeActive } from "./governance_freeze.js";
 import { isGovernanceCanaryBreachActive } from "./governance_canary.js";
+import { readForceCheckpointValidationContract } from "./guardrail_executor.js";
+import { isSloCascadingBreachScenario } from "./catastrophe_detector.js";
 import {
   estimatePlanTokens as _estimatePlanTokens,
   getUsableModelContextTokens as _getUsableModelContextTokens,
@@ -1935,16 +1937,18 @@ export function computeGateBlockRiskFromSignals(signals: {
   freezeActive?: boolean;
   canaryBreachActive?: boolean;
   criticalDebtBlocked?: boolean;
+  forceCheckpointActive?: boolean;
 }): GateBlockRiskAssessment {
   const activeGateSignals: string[] = [];
   if (signals.freezeActive) activeGateSignals.push("governance_freeze_active");
   if (signals.canaryBreachActive) activeGateSignals.push("governance_canary_breach");
   if (signals.criticalDebtBlocked) activeGateSignals.push("critical_debt_overdue");
+  if (signals.forceCheckpointActive) activeGateSignals.push("force_checkpoint_validation_active");
 
-  if (signals.freezeActive || signals.canaryBreachActive) {
+  if (signals.freezeActive || signals.canaryBreachActive || signals.forceCheckpointActive) {
     return {
       gateBlockRisk: GATE_BLOCK_RISK.HIGH,
-      reason: "Active governance freeze/canary breach indicates dispatch infeasibility",
+      reason: "Active governance freeze/canary/force-checkpoint state indicates dispatch infeasibility",
       activeGateSignals,
       requiresCorrection: true,
     };
@@ -1989,6 +1993,7 @@ export async function assessGovernanceGateBlockRisk(config): Promise<GateBlockRi
       const highRiskSignals = new Set([
         "governance_freeze_active",
         "governance_canary_breach",
+        "force_checkpoint_validation_active",
       ]);
       const mediumRiskSignals = new Set([
         "critical_debt_overdue",
@@ -2017,6 +2022,7 @@ export async function assessGovernanceGateBlockRisk(config): Promise<GateBlockRi
     freezeActive: false,
     canaryBreachActive: false,
     criticalDebtBlocked: false,
+    forceCheckpointActive: false,
   };
 
   try {
@@ -2031,6 +2037,15 @@ export async function assessGovernanceGateBlockRisk(config): Promise<GateBlockRi
     signals.canaryBreachActive = canary?.breachActive === true;
   } catch (err) {
     await appendProgress(config, `[ATHENA][WARN] canary state read failed: ${String((err as Error)?.message || err)}`);
+  }
+
+  try {
+    const forceCheckpoint = await readForceCheckpointValidationContract(config);
+    signals.forceCheckpointActive = forceCheckpoint.active
+      && isSloCascadingBreachScenario(forceCheckpoint.scenarioId)
+      && forceCheckpoint.overrideActive !== true;
+  } catch (err) {
+    await appendProgress(config, `[ATHENA][WARN] force-checkpoint state read failed: ${String((err as Error)?.message || err)}`);
   }
 
   try {
@@ -2285,7 +2300,7 @@ Prometheus has produced a plan. Your job is to validate it AND FIX any issues yo
 4. List what you fixed in "appliedFixes" and anything you could NOT fix in "unresolvedIssues".
 5. Batch-packaging directive (MANDATORY): read all tasks and regroup them into execution packets that maximize useful model context usage without overloading the model; prefer fewer dense packets, merge strongly related tasks, and keep strict sequential order where dependencies exist.
 6. CI fix packets MUST carry concrete CI failure evidence in githubCiContext.failedCiRuns so dispatch can inject deterministic failure context.
-7. Merge-oriented packets MUST require clean-tree raw verification artifacts in completion evidence: BOX_MERGED_SHA plus explicit ===NPM TEST OUTPUT START===...===NPM TEST OUTPUT END=== block.
+7. Merge-oriented packets MUST require clean-tree raw verification artifacts in completion evidence: BOX_MERGED_SHA, CLEAN_TREE_STATUS=clean from git status --porcelain, plus explicit ===NPM TEST OUTPUT START===...===NPM TEST OUTPUT END=== block.
 
 **Quality criteria for each plan item:**
 1. Is the goal measurable? (not vague like "improve" or "refactor")

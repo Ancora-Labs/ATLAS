@@ -394,6 +394,7 @@ describe("artifact gate — hard-block integration across done-emission paths", 
   it("worker runtime path: SHA + test output present → artifact gate clears", () => {
     const workerOutput = [
       "Merged abc1234 into main at 14:22 UTC",
+      "CLEAN_TREE_STATUS=clean",
       "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass",
       "===NPM TEST OUTPUT START===",
       "# tests 20 # pass 20 # fail 0",
@@ -500,27 +501,43 @@ describe("plan packet — capacityDelta and requestROI field enforcement", () =>
 // ── Artifact gate regression — all gap combinations ───────────────────────────
 
 describe("artifact gate regression — collectArtifactGaps covers all gap combinations", () => {
-  it("no SHA and no test output produces both MISSING_SHA and MISSING_TEST_OUTPUT gaps", () => {
+  it("no SHA and no test output produces MISSING_SHA, MISSING_TEST_OUTPUT, and DIRTY_TREE gaps", () => {
     const gaps = collectArtifactGaps({ hasSha: false, hasTestOutput: false, hasUnfilledPlaceholder: false });
     assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_SHA), "must include MISSING_SHA gap");
     assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_TEST_OUTPUT), "must include MISSING_TEST_OUTPUT gap");
-    assert.equal(gaps.length, 2);
+    assert.ok(gaps.includes(ARTIFACT_GAP.DIRTY_TREE), "must include DIRTY_TREE gap");
+    assert.equal(gaps.length, 3);
   });
 
-  it("missing SHA only produces a single MISSING_SHA gap", () => {
-    const gaps = collectArtifactGaps({ hasSha: false, hasTestOutput: true, hasUnfilledPlaceholder: false });
+  it("missing SHA only produces MISSING_SHA and no DIRTY_TREE when clean-tree evidence is present", () => {
+    const gaps = collectArtifactGaps({
+      hasSha: false,
+      hasTestOutput: true,
+      hasCleanTreeEvidence: true,
+      hasUnfilledPlaceholder: false,
+    });
     assert.equal(gaps.length, 1);
     assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_SHA));
   });
 
-  it("missing test output only produces a single MISSING_TEST_OUTPUT gap", () => {
-    const gaps = collectArtifactGaps({ hasSha: true, hasTestOutput: false, hasUnfilledPlaceholder: false });
+  it("missing test output only produces MISSING_TEST_OUTPUT and no DIRTY_TREE when clean-tree evidence is present", () => {
+    const gaps = collectArtifactGaps({
+      hasSha: true,
+      hasTestOutput: false,
+      hasCleanTreeEvidence: true,
+      hasUnfilledPlaceholder: false,
+    });
     assert.equal(gaps.length, 1);
     assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_TEST_OUTPUT));
   });
 
   it("complete artifact (SHA + test output, no placeholder) produces empty gaps array", () => {
-    const gaps = collectArtifactGaps({ hasSha: true, hasTestOutput: true, hasUnfilledPlaceholder: false });
+    const gaps = collectArtifactGaps({
+      hasSha: true,
+      hasTestOutput: true,
+      hasCleanTreeEvidence: true,
+      hasUnfilledPlaceholder: false,
+    });
     assert.deepEqual(gaps, []);
   });
 
@@ -529,7 +546,8 @@ describe("artifact gate regression — collectArtifactGaps covers all gap combin
     assert.ok(gaps[0] === ARTIFACT_GAP.UNFILLED_PLACEHOLDER, "placeholder gap must be first");
     assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_SHA));
     assert.ok(gaps.includes(ARTIFACT_GAP.MISSING_TEST_OUTPUT));
-    assert.equal(gaps.length, 3);
+    assert.ok(gaps.includes(ARTIFACT_GAP.DIRTY_TREE));
+    assert.equal(gaps.length, 4);
   });
 
   it("checkPostMergeArtifact: missing test output block produces hasTestOutput=false", () => {
@@ -580,6 +598,7 @@ describe("env-contract regression — worker contract and dispatch command gate"
       status: "done",
       fullOutput: [
         "Merged abc123f into main",
+        "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 25 # pass 25 # fail 0",
         "===NPM TEST OUTPUT END===",
