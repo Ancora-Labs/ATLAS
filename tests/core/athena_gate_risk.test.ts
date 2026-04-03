@@ -3,14 +3,18 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { assessGovernanceGateBlockRisk, GATE_BLOCK_RISK } from "../../src/core/athena_reviewer.js";
+import {
+  assessGovernanceGateBlockRisk,
+  computeGateBlockRiskFromSignals,
+  GATE_BLOCK_RISK,
+} from "../../src/core/athena_reviewer.js";
 
 describe("athena gate risk dry-run integration", () => {
   it("returns low risk when governance dry-run is passable", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-gate-risk-clear-"));
     try {
       const config = {
-        paths: { stateDir },
+        paths: { stateDir, progressLog: path.join(stateDir, "progress.log") },
         env: { targetRepo: "CanerDoqdu/Box" },
         canary: { enabled: false },
         systemGuardian: { enabled: false },
@@ -28,7 +32,7 @@ describe("athena gate risk dry-run integration", () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-gate-risk-freeze-"));
     try {
       const config = {
-        paths: { stateDir },
+        paths: { stateDir, progressLog: path.join(stateDir, "progress.log") },
         env: { targetRepo: "CanerDoqdu/Box" },
         canary: { enabled: false },
         systemGuardian: { enabled: false },
@@ -47,7 +51,7 @@ describe("athena gate risk dry-run integration", () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-gate-risk-force-checkpoint-"));
     try {
       const config = {
-        paths: { stateDir },
+        paths: { stateDir, progressLog: path.join(stateDir, "progress.log") },
         env: { targetRepo: "CanerDoqdu/Box" },
         canary: { enabled: false },
         systemGuardian: { enabled: false },
@@ -70,6 +74,20 @@ describe("athena gate risk dry-run integration", () => {
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
+  });
+
+  it("applies high-risk score penalty contract (4-point reduction floor=1)", () => {
+    const gateRisk = computeGateBlockRiskFromSignals({
+      freezeActive: true,
+      forceCheckpointActive: false,
+    });
+    assert.equal(gateRisk.gateBlockRisk, GATE_BLOCK_RISK.HIGH);
+    assert.equal(gateRisk.requiresCorrection, true);
+
+    const baseScore = 8;
+    const penalty = gateRisk.gateBlockRisk === GATE_BLOCK_RISK.HIGH ? 4 : 2;
+    const adjustedScore = Math.max(1, baseScore - penalty);
+    assert.equal(adjustedScore, 4);
   });
 });
 

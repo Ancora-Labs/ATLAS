@@ -16,6 +16,9 @@ import {
   normalizeLeverageRank,
   isPacketQuarantined,
   QUARANTINE_CONFIDENCE_THRESHOLD,
+  computePacketDensityMetrics,
+  isThinPacketForAdmission,
+  buildThinPacketRejectionReason,
 } from "../../src/core/plan_contract_validator.js";
 import { checkForbiddenCommands } from "../../src/core/verification_command_registry.js";
 
@@ -1239,6 +1242,47 @@ describe("validatePlanContract — decomposition caps and ambiguity", () => {
 
   it("MAX_FILES_IN_SCOPE_PER_TASK is 30", () => {
     assert.equal(MAX_FILES_IN_SCOPE_PER_TASK, 30);
+  });
+});
+
+describe("thin-packet density contract", () => {
+  const thresholds = {
+    minTaskChars: 20,
+    minTargetFiles: 1,
+    minAcceptanceCriteria: 1,
+    minExecutionTokens: 5000,
+  };
+
+  function densePlan(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      task: "Implement deterministic parser contract retry before normalization",
+      target_files: ["src/core/prometheus.ts"],
+      acceptance_criteria: ["Retry once when required fields are missing"],
+      estimatedExecutionTokens: 7000,
+      ...overrides,
+    };
+  }
+
+  it("treats NaN estimatedExecutionTokens as not-thin when other density dimensions pass", () => {
+    const metrics = computePacketDensityMetrics(densePlan({ estimatedExecutionTokens: Number.NaN }));
+    assert.equal(Number.isNaN(metrics.estimatedExecutionTokens), true);
+    assert.equal(isThinPacketForAdmission(metrics, thresholds), false);
+  });
+
+  it("rejects as thin when estimatedExecutionTokens is below threshold", () => {
+    const metrics = computePacketDensityMetrics(densePlan({ estimatedExecutionTokens: 4999 }));
+    assert.equal(isThinPacketForAdmission(metrics, thresholds), true);
+  });
+
+  it("passes thin admission when estimatedExecutionTokens is above threshold", () => {
+    const metrics = computePacketDensityMetrics(densePlan({ estimatedExecutionTokens: 5001 }));
+    assert.equal(isThinPacketForAdmission(metrics, thresholds), false);
+  });
+
+  it("emits absent marker in rejection reason when estimatedExecutionTokens is non-finite", () => {
+    const metrics = computePacketDensityMetrics(densePlan({ estimatedExecutionTokens: Number.NaN, task: "short" }));
+    const reason = buildThinPacketRejectionReason(metrics, thresholds);
+    assert.ok(reason.includes("estimatedExecutionTokens=absent/5000"));
   });
 });
 

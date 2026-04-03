@@ -73,6 +73,26 @@ describe("worker_batch_planner", () => {
     assert.equal(batches[0].sharedBranch, batches[1].sharedBranch);
   });
 
+  it("routes model by taskKind expected value when telemetry exists", () => {
+    const config = {
+      paths: { stateDir: "state" },
+      copilot: {
+        defaultModel: "Claude Sonnet 4.6",
+        preferredModelsByTaskKind: {
+          implementation: ["Claude Sonnet 4.6", "GPT-5.3-Codex"],
+        },
+        modelContextReserveTokens: 0,
+      },
+    };
+    const plans = [
+      { ...buildPlan(0), role: "Evolution Worker", taskKind: "implementation" },
+    ];
+    const batches = buildRoleExecutionBatches(plans, config);
+    assert.ok(batches.length >= 1);
+    assert.ok((batches[0] as any).modelRouting, "batch should include modelRouting metadata");
+    assert.ok("usedTelemetry" in (batches[0] as any).modelRouting);
+  });
+
   it("produces the same result when capabilityPoolResult is null (backward-compatible)", () => {
     const config = { copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 } };
     const plans = [buildPlan(0), buildPlan(1), buildPlan(2)];

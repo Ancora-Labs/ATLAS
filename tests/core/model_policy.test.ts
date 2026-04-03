@@ -27,6 +27,7 @@ import {
   routeModelWithRealizedROI,
   EXPLORATION_BOUND,
   decideDeliberationPolicy,
+  rankModelsByTaskKindExpectedValue,
 } from "../../src/core/model_policy.js";
 
 describe("model_policy — complexity tiers", () => {
@@ -861,5 +862,40 @@ describe("decideDeliberationPolicy", () => {
     assert.ok(result.attempts >= 2);
     assert.equal(result.reflection, true);
     assert.ok(result.searchBudget >= 2);
+  });
+});
+
+describe("rankModelsByTaskKindExpectedValue", () => {
+  it("ranks models by expected value from cycle analytics telemetry", () => {
+    const cycleAnalytics = {
+      modelRoutingTelemetry: {
+        byTaskKind: {
+          "ci-fix": {
+            default: { successProbability: 0.5, capacityImpact: 0.5, requestCost: 1 },
+            models: {
+              "Claude Sonnet 4.6": { successProbability: 0.7, capacityImpact: 0.8, requestCost: 1.0 },
+              "GPT-5.3-Codex": { successProbability: 0.6, capacityImpact: 0.9, requestCost: 0.8 },
+            },
+          },
+        },
+      },
+    };
+    const result = rankModelsByTaskKindExpectedValue(
+      "ci-fix",
+      ["Claude Sonnet 4.6", "GPT-5.3-Codex"],
+      cycleAnalytics,
+    );
+    assert.equal(result.usedTelemetry, true);
+    assert.equal(result.rankedModels[0], "GPT-5.3-Codex");
+  });
+
+  it("keeps deterministic fallback order when telemetry is missing", () => {
+    const result = rankModelsByTaskKindExpectedValue(
+      "implementation",
+      ["Claude Sonnet 4.6", "GPT-5.3-Codex"],
+      null,
+    );
+    assert.equal(result.usedTelemetry, false);
+    assert.deepEqual(result.rankedModels, ["Claude Sonnet 4.6", "GPT-5.3-Codex"]);
   });
 });

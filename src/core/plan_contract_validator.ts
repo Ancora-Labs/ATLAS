@@ -190,11 +190,14 @@ export function buildThinPacketRejectionReason(
   metrics: PacketDensityMetrics,
   thresholds: PacketDensityThresholds,
 ): string {
+  const tokenMetric = Number.isFinite(metrics.estimatedExecutionTokens)
+    ? String(metrics.estimatedExecutionTokens)
+    : "absent";
   return (
     `thin_packet_rejected: taskChars=${metrics.taskChars}/${thresholds.minTaskChars}, ` +
     `targetFiles=${metrics.targetFiles}/${thresholds.minTargetFiles}, ` +
     `acceptanceCriteria=${metrics.acceptanceCriteria}/${thresholds.minAcceptanceCriteria}, ` +
-    `estimatedExecutionTokens=${metrics.estimatedExecutionTokens}/${thresholds.minExecutionTokens}`
+    `estimatedExecutionTokens=${tokenMetric}/${thresholds.minExecutionTokens}`
   );
 }
 

@@ -110,5 +110,47 @@ describe("prometheus density admission contract", () => {
     assert.ok(reason.includes("taskChars="));
     assert.ok(reason.includes("estimatedExecutionTokens="));
   });
+
+  it("safety-valve restore keeps warning metadata when all thin packets would be dropped", () => {
+    const thresholds = {
+      minTargetFiles: 2,
+      minAcceptanceCriteria: 2,
+      minTaskChars: 120,
+      minExecutionTokens: 8000,
+    };
+    const bundledPlans = [
+      {
+        task: "short",
+        role: "evolution-worker",
+        wave: 1,
+        target_files: ["src/core/prometheus.ts"],
+        acceptance_criteria: ["one"],
+        estimatedExecutionTokens: 1000,
+      },
+    ];
+    const rejectedThinPackets: Array<{ index: number; reason: string }> = [];
+    const kept = bundledPlans.filter((plan, i) => {
+      const metrics = computePacketDensityMetrics(plan);
+      const thin = isThinPacketForAdmission(metrics, thresholds);
+      if (!thin) return true;
+      const reason = buildThinPacketRejectionReason(metrics, thresholds);
+      (plan as any)._thinPacketRejected = true;
+      (plan as any)._thinPacketReason = reason;
+      rejectedThinPackets.push({ index: i, reason });
+      return false;
+    });
+    assert.equal(kept.length, 0);
+    assert.equal(rejectedThinPackets.length, 1);
+
+    const restored = bundledPlans.map((plan: any) => ({
+      ...plan,
+      _thinPacketWarning: plan._thinPacketRejected ? plan._thinPacketReason : undefined,
+      _thinPacketRejected: false,
+    }));
+    assert.equal(restored.length, 1);
+    assert.equal(restored[0]._thinPacketRejected, false);
+    assert.ok(String(restored[0]._thinPacketWarning || "").includes("thin_packet_rejected:"));
+    assert.equal(rejectedThinPackets[0].index, 0);
+  });
 });
 

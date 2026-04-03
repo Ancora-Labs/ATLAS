@@ -1,8 +1,11 @@
 import { getRoleRegistry } from "./role_registry.js";
 import { enforceModelPolicy } from "./model_policy.js";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { resolveDependencyGraph, GRAPH_STATUS } from "./dependency_graph_resolver.js";
 import { enforceLaneDiversity, selectWorkerByFitScore, LanePerformanceLedger } from "./capability_pool.js";
 import { compactSingletonWaves } from "./dag_scheduler.js";
+import { rankModelsByTaskKindExpectedValue } from "./model_policy.js";
 import {
   buildThinPacketRejectionReason,
   computePacketDensityMetrics,
@@ -135,6 +138,17 @@ function collectCandidateModels(config, roleName, taskKind, taskHints) {
 
   if (resolved.length === 0) resolved.push(fallbackModel);
   return resolved;
+}
+
+function loadCycleAnalyticsTelemetry(config: any): any | null {
+  const stateDir = String(config?.paths?.stateDir || "state");
+  const analyticsPath = path.join(stateDir, "cycle_analytics.json");
+  if (!existsSync(analyticsPath)) return null;
+  try {
+    return JSON.parse(readFileSync(analyticsPath, "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 function resolveConfiguredContextWindow(config, modelName) {
@@ -373,10 +387,17 @@ export function packNucleusFrontierBatches(
 function chooseModelForRolePlans(config, roleName, plans, taskKind) {
   const taskHints = aggregateTaskHints(plans);
   const candidates = collectCandidateModels(config, roleName, taskKind, taskHints);
+  const analytics = loadCycleAnalyticsTelemetry(config);
+  const ranking = rankModelsByTaskKindExpectedValue(taskKind, candidates, analytics, {
+    taskHints,
+    history: {},
+    signals: {},
+  });
+  const rankedCandidates = ranking.rankedModels.length > 0 ? ranking.rankedModels : candidates;
   let best = null;
 
-  for (let index = 0; index < candidates.length; index += 1) {
-    const model = candidates[index];
+  for (let index = 0; index < rankedCandidates.length; index += 1) {
+    const model = rankedCandidates[index];
     const contextWindowTokens = getModelContextWindowTokens(config, model);
     const usableContextTokens = getUsableModelContextTokens(config, model);
     const batches = packPlansIntoContextBatches(plans, usableContextTokens);
@@ -399,6 +420,11 @@ function chooseModelForRolePlans(config, roleName, plans, taskKind) {
         usableContextTokens,
         batches,
         score,
+        economicsRouting: {
+          usedTelemetry: ranking.usedTelemetry,
+          reason: ranking.reason,
+          expectedValue: ranking.scoreByModel[model] ?? null,
+        },
       };
     }
   }
@@ -1028,6 +1054,7 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
             estimatedTokens: batch.estimatedTokens,
             contextUtilizationPercent: utilization,
             taskKind,
+            modelRouting: selection.economicsRouting,
             sharedBranch,
             wave: waveNum,
             roleBatchIndex: index + 1,
