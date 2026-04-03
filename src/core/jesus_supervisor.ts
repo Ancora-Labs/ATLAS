@@ -160,6 +160,7 @@ function isCapabilityGapVerifiedPresentInSource(
     "prometheus-plan-structural-lint": ["validateallplans", "plan_contract_validator"],
     "pre-athena-plan-structural-validation": ["validateallplans", "plan_contract_validator"],
     "prometheus-token-budget-floor": ["invalid_token_budget", "minimum token budgets", "token floor"],
+    "ci-failure-log-injection": ["hydratedispatchcontextwithcievidence", "ci failure evidence"],
   };
 
   const signatures = capabilitySignatures[capability] || [];
