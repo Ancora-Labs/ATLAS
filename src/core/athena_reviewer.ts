@@ -2284,6 +2284,8 @@ Prometheus has produced a plan. Your job is to validate it AND FIX any issues yo
 3. Set "approved": true if you were able to fix all issues. Only set "approved": false if there are UNFIXABLE structural problems (e.g., the entire plan is fundamentally wrong, or the task is impossible).
 4. List what you fixed in "appliedFixes" and anything you could NOT fix in "unresolvedIssues".
 5. Batch-packaging directive (MANDATORY): read all tasks and regroup them into execution packets that maximize useful model context usage without overloading the model; prefer fewer dense packets, merge strongly related tasks, and keep strict sequential order where dependencies exist.
+6. CI fix packets MUST carry concrete CI failure evidence in githubCiContext.failedCiRuns so dispatch can inject deterministic failure context.
+7. Merge-oriented packets MUST require clean-tree raw verification artifacts in completion evidence: BOX_MERGED_SHA plus explicit ===NPM TEST OUTPUT START===...===NPM TEST OUTPUT END=== block.
 
 **Quality criteria for each plan item:**
 1. Is the goal measurable? (not vague like "improve" or "refactor")

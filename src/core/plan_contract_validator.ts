@@ -69,6 +69,11 @@ export const PACKET_VIOLATION_CODE = Object.freeze({
    * artifact, system component, or measurable outcome.
    */
   TASK_AMBIGUOUS:                "task_ambiguous",
+  /**
+   * Packet is too thin to admit dispatch after densification pass.
+   * Thin packets must either be auto-bundled or rejected with explicit reasons.
+   */
+  THIN_PACKET_REJECTED:          "thin_packet_rejected",
 
   // ── Scoring fields (shared with generation-boundary gate) ────────────────
   /** capacityDelta is absent. */
@@ -284,6 +289,15 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
   }
 
   const violations: PlanViolation[] = [];
+
+  if (plan._thinPacketRejected === true) {
+    violations.push({
+      field: "packetDensity",
+      message: String(plan._thinPacketReason || "Thin packet rejected by dispatch admission contract"),
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+      code: PACKET_VIOLATION_CODE.THIN_PACKET_REJECTED,
+    });
+  }
 
   // Required fields
   if (!plan.task || String(plan.task).trim().length < 5) {

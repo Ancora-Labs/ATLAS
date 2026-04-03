@@ -741,6 +741,42 @@ export async function readGuardrailState(config, action) {
 }
 
 /**
+ * Build a normalized contract for FORCE_CHECKPOINT_VALIDATION state.
+ * This keeps orchestrator-side governance checks deterministic even when the
+ * underlying state shape evolves.
+ */
+export function normalizeForceCheckpointState(state: any) {
+  if (!state || typeof state !== "object") {
+    return {
+      active: false,
+      scenarioId: null,
+      overrideActive: false,
+      overrideReason: null,
+      overrideBy: null,
+      state,
+    };
+  }
+  const enabled = state.enabled === true && state.revertedAt === null;
+  const overrideActive = state.overrideActive === true;
+  return {
+    active: enabled,
+    scenarioId: typeof state.scenarioId === "string" ? state.scenarioId : null,
+    overrideActive,
+    overrideReason: overrideActive && typeof state.overrideReason === "string" ? state.overrideReason : null,
+    overrideBy: overrideActive && typeof state.overrideBy === "string" ? state.overrideBy : null,
+    state,
+  };
+}
+
+/**
+ * Read FORCE_CHECKPOINT_VALIDATION state and return a normalized gate contract.
+ */
+export async function readForceCheckpointValidationContract(config) {
+  const raw = await readGuardrailState(config, GUARDRAIL_ACTION.FORCE_CHECKPOINT_VALIDATION);
+  return normalizeForceCheckpointState(raw);
+}
+
+/**
  * Returns true if the given flag-type guardrail action is currently enabled.
  *
  * @param {object} config

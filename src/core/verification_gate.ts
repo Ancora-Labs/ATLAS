@@ -105,9 +105,6 @@ const GIT_SHA_PATTERN = /\b[0-9a-f]{7,40}\b/i;
  */
 const BOX_MERGED_SHA_PATTERN = /BOX_MERGED_SHA\s*=\s*([0-9a-f]{7,40})/i;
 
-/** Regex matching raw npm test output block (pass/fail counts). */
-const NPM_TEST_OUTPUT_PATTERN = /(?:passing|failing|tests?\s+\d|✓|✗|#\s+tests\s+\d|test result|suites?\s+\d|\d+\s+pass)/i;
-
 /**
  * Regex matching an explicit NPM test output block delimited by
  * ===NPM TEST OUTPUT START=== / ===NPM TEST OUTPUT END=== markers.
@@ -190,9 +187,9 @@ export function checkPostMergeArtifact(output) {
   const mergedSha: string | null = explicitShaMatch ? explicitShaMatch[1] : null;
   const hasSha = hasExplicitShaMarker || GIT_SHA_PATTERN.test(text);
 
-  // Prefer explicit NPM test output block; fall back to legacy pattern.
+  // Post-merge test evidence is structural: explicit raw block markers are required.
   const hasExplicitTestBlock = NPM_TEST_BLOCK_PATTERN.test(text);
-  const hasTestOutput = hasExplicitTestBlock || NPM_TEST_OUTPUT_PATTERN.test(text);
+  const hasTestOutput = hasExplicitTestBlock;
 
   // Deterministic rejection: any known template placeholder literal means the
   // worker did not fill in the artifact fields.  Check all known residues.
@@ -388,13 +385,44 @@ export function normalizeReportValue(raw: string): string {
 
 /**
  * Parse VERIFICATION_REPORT from worker output.
- * Expected format: VERIFICATION_REPORT: BUILD=pass; TESTS=fail; RESPONSIVE=n/a; ...
+ * Supports two formats:
+ *   1. Inline:     VERIFICATION_REPORT: BUILD=pass; TESTS=pass; ...
+ *   2. Block:      ===VERIFICATION_REPORT===\nBUILD=pass\nTESTS=pass\n...===END_VERIFICATION===
+ *                  (also accepts ===END_VERIFICATION_REPORT===)
  *
  * Values are normalized via normalizeReportValue before storage so common
  * synonyms (passing/passed/ok → pass) are canonicalized at parse time.
  */
 export function parseVerificationReport(output) {
   const text = String(output || "");
+
+  // --- Format 2: block delimiters ---
+  const blockMatch = text.match(/===VERIFICATION[_\s]?REPORT===\s*([\s\S]*?)\s*===END[_\s]?VERIFICATION(?:[_\s]?REPORT)?===/i);
+  if (blockMatch) {
+    const report: Record<string, string> = {};
+    const lines = blockMatch[1].split(/[\n\r]+/).map(s => s.trim()).filter(Boolean);
+    const keyMap = {
+      build: "build", tests: "tests", test: "tests",
+      responsive: "responsive", responsivematrix: "responsive",
+      api: "api", edgecases: "edgeCases", edge_cases: "edgeCases", security: "security"
+    };
+    for (const line of lines) {
+      // Accept "KEY=value", "KEY: value", "criterion_N: PASS|FAIL ..." patterns
+      const eqIdx = line.indexOf("=");
+      const colonIdx = line.indexOf(":");
+      const sepIdx = eqIdx >= 0 && (colonIdx < 0 || eqIdx <= colonIdx) ? eqIdx : colonIdx;
+      if (sepIdx < 0) continue;
+      const rawKey = line.slice(0, sepIdx).trim().toLowerCase().replace(/[_\s]+/g, "");
+      const rawValue = line.slice(sepIdx + 1).trim().toLowerCase().split(/[;\s]/)[0];
+      const normalizedKey = keyMap[rawKey];
+      if (normalizedKey) {
+        report[normalizedKey] = normalizeReportValue(rawValue);
+      }
+    }
+    if (Object.keys(report).length > 0) return report;
+  }
+
+  // --- Format 1: inline single-line ---
   const match = text.match(/VERIFICATION_REPORT:\s*([^\n\r]+)/i);
   if (!match) return null;
 

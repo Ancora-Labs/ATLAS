@@ -132,6 +132,7 @@ type VerificationEvidence = {
   artifactDetail?: {
     hasSha: boolean;
     hasTestOutput: boolean;
+    hasExplicitTestOutputBlock?: boolean;
     hasUnfilledPlaceholder: boolean;
     hasExplicitShaMarker: boolean;
     hasExplicitTestBlock: boolean;
@@ -1360,6 +1361,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       artifactDetail: postMergeArtifact ? {
         hasSha: postMergeArtifact.hasSha,
         hasTestOutput: postMergeArtifact.hasTestOutput,
+        hasExplicitTestOutputBlock: postMergeArtifact.hasExplicitTestBlock,
         hasUnfilledPlaceholder: postMergeArtifact.hasUnfilledPlaceholder,
         hasExplicitShaMarker: postMergeArtifact.hasExplicitShaMarker,
         hasExplicitTestBlock: postMergeArtifact.hasExplicitTestBlock,

@@ -110,7 +110,9 @@ describe("verification_gate worker contract enforcement", () => {
       status: "done",
       fullOutput: [
         "Merged commit abc123d into main",
+        "===NPM TEST OUTPUT START===",
         "# tests 10 # pass 10 # fail 0",
+        "===NPM TEST OUTPUT END===",
         "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass; API=n/a; RESPONSIVE=n/a",
         "BOX_PR_URL=https://github.com/org/repo/pull/88"
       ].join("\n")
@@ -260,8 +262,8 @@ describe("verification_gate — post-merge artifact (Packet 1/3)", () => {
     assert.equal(result.hasSha, false);
   });
 
-  it("checkPostMergeArtifact detects present SHA and test output", () => {
-    const result = checkPostMergeArtifact("Commit: abc123d\ntests 5 pass 5 fail 0");
+  it("checkPostMergeArtifact detects present SHA and explicit test output block", () => {
+    const result = checkPostMergeArtifact("Commit: abc123d\n===NPM TEST OUTPUT START===\n# tests 5 pass 5 fail 0\n===NPM TEST OUTPUT END===");
     assert.equal(result.hasSha, true);
     assert.equal(result.hasTestOutput, true);
   });
@@ -271,13 +273,20 @@ describe("verification_gate — post-merge artifact (Packet 1/3)", () => {
     assert.equal(result.hasUnfilledPlaceholder, true);
   });
 
-  it("checkPostMergeArtifact returns clean result for complete artifact", () => {
-    const text = "abc123d\n# tests 10 pass";
+  it("checkPostMergeArtifact returns clean result for complete explicit artifact", () => {
+    const text = "abc123d\n===NPM TEST OUTPUT START===\n# tests 10 pass\n===NPM TEST OUTPUT END===";
     const result = checkPostMergeArtifact(text);
     assert.equal(result.hasSha, true);
     assert.equal(result.hasTestOutput, true);
     assert.equal(result.hasUnfilledPlaceholder, false);
     assert.equal(result.hasArtifact, true);
+  });
+
+  it("negative path: plain npm summary text without explicit output block does not satisfy test evidence", () => {
+    const result = checkPostMergeArtifact("BOX_MERGED_SHA=abc1234\n# tests 10\n# pass 10\n# fail 0");
+    assert.equal(result.hasSha, true);
+    assert.equal(result.hasTestOutput, false);
+    assert.equal(result.hasArtifact, false);
   });
 });
 
@@ -309,7 +318,9 @@ describe("verification_gate — SHA + raw npm output enforced across done-capabl
       status: "done",
       fullOutput: [
         "abc123d merged into main",
+        "===NPM TEST OUTPUT START===",
         "# tests 10 # pass 10 # fail 0",
+        "===NPM TEST OUTPUT END===",
         "VERIFICATION_REPORT: BUILD=n/a; TESTS=pass; EDGE_CASES=pass"
       ].join("\n")
     });
@@ -368,7 +379,9 @@ describe("verification_gate — artifact check mandatory across all completion p
       fullOutput: [
         "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=n/a",
         "Merged at abc1234",
-        "  3 passing"
+        "===NPM TEST OUTPUT START===",
+        "  3 passing",
+        "===NPM TEST OUTPUT END===",
       ].join("\n")
     });
     // Should not fail on artifact gate specifically
@@ -630,7 +643,9 @@ describe("verification_gate — artifact gate non-bypassable (Task 1 hardening)"
       status: "done",
       fullOutput: [
         "Merged abc1234 into main",
+        "===NPM TEST OUTPUT START===",
         "# tests 5 # pass 5 # fail 0",
+        "===NPM TEST OUTPUT END===",
         "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=n/a; API=n/a; RESPONSIVE=n/a",
         "BOX_PR_URL=https://github.com/org/repo/pull/1"
       ].join("\n")
@@ -789,7 +804,7 @@ describe("verification_gate — BOX_MERGED_SHA explicit marker (Task 3)", () => 
     const output = "abc1234 merged\n# tests 10 pass";
     const result = checkPostMergeArtifact(output);
     assert.equal(result.hasExplicitTestBlock, false);
-    assert.equal(result.hasTestOutput, true, "loose detection still counts as test output");
+    assert.equal(result.hasTestOutput, false, "explicit block is required");
   });
 
   it("negative path: output with BOX_MERGED_SHA but no test output fails artifact gate", () => {
@@ -908,7 +923,9 @@ describe("verification_gate — security role done-path artifact enforcement (Ta
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=deadbeef",
+        "===NPM TEST OUTPUT START===",
         "# tests 15 pass 15 fail 0",
+        "===NPM TEST OUTPUT END===",
         "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass",
         "BOX_PR_URL=https://github.com/org/repo/pull/77"
       ].join("\n")
@@ -1741,7 +1758,9 @@ describe("verification_gate — optional field failure tracking in evidence", ()
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234",
+        "===NPM TEST OUTPUT START===",
         "# tests 5 pass 5",
+        "===NPM TEST OUTPUT END===",
         "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass; API=n/a; RESPONSIVE=n/a",
         "BOX_PR_URL=https://github.com/org/repo/pull/1",
       ].join("\n"),
@@ -1757,7 +1776,9 @@ describe("verification_gate — optional field failure tracking in evidence", ()
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234",
+        "===NPM TEST OUTPUT START===",
         "# tests 5 pass 5",
+        "===NPM TEST OUTPUT END===",
         "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=fail; API=n/a; RESPONSIVE=n/a",
         "BOX_PR_URL=https://github.com/org/repo/pull/1",
       ].join("\n"),
@@ -1807,7 +1828,9 @@ describe("verification_gate — optional field failure tracking in evidence", ()
       status: "done",
       fullOutput: [
         "BOX_MERGED_SHA=abc1234",
+        "===NPM TEST OUTPUT START===",
         "# tests 5 pass 5",
+        "===NPM TEST OUTPUT END===",
         "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=fail; API=fail; RESPONSIVE=n/a",
         "BOX_PR_URL=https://github.com/org/repo/pull/1",
       ].join("\n"),

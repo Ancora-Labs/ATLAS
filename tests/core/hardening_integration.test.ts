@@ -375,7 +375,9 @@ describe("artifact gate — hard-block integration across done-emission paths", 
       "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass",
       "BOX_PR_URL=https://github.com/org/repo/pull/42",
       "BOX_STATUS=done",
+      "===NPM TEST OUTPUT START===",
       "# tests 15 # pass 15 # fail 0",
+      "===NPM TEST OUTPUT END===",
       // No git SHA present
     ].join("\n");
     const artifact = checkPostMergeArtifact(workerOutput);
@@ -393,7 +395,9 @@ describe("artifact gate — hard-block integration across done-emission paths", 
     const workerOutput = [
       "Merged abc1234 into main at 14:22 UTC",
       "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass",
+      "===NPM TEST OUTPUT START===",
       "# tests 20 # pass 20 # fail 0",
+      "===NPM TEST OUTPUT END===",
       "BOX_PR_URL=https://github.com/org/repo/pull/55",
       "BOX_STATUS=done",
     ].join("\n");
@@ -542,7 +546,9 @@ describe("artifact gate regression — collectArtifactGaps covers all gap combin
 
   it("checkPostMergeArtifact: test output line without SHA yields hasSha=false", () => {
     const output = [
+      "===NPM TEST OUTPUT START===",
       "# tests 12 # pass 12 # fail 0",
+      "===NPM TEST OUTPUT END===",
       "VERIFICATION_REPORT: BUILD=pass; TESTS=pass",
       "BOX_STATUS=done",
       // No SHA
@@ -574,7 +580,9 @@ describe("env-contract regression — worker contract and dispatch command gate"
       status: "done",
       fullOutput: [
         "Merged abc123f into main",
+        "===NPM TEST OUTPUT START===",
         "# tests 25 # pass 25 # fail 0",
+        "===NPM TEST OUTPUT END===",
         "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass; API=n/a; RESPONSIVE=n/a",
         "BOX_PR_URL=https://github.com/CanerDoqdu/Box/pull/200",
       ].join("\n"),

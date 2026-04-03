@@ -407,6 +407,113 @@ function buildSharedBranchName(roleName, plans) {
   return `box/${roleSlug}-${firstTask || "batch"}`;
 }
 
+/**
+ * Auto-bundle thin, related packets into denser packets before dispatch admission.
+ *
+ * Relatedness heuristic:
+ *   - same role
+ *   - same wave
+ *   - at least one overlapping target file
+ *
+ * Packets that are thin after this pass are expected to be rejected by the
+ * plan contract admission gate with explicit violation reasons.
+ */
+export function autoBundleThinRelatedPackets(
+  plans: any[],
+  opts: {
+    minTargetFiles?: number;
+    minAcceptanceCriteria?: number;
+    minTaskChars?: number;
+    minExecutionTokens?: number;
+  } = {}
+): { plans: any[]; bundledCount: number } {
+  if (!Array.isArray(plans) || plans.length === 0) {
+    return { plans: [], bundledCount: 0 };
+  }
+  const minTargetFiles = Number(opts.minTargetFiles ?? 2);
+  const minAcceptanceCriteria = Number(opts.minAcceptanceCriteria ?? 2);
+  const minTaskChars = Number(opts.minTaskChars ?? 120);
+  const minExecutionTokens = Number(opts.minExecutionTokens ?? 8000);
+
+  const isThin = (plan: any): boolean => {
+    const taskChars = String(plan?.task || "").trim().length;
+    const targetCount = Array.isArray(plan?.target_files) ? plan.target_files.filter(Boolean).length : 0;
+    const acCount = Array.isArray(plan?.acceptance_criteria) ? plan.acceptance_criteria.filter(Boolean).length : 0;
+    const estimatedTokens = Number(plan?.estimatedExecutionTokens || 0);
+    return (
+      taskChars < minTaskChars
+      || targetCount < minTargetFiles
+      || acCount < minAcceptanceCriteria
+      || !Number.isFinite(estimatedTokens)
+      || estimatedTokens < minExecutionTokens
+    );
+  };
+
+  const normalizedTargetFiles = (plan: any): string[] => (
+    Array.isArray(plan?.target_files) ? plan.target_files : []
+  ).map((f: any) => String(f || "").trim()).filter(Boolean);
+  const overlapsTargets = (a: any, b: any): boolean => {
+    const fa = normalizedTargetFiles(a);
+    const fb = normalizedTargetFiles(b);
+    if (fa.length === 0 || fb.length === 0) return false;
+    const bSet = new Set(fb.map((f) => f.toLowerCase()));
+    return fa.some((f) => bSet.has(f.toLowerCase()));
+  };
+  const sameRoleWave = (a: any, b: any): boolean => (
+    String(a?.role || "") === String(b?.role || "")
+    && Number(a?.wave || 1) === Number(b?.wave || 1)
+  );
+
+  const consumed = new Set<number>();
+  const out: any[] = [];
+  let bundledCount = 0;
+
+  for (let i = 0; i < plans.length; i += 1) {
+    if (consumed.has(i)) continue;
+    const base = plans[i];
+    if (!isThin(base)) {
+      out.push(base);
+      consumed.add(i);
+      continue;
+    }
+    const bundleIdx = [i];
+    for (let j = i + 1; j < plans.length; j += 1) {
+      if (consumed.has(j)) continue;
+      const candidate = plans[j];
+      if (!isThin(candidate)) continue;
+      if (!sameRoleWave(base, candidate)) continue;
+      if (!overlapsTargets(base, candidate)) continue;
+      bundleIdx.push(j);
+      consumed.add(j);
+    }
+    if (bundleIdx.length === 1) {
+      out.push(base);
+      consumed.add(i);
+      continue;
+    }
+    const bundlePlans = bundleIdx.map((idx) => plans[idx]);
+    const mergedTargetFiles = [...new Set(bundlePlans.flatMap((p) => Array.isArray(p?.target_files) ? p.target_files : []))];
+    const mergedAcceptance = [...new Set(bundlePlans.flatMap((p) => Array.isArray(p?.acceptance_criteria) ? p.acceptance_criteria : []))];
+    const mergedVerificationCommands = [...new Set(bundlePlans.flatMap((p) => Array.isArray(p?.verification_commands) ? p.verification_commands : []))];
+    const mergedTask = bundlePlans.map((p, idx) => `${idx + 1}. ${String(p?.task || p?.title || "").trim()}`).join("\n");
+    const merged = {
+      ...base,
+      task: `Bundled thin packet:\n${mergedTask}`,
+      target_files: mergedTargetFiles,
+      acceptance_criteria: mergedAcceptance,
+      verification_commands: mergedVerificationCommands,
+      estimatedExecutionTokens: bundlePlans.reduce((sum, p) => sum + Number(p?.estimatedExecutionTokens || 0), 0),
+      _autoBundledThinPacket: true,
+      _autoBundledFromCount: bundlePlans.length,
+    };
+    out.push(merged);
+    consumed.add(i);
+    bundledCount += 1;
+  }
+
+  return { plans: out, bundledCount };
+}
+
 function hasConflictFiles(plan: any, existing: any): boolean {
   const filesA = Array.isArray(plan?.filesInScope)
     ? plan.filesInScope

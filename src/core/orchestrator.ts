@@ -44,8 +44,8 @@ import {
   STATE_FILE_TYPE,
   MIGRATION_REASON
 } from "./schema_registry.js";
-import { runCatastropheDetection, GUARDRAIL_ACTION } from "./catastrophe_detector.js";
-import { executeGuardrailsForDetections, isGuardrailActive } from "./guardrail_executor.js";
+import { runCatastropheDetection, GUARDRAIL_ACTION, isSloCascadingBreachScenario } from "./catastrophe_detector.js";
+import { executeGuardrailsForDetections, isGuardrailActive, readForceCheckpointValidationContract } from "./guardrail_executor.js";
 import { evaluateFreezeGate, isFreezeActive } from "./governance_freeze.js";
 import { detectRecurrences, buildRecurrenceEscalations } from "./recurrence_detector.js";
 import { checkClosureSLA } from "./closure_validator.js";
@@ -540,6 +540,43 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
     } catch (err) {
       warn(`[orchestrator] pre-dispatch guardrail check failed: ${String(err?.message || err)}`);
     }
+  }
+
+  try {
+    const forceCheckpoint = await readForceCheckpointValidationContract(config);
+    const hasSloBreachCheckpoint = forceCheckpoint.active
+      && isSloCascadingBreachScenario(forceCheckpoint.scenarioId);
+    if (hasSloBreachCheckpoint) {
+      if (forceCheckpoint.overrideActive) {
+        const auditPath = path.join(stateDir, "governance_gate_audit.jsonl");
+        const entry = {
+          ts: new Date().toISOString(),
+          kind: "force_checkpoint_override",
+          cycleId,
+          scenarioId: forceCheckpoint.scenarioId,
+          reason: forceCheckpoint.overrideReason || "override_active",
+          by: forceCheckpoint.overrideBy || "unknown",
+        };
+        try {
+          await fs.mkdir(path.dirname(auditPath), { recursive: true });
+          await fs.appendFile(auditPath, `${JSON.stringify(entry)}\n`, "utf8");
+        } catch (auditErr) {
+          warn(`[orchestrator] force-checkpoint override audit write failed: ${String(auditErr?.message || auditErr)}`);
+        }
+      } else {
+        return {
+          blocked: true,
+          reason: `force_checkpoint_validation_active:${forceCheckpoint.scenarioId || "unknown_scenario"}`,
+          action: undefined,
+          graphResult: null,
+          cycleId,
+          budgetEligibility,
+          gateIndex: GATE_PRECEDENCE.GUARDRAIL_PAUSE,
+        };
+      }
+    }
+  } catch (err) {
+    warn(`[orchestrator] force-checkpoint governance gate check failed: ${String(err?.message || err)}`);
   }
 
   const freezeStatus = isFreezeActive(config);
@@ -1552,28 +1589,34 @@ async function dispatchWorker(config, plan) {
   const task = batchPlans
     ? `Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exact blocker.\n\nOrdered steps:\n${orderedBatchLines}`
     : plan.task;
+  const contextBlocks: string[] = [];
+  if (batchPlans) {
+    for (let i = 0; i < batchPlans.length; i += 1) {
+      const item = batchPlans[i];
+      const taskLine = String(item?.task || item?.title || `Task ${i + 1}`);
+      const ctxLine = String(item?.context || item?.scope || "").trim();
+      const deps = Array.isArray(item?.dependencies)
+        ? item.dependencies
+        : Array.isArray(item?.dependsOn)
+          ? item.dependsOn
+          : [];
+      const files = Array.isArray(item?.target_files)
+        ? item.target_files
+        : Array.isArray(item?.targetFiles)
+          ? item.targetFiles
+          : [];
+      const depsLine = deps.length > 0 ? `\nDepends On: ${deps.map((d) => String(d)).join(", ")}` : "";
+      const filesLine = files.length > 0 ? `\nTarget Files: ${files.map((f) => String(f)).join(", ")}` : "";
+      const baseLine = ctxLine
+        ? `Task ${i + 1}: ${taskLine}\nContext: ${ctxLine}${depsLine}${filesLine}`
+        : `Task ${i + 1}: ${taskLine}${depsLine}${filesLine}`;
+      const hydrated = await hydrateDispatchContextWithCiEvidence(config, item, baseLine);
+      contextBlocks.push(hydrated);
+    }
+  }
   const context = batchPlans
-    ? batchPlans.map((item, i) => {
-        const taskLine = String(item?.task || item?.title || `Task ${i + 1}`);
-        const ctxLine = String(item?.context || item?.scope || "").trim();
-        const deps = Array.isArray(item?.dependencies)
-          ? item.dependencies
-          : Array.isArray(item?.dependsOn)
-            ? item.dependsOn
-            : [];
-        const files = Array.isArray(item?.target_files)
-          ? item.target_files
-          : Array.isArray(item?.targetFiles)
-            ? item.targetFiles
-            : [];
-        const depsLine = deps.length > 0 ? `\nDepends On: ${deps.map((d) => String(d)).join(", ")}` : "";
-        const filesLine = files.length > 0 ? `\nTarget Files: ${files.map((f) => String(f)).join(", ")}` : "";
-        if (ctxLine) {
-          return `Task ${i + 1}: ${taskLine}\nContext: ${ctxLine}${depsLine}${filesLine}`;
-        }
-        return `Task ${i + 1}: ${taskLine}${depsLine}${filesLine}`;
-      }).join("\n\n")
-    : (plan.context || "");
+    ? contextBlocks.join("\n\n")
+    : await hydrateDispatchContextWithCiEvidence(config, plan, (plan.context || ""));
   const verification = batchPlans
     ? batchPlans.map((item, i) => {
         const rule = String(item?.verification || "").trim();
@@ -3290,4 +3333,23 @@ export async function appendCiFixContext(
   }
 
   return baseContext;
+}
+
+/**
+ * Dispatch-context hydrator used by both primary and resume dispatch paths.
+ * Ensures CI-fix packets always carry deterministic failure evidence when present.
+ */
+export async function hydrateDispatchContextWithCiEvidence(
+  config: any,
+  plan: any,
+  baseContext: string,
+): Promise<string> {
+  try {
+    const taskKind = String(plan?.taskKind || plan?.kind || "").toLowerCase();
+    if (taskKind !== "ci-fix") return baseContext;
+    return await appendCiFixContext(config, plan, baseContext);
+  } catch (err) {
+    warn(`[orchestrator] CI context hydration failed (non-fatal): ${String(err?.message || err)}`);
+    return baseContext;
+  }
 }

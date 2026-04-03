@@ -159,9 +159,11 @@ describe("AC2 — security role fails without security evidence", () => {
         "BOX_PR_URL=https://github.com/org/repo/pull/8",
         // Security is a done-capable lane — SHA + raw test output required
         "abc1234",
+        "===NPM TEST OUTPUT START===",
         "# tests 5",
         "# pass 5",
-        "# fail 0"
+        "# fail 0",
+        "===NPM TEST OUTPUT END===",
       ].join("\n")
     });
     assert.equal(result.passed, true);

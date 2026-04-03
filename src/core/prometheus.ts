@@ -61,6 +61,7 @@ import {
   splitWavesIntoMicrowaves as _splitWavesIntoMicrowaves,
   MICROWAVE_MAX_TASKS_DEFAULT as _MICROWAVE_MAX_TASKS_DEFAULT,
   estimatePlanExecutionTokens,
+  autoBundleThinRelatedPackets,
 } from "./worker_batch_planner.js";
 
 // Re-export so existing callers that import from prometheus.ts continue to work
@@ -3745,6 +3746,48 @@ ${compiledCycleDelta}`;
         config,
         `[PROMETHEUS][DENSITY] Thin packet detection: ${densification.thinCount}/${densification.total} packet(s) below densification floor`
       );
+    }
+
+    // Convert densification into dispatch admission behavior:
+    // 1) auto-bundle thin related packets
+    // 2) reject remaining thin packets with explicit reasons
+    const bundled = autoBundleThinRelatedPackets(rawParsedInput.plans, PROMETHEUS_PROMPT_DENSITY_MIN);
+    rawParsedInput.plans = bundled.plans;
+    if (bundled.bundledCount > 0) {
+      await appendProgress(
+        config,
+        `[PROMETHEUS][DENSITY] Auto-bundled ${bundled.bundledCount} thin related packet group(s) before admission`
+      );
+    }
+    const postBundleDensity = _analyzePacketDensification(rawParsedInput.plans, PROMETHEUS_PROMPT_DENSITY_MIN);
+    rawParsedInput._packetDensificationPostBundle = postBundleDensity;
+    if (postBundleDensity.thinCount > 0) {
+      const rejectedThinPackets: Array<{ index: number; reason: string }> = [];
+      rawParsedInput.plans = rawParsedInput.plans.filter((plan: any, i: number) => {
+        const taskChars = String(plan?.task || "").trim().length;
+        const targetCount = Array.isArray(plan?.target_files) ? plan.target_files.filter(Boolean).length : 0;
+        const acCount = Array.isArray(plan?.acceptance_criteria) ? plan.acceptance_criteria.filter(Boolean).length : 0;
+        const estimatedTokens = Number(plan?.estimatedExecutionTokens || 0);
+        const thin = (
+          taskChars < PROMETHEUS_PROMPT_DENSITY_MIN.minTaskChars
+          || targetCount < PROMETHEUS_PROMPT_DENSITY_MIN.minTargetFiles
+          || acCount < PROMETHEUS_PROMPT_DENSITY_MIN.minAcceptanceCriteria
+          || !Number.isFinite(estimatedTokens)
+          || estimatedTokens < PROMETHEUS_PROMPT_DENSITY_MIN.minExecutionTokens
+        );
+        if (!thin) return true;
+        const reason = `thin_packet_rejected: taskChars=${taskChars}/${PROMETHEUS_PROMPT_DENSITY_MIN.minTaskChars}, targetFiles=${targetCount}/${PROMETHEUS_PROMPT_DENSITY_MIN.minTargetFiles}, acceptanceCriteria=${acCount}/${PROMETHEUS_PROMPT_DENSITY_MIN.minAcceptanceCriteria}, estimatedExecutionTokens=${estimatedTokens}/${PROMETHEUS_PROMPT_DENSITY_MIN.minExecutionTokens}`;
+        rejectedThinPackets.push({ index: i, reason });
+        return false;
+      });
+      if (rejectedThinPackets.length > 0) {
+        rawParsedInput._rejectedThinPacketCount = rejectedThinPackets.length;
+        rawParsedInput._rejectedThinPackets = rejectedThinPackets;
+        await appendProgress(
+          config,
+          `[PROMETHEUS][DENSITY] Rejected ${rejectedThinPackets.length} thin packet(s) after auto-bundling`
+        );
+      }
     }
 
     // ── Decomposition cap gate ────────────────────────────────────────────

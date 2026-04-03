@@ -89,6 +89,14 @@ export const CATASTROPHE_SCENARIO = Object.freeze({
   SLO_CASCADING_BREACH:        "SLO_CASCADING_BREACH",
 });
 
+/**
+ * Returns true when a scenario identifier is the SLO cascading breach scenario.
+ * Shared by governance gates to couple catastrophe state with dispatch safety.
+ */
+export function isSloCascadingBreachScenario(scenarioId: unknown): boolean {
+  return String(scenarioId || "").trim() === CATASTROPHE_SCENARIO.SLO_CASCADING_BREACH;
+}
+
 // ── Status enum ───────────────────────────────────────────────────────────────
 
 /** Status field values for CatastropheAlert.status. */
