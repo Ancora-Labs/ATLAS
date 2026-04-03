@@ -340,8 +340,8 @@ export function inferVerificationFromFilesHint(filesHint: string[]): string[] {
   if (!Array.isArray(filesHint) || filesHint.length === 0) return [];
   const testFiles = filesHint.filter(f => /\.(test|spec)\.(ts|js|tsx|jsx)$/i.test(f));
   if (testFiles.length === 0) return [];
-  // Build a targeted npm test command with only the relevant test files
-  return [`npm test -- ${testFiles.join(" ")}`];
+  // Build one targeted node --test command per test file, capped at 3
+  return testFiles.slice(0, 3).map(f => `node --test --import tsx ${f}`);
 }
 
 export function repairPrometheusTask(task: EvolutionTask = {}): PreparedEvolutionTask {
