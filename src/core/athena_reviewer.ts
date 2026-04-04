@@ -236,7 +236,15 @@ export const RATIONALE_CLASS = Object.freeze({
 });
 
 export const ATHENA_PLAN_REVIEW_REASON_CODE = Object.freeze({
+  NO_PLAN_PROVIDED: "NO_PLAN_PROVIDED",
   AI_CALL_FAILED: "AI_CALL_FAILED",
+  LOW_PLAN_QUALITY: "LOW_PLAN_QUALITY",
+  MISSING_PREMORTEM: "MISSING_PREMORTEM",
+  MISSING_ACTIONABLE_PACKET_FIELDS: "MISSING_ACTIONABLE_PACKET_FIELDS",
+  TRUST_BOUNDARY_VIOLATION: "TRUST_BOUNDARY_VIOLATION",
+  PATCHED_PLAN_VALIDATION_FAILED: "PATCHED_PLAN_VALIDATION_FAILED",
+  ATHENA_BATCH_METADATA_MISSING: "ATHENA_BATCH_METADATA_MISSING",
+  REVIEW_EXCEPTION: "REVIEW_EXCEPTION",
   ACTIVE_GOVERNANCE_GATE_INFEASIBLE: "ACTIVE_GOVERNANCE_GATE_INFEASIBLE",
 });
 
@@ -2078,6 +2086,15 @@ export const AUTO_APPROVE_HIGH_QUALITY_THRESHOLD = 80;
 
 // ── Plan Review (pre-work gate) ─────────────────────────────────────────────
 
+function buildPlanReviewBlocker(code: string, source = "athena_reviewer") {
+  return {
+    stage: "athena_plan_review",
+    code,
+    source,
+    retryable: false,
+  };
+}
+
 export async function runAthenaPlanReview(config, prometheusAnalysis) {
   const stateDir = config.paths?.stateDir || "state";
   const registry = getRoleRegistry(config);
@@ -2092,7 +2109,13 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
 
   if (!prometheusAnalysis || !prometheusAnalysis.plans) {
     await appendProgress(config, `[ATHENA] No Prometheus plan to review — skipping`);
-    return { approved: false, reason: "No plan provided", corrections: [] };
+    const reason = {
+      code: ATHENA_PLAN_REVIEW_REASON_CODE.NO_PLAN_PROVIDED,
+      message: "No plan provided"
+    };
+    const blocker = buildPlanReviewBlocker(reason.code);
+    await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
+    return { approved: false, reason, blocker, corrections: [] };
   }
 
   const plans = Array.isArray(prometheusAnalysis.plans) ? prometheusAnalysis.plans : [];
@@ -2112,11 +2135,15 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
   }
   if (qualityFailures.length > 0) {
     const message = `${qualityFailures.length} plan(s) below quality threshold (${qualityMinScore})`;
+    const reason = { code: ATHENA_PLAN_REVIEW_REASON_CODE.LOW_PLAN_QUALITY, message };
+    const blocker = buildPlanReviewBlocker(reason.code);
     await appendProgress(config, `[ATHENA] Plan quality pre-gate FAILED — ${message}`);
+    await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
     chatLog(stateDir, athenaName, `Plan quality pre-gate failed: ${message}`);
     return {
       approved: false,
-      reason: { code: "LOW_PLAN_QUALITY", message },
+      reason,
+      blocker,
       corrections: qualityFailures
     };
   }
@@ -2127,17 +2154,21 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
   const preMortemViolations = checkPlanPremortemGate(plans);
   if (preMortemViolations.length > 0) {
     const message = `${preMortemViolations.length} high-risk plan(s) missing valid pre-mortem`;
+    const reason = { code: ATHENA_PLAN_REVIEW_REASON_CODE.MISSING_PREMORTEM, message };
+    const blocker = buildPlanReviewBlocker(reason.code);
     await appendProgress(config, `[ATHENA] Pre-mortem gate FAILED — ${message} — blocking dispatch`);
+    await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
     chatLog(stateDir, athenaName, `Pre-mortem gate failed: ${message}`);
     await appendAlert(config, {
       severity: ALERT_SEVERITY.CRITICAL,
       source: "athena_reviewer",
       title: "High-risk plan missing pre-mortem — dispatch blocked",
-      message: `code=MISSING_PREMORTEM violations=${JSON.stringify(preMortemViolations)}`
+      message: `code=${reason.code} violations=${JSON.stringify(preMortemViolations)}`
     });
     return {
       approved: false,
-      reason: { code: "MISSING_PREMORTEM", message },
+      reason,
+      blocker,
       corrections: preMortemViolations,
       preMortemViolations
     };
@@ -2473,10 +2504,12 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
     if (uncorrectableMissing.length > 0) {
       // Correction could not resolve all missing mandatory fields — hard reject.
       const reason = {
-        code: "MISSING_ACTIONABLE_PACKET_FIELDS",
+        code: ATHENA_PLAN_REVIEW_REASON_CODE.MISSING_ACTIONABLE_PACKET_FIELDS,
         message: `Reviewer response is missing mandatory fields (${uncorrectableMissing.join(", ")}) — explicit values required, synthesis not permitted`
       };
+      const blocker = buildPlanReviewBlocker(reason.code);
       await appendProgress(config, `[ATHENA] Plan review REJECTED — ${reason.message}`);
+      await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
       chatLog(stateDir, athenaName, `Plan review rejected: missing mandatory fields ${uncorrectableMissing.join(", ")}`);
       await appendAlert(config, {
         severity: ALERT_SEVERITY.CRITICAL,
@@ -2484,7 +2517,7 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
         title: "Reviewer response missing mandatory actionable-packet fields — plan blocked",
         message: `code=${reason.code} fields=${uncorrectableMissing.join(",")}`
       });
-      return { approved: false, reason, corrections: [] };
+      return { approved: false, reason, blocker, corrections: [] };
     }
 
     // All missing mandatory fields were corrected — update the payload and continue.
@@ -2501,17 +2534,19 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
   if (!trustCheck.ok && tbMode === "enforce") {
     const tbErrors = trustCheck.errors.map(e => `${e.payloadPath}: ${e.message}`).join(" | ");
     const reason = {
-      code: "TRUST_BOUNDARY_VIOLATION",
+      code: ATHENA_PLAN_REVIEW_REASON_CODE.TRUST_BOUNDARY_VIOLATION,
       message: `Reviewer output failed contract validation — class=${TRUST_BOUNDARY_ERROR} reasonCode=${trustCheck.reasonCode}: ${tbErrors}`
     };
+    const blocker = buildPlanReviewBlocker(reason.code);
     await appendProgress(config, `[ATHENA][TRUST_BOUNDARY] Reviewer output blocked — ${reason.message}`);
+    await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
     await appendAlert(config, {
       severity: ALERT_SEVERITY.CRITICAL,
       source: "athena_reviewer",
       title: "Reviewer output failed trust-boundary validation — plan blocked",
       message: `code=${reason.code} errors=${tbErrors}`
     });
-    return { approved: false, reason, corrections: [] };
+    return { approved: false, reason, blocker, corrections: [] };
   }
   if (trustCheck.errors.length > 0 && tbMode === "warn") {
     const tbErrors = trustCheck.errors.map(e => `${e.payloadPath}: ${e.message}`).join(" | ");
@@ -2549,10 +2584,14 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
     if (!result.unresolvedIssues.includes(correction)) result.unresolvedIssues.push(correction);
 
     result.approved = false;
-    (result as any).reason = {
+    const reason = {
       code: ATHENA_PLAN_REVIEW_REASON_CODE.ACTIVE_GOVERNANCE_GATE_INFEASIBLE,
       message: `${gateRisk.reason}; gateBlockRisk=${gateRisk.gateBlockRisk}; signals=${gateRisk.activeGateSignals.join(", ") || "none"}`
     };
+    const blocker = buildPlanReviewBlocker(reason.code);
+    await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
+    (result as any).reason = reason;
+    (result as any).blocker = blocker;
   }
 
   // ── Patched-plan validation gate ─────────────────────────────────────────
@@ -2569,10 +2608,12 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
     }
     if (patchedPlanIssues.length > 0) {
       const blockReason = {
-        code: "PATCHED_PLAN_VALIDATION_FAILED",
+        code: ATHENA_PLAN_REVIEW_REASON_CODE.PATCHED_PLAN_VALIDATION_FAILED,
         message: `Patched plans contain unresolved placeholders or missing mandatory fields: ${patchedPlanIssues.join(" | ")}`
       };
+      const blocker = buildPlanReviewBlocker(blockReason.code);
       await appendProgress(config, `[ATHENA] Plan review BLOCKED — ${blockReason.message}`);
+      await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
       chatLog(stateDir, athenaName, `Patched plan validation failed: ${patchedPlanIssues.join(" | ")}`);
       await appendAlert(config, {
         severity: ALERT_SEVERITY.CRITICAL,
@@ -2585,6 +2626,7 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
         approved: false,
         corrections: [...corrections, ...patchedPlanIssues],
         reason: blockReason,
+        blocker,
       };
     }
   }
@@ -2601,7 +2643,9 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
         code: handoff.code,
         message: `Normalized patched plans failed contract re-validation: ${handoff.violations.join(" | ")}`
       };
+      const blocker = buildPlanReviewBlocker(blockReason.code);
       await appendProgress(config, `[ATHENA] Patched plan contract re-validation FAILED — ${blockReason.message}`);
+      await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
       chatLog(stateDir, athenaName, `Contract re-validation failed: ${handoff.violations.join(" | ")}`);
       await appendAlert(config, {
         severity: ALERT_SEVERITY.CRITICAL,
@@ -2614,6 +2658,7 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
         approved: false,
         corrections: [...corrections, ...handoff.violations],
         reason: blockReason,
+        blocker,
       };
     }
 
@@ -2642,10 +2687,12 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
     const aiBatchCheck = validateAiProvidedBatchMetadata(handoff.plans);
     if (!aiBatchCheck.valid) {
       const blockReason = {
-        code: "ATHENA_BATCH_METADATA_MISSING",
+        code: ATHENA_PLAN_REVIEW_REASON_CODE.ATHENA_BATCH_METADATA_MISSING,
         message: `Athena patchedPlans missing/invalid AI batch metadata: ${aiBatchCheck.violations.join(" | ")}`
       };
+      const blocker = buildPlanReviewBlocker(blockReason.code);
       await appendProgress(config, `[ATHENA] AI batch contract FAILED — ${blockReason.message}`);
+      await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
       chatLog(stateDir, athenaName, `AI batch contract failed: ${aiBatchCheck.violations.join(" | ")}`);
       await appendAlert(config, {
         severity: ALERT_SEVERITY.CRITICAL,
@@ -2658,6 +2705,7 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
         approved: false,
         corrections: [...corrections, ...aiBatchCheck.violations],
         reason: blockReason,
+        blocker,
       };
     }
 
@@ -2670,12 +2718,27 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
     result.patchedPlans = handoff.plans;
   }
 
+  if (!result.approved && !(result as any).reason) {
+    (result as any).reason = {
+      code: ATHENA_PLAN_REVIEW_REASON_CODE.LOW_PLAN_QUALITY,
+      message: "Plan rejected without explicit reason from reviewer payload",
+    };
+  }
+  if (!result.approved && !(result as any).blocker) {
+    const blockerCode = String(((result as any).reason as { code?: string } | undefined)?.code || ATHENA_PLAN_REVIEW_REASON_CODE.LOW_PLAN_QUALITY);
+    (result as any).blocker = buildPlanReviewBlocker(blockerCode);
+    await appendProgress(
+      config,
+      `[ATHENA][BLOCKER] code=${(result as any).blocker.code} stage=${(result as any).blocker.stage} retryable=${String((result as any).blocker.retryable)}`
+    );
+  }
+
   await writeJson(path.join(stateDir, "athena_plan_review.json"), {
     ...result,
     planBatchFingerprint: computePlanBatchFingerprint(plans),
   });
 
-  if (approved) {
+  if (result.approved) {
     const fixCount = result.appliedFixes.length;
     const fixMsg = fixCount > 0 ? ` (${fixCount} fix(es) applied in-place)` : "";
     await appendProgress(config, `[ATHENA] Plan APPROVED (score=${result.overallScore}/10)${fixMsg} — ${result.summary}`);

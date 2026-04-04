@@ -1,27 +1,29 @@
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import {
   readCalibrationState,
   recordCalibrationSample,
   getCalibrationCoefficient,
 } from "../../src/core/token_calibration.js";
 
-const TEST_STATE_DIR = path.join("tests", "fixtures", "_tmp_calibration");
-
-async function cleanDir() {
-  await rm(TEST_STATE_DIR, { recursive: true, force: true });
-  await mkdir(TEST_STATE_DIR, { recursive: true });
-}
+let testStateDir = "";
 
 function testConfig() {
-  return { paths: { stateDir: TEST_STATE_DIR } };
+  return { paths: { stateDir: testStateDir } };
 }
 
 describe("token_calibration", () => {
   beforeEach(async () => {
-    await cleanDir();
+    testStateDir = await mkdtemp(path.join(os.tmpdir(), "box-token-calibration-"));
+  });
+
+  afterEach(async () => {
+    if (!testStateDir) return;
+    await rm(testStateDir, { recursive: true, force: true });
+    testStateDir = "";
   });
 
   it("returns default state when no file exists", async () => {

@@ -30,6 +30,27 @@ describe("athena gate risk dry-run integration", () => {
     }
   });
 
+  it("returns explicit fail-closed reason/blocker when plan payload is missing", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-no-plan-"));
+    try {
+      const config = {
+        paths: {
+          stateDir,
+          progressFile: path.join(stateDir, "progress.log"),
+          policyFile: path.join(stateDir, "policy.json"),
+        },
+        env: { targetRepo: "CanerDoqdu/Box" },
+      };
+      const result = await runAthenaPlanReview(config, null);
+      assert.equal(result.approved, false);
+      assert.equal(result.reason?.code, ATHENA_PLAN_REVIEW_REASON_CODE.NO_PLAN_PROVIDED);
+      assert.equal(result.blocker?.stage, "athena_plan_review");
+      assert.equal(result.blocker?.code, ATHENA_PLAN_REVIEW_REASON_CODE.NO_PLAN_PROVIDED);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("enforces fail-closed review even when runtime.athenaFailOpen is enabled (legacy rollback removed)", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-fail-closed-"));
     try {

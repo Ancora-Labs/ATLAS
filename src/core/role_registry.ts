@@ -41,6 +41,26 @@ export function isSpecialistWorkerName(name: unknown): boolean {
   return normalizeWorkerName(name) !== "evolution-worker";
 }
 
+export function normalizeTaskKindLabel(taskKind: unknown): string {
+  return String(taskKind || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
+}
+
+const ATHENA_REVIEW_KIND_TOKENS = Object.freeze([
+  "athena",
+  "review",
+  "postmortem",
+  "post-mortem",
+  "retrospective",
+]);
+
+const ATHENA_REVIEW_TEXT_PATTERN = /\b(athena|review|post[- ]?mortem|retrospective)\b/i;
+
+export function isAthenaReviewOrPostmortemTask(taskKind: unknown, taskText: unknown = ""): boolean {
+  const normalizedKind = normalizeTaskKindLabel(taskKind);
+  if (normalizedKind && ATHENA_REVIEW_KIND_TOKENS.some((token) => normalizedKind.includes(token))) return true;
+  return ATHENA_REVIEW_TEXT_PATTERN.test(String(taskText || ""));
+}
+
 export function getRoleRegistry(config) {
   const fallback = {
     ceoSupervisor: { id: "ceo-supervisor", name: "Jesus", model: "gpt-5.3-codex" },
@@ -63,5 +83,67 @@ export function getRoleRegistry(config) {
       ...fallback.workers,
       ...(config?.roleRegistry?.workers || {})
     }
+  };
+}
+
+export function assertRoleCapabilityForTask(config, roleName: unknown, taskKind: unknown, taskText: unknown = "") {
+  const registry = getRoleRegistry(config);
+  const normalizedRole = normalizeWorkerName(roleName);
+  const workers = Object.values(registry?.workers || {}) as Array<{ name?: string }>;
+  const registeredWorkerNames = new Set(workers.map((worker) => normalizeWorkerName(worker?.name)));
+  const registeredLeadershipNames = new Set([
+    normalizeWorkerName(registry?.reviewer?.name || "Athena"),
+    normalizeWorkerName(registry?.planner?.name || "Prometheus"),
+    normalizeWorkerName(registry?.ceoSupervisor?.name || "Jesus"),
+    "athena",
+    "prometheus",
+    "jesus",
+  ]);
+
+  const roleKnown = registeredWorkerNames.has(normalizedRole) || registeredLeadershipNames.has(normalizedRole);
+  if (!roleKnown) {
+    return {
+      allowed: false,
+      code: "ROLE_NOT_REGISTERED",
+      message: `Role '${String(roleName || "unknown")}' is not present in role registry`,
+      athenaRelated: false,
+      requiresFileShellTools: false,
+    };
+  }
+
+  const athenaRelated = isAthenaReviewOrPostmortemTask(taskKind, taskText);
+  if (!athenaRelated) {
+    return {
+      allowed: true,
+      code: "OK",
+      message: "Role capability check passed",
+      athenaRelated: false,
+      requiresFileShellTools: false,
+    };
+  }
+
+  const rolesWithAthenaReviewCapability = new Set([
+    "evolution-worker",
+    "quality-worker",
+    "athena",
+    "prometheus",
+  ]);
+  const hasCapability = rolesWithAthenaReviewCapability.has(normalizedRole);
+  if (!hasCapability) {
+    return {
+      allowed: false,
+      code: "ROLE_CAPABILITY_MISMATCH",
+      message: `Role '${String(roleName || "unknown")}' lacks athena-review/postmortem capability`,
+      athenaRelated: true,
+      requiresFileShellTools: true,
+    };
+  }
+
+  return {
+    allowed: true,
+    code: "OK",
+    message: "Role capability check passed",
+    athenaRelated: true,
+    requiresFileShellTools: true,
   };
 }

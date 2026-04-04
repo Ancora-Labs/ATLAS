@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseWorkerResponse, detectRepoContamination, attemptBranchCleanlinessRecovery } from "../../src/core/worker_runner.js";
+import {
+  parseWorkerResponse,
+  detectRepoContamination,
+  attemptBranchCleanlinessRecovery,
+  shouldEnableFullToolAccess,
+  evaluateWorkerRoleCapability
+} from "../../src/core/worker_runner.js";
 import { isProcessAlive } from "../../src/core/daemon_control.js";
 
 // ── parseWorkerResponse ──────────────────────────────────────────────────────
@@ -112,6 +118,24 @@ describe("parseWorkerResponse", () => {
     const raw = "BOX_STATUS=done\nSome text";
     const result = parseWorkerResponse(raw, "");
     assert.equal(result.fullOutput, raw);
+  });
+});
+
+describe("tool access + capability guards", () => {
+  it("grants full tools for Athena postmortem/review work even with drifted taskKind label", () => {
+    const allowAll = shouldEnableFullToolAccess("quality-worker", "audit-followup", "Run Athena postmortem review on latest cycle");
+    assert.equal(allowAll, true);
+  });
+
+  it("keeps least-privilege defaults for non-implementation/non-review tasks", () => {
+    const allowAll = shouldEnableFullToolAccess("infrastructure-worker", "observation", "Collect dashboard screenshots");
+    assert.equal(allowAll, false);
+  });
+
+  it("blocks unknown roles before worker invocation", () => {
+    const check = evaluateWorkerRoleCapability({}, "unknown-worker", "athena-review", "Review dispatch failures");
+    assert.equal(check.allowed, false);
+    assert.equal(check.code, "ROLE_NOT_REGISTERED");
   });
 });
 

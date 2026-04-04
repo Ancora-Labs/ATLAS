@@ -23,7 +23,7 @@ import { readStopRequest, writeDaemonPid, clearDaemonPid, clearStopRequest, read
 import { loadConfig } from "../config.js";
 import { runJesusCycle } from "./jesus_supervisor.js";
 import { runPrometheusAnalysis } from "./prometheus.js";
-import { runAthenaPlanReview } from "./athena_reviewer.js";
+import { runAthenaPlanReview, ATHENA_PLAN_REVIEW_REASON_CODE } from "./athena_reviewer.js";
 import { runWorkerConversation } from "./worker_runner.js";
 import { runSelfImprovementCycle, shouldTriggerSelfImprovement } from "./self_improvement.js";
 import { collectEvolutionMetrics } from "./evolution_metrics.js";
@@ -67,7 +67,7 @@ import { executeRollback, ROLLBACK_LEVEL, ROLLBACK_TRIGGER } from "./rollback_en
 import { initializeAggregateLiveLog, appendAggregateLiveLogSync } from "./live_log.js";
 import { buildRoleExecutionBatches, buildTokenFirstBatches } from "./worker_batch_planner.js";
 import { agentFileExists, nameToSlug } from "./agent_loader.js";
-import { getRoleRegistry } from "./role_registry.js";
+import { getRoleRegistry, assertRoleCapabilityForTask, isAthenaReviewOrPostmortemTask } from "./role_registry.js";
 import {
   checkArchitectureDrift,
   rankStaleRefsAsRemediationCandidates,
@@ -1149,7 +1149,8 @@ async function completeDispatchCheckpoint(config, checkpoint) {
 
 function isDispatchOutcomeSuccessful(workerResult) {
   const status = String(workerResult?.status || "").toLowerCase();
-  return status === "done" || status === "partial";
+  // skipped = work already done (e.g. already-merged PR); treat as successful
+  return status === "done" || status === "partial" || status === "skipped";
 }
 
 async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolean } = {}) {
@@ -1557,13 +1558,17 @@ const IMPLEMENTATION_WORKER = "evolution-worker";
 // Implementation tasks assigned to these roles must be redirected to evolution-worker.
 const ANALYSIS_ONLY_ROLES = new Set(["athena", "prometheus", "jesus"]);
 
-function resolveWorkerRole(logicalRole, taskKind) {
+const ATHENA_REVIEW_CAPABLE_ROLES = new Set(["evolution-worker", "quality-worker", "athena", "prometheus"]);
+
+function resolveWorkerRole(logicalRole, taskKind, taskText = "") {
   const role = String(logicalRole || "").toLowerCase().trim();
   const kind = String(taskKind || "").toLowerCase();
   const isImplementation = !kind || kind === "implementation";
+  const isAthenaRelated = isAthenaReviewOrPostmortemTask(kind, taskText);
 
   // Analysis-only roles cannot execute implementation tasks — redirect to evolution-worker
   if (isImplementation && ANALYSIS_ONLY_ROLES.has(role)) return IMPLEMENTATION_WORKER;
+  if (isAthenaRelated && !ATHENA_REVIEW_CAPABLE_ROLES.has(role)) return IMPLEMENTATION_WORKER;
 
   // If the role has a dedicated agent file with full tools, use it as-is
   const slug = nameToSlug(role);
@@ -1579,7 +1584,7 @@ async function dispatchWorker(config, plan) {
   // Resolve actual worker agent: plan.role is a logical category ("orchestrator", "athena", etc.).
   // Map roles without a dedicated .agent.md to "evolution-worker" for implementation tasks.
   const logicalRole = plan.role;
-  const roleName = resolveWorkerRole(logicalRole, plan.taskKind || plan.kind || "implementation");
+  const taskKind = plan.taskKind || plan.kind || "implementation";
   const batchPlans = Array.isArray(plan?.plans) ? plan.plans : null;
   const orderedBatchLines = batchPlans
     ? batchPlans.map((item, i) => {
@@ -1602,6 +1607,7 @@ async function dispatchWorker(config, plan) {
   const task = batchPlans
     ? `Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exact blocker.\n\nOrdered steps:\n${orderedBatchLines}`
     : plan.task;
+  const roleName = resolveWorkerRole(logicalRole, taskKind, task);
   const contextBlocks: string[] = [];
   if (batchPlans) {
     for (let i = 0; i < batchPlans.length; i += 1) {
@@ -1637,7 +1643,27 @@ async function dispatchWorker(config, plan) {
       }).filter(Boolean).join("\n")
     : (plan.verification || "");
 
-  const taskKind = plan.taskKind || plan.kind || "implementation";
+  const capabilityCheck = assertRoleCapabilityForTask(config, roleName, taskKind, task);
+  if (!capabilityCheck.allowed) {
+    const summary = `Dispatch blocked by role capability check: ${capabilityCheck.code} — ${capabilityCheck.message}`;
+    await appendProgress(config, `[DISPATCH] ${summary}`);
+    emitEvent(EVENTS.ORCHESTRATION_HEALTH_DEGRADED, EVENT_DOMAIN.ORCHESTRATION, `role-capability-${Date.now()}`, {
+      reason: "role_capability_check_failed",
+      roleName,
+      taskKind: String(taskKind || "unknown"),
+      code: capabilityCheck.code,
+      message: capabilityCheck.message,
+    });
+    return {
+      roleName,
+      status: "blocked",
+      pr: null,
+      summary,
+      filesChanged: "",
+      raw: summary,
+      verificationEvidence: null
+    };
+  }
 
   if (batchPlans) {
     const headline = String(batchPlans[0]?.task || batchPlans[0]?.title || "bundled tasks");
@@ -2168,7 +2194,7 @@ async function runSingleCycle(config) {
     const msg = String(err?.message || err).slice(0, 200);
     await appendProgress(config, `[CYCLE] Athena plan review threw exception: ${msg} — blocking cycle (fail-closed)`);
     warn(`[orchestrator] Athena plan review exception: ${msg}`);
-    const reason = { code: "REVIEW_EXCEPTION", message: msg };
+    const reason = { code: ATHENA_PLAN_REVIEW_REASON_CODE.REVIEW_EXCEPTION, message: msg };
     const blocker = {
       stage: "athena_plan_review",
       code: reason.code,
