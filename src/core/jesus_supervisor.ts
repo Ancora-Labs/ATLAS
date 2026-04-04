@@ -74,6 +74,9 @@ async function _callCopilotAgent(command, agentSlug, contextPrompt) {
   const result: any = await spawnAsync(command, args, {
     env: process.env,
     timeoutMs: 180_000,
+    // Kill CLI immediately when output is complete — avoids hanging in
+    // interactive 'continue?' mode that Copilot CLI enters after long outputs.
+    earlyExitMarker: "===END===",
   });
   const stdout = result.stdout;
   const stderr = result.stderr;
@@ -840,6 +843,9 @@ ${workersList}`;
     rawResult = await spawnAsync(command, args, {
       env: process.env,
       timeoutMs: jesusTimeoutMs,
+      // Kill CLI immediately when output is complete — avoids hanging in
+      // interactive 'continue?' mode that Copilot CLI enters after long outputs.
+      earlyExitMarker: "===END===",
       onStdout(chunk) {
         appendLiveLogSync(stateDir, chunk.toString("utf8"));
       },
