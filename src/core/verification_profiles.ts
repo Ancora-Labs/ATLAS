@@ -279,18 +279,16 @@ export function buildVerificationChecklist(workerKind) {
   lines.push("If the task was ALREADY DONE in a previous wave (merged PR exists), report BOX_STATUS=skipped with BOX_SKIP_REASON=already-merged.");
   lines.push("");
   lines.push("## POST-MERGE VERIFICATION ARTIFACT (MANDATORY)");
-  lines.push("After merging your PR, you MUST include the following in your output:");
-  lines.push("1. Git SHA of the merged commit: run `git rev-parse HEAD` and paste the SHA.");
-  lines.push("2. Raw npm test stdout: run `npm test` on the merged state and paste the FULL raw output.");
-  lines.push("If you skip this, your task will be rejected by the runtime gate.");
-  lines.push("Replace the placeholder below with actual output:");
+  lines.push("After merging your PR, you MUST include the following in your output (exact format required by the gate):");
+  lines.push("1. BOX_MERGED_SHA=<7-40 char hex commit SHA>   — run: git rev-parse HEAD");
+  lines.push("2. CLEAN_TREE_STATUS=clean                     — run: git status --porcelain (must be empty output)");
+  lines.push("3. A raw npm test block using these exact markers:");
   lines.push("");
-  lines.push("```");
-  lines.push("POST_MERGE_TEST_OUTPUT");
-  lines.push("SHA: <paste git rev-parse HEAD here>");
-  lines.push("npm test output:");
+  lines.push("===NPM TEST OUTPUT START===");
   lines.push("<paste full raw npm test stdout here>");
-  lines.push("```");
+  lines.push("===NPM TEST OUTPUT END===");
+  lines.push("");
+  lines.push("⚠️ Do NOT use the old POST_MERGE_TEST_OUTPUT format — use the markers above or the gate will reject the artifact.");
 
   return lines.join("\n");
 }
