@@ -146,7 +146,7 @@ export const ALL_POST_MERGE_PLACEHOLDERS: readonly string[] = Object.freeze([
  * regardless of which finalization path triggers the artifact check.
  */
 export const ARTIFACT_GAP = Object.freeze({
-  UNFILLED_PLACEHOLDER: "POST_MERGE_TEST_OUTPUT placeholder is still unfilled — replace it with actual test output",
+  UNFILLED_PLACEHOLDER: "Post-merge artifact block contains unfilled template placeholders — replace every placeholder with actual output (BOX_MERGED_SHA=<sha>, CLEAN_TREE_STATUS=clean, and the ===NPM TEST OUTPUT START=== block with real test output)",
   MISSING_SHA:          "Post-merge git SHA missing — run 'git rev-parse HEAD' on merged state and include the SHA",
   MISSING_TEST_OUTPUT:  "Post-merge raw npm test output missing — run 'npm test' on merged state and paste raw stdout",
   DIRTY_TREE:           "Post-merge clean-tree evidence missing — include explicit CLEAN_TREE_STATUS=clean from 'git status --porcelain'",
@@ -912,7 +912,16 @@ ${gapList}
 \`\`\`
 ${CANONICAL_VERIFICATION_REPORT_TEMPLATE}
 \`\`\`
-4. Do NOT repeat the same approach if it already failed — try a different strategy.
+4. After merging, include these EXACT markers (the gate scans for them literally):
+   BOX_MERGED_SHA=<7-40 char hex SHA from git rev-parse HEAD>
+   CLEAN_TREE_STATUS=clean
+   ===NPM TEST OUTPUT START===
+   <paste full raw npm test stdout here>
+   ===NPM TEST OUTPUT END===
+
+   ⚠️ Do NOT use the old POST_MERGE_TEST_OUTPUT format — it will be detected as an unfilled placeholder and reject your output.
+
+5. Do NOT repeat the same approach if it already failed — try a different strategy.
 
 ## ORIGINAL TASK (for reference)
 ${originalTask}
