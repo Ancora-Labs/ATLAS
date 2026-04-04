@@ -513,3 +513,28 @@ export function analyzePacketDensification(
     isDenseEnough: thinIndexes.length === 0,
   };
 }
+
+export function compileRankedContextSection(
+  title: string,
+  entries: Array<{ path: string; score: number; preview?: string }>,
+  opts: { tokenBudget?: number; maxEntries?: number } = {},
+): string {
+  const heading = String(title || "RANKED CONTEXT").trim();
+  const tokenBudget = Math.max(80, Number(opts.tokenBudget || 500));
+  const maxEntries = Math.max(1, Math.floor(Number(opts.maxEntries || 10)));
+  const safeEntries = Array.isArray(entries) ? entries : [];
+  const lines: string[] = [`## ${heading}`];
+  let remaining = tokenBudget;
+  let added = 0;
+  for (const entry of safeEntries) {
+    if (added >= maxEntries) break;
+    const preview = String(entry?.preview || "").trim().replace(/\s+/g, " ").slice(0, 160);
+    const line = `${added + 1}. ${String(entry?.path || "")} (score=${Number(entry?.score || 0).toFixed(3)})${preview ? ` — ${preview}` : ""}`;
+    const lineTokens = estimateTokens(line);
+    if (remaining - lineTokens < 0) break;
+    lines.push(line);
+    remaining -= lineTokens;
+    added += 1;
+  }
+  return lines.length > 1 ? lines.join("\n") : "";
+}

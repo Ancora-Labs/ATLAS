@@ -177,6 +177,12 @@ export const ROUTING_REASON = Object.freeze({
   EMPTY_MODEL:       "EMPTY_MODEL",
 });
 
+export const OPTIMIZATION_INTERVENTION_KIND = Object.freeze({
+  PROMPT_DELTA: "prompt-delta",
+  ROUTING_DELTA: "routing-delta",
+  POLICY_DELTA: "policy-delta",
+});
+
 /**
  * Complexity tier taxonomy (T1/T2/T3).
  * Maps task complexity to model selection and token budget strategy.

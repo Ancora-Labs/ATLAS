@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { scanProject, computeScanNoveltySignal, detectImplementationGaps } from "../../src/core/project_scanner.js";
+import {
+  scanProject,
+  computeScanNoveltySignal,
+  detectImplementationGaps,
+  buildSemanticFileCandidatesFromScan,
+  rankSemanticFileCandidates,
+} from "../../src/core/project_scanner.js";
 
 describe("project_scanner", () => {
   let rootDir: string;
@@ -269,6 +275,43 @@ describe("computeScanNoveltySignal", () => {
     const result = computeScanNoveltySignal(null as any, null as any);
     assert.equal(result.noveltySignal, "low");
     assert.deepEqual(result.newDomains, []);
+  });
+});
+
+describe("semantic retrieval helpers", () => {
+  it("ranks semantically relevant files deterministically under token budget", () => {
+    const candidates = [
+      { path: "src/core/orchestrator.ts", preview: "dispatch lane specialization and governance gates" },
+      { path: "src/core/model_policy.ts", preview: "model routing and policy enforcement" },
+      { path: "tests/core/orchestrator.test.ts", preview: "integration tests for orchestrator" },
+    ];
+    const ranked = rankSemanticFileCandidates("dispatch specialization lanes", candidates, {
+      tokenBudget: 120,
+      maxEntries: 2,
+      cacheKey: "project-scanner-semantic-test",
+    });
+    assert.ok(ranked.length > 0, "must return at least one ranked entry");
+    assert.equal(ranked[0].path, "src/core/orchestrator.ts", "most relevant file must rank first");
+    assert.ok(ranked.length <= 2, "must respect maxEntries");
+  });
+
+  it("buildSemanticFileCandidatesFromScan deduplicates and normalizes paths", () => {
+    const candidates = buildSemanticFileCandidatesFromScan({
+      repositorySignals: {
+        allSrcFiles: ["src\\core\\orchestrator.ts", "src/core/orchestrator.ts", "src/core/prometheus.ts"],
+        allTestFiles: ["tests/core/orchestrator.test.ts"],
+        keyFilePreviews: [
+          { path: "src/core/orchestrator.ts", preview: "orchestrator preview" },
+        ],
+      },
+    });
+    const paths = candidates.map((entry) => entry.path);
+    assert.deepEqual(paths, [
+      "src/core/orchestrator.ts",
+      "src/core/prometheus.ts",
+      "tests/core/orchestrator.test.ts",
+    ]);
+    assert.equal(candidates[0].preview, "orchestrator preview");
   });
 });
 

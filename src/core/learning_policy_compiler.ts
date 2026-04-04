@@ -11,6 +11,7 @@
  */
 import { computeDecayedPolicyEffectiveness } from "./lesson_halflife.js";
 import { EQUAL_DIMENSION_SET } from "./plan_contract_validator.js";
+import { OPTIMIZATION_INTERVENTION_KIND } from "./model_policy.js";
 
 /**
  * Known lesson patterns that can be compiled into policy checks.
@@ -23,49 +24,57 @@ const COMPILABLE_PATTERNS = [
     id: "glob-false-fail",
     pattern: /glob|node --test tests[\\/]\*|wildcard|path.*expansion/i,
     assertion: "Verification must use 'npm test' not 'node --test tests/**'",
-    severity: "critical"
+    severity: "critical",
+    interventionKind: OPTIMIZATION_INTERVENTION_KIND.POLICY_DELTA,
   },
   {
     id: "missing-test",
     pattern: /no\s+test|missing\s+test|untested|test.*coverage/i,
     assertion: "New code must include at least one test file",
-    severity: "warning"
+    severity: "warning",
+    interventionKind: OPTIMIZATION_INTERVENTION_KIND.PROMPT_DELTA,
   },
   {
     id: "lint-failure",
     pattern: /lint|eslint|unused\s+(var|import|export)/i,
     assertion: "Run npm run lint before marking task complete",
-    severity: "warning"
+    severity: "warning",
+    interventionKind: OPTIMIZATION_INTERVENTION_KIND.PROMPT_DELTA,
   },
   {
     id: "import-error",
     pattern: /import.*error|module.*not\s+found|cannot\s+find\s+module/i,
     assertion: "All imports must resolve; verify with node -e 'import(\"./path\")'",
-    severity: "critical"
+    severity: "critical",
+    interventionKind: OPTIMIZATION_INTERVENTION_KIND.ROUTING_DELTA,
   },
   {
     id: "state-corruption",
     pattern: /state.*corrupt|json.*parse|invalid\s+json|malformed/i,
     assertion: "State files must be written atomically with writeJson",
-    severity: "critical"
+    severity: "critical",
+    interventionKind: OPTIMIZATION_INTERVENTION_KIND.POLICY_DELTA,
   },
   {
     id: "syntax-error",
     pattern: /syntax\s*error|unexpected\s+token|parse\s+error/i,
     assertion: "Code must parse without SyntaxError before commit",
-    severity: "critical"
+    severity: "critical",
+    interventionKind: OPTIMIZATION_INTERVENTION_KIND.ROUTING_DELTA,
   },
   {
     id: "hardcoded-path",
     pattern: /hardcoded|absolute\s+path|windows.*path|backslash/i,
     assertion: "Use path.join() for all file paths; no hardcoded separators",
-    severity: "warning"
+    severity: "warning",
+    interventionKind: OPTIMIZATION_INTERVENTION_KIND.PROMPT_DELTA,
   },
   {
     id: "missing-error-handling",
     pattern: /unhandled|uncaught|swallow.*error|silent.*fail/i,
     assertion: "Async operations at system boundaries must have try/catch",
-    severity: "warning"
+    severity: "warning",
+    interventionKind: OPTIMIZATION_INTERVENTION_KIND.PROMPT_DELTA,
   },
 ];
 
@@ -105,7 +114,10 @@ export function compileLessonsToPolicies(postmortems, opts: any = {}) {
           assertion: template.assertion,
           severity: template.severity,
           sourceLesson: lesson.slice(0, 200),
-          detectedAt: pm.reviewedAt || new Date().toISOString()
+          detectedAt: pm.reviewedAt || new Date().toISOString(),
+          interventionKind: template.interventionKind || OPTIMIZATION_INTERVENTION_KIND.POLICY_DELTA,
+          optimizationMode: "impact-attributed-loop",
+          upliftSignal: "pending_measurement",
         });
       }
     }

@@ -489,3 +489,101 @@ export function computeScanNoveltySignal(
 
   return { newDomains, noveltySignal };
 }
+
+export interface SemanticFileCandidate {
+  path: string;
+  preview: string;
+}
+
+export interface SemanticRetrievalEntry {
+  path: string;
+  score: number;
+  preview: string;
+}
+
+const semanticRetrievalCache = new Map<string, SemanticRetrievalEntry[]>();
+
+function normalizeSemanticText(text: string): string {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_/.-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeSemanticText(text: string): string[] {
+  const normalized = normalizeSemanticText(text)
+    .replace(/[./_-]+/g, " ");
+  if (!normalized) return [];
+  return [...new Set(normalized.split(" ").filter((token) => token.length >= 2))];
+}
+
+export function buildSemanticFileCandidatesFromScan(scanResult: any): SemanticFileCandidate[] {
+  const repositorySignals = scanResult?.repositorySignals || {};
+  const listedFiles = [
+    ...(Array.isArray(repositorySignals?.allSrcFiles) ? repositorySignals.allSrcFiles : []),
+    ...(Array.isArray(repositorySignals?.allTestFiles) ? repositorySignals.allTestFiles : []),
+  ]
+    .map((value) => String(value || "").replace(/\\/g, "/"))
+    .filter(Boolean);
+  const previewByPath = new Map<string, string>(
+    (Array.isArray(repositorySignals?.keyFilePreviews) ? repositorySignals.keyFilePreviews : [])
+      .map((entry: any) => [String(entry?.path || "").replace(/\\/g, "/"), String(entry?.preview || "")]),
+  );
+
+  const uniquePaths = [...new Set(listedFiles)].sort((a, b) => a.localeCompare(b));
+  return uniquePaths.map((filePath) => ({
+    path: filePath,
+    preview: previewByPath.get(filePath) || "",
+  }));
+}
+
+export function rankSemanticFileCandidates(
+  query: string,
+  candidates: SemanticFileCandidate[],
+  opts: { tokenBudget?: number; maxEntries?: number; cacheKey?: string } = {},
+): SemanticRetrievalEntry[] {
+  const safeCandidates = Array.isArray(candidates) ? candidates : [];
+  const tokenBudget = Math.max(80, Number(opts.tokenBudget || 600));
+  const maxEntries = Math.max(1, Math.floor(Number(opts.maxEntries || 12)));
+  const cacheKey = String(opts.cacheKey || "").trim();
+
+  if (cacheKey && semanticRetrievalCache.has(cacheKey)) {
+    return semanticRetrievalCache.get(cacheKey)!;
+  }
+
+  const queryTokens = tokenizeSemanticText(query);
+  const scored = safeCandidates.map((candidate) => {
+    const joined = `${candidate.path}\n${candidate.preview}`;
+    const haystack = normalizeSemanticText(joined);
+    const overlap = queryTokens.reduce((score, token) => score + (haystack.includes(token) ? 1 : 0), 0);
+    const pathBoost = candidate.path.startsWith("src/core/")
+      ? 0.35
+      : candidate.path.startsWith("src/")
+        ? 0.2
+        : candidate.path.startsWith("tests/")
+          ? 0.1
+          : 0;
+    const score = Math.round(((overlap * 1.2) + pathBoost) * 1000) / 1000;
+    return {
+      path: candidate.path,
+      score,
+      preview: String(candidate.preview || "").slice(0, 220),
+    };
+  })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+
+  const ranked: SemanticRetrievalEntry[] = [];
+  let remainingBudget = tokenBudget;
+  for (const entry of scored) {
+    if (ranked.length >= maxEntries) break;
+    const lineTokens = Math.max(1, Math.ceil(`${entry.path}\n${entry.preview}`.length / 4));
+    if (remainingBudget - lineTokens < 0) break;
+    ranked.push(entry);
+    remainingBudget -= lineTokens;
+  }
+
+  if (cacheKey) semanticRetrievalCache.set(cacheKey, ranked);
+  return ranked;
+}

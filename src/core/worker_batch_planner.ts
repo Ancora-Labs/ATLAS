@@ -1149,8 +1149,19 @@ export function buildTokenFirstBatches(
   const lanePerformance = buildLanePerformanceFromCycleTelemetry(laneTelemetry);
   const laneTelemetrySignals = buildLaneTelemetrySignals(laneTelemetry);
   const specialistFitThreshold = resolveSpecialistFitThreshold(config);
-  const minSpecializedShare = Number((config as any)?.workerPool?.specializationTargets?.minSpecializedShare ?? 0.35);
-  const requiredSpecializedCount = Math.max(0, Math.ceil(workingPlans.length * minSpecializedShare));
+  const configuredMinSpecializedShare = Number((config as any)?.workerPool?.specializationTargets?.minSpecializedShare ?? 0.35);
+  const laneSignalEntries = Object.values(laneTelemetrySignals);
+  const avgLaneSignal = laneSignalEntries.length > 0
+    ? laneSignalEntries.reduce((sum, signal) => {
+      const roiScore = Math.max(0, Math.min(1, signal.roi / 2));
+      const completionScore = Math.max(0, Math.min(1, signal.completionRate));
+      return sum + ((roiScore * 0.6) + (completionScore * 0.4));
+    }, 0) / laneSignalEntries.length
+    : 0.5;
+  const adaptiveMinSpecializedShare = Math.round(
+    Math.max(0.15, Math.min(0.9, configuredMinSpecializedShare + ((avgLaneSignal - 0.5) * 0.25))) * 1000
+  ) / 1000;
+  const requiredSpecializedCount = Math.max(0, Math.ceil(workingPlans.length * adaptiveMinSpecializedShare));
   let specialistAssignedCount = 0;
   const laneUtilizationTargets = Object.fromEntries(
     getSpecialistLaneNames().map((lane) => {
@@ -1320,7 +1331,8 @@ export function buildTokenFirstBatches(
     totalBundles: flattened.length,
     specialistUtilizationTarget: {
       fitScoreThreshold: specialistFitThreshold,
-      minSpecializedShare,
+      minSpecializedShare: configuredMinSpecializedShare,
+      adaptiveMinSpecializedShare,
       requiredSpecializedCount,
       achievedSpecializedCount: specialistAssignedCount,
       targetMet: specialistAssignedCount >= requiredSpecializedCount,

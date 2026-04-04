@@ -62,8 +62,14 @@ import {
   markCacheableSegments as _markCacheableSegments,
   markCycleDeltaSectionsRequired as _markCycleDeltaSectionsRequired,
   analyzePacketDensification as _analyzePacketDensification,
-  PROMPT_BUDGET_PARTITION
+  PROMPT_BUDGET_PARTITION,
+  compileRankedContextSection,
 } from "./prompt_compiler.js";
+import {
+  scanProject,
+  buildSemanticFileCandidatesFromScan,
+  rankSemanticFileCandidates,
+} from "./project_scanner.js";
 import { computeFingerprint, classifyCarryForwardByRecurrence } from "./carry_forward_ledger.js";
 import { rewriteVerificationCommand } from "./verification_command_registry.js";
 import { checkCarryForwardGate, hardGateRecurrenceToPolicies } from "./learning_policy_compiler.js";
@@ -3945,40 +3951,32 @@ Consider whether the root causes are:
     }
   } catch { /* non-fatal — proceed without pattern analysis */ }
 
-  // ── Build real file listing for prompt (prevents fabricated target_files) ─
-  let _repoFileListingSection = "";
+  // ── Deterministic semantic retrieval for planner context ───────────────────
+  let semanticRetrievalSection = "";
   try {
-    const listDir = async (dir: string, prefix: string) => {
-      try {
-        const files = await fs.readdir(path.join(repoRoot, dir));
-        return files
-          .filter(f => f.endsWith(".ts") || f.endsWith(".js") || f.endsWith(".mts") || f.endsWith(".cjs"))
-          .map(f => `${prefix}/${f}`);
-      } catch { return []; }
-    };
-    const [coreFiles, workerFiles, dashFiles, typeFiles, providerFiles, rootSrcFiles, testCoreFiles, testFiles] = await Promise.all([
-      listDir("src/core", "src/core"),
-      listDir("src/workers", "src/workers"),
-      listDir("src/dashboard", "src/dashboard"),
-      listDir("src/types", "src/types"),
-      listDir("src/providers", "src/providers"),
-      listDir("src", "src"),
-      listDir("tests/core", "tests/core"),
-      listDir("tests", "tests"),
-    ]);
-    const sections: string[] = [];
-    if (coreFiles.length) sections.push(`### src/core/ (core modules)\n${coreFiles.join("\n")}`);
-    if (workerFiles.length) sections.push(`### src/workers/\n${workerFiles.join("\n")}`);
-    if (dashFiles.length) sections.push(`### src/dashboard/\n${dashFiles.join("\n")}`);
-    if (typeFiles.length) sections.push(`### src/types/\n${typeFiles.join("\n")}`);
-    if (providerFiles.length) sections.push(`### src/providers/\n${providerFiles.join("\n")}`);
-    if (rootSrcFiles.length) sections.push(`### src/ (root)\n${rootSrcFiles.join("\n")}`);
-    if (testCoreFiles.length) sections.push(`### tests/core/ (test files)\n${testCoreFiles.join("\n")}`);
-    if (testFiles.length) sections.push(`### tests/ (root test files)\n${testFiles.join("\n")}`);
-    if (sections.length) {
-      _repoFileListingSection = `\n\n## EXISTING REPOSITORY FILES\nYou MUST only reference paths from this list in target_files. Do NOT invent new module names.\n${sections.join("\n")}\n`;
+    const scan = await scanProject({ rootDir: repoRoot });
+    const candidates = buildSemanticFileCandidatesFromScan(scan);
+    const retrievalQuery = [
+      userPrompt,
+      String(options.prometheusReason || ""),
+      String(carryForwardSection || ""),
+      String(behaviorPatternsSection || ""),
+    ].join("\n");
+    const ranked = rankSemanticFileCandidates(retrievalQuery, candidates, {
+      tokenBudget: 1100,
+      maxEntries: 16,
+      cacheKey: `prometheus:${repoRoot}:${retrievalQuery}`,
+    });
+    if (ranked.length > 0) {
+      semanticRetrievalSection = compileRankedContextSection(
+        "SEMANTIC FILE PRIORITY (deterministic, token-budgeted)",
+        ranked,
+        { tokenBudget: 1100, maxEntries: 16 },
+      );
     }
-  } catch { /* non-fatal */ }
+  } catch {
+    // Non-fatal — prompt generation continues without semantic retrieval.
+  }
 
   // ── Self-improvement repair feedback injection ────────────────────────────
   let repairFeedbackSection = "";
@@ -4083,6 +4081,7 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
 
   // Architecture drift summary
   if (driftSummarySection) cycleDeltaParts.push(driftSummarySection);
+  if (semanticRetrievalSection) cycleDeltaParts.push(`\n\n${semanticRetrievalSection}`);
   if (mandatoryTasksSection) cycleDeltaParts.push(mandatoryTasksSection);
 
   const cycleDeltaSections = _markCycleDeltaSectionsRequired(

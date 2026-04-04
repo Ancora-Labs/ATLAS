@@ -142,6 +142,36 @@
         "id": "worker-evolution",
         "name": "Evolution Worker",
         "model": "gpt-5.3-codex"
+      },
+      "quality": {
+        "id": "worker-quality",
+        "name": "quality-worker",
+        "model": "gpt-5.3-codex",
+        "lane": "quality"
+      },
+      "governance": {
+        "id": "worker-governance",
+        "name": "governance-worker",
+        "model": "gpt-5.3-codex",
+        "lane": "governance"
+      },
+      "infrastructure": {
+        "id": "worker-infrastructure",
+        "name": "infrastructure-worker",
+        "model": "gpt-5.3-codex",
+        "lane": "infrastructure"
+      },
+      "integration": {
+        "id": "worker-integration",
+        "name": "integration-worker",
+        "model": "gpt-5.3-codex",
+        "lane": "integration"
+      },
+      "observation": {
+        "id": "worker-observation",
+        "name": "observation-worker",
+        "model": "gpt-5.3-codex",
+        "lane": "observation"
       }
     }
   },
@@ -467,6 +497,10 @@
     "sloCascadingBreachConsecutive": 5
   },
   "workerPool": {
-    "minLanes": 1
+    "minLanes": 2,
+    "specializationTargets": {
+      "minSpecializedShare": 0.35,
+      "fitScoreThreshold": 0.65
+    }
   }
 }

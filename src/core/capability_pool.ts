@@ -100,6 +100,21 @@ export const DEFAULT_SPECIALIZATION_TARGETS = Object.freeze({
   minSpecializedShare: 0.35,
 });
 
+export function computeAdaptiveSpecializedShareTarget(
+  baseShare: number,
+  lanePerformance?: LanePerformanceLedger,
+): number {
+  const safeBase = Number.isFinite(baseShare) ? Math.max(0, Math.min(1, baseShare)) : DEFAULT_SPECIALIZATION_TARGETS.minSpecializedShare;
+  const entries = Object.values(lanePerformance || {});
+  if (entries.length === 0) return safeBase;
+  const avgScore = entries.reduce((sum, entry) => {
+    const total = Number(entry?.successes || 0) + Number(entry?.failures || 0);
+    if (!Number.isFinite(total) || total <= 0) return sum + 0.5;
+    return sum + ((Number(entry?.successes || 0) + 1) / (total + 2));
+  }, 0) / entries.length;
+  return Math.round(Math.max(0.15, Math.min(0.9, safeBase + ((avgScore - 0.5) * 0.2))) * 1000) / 1000;
+}
+
 /**
  * @typedef {object} WorkerSelection
  * @property {string} role — selected worker role name
@@ -262,8 +277,9 @@ export function assignWorkersToPlans(
   const specializedShare = assignments.length > 0
     ? Math.round((specializedCount / assignments.length) * 1000) / 1000
     : 0;
-  const minSpecializedShare = Number(config?.workerPool?.specializationTargets?.minSpecializedShare ?? DEFAULT_SPECIALIZATION_TARGETS.minSpecializedShare);
-  const specializationTargetsMet = assignments.length === 0 ? true : specializedShare >= minSpecializedShare;
+  const configuredMinSpecializedShare = Number(config?.workerPool?.specializationTargets?.minSpecializedShare ?? DEFAULT_SPECIALIZATION_TARGETS.minSpecializedShare);
+  const adaptiveMinSpecializedShare = computeAdaptiveSpecializedShareTarget(configuredMinSpecializedShare, lanePerformance);
+  const specializationTargetsMet = assignments.length === 0 ? true : specializedShare >= adaptiveMinSpecializedShare;
 
   const pool = { assignments, diversityIndex, activeLaneCount, laneCounts: Object.fromEntries(laneCounts) };
 
@@ -280,7 +296,8 @@ export function assignWorkersToPlans(
       specializedCount,
       total: assignments.length,
       specializedShare,
-      minSpecializedShare,
+      minSpecializedShare: configuredMinSpecializedShare,
+      adaptiveMinSpecializedShare,
       specializationTargetsMet,
     },
   };

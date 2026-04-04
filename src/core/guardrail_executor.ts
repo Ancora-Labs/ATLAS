@@ -73,7 +73,7 @@
 
 import path from "node:path";
 import { readJson, writeJson } from "./fs_utils.js";
-import { GUARDRAIL_ACTION } from "./catastrophe_detector.js";
+import { GUARDRAIL_ACTION, CATASTROPHE_SCENARIO, isSloCascadingBreachScenario } from "./catastrophe_detector.js";
 
 // ── Schema version ─────────────────────────────────────────────────────────────
 
@@ -127,6 +127,8 @@ export const GUARDRAIL_REASON_CODE = Object.freeze({
   MANUAL_OVERRIDE:            "MANUAL_OVERRIDE",
   /** Action was reverted (disabled/acknowledged) by operator. */
   REVERTED:                   "REVERTED",
+  /** Action was reverted automatically by the system when its trigger condition resolved. */
+  AUTO_REVERTED:              "AUTO_REVERTED",
   /** Action was simulated in dry-run mode — no state written. */
   DRY_RUN:                    "DRY_RUN",
   /** Input detections array is null or undefined. */
@@ -791,4 +793,59 @@ export async function isGuardrailActive(config, action) {
     return Array.isArray(state.entries) && state.entries.length > 0;
   }
   return state.enabled === true && state.revertedAt === null;
+}
+
+// ── Public: Auto-Revert SLO Guardrail When Condition Resolves ─────────────────
+
+/**
+ * Automatically revert the FORCE_CHECKPOINT_VALIDATION guardrail if it was
+ * triggered by SLO_CASCADING_BREACH and the SLO breach streak has since resolved.
+ *
+ * Called once per cycle after catastrophe detection. If the SLO_CASCADING_BREACH
+ * scenario is no longer detected (isSloCurrentlyBreaching === false), any active
+ * FORCE_CHECKPOINT_VALIDATION guardrail with that scenarioId is reverted so
+ * dispatch is unblocked without manual operator intervention.
+ *
+ * @param {object}  config                   — box config object
+ * @param {boolean} isSloCurrentlyBreaching  — true if SLO_CASCADING_BREACH was
+ *                                             detected in the current cycle
+ * @returns {Promise<{ reverted: boolean, reason?: string }>}
+ */
+export async function autoRevertSloGuardrailIfResolved(config, isSloCurrentlyBreaching: boolean): Promise<{ reverted: boolean; reason?: string }> {
+  if (isSloCurrentlyBreaching) {
+    return { reverted: false };
+  }
+
+  try {
+    const contract = await readForceCheckpointValidationContract(config);
+    if (!contract.active) {
+      return { reverted: false };
+    }
+    if (!isSloCascadingBreachScenario(contract.scenarioId)) {
+      return { reverted: false };
+    }
+
+    // Condition has resolved — auto-revert the state file
+    const revertResult = await _revertActionStateFile(config, GUARDRAIL_ACTION.FORCE_CHECKPOINT_VALIDATION, false);
+
+    // Record an AUTO_REVERTED audit entry for observability
+    const actionId = contract.state?.actionId ?? null;
+    await _appendAuditEntry(config, {
+      id:             newId("auto-revert"),
+      type:           GUARDRAIL_AUDIT_ENTRY_TYPE.REVERTED,
+      action:         GUARDRAIL_ACTION.FORCE_CHECKPOINT_VALIDATION,
+      scenarioId:     CATASTROPHE_SCENARIO.SLO_CASCADING_BREACH,
+      reasonCode:     GUARDRAIL_REASON_CODE.AUTO_REVERTED,
+      operatorId:     "system",
+      operatorReason: "SLO_CASCADING_BREACH condition resolved (no consecutive SLO breaches detected this cycle); guardrail auto-reverted by orchestrator",
+      timestamp:      new Date().toISOString(),
+      dryRun:         false,
+      stateFile:      revertResult.stateFile,
+      ...(actionId ? { revertedActionId: actionId } : {}),
+    });
+
+    return { reverted: revertResult.ok, ...(revertResult.ok ? {} : { reason: revertResult.reason }) };
+  } catch (err) {
+    return { reverted: false, reason: `INTERNAL_ERROR: ${String((err as any)?.message || err)}` };
+  }
 }

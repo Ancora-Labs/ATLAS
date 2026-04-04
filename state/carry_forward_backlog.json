@@ -25,8 +25,9 @@
       "closedBy": "src/core/verification_gate.ts — collectArtifactGaps, ARTIFACT_GAP.MISSING_SHA",
       "closedAt": "2025-01-01T00:00:00.000Z",
       "source": "carry_forward_ledger",
-      "debtId": null,
-      "resolutionEvidence": null
+      "debtId": "debt-1-0",
+      "resolutionEvidence": null,
+      "reconciledAt": "2026-04-04T18:36:17.223Z"
     },
     {
       "id": "CF-002",
@@ -36,8 +37,9 @@
       "closedBy": "src/core/verification_gate.ts — collectArtifactGaps, ARTIFACT_GAP.MISSING_TEST_OUTPUT",
       "closedAt": "2025-01-01T00:00:00.000Z",
       "source": "carry_forward_ledger",
-      "debtId": null,
-      "resolutionEvidence": null
+      "debtId": "debt-1-0",
+      "resolutionEvidence": null,
+      "reconciledAt": "2026-04-04T18:36:17.223Z"
     },
     {
       "id": "CF-003",
@@ -47,8 +49,9 @@
       "closedBy": "src/core/verification_command_registry.ts — FORBIDDEN_VERIFICATION_PATTERNS, checkForbiddenCommands",
       "closedAt": "2025-01-01T00:00:00.000Z",
       "source": "carry_forward_ledger",
-      "debtId": null,
-      "resolutionEvidence": null
+      "debtId": "debt-1-0",
+      "resolutionEvidence": null,
+      "reconciledAt": "2026-04-04T18:36:17.223Z"
     },
     {
       "id": "CF-004",
@@ -58,8 +61,9 @@
       "closedBy": "src/core/verification_command_registry.ts — FORBIDDEN_VERIFICATION_PATTERNS, checkForbiddenCommands",
       "closedAt": "2025-01-01T00:00:00.000Z",
       "source": "carry_forward_ledger",
-      "debtId": null,
-      "resolutionEvidence": null
+      "debtId": "debt-1-0",
+      "resolutionEvidence": null,
+      "reconciledAt": "2026-04-04T18:36:17.223Z"
     },
     {
       "id": "CF-005",
@@ -69,9 +73,10 @@
       "closedBy": "src/core/verification_gate.ts — ALL_POST_MERGE_PLACEHOLDERS, checkPostMergeArtifact, ARTIFACT_GAP.UNFILLED_PLACEHOLDER",
       "closedAt": "2025-01-01T00:00:00.000Z",
       "source": "carry_forward_ledger",
-      "debtId": null,
-      "resolutionEvidence": null
+      "debtId": "debt-1-0",
+      "resolutionEvidence": null,
+      "reconciledAt": "2026-04-04T18:36:17.223Z"
     }
   ],
-  "updatedAt": "2026-04-04T16:36:47.251Z"
+  "updatedAt": "2026-04-04T18:36:17.223Z"
 }

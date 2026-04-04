@@ -14,6 +14,7 @@ import {
   markCycleDeltaSectionsRequired,
   PROMPT_BUDGET_PARTITION,
   analyzePacketDensification,
+  compileRankedContextSection,
   validateActionablePacketCompleteness,
   ACTIONABLE_PACKET_CONTRACT_TERMS,
 } from "../../src/core/prompt_compiler.js";
@@ -312,6 +313,22 @@ describe("prompt_compiler", () => {
       assert.ok(CACHE_STABLE_SECTION_NAMES instanceof Set);
       assert.ok(CACHE_STABLE_SECTION_NAMES.has("role"));
       assert.ok(CACHE_STABLE_SECTION_NAMES.has("system"));
+    });
+  });
+
+  describe("compileRankedContextSection()", () => {
+    it("formats ranked context entries and respects token/max limits", () => {
+      const result = compileRankedContextSection(
+        "Semantic Context",
+        [
+          { path: "src/core/orchestrator.ts", score: 3.2, preview: "dispatch gates and lane logic" },
+          { path: "src/core/prometheus.ts", score: 2.9, preview: "planning prompt assembly" },
+        ],
+        { tokenBudget: 80, maxEntries: 1 },
+      );
+      assert.ok(result.includes("## Semantic Context"));
+      assert.ok(result.includes("src/core/orchestrator.ts"));
+      assert.ok(!result.includes("src/core/prometheus.ts"), "must stop at maxEntries/token budget");
     });
   });
 });

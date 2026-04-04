@@ -783,7 +783,7 @@ export const HEALTH_SCORE = Object.freeze({
  */
 export const CYCLE_HEALTH_SCHEMA = Object.freeze({
   schemaVersion: 1,
-  required: ["schemaVersion", "lastCycle", "history", "updatedAt"],
+  required: ["schemaVersion", "lastCycle", "history", "updatedAt", "lastDivergence"],
   healthRecord: Object.freeze({
     required: [
       "cycleId",
@@ -802,6 +802,15 @@ export const CYCLE_HEALTH_SCHEMA = Object.freeze({
   /** Same default cap as cycle_analytics — configurable via config.cycleAnalytics.maxHistoryEntries. */
   defaultMaxHistoryEntries: 50,
 });
+
+export interface CycleHealthDivergenceSnapshot {
+  divergenceState: string;
+  pipelineStatus: string;
+  operationalStatus: string;
+  plannerHealth: string;
+  isWarning: boolean;
+  recordedAt: string;
+}
 
 // ── Internal path helper ──────────────────────────────────────────────────────
 
@@ -921,6 +930,13 @@ export async function persistCycleHealth(config, healthRecord) {
     schemaVersion: CYCLE_HEALTH_SCHEMA.schemaVersion,
     lastCycle: null,
     history: [],
+    lastDivergence: null,
+    divergenceState: "unknown",
+    pipelineStatus: "unknown",
+    operationalStatus: "unknown",
+    plannerHealth: "unknown",
+    isWarning: false,
+    recordedAt: null,
     updatedAt: null,
   });
 
@@ -934,7 +950,57 @@ export async function persistCycleHealth(config, healthRecord) {
     schemaVersion: CYCLE_HEALTH_SCHEMA.schemaVersion,
     lastCycle:     healthRecord,
     history,
+    lastDivergence: existing?.lastDivergence ?? null,
+    divergenceState: String(existing?.divergenceState || "unknown"),
+    pipelineStatus: String(existing?.pipelineStatus || "unknown"),
+    operationalStatus: String(existing?.operationalStatus || "unknown"),
+    plannerHealth: String(existing?.plannerHealth || "unknown"),
+    isWarning: existing?.isWarning === true,
+    recordedAt: existing?.recordedAt || null,
     updatedAt:     new Date().toISOString(),
+  });
+}
+
+export async function persistCycleHealthDivergence(
+  config,
+  divergenceSnapshot: CycleHealthDivergenceSnapshot,
+) {
+  const filePath = cycleHealthPath(config);
+  const existing = await readJson(filePath, {
+    schemaVersion: CYCLE_HEALTH_SCHEMA.schemaVersion,
+    lastCycle: null,
+    history: [],
+    lastDivergence: null,
+    divergenceState: "unknown",
+    pipelineStatus: "unknown",
+    operationalStatus: "unknown",
+    plannerHealth: "unknown",
+    isWarning: false,
+    recordedAt: null,
+    updatedAt: null,
+  });
+
+  const nextDivergence = {
+    divergenceState: String(divergenceSnapshot?.divergenceState || "unknown"),
+    pipelineStatus: String(divergenceSnapshot?.pipelineStatus || "unknown"),
+    operationalStatus: String(divergenceSnapshot?.operationalStatus || "unknown"),
+    plannerHealth: String(divergenceSnapshot?.plannerHealth || "unknown"),
+    isWarning: divergenceSnapshot?.isWarning === true,
+    recordedAt: String(divergenceSnapshot?.recordedAt || new Date().toISOString()),
+  };
+
+  await writeJson(filePath, {
+    schemaVersion: CYCLE_HEALTH_SCHEMA.schemaVersion,
+    lastCycle: existing?.lastCycle ?? null,
+    history: Array.isArray(existing?.history) ? existing.history : [],
+    lastDivergence: nextDivergence,
+    divergenceState: nextDivergence.divergenceState,
+    pipelineStatus: nextDivergence.pipelineStatus,
+    operationalStatus: nextDivergence.operationalStatus,
+    plannerHealth: nextDivergence.plannerHealth,
+    isWarning: nextDivergence.isWarning,
+    recordedAt: nextDivergence.recordedAt,
+    updatedAt: new Date().toISOString(),
   });
 }
 

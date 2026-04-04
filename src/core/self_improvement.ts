@@ -386,6 +386,7 @@ export async function reconcileLearnedPoliciesWithImpact(stateDir: string, outco
     if (!trend || !attribution) return policy;
     return {
       ...policy,
+      interventionKind: String((policy as any)?.interventionKind || "policy-delta"),
       _inactiveCycles: attribution.inactiveCycles,
       _impactImprovementRate: trend.improvementRate,
       _lastDelta: attribution.delta,
@@ -393,6 +394,7 @@ export async function reconcileLearnedPoliciesWithImpact(stateDir: string, outco
       _halfLifeWeight: attribution.halfLifeWeight,
       _decayedEffectiveness: attribution.decayedEffectiveness,
       _impactAttribution: attribution,
+      _retirementStrategy: "measured_uplift",
     };
   });
 

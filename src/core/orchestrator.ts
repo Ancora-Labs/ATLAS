@@ -34,7 +34,7 @@ import { readJson, readJsonSafe, writeJson, cleanupStaleTempFiles, READ_JSON_REA
 import { updatePipelineProgress, readPipelineProgress } from "./pipeline_progress.js";
 import { loadEscalationQueue, sortEscalationQueue, processEscalationQueueClosures } from "./escalation_queue.js";
 import { computeCycleSLOs, persistSloMetrics, detectCoupledAlerts } from "./slo_checker.js";
-import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealth, CYCLE_PHASE, computeRuntimeContractProbe } from "./cycle_analytics.js";
+import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealth, persistCycleHealthDivergence, CYCLE_PHASE, computeRuntimeContractProbe } from "./cycle_analytics.js";
 import { computeBaselineRecoveryState, persistBaselineMetrics, PARSER_CONFIDENCE_RECOVERY_THRESHOLD } from "./parser_baseline_recovery.js";
 import { computeDispatchStrictness, loadReplayRegressionState, DISPATCH_STRICTNESS } from "./parser_replay_harness.js";
 import {
@@ -45,7 +45,7 @@ import {
   MIGRATION_REASON
 } from "./schema_registry.js";
 import { runCatastropheDetection, GUARDRAIL_ACTION, isSloCascadingBreachScenario } from "./catastrophe_detector.js";
-import { executeGuardrailsForDetections, isGuardrailActive, readForceCheckpointValidationContract } from "./guardrail_executor.js";
+import { executeGuardrailsForDetections, isGuardrailActive, readForceCheckpointValidationContract, autoRevertSloGuardrailIfResolved } from "./guardrail_executor.js";
 import { evaluateFreezeGate, isFreezeActive } from "./governance_freeze.js";
 import { detectRecurrences, buildRecurrenceEscalations } from "./recurrence_detector.js";
 import { checkClosureSLA } from "./closure_validator.js";
@@ -2000,54 +2000,40 @@ async function runSingleCycle(config) {
   // ────────────────────────────────────────────────────────────────────────────
   try {
     const stateDir = config.paths?.stateDir || "state";
-    const maxActiveResearchTopics = Number(config.runtime?.scoutMaxActiveTopics ?? 30);
 
     // Read synthesis state
     const synthesisPath = path.join(stateDir, "research_synthesis.json");
-    let synthesisAgeHours = Infinity;
     let synthesisConsumedAt: Date | null = null;
     let synthJson: Record<string, unknown> | null = null;
     try {
       synthJson = await readJson(synthesisPath, null);
-      if (synthJson?.synthesizedAt) {
-        synthesisAgeHours = (Date.now() - new Date(synthJson.synthesizedAt as string).getTime()) / (1000 * 60 * 60);
-      }
       if (synthJson?.lastConsumedAt) {
         synthesisConsumedAt = new Date(synthJson.lastConsumedAt as string);
       }
     } catch { /* ok — file missing means first run, treat as consumed */ }
 
-    // Check active topic count in Prometheus topic memory
-    const topicMemoryPath = path.join(stateDir, "prometheus_topic_memory.json");
-    let activeTopicCount = 0;
-    try {
-      const topicMemory = await readJson(topicMemoryPath, null);
-      if (Array.isArray(topicMemory?.active)) {
-        activeTopicCount = topicMemory.active.length;
-      }
-    } catch { /* ok */ }
-
-    const topicsUnderThreshold = activeTopicCount <= maxActiveResearchTopics;
-
-    // Consumption-triggered: Prometheus wrote lastConsumedAt after the last scout run,
-    // meaning the knowledge was used and needs refreshing before the next cycle.
-    // Also triggers on first run (no synthesis file yet — synthesisAgeHours = Infinity).
+    // Consumption-triggered scout gate:
+    // Scout runs when Prometheus consumed the previous synthesis in a DIFFERENT cycle
+    // from when it was produced (gap > 5 minutes rules out same-cycle consumption).
+    // This is the only gate — topic count is not a scout trigger because topics
+    // accumulate independently of scout cadence and Prometheus always gets them injected.
+    const MIN_CONSUMED_GAP_MS = 5 * 60 * 1000; // 5 minutes
     const synthesisConsumedSinceLastScout =
       synthJson === null || // first run — no synthesis exists yet
       (
         synthesisConsumedAt !== null &&
         synthJson?.synthesizedAt != null &&
         synthesisConsumedAt > new Date(synthJson.synthesizedAt as string) &&
-        synthesisAgeHours >= 1  // guard: synthesis must be at least 1h old to avoid same-cycle double-run
+        (synthesisConsumedAt.getTime() - new Date(synthJson.synthesizedAt as string).getTime()) > MIN_CONSUMED_GAP_MS
       );
 
-    const shouldRunScout = topicsUnderThreshold && synthesisConsumedSinceLastScout;
+    const shouldRunScout = synthesisConsumedSinceLastScout;
 
     if (shouldRunScout) {
       const scoutReason = synthJson === null
         ? "first-run (no synthesis exists)"
         : `consumption-triggered (consumed=${synthesisConsumedAt?.toISOString()}, synthesized=${synthJson.synthesizedAt})`;
-      await appendProgress(config, `[CYCLE] ── Step 1.5: Research Scout (${scoutReason}, activeTopics=${activeTopicCount}) ──`);
+      await appendProgress(config, `[CYCLE] ── Step 1.5: Research Scout (${scoutReason}) ──`);
       await appendProgress(config, `[AGENT] ↯↯↯ RESEARCH SCOUT ↯↯↯  req#${_cycleRequests + 1} this cycle`);
       try {
         const scoutResult = await runResearchScout(config);
@@ -2065,9 +2051,7 @@ async function runSingleCycle(config) {
         await appendProgress(config, `[RESEARCH_SCOUT] Failed (non-fatal): ${String((scoutErr as any)?.message || scoutErr)}`);
       }
     } else {
-      const skipReason = !topicsUnderThreshold
-        ? `activeTopics=${activeTopicCount} > threshold=${maxActiveResearchTopics}`
-        : `synthesis not yet consumed (lastConsumedAt=${synthesisConsumedAt?.toISOString() ?? "none"}, synthesizedAt=${synthJson?.synthesizedAt ?? "none"})`;
+      const skipReason = `synthesis not yet consumed from a separate cycle (lastConsumedAt=${synthesisConsumedAt?.toISOString() ?? "none"}, synthesizedAt=${synthJson?.synthesizedAt ?? "none"}, gap must exceed ${MIN_CONSUMED_GAP_MS / 60000}m)`;
       await appendProgress(config, `[CYCLE] Research Scout skipped — ${skipReason}`);
     }
   } catch (scoutGateErr) {
@@ -3111,6 +3095,21 @@ async function runSingleCycle(config) {
         warn(`[orchestrator] Guardrail execution returned partial/failed status: ${guardResult.reason || "see results"}`);
       }
     }
+
+    // Auto-revert FORCE_CHECKPOINT_VALIDATION if the SLO_CASCADING_BREACH that
+    // triggered it is no longer active this cycle.  Runs unconditionally after
+    // detection so a resolved breach is always cleared without operator action.
+    if (config.systemGuardian?.enabled !== false) {
+      const isSloBreachingNow = catastropheResult.detections.some(
+        d => d.scenarioId === "SLO_CASCADING_BREACH"
+      );
+      const revertResult = await autoRevertSloGuardrailIfResolved(config, isSloBreachingNow);
+      if (revertResult.reverted) {
+        await appendProgress(config, "[GUARDRAIL] FORCE_CHECKPOINT_VALIDATION auto-reverted: SLO_CASCADING_BREACH condition resolved");
+      } else if (revertResult.reason) {
+        warn(`[orchestrator] SLO guardrail auto-revert failed (non-fatal): ${revertResult.reason}`);
+      }
+    }
   } catch (err) {
     // Advisory — never blocks orchestration
     warn(`[orchestrator] Catastrophe detection error (non-fatal): ${String(err?.message || err)}`);
@@ -3145,10 +3144,26 @@ async function runSingleCycle(config) {
     const postmortemsRaw2 = await readJson(path.join(stateDir, "athena_postmortems.json"), null);
     const pmEntries2 = Array.isArray(postmortemsRaw2?.entries) ? postmortemsRaw2.entries : [];
     if (pmEntries2.length > 0) {
-      const policies = compileLessonsToPolicies(pmEntries2);
+      const learnedPolicyPath = path.join(stateDir, "learned_policies.json");
+      const existingPolicies = await readJson(learnedPolicyPath, []);
+      const existingPolicyIds = Array.isArray(existingPolicies)
+        ? existingPolicies.map((policy: any) => String(policy?.id || "")).filter(Boolean)
+        : [];
+      const policies = compileLessonsToPolicies(pmEntries2, { existingPolicies: existingPolicyIds });
       if (policies.length > 0) {
-        await writeJson(path.join(stateDir, "learned_policies.json"), policies);
-        await appendProgress(config, `[POLICY_COMPILER] ${policies.length} lesson-based policies compiled: ${policies.map(p => p.id).join(", ")}`);
+        const mergedPolicies = [
+          ...(Array.isArray(existingPolicies) ? existingPolicies : []),
+          ...policies.map((policy) => ({
+            ...policy,
+            optimizationLoop: {
+              interventionKind: policy?.interventionKind || "policy-delta",
+              impactAttribution: "pending",
+              retirementMode: "measured_uplift",
+            },
+          })),
+        ];
+        await writeJson(learnedPolicyPath, mergedPolicies);
+        await appendProgress(config, `[POLICY_COMPILER] ${policies.length} policy optimization delta(s) compiled: ${policies.map(p => p.id).join(", ")}`);
       }
     }
   } catch (err) {
@@ -3304,6 +3319,9 @@ async function runSingleCycle(config) {
 
   // ── Capacity scoreboard: persist KPIs for trend analysis ──────────────────
   try {
+    const firstBatchSpecialization = Array.isArray(workerBatches) && workerBatches.length > 0
+      ? (workerBatches[0] as any)?.specialistUtilizationTarget
+      : null;
     await appendCapacityEntry(config, {
       parserConfidence: prometheusAnalysis?.parserConfidence ?? null,
       parserCoreConfidence: prometheusAnalysis?.parserCoreConfidence ?? null,
@@ -3314,6 +3332,8 @@ async function runSingleCycle(config) {
       budgetUsed: prometheusAnalysis?.requestBudget?.estimatedPremiumRequestsTotal ?? 0,
       budgetLimit: prometheusAnalysis?.requestBudget?.hardCapTotal ?? 0,
       workersDone: workersDone,
+      specializedShareTarget: Number(firstBatchSpecialization?.adaptiveMinSpecializedShare ?? firstBatchSpecialization?.minSpecializedShare ?? 0),
+      specializedShareTargetMet: firstBatchSpecialization?.targetMet === true,
     });
   } catch (err) {
     warn(`[orchestrator] Capacity scoreboard update failed (non-fatal): ${String(err?.message || err)}`);
@@ -3329,7 +3349,7 @@ async function runSingleCycle(config) {
     const healthFile = await readJson(path.join(stateDir, "orchestrator_health.json"), null);
     const operationalStatus = healthFile?.orchestratorStatus ?? ORCHESTRATOR_STATUS.OPERATIONAL;
     const divergence = computeHealthDivergence(operationalStatus, plannerHealth);
-    await writeJson(path.join(stateDir, "cycle_health.json"), {
+    await persistCycleHealthDivergence(config, {
       ...divergence,
       recordedAt: new Date().toISOString(),
     });

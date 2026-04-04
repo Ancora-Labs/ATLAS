@@ -117,6 +117,47 @@ describe("orchestrator pipeline progress — resilience", () => {
       `stage '${data.stage}' written by orchestrator is not in PIPELINE_STAGE_ENUM`
     );
   });
+
+  it("persists composite cycle_health contract without overwriting runtime health channel", async () => {
+    const cycleHealthPath = path.join(tmpDir, "cycle_health.json");
+    await fs.writeFile(
+      cycleHealthPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        lastCycle: {
+          cycleId: "seed-cycle",
+          healthScore: "degraded",
+          generatedAt: new Date().toISOString(),
+        },
+        history: [],
+        lastDivergence: {
+          divergenceState: "none",
+          pipelineStatus: "healthy",
+          operationalStatus: "operational",
+          plannerHealth: "good",
+          isWarning: false,
+          recordedAt: new Date().toISOString(),
+        },
+        divergenceState: "none",
+        pipelineStatus: "healthy",
+        operationalStatus: "operational",
+        plannerHealth: "good",
+        isWarning: false,
+        recordedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }, null, 2),
+      "utf8",
+    );
+    await runOnce(config);
+    const cycleHealthRaw = await fs.readFile(cycleHealthPath, "utf8");
+    const cycleHealth = JSON.parse(cycleHealthRaw);
+
+    assert.equal(cycleHealth.schemaVersion, 1, "cycle_health.json must keep schemaVersion=1");
+    assert.ok("lastCycle" in cycleHealth, "composite contract must preserve runtime health channel");
+    assert.ok("lastDivergence" in cycleHealth, "composite contract must preserve divergence channel");
+    assert.ok(typeof cycleHealth.divergenceState === "string", "compat top-level divergenceState must be present");
+    assert.ok(typeof cycleHealth.pipelineStatus === "string", "compat top-level pipelineStatus must be present");
+  });
 });
 
 describe("orchestrator escalation closure workflow", () => {

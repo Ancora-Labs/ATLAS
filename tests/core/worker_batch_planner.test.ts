@@ -1218,6 +1218,7 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
     assert.ok(target, "specialist utilization metadata must be present");
     assert.equal(typeof target.fitScoreThreshold, "number");
     assert.equal(typeof target.minSpecializedShare, "number");
+    assert.equal(typeof target.adaptiveMinSpecializedShare, "number");
     assert.equal(typeof target.requiredSpecializedCount, "number");
     assert.equal(typeof target.achievedSpecializedCount, "number");
     assert.equal(typeof target.targetMet, "boolean");

@@ -24,6 +24,7 @@ import {
   readCycleAnalytics,
   computeCycleHealth,
   persistCycleHealth,
+  persistCycleHealthDivergence,
   readCycleHealth,
   CYCLE_PHASE,
   CYCLE_OUTCOME_STATUS,
@@ -1170,6 +1171,29 @@ describe("persistCycleHealth and readCycleHealth", () => {
       const config = makeConfig(dir);
       const data = await readCycleHealth(config);
       assert.equal(data, null);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persistCycleHealthDivergence updates divergence channel without overwriting lastCycle", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "box-health-divergence-"));
+    try {
+      const config = makeConfig(dir);
+      const analytics = computeCycleAnalytics(config, { pipelineProgress: makePipelineProgress({ startedAt: makeTs(0) }) });
+      await persistCycleHealth(config, computeCycleHealth(analytics));
+      await persistCycleHealthDivergence(config, {
+        divergenceState: "planner_warning",
+        pipelineStatus: "warning",
+        operationalStatus: "operational",
+        plannerHealth: "needs-work",
+        isWarning: true,
+        recordedAt: makeTs(500),
+      });
+      const data = await readCycleHealth(config);
+      assert.equal(data.lastCycle.cycleId, analytics.cycleId, "runtime health channel must be preserved");
+      assert.equal(data.lastDivergence.divergenceState, "planner_warning");
+      assert.equal(data.divergenceState, "planner_warning", "top-level compatibility mirror must be preserved");
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

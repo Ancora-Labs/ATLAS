@@ -32,6 +32,12 @@ import {
 } from "./model_policy.js";
 import { deriveRoutingAdjustments, buildPromptHardConstraints } from "./learning_policy_compiler.js";
 import { loadPolicy, getProtectedPathMatches, getRolePathViolations } from "./policy_engine.js";
+import { compileRankedContextSection } from "./prompt_compiler.js";
+import {
+  scanProject,
+  buildSemanticFileCandidatesFromScan,
+  rankSemanticFileCandidates,
+} from "./project_scanner.js";
 import { appendEscalation, BLOCKING_REASON_CLASS, NEXT_ACTION, resolveEscalationsForTask } from "./escalation_queue.js";
 import { buildTaskFingerprint, buildLineageId, LINEAGE_ENTRY_STATUS } from "./lineage_graph.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
@@ -362,6 +368,37 @@ function loadLearnedPolicies(config): any[] {
     return Array.isArray(data) ? data : [];
   } catch {
     return []; // non-critical; missing policy file must never block dispatch
+  }
+}
+
+async function buildSemanticTaskContext(config, instruction): Promise<string> {
+  try {
+    const rootDir = String(config?.rootDir || process.cwd());
+    const scan = await scanProject({ rootDir });
+    const candidates = buildSemanticFileCandidatesFromScan(scan);
+    const retrievalQuery = [
+      String(instruction?.task || ""),
+      String(instruction?.context || ""),
+      String(instruction?.verification || ""),
+      String(instruction?.scope || ""),
+    ].join("\n");
+    const ranked = rankSemanticFileCandidates(retrievalQuery, candidates, {
+      tokenBudget: 550,
+      maxEntries: 8,
+      cacheKey: `worker:${rootDir}:${String(instruction?.taskKind || "general")}:${retrievalQuery}`,
+    });
+    if (ranked.length === 0) return "";
+    return compileRankedContextSection(
+      "SEMANTIC RETRIEVAL CONTEXT (deterministic, token-budgeted)",
+      ranked,
+      { tokenBudget: 550, maxEntries: 8 },
+    );
+  } catch (err) {
+    await appendProgress(
+      config,
+      `[WORKER][SEMANTIC_CONTEXT] retrieval skipped (non-fatal): ${String((err as any)?.message || err)}`
+    );
+    return "";
   }
 }
 
@@ -999,10 +1036,17 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // Resolve worker kind for role-based verification
   const workerConfig = findWorkerByName(config, roleName);
   const workerKind = workerConfig?.kind || null;
+  const semanticContext = await buildSemanticTaskContext(config, instruction);
+  const instructionWithSemanticContext = semanticContext
+    ? {
+      ...instruction,
+      context: [semanticContext, String(instruction?.context || "").trim()].filter(Boolean).join("\n\n"),
+    }
+    : instruction;
 
   // Build conversation-only context with prompt tier budget and hard constraints injected
   const conversationContext = buildConversationContext(
-    history, instruction, sessionState, config, workerKind,
+    history, instructionWithSemanticContext, sessionState, config, workerKind,
     {
       tier,
       hardConstraints,
