@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { writeCheckpoint } from "../../src/core/checkpoint_engine.js";
+import {
+  writeCheckpoint,
+  initializeRunSegmentState,
+  applyRunSegmentRollover,
+} from "../../src/core/checkpoint_engine.js";
 
 const REAL_DATE = Date;
 
@@ -74,6 +78,38 @@ describe("checkpoint_engine", () => {
         value: REAL_DATE,
       });
     }
+  });
+
+  it("initializes run-segment state deterministically", () => {
+    const checkpoint = initializeRunSegmentState({
+      totalPlans: 12,
+      createdAt: "2026-04-04T00:00:00.000Z",
+    }, {
+      spanBatches: 5,
+      historyMax: 3,
+    });
+    assert.equal(checkpoint.runSegment.segmentIndex, 1);
+    assert.equal(checkpoint.runSegment.startBatch, 1);
+    assert.equal(checkpoint.runSegment.endBatch, 5);
+    assert.equal(checkpoint.runSegmentHistoryMax, 3);
+    assert.deepEqual(checkpoint.runSegmentHistory, []);
+  });
+
+  it("rolls over run-segments and caps history size", () => {
+    const base = initializeRunSegmentState({ totalPlans: 13 }, { spanBatches: 5, historyMax: 2 });
+    const r1 = applyRunSegmentRollover({ ...base }, { completedBatches: 5, spanBatches: 5, historyMax: 2 });
+    assert.equal(r1.rolledOver, true);
+    assert.equal((r1.activeSegment as any).segmentIndex, 2);
+    assert.equal((r1.checkpoint as any).runSegmentHistory.length, 1);
+
+    const r2 = applyRunSegmentRollover({ ...(r1.checkpoint as any) }, { completedBatches: 10, spanBatches: 5, historyMax: 2 });
+    assert.equal(r2.rolledOver, true);
+    assert.equal((r2.activeSegment as any).segmentIndex, 3);
+    assert.equal((r2.checkpoint as any).runSegmentHistory.length, 2);
+
+    const r3 = applyRunSegmentRollover({ ...(r2.checkpoint as any) }, { completedBatches: 13, spanBatches: 5, historyMax: 2 });
+    assert.equal(r3.rolledOver, false, "final batch completion should not create extra rollover");
+    assert.equal((r3.checkpoint as any).runSegmentHistory.length, 2, "history must remain bounded");
   });
 });
 

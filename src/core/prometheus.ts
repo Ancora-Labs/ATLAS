@@ -64,6 +64,7 @@ import {
 import { computeFingerprint, classifyCarryForwardByRecurrence } from "./carry_forward_ledger.js";
 import { rewriteVerificationCommand } from "./verification_command_registry.js";
 import { checkCarryForwardGate, hardGateRecurrenceToPolicies } from "./learning_policy_compiler.js";
+import { buildRankedLessonShortlists } from "./lesson_halflife.js";
 import {
   splitWavesIntoMicrowaves as _splitWavesIntoMicrowaves,
   MICROWAVE_MAX_TASKS_DEFAULT as _MICROWAVE_MAX_TASKS_DEFAULT,
@@ -333,6 +334,33 @@ export function buildMandatoryCoverageRetryDiff(result: MandatoryTaskCoverageVal
   const invalidText = invalid.length > 0 ? invalid.join(", ") : "none";
   return `missing=[${sanitizePromptLine(missingText, 600)}]
 invalid=[${sanitizePromptLine(invalidText, 1200)}]`;
+}
+
+export const MANDATORY_COVERAGE_ENFORCE_REJECT_TOKEN = "ENFORCE_REJECT";
+export const MANDATORY_COVERAGE_ENFORCE_EXIT_CODE = 2;
+
+export function applyMandatoryCoverageEnforceReject(
+  payload: any,
+  result: MandatoryTaskCoverageValidationResult,
+): any {
+  const next = (payload && typeof payload === "object") ? payload : {};
+  next._mandatoryTaskCoverageGate = {
+    ok: false,
+    missing: Array.isArray(result?.missing) ? result.missing : [],
+    invalid: Array.isArray(result?.invalid) ? result.invalid : [],
+    mapped: Array.isArray(result?.mapped) ? result.mapped : [],
+    excluded: Array.isArray(result?.excluded) ? result.excluded : [],
+    _retryAttempted: true,
+    logToken: MANDATORY_COVERAGE_ENFORCE_REJECT_TOKEN,
+    exitCode: MANDATORY_COVERAGE_ENFORCE_EXIT_CODE,
+  };
+  next._parserReject = {
+    token: MANDATORY_COVERAGE_ENFORCE_REJECT_TOKEN,
+    exitCode: MANDATORY_COVERAGE_ENFORCE_EXIT_CODE,
+    reason: "mandatory_task_coverage_enforce",
+  };
+  next.plans = [];
+  return next;
 }
 
 function sanitizePromptLine(value: unknown, maxLen = 220): string {
@@ -2668,6 +2696,7 @@ Wrap the JSON companion with markers:
 export const PROMETHEUS_CYCLE_DELTA_SECTION_NAMES: ReadonlySet<string> = new Set([
   "research-intelligence",
   "topic-memory",
+  "postmortem-shortlist",
   "behavior-patterns",
   "carry-forward",
   "diagnostics-freshness",
@@ -2686,7 +2715,11 @@ export const PROMETHEUS_PROMPT_DENSITY_MIN = Object.freeze({
   minTargetFiles: 2,
   minAcceptanceCriteria: 2,
   minTaskChars: 120,
-  minExecutionTokens: 8000,
+  // estimatedExecutionTokens is a batch-packing utility, not a plan quality signal.
+  // The model consistently underestimates this field (~1000 vs expected 8000+) because
+  // it estimates plan-text tokens rather than full-worker-session tokens. Disabling the
+  // token floor prevents valid plans from being rejected on every cycle.
+  minExecutionTokens: 0,
 });
 
 export const RIGIDITY_PENALTY = 0.15 as const;
@@ -3612,6 +3645,7 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
 
   // ── Extract behavior patterns from postmortems ────────────────────────────
   let behaviorPatternsSection = "";
+  let postmortemShortlistSection = "";
   let carryForwardSection = "";
   // Postmortem entries lifted to function scope so the carry-forward gate can
   // evaluate them after plan generation and validation.
@@ -3628,10 +3662,36 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
       ? coordinationData.completedTasks : [];
     const entries = Array.isArray(postmortems?.entries) ? postmortems.entries : [];
     postmortemEntries = entries; // expose to carry-forward gate after plan validation
+    const shortlist = buildRankedLessonShortlists(entries, { limit: 10 });
+    const shortlistLessons = new Set(
+      shortlist.combinedTop10.map((item) => String(item.lesson || "").toLowerCase().replace(/\s+/g, " ").trim()).filter(Boolean),
+    );
+    const unresolvedShortlistLessons = new Set(
+      shortlist.unresolvedTop10.map((item) => String(item.lesson || "").toLowerCase().replace(/\s+/g, " ").trim()).filter(Boolean),
+    );
     
     if (entries.length > 0) {
+      const formatShortlist = (items: Array<{ lesson: string; score: number; impact: number; freshness: number }>) =>
+        items.map((item, index) =>
+          `${index + 1}. ${item.lesson} (score=${item.score.toFixed(2)}, impact=${item.impact.toFixed(2)}, freshness=${item.freshness.toFixed(2)})`
+        ).join("\n");
+      postmortemShortlistSection = `\n\n## POSTMORTEM SHORTLISTS (ranked deterministic top-10)
+Recent:
+${formatShortlist(shortlist.recentTop10)}
+
+High impact:
+${formatShortlist(shortlist.highImpactTop10)}
+
+Unresolved:
+${formatShortlist(shortlist.unresolvedTop10)}`;
+
       // Extract patterns: recurring issues, worker problems, quality trends
-      const last20 = entries.slice(-20);
+      const focusedEntries = entries
+        .filter((entry) => {
+          const lesson = String(entry?.lessonLearned || entry?.lesson || entry?.followUpTask || "").toLowerCase().replace(/\s+/g, " ").trim();
+          return lesson && shortlistLessons.has(lesson);
+        });
+      const last20 = (focusedEntries.length > 0 ? focusedEntries : entries.slice(-10)).slice(-10);
       
       // Count issue patterns
       const issuePatterns: Record<string, any> = {};
@@ -3693,7 +3753,13 @@ Consider whether the root causes are:
       }
       
       // Carry-forward follow-ups — retire items already resolved in ledger or coordination
-      const allPending = entries.filter(e => e.followUpNeeded && e.followUpTask);
+      const allPending = entries
+        .filter(e => e.followUpNeeded && e.followUpTask)
+        .filter((entry) => {
+          if (unresolvedShortlistLessons.size === 0) return true;
+          const followUp = String(entry?.followUpTask || entry?.lessonLearned || "").toLowerCase().replace(/\s+/g, " ").trim();
+          return followUp && unresolvedShortlistLessons.has(followUp);
+        });
       const pending = filterResolvedCarryForwardItems(allPending, cfLedger, coordinationCompletedTasks);
       if (pending.length > 0) {
         const seenFollowUps = new Set();
@@ -3706,7 +3772,8 @@ Consider whether the root causes are:
           seenFollowUps.add(fp);
           deduped.push(e);
         }
-        const classified = classifyCarryForwardByRecurrence(deduped, entries);
+        const shortlistedPending = deduped.slice(-10);
+        const classified = classifyCarryForwardByRecurrence(shortlistedPending, entries);
         const highRec = classified.highRecurrence;
         const lowRec = classified.lowRecurrence.slice(-CARRY_FORWARD_MAX_LOW_RECURRENCE_ITEMS);
         const combined = [...highRec, ...lowRec];
@@ -3845,6 +3912,7 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
 
   // Behavior patterns from postmortems
   if (behaviorPatternsSection) cycleDeltaParts.push(behaviorPatternsSection);
+  if (postmortemShortlistSection) cycleDeltaParts.push(postmortemShortlistSection);
 
   // Carry-forward follow-ups
   if (carryForwardSection) cycleDeltaParts.push(carryForwardSection);
@@ -3863,6 +3931,7 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
       section("research-intelligence", researchTopicsList.length > 0 ? cycleDeltaParts.find(p => p.startsWith("## RESEARCH INTELLIGENCE AVAILABLE")) || "" : ""),
       section("topic-memory", topicMemorySection || ""),
       section("behavior-patterns", behaviorPatternsSection || ""),
+      section("postmortem-shortlist", postmortemShortlistSection || ""),
       section("carry-forward", carryForwardSection || ""),
       section("benchmark", benchmarkSection || ""),
       section("routing-outcomes", routingOutcomeSection || ""),
@@ -3947,6 +4016,9 @@ ${compiledCycleDelta}`;
     result = await spawnAsync(command, args, {
       env: process.env,
       timeoutMs: prometheusTimeoutMs,
+      // Kill the CLI process as soon as ===END=== appears in output — the
+      // model is done and the CLI often hangs open for minutes after this.
+      earlyExitMarker: "===END===",
       onStdout(chunk) {
         const text = chunk.toString("utf8");
         appendLiveLogSync(stateDir, text);
@@ -4083,6 +4155,7 @@ Mandatory parser fields:
           const retryResult = await spawnAsync(command, retryArgs, {
             env: process.env,
             timeoutMs: prometheusTimeoutMs,
+            earlyExitMarker: "===END===",
             onStdout(chunk) {
               const text = chunk.toString("utf8");
               appendLiveLogSync(stateDir, text);
@@ -4191,6 +4264,7 @@ Mandatory requirements:
         const retryResult = await spawnAsync(command, retryArgs, {
           env: process.env,
           timeoutMs: prometheusTimeoutMs,
+          earlyExitMarker: "===END===",
           onStdout(chunk) {
             const text = chunk.toString("utf8");
             appendLiveLogSync(stateDir, text);
@@ -4242,32 +4316,19 @@ Mandatory requirements:
         } else {
           const retryMissing = retryCoverageResult.missing.join(", ") || "none";
           const retryInvalid = retryCoverageResult.invalid.join(", ") || "none";
-          rawParsedInput = retryRawParsedInput;
+          rawParsedInput = applyMandatoryCoverageEnforceReject(retryRawParsedInput, retryCoverageResult);
           rawParsedInput._retryAttempted = true;
-          rawParsedInput._mandatoryTaskCoverageGate = {
-            ok: false,
-            missing: retryCoverageResult.missing,
-            invalid: retryCoverageResult.invalid,
-            mapped: retryCoverageResult.mapped,
-            excluded: retryCoverageResult.excluded,
-            _retryAttempted: true,
-          };
-          rawParsedInput.plans = [];
           await appendProgress(
             config,
-            `[PROMETHEUS][MANDATORY_TASKS] Retry failed coverage — missing=[${retryMissing}] invalid=[${retryInvalid}] | fail-close plans=[]`
+            `[PROMETHEUS][MANDATORY_TASKS][${MANDATORY_COVERAGE_ENFORCE_REJECT_TOKEN}] Retry failed coverage — missing=[${retryMissing}] invalid=[${retryInvalid}] | fail-close plans=[] | exit_code=${MANDATORY_COVERAGE_ENFORCE_EXIT_CODE}`
           );
         }
       } else {
-        rawParsedInput._mandatoryTaskCoverageGate = {
-          ...(rawParsedInput._mandatoryTaskCoverageGate || {}),
-          ok: false,
-          _retryAttempted: true,
-        };
-        rawParsedInput.plans = [];
+        rawParsedInput = applyMandatoryCoverageEnforceReject(rawParsedInput, mandatoryCoverageResult);
+        rawParsedInput._retryAttempted = true;
         await appendProgress(
           config,
-          "[PROMETHEUS][MANDATORY_TASKS] Retry produced no parsable payload — fail-close plans=[]"
+          `[PROMETHEUS][MANDATORY_TASKS][${MANDATORY_COVERAGE_ENFORCE_REJECT_TOKEN}] Retry produced no parsable payload — fail-close plans=[] | exit_code=${MANDATORY_COVERAGE_ENFORCE_EXIT_CODE}`
         );
       }
     } else {

@@ -108,7 +108,8 @@
     "verificationCommandTimeoutMs": 3600000,
     "workerContextTokenLimit": 150000,
     "trustBoundaryMode": "warn",
-    "planQualityMinScore": 0
+    "planQualityMinScore": 0,
+    "mandatoryTaskCoverageMode": "enforce"
   },
   "roadmap": {
     "strategy": "roadmap-first",

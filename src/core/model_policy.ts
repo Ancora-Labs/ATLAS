@@ -93,6 +93,14 @@ export interface HardTaskEscalationSignal {
   uncertaintyScore: number;
 }
 
+export interface RetryExpectedRoiSignal {
+  allowRetry: boolean;
+  expectedGain: number;
+  threshold: number;
+  reason: string;
+  attempt: number;
+}
+
 export interface DeliberationPolicy {
   mode: "single-pass" | "multi-attempt";
   attempts: number;
@@ -999,6 +1007,74 @@ function deriveLatestBenchmarkSignal(benchmarkGroundTruth: any): {
     avgBenchmarkScore: Math.round(avgBenchmarkScore * 1000) / 1000,
     avgCapacityGain: Math.round(avgCapacityGain * 1000) / 1000,
     unresolvedRatio: Math.round(unresolvedRatio * 1000) / 1000,
+  };
+}
+
+export const RETRY_EXPECTED_GAIN_MIN_THRESHOLD = 0.18;
+
+function deriveRoutingOutcomeSignal(premiumUsageData: any, taskKind: string): {
+  sampleCount: number;
+  successRate: number;
+} {
+  const rows = Array.isArray(premiumUsageData) ? premiumUsageData : [];
+  if (rows.length === 0) return { sampleCount: 0, successRate: 0 };
+  const key = String(taskKind || "general").trim().toLowerCase();
+  const filtered = rows
+    .filter((row) => row && typeof row === "object")
+    .filter((row) => {
+      const rowKind = String((row as any).taskKind || "general").trim().toLowerCase();
+      return rowKind === key;
+    })
+    .slice(-30);
+  if (filtered.length === 0) return { sampleCount: 0, successRate: 0 };
+  const done = filtered.reduce((acc, row) => {
+    const status = String((row as any).outcome || "").toLowerCase().trim();
+    return acc + (status === "done" ? 1 : 0);
+  }, 0);
+  return {
+    sampleCount: filtered.length,
+    successRate: Math.round(clamp01(done / filtered.length) * 1000) / 1000,
+  };
+}
+
+export function assessRetryExpectedROI(input: {
+  attempt: number;
+  maxRetries?: number;
+  taskKind?: string;
+  premiumUsageData?: any;
+  benchmarkGroundTruth?: any;
+  minExpectedGain?: number;
+}): RetryExpectedRoiSignal {
+  const attempt = Math.max(1, Math.floor(Number(input?.attempt) || 1));
+  const maxRetries = Math.max(1, Math.floor(Number(input?.maxRetries) || 3));
+  const taskKind = String(input?.taskKind || "general");
+  const threshold = Number.isFinite(Number(input?.minExpectedGain))
+    ? Math.max(0, Number(input?.minExpectedGain))
+    : RETRY_EXPECTED_GAIN_MIN_THRESHOLD;
+  if (attempt > maxRetries) {
+    return {
+      allowRetry: false,
+      expectedGain: 0,
+      threshold,
+      reason: `retry-cap-reached(attempt=${attempt}, max=${maxRetries})`,
+      attempt,
+    };
+  }
+  const outcome = deriveRoutingOutcomeSignal(input?.premiumUsageData, taskKind);
+  const benchmark = deriveLatestBenchmarkSignal(input?.benchmarkGroundTruth);
+  const successSignal = outcome.sampleCount > 0 ? outcome.successRate : 0.5;
+  const benchmarkSignal = benchmark.sampleCount > 0
+    ? clamp01((benchmark.avgBenchmarkScore + benchmark.avgCapacityGain + (1 - benchmark.unresolvedRatio)) / 3)
+    : 0.5;
+  const attemptDecay = 1 / attempt;
+  const expectedGain = Math.round(clamp01(successSignal * benchmarkSignal * attemptDecay) * 1000) / 1000;
+  const allowRetry = expectedGain >= threshold;
+  return {
+    allowRetry,
+    expectedGain,
+    threshold,
+    reason: `retry-roi(taskKind=${taskKind}, success=${successSignal.toFixed(2)}, benchmark=${benchmarkSignal.toFixed(2)}, attempt=${attempt})`,
+    attempt,
   };
 }
 

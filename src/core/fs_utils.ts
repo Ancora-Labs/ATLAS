@@ -247,9 +247,30 @@ export function spawnAsync(command, args, options) {
       child.stdin.write(stdinInput);
       child.stdin.end();
     }
+    // earlyExitMarker: if set, kill the child process as soon as the marker
+    // appears in stdout — avoids waiting for CLI process exit when the model
+    // has already emitted a terminal output boundary (e.g. ===END===).
+    const earlyExitMarker: string | undefined = options.earlyExitMarker;
+    let earlyExitBuffer = "";
+
     child.stdout.on("data", (chunk) => {
       stdoutChunks.push(chunk);
       if (options.onStdout) options.onStdout(chunk);
+      if (earlyExitMarker && !settled) {
+        earlyExitBuffer += chunk.toString("utf8");
+        if (earlyExitBuffer.includes(earlyExitMarker)) {
+          if (settled) return;
+          settled = true;
+          if (timer) clearTimeout(timer);
+          try { child.kill("SIGKILL"); } catch { /* already gone */ }
+          resolve({
+            status: 0,
+            stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+            stderr: Buffer.concat(stderrChunks).toString("utf8"),
+            earlyExit: true
+          });
+        }
+      }
     });
     child.stderr.on("data", (chunk) => {
       stderrChunks.push(chunk);
