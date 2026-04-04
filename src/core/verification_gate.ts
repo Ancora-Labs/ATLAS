@@ -472,6 +472,21 @@ export function parseVerificationReport(output) {
   return report;
 }
 
+/**
+ * True when output includes a parseable VERIFICATION_REPORT with at least one
+ * canonical evidence field.
+ */
+export function hasVerificationReportEvidence(output: unknown): boolean {
+  const report = parseVerificationReport(String(output || ""));
+  if (!report || typeof report !== "object") return false;
+  const evidenceKeys = ["build", "tests", "responsive", "api", "edgeCases", "security"];
+  for (const key of evidenceKeys) {
+    const value = String((report as Record<string, unknown>)[key] || "").trim().toLowerCase();
+    if (CANONICAL_REPORT_VALUES.has(value)) return true;
+  }
+  return false;
+}
+
 function hasVerificationReportPlaceholders(output: string): boolean {
   const text = String(output || "");
   return text.includes(VERIFICATION_REPORT_PLACEHOLDER);

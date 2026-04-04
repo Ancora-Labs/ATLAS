@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { inferCapabilityTag, selectWorkerForPlan, assignWorkersToPlans, enforceLaneDiversity, computeDispatchMetrics, buildWorkerChain, detectLaneConflicts, recordLaneOutcome, getLaneScore, scoreWorkerTaskFit, selectWorkerByFitScore } from "../../src/core/capability_pool.js";
+import { inferCapabilityTag, selectWorkerForPlan, assignWorkersToPlans, enforceLaneDiversity, computeDispatchMetrics, buildWorkerChain, detectLaneConflicts, recordLaneOutcome, getLaneScore, scoreWorkerTaskFit, selectWorkerByFitScore, buildLanePerformanceFromCycleTelemetry } from "../../src/core/capability_pool.js";
 
 describe("capability_pool", () => {
   describe("inferCapabilityTag", () => {
@@ -688,5 +688,26 @@ describe("capability_pool — roiToLaneScore", () => {
         `roiToLaneScore must be non-decreasing: roi=${rois[i - 1]}→${scores[i - 1]}, roi=${rois[i]}→${scores[i]}`
       );
     }
+  });
+});
+
+describe("capability_pool — buildLanePerformanceFromCycleTelemetry", () => {
+  it("builds lane performance entries from telemetry completion/failure counts", () => {
+    const ledger = buildLanePerformanceFromCycleTelemetry({
+      quality: { completed: 3, failed: 1 },
+      governance: { completed: 2, failed: 0 },
+    });
+    assert.equal(ledger.quality.successes, 3);
+    assert.equal(ledger.quality.failures, 1);
+    assert.equal(ledger.governance.successes, 2);
+    assert.equal(ledger.governance.failures, 0);
+  });
+
+  it("negative path: ignores non-numeric telemetry rows", () => {
+    const ledger = buildLanePerformanceFromCycleTelemetry({
+      quality: { completed: "bad", failed: 1 },
+      implementation: null,
+    } as any);
+    assert.deepEqual(ledger, {});
   });
 });

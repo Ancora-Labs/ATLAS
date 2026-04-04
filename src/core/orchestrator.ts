@@ -23,7 +23,7 @@ import { readStopRequest, writeDaemonPid, clearDaemonPid, clearStopRequest, read
 import { loadConfig } from "../config.js";
 import { runJesusCycle } from "./jesus_supervisor.js";
 import { runPrometheusAnalysis } from "./prometheus.js";
-import { runAthenaPlanReview, ATHENA_PLAN_REVIEW_REASON_CODE } from "./athena_reviewer.js";
+import { runAthenaPlanReview, ATHENA_PLAN_REVIEW_REASON_CODE, hasFiniteAthenaOverallScore } from "./athena_reviewer.js";
 import { runWorkerConversation } from "./worker_runner.js";
 import { runSelfImprovementCycle, shouldTriggerSelfImprovement } from "./self_improvement.js";
 import { collectEvolutionMetrics } from "./evolution_metrics.js";
@@ -2240,7 +2240,7 @@ async function runSingleCycle(config) {
     planReview = { approved: false, reason, blocker, corrections: [] };
   }
 
-  if (planReview?.approved === true && !Number.isFinite(Number(planReview?.overallScore))) {
+  if (planReview?.approved === true && !hasFiniteAthenaOverallScore(planReview)) {
     const reason = {
       code: ATHENA_PLAN_REVIEW_REASON_CODE.SCORE_CONTRACT_VIOLATION,
       message: "Athena approved response missing valid overallScore (expected numeric 1-10)"
@@ -2655,7 +2655,7 @@ async function runSingleCycle(config) {
 
   const dispatchCheckpoint = await beginDispatchCheckpoint(config, workerBatches, plans.length);
   let workersDone = 0;
-  const allWorkerResults: Array<{ roleName: string; status: string }> = [];
+  const allWorkerResults: Array<{ roleName: string; status: string; verificationEvidence?: string | null }> = [];
   // Collects (taskText, verificationEvidence) from successful workers for
   // carry-forward auto-close matching at end of cycle.
   const resolvedPlanItems: Array<{ taskText: string; verificationEvidence: string }> = [];
@@ -2731,7 +2731,11 @@ async function runSingleCycle(config) {
     }
 
     workersDone += 1;
-    allWorkerResults.push({ roleName: batch.role, status: String(workerResult?.status || "unknown") });
+    allWorkerResults.push({
+      roleName: batch.role,
+      status: String(workerResult?.status || "unknown"),
+      verificationEvidence: workerResult?.verificationEvidence ? String(workerResult.verificationEvidence) : null,
+    });
 
     // Collect plan tasks with verification evidence for carry-forward auto-close.
     // Only plans from successful batches with real evidence qualify.
@@ -2857,6 +2861,8 @@ async function runSingleCycle(config) {
       workerResults: allWorkerResults.length > 0 ? allWorkerResults : null,
       planCount: Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans.length : null,
       phase: CYCLE_PHASE.COMPLETED,
+      prometheusAnalysis,
+      athenaPlanReview: planReview,
       parserBaselineRecovery: baselineRecoveryRecord ?? null,
       funnelCounts: {
         generated:  Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans.length : null,

@@ -1063,6 +1063,13 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
       modelContextReserveTokens: 0,
     },
   };
+  const rerouteConfig = {
+    paths: { stateDir: "__missing_state_for_test__" },
+    ...config,
+    workerPool: {
+      specializationTargets: { fitScoreThreshold: 0.99 },
+    },
+  };
 
   function makePlan(role: string, task: string) {
     return {
@@ -1078,10 +1085,10 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
     // governance-worker with one tiny task — well below 100% of context
     const plans = [
       makePlan("evolution-worker", "Big evo task " + "x".repeat(200)),
-      makePlan("governance-worker", "Small gov task"),
+      makePlan("governance-worker", "Small generic maintenance task"),
     ];
 
-    const batches = buildTokenFirstBatches(plans, config);
+    const batches = buildTokenFirstBatches(plans, rerouteConfig);
 
     // Both plans should be in evolution-worker batches (governance rerouted)
     for (const batch of batches) {
@@ -1090,6 +1097,29 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
     }
     // Should produce fewer batches than 2
     assert.ok(batches.length <= 2, "should not produce more than 2 batches");
+  });
+
+  it("keeps specialist lane when fit score is above threshold even below fill threshold", () => {
+    const lockConfig = {
+      ...config,
+      paths: { stateDir: "__missing_state_for_test__" },
+    };
+    const plans = [
+      makePlan("governance-worker", "Update governance freeze policy rules"),
+    ];
+    const batches = buildTokenFirstBatches(plans, lockConfig);
+    assert.equal(batches.length, 1);
+    assert.equal(batches[0].role, "governance-worker");
+    const plan = (batches[0].plans as any[])[0];
+    assert.equal(plan._specialistFitLocked, true, "high-fit specialist plan must be locked to specialist lane");
+  });
+
+  it("negative path: high threshold disables specialist lock and allows reroute", () => {
+    const plans = [
+      makePlan("governance-worker", "Update governance freeze policy rules"),
+    ];
+    const batches = buildTokenFirstBatches(plans, rerouteConfig);
+    assert.equal(batches[0].role, "evolution-worker");
   });
 
   it("keeps specialist batch when fill threshold is met", () => {
@@ -1132,7 +1162,7 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
       makePlan("observation-worker", "tiny obs task"),
     ];
 
-    const batches = buildTokenFirstBatches(plans, config);
+    const batches = buildTokenFirstBatches(plans, rerouteConfig);
     assert.equal(batches[0].role, "evolution-worker");
     const plan = (batches[0].plans as any[])[0];
     assert.equal(plan._originalSpecialistRole, "observation-worker");
@@ -1143,7 +1173,7 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
       makePlan("evolution-worker", "tiny task"),
     ];
 
-    const batches = buildTokenFirstBatches(plans, config);
+    const batches = buildTokenFirstBatches(plans, rerouteConfig);
     assert.equal(batches.length, 1);
     assert.equal(batches[0].role, "evolution-worker");
   });
@@ -1156,7 +1186,7 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
       { ...makePlan("governance-worker", "gov w2"), wave: 2, dependencies: ["gov w1"] },
     ];
 
-    const batches = buildTokenFirstBatches(plans, config);
+    const batches = buildTokenFirstBatches(plans, rerouteConfig);
     // All output batches must have wave 1 (wave collapsing is the documented behavior)
     for (const batch of batches) {
       assert.equal(batch.wave, 1, "buildTokenFirstBatches must collapse all waves to 1");
@@ -1168,11 +1198,26 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
       makePlan("governance-worker", "small task"),
     ];
 
-    const batches = buildTokenFirstBatches(plans, config);
+    const batches = buildTokenFirstBatches(plans, rerouteConfig);
     const reroutes = (batches[0] as any).specialistReroutes;
     assert.ok(Array.isArray(reroutes), "should have specialistReroutes array");
     assert.ok(reroutes.length > 0, "should have at least one reroute entry");
     assert.ok(reroutes[0].includes("governance-worker"), "reroute should mention governance-worker");
+  });
+
+  it("emits specialist utilization target metadata on each batch", () => {
+    const plans = [
+      makePlan("evolution-worker", "General implementation task"),
+      makePlan("quality-worker", "Add test coverage for parser"),
+    ];
+    const batches = buildTokenFirstBatches(plans, config);
+    const target = (batches[0] as any).specialistUtilizationTarget;
+    assert.ok(target, "specialist utilization metadata must be present");
+    assert.equal(typeof target.fitScoreThreshold, "number");
+    assert.equal(typeof target.minSpecializedShare, "number");
+    assert.equal(typeof target.requiredSpecializedCount, "number");
+    assert.equal(typeof target.achievedSpecializedCount, "number");
+    assert.equal(typeof target.targetMet, "boolean");
   });
 
   it("separates same-role conflicting file plans into distinct token-first batches", () => {

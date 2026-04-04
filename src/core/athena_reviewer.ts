@@ -2097,6 +2097,12 @@ function buildPlanReviewBlocker(code: string, source = "athena_reviewer") {
   };
 }
 
+export function hasFiniteAthenaOverallScore(review: unknown): boolean {
+  if (!review || typeof review !== "object") return false;
+  const score = Number((review as Record<string, unknown>).overallScore);
+  return Number.isFinite(score);
+}
+
 export function formatDecisionFieldDiff(raw: any): string[] {
   const payload = pickReviewerPayload(raw);
   const statusOrVerdict = String(payload?.status || payload?.verdict || "").trim();

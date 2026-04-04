@@ -47,6 +47,10 @@
 import path from "node:path";
 import { readJson, writeJson } from "./fs_utils.js";
 import { SLO_TIMESTAMP_CONTRACT, SLO_METRIC } from "./slo_checker.js";
+import { hasVerificationReportEvidence } from "./verification_gate.js";
+import { hasFiniteAthenaOverallScore } from "./athena_reviewer.js";
+import { hasPrometheusRuntimeContractSignals } from "./prometheus.js";
+import { getLaneForWorkerName } from "./role_registry.js";
 
 // ── Funnel helpers ─────────────────────────────────────────────────────────────
 
@@ -169,6 +173,8 @@ export const CYCLE_ANALYTICS_SCHEMA = Object.freeze({
       "causalLinks",
       "canonicalEvents",
       "missingData",
+      "runtimeContractProbe",
+      "laneTelemetry",
       "stageTransitions",
       "dropReasons",
     ],
@@ -182,6 +188,77 @@ export const CYCLE_ANALYTICS_SCHEMA = Object.freeze({
   /** Configurable via config.cycleAnalytics.maxHistoryEntries. */
   defaultMaxHistoryEntries: 50,
 });
+
+function hasDoneWorkerWithVerificationEvidence(workerResults: unknown): boolean {
+  if (!Array.isArray(workerResults)) return false;
+  return workerResults.some((item) => {
+    if (!item || typeof item !== "object") return false;
+    const row = item as Record<string, unknown>;
+    const status = String(row.status || "").toLowerCase();
+    if (status !== "done" && status !== "success") return false;
+    const evidence = String(
+      row.verificationEvidence
+      || row.verification_report
+      || row.verificationReport
+      || row.fullOutput
+      || "",
+    );
+    return hasVerificationReportEvidence(evidence);
+  });
+}
+
+export function computeRuntimeContractProbe(opts: {
+  prometheusAnalysis?: unknown;
+  athenaPlanReview?: unknown;
+  workerResults?: unknown;
+} = {}) {
+  const prometheusPass = hasPrometheusRuntimeContractSignals(opts.prometheusAnalysis);
+  const athenaPass = hasFiniteAthenaOverallScore(opts.athenaPlanReview);
+  const workerPass = hasDoneWorkerWithVerificationEvidence(opts.workerResults);
+  const passed = prometheusPass && athenaPass && workerPass;
+  return {
+    checkedAt: new Date().toISOString(),
+    passed,
+    criteria: {
+      prometheusGeneratedAtAndKeyFindings: { pass: prometheusPass },
+      athenaPlanReviewOverallScoreFinite: { pass: athenaPass },
+      doneWorkerWithVerificationReportEvidence: { pass: workerPass },
+    },
+  };
+}
+
+function computeLaneTelemetry(workerResults: Array<{ roleName: string; status: string }> | null): Record<string, {
+  dispatched: number;
+  completed: number;
+  failed: number;
+  completionRate: number;
+  roi: number;
+}> {
+  if (!Array.isArray(workerResults) || workerResults.length === 0) return {};
+  const byLane = new Map<string, { dispatched: number; completed: number; failed: number }>();
+  for (const result of workerResults) {
+    const lane = getLaneForWorkerName(result?.roleName, "implementation");
+    const current = byLane.get(lane) || { dispatched: 0, completed: 0, failed: 0 };
+    current.dispatched += 1;
+    const status = String(result?.status || "").toLowerCase();
+    if (status === "done" || status === "success") current.completed += 1;
+    if (status === "error" || status === "failed") current.failed += 1;
+    byLane.set(lane, current);
+  }
+  const output: Record<string, { dispatched: number; completed: number; failed: number; completionRate: number; roi: number }> = {};
+  for (const [lane, row] of byLane.entries()) {
+    const completionRate = row.dispatched > 0 ? row.completed / row.dispatched : 0;
+    const roi = row.completed / Math.max(1, row.failed);
+    output[lane] = {
+      dispatched: row.dispatched,
+      completed: row.completed,
+      failed: row.failed,
+      completionRate: Math.round(completionRate * 1000) / 1000,
+      roi: Math.round(roi * 1000) / 1000,
+    };
+  }
+  return output;
+}
 
 /**
  * The 5 canonical pipeline stage names used as KPI inputs.
@@ -412,6 +489,8 @@ export function computeCycleAnalytics(config, {
   workerResults = null,
   planCount = null,
   phase = CYCLE_PHASE.COMPLETED,
+  prometheusAnalysis = null,
+  athenaPlanReview = null,
   parserBaselineRecovery = null,
   funnelCounts = null,
   tierCounts = null,
@@ -523,6 +602,12 @@ export function computeCycleAnalytics(config, {
 
   // Confidence (deterministic, not statistical)
   const confidence = computeConfidence(canonicalEvents, sloRecord, pipelineProgress);
+  const runtimeContractProbe = computeRuntimeContractProbe({
+    prometheusAnalysis,
+    athenaPlanReview,
+    workerResults,
+  });
+  const laneTelemetry = computeLaneTelemetry(safeWorkerResults as Array<{ roleName: string; status: string }> | null);
 
   const cycleId = pipelineProgress?.startedAt ?? sloRecord?.cycleId ?? null;
 
@@ -592,6 +677,8 @@ export function computeCycleAnalytics(config, {
     causalLinks,
     canonicalEvents,
     missingData,
+    runtimeContractProbe,
+    laneTelemetry,
     parserBaselineRecovery: parserBaselineRecovery ?? null,
     stageTransitions: Array.isArray(stageTransitions) ? stageTransitions : [],
     dropReasons:      Array.isArray(dropReasons) ? dropReasons : [],

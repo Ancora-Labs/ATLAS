@@ -3,7 +3,7 @@ import { enforceModelPolicy } from "./model_policy.js";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { resolveDependencyGraph, GRAPH_STATUS } from "./dependency_graph_resolver.js";
-import { enforceLaneDiversity, selectWorkerByFitScore, LanePerformanceLedger } from "./capability_pool.js";
+import { enforceLaneDiversity, selectWorkerByFitScore, LanePerformanceLedger, buildLanePerformanceFromCycleTelemetry } from "./capability_pool.js";
 import { compactSingletonWaves } from "./dag_scheduler.js";
 import { rankModelsByTaskKindExpectedValue } from "./model_policy.js";
 import {
@@ -149,6 +149,12 @@ function loadCycleAnalyticsTelemetry(config: any): any | null {
   } catch {
     return null;
   }
+}
+
+function resolveSpecialistFitThreshold(config: any): number {
+  const raw = Number(config?.workerPool?.specializationTargets?.fitScoreThreshold);
+  if (!Number.isFinite(raw)) return 0.65;
+  return Math.max(0, Math.min(1, raw));
 }
 
 function resolveConfiguredContextWindow(config, modelName) {
@@ -1131,6 +1137,27 @@ export function buildTokenFirstBatches(
   // Wave barriers are fully disabled.  All plans collapse to wave 1 so they
   // can be packed purely by role + token capacity.
   const workingPlans: any[] = plans.map(p => ({ ...p, wave: 1 }));
+  const telemetry = loadCycleAnalyticsTelemetry(config);
+  const laneTelemetry = telemetry?.lastCycle?.laneTelemetry ?? {};
+  const lanePerformance = buildLanePerformanceFromCycleTelemetry(laneTelemetry);
+  const specialistFitThreshold = resolveSpecialistFitThreshold(config);
+  const minSpecializedShare = Number((config as any)?.workerPool?.specializationTargets?.minSpecializedShare ?? 0.35);
+  const requiredSpecializedCount = Math.max(0, Math.ceil(workingPlans.length * minSpecializedShare));
+  let specialistAssignedCount = 0;
+
+  // Dispatch-time specialist utilization target:
+  // lock specialist routing when fit score clears the configured threshold.
+  for (const plan of workingPlans) {
+    const selection = selectWorkerByFitScore(plan, config, lanePerformance);
+    plan._fitScore = selection.fitScore;
+    plan._fitLane = selection.lane;
+    if (selection.role !== "Evolution Worker" && selection.fitScore >= specialistFitThreshold) {
+      plan._originalRole = plan.role;
+      plan.role = selection.role;
+      plan._specialistFitLocked = true;
+      specialistAssignedCount += 1;
+    }
+  }
 
   // ── Group by role ─────────────────────────────────────────────────────────
   // Different roles must never be merged into the same worker batch.
@@ -1166,6 +1193,8 @@ export function buildTokenFirstBatches(
 
   for (const [key, group] of byRole) {
     if (SPECIALIST_EXEMPT_ROLES.has(group.role)) continue;
+    const hasLockedSpecialistPlan = group.plans.some((plan: any) => plan?._specialistFitLocked === true);
+    if (hasLockedSpecialistPlan) continue;
     const groupCoeff = getCoeff(group.role);
     const groupTokens = group.plans.reduce((sum, p) => sum + estimatePlanTokens(p, groupCoeff), 0);
     if (groupTokens < minSpecialistTokens) {
@@ -1251,6 +1280,13 @@ export function buildTokenFirstBatches(
     ...batch,
     bundleIndex: index + 1,
     totalBundles: flattened.length,
+    specialistUtilizationTarget: {
+      fitScoreThreshold: specialistFitThreshold,
+      minSpecializedShare,
+      requiredSpecializedCount,
+      achievedSpecializedCount: specialistAssignedCount,
+      targetMet: specialistAssignedCount >= requiredSpecializedCount,
+    },
     ...(reroutedRoles.length > 0 ? { specialistReroutes: reroutedRoles } : {}),
   }));
 }

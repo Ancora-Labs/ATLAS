@@ -22,7 +22,7 @@
     "autonomousTaskSplitOnFailure": true,
     "maxQueuedTasks": 30,
     "runningTaskTimeoutMinutes": 0,
-    "workerTimeoutMinutes": 0,
+    "workerTimeoutMinutes": 90,
     "blockedTaskRequeueMinutes": 120,
     "semanticFailureWindowMinutes": 180,
     "semanticFailureMaxCount": 3,

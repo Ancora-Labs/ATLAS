@@ -11,7 +11,7 @@
  * optimal worker for each plan.
  */
 
-import { LANE_WORKER_NAMES, WORKER_CAPABILITIES } from "./role_registry.js";
+import { LANE_WORKER_NAMES, WORKER_CAPABILITIES, getLaneForWorkerName } from "./role_registry.js";
 
 /**
  * Per-lane outcome accumulator.  Populated by callers (e.g. orchestrator or
@@ -512,7 +512,7 @@ export function selectWorkerByFitScore(
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
 
   const best = scored[0] ?? { name: "Evolution Worker", score: 0 };
-  const lane = Object.entries(LANE_WORKER_NAMES).find(([, n]) => n === best.name)?.[0] ?? "implementation";
+  const lane = getLaneForWorkerName(best.name, "implementation");
   const capTag = inferCapabilityTag(plan);
 
   return {
@@ -523,6 +523,25 @@ export function selectWorkerByFitScore(
     performanceScore: getLaneScore(ledger ?? {}, lane),
     fitScore: best.score,
   };
+}
+
+export function buildLanePerformanceFromCycleTelemetry(telemetry: unknown): LanePerformanceLedger {
+  if (!telemetry || typeof telemetry !== "object") return {};
+  const lanePerformance: LanePerformanceLedger = {};
+  for (const [lane, raw] of Object.entries(telemetry as Record<string, unknown>)) {
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw as Record<string, unknown>;
+    const successes = Number(entry.completed);
+    const failures = Number(entry.failed);
+    if (!Number.isFinite(successes) || !Number.isFinite(failures)) continue;
+    lanePerformance[lane] = {
+      successes: Math.max(0, Math.floor(successes)),
+      failures: Math.max(0, Math.floor(failures)),
+      totalMs: 0,
+      lastUpdated: new Date().toISOString(),
+    };
+  }
+  return lanePerformance;
 }
 
 /**

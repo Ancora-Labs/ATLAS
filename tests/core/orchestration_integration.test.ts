@@ -39,6 +39,7 @@ import {
   runInterventionOptimizer,
   OPTIMIZER_STATUS,
 } from "../../src/core/intervention_optimizer.js";
+import { computeRuntimeContractProbe } from "../../src/core/cycle_analytics.js";
 
 // ── 1. Dependency Wave Order ───────────────────────────────────────────────────
 
@@ -975,5 +976,45 @@ describe("Integration: fit-scored dispatch with bounded fallback promotion", () 
       scoreWithHistory >= scoreWithoutHistory,
       `healthy ledger (${scoreWithHistory}) must not decrease fit score vs no history (${scoreWithoutHistory})`
     );
+  });
+});
+
+describe("Integration: runtime contract cycle-proof probe", () => {
+  it("passes when Prometheus, Athena, and worker verification seams are all valid", () => {
+    const probe = computeRuntimeContractProbe({
+      prometheusAnalysis: {
+        generatedAt: "2026-04-04T12:00:00.000Z",
+        keyFindings: "Parser contract fields are present and non-empty.",
+      },
+      athenaPlanReview: { overallScore: 8.5 },
+      workerResults: [{
+        roleName: "quality-worker",
+        status: "done",
+        verificationEvidence: "===VERIFICATION_REPORT===\nBUILD=pass\nTESTS=pass\n===END_VERIFICATION===",
+      }],
+    });
+
+    assert.equal(probe.passed, true);
+    assert.equal(probe.criteria.prometheusGeneratedAtAndKeyFindings.pass, true);
+    assert.equal(probe.criteria.athenaPlanReviewOverallScoreFinite.pass, true);
+    assert.equal(probe.criteria.doneWorkerWithVerificationReportEvidence.pass, true);
+  });
+
+  it("fails when a done worker does not provide VERIFICATION_REPORT evidence", () => {
+    const probe = computeRuntimeContractProbe({
+      prometheusAnalysis: {
+        generatedAt: "2026-04-04T12:00:00.000Z",
+        keyFindings: "Signals exist.",
+      },
+      athenaPlanReview: { overallScore: 7 },
+      workerResults: [{
+        roleName: "Evolution Worker",
+        status: "done",
+        verificationEvidence: "Finished implementation with no verification block.",
+      }],
+    });
+
+    assert.equal(probe.passed, false);
+    assert.equal(probe.criteria.doneWorkerWithVerificationReportEvidence.pass, false);
   });
 });

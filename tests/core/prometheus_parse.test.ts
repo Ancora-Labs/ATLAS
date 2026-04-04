@@ -2494,6 +2494,7 @@ describe("enforceParserContractBeforeNormalization", () => {
     const repaired = {
       projectHealth: "degraded",
       requestBudget: { estimatedPremiumRequestsTotal: 2 },
+      generatedAt: "2026-04-04T12:00:00.000Z",
       keyFindings: "Strategic parser contract repaired",
       strategicNarrative: "Improve dispatch reliability with explicit validation.",
       plans: [{ task: "x", role: "evolution-worker" }],
@@ -2508,6 +2509,7 @@ describe("enforceParserContractBeforeNormalization", () => {
         called += 1;
         assert.ok(diff.includes("projectHealth"));
         assert.ok(diff.includes("requestBudget.estimatedPremiumRequestsTotal"));
+        assert.ok(diff.includes("generatedAt"));
         assert.ok(diff.includes("keyFindings"));
         assert.ok(diff.includes("strategicNarrative"));
         return repaired;
@@ -2525,6 +2527,7 @@ describe("enforceParserContractBeforeNormalization", () => {
     const stillInvalid = {
       projectHealth: "unknown",
       requestBudget: { estimatedPremiumRequestsTotal: Number.NaN },
+      generatedAt: "",
       keyFindings: "",
       strategicNarrative: "",
       plans: [{ task: "x", role: "evolution-worker" }],
@@ -2543,6 +2546,7 @@ describe("enforceParserContractBeforeNormalization", () => {
     assert.ok(violation.includes("projectHealth=unknown"));
     assert.ok(String(result.violationReason || "").includes("projectHealth=unknown"));
     assert.ok(String(result.violationReason || "").includes("requestBudget.estimatedPremiumRequestsTotal=NaN"));
+    assert.ok(String(result.violationReason || "").includes("generatedAt"));
     assert.ok(String(result.violationReason || "").includes("keyFindings"));
     assert.ok(String(result.violationReason || "").includes("strategicNarrative"));
   });
@@ -2551,6 +2555,7 @@ describe("enforceParserContractBeforeNormalization", () => {
     const valid = {
       projectHealth: "healthy",
       requestBudget: { estimatedPremiumRequestsTotal: 4 },
+      generatedAt: "2026-04-04T12:00:00.000Z",
       keyFindings: "Keep retry path deterministic.",
       strategicNarrative: "Maintain parse boundary contracts before normalization.",
       plans: [{ task: "x", role: "evolution-worker" }],

@@ -45,6 +45,14 @@ export function normalizeTaskKindLabel(taskKind: unknown): string {
   return String(taskKind || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
 }
 
+export function getLaneForWorkerName(name: unknown, fallback = "implementation"): string {
+  const normalized = normalizeWorkerName(name);
+  for (const [lane, worker] of Object.entries(LANE_WORKER_NAMES)) {
+    if (normalizeWorkerName(worker) === normalized) return lane;
+  }
+  return fallback;
+}
+
 const ATHENA_REVIEW_KIND_TOKENS = Object.freeze([
   "athena",
   "review",

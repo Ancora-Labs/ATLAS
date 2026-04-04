@@ -15,6 +15,7 @@
   "projectHealth": "needs-work",
   "analysis": "Legacy analysis without schemaVersion",
   "keyFindings": "Some findings",
+  "generatedAt": "2026-01-01T00:00:00.000Z",
   "analyzedAt": "2026-01-01T00:00:00.000Z",
   "model": "Claude Sonnet 4.6",
   "repo": "CanerDoqdu/Box",
