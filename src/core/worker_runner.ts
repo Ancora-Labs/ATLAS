@@ -17,7 +17,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { spawnAsync } from "./fs_utils.js";
-import { getRoleRegistry } from "./role_registry.js";
+import { getRoleRegistry, assertRoleCapabilityForTask, isAthenaReviewOrPostmortemTask, normalizeTaskKindLabel } from "./role_registry.js";
 import { appendProgress, appendLineageEntry, appendFailureClassification } from "./state_tracker.js";
 import { buildAgentArgs, nameToSlug } from "./agent_loader.js";
 import { buildVerificationChecklist } from "./verification_profiles.js";
@@ -379,6 +379,19 @@ function findWorkerByName(config, roleName) {
     if (worker?.name === roleName) return { kind, ...worker };
   }
   return null;
+}
+
+export function shouldEnableFullToolAccess(roleName: unknown, taskKind: unknown, taskText: unknown = ""): boolean {
+  const normalizedRole = String(roleName || "").trim().toLowerCase();
+  const normalizedTaskKind = normalizeTaskKindLabel(taskKind);
+  const isImplementationTask = !normalizedTaskKind || normalizedTaskKind === "implementation";
+  if (isImplementationTask) return true;
+  if (normalizedRole === "evolution-worker") return true;
+  return isAthenaReviewOrPostmortemTask(normalizedTaskKind, taskText);
+}
+
+export function evaluateWorkerRoleCapability(config, roleName: unknown, taskKind: unknown, taskText: unknown = "") {
+  return assertRoleCapabilityForTask(config, roleName, taskKind, taskText);
 }
 
 // ── Repo contamination detection and recovery ────────────────────────────────
@@ -891,8 +904,10 @@ export function parseWorkerResponse(stdout, stderr) {
 
   // Guardrail: if access protocol reports blocked but status is not blocked,
   // force status to blocked for safe deterministic follow-up routing.
-  let normalizedStatus = ["done", "partial", "blocked", "error"].includes(status) ? status : "done";
-  if (hasBlockedAccess && normalizedStatus !== "blocked") {
+  // Exception: status=skipped means work is already done (e.g. already-merged);
+  // tool access being blocked is irrelevant — do NOT override skipped to blocked.
+  let normalizedStatus = ["done", "partial", "blocked", "error", "skipped"].includes(status) ? status : "done";
+  if (hasBlockedAccess && normalizedStatus !== "blocked" && normalizedStatus !== "skipped") {
     normalizedStatus = "blocked";
   }
 
@@ -994,11 +1009,39 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     { from: "prometheus", content: instruction.task, timestamp: new Date().toISOString() }
   ];
 
+  const capabilityCheck = evaluateWorkerRoleCapability(config, roleName, instruction.taskKind, instruction.task);
+  if (!capabilityCheck.allowed) {
+    const summary = `Role capability check failed: ${capabilityCheck.code} — ${capabilityCheck.message}`;
+    await appendProgress(config, `[WORKER:${roleName}] ${summary}`);
+    updatedHistory.push({
+      from: roleName,
+      content: summary,
+      fullOutput: summary,
+      prUrl: null,
+      timestamp: new Date().toISOString(),
+      status: "blocked"
+    });
+    return {
+      status: "blocked",
+      summary,
+      prUrl: null,
+      currentBranch: null,
+      filesTouched: [],
+      updatedHistory,
+      workerKind,
+      tier,
+      verificationReport: null,
+      responsiveMatrix: null,
+      verificationEvidence: null,
+      fullOutput: summary,
+      failureClassification: null,
+      retryDecision: null
+    };
+  }
+
   // Single-prompt mode: no autopilot continuations.
   // All implementation workers dispatched by the daemon need full tool access.
-  const taskKindLower = String(instruction.taskKind || "").toLowerCase();
-  const isImplementationTask = !taskKindLower || taskKindLower === "implementation";
-  const allowAllTools = isImplementationTask || String(roleName || "").toLowerCase() === "evolution-worker";
+  const allowAllTools = shouldEnableFullToolAccess(roleName, instruction.taskKind, instruction.task);
   const args = buildAgentArgs({
     agentSlug,
     prompt: conversationContext,

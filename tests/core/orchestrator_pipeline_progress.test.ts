@@ -17,6 +17,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { runOnce, runResumeDispatch, evaluatePreDispatchGovernanceGate, BLOCK_REASON } from "../../src/core/orchestrator.js";
+import { ATHENA_PLAN_REVIEW_REASON_CODE } from "../../src/core/athena_reviewer.js";
 import { readPipelineProgress, PIPELINE_STAGE_ENUM, PIPELINE_STEPS } from "../../src/core/pipeline_progress.js";
 import { EVENTS } from "../../src/core/event_schema.js";
 
@@ -1455,6 +1456,14 @@ describe("dependency readiness gate — pre-dispatch governance gate integration
 // orchestrator, pipeline progress tracker, and test assertions.
 
 describe("pipeline progress — terminology drift prevention (stage IDs)", () => {
+  it("pins canonical Athena review exception reason code used for fail-closed blocker propagation", () => {
+    assert.equal(
+      ATHENA_PLAN_REVIEW_REASON_CODE.REVIEW_EXCEPTION,
+      "REVIEW_EXCEPTION",
+      "Athena review exception code must remain stable for blocker telemetry/event consumers"
+    );
+  });
+
   it("PIPELINE_STAGE_ENUM contains exactly the canonical leadership chain stage IDs", () => {
     // Authoritative ordered list of all stage IDs.
     // Any addition, removal, or rename must update this list explicitly.
