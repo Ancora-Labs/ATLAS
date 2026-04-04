@@ -127,7 +127,7 @@
     "deepPlanner": {
       "id": "deep-planner",
       "name": "Prometheus",
-      "model": "GPT-5.3-Codex",
+      "model": "gpt-5.3-codex",
       "provider": "copilot"
     },
     "qualityReviewer": {
@@ -140,7 +140,7 @@
       "evolution": {
         "id": "worker-evolution",
         "name": "Evolution Worker",
-        "model": "GPT-5.3-Codex"
+        "model": "gpt-5.3-codex"
       }
     }
   },
@@ -225,76 +225,76 @@
   },
   "copilot": {
     "strategy": "task-best",
-    "defaultModel": "GPT-5.3-Codex",
+    "defaultModel": "gpt-5.3-codex",
     "preferredModelsByTaskKind": {
       "scan": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ],
       "analysis": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ],
       "planning": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ],
       "implementation": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ],
       "test": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ],
       "qa": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ],
       "security": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ],
       "devops": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ],
       "refactor": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ],
       "quality": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ],
       "stability": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ],
       "production": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ]
     },
     "preferredModelsByRole": {
       "Jesus": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ],
       "Prometheus": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ],
       "Athena": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ],
       "Evolution Worker": [
-        "GPT-5.3-Codex",
+        "gpt-5.3-codex",
         "Claude Sonnet 4.6"
       ]
     },
-    "opusModel": "GPT-5.3-Codex",
+    "opusModel": "gpt-5.3-codex",
     "allowOpusEscalation": false,
     "opusEscalationKeywords": [
       "critical",
@@ -332,7 +332,7 @@
     "allowedModels": [
       "Claude Sonnet 4.6",
       "GPT-5.2-Codex",
-      "GPT-5.3-Codex"
+      "gpt-5.3-codex"
     ],
     "maxMultiplier": 1,
     "opusMinBudgetUsd": 2,
@@ -345,7 +345,7 @@
       "GPT-5 mini": 0,
       "GPT-4.1": 0,
       "GPT-5.2-Codex": 1,
-      "GPT-5.3-Codex": 1,
+      "gpt-5.3-codex": 1,
       "Grok Code Fast 1": 0,
       "Raptor mini": 0
     },

@@ -23,6 +23,19 @@ describe("evolution_metrics", () => {
     await fs.writeFile(path.join(stateDir, "premium_usage_log.json"), JSON.stringify([{ timestamp: now }]), "utf8");
     await fs.writeFile(path.join(stateDir, "slo_metrics_history.json"), JSON.stringify([{ totalCycleDurationMs: 20 }, { totalCycleDurationMs: 10 }]), "utf8");
     await fs.writeFile(path.join(stateDir, "jesus_directive.json"), JSON.stringify({ prometheusAnalysis: { projectHealth: "green" } }), "utf8");
+    await fs.writeFile(
+      path.join(stateDir, "benchmark_ground_truth.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        updatedAt: now,
+        entries: [],
+        externalSamples: [
+          { benchmark: "swebench", instance_id: "swe-1", repo: "org/repo", status: "resolved" },
+          { benchmarkName: "osworld", task_id: "osw-1", environment_id: "env-1", status: "completed" },
+        ],
+      }),
+      "utf8"
+    );
 
     const metrics = await collectEvolutionMetrics({ paths: { stateDir } });
     assert.equal(metrics.deterministicPostmortem.totalCount, 1);
@@ -35,6 +48,10 @@ describe("evolution_metrics", () => {
     assert.ok("jesusCalibration" in saved, "jesusCalibration must be present in saved metrics");
     assert.equal(saved.jesusCalibration.totalRecords, 0);
     assert.equal(saved.jesusCalibration.averageOverallScore, null);
+    assert.equal(saved.externalBenchmarkCoverage.totalSamples, 2);
+    assert.equal(saved.externalBenchmarkCoverage.validSamples, 2);
+    assert.equal(saved.externalBenchmarkCoverage.invalidSamples, 0);
+    assert.equal(saved.externalBenchmarkCoverage.normalizedSamples, 2);
   });
 
   it("negative path: handles missing input files deterministically", async () => {
@@ -46,6 +63,10 @@ describe("evolution_metrics", () => {
     assert.ok("jesusCalibration" in metrics, "jesusCalibration must always be present");
     assert.equal(metrics.jesusCalibration.totalRecords, 0);
     assert.equal(metrics.jesusCalibration.averageOverallScore, null);
+    assert.equal(metrics.externalBenchmarkCoverage.totalSamples, 0);
+    assert.equal(metrics.externalBenchmarkCoverage.validSamples, 0);
+    assert.equal(metrics.externalBenchmarkCoverage.invalidSamples, 0);
+    assert.equal(metrics.externalBenchmarkCoverage.normalizedSamples, 0);
   });
 });
 

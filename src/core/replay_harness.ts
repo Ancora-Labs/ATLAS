@@ -113,8 +113,10 @@ export const REPLAY_DEGRADED_REASON = Object.freeze({
   INVALID_CYCLE:       "INVALID_CYCLE",
   POLICY_ERROR:        "POLICY_ERROR",
   INSUFFICIENT_CYCLES: "INSUFFICIENT_CYCLES",
-  INVALID_POLICY:      "INVALID_POLICY"
+  INVALID_POLICY:      "INVALID_POLICY",
 });
+
+export const REPLAY_CHECKPOINT_CONTRACT_VERSION = 1;
 
 // ── Outcome Metrics Helpers ───────────────────────────────────────────────────
 
@@ -398,6 +400,46 @@ export function computeInputHash(cycles) {
   return crypto.createHash("sha256").update(serialized).digest("hex");
 }
 
+async function readReplayCheckpointCompatibility(stateDir) {
+  const dispatchCheckpointPath = path.join(stateDir, "dispatch_checkpoint.json");
+  const result = await readJsonSafe(dispatchCheckpointPath);
+  if (!result.ok) {
+    if (result.reason === READ_JSON_REASON.MISSING) {
+      return { compatible: true, reason: null, sourceFiles: [] };
+    }
+    return {
+      compatible: false,
+      reason: REPLAY_DEGRADED_REASON.INVALID_CYCLE,
+      sourceFiles: ["dispatch_checkpoint.json"],
+    };
+  }
+
+  const checkpoint = result.data && typeof result.data === "object" ? result.data : null;
+  if (!checkpoint) {
+    return {
+      compatible: false,
+      reason: REPLAY_DEGRADED_REASON.INVALID_CYCLE,
+      sourceFiles: ["dispatch_checkpoint.json"],
+    };
+  }
+
+  const schemaVersion = Number((checkpoint as any).schemaVersion || 1);
+  const replayContractVersion = Number((checkpoint as any)?.replayCompatibility?.replayContractVersion || 0);
+  if (schemaVersion >= 2 && replayContractVersion !== REPLAY_CHECKPOINT_CONTRACT_VERSION) {
+    return {
+      compatible: false,
+      reason: REPLAY_DEGRADED_REASON.INVALID_CYCLE,
+      sourceFiles: ["dispatch_checkpoint.json"],
+    };
+  }
+
+  return {
+    compatible: true,
+    reason: null,
+    sourceFiles: ["dispatch_checkpoint.json"],
+  };
+}
+
 // ── Main Replay Entry Point ───────────────────────────────────────────────────
 
 /**
@@ -478,15 +520,18 @@ export async function runReplay(config, policyCandidates) {
   }
 
   const { cycles, sourceFiles } = snapshotResult;
+  const checkpointCompatibility = await readReplayCheckpointCompatibility(stateDir);
   const inputHash = computeInputHash(cycles);
 
-  const topLevelStatus = cycles.length < cycleWindow
+  const topLevelStatus = (!checkpointCompatibility.compatible || cycles.length < cycleWindow)
     ? REPLAY_STATUS.DEGRADED
     : REPLAY_STATUS.OK;
 
-  const topLevelReason = cycles.length < cycleWindow
-    ? REPLAY_DEGRADED_REASON.INSUFFICIENT_CYCLES
-    : null;
+  const topLevelReason = !checkpointCompatibility.compatible
+    ? checkpointCompatibility.reason
+    : cycles.length < cycleWindow
+      ? REPLAY_DEGRADED_REASON.INSUFFICIENT_CYCLES
+      : null;
 
   // ── Evaluate each policy against each cycle ───────────────────────────────
   const policyResults = [];
@@ -573,7 +618,12 @@ export async function runReplay(config, policyCandidates) {
     cycleWindow,
     cyclesLoaded:  cycles.length,
     inputHash,
-    sourceFiles,
+    sourceFiles: [...sourceFiles, ...checkpointCompatibility.sourceFiles],
+    checkpointReplayCompatibility: {
+      compatible: checkpointCompatibility.compatible,
+      reason: checkpointCompatibility.reason,
+      contractVersion: REPLAY_CHECKPOINT_CONTRACT_VERSION,
+    },
     policyResults
   };
 

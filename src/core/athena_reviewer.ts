@@ -235,6 +235,11 @@ export const RATIONALE_CLASS = Object.freeze({
   CIRCULAR_DEPENDENCY:      "CIRCULAR_DEPENDENCY"
 });
 
+export const ATHENA_PLAN_REVIEW_REASON_CODE = Object.freeze({
+  AI_CALL_FAILED: "AI_CALL_FAILED",
+  ACTIVE_GOVERNANCE_GATE_INFEASIBLE: "ACTIVE_GOVERNANCE_GATE_INFEASIBLE",
+});
+
 /** Set of all valid RATIONALE_CLASS values for O(1) lookup. */
 export const VALID_RATIONALE_CLASSES = new Set(Object.values(RATIONALE_CLASS));
 
@@ -2419,16 +2424,16 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
   }
 
   if (!aiResult.ok || !aiResult.parsed) {
-    // Rollback: if runtime.athenaFailOpen is explicitly enabled, restore legacy permissive behavior.
-    if (config.runtime?.athenaFailOpen === true) {
-      await appendProgress(config, `[ATHENA] Plan review AI call failed — ${(aiResult as any).error || "no JSON"} — auto-approving (fail-open mode active)`);
-      chatLog(stateDir, athenaName, `AI failed: ${(aiResult as any).error || "no JSON"} — auto-approve (fail-open)`);
-      return { approved: true, reason: { code: "AI_CALL_FAILED_FAILOPEN", message: (aiResult as any).error || "no JSON" }, corrections: [] };
-    }
-
     // Fail-closed: AI failure must never silently approve the plan.
-    const reason = { code: "AI_CALL_FAILED", message: (aiResult as any).error || "No JSON returned from AI" };
+    const reason = { code: ATHENA_PLAN_REVIEW_REASON_CODE.AI_CALL_FAILED, message: (aiResult as any).error || "No JSON returned from AI" };
+    const blocker = {
+      stage: "athena_plan_review",
+      code: reason.code,
+      source: "athena_reviewer",
+      retryable: false,
+    };
     await appendProgress(config, `[ATHENA] Plan review AI call failed — ${reason.message} — blocking plan (fail-closed)`);
+    await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
     chatLog(stateDir, athenaName, `AI failed: ${reason.message} — plan blocked`);
     await appendAlert(config, {
       severity: ALERT_SEVERITY.CRITICAL,
@@ -2436,7 +2441,7 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
       title: "Plan review AI call failed — plan blocked",
       message: `code=${reason.code} message=${reason.message}`
     });
-    return { approved: false, reason, corrections: [] };
+    return { approved: false, reason, blocker, corrections: [] };
   }
 
   logAgentThinking(stateDir, athenaName, aiResult.thinking);
@@ -2545,7 +2550,7 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
 
     result.approved = false;
     (result as any).reason = {
-      code: "ACTIVE_GOVERNANCE_GATE_INFEASIBLE",
+      code: ATHENA_PLAN_REVIEW_REASON_CODE.ACTIVE_GOVERNANCE_GATE_INFEASIBLE,
       message: `${gateRisk.reason}; gateBlockRisk=${gateRisk.gateBlockRisk}; signals=${gateRisk.activeGateSignals.join(", ") || "none"}`
     };
   }

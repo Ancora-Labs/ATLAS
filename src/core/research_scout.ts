@@ -219,7 +219,7 @@ function appendLiveLogSync(stateDir: string, text: string): void {
  */
 async function buildScoutContext(config: any): Promise<string> {
   const stateDir = config.paths?.stateDir || "state";
-  const scoutModel = config?.roleRegistry?.researchScout?.model || "GPT-5.3-Codex";
+  const scoutModel = config?.roleRegistry?.researchScout?.model || "gpt-5.3-codex";
   const promptTokenBudget = resolveMaxPromptBudget(
     config,
     String(scoutModel),
@@ -390,7 +390,7 @@ export interface ResearchScoutResult {
 export async function runResearchScout(config: any): Promise<ResearchScoutResult> {
   const stateDir = config.paths?.stateDir || "state";
   const command = config.env?.copilotCliCommand || "copilot";
-  const model = config.roleRegistry?.researchScout?.model || "GPT-5.3-Codex";
+  const model = config.roleRegistry?.researchScout?.model || "gpt-5.3-codex";
   const disablePromptCache = config?.runtime?.researchScoutDisableCache !== false;
   const runNonce = disablePromptCache
     ? `research-scout-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
@@ -460,7 +460,7 @@ Follow the output format specified in your agent definition exactly.`;
   const raw = stdout || stderr;
   await appendAgentContextUsage(config, {
     agent: "research-scout",
-    model: String(model || "GPT-5.3-Codex"),
+    model: String(model || "gpt-5.3-codex"),
     promptText: contextPromptFinal,
     status: (result as any).status === 0 ? "success" : "failed",
   });

@@ -1138,3 +1138,105 @@ export function decideDeliberationPolicy(
     reason: hard.reason,
   };
 }
+
+export interface TaskKindEconomicsPoint {
+  successProbability: number;
+  capacityImpact: number;
+  requestCost: number;
+}
+
+function toTaskKindKey(taskKind: string): string {
+  return String(taskKind || "").trim().toLowerCase();
+}
+
+function normalizeEconomicsPoint(input: any): TaskKindEconomicsPoint | null {
+  if (!input || typeof input !== "object") return null;
+  const successProbability = Number(input.successProbability);
+  const capacityImpact = Number(input.capacityImpact);
+  const requestCost = Number(input.requestCost);
+  if (!Number.isFinite(successProbability) || !Number.isFinite(capacityImpact) || !Number.isFinite(requestCost) || requestCost <= 0) {
+    return null;
+  }
+  return {
+    successProbability: clamp01(successProbability),
+    capacityImpact: Math.max(0, capacityImpact),
+    requestCost,
+  };
+}
+
+export function computeExpectedValue(point: TaskKindEconomicsPoint): number {
+  return (point.successProbability * point.capacityImpact) / Math.max(0.0001, point.requestCost);
+}
+
+export function rankModelsByTaskKindExpectedValue(
+  taskKind: string,
+  models: string[],
+  cycleAnalytics: any,
+  opts: {
+    taskHints?: TaskHints;
+    history?: RoutingHistory;
+    signals?: {
+      benchmarkGroundTruth?: any;
+      outcomeMetrics?: Partial<RoutingOutcomeMetrics> | null;
+    };
+  } = {},
+): { rankedModels: string[]; scoreByModel: Record<string, number>; usedTelemetry: boolean; reason: string } {
+  const original = Array.isArray(models) ? models.filter(Boolean) : [];
+  if (original.length <= 1) {
+    return { rankedModels: original, scoreByModel: {}, usedTelemetry: false, reason: "single-candidate" };
+  }
+
+  const hardSignal = assessHardTaskEscalation(
+    opts.taskHints || {},
+    opts.history || {},
+    opts.signals || {},
+  );
+  if (hardSignal.escalate && hardSignal.severity === "required") {
+    return {
+      rankedModels: original,
+      scoreByModel: {},
+      usedTelemetry: false,
+      reason: `hard-task-uncertainty-required(score=${hardSignal.uncertaintyScore})`,
+    };
+  }
+
+  const key = toTaskKindKey(taskKind);
+  const byTaskKind = cycleAnalytics?.modelRoutingTelemetry?.byTaskKind;
+  const taskTelemetry = byTaskKind && typeof byTaskKind === "object" ? byTaskKind[key] : null;
+  if (!taskTelemetry || typeof taskTelemetry !== "object") {
+    return { rankedModels: original, scoreByModel: {}, usedTelemetry: false, reason: "telemetry-missing" };
+  }
+
+  const defaultPoint = normalizeEconomicsPoint((taskTelemetry as any).default);
+  const modelPoints = (taskTelemetry as any).models && typeof (taskTelemetry as any).models === "object"
+    ? (taskTelemetry as any).models
+    : {};
+
+  const scoreByModel: Record<string, number> = {};
+  let usableScores = 0;
+  for (const model of original) {
+    const direct = normalizeEconomicsPoint(modelPoints[model]);
+    const lower = normalizeEconomicsPoint(modelPoints[String(model).toLowerCase()]);
+    const point = direct || lower || defaultPoint;
+    if (!point) continue;
+    scoreByModel[model] = Math.round(computeExpectedValue(point) * 1000) / 1000;
+    usableScores += 1;
+  }
+  if (usableScores === 0) {
+    return { rankedModels: original, scoreByModel: {}, usedTelemetry: false, reason: "telemetry-invalid" };
+  }
+
+  const rankedModels = [...original].sort((a, b) => {
+    const as = Number.isFinite(scoreByModel[a]) ? scoreByModel[a] : Number.NEGATIVE_INFINITY;
+    const bs = Number.isFinite(scoreByModel[b]) ? scoreByModel[b] : Number.NEGATIVE_INFINITY;
+    if (bs !== as) return bs - as;
+    return original.indexOf(a) - original.indexOf(b);
+  });
+
+  return {
+    rankedModels,
+    scoreByModel,
+    usedTelemetry: true,
+    reason: "expected-value(taskKind)",
+  };
+}

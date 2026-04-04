@@ -5,7 +5,7 @@
  * machine-readable reason, that the orchestrator blocks worker dispatch,
  * and that an alert record with deterministic severity is written.
  *
- * The runtime.athenaFailOpen flag must restore legacy permissive behavior.
+ * Fail-open rollback is removed; AI failures are always fail-closed.
  */
 
 import { describe, it, beforeEach, afterEach } from "node:test";
@@ -144,13 +144,13 @@ describe("runAthenaPlanReview — fail-closed on AI failure", () => {
       "Alert message must include the reason code for machine readability");
   });
 
-  it("returns approved=true with fail-open flag enabled (rollback mode)", async () => {
+  it("keeps approved=false even when fail-open flag is present (legacy rollback removed)", async () => {
     const config = makeConfig(tmpDir, { runtime: { athenaFailOpen: true } });
     const result = await runAthenaPlanReview(config, VALID_PROMETHEUS_ANALYSIS);
 
-    assert.equal(result.approved, true,
-      "runtime.athenaFailOpen=true must restore legacy permissive behavior");
-    assert.equal(result.reason.code, "AI_CALL_FAILED_FAILOPEN");
+    assert.equal(result.approved, false,
+      "runtime.athenaFailOpen must not bypass fail-closed review blocking");
+    assert.equal(result.reason.code, "AI_CALL_FAILED");
   });
 
   it("returns approved=false and empty corrections array on AI failure", async () => {

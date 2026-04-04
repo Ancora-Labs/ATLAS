@@ -520,6 +520,13 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
       "dispatch_checkpoint.json must be written by tryResumeDispatchFromCheckpoint even when the gate blocks"
     );
     const checkpoint = JSON.parse(checkpointRaw!);
+    assert.equal(checkpoint.schemaVersion, 2, "dispatch checkpoint must use schemaVersion=2");
+    assert.ok(typeof checkpoint.checkpointVersion === "number" && checkpoint.checkpointVersion >= 1,
+      "dispatch checkpoint must include monotonic checkpointVersion metadata");
+    assert.equal(checkpoint.checkpointFormat, "resumable_v2",
+      "dispatch checkpoint must declare resumable checkpoint format");
+    assert.ok(typeof checkpoint.integrity?.hash === "string" && checkpoint.integrity.hash.length > 0,
+      "dispatch checkpoint must include integrity hash metadata");
     assert.notEqual(
       checkpoint.status,
       "complete",
@@ -565,6 +572,9 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
       "dispatch_checkpoint.json must be written when the governance gate is clear and resume dispatch is entered"
     );
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, "utf8"));
+    assert.equal(checkpoint.schemaVersion, 2, "dispatch checkpoint must use schemaVersion=2");
+    assert.ok(typeof checkpoint.replayCompatibility?.replayContractVersion === "number",
+      "dispatch checkpoint must include replay compatibility contract metadata");
     assert.ok(
       typeof checkpoint.status === "string",
       "dispatch_checkpoint.json must have a string status field"

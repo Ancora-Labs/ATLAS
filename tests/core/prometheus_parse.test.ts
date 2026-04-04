@@ -45,6 +45,7 @@ import {
   validateMandatoryTaskCoverageContract,
   buildMandatoryCoverageRetryDiff,
   buildRoutingOutcomeSection,
+  enforceParserContractBeforeNormalization,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments } from "../../src/core/prompt_compiler.js";
 import { isNonSpecificVerification, validatePlanContract } from "../../src/core/plan_contract_validator.js";
@@ -777,7 +778,7 @@ describe("PROMETHEUS_STATIC_SECTIONS", () => {
     assert.ok(content.includes("ACTIONABLE IMPROVEMENT PACKET FORMAT"));
     assert.ok(content.includes("PACKET FIELD ENFORCEMENT RULES"));
     assert.ok(content.includes("===DECISION==="), "should contain JSON output markers");
-    assert.ok(content.includes("\"projectHealth\": \"<good|needs-work|critical>\""));
+    assert.ok(content.includes("\"projectHealth\": \"<good|healthy|needs-work|degraded|critical>\""));
     assert.ok(content.includes("\"estimatedPremiumRequestsTotal\": 6"));
   });
 });
@@ -2484,6 +2485,86 @@ describe("checkHighRiskPacketConfidence — high-risk low-confidence gate", () =
       assert.equal(result.requiresRejection, true,
         `riskLevel="${level}" with no confidence signals must trigger rejection`);
     }
+  });
+});
+
+describe("enforceParserContractBeforeNormalization", () => {
+  it("retries once when mandatory fields are missing and passes on repaired payload", async () => {
+    const initial = { plans: [{ task: "x", role: "evolution-worker" }] };
+    const repaired = {
+      projectHealth: "degraded",
+      requestBudget: { estimatedPremiumRequestsTotal: 2 },
+      keyFindings: "Strategic parser contract repaired",
+      strategicNarrative: "Improve dispatch reliability with explicit validation.",
+      plans: [{ task: "x", role: "evolution-worker" }],
+    };
+    let called = 0;
+    let seenDiff = "";
+    const result = await enforceParserContractBeforeNormalization(initial, {
+      onRetryDiff(diff: string) {
+        seenDiff = diff;
+      },
+      async buildRetryCandidate(diff: string) {
+        called += 1;
+        assert.ok(diff.includes("projectHealth"));
+        assert.ok(diff.includes("requestBudget.estimatedPremiumRequestsTotal"));
+        assert.ok(diff.includes("keyFindings"));
+        assert.ok(diff.includes("strategicNarrative"));
+        return repaired;
+      },
+    });
+    assert.equal(called, 1);
+    assert.ok(seenDiff.includes("missing=[projectHealth"));
+    assert.equal(result.ok, true);
+    assert.equal(result.retried, true);
+    assert.equal(result.parsed.projectHealth, "degraded");
+  });
+
+  it("returns parser contract violation shape after second failure", async () => {
+    const initial = { plans: [{ task: "x", role: "evolution-worker" }] };
+    const stillInvalid = {
+      projectHealth: "unknown",
+      requestBudget: { estimatedPremiumRequestsTotal: Number.NaN },
+      keyFindings: "",
+      strategicNarrative: "",
+      plans: [{ task: "x", role: "evolution-worker" }],
+    };
+    let violation = "";
+    const result = await enforceParserContractBeforeNormalization(initial, {
+      onRetryViolation(reason: string) {
+        violation = reason;
+      },
+      async buildRetryCandidate() {
+        return stillInvalid;
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.retried, true);
+    assert.ok(violation.includes("projectHealth=unknown"));
+    assert.ok(String(result.violationReason || "").includes("projectHealth=unknown"));
+    assert.ok(String(result.violationReason || "").includes("requestBudget.estimatedPremiumRequestsTotal=NaN"));
+    assert.ok(String(result.violationReason || "").includes("keyFindings"));
+    assert.ok(String(result.violationReason || "").includes("strategicNarrative"));
+  });
+
+  it("keeps valid mandatory fields on first pass without retry or penalties", async () => {
+    const valid = {
+      projectHealth: "healthy",
+      requestBudget: { estimatedPremiumRequestsTotal: 4 },
+      keyFindings: "Keep retry path deterministic.",
+      strategicNarrative: "Maintain parse boundary contracts before normalization.",
+      plans: [{ task: "x", role: "evolution-worker" }],
+    };
+    let called = 0;
+    const result = await enforceParserContractBeforeNormalization(valid, {
+      async buildRetryCandidate() {
+        called += 1;
+        return null;
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.retried, false);
+    assert.equal(called, 0);
   });
 });
 

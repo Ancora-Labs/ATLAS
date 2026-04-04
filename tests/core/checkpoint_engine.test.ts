@@ -23,7 +23,12 @@ describe("checkpoint_engine", () => {
     const payload = { cycle: 1, status: "ok" };
     const filePath = await writeCheckpoint(config, payload);
     const raw = await fs.readFile(filePath, "utf8");
-    assert.deepEqual(JSON.parse(raw), payload);
+    const parsed = JSON.parse(raw);
+    assert.equal(parsed.cycle, payload.cycle);
+    assert.equal(parsed.status, payload.status);
+    assert.equal(parsed.schemaVersion, 2);
+    assert.equal(parsed.checkpointFormat, "resumable_v2");
+    assert.ok(typeof parsed.integrity?.hash === "string" && parsed.integrity.hash.length > 0);
   });
 
   it("negative path: writes distinct files on successive calls", async () => {

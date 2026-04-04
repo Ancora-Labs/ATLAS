@@ -193,6 +193,8 @@ export function checkPostMergeArtifact(output) {
   const hasExplicitTestBlock = NPM_TEST_BLOCK_PATTERN.test(text);
   const hasTestOutput = hasExplicitTestBlock;
   const hasCleanTreeEvidence = /CLEAN_TREE_STATUS\s*=\s*clean\b/i.test(text);
+  // Replay-and-attach completion is represented by the explicit raw npm test output block.
+  const hasReplayAttachEvidence = hasExplicitTestBlock;
 
   // Deterministic rejection: any known template placeholder literal means the
   // worker did not fill in the artifact fields.  Check all known residues.
@@ -203,6 +205,7 @@ export function checkPostMergeArtifact(output) {
     hasSha,
     hasTestOutput,
     hasCleanTreeEvidence,
+    hasReplayAttachEvidence,
     hasUnfilledPlaceholder,
     mergedSha,
     hasExplicitShaMarker,
@@ -234,7 +237,7 @@ export function extractMergedSha(output: string): string | null {
  *   — result of checkPostMergeArtifact()
  * @returns {string[]} ordered list of gap reason strings (empty when artifact is complete)
  */
-export function collectArtifactGaps(artifact: { hasSha: boolean; hasTestOutput: boolean; hasCleanTreeEvidence?: boolean; hasUnfilledPlaceholder: boolean }): string[] {
+export function collectArtifactGaps(artifact: { hasSha: boolean; hasTestOutput: boolean; hasCleanTreeEvidence?: boolean; hasReplayAttachEvidence?: boolean; hasUnfilledPlaceholder: boolean }): string[] {
   const gaps: string[] = [];
   if (artifact.hasUnfilledPlaceholder) gaps.push(ARTIFACT_GAP.UNFILLED_PLACEHOLDER);
   if (!artifact.hasSha)               gaps.push(ARTIFACT_GAP.MISSING_SHA);
@@ -257,6 +260,7 @@ export interface ArtifactAuditEntry {
     hasSha: boolean;
     hasTestOutput: boolean;
     hasCleanTreeEvidence: boolean;
+    hasReplayAttachEvidence?: boolean;
     hasUnfilledPlaceholder: boolean;
     hasExplicitShaMarker: boolean;
     hasExplicitTestBlock: boolean;
@@ -309,6 +313,7 @@ export function buildArtifactAuditEntry(
       hasSha: artifact.hasSha,
       hasTestOutput: artifact.hasTestOutput,
       hasCleanTreeEvidence: artifact.hasCleanTreeEvidence,
+      hasReplayAttachEvidence: (artifact as any).hasReplayAttachEvidence === true,
       hasUnfilledPlaceholder: artifact.hasUnfilledPlaceholder,
       hasExplicitShaMarker: artifact.hasExplicitShaMarker,
       hasExplicitTestBlock: artifact.hasExplicitTestBlock,

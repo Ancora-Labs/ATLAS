@@ -85,6 +85,17 @@ export const VALID_STOP_CONDITION_TYPES = Object.freeze(
   new Set(["max_duration_hours", "error_rate_threshold", "min_health_score", "manual"])
 );
 
+export const EXTERNAL_BENCHMARK_CONTRACTS = Object.freeze([
+  Object.freeze({
+    name: "swe-bench",
+    requiredFields: Object.freeze(["benchmarkName", "instanceId", "repo", "status"]),
+  }),
+  Object.freeze({
+    name: "osworld",
+    requiredFields: Object.freeze(["benchmarkName", "instanceId", "environmentId", "status"]),
+  }),
+]);
+
 /** Valid status transitions. Unlisted source statuses have no valid transitions. */
 const VALID_TRANSITIONS = Object.freeze({
   planned:     Object.freeze(["running"]),

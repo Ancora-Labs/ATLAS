@@ -92,6 +92,10 @@ import {
 import { validatePlanEvidenceCoupling } from "./evidence_envelope.js";
 import { runResearchScout } from "./research_scout.js";
 import { runResearchSynthesizer } from "./research_synthesizer.js";
+import {
+  readCheckpoint as readVersionedCheckpoint,
+  writeCheckpoint as writeVersionedCheckpoint,
+} from "./checkpoint_engine.js";
 
 /**
  * Orchestrator health status enum.
@@ -1078,18 +1082,25 @@ async function _wasDispatchInterrupted(_stateDir: string): Promise<boolean> {
 
 const DISPATCH_CHECKPOINT_FILE = "dispatch_checkpoint.json";
 
-function getDispatchCheckpointPath(stateDir) {
-  return path.join(stateDir, DISPATCH_CHECKPOINT_FILE);
-}
-
 async function readDispatchCheckpoint(config) {
-  const stateDir = config.paths?.stateDir || "state";
-  return readJson(getDispatchCheckpointPath(stateDir), null);
+  try {
+    return await readVersionedCheckpoint(config, { fileName: DISPATCH_CHECKPOINT_FILE });
+  } catch (err) {
+    warn(`[orchestrator] dispatch checkpoint read failed: ${String(err?.message || err)}`);
+    return null;
+  }
 }
 
 async function writeDispatchCheckpoint(config, checkpoint) {
-  const stateDir = config.paths?.stateDir || "state";
-  await writeJson(getDispatchCheckpointPath(stateDir), checkpoint);
+  const persisted = await writeVersionedCheckpoint(config, checkpoint, {
+    fileName: DISPATCH_CHECKPOINT_FILE,
+    checkpointKind: "dispatch",
+    returnEnvelope: true,
+  });
+  if (checkpoint && typeof checkpoint === "object") {
+    Object.assign(checkpoint, persisted);
+  }
+  return persisted;
 }
 
 function isDispatchCheckpointResumable(checkpoint) {
@@ -1108,7 +1119,7 @@ function isDispatchCheckpointCompleteForTotal(checkpoint, totalPlans) {
 async function beginDispatchCheckpoint(config, plans, actualPlanCount?: number) {
   const nowIso = new Date().toISOString();
   const checkpoint = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     status: "dispatching",
     createdAt: nowIso,
     updatedAt: nowIso,
@@ -1676,7 +1687,7 @@ async function dispatchWorker(config, plan) {
 async function countCompletedPlans(config, plans) {
   const stateDir = config.paths?.stateDir || "state";
 
-  const checkpoint = await readJson(path.join(stateDir, DISPATCH_CHECKPOINT_FILE), null);
+  const checkpoint = await readDispatchCheckpoint(config);
   // Match on planCount (actual plan count) if present, fall back to legacy totalPlans comparison
   const checkpointPlanCount = Number(checkpoint?.planCount ?? checkpoint?.totalPlans ?? 0);
   if (checkpoint && checkpointPlanCount === plans.length) {
@@ -2157,35 +2168,51 @@ async function runSingleCycle(config) {
     const msg = String(err?.message || err).slice(0, 200);
     await appendProgress(config, `[CYCLE] Athena plan review threw exception: ${msg} — blocking cycle (fail-closed)`);
     warn(`[orchestrator] Athena plan review exception: ${msg}`);
-
-    // Rollback: if runtime.athenaFailOpen is enabled, restore legacy permissive behavior.
-    if (config.runtime?.athenaFailOpen === true) {
-      planReview = { approved: true, reason: { code: "REVIEW_EXCEPTION_FAILOPEN", message: msg }, corrections: [] };
-    } else {
-      // Fail-closed: exception must block the cycle and record a deterministic blocked state.
-      const reason = { code: "REVIEW_EXCEPTION", message: msg };
-      await appendAlert(config, {
-        severity: ALERT_SEVERITY.CRITICAL,
-        source: "orchestrator",
-        title: "Athena plan review exception — cycle blocked",
-        message: `code=${reason.code} message=${reason.message}`
-      });
-      await writeJson(path.join(stateDir, "athena_plan_rejection.json"), {
-        rejectedAt: new Date().toISOString(),
-        reason,
-        corrections: [],
-        summary: `Plan review exception: ${msg}`
-      });
-      planReview = { approved: false, reason, corrections: [] };
-    }
+    const reason = { code: "REVIEW_EXCEPTION", message: msg };
+    const blocker = {
+      stage: "athena_plan_review",
+      code: reason.code,
+      source: "orchestrator",
+      retryable: false,
+    };
+    emitEvent(EVENTS.ORCHESTRATION_HEALTH_DEGRADED, EVENT_DOMAIN.ORCHESTRATION, `athena-review-exception-${Date.now()}`, {
+      reason: "athena_plan_review_exception",
+      blockerCode: blocker.code,
+      blockerStage: blocker.stage,
+      error: msg,
+    });
+    await appendAlert(config, {
+      severity: ALERT_SEVERITY.CRITICAL,
+      source: "orchestrator",
+      title: "Athena plan review exception — cycle blocked",
+      message: `code=${reason.code} message=${reason.message}`
+    });
+    await writeJson(path.join(stateDir, "athena_plan_rejection.json"), {
+      rejectedAt: new Date().toISOString(),
+      reason,
+      blocker,
+      corrections: [],
+      summary: `Plan review exception: ${msg}`
+    });
+    planReview = { approved: false, reason, blocker, corrections: [] };
   }
 
   if (!planReview.approved) {
     const rejectionReason = planReview.reason || { code: "PLAN_REJECTED", message: planReview.summary || "Rejected by Athena" };
     const correctionsList = planReview.corrections || [];
-    await appendProgress(config, `[CYCLE] Athena REJECTED plan — code=${typeof rejectionReason === "object" ? rejectionReason.code : rejectionReason} corrections: ${correctionsList.join("; ")}`);
+    const blocker = planReview.blocker && typeof planReview.blocker === "object"
+      ? planReview.blocker
+      : {
+        stage: "athena_plan_review",
+        code: typeof rejectionReason === "object" ? (rejectionReason as Record<string, unknown>).code : String(rejectionReason),
+        source: "athena_reviewer",
+        retryable: false,
+      };
+    const blockerCode = String((blocker as Record<string, unknown>).code || "PLAN_REJECTED");
+    await appendProgress(config, `[CYCLE] Athena REJECTED plan — code=${typeof rejectionReason === "object" ? rejectionReason.code : rejectionReason} blocker=${blockerCode} corrections: ${correctionsList.join("; ")}`);
     emitEvent(EVENTS.PLANNING_PLAN_REJECTED, EVENT_DOMAIN.PLANNING, `plan-reject-${Date.now()}`, {
       code: typeof rejectionReason === "object" ? (rejectionReason as Record<string, unknown>).code : String(rejectionReason),
+      blockerCode,
       corrections: correctionsList,
       summary: planReview.summary || ""
     });
@@ -2193,6 +2220,7 @@ async function runSingleCycle(config) {
     await writeJson(path.join(stateDir, "athena_plan_rejection.json"), {
       rejectedAt: new Date().toISOString(),
       reason: rejectionReason,
+      blocker,
       corrections: correctionsList,
       summary: planReview.summary || ""
     });

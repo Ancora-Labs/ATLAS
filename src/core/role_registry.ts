@@ -43,16 +43,16 @@ export function isSpecialistWorkerName(name: unknown): boolean {
 
 export function getRoleRegistry(config) {
   const fallback = {
-    ceoSupervisor: { id: "ceo-supervisor", name: "Jesus", model: "GPT-5.3-Codex" },
-    planner: { id: "planner", name: "Prometheus", model: "GPT-5.3-Codex" },
-    reviewer: { id: "reviewer", name: "Athena", model: "GPT-5.3-Codex" },
+    ceoSupervisor: { id: "ceo-supervisor", name: "Jesus", model: "gpt-5.3-codex" },
+    planner: { id: "planner", name: "Prometheus", model: "gpt-5.3-codex" },
+    reviewer: { id: "reviewer", name: "Athena", model: "gpt-5.3-codex" },
     workers: {
-      evolution:      { id: "worker-evolution",      name: "Evolution Worker",      model: "GPT-5.3-Codex", lane: "implementation" },
-      quality:        { id: "worker-quality",         name: "quality-worker",        model: "GPT-5.3-Codex", lane: "quality" },
-      governance:     { id: "worker-governance",      name: "governance-worker",     model: "GPT-5.3-Codex", lane: "governance" },
-      infrastructure: { id: "worker-infrastructure",  name: "infrastructure-worker", model: "GPT-5.3-Codex", lane: "infrastructure" },
-      integration:    { id: "worker-integration",     name: "integration-worker",    model: "GPT-5.3-Codex", lane: "integration" },
-      observation:    { id: "worker-observation",     name: "observation-worker",    model: "GPT-5.3-Codex", lane: "observation" },
+      evolution:      { id: "worker-evolution",      name: "Evolution Worker",      model: "gpt-5.3-codex", lane: "implementation" },
+      quality:        { id: "worker-quality",         name: "quality-worker",        model: "gpt-5.3-codex", lane: "quality" },
+      governance:     { id: "worker-governance",      name: "governance-worker",     model: "gpt-5.3-codex", lane: "governance" },
+      infrastructure: { id: "worker-infrastructure",  name: "infrastructure-worker", model: "gpt-5.3-codex", lane: "infrastructure" },
+      integration:    { id: "worker-integration",     name: "integration-worker",    model: "gpt-5.3-codex", lane: "integration" },
+      observation:    { id: "worker-observation",     name: "observation-worker",    model: "gpt-5.3-codex", lane: "observation" },
     }
   };
 

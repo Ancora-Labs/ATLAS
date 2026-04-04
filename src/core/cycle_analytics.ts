@@ -973,6 +973,47 @@ export function summarizeBenchmarkSchemaCoverage(
   };
 }
 
+export function normalizeExternalBenchmarkSamples(
+  samples: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const sampleList = Array.isArray(samples) ? samples : [];
+  const normalized: Array<Record<string, unknown>> = [];
+  for (const sample of sampleList) {
+    if (!sample || typeof sample !== "object" || Array.isArray(sample)) continue;
+    const benchmarkNameRaw = String(
+      (sample as any).benchmarkName
+        || (sample as any).benchmark
+        || (sample as any).dataset
+        || ""
+    ).trim().toLowerCase();
+    const benchmarkName = benchmarkNameRaw === "swebench" ? "swe-bench" : benchmarkNameRaw;
+    const instanceId = String(
+      (sample as any).instanceId
+        || (sample as any).instance_id
+        || (sample as any).taskId
+        || (sample as any).task_id
+        || ""
+    ).trim();
+    const status = String(
+      (sample as any).status
+        || (sample as any).resolution
+        || (sample as any).outcome
+        || ""
+    ).trim().toLowerCase();
+    const normalizedEntry: Record<string, unknown> = {
+      benchmarkName,
+      instanceId,
+      status,
+    };
+    if ((sample as any).repo) normalizedEntry.repo = String((sample as any).repo);
+    if ((sample as any).environmentId || (sample as any).environment_id) {
+      normalizedEntry.environmentId = String((sample as any).environmentId || (sample as any).environment_id);
+    }
+    normalized.push(normalizedEntry);
+  }
+  return normalized;
+}
+
 export function buildPolicyInterventionAttributionLedger(
   history: any[],
   newEntries: any[],

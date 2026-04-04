@@ -1976,8 +1976,88 @@ function buildPlansFromNarrative(analysisText) {
  */
 export const PLANNER_HEALTH_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   healthy:  "good",
+  degraded: "needs-work",
+  critical: "critical",
+  good: "good",
+  "needs-work": "needs-work",
+  "needs work": "needs-work",
+  "needs_work": "needs-work",
+  needswork: "needs-work",
   warning:  "needs-work",
 });
+
+const REQUIRED_PROMETHEUS_HEALTH_VALUES = new Set(["healthy", "degraded", "critical", "needs-work", "good"]);
+
+function hasValidParserContractFields(parsed: any): boolean {
+  if (!parsed || typeof parsed !== "object") return false;
+  const rawHealth = String(parsed.projectHealth ?? "").trim().toLowerCase();
+  const health = rawHealth.replace(/\s+/g, "-");
+  const estimatedTotal = Number(parsed?.requestBudget?.estimatedPremiumRequestsTotal);
+  const keyFindings = String(parsed?.keyFindings ?? "").trim();
+  const strategicNarrative = String(parsed?.strategicNarrative ?? "").trim();
+  return REQUIRED_PROMETHEUS_HEALTH_VALUES.has(health)
+    && Number.isFinite(estimatedTotal)
+    && keyFindings.length > 0
+    && strategicNarrative.length > 0;
+}
+
+function buildParserContractRetryDiff(parsed: any): string {
+  const missing: string[] = [];
+  const invalid: string[] = [];
+  const rawHealth = String(parsed?.projectHealth ?? "").trim();
+  const normalizedHealth = rawHealth.toLowerCase().replace(/\s+/g, "-");
+  if (!rawHealth) {
+    missing.push("projectHealth");
+  } else if (!REQUIRED_PROMETHEUS_HEALTH_VALUES.has(normalizedHealth)) {
+    invalid.push(`projectHealth=${rawHealth}`);
+  }
+  const hasBudgetObject = parsed?.requestBudget && typeof parsed.requestBudget === "object";
+  if (!hasBudgetObject || parsed.requestBudget.estimatedPremiumRequestsTotal == null || parsed.requestBudget.estimatedPremiumRequestsTotal === "") {
+    missing.push("requestBudget.estimatedPremiumRequestsTotal");
+  } else if (!Number.isFinite(Number(parsed.requestBudget.estimatedPremiumRequestsTotal))) {
+    invalid.push(`requestBudget.estimatedPremiumRequestsTotal=${String(parsed.requestBudget.estimatedPremiumRequestsTotal)}`);
+  }
+  const rawKeyFindings = String(parsed?.keyFindings ?? "").trim();
+  if (!rawKeyFindings) {
+    missing.push("keyFindings");
+  }
+  const rawStrategicNarrative = String(parsed?.strategicNarrative ?? "").trim();
+  if (!rawStrategicNarrative) {
+    missing.push("strategicNarrative");
+  }
+  const missingText = missing.length > 0 ? missing.join(", ") : "none";
+  const invalidText = invalid.length > 0 ? invalid.join(", ") : "none";
+  return `missing=[${missingText}]; invalid=[${invalidText}]`;
+}
+
+export async function enforceParserContractBeforeNormalization(
+  parsedCandidate: any,
+  opts: {
+    onRetryDiff?: (diff: string) => Promise<void> | void;
+    onRetrySuccess?: () => Promise<void> | void;
+    onRetryViolation?: (violationReason: string) => Promise<void> | void;
+    buildRetryCandidate: (diff: string) => Promise<any | null>;
+  },
+): Promise<{ ok: boolean; parsed: any; retried: boolean; violationReason?: string }> {
+  if (hasValidParserContractFields(parsedCandidate)) {
+    return { ok: true, parsed: parsedCandidate, retried: false };
+  }
+  const parserDiff = buildParserContractRetryDiff(parsedCandidate);
+  await opts.onRetryDiff?.(parserDiff);
+  const retryCandidate = await opts.buildRetryCandidate(parserDiff);
+  if (retryCandidate && hasValidParserContractFields(retryCandidate)) {
+    await opts.onRetrySuccess?.();
+    return { ok: true, parsed: retryCandidate, retried: true };
+  }
+  const secondDiff = buildParserContractRetryDiff(retryCandidate || parsedCandidate);
+  await opts.onRetryViolation?.(secondDiff);
+  return {
+    ok: false,
+    parsed: retryCandidate,
+    retried: true,
+    violationReason: secondDiff,
+  };
+}
 
 /**
  * Normalize a raw projectHealth string by resolving known aliases to their
@@ -2360,7 +2440,7 @@ Security or governance recommendations must explain how they contribute to capac
 You MUST emit a structured JSON companion block at the end of your response.
 The JSON block must contain all of the following fields:
 {
-  "projectHealth": "<good|needs-work|critical>",
+  "projectHealth": "<good|healthy|needs-work|degraded|critical>",
   "totalPackets": <number>,
   "requestBudget": {
     "estimatedPremiumRequestsTotal": 6,
@@ -3223,7 +3303,7 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   const repoRoot = process.cwd();
   const registry = getRoleRegistry(config);
   const prometheusName = registry?.deepPlanner?.name || "Prometheus";
-  const prometheusModel = registry?.deepPlanner?.model || "GPT-5.3-Codex";
+  const prometheusModel = registry?.deepPlanner?.model || "gpt-5.3-codex";
   const command = config.env?.copilotCliCommand || "copilot";
 
   const userPrompt = options.prompt || options.prometheusReason || "Full repository self-evolution analysis";
@@ -3695,7 +3775,105 @@ ${compiledCycleDelta}`;
   }
 
   // ── Parse output ──────────────────────────────────────────────────────────
-  const aiResult = parseAgentOutput(raw);
+  let aiResult = parseAgentOutput(raw);
+
+  // ── Parser contract gate (pre-normalization) ──────────────────────────────
+  // Mandatory parse fields must be present/valid before normalization:
+  //   - projectHealth ∈ {healthy,degraded,critical,needs-work}
+  //   - requestBudget.estimatedPremiumRequestsTotal is finite
+  //   - keyFindings is non-empty
+  //   - strategicNarrative is non-empty
+  // Retry once with an explicit diff; fail-closed on second failure.
+  const parsedContractCandidate = aiResult?.parsed || buildNarrativeFallbackParsed({ ...aiResult, raw });
+  let retryAiResult: any = null;
+  const parserContractResult = await enforceParserContractBeforeNormalization(
+    parsedContractCandidate,
+    {
+      onRetryDiff: async (parserDiff: string) => {
+        await appendProgress(
+          config,
+          `[PROMETHEUS][PARSER_CONTRACT] Missing/invalid mandatory fields — retrying once with diff: ${parserDiff}`
+        );
+      },
+      onRetrySuccess: async () => {
+        await appendProgress(config, "[PROMETHEUS][PARSER_CONTRACT] Retry succeeded");
+      },
+      onRetryViolation: async (violationReason: string) => {
+        await appendProgress(
+          config,
+          `[PROMETHEUS][PARSER_CONTRACT] Retry failed mandatory fields — parser_contract_violation: ${violationReason}`
+        );
+      },
+      buildRetryCandidate: async (parserDiff: string) => {
+        const retryPrompt = `${contextPrompt}
+
+## PARSER_CONTRACT_RETRY
+The previous response failed parser contract validation.
+Regenerate the full response and companion JSON, then fix mandatory parser fields exactly.
+
+Parser contract diff:
+${parserDiff}
+
+Mandatory parser fields:
+- projectHealth must be exactly one of: good, healthy, needs-work, degraded, critical
+- requestBudget.estimatedPremiumRequestsTotal must be present and finite
+- keyFindings must be a non-empty string
+- strategicNarrative must be a non-empty string
+- Keep the rest of the plan deterministic and unchanged unless required by these fixes.`;
+
+        try {
+          const retryArgs = buildAgentArgs({
+            agentSlug: "prometheus",
+            prompt: retryPrompt,
+            model: prometheusModel,
+            allowAll: true,
+            noAskUser: true,
+            maxContinues: undefined
+          });
+          appendLiveLogSync(stateDir, `\n[copilot_stream_retry_start] ${ts()}\n`);
+          const retryResult = await spawnAsync(command, retryArgs, {
+            env: process.env,
+            timeoutMs: prometheusTimeoutMs,
+            onStdout(chunk) {
+              const text = chunk.toString("utf8");
+              appendLiveLogSync(stateDir, text);
+            },
+            onStderr(chunk) {
+              const text = chunk.toString("utf8");
+              appendLiveLogSync(stateDir, text);
+            }
+          });
+          const retryResultObj = retryResult as { status?: number; stdout?: string; stderr?: string };
+          appendLiveLogSync(stateDir, `\n[copilot_stream_retry_end] ${ts()} exit=${retryResultObj.status}\n`);
+          if (retryResultObj.status !== 0) {
+            await appendProgress(
+              config,
+              `[PROMETHEUS][PARSER_CONTRACT] Retry process failed — parser_contract_violation: exited ${retryResultObj.status}`
+            );
+            return null;
+          }
+          const retryStdout = String(retryResultObj.stdout || "");
+          const retryStderr = String(retryResultObj.stderr || "");
+          const retryRaw = `${retryStdout}\n${retryStderr}`.trim();
+          retryAiResult = parseAgentOutput(retryRaw);
+          return retryAiResult?.parsed || buildNarrativeFallbackParsed({ ...retryAiResult, raw: retryRaw });
+        } catch (retryError) {
+          const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+          await appendProgress(
+            config,
+            `[PROMETHEUS][PARSER_CONTRACT] Retry execution error — parser_contract_violation: ${retryMessage}`
+          );
+          return null;
+        }
+      },
+    }
+  );
+  if (!parserContractResult.ok) {
+    return null;
+  }
+  if (parserContractResult.retried && retryAiResult) {
+    aiResult = retryAiResult;
+  }
 
   // ── Generation-boundary packet completeness gate ──────────────────────────
   // Reject unrecoverable incomplete packets BEFORE normalization so they never
@@ -3885,6 +4063,15 @@ Mandatory requirements:
         `[PROMETHEUS][DENSITY] Auto-bundled ${bundled.bundledCount} thin related packet group(s) before admission`
       );
     }
+    // Deterministic backfill pass: ensure no plan enters thin-filter with non-finite tokens.
+    rawParsedInput.plans = rawParsedInput.plans.map((plan: any) => {
+      const rawTokens = Number(plan?.estimatedExecutionTokens);
+      if (Number.isFinite(rawTokens)) return plan;
+      return {
+        ...plan,
+        estimatedExecutionTokens: Math.max(1, estimatePlanExecutionTokens(plan)),
+      };
+    });
     const postBundleDensity = _analyzePacketDensification(rawParsedInput.plans, PROMETHEUS_PROMPT_DENSITY_MIN);
     rawParsedInput._packetDensificationPostBundle = postBundleDensity;
     if (postBundleDensity.thinCount > 0) {

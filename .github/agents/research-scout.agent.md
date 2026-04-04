@@ -1,7 +1,7 @@
 ---
 name: research-scout
 description: BOX Research Scout. Searches the open internet for the most valuable technical knowledge to advance the BOX autonomous agent system. Outputs a structured research package with full extracted content ranked by importance.
-model: GPT-5.3-Codex
+model: gpt-5.3-codex
 tools: [read, search, fetch, execute]
 user-invocable: false
 ---

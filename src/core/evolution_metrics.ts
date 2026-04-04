@@ -8,6 +8,11 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { readJson, writeJson } from "./fs_utils.js";
 import { getCalibrationSummary } from "./jesus_calibration.js";
+import {
+  normalizeExternalBenchmarkSamples,
+  summarizeBenchmarkSchemaCoverage,
+} from "./cycle_analytics.js";
+import { EXTERNAL_BENCHMARK_CONTRACTS } from "./experiment_registry.js";
 
 const WINDOW_24H = 24 * 60 * 60_000;
 
@@ -86,7 +91,8 @@ export async function collectEvolutionMetrics(config) {
     premiumRequests24h,
     cycleTimeP50,
     jesusDirective,
-    jesusCalibration
+    jesusCalibration,
+    benchmarkGroundTruth
   ] = await Promise.all([
     computeDeterministicRate(stateDir),
     countProgressEntries(stateDir, "[JESUS] awakening"),
@@ -99,10 +105,21 @@ export async function collectEvolutionMetrics(config) {
     }),
     computeCycleTimeP50(stateDir),
     readJson(path.join(stateDir, "jesus_directive.json"), null),
-    getCalibrationSummary(stateDir)
+    getCalibrationSummary(stateDir),
+    readJson(path.join(stateDir, "benchmark_ground_truth.json"), null),
   ]);
 
   const jesusContextCorrect = !!(jesusDirective?.prometheusAnalysis?.projectHealth);
+  const normalizedExternalSamples = normalizeExternalBenchmarkSamples(
+    Array.isArray(benchmarkGroundTruth?.externalSamples) ? benchmarkGroundTruth.externalSamples : []
+  );
+  const externalBenchmarkCoverage = summarizeBenchmarkSchemaCoverage(
+    EXTERNAL_BENCHMARK_CONTRACTS.map((contract) => ({
+      name: String(contract.name),
+      requiredFields: Array.from(contract.requiredFields),
+    })),
+    normalizedExternalSamples
+  );
 
   const metrics = {
     collectedAt: new Date().toISOString(),
@@ -113,7 +130,11 @@ export async function collectEvolutionMetrics(config) {
     selfImprovementCallsPerDay: selfImprovementCalls24h,
     jesusContextCorrect,
     premiumRequestsPerDay: premiumRequests24h,
-    jesusCalibration
+    jesusCalibration,
+    externalBenchmarkCoverage: {
+      ...externalBenchmarkCoverage,
+      normalizedSamples: normalizedExternalSamples.length,
+    },
   };
 
   await writeJson(path.join(stateDir, "evolution_metrics.json"), metrics);
