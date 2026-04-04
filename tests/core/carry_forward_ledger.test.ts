@@ -371,6 +371,23 @@ describe("autoCloseVerifiedDebt", () => {
     assert.equal(ledger[0].closedAt, null, "Entry must remain open");
   });
 
+  it("does NOT close an entry when canonical replay commands are incomplete", () => {
+    const lesson = "Fix replay artifact workflow command coverage";
+    const ledger = [makeEntry(lesson)];
+    const count = autoCloseVerifiedDebt(ledger, [{
+      taskText: lesson,
+      verificationEvidence: makeReplayContractEvidence({
+        replayClosure: {
+          contractSatisfied: true,
+          executedCommands: ["git rev-parse HEAD", "npm test"],
+          rawArtifactEvidenceLinks: ["inline://post-merge-sha/abc1234"],
+        },
+      }),
+    }]);
+    assert.equal(count, 0, "Must not close when canonical replay command evidence is incomplete");
+    assert.equal(ledger[0].closedAt, null);
+  });
+
   it("does NOT close an entry when task text does not fingerprint-match the lesson", () => {
     const ledger = [makeEntry("Fix the orchestrator dispatch retry logic")];
     const count = autoCloseVerifiedDebt(ledger, [

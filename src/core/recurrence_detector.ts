@@ -12,6 +12,22 @@ export const RECURRENCE_THRESHOLD = 3;
 
 /** Number of recent postmortems to scan. */
 export const RECURRENCE_WINDOW = 20;
+export const LEARNING_GRADE_REVIEW_STATUS = "learning_grade";
+
+function hasNonEmptyPostmortemOutcomes(pm: any): boolean {
+  const expectedOutcome = typeof pm?.expectedOutcome === "string" ? pm.expectedOutcome.trim() : "";
+  const actualOutcome = typeof pm?.actualOutcome === "string" ? pm.actualOutcome.trim() : "";
+  return expectedOutcome.length > 0 && actualOutcome.length > 0;
+}
+
+export function isLearningGradePostmortem(pm: any): boolean {
+  if (!pm || typeof pm !== "object") return false;
+  if (!hasNonEmptyPostmortemOutcomes(pm)) return false;
+  if (pm.closureFieldsValid === false) return false;
+  if (pm.learningGradeEligible === false) return false;
+  if (String(pm.reviewStatus || "").trim() && pm.reviewStatus !== LEARNING_GRADE_REVIEW_STATUS) return false;
+  return true;
+}
 
 /**
  * @typedef {object} RecurrenceMatch
@@ -42,6 +58,7 @@ export function detectRecurrences(postmortems, opts: any = {}) {
   const lessonCounts = new Map();
 
   for (const pm of recent) {
+    if (!isLearningGradePostmortem(pm)) continue;
     if (pm?.interventionDuplicateSuppressed === true) continue;
     const tag = pm.defectChannelTag || pm.defectChannel || "unknown";
     tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);

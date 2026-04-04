@@ -22,9 +22,12 @@ import { fileURLToPath } from "node:url";
 import {
   DECISION_QUALITY_LABEL,
   DECISION_QUALITY_REASON,
+  DEGRADED_POSTMORTEM_REVIEW_REASON,
   LABEL_OUTCOME_MAP,
   computeDecisionQualityLabel,
-  normalizeDecisionQualityLabel
+  normalizeDecisionQualityLabel,
+  POSTMORTEM_REVIEW_STATUS,
+  runAthenaPostmortem,
 } from "../../src/core/athena_reviewer.js";
 
 import {
@@ -602,6 +605,48 @@ describe("validatePostmortemClosureFields — negative paths", () => {
     const r = validatePostmortemClosureFields(null);
     assert.equal(r.valid, false);
     assert.equal(r.reason, POSTMORTEM_CLOSURE_VALIDATION_REASON.MISSING_FIELD);
+  });
+});
+
+describe("runAthenaPostmortem — fallback learning-grade guard", () => {
+  it("routes AI fallback postmortems to degraded review with replay/manual follow-up", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-fallback-"));
+    try {
+      const config = {
+        paths: {
+          stateDir,
+          progressFile: path.join(stateDir, "progress.log"),
+          policyFile: path.join(stateDir, "policy.json"),
+        },
+        env: {
+          targetRepo: "Ancora-Labs/Box",
+          copilotCliCommand: "__missing_copilot_binary__",
+        },
+        roleRegistry: {
+          qualityReviewer: { name: "Athena", model: "GPT-5.3-Codex" },
+        },
+        athena: { forceAiPostmortem: true },
+      };
+      const workerResult = {
+        roleName: "quality-worker",
+        status: "done",
+        summary: "Worker completed task and reported status.",
+        verificationPassed: true,
+        verificationEvidence: { build: "pass", tests: "pass", lint: "pass" },
+      };
+      const originalPlan = { task: "Harden fallback handling for Athena postmortems", riskLevel: "low" };
+      const result: any = await runAthenaPostmortem(config as any, workerResult as any, originalPlan as any);
+
+      assert.equal(result.reviewStatus, POSTMORTEM_REVIEW_STATUS.DEGRADED_REVIEW_REQUIRED);
+      assert.equal(result.learningGradeEligible, false);
+      assert.equal(result.degradedReviewReason, DEGRADED_POSTMORTEM_REVIEW_REASON.AI_POSTMORTEM_FAILURE);
+      assert.equal(result.followUpNeeded, true);
+      assert.match(String(result.followUpTask || ""), /replay|manual/i);
+      assert.equal(result.decisionQualityStatus, "degraded");
+      assert.equal(result.closureFieldsValid, true);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });
 

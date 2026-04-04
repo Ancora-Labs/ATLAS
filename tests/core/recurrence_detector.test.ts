@@ -5,12 +5,12 @@ import { detectRecurrences } from "../../src/core/recurrence_detector.js";
 describe("recurrence_detector", () => {
   it("sorts recurrences by recurrenceWeightedPriority descending", () => {
     const postmortems = [
-      { defectChannelTag: "infra_env", lessonLearned: "infra timeout issue repeated" },
-      { defectChannelTag: "infra_env", lessonLearned: "infra timeout issue repeated" },
-      { defectChannelTag: "infra_env", lessonLearned: "infra timeout issue repeated" },
-      { defectChannelTag: "unknown", lessonLearned: "generic lesson repeated often" },
-      { defectChannelTag: "unknown", lessonLearned: "generic lesson repeated often" },
-      { defectChannelTag: "unknown", lessonLearned: "generic lesson repeated often" },
+      { expectedOutcome: "Fix infra timeout", actualOutcome: "Retried with stable network", defectChannelTag: "infra_env", lessonLearned: "infra timeout issue repeated", reviewStatus: "learning_grade" },
+      { expectedOutcome: "Fix infra timeout", actualOutcome: "Retried with stable network", defectChannelTag: "infra_env", lessonLearned: "infra timeout issue repeated", reviewStatus: "learning_grade" },
+      { expectedOutcome: "Fix infra timeout", actualOutcome: "Retried with stable network", defectChannelTag: "infra_env", lessonLearned: "infra timeout issue repeated", reviewStatus: "learning_grade" },
+      { expectedOutcome: "Fix unknown issue", actualOutcome: "Applied mitigation and verified", defectChannelTag: "unknown", lessonLearned: "generic lesson repeated often", reviewStatus: "learning_grade" },
+      { expectedOutcome: "Fix unknown issue", actualOutcome: "Applied mitigation and verified", defectChannelTag: "unknown", lessonLearned: "generic lesson repeated often", reviewStatus: "learning_grade" },
+      { expectedOutcome: "Fix unknown issue", actualOutcome: "Applied mitigation and verified", defectChannelTag: "unknown", lessonLearned: "generic lesson repeated often", reviewStatus: "learning_grade" },
     ];
     const matches = detectRecurrences(postmortems, { threshold: 2, window: 20 }) as any[];
     assert.ok(matches.length >= 2);
@@ -19,8 +19,8 @@ describe("recurrence_detector", () => {
 
   it("negative path: skips duplicate-suppressed postmortems from recurrence counts", () => {
     const postmortems = [
-      { defectChannelTag: "governance_drift", lessonLearned: "drift fix needed", interventionDuplicateSuppressed: true },
-      { defectChannelTag: "governance_drift", lessonLearned: "drift fix needed", interventionDuplicateSuppressed: false },
+      { expectedOutcome: "Fix governance drift", actualOutcome: "Patch deferred", defectChannelTag: "governance_drift", lessonLearned: "drift fix needed", interventionDuplicateSuppressed: true, reviewStatus: "learning_grade" },
+      { expectedOutcome: "Fix governance drift", actualOutcome: "Patch deferred", defectChannelTag: "governance_drift", lessonLearned: "drift fix needed", interventionDuplicateSuppressed: false, reviewStatus: "learning_grade" },
     ];
     const matches = detectRecurrences(postmortems, { threshold: 2, window: 20 });
     assert.equal(matches.length, 0);

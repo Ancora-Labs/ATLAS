@@ -92,7 +92,7 @@ import {
 import { validatePlanEvidenceCoupling } from "./evidence_envelope.js";
 import { runResearchScout } from "./research_scout.js";
 import { runResearchSynthesizer } from "./research_synthesizer.js";
-import { buildReplayClosureEvidence } from "./verification_gate.js";
+import { buildReplayClosureEvidence, CANONICAL_MAIN_BRANCH_REPLAY_COMMANDS } from "./verification_gate.js";
 import {
   readCheckpoint as readVersionedCheckpoint,
   writeCheckpoint as writeVersionedCheckpoint,
@@ -3036,7 +3036,9 @@ async function runSingleCycle(config) {
           recordedAt: new Date().toISOString(),
           taskText: item.taskText,
           contractSatisfied: replay.contractSatisfied === true,
-          canonicalCommands: Array.isArray(replay.canonicalCommands) ? replay.canonicalCommands : [],
+          canonicalCommands: Array.isArray(replay.canonicalCommands) && replay.canonicalCommands.length > 0
+            ? replay.canonicalCommands
+            : [...CANONICAL_MAIN_BRANCH_REPLAY_COMMANDS],
           executedCommands: Array.isArray(replay.executedCommands) ? replay.executedCommands : [],
           rawArtifactEvidenceLinks: Array.isArray(replay.rawArtifactEvidenceLinks) ? replay.rawArtifactEvidenceLinks : [],
         });

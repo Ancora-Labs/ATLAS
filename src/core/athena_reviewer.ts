@@ -555,6 +555,24 @@ export const POSTMORTEM_RECOMMENDATION = Object.freeze({
   ESCALATE: "escalate"  // task needs human intervention
 });
 
+export const POSTMORTEM_REVIEW_STATUS = Object.freeze({
+  LEARNING_GRADE: "learning_grade",
+  DEGRADED_REVIEW_REQUIRED: "degraded_review_required",
+} as const);
+
+export const DEGRADED_POSTMORTEM_REVIEW_REASON = Object.freeze({
+  AI_POSTMORTEM_FAILURE: "AI_POSTMORTEM_FAILURE",
+  MISSING_CLOSURE_FIELDS: "MISSING_CLOSURE_FIELDS",
+} as const);
+
+const REPLAY_OR_MANUAL_COMPLETION_FOLLOW_UP =
+  "Run canonical main-branch replay commands (git rev-parse HEAD, git status --porcelain, npm test) and complete expectedOutcome/actualOutcome manually.";
+const REQUIRED_MAIN_BRANCH_REPLAY_COMMANDS = Object.freeze([
+  "git rev-parse HEAD",
+  "git status --porcelain",
+  "npm test",
+]);
+
 /**
  * Decision quality labels for postmortem entries.
  * Assigned deterministically from the task outcome via LABEL_OUTCOME_MAP.
@@ -877,6 +895,55 @@ export function validatePostmortemClosureFields(postmortem: any): {
   }
 
   return { valid: true, reason: POSTMORTEM_CLOSURE_VALIDATION_REASON.OK, emptyFields: [] };
+}
+
+export function applyPostmortemLearningGradeStatus(
+  postmortem: any,
+  opts: {
+    closureValidation?: ReturnType<typeof validatePostmortemClosureFields>;
+    forceDegraded?: boolean;
+    degradedReason?: string;
+  } = {},
+) {
+  const closureValidation = opts.closureValidation ?? validatePostmortemClosureFields(postmortem);
+  const forceDegraded = opts.forceDegraded === true;
+  const degradedReason = String(opts.degradedReason || "").trim();
+  const requiresDegradedReview = forceDegraded || !closureValidation.valid;
+
+  const normalized = {
+    ...(postmortem && typeof postmortem === "object" ? postmortem : {}),
+    closureFieldsValid: closureValidation.valid,
+    closureValidationReason: closureValidation.reason,
+    closureValidationEmptyFields: [...closureValidation.emptyFields],
+    requiredReplayCommands: [...REQUIRED_MAIN_BRANCH_REPLAY_COMMANDS],
+  } as Record<string, any>;
+
+  if (requiresDegradedReview) {
+    normalized.reviewStatus = POSTMORTEM_REVIEW_STATUS.DEGRADED_REVIEW_REQUIRED;
+    normalized.learningGradeEligible = false;
+    normalized.requiresReplayOrManualCompletion = true;
+    normalized.degradedReviewReason = degradedReason || DEGRADED_POSTMORTEM_REVIEW_REASON.MISSING_CLOSURE_FIELDS;
+    normalized.decisionQualityStatus = "degraded";
+    if (normalized.decisionQualityLabel !== DECISION_QUALITY_LABEL.INCONCLUSIVE) {
+      normalized.decisionQualityLabel = DECISION_QUALITY_LABEL.INCONCLUSIVE;
+    }
+    if (!String(normalized.decisionQualityLabelReason || "").trim()) {
+      normalized.decisionQualityLabelReason = DECISION_QUALITY_REASON.MISSING_INPUT;
+    }
+    normalized.followUpNeeded = true;
+    if (!String(normalized.followUpTask || "").trim()) {
+      normalized.followUpTask = REPLAY_OR_MANUAL_COMPLETION_FOLLOW_UP;
+    }
+    if (normalized.recommendation !== POSTMORTEM_RECOMMENDATION.ESCALATE) {
+      normalized.recommendation = POSTMORTEM_RECOMMENDATION.REWORK;
+    }
+    return normalized;
+  }
+
+  normalized.reviewStatus = POSTMORTEM_REVIEW_STATUS.LEARNING_GRADE;
+  normalized.learningGradeEligible = true;
+  normalized.requiresReplayOrManualCompletion = false;
+  return normalized;
 }
 
 /**
@@ -2960,6 +3027,8 @@ function computeDeterministicPostmortem(workerResult, originalPlan, dql) {
     decisionQualityLabel: dql.label,
     decisionQualityLabelReason: dql.reason,
     decisionQualityStatus: dql.status,
+    reviewStatus: POSTMORTEM_REVIEW_STATUS.LEARNING_GRADE,
+    learningGradeEligible: true,
     reviewedAt: new Date().toISOString(),
     model: "deterministic"
   };
@@ -3289,24 +3358,53 @@ ${recurrenceContext}
   const aiResult = await callCopilotAgent(command, "athena", contextPrompt, config, athenaModel);
 
   if (!aiResult.ok || !aiResult.parsed) {
-    await appendProgress(config, `[ATHENA] Postmortem AI call failed — ${(aiResult as any).error || "no JSON"}`);
-    chatLog(stateDir, athenaName, `Postmortem AI failed: ${(aiResult as any).error || "no JSON"}`);
-    return {
+    const aiError = String((aiResult as any).error || "no JSON");
+    await appendProgress(config, `[ATHENA] Postmortem AI call failed — ${aiError}`);
+    chatLog(stateDir, athenaName, `Postmortem AI failed: ${aiError}`);
+    const degradedPostmortem = applyPostmortemLearningGradeStatus({
       workerName,
       taskCompleted: workerStatus === "done",
-      recommendation: "proceed",
+      expectedOutcome: String(planTask || "pending replay closure"),
+      actualOutcome: `Athena postmortem fallback triggered: ${aiError}`,
+      deviation: "major",
+      successCriteriaMet: false,
       lessonLearned: "",
+      qualityScore: 0,
+      followUpNeeded: true,
+      followUpTask: REPLAY_OR_MANUAL_COMPLETION_FOLLOW_UP,
+      recommendation: POSTMORTEM_RECOMMENDATION.REWORK,
       decisionQualityLabel: dql.label,
       decisionQualityLabelReason: dql.reason,
       decisionQualityStatus: dql.status,
-      reviewedAt: new Date().toISOString()
+      reviewedAt: new Date().toISOString(),
+      model: athenaModel,
+    }, {
+      forceDegraded: true,
+      degradedReason: DEGRADED_POSTMORTEM_REVIEW_REASON.AI_POSTMORTEM_FAILURE,
+    });
+
+    const fallbackRecurrences = detectRecurrences(pastPostmortems, { window: 50, threshold: 2 });
+    const fallbackClosureMeta = buildPostmortemInterventionClosure(degradedPostmortem, fallbackRecurrences);
+    const enrichedFallbackPostmortem = {
+      ...degradedPostmortem,
+      recurrenceCount: fallbackClosureMeta.recurrenceCount,
+      recurrenceWeightedPriority: scoreRecurrenceWeightedPriority({ ...degradedPostmortem, ...fallbackClosureMeta }),
+      interventionId: fallbackClosureMeta.interventionId,
+      interventionDuplicateSuppressed: fallbackClosureMeta.duplicateSuppressed,
+      interventionClosureStatus: fallbackClosureMeta.closureStatus,
+      interventionClosureTrackedTask: fallbackClosureMeta.closureTrackedTask,
     };
+    pastPostmortems.push(enrichedFallbackPostmortem);
+    if (pastPostmortems.length > 50) pastPostmortems.splice(0, pastPostmortems.length - 50);
+    await writeJson(postmortemsFilePath, addSchemaVersion(pastPostmortems, STATE_FILE_TYPE.ATHENA_POSTMORTEMS));
+    await writeJson(path.join(stateDir, "athena_latest_postmortem.json"), enrichedFallbackPostmortem);
+    return enrichedFallbackPostmortem;
   }
 
   logAgentThinking(stateDir, athenaName, aiResult.thinking);
 
   const d = aiResult.parsed;
-  const postmortem = {
+  const rawPostmortem = {
     workerName: d.workerName || workerName,
     taskCompleted: d.taskCompleted !== false,
     expectedOutcome: d.expectedOutcome || "",
@@ -3329,16 +3427,12 @@ ${recurrenceContext}
   // Require non-empty expectedOutcome, actualOutcome, and deviation before
   // persisting. Empty fields degrade the postmortem and prevent carry-forward
   // lesson extraction and decision quality scoring from using it.
-  const closureValidation = validatePostmortemClosureFields(postmortem);
+  const closureValidation = validatePostmortemClosureFields(rawPostmortem);
+  const postmortem = applyPostmortemLearningGradeStatus(rawPostmortem, { closureValidation });
   if (!closureValidation.valid) {
     await appendProgress(config,
       `[ATHENA] Postmortem closure validation FAILED — ${closureValidation.reason} — empty fields: ${closureValidation.emptyFields.join(", ")}`
     );
-    (postmortem as any).closureFieldsValid = false;
-    (postmortem as any).closureValidationReason = closureValidation.reason;
-    (postmortem as any).closureValidationEmptyFields = closureValidation.emptyFields;
-  } else {
-    (postmortem as any).closureFieldsValid = true;
   }
 
   // Classify defect channel
@@ -3354,7 +3448,7 @@ ${recurrenceContext}
   const history = Array.isArray(pastPostmortems) ? pastPostmortems : [];
   const recurrences = detectRecurrences(history, { window: 50, threshold: 2 });
   const closureMeta = buildPostmortemInterventionClosure(postmortem, recurrences);
-  const enrichedPostmortem = {
+  const enrichedPostmortem: any = {
     ...postmortem,
     recurrenceCount: closureMeta.recurrenceCount,
     recurrenceWeightedPriority: scoreRecurrenceWeightedPriority({ ...postmortem, ...closureMeta }),

@@ -1096,6 +1096,7 @@ import {
   POSTMORTEM_CLOSURE_VALIDATION_REASON,
   validatePostmortemClosureFields,
 } from "../../src/core/athena_reviewer.js";
+import { detectRecurrences } from "../../src/core/recurrence_detector.js";
 
 describe("validatePostmortemClosureFields — used in monthly postmortem workflow (Task 1)", () => {
   it("accepts a fully populated postmortem with all closure fields", () => {
@@ -1145,5 +1146,41 @@ describe("validatePostmortemClosureFields — used in monthly postmortem workflo
     const r = validatePostmortemClosureFields(pm);
     assert.equal(r.valid, false,
       "only 'none', 'minor', 'major' are valid deviation values");
+  });
+});
+
+describe("detectRecurrences — learning-grade filter for degraded postmortems", () => {
+  it("ignores degraded-review records with missing outcomes and only counts learning-grade entries", () => {
+    const postmortems = [
+      {
+        expectedOutcome: "",
+        actualOutcome: "",
+        lessonLearned: "fallback record without closure data",
+        defectChannel: "product",
+        defectChannelTag: "planning_gap",
+        reviewStatus: "degraded_review_required",
+        learningGradeEligible: false,
+      },
+      {
+        expectedOutcome: "Implement replay closure workflow",
+        actualOutcome: "Workflow merged and verified",
+        lessonLearned: "explicit",
+        defectChannel: "product",
+        defectChannelTag: "planning_gap",
+        reviewStatus: "learning_grade",
+      },
+      {
+        expectedOutcome: "Implement replay closure workflow",
+        actualOutcome: "Workflow merged and verified",
+        lessonLearned: "explicit",
+        defectChannel: "product",
+        defectChannelTag: "planning_gap",
+        reviewStatus: "learning_grade",
+      },
+    ];
+    const matches = detectRecurrences(postmortems, { threshold: 2, window: 10 });
+    assert.equal(matches.length, 1, "only learning-grade postmortems should contribute to recurrence counts");
+    assert.equal(matches[0].tag, "planning_gap");
+    assert.equal(matches[0].count, 2);
   });
 });
