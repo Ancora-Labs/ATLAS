@@ -3312,6 +3312,22 @@ export function seedDiscoveryGapPackets(
   }));
 }
 
+function ensurePersistedAnalysisTimestamps<T extends Record<string, unknown>>(analysis: T): T & {
+  generatedAt: string;
+  analyzedAt: string;
+} {
+  const generatedAt = String(analysis?.generatedAt ?? "").trim();
+  const analyzedAt = String(analysis?.analyzedAt ?? "").trim();
+  const nowIso = new Date().toISOString();
+  const normalizedAnalyzedAt = analyzedAt || nowIso;
+  const normalizedGeneratedAt = generatedAt || normalizedAnalyzedAt;
+  return {
+    ...analysis,
+    generatedAt: normalizedGeneratedAt,
+    analyzedAt: normalizedAnalyzedAt,
+  };
+}
+
 export async function runPrometheusAnalysis(config, options: any = {}) {
   const stateDir = config.paths?.stateDir || "state";
 
@@ -3334,8 +3350,13 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
           // functions (target_files, scope, acceptance_criteria) always run.
           if (Array.isArray(existing.plans) && existing.plans.length > 0) {
             const renormalized = normalizePrometheusParsedOutput(existing, {});
+            const persistedRenormalized = ensurePersistedAnalysisTimestamps(renormalized);
+            await writeJson(
+              path.join(stateDir, "prometheus_analysis.json"),
+              addSchemaVersion(persistedRenormalized, STATE_FILE_TYPE.PROMETHEUS_ANALYSIS),
+            ).catch(() => {});
             await appendProgress(config, `[PROMETHEUS] Fresh analysis exists (${Math.round(ageMs / 60_000)}m old, threshold=${freshnessMins}m) — reusing cached result (re-normalized ${renormalized.plans.length} plan(s))`);
-            return renormalized;
+            return persistedRenormalized;
           }
           // Cached file has no plans — attempt normalization to recover plans
           const recovered = normalizePrometheusParsedOutput(existing, {});
@@ -3364,8 +3385,12 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
               recovered.dependencyGraph = { status: "degraded", errorMessage: String(graphErr?.message || graphErr) };
             }
             // Persist normalized result so subsequent reads don't need re-normalization
-            await writeJson(path.join(stateDir, "prometheus_analysis.json"), recovered).catch(() => {});
-            return recovered;
+            const persistedRecovered = ensurePersistedAnalysisTimestamps(recovered);
+            await writeJson(
+              path.join(stateDir, "prometheus_analysis.json"),
+              addSchemaVersion(persistedRecovered, STATE_FILE_TYPE.PROMETHEUS_ANALYSIS),
+            ).catch(() => {});
+            return persistedRecovered;
           }
           // Cache exists but normalization also produced no plans — re-run
           await appendProgress(config, `[PROMETHEUS] Cached analysis has no actionable plans (${Math.round(ageMs / 60_000)}m old) — re-running`);
@@ -4642,11 +4667,9 @@ Mandatory requirements:
   }
 
   // ── Build analysis result ─────────────────────────────────────────────────
-  const analysis = {
+  const analysis = ensurePersistedAnalysisTimestamps({
     ...parsed,
     dossierPath: null,
-    generatedAt: String(parsed?.generatedAt || "").trim() || new Date().toISOString(),
-    analyzedAt: new Date().toISOString(),
     model: prometheusModel,
     repo: config.env?.targetRepo,
     requestedBy,
@@ -4663,7 +4686,7 @@ Mandatory requirements:
       findings: mandatoryFindings,
       coverageGate: parsed._mandatoryTaskCoverageGate || null,
     },
-  };
+  });
 
   await writeJson(path.join(stateDir, "prometheus_analysis.json"), addSchemaVersion(analysis, STATE_FILE_TYPE.PROMETHEUS_ANALYSIS));
 

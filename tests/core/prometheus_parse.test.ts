@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   normalizePrometheusParsedOutput,
   applyPlanningRubric,
@@ -49,6 +52,9 @@ import {
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments } from "../../src/core/prompt_compiler.js";
 import { isNonSpecificVerification, validatePlanContract } from "../../src/core/plan_contract_validator.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const FIXTURES_DIR = path.join(__dirname, "..", "fixtures");
 
 describe("normalizePrometheusParsedOutput", () => {
   it("maps tasks/waves decision payload into planner plans", () => {
@@ -2489,6 +2495,31 @@ describe("checkHighRiskPacketConfidence — high-risk low-confidence gate", () =
 });
 
 describe("enforceParserContractBeforeNormalization", () => {
+  it("treats null generatedAt/keyFindings/strategicNarrative as contract-missing and fails closed", async () => {
+    const invalid = {
+      projectHealth: "healthy",
+      requestBudget: { estimatedPremiumRequestsTotal: 1 },
+      generatedAt: null,
+      keyFindings: null,
+      strategicNarrative: null,
+      plans: [{ task: "x", role: "evolution-worker" }],
+    };
+    let violation = "";
+    const result = await enforceParserContractBeforeNormalization(invalid, {
+      onRetryViolation(reason: string) {
+        violation = reason;
+      },
+      async buildRetryCandidate() {
+        return null;
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.retried, true);
+    assert.ok(violation.includes("generatedAt"));
+    assert.ok(violation.includes("keyFindings"));
+    assert.ok(violation.includes("strategicNarrative"));
+  });
+
   it("retries once when mandatory fields are missing and passes on repaired payload", async () => {
     const initial = { plans: [{ task: "x", role: "evolution-worker" }] };
     const repaired = {
@@ -2562,6 +2593,22 @@ describe("enforceParserContractBeforeNormalization", () => {
     };
     let called = 0;
     const result = await enforceParserContractBeforeNormalization(valid, {
+      async buildRetryCandidate() {
+        called += 1;
+        return null;
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.retried, false);
+    assert.equal(called, 0);
+  });
+
+  it("accepts legacy analysis fixture when generatedAt/keyFindings/strategicNarrative are non-empty", async () => {
+    const fixture = JSON.parse(
+      await fs.readFile(path.join(FIXTURES_DIR, "prometheus_analysis_v0.json"), "utf8")
+    );
+    let called = 0;
+    const result = await enforceParserContractBeforeNormalization(fixture, {
       async buildRetryCandidate() {
         called += 1;
         return null;
