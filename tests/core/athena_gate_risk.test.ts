@@ -9,6 +9,8 @@ import {
   GATE_BLOCK_RISK,
   ATHENA_PLAN_REVIEW_REASON_CODE,
   runAthenaPlanReview,
+  evaluateDecisionPacketContract,
+  buildDecisionPacketRetryPrompt,
 } from "../../src/core/athena_reviewer.js";
 
 describe("athena gate risk dry-run integration", () => {
@@ -146,6 +148,32 @@ describe("athena gate risk dry-run integration", () => {
     const penalty = gateRisk.gateBlockRisk === GATE_BLOCK_RISK.HIGH ? 4 : 2;
     const adjustedScore = Math.max(1, baseScore - penalty);
     assert.equal(adjustedScore, 4);
+  });
+
+  it("flags malformed decision packet and invalid score for retry diagnostics", () => {
+    const check = evaluateDecisionPacketContract({ approved: true, planReviews: [], overallScore: "NaN" });
+    assert.equal(check.needsRetry, true);
+    assert.equal(check.hasScoreViolation, true);
+    assert.ok(check.violations.some(v => v.includes("overallScore")));
+    assert.ok(check.fieldDiff.some(v => v.includes("overallScore: invalid")));
+  });
+
+  it("does not request retry when decision packet and overallScore satisfy contract", () => {
+    const check = evaluateDecisionPacketContract({ approved: true, planReviews: [{ planIndex: 0 }], overallScore: 8 });
+    assert.equal(check.needsRetry, false);
+    assert.equal(check.hasScoreViolation, false);
+    assert.equal(check.violations.length, 0);
+  });
+
+  it("builds retry prompt with explicit field diff details", () => {
+    const prompt = buildDecisionPacketRetryPrompt("BASE", {
+      needsRetry: true,
+      hasScoreViolation: true,
+      violations: ["overallScore missing/invalid (must be numeric 1-10)"],
+      fieldDiff: ["approved: boolean(true)", "planReviews: present", "overallScore: invalid(\"NaN\")"],
+    });
+    assert.ok(prompt.includes("RETRY — FIX MALFORMED DECISION PACKET"));
+    assert.ok(prompt.includes("overallScore: invalid"));
   });
 });
 

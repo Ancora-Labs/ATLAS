@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { runOnce, runResumeDispatch, evaluatePreDispatchGovernanceGate, BLOCK_REASON } from "../../src/core/orchestrator.js";
+import { runOnce, runResumeDispatch, evaluatePreDispatchGovernanceGate, BLOCK_REASON, processEscalationQueueClosureWorkflow } from "../../src/core/orchestrator.js";
 import { ATHENA_PLAN_REVIEW_REASON_CODE } from "../../src/core/athena_reviewer.js";
 import { readPipelineProgress, PIPELINE_STAGE_ENUM, PIPELINE_STEPS } from "../../src/core/pipeline_progress.js";
 import { EVENTS } from "../../src/core/event_schema.js";
@@ -116,6 +116,56 @@ describe("orchestrator pipeline progress — resilience", () => {
       PIPELINE_STAGE_ENUM.includes(data.stage),
       `stage '${data.stage}' written by orchestrator is not in PIPELINE_STAGE_ENUM`
     );
+  });
+});
+
+describe("orchestrator escalation closure workflow", () => {
+  it("processEscalationQueueClosureWorkflow resolves targeted stale escalations with deterministic summaries", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-orch-escalation-closure-"));
+    try {
+      const config = {
+        paths: { stateDir: tmpDir, progressFile: path.join(tmpDir, "progress.txt") },
+      };
+      await fs.writeFile(path.join(tmpDir, "progress.txt"), "", "utf8");
+      await fs.writeFile(path.join(tmpDir, "escalation_queue.json"), JSON.stringify({
+        entries: [
+          {
+            schemaVersion: 1,
+            role: "evolution-worker",
+            taskFingerprint: "6b493c609b258bc0",
+            taskSnippet: "forced max rework",
+            blockingReasonClass: "MAX_REWORK_EXHAUSTED",
+            attempts: 2,
+            nextAction: "RETRY",
+            summary: "pending",
+            prUrl: null,
+            resolved: false,
+            createdAt: new Date().toISOString(),
+          },
+          {
+            schemaVersion: 1,
+            role: "infrastructure-worker",
+            taskFingerprint: "905e317f43de1a08",
+            taskSnippet: "forced access blocked",
+            blockingReasonClass: "ACCESS_BLOCKED",
+            attempts: 1,
+            nextAction: "ESCALATE_TO_HUMAN",
+            summary: "pending",
+            prUrl: null,
+            resolved: false,
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        updatedAt: null,
+      }, null, 2), "utf8");
+
+      const result = await processEscalationQueueClosureWorkflow(config);
+      assert.equal(result.resolvedCount, 2);
+      assert.ok(result.resolvedFingerprints.includes("6b493c609b258bc0"));
+      assert.ok(result.resolvedFingerprints.includes("905e317f43de1a08"));
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 

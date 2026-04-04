@@ -241,6 +241,8 @@ export const ATHENA_PLAN_REVIEW_REASON_CODE = Object.freeze({
   LOW_PLAN_QUALITY: "LOW_PLAN_QUALITY",
   MISSING_PREMORTEM: "MISSING_PREMORTEM",
   MISSING_ACTIONABLE_PACKET_FIELDS: "MISSING_ACTIONABLE_PACKET_FIELDS",
+  MALFORMED_DECISION_PACKET: "MALFORMED_DECISION_PACKET",
+  SCORE_CONTRACT_VIOLATION: "SCORE_CONTRACT_VIOLATION",
   TRUST_BOUNDARY_VIOLATION: "TRUST_BOUNDARY_VIOLATION",
   PATCHED_PLAN_VALIDATION_FAILED: "PATCHED_PLAN_VALIDATION_FAILED",
   ATHENA_BATCH_METADATA_MISSING: "ATHENA_BATCH_METADATA_MISSING",
@@ -2095,6 +2097,72 @@ function buildPlanReviewBlocker(code: string, source = "athena_reviewer") {
   };
 }
 
+export function formatDecisionFieldDiff(raw: any): string[] {
+  const payload = pickReviewerPayload(raw);
+  const statusOrVerdict = String(payload?.status || payload?.verdict || "").trim();
+  const hasApprovedBoolean = typeof payload?.approved === "boolean";
+  const hasPlanReviews = Array.isArray(payload?.planReviews) || Array.isArray(payload?.plan_reviews);
+  const scoreRaw = payload?.overallScore;
+  const scoreNum = Number(scoreRaw);
+  const scoreValid = Number.isFinite(scoreNum) && scoreNum >= 1 && scoreNum <= 10;
+  return [
+    `approved: ${hasApprovedBoolean ? `boolean(${String(payload.approved)})` : statusOrVerdict ? `non-boolean status/verdict="${statusOrVerdict}"` : "missing"}`,
+    `planReviews: ${hasPlanReviews ? "present" : "missing"}`,
+    `overallScore: ${scoreValid ? `valid(${String(scoreNum)})` : `invalid(${JSON.stringify(scoreRaw)})`}`,
+  ];
+}
+
+export function evaluateDecisionPacketContract(raw: any): {
+  needsRetry: boolean;
+  hasScoreViolation: boolean;
+  violations: string[];
+  fieldDiff: string[];
+} {
+  const payload = pickReviewerPayload(raw);
+  const violations: string[] = [];
+  const fieldDiff = formatDecisionFieldDiff(raw);
+  const statusOrVerdict = String(payload?.status || payload?.verdict || "").trim().toLowerCase();
+  const hasExplicitApproval = typeof payload?.approved === "boolean" || EXPLICIT_APPROVAL_STATUS_VALUES.has(statusOrVerdict);
+  const hasPlanReviews = Array.isArray(payload?.planReviews) || Array.isArray(payload?.plan_reviews);
+  const scoreNum = Number(payload?.overallScore);
+  const hasValidScore = Number.isFinite(scoreNum) && scoreNum >= 1 && scoreNum <= 10;
+  if (!hasExplicitApproval || !hasPlanReviews) {
+    violations.push("decision packet malformed: approved and/or planReviews missing");
+  }
+  if (!hasValidScore) {
+    violations.push("overallScore missing/invalid (must be numeric 1-10)");
+  }
+  return {
+    needsRetry: violations.length > 0,
+    hasScoreViolation: !hasValidScore,
+    violations,
+    fieldDiff,
+  };
+}
+
+export function buildDecisionPacketRetryPrompt(basePrompt: string, contractCheck: ReturnType<typeof evaluateDecisionPacketContract>): string {
+  const violations = contractCheck.violations.map((v, idx) => `${idx + 1}. ${v}`).join("\n");
+  const fieldDiff = contractCheck.fieldDiff.map((v) => `- ${v}`).join("\n");
+  return `${basePrompt}
+
+## RETRY — FIX MALFORMED DECISION PACKET
+
+Your previous response violated the decision packet contract.
+Violations:
+${violations}
+
+Field diff from the previous response:
+${fieldDiff}
+
+Return a corrected ===DECISION=== packet that includes:
+1. approved (boolean or explicit status/verdict),
+2. overallScore (numeric 1-10),
+3. planReviews (array),
+4. all other required fields from the original contract.
+
+Do not omit fields.`;
+}
+
 export async function runAthenaPlanReview(config, prometheusAnalysis) {
   const stateDir = config.paths?.stateDir || "state";
   const registry = getRoleRegistry(config);
@@ -2475,6 +2543,54 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
     return { approved: false, reason, blocker, corrections: [] };
   }
 
+  const initialContractCheck = evaluateDecisionPacketContract(aiResult.parsed);
+  if (initialContractCheck.needsRetry) {
+    await appendProgress(
+      config,
+      `[ATHENA] Decision packet contract mismatch on first attempt — retrying once with explicit field diff: ${initialContractCheck.fieldDiff.join(" | ")}`
+    );
+    const retryPrompt = buildDecisionPacketRetryPrompt(contextPrompt, initialContractCheck);
+    const retryResult = await callCopilotAgent(command, "athena", retryPrompt, config, athenaModel);
+    if (!retryResult.ok || !retryResult.parsed) {
+      const reason = {
+        code: ATHENA_PLAN_REVIEW_REASON_CODE.AI_CALL_FAILED,
+        message: `Retry failed after decision-packet contract mismatch: ${(retryResult as any).error || "No JSON returned from AI"}`
+      };
+      const blocker = buildPlanReviewBlocker(reason.code);
+      await appendProgress(config, `[ATHENA] Decision packet retry failed — ${reason.message} — blocking plan (fail-closed)`);
+      await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
+      await appendAlert(config, {
+        severity: ALERT_SEVERITY.CRITICAL,
+        source: "athena_reviewer",
+        title: "Decision packet retry failed — plan blocked",
+        message: `code=${reason.code} message=${reason.message}`
+      });
+      return { approved: false, reason, blocker, corrections: [] };
+    }
+    aiResult = retryResult;
+    const retryContractCheck = evaluateDecisionPacketContract(aiResult.parsed);
+    if (retryContractCheck.needsRetry) {
+      const code = retryContractCheck.hasScoreViolation
+        ? ATHENA_PLAN_REVIEW_REASON_CODE.SCORE_CONTRACT_VIOLATION
+        : ATHENA_PLAN_REVIEW_REASON_CODE.MALFORMED_DECISION_PACKET;
+      const reason = {
+        code,
+        message: `Decision packet contract still invalid after retry: ${retryContractCheck.violations.join("; ")}`
+      };
+      const blocker = buildPlanReviewBlocker(reason.code);
+      await appendProgress(config, `[ATHENA] Plan review REJECTED — ${reason.message}`);
+      await appendProgress(config, `[ATHENA] Decision packet field diff after retry: ${retryContractCheck.fieldDiff.join(" | ")}`);
+      await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
+      await appendAlert(config, {
+        severity: ALERT_SEVERITY.CRITICAL,
+        source: "athena_reviewer",
+        title: "Decision packet contract violation after retry — plan blocked",
+        message: `code=${reason.code} violations=${retryContractCheck.violations.join(" | ")}`
+      });
+      return { approved: false, reason, blocker, corrections: [] };
+    }
+  }
+
   logAgentThinking(stateDir, athenaName, aiResult.thinking);
 
   // ── Trust boundary validation ────────────────────────────────────────────
@@ -2559,7 +2675,9 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
 
   const result = {
     approved,
-    overallScore: d.overallScore || 0,
+    overallScore: Number.isFinite(Number(d.overallScore))
+      ? Math.max(approved ? 1 : 0, Math.min(10, Number(d.overallScore)))
+      : (approved ? 1 : 0),
     summary: d.summary || "",
     planReviews: Array.isArray(d.planReviews) ? d.planReviews : [],
     corrections,

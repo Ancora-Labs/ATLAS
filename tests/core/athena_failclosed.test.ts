@@ -29,6 +29,7 @@ import {
   buildGovernanceLaneVerdict,
   runDualLanePlanReview,
   resolveEffectiveLaneMergePolicy,
+  ATHENA_PLAN_REVIEW_REASON_CODE,
 } from "../../src/core/athena_reviewer.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -88,6 +89,13 @@ describe("ALERT_SEVERITY enum", () => {
     assert.equal(ALERT_SEVERITY.MEDIUM, "medium");
     assert.equal(ALERT_SEVERITY.HIGH, "high");
     assert.equal(ALERT_SEVERITY.CRITICAL, "critical");
+  });
+});
+
+describe("ATHENA_PLAN_REVIEW_REASON_CODE score/packet contract", () => {
+  it("exports deterministic reason codes for malformed decision packets and score contract violations", () => {
+    assert.equal(ATHENA_PLAN_REVIEW_REASON_CODE.MALFORMED_DECISION_PACKET, "MALFORMED_DECISION_PACKET");
+    assert.equal(ATHENA_PLAN_REVIEW_REASON_CODE.SCORE_CONTRACT_VIOLATION, "SCORE_CONTRACT_VIOLATION");
   });
 });
 

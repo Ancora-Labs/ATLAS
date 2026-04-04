@@ -109,6 +109,26 @@ describe("parseWorkerResponse", () => {
     assert.equal(result.verificationReport, null);
   });
 
+  it("parses canonical block-style VERIFICATION_REPORT", () => {
+    const stdout = [
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=pass",
+      "EDGE_CASES=pass",
+      "===END_VERIFICATION===",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.ok(result.verificationReport);
+    assert.equal(result.verificationReport.build, "pass");
+    assert.equal(result.verificationReport.tests, "pass");
+  });
+
+  it("keeps verificationReport null when VERIFICATION_REPORT block is malformed", () => {
+    const stdout = "===VERIFICATION_REPORT===\nnot-a-report\n===END_VERIFICATION===";
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.verificationReport, null);
+  });
+
   it("returns non-empty summary from stdout", () => {
     const result = parseWorkerResponse("I fixed the bug in src/auth.js", "");
     assert.ok(result.summary.length > 0);

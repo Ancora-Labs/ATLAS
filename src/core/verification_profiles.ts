@@ -203,6 +203,17 @@ const DEFAULT_PROFILE = {
   description: "Unknown role. Build required, everything else optional."
 };
 
+export const CANONICAL_VERIFICATION_REPORT_TEMPLATE = Object.freeze([
+  "===VERIFICATION_REPORT===",
+  "BUILD=<pass|fail|n/a>",
+  "TESTS=<pass|fail|n/a>",
+  "RESPONSIVE=<pass|fail|n/a>",
+  "API=<pass|fail|n/a>",
+  "EDGE_CASES=<pass|fail|n/a>",
+  "SECURITY=<pass|fail|n/a>",
+  "===END_VERIFICATION===",
+].join("\n"));
+
 export function getVerificationProfile(workerKind) {
   return PROFILES[workerKind] || DEFAULT_PROFILE;
 }
@@ -250,7 +261,10 @@ export function buildVerificationChecklist(workerKind) {
 
   lines.push("");
   lines.push("At the END of your response, you MUST include ALL of the following:");
-  lines.push("VERIFICATION_REPORT: BUILD=<pass|fail|n/a>; TESTS=<pass|fail|n/a>; RESPONSIVE=<pass|fail|n/a>; API=<pass|fail|n/a>; EDGE_CASES=<pass|fail|n/a>; SECURITY=<pass|fail|n/a>");
+  lines.push("Use this exact verification report block (replace placeholders with real values):");
+  lines.push("```");
+  lines.push(CANONICAL_VERIFICATION_REPORT_TEMPLATE);
+  lines.push("```");
 
   const needsPrUrl = profile.evidence?.prUrl === "required";
   if (needsPrUrl) {
