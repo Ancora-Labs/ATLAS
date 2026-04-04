@@ -5,6 +5,8 @@ import { readJsonSafe, READ_JSON_REASON, writeJsonAtomic } from "./fs_utils.js";
 export const CHECKPOINT_SCHEMA_VERSION = 2;
 export const CHECKPOINT_FORMAT = "resumable_v2";
 export const CHECKPOINT_INTEGRITY_ALGORITHM = "sha256";
+export const RUN_SEGMENT_BATCH_SPAN_DEFAULT = 5;
+export const RUN_SEGMENT_HISTORY_MAX_DEFAULT = 20;
 
 const CHECKPOINT_META_KEYS = new Set([
   "schemaVersion",
@@ -27,6 +29,97 @@ function extractPayloadFields(checkpoint) {
 
 function computeCheckpointIntegrity(payload) {
   return crypto.createHash(CHECKPOINT_INTEGRITY_ALGORITHM).update(JSON.stringify(payload)).digest("hex");
+}
+
+function resolveSegmentBounds(segmentIndex: number, spanBatches: number, totalBatches: number) {
+  const safeSpan = Math.max(1, Math.floor(Number(spanBatches) || RUN_SEGMENT_BATCH_SPAN_DEFAULT));
+  const safeTotal = Math.max(0, Math.floor(Number(totalBatches) || 0));
+  const idx = Math.max(1, Math.floor(Number(segmentIndex) || 1));
+  const startBatch = ((idx - 1) * safeSpan) + 1;
+  const endBatch = Math.min(safeTotal > 0 ? safeTotal : startBatch + safeSpan - 1, idx * safeSpan);
+  return { segmentIndex: idx, spanBatches: safeSpan, startBatch, endBatch };
+}
+
+export function initializeRunSegmentState(checkpoint, opts: { spanBatches?: number; historyMax?: number } = {}) {
+  const target = checkpoint && typeof checkpoint === "object" ? checkpoint : {};
+  const totalBatches = Math.max(0, Math.floor(Number((target as any).totalPlans || 0)));
+  const spanBatches = Math.max(1, Math.floor(Number(opts.spanBatches) || RUN_SEGMENT_BATCH_SPAN_DEFAULT));
+  const historyMax = Math.max(1, Math.floor(Number(opts.historyMax) || RUN_SEGMENT_HISTORY_MAX_DEFAULT));
+  const initialized = {
+    ...target,
+    runSegment: {
+      ...resolveSegmentBounds(1, spanBatches, totalBatches),
+      startedAt: String((target as any)?.createdAt || new Date().toISOString()),
+      rolloverAt: null,
+    },
+    runSegmentHistory: [],
+    runSegmentHistoryMax: historyMax,
+  };
+  return initialized;
+}
+
+export function applyRunSegmentRollover(
+  checkpoint,
+  opts: { completedBatches: number; spanBatches?: number; historyMax?: number } = { completedBatches: 0 },
+): {
+  checkpoint: any;
+  rolledOver: boolean;
+  previousSegment?: Record<string, unknown> | null;
+  activeSegment?: Record<string, unknown> | null;
+} {
+  const target = checkpoint && typeof checkpoint === "object" ? checkpoint : {};
+  const totalBatches = Math.max(0, Math.floor(Number((target as any).totalPlans || 0)));
+  const spanBatches = Math.max(
+    1,
+    Math.floor(
+      Number(opts.spanBatches || (target as any)?.runSegment?.spanBatches || RUN_SEGMENT_BATCH_SPAN_DEFAULT),
+    ),
+  );
+  const historyMax = Math.max(
+    1,
+    Math.floor(
+      Number(opts.historyMax || (target as any)?.runSegmentHistoryMax || RUN_SEGMENT_HISTORY_MAX_DEFAULT),
+    ),
+  );
+  const completedBatches = Math.max(0, Math.floor(Number(opts.completedBatches || 0)));
+  const currentIndex = Math.max(1, Math.floor(Number((target as any)?.runSegment?.segmentIndex || 1)));
+  const nextIndex = Math.max(1, Math.floor(completedBatches / spanBatches) + 1);
+  const effectiveNextIndex = totalBatches > 0 ? Math.min(nextIndex, Math.ceil(totalBatches / spanBatches)) : nextIndex;
+  const previousHistory = Array.isArray((target as any).runSegmentHistory) ? (target as any).runSegmentHistory : [];
+
+  const base = {
+    ...target,
+    runSegmentHistoryMax: historyMax,
+  };
+  if (effectiveNextIndex <= currentIndex) {
+    if (!(base as any).runSegment) {
+      (base as any).runSegment = {
+        ...resolveSegmentBounds(currentIndex, spanBatches, totalBatches),
+        startedAt: new Date().toISOString(),
+        rolloverAt: null,
+      };
+    }
+    return { checkpoint: base, rolledOver: false, previousSegment: null, activeSegment: (base as any).runSegment || null };
+  }
+
+  const nowIso = new Date().toISOString();
+  const previousSegment = {
+    ...resolveSegmentBounds(currentIndex, spanBatches, totalBatches),
+    completedBatches: Math.min(completedBatches, totalBatches || completedBatches),
+    rolloverAt: nowIso,
+  };
+  const runSegmentHistory = [...previousHistory, previousSegment].slice(-historyMax);
+  const activeSegment = {
+    ...resolveSegmentBounds(effectiveNextIndex, spanBatches, totalBatches),
+    startedAt: nowIso,
+    rolloverAt: null,
+  };
+  const next = {
+    ...base,
+    runSegmentHistory,
+    runSegment: activeSegment,
+  };
+  return { checkpoint: next, rolledOver: true, previousSegment, activeSegment };
 }
 
 export function createVersionedCheckpointEnvelope(checkpoint, previousCheckpoint = null, checkpointKind = "dispatch") {

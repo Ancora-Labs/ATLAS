@@ -7,6 +7,7 @@ import {
   PIPELINE_STEPS,
   PIPELINE_STAGE_ENUM,
   PIPELINE_PROGRESS_SCHEMA,
+  PIPELINE_SEGMENT_HISTORY_MAX,
   PROGRESS_ERROR_CODE,
   updatePipelineProgress,
   readPipelineProgress,
@@ -309,5 +310,25 @@ describe("updatePipelineProgress state transitions", () => {
     const after = await readPipelineProgress(config);
     assert.equal(after.percent, 0, "only idle should reset percent to 0");
     assert.equal(after.stage, "idle");
+  });
+
+  it("maintains bounded run segment rollover history", async () => {
+    await updatePipelineProgress(config, "workers_running", "segment-1", {
+      runSegment: { segmentIndex: 1, startBatch: 1, endBatch: 2 },
+    });
+    for (let i = 1; i <= PIPELINE_SEGMENT_HISTORY_MAX + 2; i++) {
+      await updatePipelineProgress(config, "workers_running", `rollover-${i}`, {
+        runSegment: { segmentIndex: i + 1, startBatch: i + 1, endBatch: i + 2 },
+        runSegmentRollover: { segmentIndex: i, startBatch: i, endBatch: i + 1 },
+      });
+    }
+    const data = await readPipelineProgress(config);
+    assert.equal(data.runSegment.segmentIndex, PIPELINE_SEGMENT_HISTORY_MAX + 3);
+    assert.ok(Array.isArray(data.segmentHistory), "segmentHistory must be an array");
+    assert.equal(
+      data.segmentHistory.length,
+      PIPELINE_SEGMENT_HISTORY_MAX,
+      "segment history must be capped to PIPELINE_SEGMENT_HISTORY_MAX",
+    );
   });
 });

@@ -42,6 +42,7 @@ import {
   loadLedgerMeta,
   prioritizeStaleDebts,
 } from "./carry_forward_ledger.js";
+import { buildRankedLessonShortlists } from "./lesson_halflife.js";
 
 // ── Decision Quality Weights ──────────────────────────────────────────────────
 
@@ -600,8 +601,19 @@ export async function collectCycleOutcomes(config) {
 
 async function analyzeWithAI(config, outcomes, knowledgeMemory) {
   const command = config.env?.copilotCliCommand || "copilot";
-  const previousLessons = (knowledgeMemory.lessons || []).slice(-5)
-    .map(l => `- [${l.source}] ${l.lesson}`).join("\n") || "None yet.";
+  const rankedLessons = buildRankedLessonShortlists(knowledgeMemory.lessons || [], { limit: 10 });
+  const lessonSections = [
+    { label: "TOP-10 RECENT", items: rankedLessons.recentTop10 },
+    { label: "TOP-10 HIGH-IMPACT", items: rankedLessons.highImpactTop10 },
+    { label: "TOP-10 UNRESOLVED", items: rankedLessons.unresolvedTop10 },
+  ];
+  const previousLessons = lessonSections
+    .map((group) => {
+      if (!Array.isArray(group.items) || group.items.length === 0) return `### ${group.label}\n- (none)`;
+      const lines = group.items.map((l) => `- ${l.lesson} (score=${l.score.toFixed(2)}, impact=${l.impact.toFixed(2)}, freshness=${l.freshness.toFixed(2)})`);
+      return `### ${group.label}\n${lines.join("\n")}`;
+    })
+    .join("\n");
   const previousGaps = (knowledgeMemory.capabilityGaps || []).slice(-5)
     .map(g => `- [${g.severity}] ${g.gap} → ${g.proposedFix || "no fix proposed"}`).join("\n") || "None yet.";
 

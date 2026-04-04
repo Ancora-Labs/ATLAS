@@ -98,7 +98,12 @@ import { buildReplayClosureEvidence, CANONICAL_MAIN_BRANCH_REPLAY_COMMANDS } fro
 import {
   readCheckpoint as readVersionedCheckpoint,
   writeCheckpoint as writeVersionedCheckpoint,
+  initializeRunSegmentState,
+  applyRunSegmentRollover,
+  RUN_SEGMENT_BATCH_SPAN_DEFAULT,
+  RUN_SEGMENT_HISTORY_MAX_DEFAULT,
 } from "./checkpoint_engine.js";
+import { assessRetryExpectedROI } from "./model_policy.js";
 
 /**
  * Orchestrator health status enum.
@@ -289,6 +294,28 @@ export function computeHealthDivergence(operationalStatus, plannerHealth) {
 
 /** Max automatic retries when a worker hits transient API errors (circuit breaker). */
 const MAX_TRANSIENT_RETRIES = 3;
+
+type RetryTelemetryContext = {
+  premiumUsageData: any[];
+  benchmarkGroundTruth: any;
+};
+
+async function loadRetryTelemetryContext(config): Promise<RetryTelemetryContext> {
+  const stateDir = config?.paths?.stateDir || "state";
+  try {
+    const [premiumUsageData, benchmarkGroundTruth] = await Promise.all([
+      readJson(path.join(stateDir, "premium_usage_log.json"), []),
+      readJson(path.join(stateDir, "benchmark_ground_truth.json"), null),
+    ]);
+    return {
+      premiumUsageData: Array.isArray(premiumUsageData) ? premiumUsageData : [],
+      benchmarkGroundTruth,
+    };
+  } catch (err) {
+    warn(`[orchestrator] retry telemetry load failed: ${String(err?.message || err)}`);
+    return { premiumUsageData: [], benchmarkGroundTruth: null };
+  }
+}
 
 type WorkerSessionRecord = {
   status?: string;
@@ -1121,7 +1148,7 @@ function isDispatchCheckpointCompleteForTotal(checkpoint, totalPlans) {
 
 async function beginDispatchCheckpoint(config, plans, actualPlanCount?: number) {
   const nowIso = new Date().toISOString();
-  const checkpoint = {
+  const checkpoint = initializeRunSegmentState({
     schemaVersion: 2,
     status: "dispatching",
     createdAt: nowIso,
@@ -1130,16 +1157,31 @@ async function beginDispatchCheckpoint(config, plans, actualPlanCount?: number) 
     // planCount stores actual Prometheus plan count (totalPlans stores batch count)
     planCount: Number.isFinite(actualPlanCount) ? actualPlanCount : (Array.isArray(plans) ? plans.length : 0),
     completedPlans: 0
-  };
+  }, {
+    spanBatches: Number(config?.runtime?.runSegmentBatchSpan || RUN_SEGMENT_BATCH_SPAN_DEFAULT),
+    historyMax: Number(config?.runtime?.runSegmentHistoryMax || RUN_SEGMENT_HISTORY_MAX_DEFAULT),
+  });
   await writeDispatchCheckpoint(config, checkpoint);
   return checkpoint;
 }
 
 async function updateDispatchCheckpointProgress(config, checkpoint, completedPlans) {
-  if (!checkpoint) return;
+  if (!checkpoint) return { rolledOver: false, activeSegment: null, previousSegment: null, historySize: 0 };
   checkpoint.completedPlans = Math.max(0, Math.min(Number(completedPlans || 0), Number(checkpoint.totalPlans || 0)));
   checkpoint.updatedAt = new Date().toISOString();
+  const rolloverResult = applyRunSegmentRollover(checkpoint, {
+    completedBatches: checkpoint.completedPlans,
+    spanBatches: Number(config?.runtime?.runSegmentBatchSpan || RUN_SEGMENT_BATCH_SPAN_DEFAULT),
+    historyMax: Number(config?.runtime?.runSegmentHistoryMax || RUN_SEGMENT_HISTORY_MAX_DEFAULT),
+  });
+  Object.assign(checkpoint, rolloverResult.checkpoint);
   await writeDispatchCheckpoint(config, checkpoint);
+  return {
+    rolledOver: rolloverResult.rolledOver,
+    activeSegment: rolloverResult.activeSegment || null,
+    previousSegment: rolloverResult.previousSegment || null,
+    historySize: Array.isArray(checkpoint.runSegmentHistory) ? checkpoint.runSegmentHistory.length : 0,
+  };
 }
 
 async function completeDispatchCheckpoint(config, checkpoint) {
@@ -1249,6 +1291,7 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
     ? (typeof (workerBatches[startIndex - 1] as any)?.wave === "number"
        ? (workerBatches[startIndex - 1] as any).wave : null)
     : null;
+  const resumeRetryTelemetry = await loadRetryTelemetryContext(config);
 
   for (let index = startIndex; index < workerBatches.length; index += 1) {
     const stopReq = await readStopRequest(config);
@@ -1295,14 +1338,30 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
 
       // Auto-retry on transient API errors with escalating cooldown
       const isTransient = String(workerResult?.status || "") === "transient_error";
-      if (isTransient && transientRetries < MAX_TRANSIENT_RETRIES) {
+      const retryDecision = isTransient
+        ? assessRetryExpectedROI({
+            attempt: transientRetries + 1,
+            maxRetries: MAX_TRANSIENT_RETRIES,
+            taskKind: String((batch as any)?.taskKind || "implementation"),
+            premiumUsageData: resumeRetryTelemetry.premiumUsageData,
+            benchmarkGroundTruth: resumeRetryTelemetry.benchmarkGroundTruth,
+            minExpectedGain: Number(config?.runtime?.retryRoiMinExpectedGain ?? 0.18),
+          })
+        : null;
+      if (isTransient && retryDecision?.allowRetry) {
         transientRetries++;
         const cooldownMs = transientRetries * 3 * 60 * 1000; // 3min, 6min, 9min
         await appendProgress(config,
-          `[RESUME] Transient API error — retry ${transientRetries}/${MAX_TRANSIENT_RETRIES}, cooling down ${Math.round(cooldownMs / 1000)}s`
+          `[RESUME] Transient API error — retry ${transientRetries}/${MAX_TRANSIENT_RETRIES}, expected_gain=${retryDecision.expectedGain.toFixed(3)} (threshold=${retryDecision.threshold.toFixed(3)}), cooling down ${Math.round(cooldownMs / 1000)}s`
         );
         await sleep(cooldownMs);
         continue;
+      }
+      if (isTransient && retryDecision && !retryDecision.allowRetry) {
+        await appendProgress(
+          config,
+          `[RESUME] Transient API error — retry suppressed (low ROI): expected_gain=${retryDecision.expectedGain.toFixed(3)} threshold=${retryDecision.threshold.toFixed(3)} reason=${retryDecision.reason}`
+        );
       }
       break;
     }
@@ -1315,7 +1374,22 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
     }
 
     await waitForWorkersToFinish(config);
-    await updateDispatchCheckpointProgress(config, checkpoint, index + 1);
+    const resumeCheckpointUpdate = await updateDispatchCheckpointProgress(config, checkpoint, index + 1);
+    if (resumeCheckpointUpdate.rolledOver && resumeCheckpointUpdate.activeSegment && resumeCheckpointUpdate.previousSegment) {
+      await appendProgress(
+        config,
+        `[RUN_SEGMENT] rollover complete: segment ${String((resumeCheckpointUpdate.previousSegment as any).segmentIndex)} -> ${String((resumeCheckpointUpdate.activeSegment as any).segmentIndex)}`
+      );
+      await safeUpdatePipelineProgress(config, "workers_running", `Run segment rollover to ${String((resumeCheckpointUpdate.activeSegment as any).segmentIndex)}`, {
+        workersTotal: workerBatches.length,
+        workersDone: index + 1,
+        resumedFromCheckpoint: true,
+        forcedResume: force,
+        runSegment: resumeCheckpointUpdate.activeSegment,
+        runSegmentRollover: resumeCheckpointUpdate.previousSegment,
+        runSegmentHistorySize: resumeCheckpointUpdate.historySize,
+      });
+    }
 
     // Inter-batch rate-limit cooldown to avoid transient API errors
     const resumeDelay = Number(config?.runtime?.interBatchDelayMs || 90000);
@@ -2720,6 +2794,7 @@ async function runSingleCycle(config) {
   // batches completed successfully (the loop returns early on any failure),
   // giving a hard sequential barrier between waves.
   let currentDispatchWave: number | null = null;
+  const cycleRetryTelemetry = await loadRetryTelemetryContext(config);
 
   for (const batch of workerBatches) {
     const stopReq = await readStopRequest(config);
@@ -2765,14 +2840,30 @@ async function runSingleCycle(config) {
 
       // Auto-retry on transient API errors with escalating cooldown
       const isTransient = String(workerResult?.status || "") === "transient_error";
-      if (isTransient && transientRetries < MAX_TRANSIENT_RETRIES) {
+      const retryDecision = isTransient
+        ? assessRetryExpectedROI({
+            attempt: transientRetries + 1,
+            maxRetries: MAX_TRANSIENT_RETRIES,
+            taskKind: String((batch as any)?.taskKind || "implementation"),
+            premiumUsageData: cycleRetryTelemetry.premiumUsageData,
+            benchmarkGroundTruth: cycleRetryTelemetry.benchmarkGroundTruth,
+            minExpectedGain: Number(config?.runtime?.retryRoiMinExpectedGain ?? 0.18),
+          })
+        : null;
+      if (isTransient && retryDecision?.allowRetry) {
         transientRetries++;
         const cooldownMs = transientRetries * 3 * 60 * 1000;
         await appendProgress(config,
-          `[CYCLE] Transient API error — retry ${transientRetries}/${MAX_TRANSIENT_RETRIES}, cooling down ${Math.round(cooldownMs / 1000)}s`
+          `[CYCLE] Transient API error — retry ${transientRetries}/${MAX_TRANSIENT_RETRIES}, expected_gain=${retryDecision.expectedGain.toFixed(3)} (threshold=${retryDecision.threshold.toFixed(3)}), cooling down ${Math.round(cooldownMs / 1000)}s`
         );
         await sleep(cooldownMs);
         continue;
+      }
+      if (isTransient && retryDecision && !retryDecision.allowRetry) {
+        await appendProgress(
+          config,
+          `[CYCLE] Transient API error — retry suppressed (low ROI): expected_gain=${retryDecision.expectedGain.toFixed(3)} threshold=${retryDecision.threshold.toFixed(3)} reason=${retryDecision.reason}`
+        );
       }
       break;
     }
@@ -2832,7 +2923,21 @@ async function runSingleCycle(config) {
       // Calibration is advisory — never block dispatch
     }
 
-    await updateDispatchCheckpointProgress(config, dispatchCheckpoint, workersDone);
+    const dispatchCheckpointUpdate = await updateDispatchCheckpointProgress(config, dispatchCheckpoint, workersDone);
+    if (dispatchCheckpointUpdate.rolledOver && dispatchCheckpointUpdate.activeSegment && dispatchCheckpointUpdate.previousSegment) {
+      await appendProgress(
+        config,
+        `[RUN_SEGMENT] rollover complete: segment ${String((dispatchCheckpointUpdate.previousSegment as any).segmentIndex)} -> ${String((dispatchCheckpointUpdate.activeSegment as any).segmentIndex)}`
+      );
+      await safeUpdatePipelineProgress(config, "workers_running", `Run segment rollover to ${String((dispatchCheckpointUpdate.activeSegment as any).segmentIndex)}`, {
+        workersTotal: workerBatches.length,
+        workersDone,
+        currentWorker: batch.role,
+        runSegment: dispatchCheckpointUpdate.activeSegment,
+        runSegmentRollover: dispatchCheckpointUpdate.previousSegment,
+        runSegmentHistorySize: dispatchCheckpointUpdate.historySize,
+      });
+    }
     await waitForWorkersToFinish(config);
 
     // Inter-batch rate-limit cooldown to avoid transient API errors

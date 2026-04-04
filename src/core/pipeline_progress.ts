@@ -50,6 +50,8 @@ export const PROGRESS_ERROR_CODE = Object.freeze({
   INVALID_STEP_ID: "INVALID_STEP_ID",
 });
 
+export const PIPELINE_SEGMENT_HISTORY_MAX = 20;
+
 /** Ordered pipeline steps with weight-based percentages. */
 const STEPS = [
   { id: "idle",                    label: "Idle",                               pct: 0   },
@@ -121,6 +123,7 @@ export async function updatePipelineProgress(config, stepId, detail, extra) {
     updatedAt: new Date().toISOString(),
     ...(extra || {}),
   };
+  const extraObj = (extra && typeof extra === "object") ? extra as Record<string, unknown> : {};
 
   // Preserve startedAt from the previous state if mid-pipeline
   if (stepId !== "idle" && stepId !== "cycle_complete") {
@@ -133,16 +136,35 @@ export async function updatePipelineProgress(config, stepId, detail, extra) {
       if (SLO_TIMESTAMP_STAGES.includes(stepId)) {
         payload.stageTimestamps[stepId] = payload.updatedAt;
       }
+      const prevSegmentHistory = Array.isArray(prev.segmentHistory) ? prev.segmentHistory : [];
+      if (extraObj.runSegmentRollover && typeof extraObj.runSegmentRollover === "object") {
+        payload.segmentHistory = [...prevSegmentHistory, extraObj.runSegmentRollover].slice(-PIPELINE_SEGMENT_HISTORY_MAX);
+      } else {
+        payload.segmentHistory = prevSegmentHistory.slice(-PIPELINE_SEGMENT_HISTORY_MAX);
+      }
+      if (extraObj.runSegment && typeof extraObj.runSegment === "object") {
+        payload.runSegment = extraObj.runSegment;
+      } else if (prev.runSegment && typeof prev.runSegment === "object") {
+        payload.runSegment = prev.runSegment;
+      }
     } catch {
       payload.startedAt = payload.updatedAt;
       payload.stageTimestamps = {};
       if (SLO_TIMESTAMP_STAGES.includes(stepId)) {
         payload.stageTimestamps[stepId] = payload.updatedAt;
       }
+      if (extraObj.runSegment && typeof extraObj.runSegment === "object") {
+        payload.runSegment = extraObj.runSegment;
+      }
+      payload.segmentHistory = extraObj.runSegmentRollover && typeof extraObj.runSegmentRollover === "object"
+        ? [extraObj.runSegmentRollover]
+        : [];
     }
   } else if (stepId === "idle") {
     payload.startedAt = null;
     payload.stageTimestamps = {};
+    payload.runSegment = null;
+    payload.segmentHistory = [];
   } else {
     // cycle_complete — keep startedAt, accumulate final timestamp
     try {
@@ -150,8 +172,25 @@ export async function updatePipelineProgress(config, stepId, detail, extra) {
       payload.startedAt = prev.startedAt || null;
       const prevTimestamps = (prev.stageTimestamps && typeof prev.stageTimestamps === "object") ? prev.stageTimestamps : {};
       payload.stageTimestamps = { ...prevTimestamps, cycle_complete: payload.updatedAt };
+      const prevSegmentHistory = Array.isArray(prev.segmentHistory) ? prev.segmentHistory : [];
+      if (extraObj.runSegmentRollover && typeof extraObj.runSegmentRollover === "object") {
+        payload.segmentHistory = [...prevSegmentHistory, extraObj.runSegmentRollover].slice(-PIPELINE_SEGMENT_HISTORY_MAX);
+      } else {
+        payload.segmentHistory = prevSegmentHistory.slice(-PIPELINE_SEGMENT_HISTORY_MAX);
+      }
+      if (extraObj.runSegment && typeof extraObj.runSegment === "object") {
+        payload.runSegment = extraObj.runSegment;
+      } else if (prev.runSegment && typeof prev.runSegment === "object") {
+        payload.runSegment = prev.runSegment;
+      }
     } catch {
       payload.stageTimestamps = { cycle_complete: payload.updatedAt };
+      payload.segmentHistory = extraObj.runSegmentRollover && typeof extraObj.runSegmentRollover === "object"
+        ? [extraObj.runSegmentRollover]
+        : [];
+      if (extraObj.runSegment && typeof extraObj.runSegment === "object") {
+        payload.runSegment = extraObj.runSegment;
+      }
     }
     payload.completedAt = payload.updatedAt;
   }
@@ -210,6 +249,8 @@ export const PIPELINE_PROGRESS_SCHEMA = Object.freeze({
   conditionalFields: Object.freeze({ completedAt: "cycle_complete" }),
   /** stageTimestamps accumulates ISO entry times for SLO-relevant stages */
   sloTimestampStages: SLO_TIMESTAMP_STAGES,
+  /** maximum retained run segment rollover records */
+  segmentHistoryMax: PIPELINE_SEGMENT_HISTORY_MAX,
 });
 
 /**

@@ -47,6 +47,9 @@ import {
   buildMandatoryTasksPromptSection,
   validateMandatoryTaskCoverageContract,
   buildMandatoryCoverageRetryDiff,
+  applyMandatoryCoverageEnforceReject,
+  MANDATORY_COVERAGE_ENFORCE_REJECT_TOKEN,
+  MANDATORY_COVERAGE_ENFORCE_EXIT_CODE,
   buildRoutingOutcomeSection,
   enforceParserContractBeforeNormalization,
   ensurePersistedAnalysisTimestamps,
@@ -3639,6 +3642,36 @@ describe("health-audit mandatory task injection contract", () => {
     const result = validateMandatoryTaskCoverageContract(payload, findings);
     assert.equal(result.ok, false);
     assert.deepEqual(result.missing, ["cap-critical"]);
+  });
+
+  it("negative path: enforce mode fail-closes parse output with non-zero exit and ENFORCE_REJECT token", () => {
+    const findings = [
+      {
+        id: "cap-critical",
+        area: "capability-gap",
+        severity: "critical" as const,
+        finding: "critical finding",
+        remediation: "fix",
+        capabilityNeeded: "cap-critical",
+      },
+    ];
+    const payload: any = {
+      plans: [{ task: "Some unrelated task" }],
+      mandatoryTaskCoverage: [],
+    };
+    const coverage = validateMandatoryTaskCoverageContract(payload, findings);
+    assert.equal(coverage.ok, false);
+    assert.deepEqual(coverage.missing, ["cap-critical"]);
+
+    const rejected = applyMandatoryCoverageEnforceReject(payload, coverage);
+    assert.deepEqual(rejected.plans, [], "enforce reject must fail-close with plans=[]");
+    assert.equal(rejected._mandatoryTaskCoverageGate?.logToken, MANDATORY_COVERAGE_ENFORCE_REJECT_TOKEN);
+    assert.equal(rejected._mandatoryTaskCoverageGate?.exitCode, MANDATORY_COVERAGE_ENFORCE_EXIT_CODE);
+    assert.ok(
+      Number(rejected._parserReject?.exitCode) > 0,
+      "parse reject exit code must be non-zero in enforce mode",
+    );
+    assert.equal(rejected._parserReject?.token, "ENFORCE_REJECT");
   });
 
   it("negative path: mapped entry must reference an existing plan task", () => {

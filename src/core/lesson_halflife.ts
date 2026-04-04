@@ -33,6 +33,136 @@ export function computeLessonWeight(reviewedAt, opts: any = {}) {
   return Math.pow(2, -ageDays / halfLife);
 }
 
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value < 0) return 0;
+  if (value > 1) return 1;
+  return value;
+}
+
+function normalizeSeverityImpact(value: unknown): number {
+  const severity = String(value || "").toLowerCase().trim();
+  if (severity === "critical") return 1.0;
+  if (severity === "important" || severity === "warning" || severity === "high") return 0.8;
+  if (severity === "medium") return 0.6;
+  return 0.4;
+}
+
+function normalizeUnresolved(entry: any): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  if (entry.followUpNeeded === true) return true;
+  if (entry.closedAt || entry.resolvedAt) return false;
+  const status = String(entry.status || "").toLowerCase().trim();
+  return status === "open" || status === "pending" || status === "unresolved";
+}
+
+function pickLessonText(entry: any): string {
+  return String(
+    entry?.lessonLearned
+    || entry?.lesson
+    || entry?.followUpTask
+    || entry?.summary
+    || "",
+  ).trim();
+}
+
+function pickReviewedAt(entry: any): string {
+  return String(entry?.reviewedAt || entry?.addedAt || entry?.createdAt || "").trim();
+}
+
+function computeImpactScore(entry: any): number {
+  const base = normalizeSeverityImpact(entry?.severity);
+  const qualityScore = Number(entry?.qualityScore);
+  const qualityPenalty = Number.isFinite(qualityScore)
+    ? clamp01((10 - Math.max(0, Math.min(10, qualityScore))) / 10)
+    : 0;
+  const recurrence = Number(entry?.recurrenceCount);
+  const recurrenceBoost = Number.isFinite(recurrence)
+    ? clamp01(Math.max(0, recurrence - 1) / 4)
+    : 0;
+  return Math.round(clamp01((base * 0.7) + (qualityPenalty * 0.2) + (recurrenceBoost * 0.1)) * 1000) / 1000;
+}
+
+export type RankedLessonShortlistItem = {
+  lesson: string;
+  score: number;
+  freshness: number;
+  impact: number;
+  unresolved: boolean;
+  reviewedAt: string;
+};
+
+export function buildRankedLessonShortlists(
+  entries: any[],
+  opts: { limit?: number; halfLifeDays?: number; now?: number; unresolvedBoost?: number } = {},
+): {
+  recentTop10: RankedLessonShortlistItem[];
+  highImpactTop10: RankedLessonShortlistItem[];
+  unresolvedTop10: RankedLessonShortlistItem[];
+  combinedTop10: RankedLessonShortlistItem[];
+} {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return { recentTop10: [], highImpactTop10: [], unresolvedTop10: [], combinedTop10: [] };
+  }
+
+  const limit = Math.max(1, Math.floor(Number(opts.limit) || 10));
+  const unresolvedBoost = Number.isFinite(Number(opts.unresolvedBoost)) ? Number(opts.unresolvedBoost) : 0.25;
+  const now = Number.isFinite(Number(opts.now)) ? Number(opts.now) : Date.now();
+  const scored: RankedLessonShortlistItem[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of entries) {
+    const lesson = pickLessonText(entry);
+    if (lesson.length < 5) continue;
+    const dedupeKey = lesson.toLowerCase().replace(/\s+/g, " ").trim();
+    if (!dedupeKey || seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    const reviewedAt = pickReviewedAt(entry);
+    const freshness = computeLessonWeight(reviewedAt, { ...opts, now });
+    const impact = computeImpactScore(entry);
+    const unresolved = normalizeUnresolved(entry);
+    const unresolvedFactor = unresolved ? (1 + unresolvedBoost) : 1;
+    const rawScore = ((freshness * 0.6) + (impact * 0.4)) * unresolvedFactor;
+    const score = Math.round(clamp01(rawScore) * 1000) / 1000;
+    scored.push({ lesson, score, freshness: Math.round(freshness * 1000) / 1000, impact, unresolved, reviewedAt });
+  }
+
+  const byRecent = [...scored].sort((a, b) => {
+    const aTs = Date.parse(a.reviewedAt || "");
+    const bTs = Date.parse(b.reviewedAt || "");
+    if (Number.isFinite(bTs) && Number.isFinite(aTs) && bTs !== aTs) return bTs - aTs;
+    if (b.score !== a.score) return b.score - a.score;
+    return a.lesson.localeCompare(b.lesson);
+  });
+  const byImpact = [...scored].sort((a, b) => {
+    if (b.impact !== a.impact) return b.impact - a.impact;
+    if (b.score !== a.score) return b.score - a.score;
+    return a.lesson.localeCompare(b.lesson);
+  });
+  const byUnresolved = [...scored]
+    .filter((item) => item.unresolved)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.impact !== a.impact) return b.impact - a.impact;
+      return a.lesson.localeCompare(b.lesson);
+    });
+
+  const recentTop10 = byRecent.slice(0, limit);
+  const highImpactTop10 = byImpact.slice(0, limit);
+  const unresolvedTop10 = byUnresolved.slice(0, limit);
+  const combinedTop10: RankedLessonShortlistItem[] = [];
+  const combinedSeen = new Set<string>();
+  for (const item of [...recentTop10, ...highImpactTop10, ...unresolvedTop10]) {
+    const key = item.lesson.toLowerCase().replace(/\s+/g, " ").trim();
+    if (!key || combinedSeen.has(key)) continue;
+    combinedSeen.add(key);
+    combinedTop10.push(item);
+    if (combinedTop10.length >= limit) break;
+  }
+
+  return { recentTop10, highImpactTop10, unresolvedTop10, combinedTop10 };
+}
+
 /**
  * Rank postmortem lessons by time-decayed relevance.
  * Returns the top N lessons sorted by weight descending.

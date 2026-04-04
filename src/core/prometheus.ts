@@ -2696,6 +2696,7 @@ Wrap the JSON companion with markers:
 export const PROMETHEUS_CYCLE_DELTA_SECTION_NAMES: ReadonlySet<string> = new Set([
   "research-intelligence",
   "topic-memory",
+  "postmortem-shortlist",
   "behavior-patterns",
   "carry-forward",
   "diagnostics-freshness",

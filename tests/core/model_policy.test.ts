@@ -28,6 +28,8 @@ import {
   EXPLORATION_BOUND,
   decideDeliberationPolicy,
   rankModelsByTaskKindExpectedValue,
+  assessRetryExpectedROI,
+  RETRY_EXPECTED_GAIN_MIN_THRESHOLD,
 } from "../../src/core/model_policy.js";
 
 describe("model_policy — complexity tiers", () => {
@@ -206,6 +208,67 @@ describe("model_policy — complexity tiers", () => {
       const result = routeModelWithUncertainty({}, { defaultModel: "Claude Sonnet 4.6" });
       assert.equal(result.model, "Claude Sonnet 4.6");
     });
+  });
+});
+
+describe("assessRetryExpectedROI", () => {
+  const benchmarkGroundTruth = {
+    entries: [
+      {
+        cycleId: "c-1",
+        recommendations: [
+          { implementationStatus: "implemented", benchmarkScore: 0.9, capacityGain: 0.5 },
+          { implementationStatus: "pending", benchmarkScore: 0.8, capacityGain: 0.4 },
+        ],
+      },
+    ],
+  };
+
+  it("allows retry when expected gain beats threshold", () => {
+    const result = assessRetryExpectedROI({
+      attempt: 1,
+      maxRetries: 3,
+      taskKind: "implementation",
+      premiumUsageData: [
+        { taskKind: "implementation", outcome: "done" },
+        { taskKind: "implementation", outcome: "done" },
+        { taskKind: "implementation", outcome: "done" },
+      ],
+      benchmarkGroundTruth,
+      minExpectedGain: 0.2,
+    });
+    assert.equal(result.allowRetry, true);
+    assert.ok(result.expectedGain >= 0.2);
+  });
+
+  it("suppresses retry when expected gain is below threshold", () => {
+    const result = assessRetryExpectedROI({
+      attempt: 2,
+      maxRetries: 3,
+      taskKind: "implementation",
+      premiumUsageData: [
+        { taskKind: "implementation", outcome: "blocked" },
+        { taskKind: "implementation", outcome: "blocked" },
+      ],
+      benchmarkGroundTruth: {
+        entries: [{ recommendations: [{ implementationStatus: "pending", benchmarkScore: 0.3, capacityGain: 0.05 }] }],
+      },
+      minExpectedGain: RETRY_EXPECTED_GAIN_MIN_THRESHOLD,
+    });
+    assert.equal(result.allowRetry, false);
+    assert.ok(result.expectedGain < RETRY_EXPECTED_GAIN_MIN_THRESHOLD);
+  });
+
+  it("negative path: blocks retry when attempt exceeds maxRetries", () => {
+    const result = assessRetryExpectedROI({
+      attempt: 4,
+      maxRetries: 3,
+      taskKind: "implementation",
+      premiumUsageData: [{ taskKind: "implementation", outcome: "done" }],
+      benchmarkGroundTruth,
+    });
+    assert.equal(result.allowRetry, false);
+    assert.equal(result.expectedGain, 0);
   });
 });
 
