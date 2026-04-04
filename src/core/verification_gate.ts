@@ -297,6 +297,12 @@ export function buildReplayClosureEvidence(
   };
 }
 
+export function hasReplayClosureEvidence(value: unknown): boolean {
+  const text = String(value || "");
+  if (!/replay-closure:v1/i.test(text)) return false;
+  return CANONICAL_MAIN_BRANCH_REPLAY_COMMANDS.every((command) => text.includes(command));
+}
+
 /**
  * Extract the merged commit SHA from worker output.
  *

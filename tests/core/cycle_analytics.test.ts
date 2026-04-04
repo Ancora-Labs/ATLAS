@@ -438,6 +438,31 @@ describe("computeCycleAnalytics — outcomes (AC1)", () => {
     assert.equal(record.outcomes.status, CYCLE_OUTCOME_STATUS.PARTIAL);
   });
 
+  it("outcomes.status is PARTIAL when tasks are dispatched but only partial worker statuses are present", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      workerResults: [
+        { roleName: "coder", status: "partial" },
+        { roleName: "qa", status: "partial" },
+      ],
+      planCount: 2,
+      phase: CYCLE_PHASE.COMPLETED,
+    });
+    assert.equal(record.outcomes.tasksCompleted, 0);
+    assert.equal(record.outcomes.status, CYCLE_OUTCOME_STATUS.PARTIAL);
+  });
+
+  it("counts skipped workers as completed to align dispatch and analytics completion semantics", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      workerResults: [{ roleName: "coder", status: "skipped" }],
+      planCount: 1,
+      phase: CYCLE_PHASE.COMPLETED,
+    });
+    assert.equal(record.outcomes.tasksCompleted, 1);
+    assert.equal(record.outcomes.status, CYCLE_OUTCOME_STATUS.SUCCESS);
+  });
+
   it("outcomes.status is NO_PLANS when planCount=0 and phase=INCOMPLETE", () => {
     const config = makeConfig("state");
     const record = computeCycleAnalytics(config, { planCount: 0, phase: CYCLE_PHASE.INCOMPLETE });

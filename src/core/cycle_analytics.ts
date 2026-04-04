@@ -51,6 +51,7 @@ import { hasVerificationReportEvidence } from "./verification_gate.js";
 import { hasFiniteAthenaOverallScore } from "./athena_reviewer.js";
 import { hasPrometheusRuntimeContractSignals } from "./prometheus.js";
 import { getLaneForWorkerName, isSpecialistLane } from "./role_registry.js";
+import { isAnalyticsCompletedWorkerStatus } from "./worker_runner.js";
 
 // ── Funnel helpers ─────────────────────────────────────────────────────────────
 
@@ -443,9 +444,16 @@ function computeOutcomeStatus(phase, workerResults, planCount) {
   }
 
   const failed = workerResults.filter(w => w.status === "error" || w.status === "failed").length;
-  const done = workerResults.filter(w => w.status === "done" || w.status === "success").length;
+  const done = workerResults.filter(w => isAnalyticsCompletedWorkerStatus(w.status)).length;
+  const partial = workerResults.filter(w => w.status === "partial").length;
+  const hasDispatch = typeof planCount === "number" && planCount > 0;
 
-  if (failed === 0) return CYCLE_OUTCOME_STATUS.SUCCESS;
+  if (hasDispatch && done === 0) {
+    if (partial > 0) return CYCLE_OUTCOME_STATUS.PARTIAL;
+    if (failed > 0) return CYCLE_OUTCOME_STATUS.FAILED;
+    return CYCLE_OUTCOME_STATUS.UNKNOWN;
+  }
+  if (failed === 0 && partial === 0 && done > 0) return CYCLE_OUTCOME_STATUS.SUCCESS;
   if (done > 0) return CYCLE_OUTCOME_STATUS.PARTIAL;
   return CYCLE_OUTCOME_STATUS.FAILED;
 }
@@ -553,7 +561,7 @@ export function computeCycleAnalytics(config, {
   // Outcomes
   const tasksDispatched = planCount !== null ? planCount : null;
   const tasksCompleted = Array.isArray(safeWorkerResults)
-    ? safeWorkerResults.filter(w => w.status === "done" || w.status === "success").length
+    ? safeWorkerResults.filter(w => isAnalyticsCompletedWorkerStatus(w.status)).length
     : null;
   const tasksFailed = Array.isArray(safeWorkerResults)
     ? safeWorkerResults.filter(w => w.status === "error" || w.status === "failed").length

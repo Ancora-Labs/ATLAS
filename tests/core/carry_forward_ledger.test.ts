@@ -13,6 +13,8 @@ import {
   loadLedgerMeta,
   saveLedgerFull,
   autoCloseVerifiedDebt,
+  reconcileReplayClosureBacklog,
+  MANDATORY_REPLAY_LINEAGE_IDS,
   prioritizeStaleDebts,
   clusterDuplicateDebts,
   compressLedger,
@@ -458,6 +460,64 @@ describe("autoCloseVerifiedDebt", () => {
       .filter(e => !e.closedAt && e.severity === "critical")
       .length >= 2;
     assert.equal(shouldBlock, true, "Unresolved critical debt must still block after partial close");
+  });
+});
+
+describe("reconcileReplayClosureBacklog", () => {
+  it("reopens mandatory replay lineage items when ledger has no closure evidence", () => {
+    const backlog = {
+      schemaVersion: 1,
+      items: [
+        { id: "CF-001", status: "closed_via_replay_contract", title: "Workers not including BOX_MERGED_SHA in done output" },
+        { id: "CF-005", status: "closed_via_replay_contract", title: "Workers using unfilled template placeholders" },
+      ],
+    };
+    const ledger = [
+      {
+        id: "debt-1-0",
+        lesson: "Workers not including BOX_MERGED_SHA in done output",
+        closedAt: null,
+        closureEvidence: null,
+      },
+    ];
+
+    const reconciled = reconcileReplayClosureBacklog(backlog, ledger);
+    assert.equal(reconciled.items[0].status, "open");
+    assert.equal(reconciled.items[1].status, "open");
+  });
+
+  it("keeps mandatory replay lineage closed only with replay-closure evidence", () => {
+    const backlog = {
+      schemaVersion: 1,
+      items: [
+        { id: "CF-003", status: "open", title: "Workers using node --test tests/** glob patterns instead of npm test" },
+      ],
+    };
+    const ledger = [
+      {
+        id: "debt-1-3",
+        lesson: "Workers using node --test tests/** glob patterns instead of npm test",
+        closedAt: "2026-01-01T00:00:00.000Z",
+        closureEvidence: "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://npm-test-output-block]",
+      },
+    ];
+
+    const reconciled = reconcileReplayClosureBacklog(backlog, ledger);
+    assert.equal(reconciled.items[0].status, "closed_via_replay_contract");
+    assert.equal(reconciled.items[0].debtId, "debt-1-3");
+  });
+
+  it("only reconciles mandatory #1-#5 lineage items", () => {
+    const backlog = {
+      schemaVersion: 1,
+      items: [
+        { id: "CF-001", status: "open", title: "A" },
+        { id: "CF-999", status: "closed_via_replay_contract", title: "non-mandatory" },
+      ],
+    };
+    const reconciled = reconcileReplayClosureBacklog(backlog, []);
+    assert.deepEqual(MANDATORY_REPLAY_LINEAGE_IDS, ["CF-001", "CF-002", "CF-003", "CF-004", "CF-005"]);
+    assert.equal(reconciled.items[1].status, "closed_via_replay_contract");
   });
 });
 

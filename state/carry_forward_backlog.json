@@ -20,42 +20,58 @@
     {
       "id": "CF-001",
       "title": "Workers not including BOX_MERGED_SHA in done output",
-      "status": "closed_via_replay_contract",
+      "status": "open",
       "closureEvidence": "ARTIFACT_GAP.MISSING_SHA constant emitted by collectArtifactGaps() when checkPostMergeArtifact().hasSha is false. validateWorkerContract() blocks done status with this gap for all roles with required evidence fields.",
       "closedBy": "src/core/verification_gate.ts — collectArtifactGaps, ARTIFACT_GAP.MISSING_SHA",
-      "closedAt": "2025-01-01T00:00:00.000Z"
+      "closedAt": "2025-01-01T00:00:00.000Z",
+      "source": "carry_forward_ledger",
+      "debtId": null,
+      "resolutionEvidence": null
     },
     {
       "id": "CF-002",
       "title": "Workers not including ===NPM TEST OUTPUT START=== block in done output",
-      "status": "closed_via_replay_contract",
+      "status": "open",
       "closureEvidence": "ARTIFACT_GAP.MISSING_TEST_OUTPUT constant emitted by collectArtifactGaps() when checkPostMergeArtifact().hasTestOutput is false. NPM_TEST_BLOCK_PATTERN regex requires both START and END markers with content.",
       "closedBy": "src/core/verification_gate.ts — collectArtifactGaps, ARTIFACT_GAP.MISSING_TEST_OUTPUT",
-      "closedAt": "2025-01-01T00:00:00.000Z"
+      "closedAt": "2025-01-01T00:00:00.000Z",
+      "source": "carry_forward_ledger",
+      "debtId": null,
+      "resolutionEvidence": null
     },
     {
       "id": "CF-003",
       "title": "Workers using node --test tests/** glob patterns instead of npm test",
-      "status": "closed_via_replay_contract",
+      "status": "open",
       "closureEvidence": "FORBIDDEN_VERIFICATION_PATTERNS entry matches /node\\s+--test\\s+tests\\/\\*\\*/ and similar glob patterns. checkForbiddenCommands() returns forbidden:true for these inputs. Dispatch validation rejects before execution.",
       "closedBy": "src/core/verification_command_registry.ts — FORBIDDEN_VERIFICATION_PATTERNS, checkForbiddenCommands",
-      "closedAt": "2025-01-01T00:00:00.000Z"
+      "closedAt": "2025-01-01T00:00:00.000Z",
+      "source": "carry_forward_ledger",
+      "debtId": null,
+      "resolutionEvidence": null
     },
     {
       "id": "CF-004",
       "title": "Workers using bash/sh scripts instead of npm run commands",
-      "status": "closed_via_replay_contract",
+      "status": "open",
       "closureEvidence": "FORBIDDEN_VERIFICATION_PATTERNS entry matches /\\bbash\\b/ and /\\bsh\\s+scripts/ patterns. checkForbiddenCommands() returns forbidden:true. VERIFICATION_CMD_REWRITE_RULES canonicalizes to npm equivalents where possible.",
       "closedBy": "src/core/verification_command_registry.ts — FORBIDDEN_VERIFICATION_PATTERNS, checkForbiddenCommands",
-      "closedAt": "2025-01-01T00:00:00.000Z"
+      "closedAt": "2025-01-01T00:00:00.000Z",
+      "source": "carry_forward_ledger",
+      "debtId": null,
+      "resolutionEvidence": null
     },
     {
       "id": "CF-005",
       "title": "Workers using unfilled template placeholders (POST_MERGE_SHA_PLACEHOLDER, POST_MERGE_OUTPUT_PLACEHOLDER) in done output",
-      "status": "closed_via_replay_contract",
+      "status": "open",
       "closureEvidence": "ALL_POST_MERGE_PLACEHOLDERS set checked by checkPostMergeArtifact(). hasUnfilledPlaceholder=true triggers ARTIFACT_GAP.UNFILLED_PLACEHOLDER via collectArtifactGaps(). validateWorkerContract() rejects done output containing any placeholder string.",
       "closedBy": "src/core/verification_gate.ts — ALL_POST_MERGE_PLACEHOLDERS, checkPostMergeArtifact, ARTIFACT_GAP.UNFILLED_PLACEHOLDER",
-      "closedAt": "2025-01-01T00:00:00.000Z"
+      "closedAt": "2025-01-01T00:00:00.000Z",
+      "source": "carry_forward_ledger",
+      "debtId": null,
+      "resolutionEvidence": null
     }
-  ]
+  ],
+  "updatedAt": "2026-04-04T16:36:47.251Z"
 }

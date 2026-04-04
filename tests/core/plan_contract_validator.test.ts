@@ -487,6 +487,7 @@ describe("PACKET_VIOLATION_CODE — deterministic violation taxonomy", () => {
       "THIN_PACKET_REJECTED",
       "MISSING_CAPACITY_DELTA", "INVALID_CAPACITY_DELTA",
       "MISSING_REQUEST_ROI", "INVALID_REQUEST_ROI",
+      "MISSING_IMPLEMENTATION_EVIDENCE", "MISSING_CAPACITY_FIRST_JUSTIFICATION",
     ];
     for (const key of expectedCodes) {
       assert.equal(typeof PACKET_VIOLATION_CODE[key], "string", `${key} must be a string`);
@@ -1234,6 +1235,27 @@ describe("validatePlanContract — decomposition caps and ambiguity", () => {
     assert.equal(typeof PACKET_VIOLATION_CODE.TASK_AMBIGUOUS, "string");
     assert.equal(PACKET_VIOLATION_CODE.TASK_TOO_LARGE, "task_too_large");
     assert.equal(PACKET_VIOLATION_CODE.TASK_AMBIGUOUS, "task_ambiguous");
+  });
+
+  it("rejects explicitly low-leverage packets without implementationEvidence", () => {
+    const result = validatePlanContract(baseValidPlan({
+      leverage_rank: ["security"],
+      implementationEvidence: [],
+    }));
+    const v = result.violations.find(x => x.code === PACKET_VIOLATION_CODE.MISSING_IMPLEMENTATION_EVIDENCE);
+    assert.ok(v, "must reject low-leverage packet without implementation evidence");
+    assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.CRITICAL);
+  });
+
+  it("rejects redundant packets without measurable capacity-first justification", () => {
+    const result = validatePlanContract(baseValidPlan({
+      implementationStatus: "implemented_correctly",
+      implementationEvidence: ["src/core/prometheus.ts"],
+      capacityDelta: 0,
+      requestROI: 1,
+    }));
+    const v = result.violations.find(x => x.code === PACKET_VIOLATION_CODE.MISSING_CAPACITY_FIRST_JUSTIFICATION);
+    assert.ok(v, "must reject redundant packet without strong capacity-first justification");
   });
 
   it("MAX_ACCEPTANCE_CRITERIA_PER_TASK is 10", () => {

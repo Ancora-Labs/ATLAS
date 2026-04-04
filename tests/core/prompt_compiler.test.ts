@@ -14,6 +14,8 @@ import {
   markCycleDeltaSectionsRequired,
   PROMPT_BUDGET_PARTITION,
   analyzePacketDensification,
+  validateActionablePacketCompleteness,
+  ACTIONABLE_PACKET_CONTRACT_TERMS,
 } from "../../src/core/prompt_compiler.js";
 
 describe("prompt_compiler", () => {
@@ -556,5 +558,26 @@ describe("analyzePacketDensification()", () => {
     assert.equal(result.thinCount, 0);
     assert.equal(result.isDenseEnough, true);
     assert.equal(result.denseRatio, 1);
+  });
+});
+
+describe("validateActionablePacketCompleteness()", () => {
+  it("requires implementation-status and capacity-first contract terms", () => {
+    const result = validateActionablePacketCompleteness([
+      section("output", "approved patchedPlans planReviews acceptance_criteria verification"),
+    ]);
+    assert.equal(result.complete, false);
+    assert.ok(result.missingTerms.includes("implementationStatus"));
+    assert.ok(result.missingTerms.includes("implementationEvidence"));
+    assert.ok(result.missingTerms.includes("capacityDelta"));
+    assert.ok(result.missingTerms.includes("requestROI"));
+    assert.ok(result.missingTerms.includes("leverage_rank"));
+  });
+
+  it("passes when all actionable packet contract terms are present", () => {
+    const result = validateActionablePacketCompleteness([
+      section("output", ACTIONABLE_PACKET_CONTRACT_TERMS.join(" ")),
+    ]);
+    assert.equal(result.complete, true);
   });
 });

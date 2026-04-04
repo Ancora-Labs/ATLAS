@@ -145,6 +145,12 @@ type ParsedWorkerResponse = ReturnType<typeof parseWorkerResponse> & {
   verificationEvidence?: VerificationEvidence | null;
 };
 
+const ANALYTICS_COMPLETED_WORKER_STATUSES = new Set(["done", "success", "skipped"]);
+
+export function isAnalyticsCompletedWorkerStatus(status: unknown): boolean {
+  return ANALYTICS_COMPLETED_WORKER_STATUSES.has(String(status || "").toLowerCase());
+}
+
 // ── Span contract emitter ─────────────────────────────────────────────────────
 
 /** Canonical agent identifier for workers in span events. */

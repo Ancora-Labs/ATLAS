@@ -67,6 +67,7 @@
 import path from "node:path";
 import fs from "node:fs/promises";
 import { applyClassificationToSuccessProbability } from "./failure_classifier.js";
+import { readJson, writeJson } from "./fs_utils.js";
 
 // ── Budget unit ───────────────────────────────────────────────────────────────
 
@@ -1020,9 +1021,10 @@ export function buildBudgetFromConfig(requestBudget, config) {
 export async function persistOptimizerLog(stateDir, result) {
   try {
     const logFile = path.join(stateDir, "intervention_optimizer_log.jsonl");
+    const jsonMirrorFile = path.join(stateDir, "intervention_optimizer_log.json");
     const savedAt = new Date().toISOString();
     const expiresAt = new Date(Date.now() + OPTIMIZER_LOG_FRESHNESS_MS).toISOString();
-    const entry = JSON.stringify({
+    const record = {
       jsonlSchema: OPTIMIZER_LOG_JSONL_SCHEMA,
       recordType: OPTIMIZER_LOG_RECORD_TYPE,
       schemaVersion: OPTIMIZER_LOG_SCHEMA_VERSION,
@@ -1033,9 +1035,18 @@ export async function persistOptimizerLog(stateDir, result) {
         expiresAt,
       },
       payload: result,
-    });
+    };
+    const entry = JSON.stringify(record);
 
     await fs.appendFile(logFile, entry + "\n", "utf8");
+    const mirror = await readJson(jsonMirrorFile, { schemaVersion: OPTIMIZER_LOG_SCHEMA_VERSION, updatedAt: savedAt, entries: [] });
+    const entries = Array.isArray(mirror?.entries) ? mirror.entries : [];
+    entries.push(record.payload);
+    await writeJson(jsonMirrorFile, {
+      schemaVersion: OPTIMIZER_LOG_SCHEMA_VERSION,
+      updatedAt: savedAt,
+      entries: entries.slice(-100),
+    });
 
     return { ok: true };
   } catch (err) {

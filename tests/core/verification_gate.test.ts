@@ -21,6 +21,7 @@ import {
   applyConfigOverrides,
   CANONICAL_MAIN_BRANCH_REPLAY_COMMANDS,
   buildReplayClosureEvidence,
+  hasReplayClosureEvidence,
   VERIFICATION_REPORT_TEMPLATE_GAP,
   VERIFICATION_REPORT_MALFORMED_GAP,
 } from "../../src/core/verification_gate.js";
@@ -65,6 +66,18 @@ describe("verification_gate parse helpers", () => {
       "360x640": "fail",
       "768x1024": "pass"
     });
+  });
+});
+
+describe("verification_gate replay closure evidence helper", () => {
+  it("detects replay-closure evidence only when canonical replay commands are present", () => {
+    const evidence = "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://npm-test-output-block]";
+    assert.equal(hasReplayClosureEvidence(evidence), true);
+  });
+
+  it("negative path: rejects replay-closure text missing canonical command coverage", () => {
+    const evidence = "replay-closure:v1 commands=[git rev-parse HEAD, npm test] links=[inline://npm-test-output-block]";
+    assert.equal(hasReplayClosureEvidence(evidence), false);
   });
 });
 

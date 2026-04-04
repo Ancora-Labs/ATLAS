@@ -49,6 +49,7 @@ import {
   buildMandatoryCoverageRetryDiff,
   buildRoutingOutcomeSection,
   enforceParserContractBeforeNormalization,
+  ensurePersistedAnalysisTimestamps,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments } from "../../src/core/prompt_compiler.js";
 import { isNonSpecificVerification, validatePlanContract } from "../../src/core/plan_contract_validator.js";
@@ -2617,6 +2618,20 @@ describe("enforceParserContractBeforeNormalization", () => {
     assert.equal(result.ok, true);
     assert.equal(result.retried, false);
     assert.equal(called, 0);
+  });
+});
+
+describe("ensurePersistedAnalysisTimestamps", () => {
+  it("uses persistence-time timestamp as source-of-truth for generatedAt and analyzedAt", () => {
+    const persisted = ensurePersistedAnalysisTimestamps({
+      generatedAt: "2020-01-01T00:00:00.000Z",
+      analyzedAt: "2020-01-01T00:00:00.000Z",
+      keyFindings: "x",
+      strategicNarrative: "y",
+    });
+    assert.notEqual(persisted.generatedAt, "2020-01-01T00:00:00.000Z");
+    assert.equal(persisted.generatedAt, persisted.analyzedAt);
+    assert.ok(!Number.isNaN(new Date(persisted.generatedAt).getTime()));
   });
 });
 

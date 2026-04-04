@@ -119,6 +119,32 @@ describe("plan_critic", () => {
       const result = critiquePlan(plan);
       assert.equal(result.dimensions[CRITIC_DIMENSION.CAPACITY_FIRST], 0.0);
     });
+
+    it("flags redundant packets without implementation evidence", () => {
+      const plan = {
+        task: "Already implemented parser hardening task",
+        verification: "npm test passes",
+        implementationStatus: "implemented_correctly",
+        capacityDelta: 0.2,
+        requestROI: 2.0,
+      };
+      const result = critiquePlan(plan);
+      assert.equal(result.dimensions[CRITIC_DIMENSION.IMPLEMENTATION_EVIDENCE], 0.0);
+      assert.ok(result.issues.some(i => /implementationEvidence/i.test(i)));
+    });
+
+    it("passes implementation-evidence dimension when redundant packet includes evidence and capacity-first metrics", () => {
+      const plan = {
+        task: "Already implemented parser hardening task",
+        verification: "npm test passes",
+        implementationStatus: "implemented_correctly",
+        implementationEvidence: ["src/core/prometheus.ts", "tests/core/prometheus_parse.test.ts"],
+        capacityDelta: 0.2,
+        requestROI: 2.0,
+      };
+      const result = critiquePlan(plan);
+      assert.equal(result.dimensions[CRITIC_DIMENSION.IMPLEMENTATION_EVIDENCE], 1.0);
+    });
   });
 
   describe("runCriticPass", () => {

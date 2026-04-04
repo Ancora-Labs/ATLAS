@@ -39,7 +39,12 @@ import {
   runInterventionOptimizer,
   OPTIMIZER_STATUS,
 } from "../../src/core/intervention_optimizer.js";
-import { computeRuntimeContractProbe } from "../../src/core/cycle_analytics.js";
+import {
+  computeRuntimeContractProbe,
+  computeCycleAnalytics,
+  CYCLE_PHASE,
+  CYCLE_OUTCOME_STATUS,
+} from "../../src/core/cycle_analytics.js";
 
 // ── 1. Dependency Wave Order ───────────────────────────────────────────────────
 
@@ -496,6 +501,19 @@ describe("Integration: optimizer budget admission filtering", () => {
     // Orchestrator logic: INVALID_INPUT → skip admission filter → plans proceed unchanged
     const shouldSkipFilter = result.status === OPTIMIZER_STATUS.INVALID_INPUT || result.status === OPTIMIZER_STATUS.EMPTY_INPUT;
     assert.equal(shouldSkipFilter, true, "Dispatch must not be blocked on optimizer INVALID_INPUT");
+  });
+});
+
+describe("Integration: dispatch-success semantics align with analytics outcomes", () => {
+  it("does not report success when dispatch count is non-zero and completed count remains zero", () => {
+    const record = computeCycleAnalytics({}, {
+      workerResults: [{ roleName: "evolution-worker", status: "partial" }],
+      planCount: 1,
+      phase: CYCLE_PHASE.COMPLETED,
+    });
+    assert.equal(record.outcomes.tasksCompleted, 0);
+    assert.notEqual(record.outcomes.status, CYCLE_OUTCOME_STATUS.SUCCESS);
+    assert.equal(record.outcomes.status, CYCLE_OUTCOME_STATUS.PARTIAL);
   });
 });
 

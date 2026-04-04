@@ -803,6 +803,7 @@ export function computeReadinessGate(
 export async function persistGraphDiagnostics(stateDir, resolution, meta: any = {}) {
   const diagnosticsPath = path.join(stateDir, "dependency_graph_diagnostics.json");
   const persistedAt = new Date().toISOString();
+  const savedAt = persistedAt;
   const expiresAt = new Date(Date.now() + GRAPH_DIAGNOSTICS_FRESHNESS_MS).toISOString();
   const reservedKeys = new Set([
     "jsonlSchema",
@@ -831,6 +832,7 @@ export async function persistGraphDiagnostics(stateDir, resolution, meta: any = 
     jsonlSchema: GRAPH_DIAGNOSTICS_JSONL_SCHEMA,
     recordType: GRAPH_DIAGNOSTICS_RECORD_TYPE,
     schemaVersion: GRAPH_DIAGNOSTICS_SCHEMA_VERSION,
+    savedAt,
     persistedAt,
     freshness: {
       status: "fresh",
@@ -851,6 +853,21 @@ export async function persistGraphDiagnostics(stateDir, resolution, meta: any = 
     waves: resolution.waves,
     conflictPairs: resolution.conflictPairs,
     cycles: resolution.cycles,
+    payload: {
+      status: resolution.status,
+      reasonCode: resolution.reasonCode,
+      resolvedAt: resolution.resolvedAt,
+      totalTasks: resolution.totalTasks,
+      parallelTasks: resolution.parallelTasks,
+      serializedTasks: resolution.serializedTasks,
+      waveCount: Array.isArray(resolution.waves) ? resolution.waves.length : 0,
+      conflictCount: Array.isArray(resolution.conflictPairs) ? resolution.conflictPairs.length : 0,
+      cycleCount: Array.isArray(resolution.cycles) ? resolution.cycles.length : 0,
+      errorMessage: resolution.errorMessage ?? null,
+      waves: resolution.waves,
+      conflictPairs: resolution.conflictPairs,
+      cycles: resolution.cycles,
+    },
   });
 
   await fs.appendFile(diagnosticsPath, entry + "\n", "utf8");

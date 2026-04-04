@@ -25,6 +25,7 @@ export const CRITIC_DIMENSION = Object.freeze({
   BALANCED_DIMENSIONS:    "BALANCED_DIMENSIONS",
   CAPACITY_FIRST:         "CAPACITY_FIRST",
   NON_RIGID_PLAN:         "NON_RIGID_PLAN",
+  IMPLEMENTATION_EVIDENCE: "IMPLEMENTATION_EVIDENCE",
 });
 
 /** Minimum composite score to pass the critic gate (0-1 scale). */
@@ -170,6 +171,22 @@ export function critiquePlan(plan) {
   dimensions[CRITIC_DIMENSION.NON_RIGID_PLAN] = defensiveOnly ? 0.0 : 1.0;
   if (defensiveOnly) {
     issues.push("Task appears defensive-only/rigid without capacity-building implementation detail");
+  }
+
+  const implementationStatus = String(plan.implementationStatus || "").toLowerCase();
+  const lowLeverageOrRedundant = (Array.isArray(plan.leverage_rank) && leverageRank.length < 2)
+    || ["implemented", "implemented_correctly", "already_implemented", "completed", "complete"].includes(implementationStatus)
+    || /\balready\b|\bredundant\b|\bduplicate\b|\bno-op\b/.test(planText);
+  const implementationEvidence = Array.isArray(plan.implementationEvidence) ? plan.implementationEvidence : [];
+  const hasImplementationEvidence = implementationEvidence.some(entry => String(entry || "").trim().length > 0);
+  dimensions[CRITIC_DIMENSION.IMPLEMENTATION_EVIDENCE] = lowLeverageOrRedundant
+    ? (hasImplementationEvidence && hasCapacityFirst ? 1.0 : 0.0)
+    : 1.0;
+  if (lowLeverageOrRedundant && !hasImplementationEvidence) {
+    issues.push("low-leverage/redundant packet missing implementationEvidence");
+  }
+  if (lowLeverageOrRedundant && !hasCapacityFirst) {
+    issues.push("low-leverage/redundant packet missing measurable capacity-first justification");
   }
 
   // Composite score (equal weight)

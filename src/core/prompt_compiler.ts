@@ -295,6 +295,11 @@ export const ACTIONABLE_PACKET_CONTRACT_TERMS = Object.freeze([
   "planReviews",
   "acceptance_criteria",
   "verification",
+  "implementationStatus",
+  "implementationEvidence",
+  "capacityDelta",
+  "requestROI",
+  "leverage_rank",
 ]);
 
 /**

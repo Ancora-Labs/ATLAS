@@ -9,7 +9,7 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { readJson, writeJson } from "./fs_utils.js";
-import { CANONICAL_MAIN_BRANCH_REPLAY_COMMANDS } from "./verification_gate.js";
+import { CANONICAL_MAIN_BRANCH_REPLAY_COMMANDS, hasReplayClosureEvidence } from "./verification_gate.js";
 
 /**
  * @typedef {object} DebtEntry
@@ -61,6 +61,22 @@ export function computeFingerprint(text: string): string | null {
 }
 
 const LEDGER_FILE = "carry_forward_ledger.json";
+
+export const MANDATORY_REPLAY_LINEAGE_IDS = Object.freeze([
+  "CF-001",
+  "CF-002",
+  "CF-003",
+  "CF-004",
+  "CF-005",
+]);
+
+const REPLAY_LINEAGE_MATCHERS: Readonly<Record<string, RegExp[]>> = Object.freeze({
+  "CF-001": [/\bbox_merged_sha\b/i, /\bmerged sha\b/i, /\bsha\b/i],
+  "CF-002": [/npm test output start/i, /\bnpm test\b/i, /\btest output\b/i],
+  "CF-003": [/node\s+--test/i, /tests\/\*\*/i, /glob/i],
+  "CF-004": [/\bbash\b/i, /\bsh\b/i, /scripts\//i],
+  "CF-005": [/placeholder/i, /post_merge_sha_placeholder/i, /post_merge_output_placeholder/i],
+});
 
 /**
  * Load the carry-forward ledger from state.
@@ -329,6 +345,56 @@ export function autoCloseVerifiedDebt(
   }
 
   return closedCount;
+}
+
+export function reconcileReplayClosureBacklog(backlog: any, ledger: any[]) {
+  const sourceItems = Array.isArray(backlog?.items) ? backlog.items : [];
+  const normalizedLedger = Array.isArray(ledger) ? ledger : [];
+  const nowIso = new Date().toISOString();
+
+  const items = sourceItems.map((item) => {
+    const id = String(item?.id || "").trim();
+    if (!MANDATORY_REPLAY_LINEAGE_IDS.includes(id)) return item;
+
+    const title = String(item?.title || "");
+    const lessonMatchers = REPLAY_LINEAGE_MATCHERS[id] || [];
+    const candidates = normalizedLedger.filter((entry) => {
+      const lesson = String(entry?.lesson || "");
+      const haystack = `${title}\n${lesson}`;
+      return lessonMatchers.some((matcher) => matcher.test(haystack));
+    });
+    const evidenced = candidates.find((entry) =>
+      Boolean(entry?.closedAt) && hasReplayClosureEvidence(entry?.closureEvidence),
+    );
+
+    if (!evidenced) {
+      return {
+        ...item,
+        status: "open",
+        source: "carry_forward_ledger",
+        debtId: candidates[0]?.id || null,
+        resolutionEvidence: null,
+        reconciledAt: nowIso,
+      };
+    }
+
+    return {
+      ...item,
+      status: "closed_via_replay_contract",
+      source: "carry_forward_ledger",
+      debtId: evidenced.id || null,
+      resolutionEvidence: String(evidenced.closureEvidence || ""),
+      closedAt: item?.closedAt || evidenced.closedAt || nowIso,
+      reconciledAt: nowIso,
+    };
+  });
+
+  return {
+    ...backlog,
+    schemaVersion: Number(backlog?.schemaVersion || 1),
+    updatedAt: nowIso,
+    items,
+  };
 }
 
 /**

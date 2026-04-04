@@ -84,6 +84,10 @@ export const PACKET_VIOLATION_CODE = Object.freeze({
   MISSING_REQUEST_ROI:           "missing_request_roi",
   /** requestROI is present but not a positive finite number. */
   INVALID_REQUEST_ROI:           "invalid_request_roi",
+  /** Low-leverage or redundant packets must include concrete implementation evidence. */
+  MISSING_IMPLEMENTATION_EVIDENCE: "missing_implementation_evidence",
+  /** Low-leverage or redundant packets must include measurable capacity-first justification. */
+  MISSING_CAPACITY_FIRST_JUSTIFICATION: "missing_capacity_first_justification",
 });
 
 /**
@@ -501,6 +505,40 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
         message: `requestROI must be a positive finite number; got: ${plan.requestROI}`,
         severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
         code: PACKET_VIOLATION_CODE.INVALID_REQUEST_ROI,
+      });
+    }
+  }
+
+  const leverageRank = normalizeLeverageRank(plan?.leverage_rank);
+  const lowLeverage = Array.isArray(plan?.leverage_rank) && leverageRank.length < 2;
+  const taskText = String(plan?.task || "").toLowerCase();
+  const implementationStatus = String(plan?.implementationStatus || "").toLowerCase();
+  const redundantCandidate =
+    ["implemented", "implemented_correctly", "already_implemented", "completed", "complete"].includes(implementationStatus)
+    || /\balready\b|\bredundant\b|\bduplicate\b|\bno-op\b/.test(taskText);
+  const requiresEvidenceGate = lowLeverage || redundantCandidate;
+  if (requiresEvidenceGate) {
+    const evidence = Array.isArray(plan?.implementationEvidence) ? plan.implementationEvidence : [];
+    const hasImplementationEvidence = evidence.some((entry: unknown) => String(entry || "").trim().length > 0);
+    if (!hasImplementationEvidence) {
+      violations.push({
+        field: "implementationEvidence",
+        message: "Low-leverage or redundant packets must include explicit implementationEvidence before admission.",
+        severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+        code: PACKET_VIOLATION_CODE.MISSING_IMPLEMENTATION_EVIDENCE,
+      });
+    }
+
+    const capacityDelta = Number(plan?.capacityDelta);
+    const requestROI = Number(plan?.requestROI);
+    const hasCapacityFirstJustification = Number.isFinite(capacityDelta) && capacityDelta > 0
+      && Number.isFinite(requestROI) && requestROI > 1;
+    if (!hasCapacityFirstJustification) {
+      violations.push({
+        field: "capacityDelta/requestROI",
+        message: "Low-leverage or redundant packets require measurable capacity-first justification (capacityDelta>0 and requestROI>1).",
+        severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+        code: PACKET_VIOLATION_CODE.MISSING_CAPACITY_FIRST_JUSTIFICATION,
       });
     }
   }
