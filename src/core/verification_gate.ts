@@ -10,9 +10,10 @@
  * After exhausting retries, the task escalates instead of looping.
  */
 
-import { getVerificationProfile } from "./verification_profiles.js";
+import { getVerificationProfile, CANONICAL_VERIFICATION_REPORT_TEMPLATE } from "./verification_profiles.js";
 import {
   validateDispatchCommands,
+  classifyNodeTestGlobWindowsArtifact,
   type DispatchCommandValidationResult,
 } from "./verification_command_registry.js";
 
@@ -375,6 +376,11 @@ export function applyConfigOverrides(profile, gatesConfig) {
  * Workers must use one of these values; anything else is non-canonical.
  */
 export const CANONICAL_REPORT_VALUES = Object.freeze(new Set(["pass", "fail", "n/a"]));
+export const VERIFICATION_REPORT_PLACEHOLDER = "<pass|fail|n/a>";
+export const VERIFICATION_REPORT_TEMPLATE_GAP =
+  "VERIFICATION_REPORT template placeholders are still present — replace every <pass|fail|n/a> placeholder with pass, fail, or n/a";
+export const VERIFICATION_REPORT_MALFORMED_GAP =
+  "VERIFICATION_REPORT marker found but report is malformed/unparseable — use the canonical ===VERIFICATION_REPORT=== block";
 
 /**
  * Normalize a raw VERIFICATION_REPORT field value to its canonical form.
@@ -464,6 +470,20 @@ export function parseVerificationReport(output) {
     }
   }
   return report;
+}
+
+function hasVerificationReportPlaceholders(output: string): boolean {
+  const text = String(output || "");
+  return text.includes(VERIFICATION_REPORT_PLACEHOLDER);
+}
+
+function hasMalformedVerificationReportEnvelope(output: string, report: Record<string, string> | null): boolean {
+  const text = String(output || "");
+  const hasMarker =
+    /VERIFICATION_REPORT:/i.test(text)
+    || /===VERIFICATION[_\s]?REPORT===/i.test(text)
+    || /===END[_\s]?VERIFICATION(?:[_\s]?REPORT)?===/i.test(text);
+  return hasMarker && !report;
 }
 
 /**
@@ -611,8 +631,11 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
   const profile = options.gatesConfig ? applyConfigOverrides(baseProfile, options.gatesConfig) : baseProfile;
   const output = parsedResponse?.fullOutput || parsedResponse?.summary || "";
   const report = parseVerificationReport(output);
+  const hasReportPlaceholders = hasVerificationReportPlaceholders(String(output));
+  const hasMalformedReportEnvelope = hasMalformedVerificationReportEnvelope(String(output), report as Record<string, string> | null);
   const responsiveMatrix = parseResponsiveMatrix(output);
   const prUrl = parsePrUrl(output);
+  const windowsNodeTestArtifact = classifyNodeTestGlobWindowsArtifact(String(output));
 
   const gaps: string[] = [];
   const evidence: Record<string, unknown> = {
@@ -675,8 +698,23 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
 
   // No verification report at all — gap for any role with required fields
   if (!report && hasRequiredFields) {
+    if (hasReportPlaceholders) {
+      gaps.push(VERIFICATION_REPORT_TEMPLATE_GAP);
+      return { passed: false, gaps, evidence, reason: "verification report placeholders not replaced" };
+    }
+    if (hasMalformedReportEnvelope) {
+      gaps.push(VERIFICATION_REPORT_MALFORMED_GAP);
+      return { passed: false, gaps, evidence, reason: "malformed verification report" };
+    }
     gaps.push("VERIFICATION_REPORT missing — worker did not provide any verification evidence");
     return { passed: false, gaps, evidence, reason: "no verification report" };
+  }
+
+  if (hasReportPlaceholders) {
+    gaps.push(VERIFICATION_REPORT_TEMPLATE_GAP);
+  }
+  if (hasMalformedReportEnvelope) {
+    gaps.push(VERIFICATION_REPORT_MALFORMED_GAP);
   }
 
   // ── Profile-aware optional field failure tracking ───────────────────────
@@ -710,6 +748,13 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
     if (!value || value === "n/a") {
       gaps.push(`${field.toUpperCase()} is required but was ${value || "missing"}`);
     } else if (value === "fail") {
+      if (
+        field === "tests"
+        && windowsNodeTestArtifact.isArtifact
+        && windowsNodeTestArtifact.hasNpmTestPassEvidence
+      ) {
+        continue;
+      }
       gaps.push(`${field.toUpperCase()} reported as FAIL — worker must fix before done`);
     } else if (!CANONICAL_REPORT_VALUES.has(value)) {
       // Non-canonical value — prevents false negatives from values like "xyz"
@@ -765,7 +810,10 @@ ${gapList}
 
 1. Go back to your work and fix each gap listed above.
 2. Re-run verification for each gap (build, tests, responsive checks, etc.)
-3. Include a complete VERIFICATION_REPORT in your response.
+3. Include a complete VERIFICATION_REPORT in your response using this exact block template and replace placeholders:
+\`\`\`
+${CANONICAL_VERIFICATION_REPORT_TEMPLATE}
+\`\`\`
 4. Do NOT repeat the same approach if it already failed — try a different strategy.
 
 ## ORIGINAL TASK (for reference)

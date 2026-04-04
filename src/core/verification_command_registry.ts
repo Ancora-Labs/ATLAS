@@ -172,6 +172,36 @@ export function checkForbiddenCommands(command) {
   return { forbidden: violations.length > 0, violations };
 }
 
+export const WINDOWS_NODE_TEST_GLOB_ARTIFACT_CODE = "WINDOWS_NODE_TEST_GLOB_ARTIFACT";
+
+export function classifyNodeTestGlobWindowsArtifact(output: string): {
+  isArtifact: boolean;
+  hasNpmTestPassEvidence: boolean;
+  code: string | null;
+} {
+  const text = String(output || "");
+  const hasNodeGlobInvocation = /node\s+--test\s+[^\r\n]*\*/i.test(text) || /tests\/\*\*/i.test(text);
+  const hasWindowsGlobFailure =
+    /glob patterns? (?:are )?not expanded on windows/i.test(text)
+    || /could not find ['"]?tests\/\*\*/i.test(text)
+    || /cannot find module .*tests\/\*\*/i.test(text)
+    || /no files match(?:ed)?(?: the)? pattern/i.test(text);
+  const hasNpmTestPassEvidence =
+    /npm\s+test/i.test(text)
+    && (
+      /all tests? passed/i.test(text)
+      || /\b\d+\s+passing\b/i.test(text)
+      || /#\s*pass\s+\d+/i.test(text)
+      || /\bok\s+\d+\b/i.test(text)
+    );
+  const isArtifact = hasNodeGlobInvocation && hasWindowsGlobFailure;
+  return {
+    isArtifact,
+    hasNpmTestPassEvidence,
+    code: isArtifact ? WINDOWS_NODE_TEST_GLOB_ARTIFACT_CODE : null,
+  };
+}
+
 // ── Dispatch command validation gate (Task 3) ─────────────────────────────────
 
 /**

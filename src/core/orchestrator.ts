@@ -32,7 +32,7 @@ import { warn, emitEvent } from "./logger.js";
 import { EVENTS, EVENT_DOMAIN } from "./event_schema.js";
 import { readJson, readJsonSafe, writeJson, cleanupStaleTempFiles, READ_JSON_REASON } from "./fs_utils.js";
 import { updatePipelineProgress, readPipelineProgress } from "./pipeline_progress.js";
-import { loadEscalationQueue, sortEscalationQueue } from "./escalation_queue.js";
+import { loadEscalationQueue, sortEscalationQueue, processEscalationQueueClosures } from "./escalation_queue.js";
 import { computeCycleSLOs, persistSloMetrics, detectCoupledAlerts } from "./slo_checker.js";
 import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealth, CYCLE_PHASE } from "./cycle_analytics.js";
 import { computeBaselineRecoveryState, persistBaselineMetrics, PARSER_CONFIDENCE_RECOVERY_THRESHOLD } from "./parser_baseline_recovery.js";
@@ -1374,6 +1374,23 @@ export async function runRebase(_config, _opts: Record<string, unknown> = {}) {
   return { triggered: false, reason: "not applicable in athena-gated architecture" };
 }
 
+export async function processEscalationQueueClosureWorkflow(config) {
+  const closure = await processEscalationQueueClosures(config);
+  if (closure.resolvedCount > 0) {
+    await appendProgress(
+      config,
+      `[LOOP] Escalation closure workflow resolved ${closure.resolvedCount} item(s): ${closure.resolvedFingerprints.join(", ")}`
+    );
+  }
+  if (closure.replayUpdatedCount > 0) {
+    await appendProgress(
+      config,
+      `[LOOP] Escalation replay actions updated for ${closure.replayUpdatedCount} unresolved item(s)`
+    );
+  }
+  return closure;
+}
+
 // ── Loop intervals ────────────────────────────────────────────────────────────
 const WORKERS_DONE_POLL_MS = 30 * 1000;
 
@@ -2221,6 +2238,22 @@ async function runSingleCycle(config) {
       summary: `Plan review exception: ${msg}`
     });
     planReview = { approved: false, reason, blocker, corrections: [] };
+  }
+
+  if (planReview?.approved === true && !Number.isFinite(Number(planReview?.overallScore))) {
+    const reason = {
+      code: ATHENA_PLAN_REVIEW_REASON_CODE.SCORE_CONTRACT_VIOLATION,
+      message: "Athena approved response missing valid overallScore (expected numeric 1-10)"
+    };
+    const blocker = {
+      stage: "athena_plan_review",
+      code: reason.code,
+      source: "orchestrator",
+      retryable: false,
+    };
+    await appendProgress(config, `[CYCLE] Athena plan review score contract violation — blocking cycle (fail-closed)`);
+    await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
+    planReview = { ...planReview, approved: false, reason, blocker, corrections: planReview?.corrections || [] };
   }
 
   if (!planReview.approved) {
@@ -3129,6 +3162,7 @@ async function mainLoop(config) {
     // Read and prioritise escalation queue before starting any new planning cycle.
     // Alerts leadership when blocked tasks require attention; does not gate planning.
     try {
+      await processEscalationQueueClosureWorkflow(config);
       const escalationEntries = await loadEscalationQueue(config);
       const prioritisedEscalations = sortEscalationQueue(escalationEntries);
       if (prioritisedEscalations.length > 0) {

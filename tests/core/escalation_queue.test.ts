@@ -12,7 +12,11 @@ import {
   loadEscalationQueue,
   sortEscalationQueue,
   appendEscalation,
-  getEscalationStats
+  getEscalationStats,
+  deriveEscalationReplayAction,
+  processEscalationQueueClosures,
+  ESCALATION_REPLAY_ACTION,
+  ESCALATION_FORCE_RESOLVE_FINGERPRINTS,
 } from "../../src/core/escalation_queue.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -374,5 +378,73 @@ describe("getEscalationStats", () => {
 describe("DEFAULT_ESCALATION_COOLDOWN_MS", () => {
   it("equals 3600000 ms (1 hour)", () => {
     assert.equal(DEFAULT_ESCALATION_COOLDOWN_MS, 3_600_000);
+  });
+});
+
+describe("processEscalationQueueClosures", () => {
+  let tmpDir;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "escalation-closure-test-"));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("maps replay actions by blocking reason class", () => {
+    assert.equal(
+      deriveEscalationReplayAction(BLOCKING_REASON_CLASS.MAX_REWORK_EXHAUSTED),
+      ESCALATION_REPLAY_ACTION.MAX_REWORK_EXHAUSTED,
+    );
+    assert.equal(
+      deriveEscalationReplayAction(BLOCKING_REASON_CLASS.ACCESS_BLOCKED),
+      ESCALATION_REPLAY_ACTION.ACCESS_BLOCKED,
+    );
+  });
+
+  it("resolves forced fingerprints and updates class-specific nextAction", async () => {
+    const config = makeConfig(tmpDir);
+    const filePath = path.join(tmpDir, "escalation_queue.json");
+    const [fpMax, fpAccess] = ESCALATION_FORCE_RESOLVE_FINGERPRINTS;
+    await fs.writeFile(filePath, JSON.stringify({
+      entries: [
+        {
+          ...buildEscalationPayload(validParams({
+            task: "forced max rework",
+            blockingReasonClass: BLOCKING_REASON_CLASS.MAX_REWORK_EXHAUSTED,
+            nextAction: NEXT_ACTION.RETRY,
+          })).payload,
+          taskFingerprint: fpMax,
+          resolved: false,
+        },
+        {
+          ...buildEscalationPayload(validParams({
+            task: "forced access blocked",
+            blockingReasonClass: BLOCKING_REASON_CLASS.ACCESS_BLOCKED,
+            nextAction: NEXT_ACTION.ESCALATE_TO_HUMAN,
+          })).payload,
+          taskFingerprint: fpAccess,
+          resolved: false,
+        },
+      ],
+      updatedAt: null,
+    }), "utf8");
+
+    const result = await processEscalationQueueClosures(config);
+    assert.equal(result.resolvedCount, 2);
+    assert.equal(result.resolvedFingerprints.length, 2);
+
+    const entries = await loadEscalationQueue(config);
+    const resolvedMax = entries.find(e => e.taskFingerprint === fpMax);
+    const resolvedAccess = entries.find(e => e.taskFingerprint === fpAccess);
+    assert.equal(resolvedMax?.resolved, true);
+    assert.equal(resolvedMax?.nextAction, NEXT_ACTION.REASSIGN);
+    assert.equal(typeof resolvedMax?.resolvedAt, "string");
+    assert.ok(String(resolvedMax?.resolutionSummary || "").includes("MAX_REWORK_EXHAUSTED"));
+    assert.equal(resolvedAccess?.resolved, true);
+    assert.equal(resolvedAccess?.nextAction, NEXT_ACTION.RETRY);
+    assert.equal(typeof resolvedAccess?.resolvedAt, "string");
+    assert.ok(String(resolvedAccess?.resolutionSummary || "").includes("ACCESS_BLOCKED"));
   });
 });

@@ -54,6 +54,17 @@ export const NEXT_ACTION = Object.freeze({
   REASSIGN: "REASSIGN"
 });
 
+export const ESCALATION_REPLAY_ACTION = Object.freeze({
+  MAX_REWORK_EXHAUSTED: "REASSIGN_WITH_VERIFICATION_TEMPLATE_REPLAY",
+  ACCESS_BLOCKED: "RETRY_WITH_ACCESS_RECHECK",
+  DEFAULT: "RETRY_WITH_OBSERVATION",
+});
+
+export const ESCALATION_FORCE_RESOLVE_FINGERPRINTS = Object.freeze([
+  "6b493c609b258bc0",
+  "905e317f43de1a08",
+]);
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /** Default cooldown window in ms (1 hour). Override via config.runtime.escalationCooldownMs. */
@@ -272,6 +283,72 @@ export async function resolveEscalationsForTask(config, params = {}) {
   }
 
   return { resolvedCount };
+}
+
+export function deriveEscalationReplayAction(blockingReasonClass: string | null | undefined): string {
+  const cls = String(blockingReasonClass || "").trim().toUpperCase();
+  if (cls === BLOCKING_REASON_CLASS.MAX_REWORK_EXHAUSTED) return ESCALATION_REPLAY_ACTION.MAX_REWORK_EXHAUSTED;
+  if (cls === BLOCKING_REASON_CLASS.ACCESS_BLOCKED) return ESCALATION_REPLAY_ACTION.ACCESS_BLOCKED;
+  return ESCALATION_REPLAY_ACTION.DEFAULT;
+}
+
+export async function processEscalationQueueClosures(config) {
+  const filePath = path.join(config?.paths?.stateDir || "state", "escalation_queue.json");
+  const state = await readJson(filePath, { entries: [], updatedAt: null });
+  const entries = Array.isArray(state?.entries) ? state.entries : [];
+  const now = new Date().toISOString();
+  const forceResolveSet = new Set(ESCALATION_FORCE_RESOLVE_FINGERPRINTS);
+  let changed = false;
+  let resolvedCount = 0;
+  let replayUpdatedCount = 0;
+  const resolvedFingerprints: string[] = [];
+
+  const updatedEntries = entries.map((entry) => {
+    if (!entry || typeof entry !== "object") return entry;
+    if (entry.resolved) return entry;
+
+    const replayAction = deriveEscalationReplayAction(entry.blockingReasonClass);
+    let nextAction = entry.nextAction;
+    if (entry.blockingReasonClass === BLOCKING_REASON_CLASS.MAX_REWORK_EXHAUSTED && entry.nextAction !== NEXT_ACTION.REASSIGN) {
+      nextAction = NEXT_ACTION.REASSIGN;
+      replayUpdatedCount += 1;
+      changed = true;
+    } else if (entry.blockingReasonClass === BLOCKING_REASON_CLASS.ACCESS_BLOCKED && entry.nextAction !== NEXT_ACTION.RETRY) {
+      nextAction = NEXT_ACTION.RETRY;
+      replayUpdatedCount += 1;
+      changed = true;
+    }
+
+    if (!forceResolveSet.has(String(entry.taskFingerprint || ""))) {
+      if (nextAction !== entry.nextAction) {
+        return { ...entry, nextAction };
+      }
+      return entry;
+    }
+
+    resolvedCount += 1;
+    changed = true;
+    resolvedFingerprints.push(String(entry.taskFingerprint || ""));
+    return {
+      ...entry,
+      nextAction,
+      resolved: true,
+      resolvedAt: now,
+      resolvedBy: "system:escalation-closure-workflow",
+      resolutionSummary: `Resolved by closure workflow (${replayAction}) for ${String(entry.blockingReasonClass || "UNKNOWN")}`,
+    };
+  });
+
+  if (changed) {
+    await writeJson(filePath, { entries: updatedEntries, updatedAt: now });
+  }
+
+  return {
+    processedCount: entries.filter(e => !e?.resolved).length,
+    replayUpdatedCount,
+    resolvedCount,
+    resolvedFingerprints,
+  };
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────

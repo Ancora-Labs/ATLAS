@@ -19,6 +19,8 @@ import {
   normalizeReportValue,
   CANONICAL_REPORT_VALUES,
   applyConfigOverrides,
+  VERIFICATION_REPORT_TEMPLATE_GAP,
+  VERIFICATION_REPORT_MALFORMED_GAP,
 } from "../../src/core/verification_gate.js";
 
 describe("verification_gate parse helpers", () => {
@@ -50,6 +52,10 @@ describe("verification_gate parse helpers", () => {
     assert.equal(parseVerificationReport("no report here"), null);
   });
 
+  it("returns null for malformed VERIFICATION_REPORT envelope without key/value entries", () => {
+    assert.equal(parseVerificationReport("===VERIFICATION_REPORT===\nhello\n===END_VERIFICATION==="), null);
+  });
+
   it("parses RESPONSIVE_MATRIX key/value pairs", () => {
     const matrix = parseResponsiveMatrix("RESPONSIVE_MATRIX: 320x568=pass, 360x640=fail, 768x1024=pass");
     assert.deepEqual(matrix, {
@@ -57,6 +63,69 @@ describe("verification_gate parse helpers", () => {
       "360x640": "fail",
       "768x1024": "pass"
     });
+  });
+});
+
+describe("verification_gate verification report template enforcement", () => {
+  it("rejects done output when VERIFICATION_REPORT placeholders are not replaced", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
+        "===NPM TEST OUTPUT START===",
+        "# pass 10",
+        "===NPM TEST OUTPUT END===",
+        "===VERIFICATION_REPORT===",
+        "BUILD=<pass|fail|n/a>",
+        "TESTS=pass",
+        "EDGE_CASES=pass",
+        "SECURITY=n/a",
+        "===END_VERIFICATION===",
+        "BOX_PR_URL=https://github.com/org/repo/pull/88",
+      ].join("\n"),
+    });
+    assert.equal(result.passed, false);
+    assert.ok(result.gaps.includes(VERIFICATION_REPORT_TEMPLATE_GAP));
+  });
+
+  it("rejects malformed verification-report envelopes with explicit guidance", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
+        "===NPM TEST OUTPUT START===",
+        "# pass 10",
+        "===NPM TEST OUTPUT END===",
+        "===VERIFICATION_REPORT===",
+        "not-a-report",
+        "===END_VERIFICATION===",
+        "BOX_PR_URL=https://github.com/org/repo/pull/88",
+      ].join("\n"),
+    });
+    assert.equal(result.passed, false);
+    assert.ok(result.gaps.includes(VERIFICATION_REPORT_MALFORMED_GAP));
+  });
+
+  it("does not fail tests field on Windows node --test glob artifact when npm test passed evidence exists", () => {
+    const result = validateWorkerContract("test", {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
+        "===NPM TEST OUTPUT START===",
+        "# pass 10",
+        "===NPM TEST OUTPUT END===",
+        "node --test tests/**",
+        "Could not find 'tests/**'",
+        "npm test",
+        "10 passing",
+        "VERIFICATION_REPORT: BUILD=n/a; TESTS=fail; EDGE_CASES=pass",
+      ].join("\n"),
+    });
+    assert.equal(result.passed, true);
+    assert.ok(!result.gaps.some(g => /TESTS reported as FAIL/i.test(g)));
   });
 });
 

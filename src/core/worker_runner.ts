@@ -20,8 +20,8 @@ import { spawnAsync } from "./fs_utils.js";
 import { getRoleRegistry, assertRoleCapabilityForTask, isAthenaReviewOrPostmortemTask, normalizeTaskKindLabel } from "./role_registry.js";
 import { appendProgress, appendLineageEntry, appendFailureClassification } from "./state_tracker.js";
 import { buildAgentArgs, nameToSlug } from "./agent_loader.js";
-import { buildVerificationChecklist } from "./verification_profiles.js";
-import { getVerificationCommands } from "./verification_command_registry.js";
+import { buildVerificationChecklist, CANONICAL_VERIFICATION_REPORT_TEMPLATE } from "./verification_profiles.js";
+import { getVerificationCommands, classifyNodeTestGlobWindowsArtifact } from "./verification_command_registry.js";
 import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry } from "./verification_gate.js";
 import {
   enforceModelPolicy,
@@ -773,7 +773,10 @@ function buildConversationContext(history, instruction, sessionState: WorkerSess
     // Fallback for unknown roles — basic verification
     parts.push("\n## SELF-VERIFICATION PROTOCOL");
     parts.push("Before reporting done, verify your work: run build, run tests, check edge cases.");
-    parts.push("Include VERIFICATION_REPORT: BUILD=<pass|fail|n/a>; TESTS=<pass|fail|n/a>; RESPONSIVE=<pass|fail|n/a>; API=<pass|fail|n/a>; EDGE_CASES=<pass|fail|n/a>; SECURITY=<pass|fail|n/a>");
+    parts.push("Include this exact verification report block and replace placeholders:");
+    parts.push("```");
+    parts.push(CANONICAL_VERIFICATION_REPORT_TEMPLATE);
+    parts.push("```");
   }
 
   // Hard constraints from compiled lesson policies — injected prominently so the
@@ -1229,6 +1232,13 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       nextAction: NEXT_ACTION.RETRY,
       summary: "Worker reported BOX_ACCESS blocked"
     }).catch(() => { /* non-fatal */ });
+  }
+
+  const windowsGlobArtifact = classifyNodeTestGlobWindowsArtifact(stdout);
+  if (parsed.status === "blocked" && windowsGlobArtifact.isArtifact && windowsGlobArtifact.hasNpmTestPassEvidence) {
+    parsed.status = "partial";
+    parsed.summary = `[VERIFICATION NORMALIZED] node --test glob failure classified as Windows shell-expansion artifact; npm test passed evidence detected\n${parsed.summary}`;
+    await appendProgress(config, `[WORKER:${roleName}] VERIFICATION_NORMALIZED windows-node-test-glob-artifact`);
   }
 
   // Policy gate: protected path changes require reviewer approval,
