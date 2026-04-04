@@ -2441,6 +2441,8 @@ You MUST emit a structured JSON companion block at the end of your response.
 The JSON block must contain all of the following fields:
 {
   "projectHealth": "<good|healthy|needs-work|degraded|critical>",
+  "keyFindings": "<one-paragraph summary of the most important repository findings>",
+  "strategicNarrative": "<one-paragraph explanation of the strategic direction for this cycle>",
   "totalPackets": <number>,
   "requestBudget": {
     "estimatedPremiumRequestsTotal": 6,
