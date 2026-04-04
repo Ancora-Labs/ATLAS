@@ -22,6 +22,7 @@ import {
   CANONICAL_MAIN_BRANCH_REPLAY_COMMANDS,
   buildReplayClosureEvidence,
   hasReplayClosureEvidence,
+  hasCleanTreeStatusEvidence,
   VERIFICATION_REPORT_TEMPLATE_GAP,
   VERIFICATION_REPORT_MALFORMED_GAP,
 } from "../../src/core/verification_gate.js";
@@ -78,6 +79,14 @@ describe("verification_gate replay closure evidence helper", () => {
   it("negative path: rejects replay-closure text missing canonical command coverage", () => {
     const evidence = "replay-closure:v1 commands=[git rev-parse HEAD, npm test] links=[inline://npm-test-output-block]";
     assert.equal(hasReplayClosureEvidence(evidence), false);
+  });
+
+  it("detects explicit CLEAN_TREE_STATUS evidence marker", () => {
+    assert.equal(hasCleanTreeStatusEvidence("CLEAN_TREE_STATUS=clean"), true);
+  });
+
+  it("negative path: does not detect clean-tree evidence when marker is absent", () => {
+    assert.equal(hasCleanTreeStatusEvidence("git status output only"), false);
   });
 });
 

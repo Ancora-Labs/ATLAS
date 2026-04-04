@@ -209,6 +209,38 @@ export function estimatePromptTokens(sections) {
   return { total, sections: result };
 }
 
+/**
+ * Normalize a structured list for prompt-safe injection.
+ * Removes empty entries, de-duplicates case-insensitively, and bounds both
+ * item count and per-item character length.
+ */
+export function boundStructuredList(
+  values: unknown,
+  opts: { maxItems?: number; maxItemChars?: number } = {}
+): string[] {
+  const maxItems = Math.max(1, Number(opts.maxItems ?? 20));
+  const maxItemChars = Math.max(8, Number(opts.maxItemChars ?? 280));
+  const list = Array.isArray(values) ? values : [];
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of list) {
+    const normalized = String(value || "")
+      .replace(/[\r\n\t]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!normalized) continue;
+    const bounded = normalized.length > maxItemChars
+      ? `${normalized.slice(0, maxItemChars - 3)}...`
+      : normalized;
+    const key = bounded.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(bounded);
+    if (output.length >= maxItems) break;
+  }
+  return output;
+}
+
 // ─── Packet 18 — Prompt Compiler Tiering by Task Complexity ────────────
 
 /**

@@ -227,6 +227,158 @@ function extractCrossTopicConnections(rawText: string): string[] {
     .filter(l => l.length > 0);
 }
 
+const MAX_SYNTHESIS_TOPICS = 20;
+const MAX_TOPIC_SOURCES = 6;
+const MAX_TOPIC_TEXT = 280;
+const MAX_RESEARCH_GAPS = 2000;
+const MAX_CONNECTIONS = 20;
+const MAX_PLANNER_SIGNALS = 12;
+
+function toSingleLine(value: unknown, maxLen = 240): string {
+  const compact = String(value || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!compact) return "";
+  return compact.length > maxLen ? `${compact.slice(0, maxLen - 3)}...` : compact;
+}
+
+function clampList(values: unknown, maxItems: number, maxLen: number): string[] {
+  const list = Array.isArray(values) ? values : [];
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of list) {
+    const normalized = toSingleLine(value, maxLen);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(normalized);
+    if (output.length >= maxItems) break;
+  }
+  return output;
+}
+
+export function stripExecutionTranscriptNoise(rawText: string): string {
+  const text = String(rawText || "");
+  const lines = text.split(/\r?\n/);
+  const filtered = lines.filter((line) => {
+    const normalized = String(line || "").trim();
+    if (!normalized) return false;
+    if (/^\[(synthesizer_start|synthesizer_end|research_synthesizer_live)\]/i.test(normalized)) return false;
+    if (/^(tool_call|tool_result|function_call|assistant:|system:|user:)/i.test(normalized)) return false;
+    if (/^copilot>/i.test(normalized)) return false;
+    if (/^```/.test(normalized)) return false;
+    return true;
+  });
+  return filtered.join("\n").trim();
+}
+
+function toClampedConfidence(value: unknown): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.round(Math.max(0, Math.min(1, parsed)) * 1000) / 1000;
+}
+
+function buildPlannerSignals(topics: Array<Record<string, unknown>>, crossTopicConnections: string[], researchGaps: string) {
+  const priorityActions: string[] = [];
+  const riskFlags: string[] = [];
+  for (const topic of topics) {
+    const topicName = toSingleLine(topic.topic, 160);
+    if (!topicName) continue;
+    if (priorityActions.length < MAX_PLANNER_SIGNALS) {
+      const signal =
+        toSingleLine((topic as Record<string, unknown>).prometheusReadySummary, MAX_TOPIC_TEXT)
+        || toSingleLine((topic as Record<string, unknown>).netFindings?.[0], MAX_TOPIC_TEXT)
+        || topicName;
+      priorityActions.push(`${topicName}: ${signal}`);
+    }
+    const risk = toSingleLine((topic as Record<string, unknown>).risks?.[0], MAX_TOPIC_TEXT);
+    if (risk && riskFlags.length < MAX_PLANNER_SIGNALS) {
+      riskFlags.push(`${topicName}: ${risk}`);
+    }
+  }
+
+  const unresolvedGaps = clampList(
+    String(researchGaps || "").split(/\n+/).map((line) => line.replace(/^[\s\-*•\d.]+/, "")),
+    MAX_PLANNER_SIGNALS,
+    MAX_TOPIC_TEXT,
+  );
+
+  return {
+    topTopics: topics.map((topic) => toSingleLine(topic.topic, 160)).filter(Boolean).slice(0, MAX_PLANNER_SIGNALS),
+    priorityActions: clampList(priorityActions, MAX_PLANNER_SIGNALS, MAX_TOPIC_TEXT),
+    riskFlags: clampList(riskFlags, MAX_PLANNER_SIGNALS, MAX_TOPIC_TEXT),
+    crossTopicDependencies: clampList(crossTopicConnections, MAX_PLANNER_SIGNALS, MAX_TOPIC_TEXT),
+    unresolvedGaps,
+  };
+}
+
+export function sanitizeResearchSynthesisForPersistence(payload: {
+  success: boolean;
+  topicCount: number;
+  topics: Array<Record<string, unknown>>;
+  crossTopicConnections: string[];
+  researchGaps: string;
+  synthesizedAt: string;
+  scoutSourceCount: number;
+  model: string;
+  lastConsumedAt?: string;
+}): Record<string, unknown> {
+  const rawTopics = Array.isArray(payload.topics) ? payload.topics : [];
+  const topics = rawTopics.slice(0, MAX_SYNTHESIS_TOPICS).map((topic) => {
+    const item = (topic && typeof topic === "object") ? topic as Record<string, unknown> : {};
+    const sources = (Array.isArray(item.sources) ? item.sources : [])
+      .slice(0, MAX_TOPIC_SOURCES)
+      .map((source) => {
+        const src = (source && typeof source === "object") ? source as Record<string, unknown> : {};
+        const confidence = toClampedConfidence(src.confidence);
+        return {
+          title: toSingleLine(src.title, 160),
+          url: toSingleLine(src.url, 260),
+          date: toSingleLine(src.date, 64),
+          ...(confidence !== null ? { confidence } : {}),
+          isDuplicate: src.isDuplicate === true,
+          knowledgeType: toSingleLine(src.knowledgeType, 64),
+          scoutFindings: toSingleLine(src.scoutFindings, MAX_TOPIC_TEXT),
+          synthesizerEnrichment: toSingleLine(src.synthesizerEnrichment, MAX_TOPIC_TEXT),
+          prometheusReadySummary: toSingleLine(src.prometheusReadySummary, MAX_TOPIC_TEXT),
+        };
+      })
+      .filter((source) => Object.values(source).some(Boolean));
+
+    return {
+      topic: toSingleLine(item.topic, 180),
+      freshness: toSingleLine(item.freshness, 120),
+      confidence: toSingleLine(item.confidence, 32),
+      sourceCount: Number.isFinite(Number(item.sourceCount)) ? Math.max(0, Number(item.sourceCount)) : sources.length,
+      sourceList: clampList(item.sourceList, MAX_TOPIC_SOURCES, 260),
+      netFindings: clampList(item.netFindings, 6, MAX_TOPIC_TEXT),
+      applicableIdeas: clampList(item.applicableIdeas, 6, MAX_TOPIC_TEXT),
+      risks: clampList(item.risks, 6, MAX_TOPIC_TEXT),
+      conflictingViews: clampList(item.conflictingViews, 6, MAX_TOPIC_TEXT),
+      sources,
+    };
+  }).filter((topic) => Boolean(topic.topic));
+
+  const crossTopicConnections = clampList(payload.crossTopicConnections, MAX_CONNECTIONS, MAX_TOPIC_TEXT);
+  const researchGaps = String(payload.researchGaps || "").slice(0, MAX_RESEARCH_GAPS).trim();
+  const plannerSignals = buildPlannerSignals(topics, crossTopicConnections, researchGaps);
+
+  return {
+    success: payload.success === true,
+    topicCount: topics.length,
+    topics,
+    crossTopicConnections,
+    researchGaps,
+    synthesizedAt: String(payload.synthesizedAt || new Date().toISOString()),
+    scoutSourceCount: Number.isFinite(Number(payload.scoutSourceCount)) ? Math.max(0, Number(payload.scoutSourceCount)) : 0,
+    model: toSingleLine(payload.model, 80) || "gpt-5.3-codex",
+    plannerSignals,
+    ...(payload.lastConsumedAt ? { lastConsumedAt: String(payload.lastConsumedAt) } : {}),
+  };
+}
+
 export interface ResearchSynthesisResult {
   success: boolean;
   topicCount: number;
@@ -309,6 +461,7 @@ ${scoutRawText}`),
   const stdout = String((result as any)?.stdout || "");
   const stderr = String((result as any)?.stderr || "");
   const raw = stdout || stderr;
+  const cleanRaw = stripExecutionTranscriptNoise(raw);
   await appendAgentContextUsage(config, {
     agent: "research-synthesizer",
     model: String(model || "gpt-5.3-codex"),
@@ -334,9 +487,9 @@ ${scoutRawText}`),
   }
 
   // Parse structured topics
-  const topics = parseSynthesisTopics(raw);
-  const crossTopicConnections = extractCrossTopicConnections(raw);
-  const researchGaps = extractResearchGaps(raw);
+  const topics = parseSynthesisTopics(cleanRaw);
+  const crossTopicConnections = extractCrossTopicConnections(cleanRaw);
+  const researchGaps = extractResearchGaps(cleanRaw);
 
   const output: ResearchSynthesisResult = {
     success: true,
@@ -344,14 +497,14 @@ ${scoutRawText}`),
     topics,
     crossTopicConnections,
     researchGaps,
-    rawText: raw,
+    rawText: cleanRaw,
     synthesizedAt: new Date().toISOString(),
     scoutSourceCount: sourceCount,
     model,
   };
 
   // Persist synthesis for Prometheus to read
-  await writeJson(path.join(stateDir, "research_synthesis.json"), output);
+  await writeJson(path.join(stateDir, "research_synthesis.json"), sanitizeResearchSynthesisForPersistence(output));
 
   await appendProgress(config, `[RESEARCH_SYNTHESIZER] Complete — ${topics.length} topic(s) synthesized from ${sourceCount} source(s)`);
 

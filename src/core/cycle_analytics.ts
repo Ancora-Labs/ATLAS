@@ -175,6 +175,7 @@ export const CYCLE_ANALYTICS_SCHEMA = Object.freeze({
       "canonicalEvents",
       "missingData",
       "runtimeContractProbe",
+      "structuralAnalytics",
       "laneTelemetry",
       "stageTransitions",
       "dropReasons",
@@ -210,6 +211,53 @@ function hasDoneWorkerWithVerificationEvidence(workerResults: unknown): boolean 
     );
     return hasVerificationReportEvidence(evidence);
   });
+}
+
+function countDoneWorkersWithCleanTreeEvidence(workerResults: unknown): number | null {
+  if (!Array.isArray(workerResults)) return null;
+  let count = 0;
+  for (const item of workerResults) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const status = String(row.status || "").toLowerCase();
+    if (status !== "done" && status !== "success") continue;
+    const dispatchContract = row.dispatchContract && typeof row.dispatchContract === "object"
+      ? row.dispatchContract as Record<string, unknown>
+      : null;
+    if (dispatchContract?.doneWorkerWithCleanTreeStatusEvidence === true) {
+      count += 1;
+      continue;
+    }
+    const evidence = String(
+      row.verificationEvidence
+      || row.verification_report
+      || row.verificationReport
+      || row.fullOutput
+      || "",
+    );
+    if (/CLEAN_TREE_STATUS\s*=\s*clean\b/i.test(evidence)) count += 1;
+  }
+  return count;
+}
+
+function countBlockedWorkersWithReason(workerResults: unknown): number | null {
+  if (!Array.isArray(workerResults)) return null;
+  let count = 0;
+  for (const item of workerResults) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    if (String(row.status || "").toLowerCase() !== "blocked") continue;
+    const dispatchContract = row.dispatchContract && typeof row.dispatchContract === "object"
+      ? row.dispatchContract as Record<string, unknown>
+      : null;
+    const reason = String(
+      row.dispatchBlockReason
+      || dispatchContract?.dispatchBlockReason
+      || "",
+    ).trim();
+    if (reason) count += 1;
+  }
+  return count;
 }
 
 function hasDispatchBlockReasonOutcomes(workerResults: unknown): boolean {
@@ -644,6 +692,24 @@ export function computeCycleAnalytics(config, {
     athenaPlanReview,
     workerResults,
   });
+  const structuralAnalytics = {
+    doneWorkerVerificationEvidenceCount: Array.isArray(workerResults)
+      ? workerResults.filter((item) => {
+        if (!item || typeof item !== "object") return false;
+        const row = item as Record<string, unknown>;
+        const status = String(row.status || "").toLowerCase();
+        if (status !== "done" && status !== "success") return false;
+        const dispatchContract = row.dispatchContract && typeof row.dispatchContract === "object"
+          ? row.dispatchContract as Record<string, unknown>
+          : null;
+        if (dispatchContract?.doneWorkerWithVerificationReportEvidence === true) return true;
+        const evidence = String(row.verificationEvidence || row.verificationReport || row.fullOutput || "");
+        return hasVerificationReportEvidence(evidence);
+      }).length
+      : null,
+    doneWorkerCleanTreeEvidenceCount: countDoneWorkersWithCleanTreeEvidence(workerResults),
+    blockedWorkerWithReasonCount: countBlockedWorkersWithReason(workerResults),
+  };
   const laneTelemetry = computeLaneTelemetry(safeWorkerResults as Array<{ roleName: string; status: string }> | null);
 
   const cycleId = pipelineProgress?.startedAt ?? sloRecord?.cycleId ?? null;
@@ -715,6 +781,7 @@ export function computeCycleAnalytics(config, {
     canonicalEvents,
     missingData,
     runtimeContractProbe,
+    structuralAnalytics,
     laneTelemetry,
     parserBaselineRecovery: parserBaselineRecovery ?? null,
     stageTransitions: Array.isArray(stageTransitions) ? stageTransitions : [],
@@ -947,6 +1014,16 @@ export function computeCycleHealth(analyticsRecord: any, sustainedBreachSignatur
  * @param {object} healthRecord — output of computeCycleHealth()
  */
 export async function persistCycleHealth(config, healthRecord) {
+  return persistCycleHealthComposite(config, { healthRecord });
+}
+
+export async function persistCycleHealthComposite(
+  config,
+  payload: {
+    healthRecord?: Record<string, unknown> | null;
+    divergenceSnapshot?: CycleHealthDivergenceSnapshot | null;
+  }
+) {
   const filePath  = cycleHealthPath(config);
   const maxEntries = Number(
     config?.cycleAnalytics?.maxHistoryEntries
@@ -968,22 +1045,38 @@ export async function persistCycleHealth(config, healthRecord) {
   });
 
   const history = Array.isArray(existing.history) ? existing.history : [];
-  history.unshift(healthRecord);
-  if (history.length > maxEntries) {
-    history.length = maxEntries;
+  const nextHealthRecord = payload?.healthRecord ?? null;
+  const divergenceSnapshot = payload?.divergenceSnapshot ?? null;
+
+  if (nextHealthRecord) {
+    history.unshift(nextHealthRecord);
+    if (history.length > maxEntries) {
+      history.length = maxEntries;
+    }
   }
+
+  const nextDivergence = divergenceSnapshot
+    ? {
+      divergenceState: String(divergenceSnapshot?.divergenceState || "unknown"),
+      pipelineStatus: String(divergenceSnapshot?.pipelineStatus || "unknown"),
+      operationalStatus: String(divergenceSnapshot?.operationalStatus || "unknown"),
+      plannerHealth: String(divergenceSnapshot?.plannerHealth || "unknown"),
+      isWarning: divergenceSnapshot?.isWarning === true,
+      recordedAt: String(divergenceSnapshot?.recordedAt || new Date().toISOString()),
+    }
+    : (existing?.lastDivergence ?? null);
 
   await writeJson(filePath, {
     schemaVersion: CYCLE_HEALTH_SCHEMA.schemaVersion,
-    lastCycle:     healthRecord,
+    lastCycle:     nextHealthRecord ?? existing?.lastCycle ?? null,
     history,
-    lastDivergence: existing?.lastDivergence ?? null,
-    divergenceState: String(existing?.divergenceState || "unknown"),
-    pipelineStatus: String(existing?.pipelineStatus || "unknown"),
-    operationalStatus: String(existing?.operationalStatus || "unknown"),
-    plannerHealth: String(existing?.plannerHealth || "unknown"),
-    isWarning: existing?.isWarning === true,
-    recordedAt: existing?.recordedAt || null,
+    lastDivergence: nextDivergence,
+    divergenceState: String(nextDivergence?.divergenceState || existing?.divergenceState || "unknown"),
+    pipelineStatus: String(nextDivergence?.pipelineStatus || existing?.pipelineStatus || "unknown"),
+    operationalStatus: String(nextDivergence?.operationalStatus || existing?.operationalStatus || "unknown"),
+    plannerHealth: String(nextDivergence?.plannerHealth || existing?.plannerHealth || "unknown"),
+    isWarning: nextDivergence?.isWarning === true,
+    recordedAt: nextDivergence?.recordedAt || existing?.recordedAt || null,
     updatedAt:     new Date().toISOString(),
   });
 }
@@ -992,43 +1085,7 @@ export async function persistCycleHealthDivergence(
   config,
   divergenceSnapshot: CycleHealthDivergenceSnapshot,
 ) {
-  const filePath = cycleHealthPath(config);
-  const existing = await readJson(filePath, {
-    schemaVersion: CYCLE_HEALTH_SCHEMA.schemaVersion,
-    lastCycle: null,
-    history: [],
-    lastDivergence: null,
-    divergenceState: "unknown",
-    pipelineStatus: "unknown",
-    operationalStatus: "unknown",
-    plannerHealth: "unknown",
-    isWarning: false,
-    recordedAt: null,
-    updatedAt: null,
-  });
-
-  const nextDivergence = {
-    divergenceState: String(divergenceSnapshot?.divergenceState || "unknown"),
-    pipelineStatus: String(divergenceSnapshot?.pipelineStatus || "unknown"),
-    operationalStatus: String(divergenceSnapshot?.operationalStatus || "unknown"),
-    plannerHealth: String(divergenceSnapshot?.plannerHealth || "unknown"),
-    isWarning: divergenceSnapshot?.isWarning === true,
-    recordedAt: String(divergenceSnapshot?.recordedAt || new Date().toISOString()),
-  };
-
-  await writeJson(filePath, {
-    schemaVersion: CYCLE_HEALTH_SCHEMA.schemaVersion,
-    lastCycle: existing?.lastCycle ?? null,
-    history: Array.isArray(existing?.history) ? existing.history : [],
-    lastDivergence: nextDivergence,
-    divergenceState: nextDivergence.divergenceState,
-    pipelineStatus: nextDivergence.pipelineStatus,
-    operationalStatus: nextDivergence.operationalStatus,
-    plannerHealth: nextDivergence.plannerHealth,
-    isWarning: nextDivergence.isWarning,
-    recordedAt: nextDivergence.recordedAt,
-    updatedAt: new Date().toISOString(),
-  });
+  return persistCycleHealthComposite(config, { divergenceSnapshot });
 }
 
 /**

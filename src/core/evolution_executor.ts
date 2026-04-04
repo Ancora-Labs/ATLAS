@@ -754,7 +754,8 @@ function buildInstruction(task, athenaHints = null) {
     `  - Output BOX_STATUS=partial if blocked on external dependency`,
     `  - Output BOX_FILES_TOUCHED=<comma-separated list of changed files>`,
     `  - Output BOX_BRANCH=<branch-name> if you create/switch a branch`,
-    `  - Include a VERIFICATION_REPORT section listing evidence for each criterion`
+    `  - Include a canonical VERIFICATION_REPORT block with pass/fail/n/a values`,
+    `  - Include BOX_MERGED_SHA=<sha>, CLEAN_TREE_STATUS=clean, and the ===NPM TEST OUTPUT START/END=== block`
   ].join("\n");
 
   return {

@@ -155,6 +155,8 @@ describe("orchestrator pipeline progress — resilience", () => {
     assert.equal(cycleHealth.schemaVersion, 1, "cycle_health.json must keep schemaVersion=1");
     assert.ok("lastCycle" in cycleHealth, "composite contract must preserve runtime health channel");
     assert.ok("lastDivergence" in cycleHealth, "composite contract must preserve divergence channel");
+    assert.ok(cycleHealth.lastCycle !== null, "runtime degradation channel must remain populated after divergence update");
+    assert.ok(cycleHealth.lastDivergence !== null, "planner divergence channel must remain populated");
     assert.ok(typeof cycleHealth.divergenceState === "string", "compat top-level divergenceState must be present");
     assert.ok(typeof cycleHealth.pipelineStatus === "string", "compat top-level pipelineStatus must be present");
   });

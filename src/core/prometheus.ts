@@ -64,6 +64,7 @@ import {
   analyzePacketDensification as _analyzePacketDensification,
   PROMPT_BUDGET_PARTITION,
   compileRankedContextSection,
+  boundStructuredList,
 } from "./prompt_compiler.js";
 import {
   scanProject,
@@ -473,7 +474,8 @@ function buildResearchPromptSection(
   // Topics and cross-topic connections are always fully injected — they are the
   // richest planning signal and must not be truncated.
   const sourcePreviewLimit = isStale ? 5 : 15;
-  const topicLines = topics.map((topic, i) => `${i + 1}. ${topic}`).join("\n");
+  const boundedTopics = boundStructuredList(topics, { maxItems: 24, maxItemChars: 220 });
+  const topicLines = boundedTopics.map((topic, i) => `${i + 1}. ${topic}`).join("\n");
   const _hiddenTopicCount = 0; // all topics always shown
   const sourceSignals = (Array.isArray(scoutObj.sources) ? scoutObj.sources : [])
     .slice(0, sourcePreviewLimit)
@@ -485,25 +487,37 @@ function buildResearchPromptSection(
     })
     .join("\n");
   // Research gaps: inject in full — these directly tell Prometheus what was NOT covered.
-  const gapsPreview = String(synthesisObj.researchGaps || "").slice(0, 4000);
+  const gapsPreview = String(synthesisObj.researchGaps || "").slice(0, 2000);
 
   // Cross-topic connections are the RICHEST actionable content: they show which topics
   // must be implemented together and why. Inject ALL connections at full fidelity.
-  const crossTopicLines = (Array.isArray(synthesisObj.crossTopicConnections) ? synthesisObj.crossTopicConnections : [])
-    .map((c: unknown, i: number) => `${i + 1}. ${sanitizePromptLine(c, 3000)}`)
+  const crossTopicLines = boundStructuredList(
+    Array.isArray(synthesisObj.crossTopicConnections) ? synthesisObj.crossTopicConnections : [],
+    { maxItems: 20, maxItemChars: 360 }
+  )
+    .map((c: string, i: number) => `${i + 1}. ${sanitizePromptLine(c, 360)}`)
+    .join("\n");
+  const plannerSignals = (synthesisObj.plannerSignals && typeof synthesisObj.plannerSignals === "object")
+    ? synthesisObj.plannerSignals as Record<string, unknown>
+    : {};
+  const priorityActionLines = boundStructuredList(
+    Array.isArray(plannerSignals.priorityActions) ? plannerSignals.priorityActions : [],
+    { maxItems: 12, maxItemChars: 360 }
+  )
+    .map((entry: string, i: number) => `${i + 1}. ${sanitizePromptLine(entry, 360)}`)
+    .join("\n");
+  const riskFlagLines = boundStructuredList(
+    Array.isArray(plannerSignals.riskFlags) ? plannerSignals.riskFlags : [],
+    { maxItems: 12, maxItemChars: 360 }
+  )
+    .map((entry: string, i: number) => `${i + 1}. ${sanitizePromptLine(entry, 360)}`)
     .join("\n");
 
   const stalenessNote = isStale
     ? `\n⚠️  STALE: Research artifacts are >72 h old. Do NOT produce redundant plans for topics already in ACCUMULATED TOPIC KNOWLEDGE. Only generate NEW packets for genuinely unaddressed gaps.`
     : "";
 
-  // Inject the full synthesis rawText — this is the Synthesizer's complete analysis
-  // with deep per-topic breakdowns, implementation recommendations, and cross-references.
-  // This is the richest signal Prometheus can receive from the research pipeline.
-  const rawText = String(synthesisObj.rawText || "").trim();
-  const rawTextBlock = rawText ? `\n\n### FULL RESEARCH SYNTHESIS (Synthesizer output — read carefully)\n${rawText}` : "";
-
-  const sectionText = `\n\n## EXTERNAL RESEARCH INTELLIGENCE${stalenessNote}\nResearch signal available for this cycle: ${topicCount} topic(s), ${sourceCount} source(s).\n\nResearch coverage target: ${coverageTarget > 0 ? coverageTarget : "AUTO"} research-backed packet(s) when materially applicable.\nDo NOT ignore this section. For each high-confidence unresolved topic, either:\n1) produce an actionable packet with concrete target_files and verification, or\n2) state that it is already implemented and cite exact file evidence in before_state/after_state.\n\nAll research topics:\n${topicLines || "(none)"}${crossTopicLines ? `\n\nCross-topic implementation dependencies (act on these together — these are your highest-priority planning inputs):\n${crossTopicLines}` : ""}${sourceSignals ? `\n\nSource signals:\n${sourceSignals}` : ""}${gapsPreview ? `\n\nResearch gaps to address next (areas the Scout did NOT cover — generate packets for these):\n${gapsPreview}` : ""}${rawTextBlock}`;
+  const sectionText = `\n\n## EXTERNAL RESEARCH INTELLIGENCE${stalenessNote}\nResearch signal available for this cycle: ${topicCount} topic(s), ${sourceCount} source(s).\n\nResearch coverage target: ${coverageTarget > 0 ? coverageTarget : "AUTO"} research-backed packet(s) when materially applicable.\nDo NOT ignore this section. For each high-confidence unresolved topic, either:\n1) produce an actionable packet with concrete target_files and verification, or\n2) state that it is already implemented and cite exact file evidence in before_state/after_state.\n\nAll research topics:\n${topicLines || "(none)"}${crossTopicLines ? `\n\nCross-topic implementation dependencies (act on these together — these are your highest-priority planning inputs):\n${crossTopicLines}` : ""}${priorityActionLines ? `\n\nPlanner-ready priority actions (distilled):\n${priorityActionLines}` : ""}${riskFlagLines ? `\n\nPlanner risk flags:\n${riskFlagLines}` : ""}${sourceSignals ? `\n\nSource signals:\n${sourceSignals}` : ""}${gapsPreview ? `\n\nResearch gaps to address next (areas the Scout did NOT cover — generate packets for these):\n${gapsPreview}` : ""}`;
 
   return { sectionText, topicCount, sourceCount, coverageTarget };
 }
@@ -2795,13 +2809,14 @@ The JSON block must contain all of the following fields:
     "capacityDelta": <number ∈ [-1.0, 1.0]>,
     "requestROI": <positive number>,
     "estimatedExecutionTokens": <positive integer>,
-    "synthesis_sources": ["<synthesis topic name this plan directly addresses — omit if not research-driven>"]
+    "synthesis_sources": ["<synthesis topic name(s) this plan directly addresses — use [] if this plan is not research-driven>"]
   }],
-  "informational_topics_consumed": ["<synthesis topic name you read but no plan is needed — already implemented or purely contextual>"]
+  "informational_topics_consumed": ["<REQUIRED — list every synthesis topic from RESEARCH INTELLIGENCE that you read but decided no plan is needed for (already implemented, out of scope, or purely contextual)>"]
 }
 Do NOT omit target_files, before_state, after_state, scope, acceptance_criteria, capacityDelta, or requestROI from any plan entry.
 Do NOT omit estimatedExecutionTokens from any plan entry.
-For EVERY synthesis topic from the RESEARCH INTELLIGENCE section: if you produce a plan for it, list it in that plan's synthesis_sources[]. If you read it but no plan is needed (already done or purely informational), list it in informational_topics_consumed[]. This enables the system to know when all research is consumed and schedule a new Scout run.
+MANDATORY synthesis-topic accounting — you MUST populate synthesis_sources and informational_topics_consumed together such that EVERY topic listed in the RESEARCH INTELLIGENCE section is accounted for in exactly one of: (a) a plan's synthesis_sources[] if you are implementing it, or (b) informational_topics_consumed[] if you reviewed it but no plan is needed. Unaccounted topics accumulate in the research backlog forever and prevent new Scout runs. An empty informational_topics_consumed[] is only acceptable when EVERY synthesis topic is covered by a plan's synthesis_sources[].
+For EVERY synthesis topic from the RESEARCH INTELLIGENCE section: if you produce a plan for it, list it in that plan's synthesis_sources[]. If you read it but no plan is needed (already done or purely informational), list it in informational_topics_consumed[].
 Do NOT emit requestBudget with _fallback:true — compute byWave and byRole from the actual plan list.
 Keep diagnostic findings in analysis or strategicNarrative and include only actionable redesign work in plans.
 Wrap the JSON companion with markers:

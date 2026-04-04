@@ -136,6 +136,16 @@ describe("parseWorkerResponse", () => {
     assert.equal(result.verificationReport.tests, "pass");
   });
 
+  it("extracts CLEAN_TREE_STATUS evidence marker", () => {
+    const result = parseWorkerResponse("CLEAN_TREE_STATUS=clean", "");
+    assert.equal(result.cleanTreeStatus, true);
+  });
+
+  it("negative: cleanTreeStatus=false when marker is absent", () => {
+    const result = parseWorkerResponse("No clean tree marker here", "");
+    assert.equal(result.cleanTreeStatus, false);
+  });
+
   it("keeps verificationReport null when VERIFICATION_REPORT block is malformed", () => {
     const stdout = "===VERIFICATION_REPORT===\nnot-a-report\n===END_VERIFICATION===";
     const result = parseWorkerResponse(stdout, "");

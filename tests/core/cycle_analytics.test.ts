@@ -25,6 +25,7 @@ import {
   computeCycleHealth,
   computeRuntimeContractProbe,
   persistCycleHealth,
+  persistCycleHealthComposite,
   persistCycleHealthDivergence,
   readCycleHealth,
   CYCLE_PHASE,
@@ -525,6 +526,29 @@ describe("computeRuntimeContractProbe — dispatch contract evidence", () => {
     });
     assert.equal(probe.criteria.dispatchBlockReasonOutcomes.pass, false);
     assert.equal(probe.passed, false);
+  });
+
+  it("populates structural analytics counts for verification, clean-tree, and blocked-reason evidence", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      workerResults: [
+        {
+          roleName: "evolution-worker",
+          status: "done",
+          dispatchContract: {
+            doneWorkerWithVerificationReportEvidence: true,
+            doneWorkerWithCleanTreeStatusEvidence: true,
+            dispatchBlockReason: null,
+          },
+        },
+        { roleName: "quality-worker", status: "blocked", dispatchBlockReason: "access_blocked:api" },
+      ],
+      phase: CYCLE_PHASE.COMPLETED,
+      planCount: 2,
+    });
+    assert.equal(record.structuralAnalytics.doneWorkerVerificationEvidenceCount, 1);
+    assert.equal(record.structuralAnalytics.doneWorkerCleanTreeEvidenceCount, 1);
+    assert.equal(record.structuralAnalytics.blockedWorkerWithReasonCount, 1);
   });
 });
 
@@ -1233,6 +1257,32 @@ describe("persistCycleHealth and readCycleHealth", () => {
       assert.equal(data.lastCycle.cycleId, analytics.cycleId, "runtime health channel must be preserved");
       assert.equal(data.lastDivergence.divergenceState, "planner_warning");
       assert.equal(data.divergenceState, "planner_warning", "top-level compatibility mirror must be preserved");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persistCycleHealthComposite writes runtime and divergence channels atomically", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "box-health-composite-"));
+    try {
+      const config = makeConfig(dir);
+      const analytics = computeCycleAnalytics(config, { pipelineProgress: makePipelineProgress({ startedAt: makeTs(0) }) });
+      const health = computeCycleHealth(analytics);
+      await persistCycleHealthComposite(config, {
+        healthRecord: health,
+        divergenceSnapshot: {
+          divergenceState: "planner_warning",
+          pipelineStatus: "warning",
+          operationalStatus: "degraded",
+          plannerHealth: "warning",
+          isWarning: true,
+          recordedAt: makeTs(900),
+        },
+      } as any);
+      const data = await readCycleHealth(config);
+      assert.equal(data.lastCycle.cycleId, analytics.cycleId);
+      assert.equal(data.lastDivergence.divergenceState, "planner_warning");
+      assert.equal(data.divergenceState, "planner_warning");
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

@@ -1159,10 +1159,16 @@ export function buildTokenFirstBatches(
     }, 0) / laneSignalEntries.length
     : 0.5;
   const adaptiveMinSpecializedShare = Math.round(
-    Math.max(0.15, Math.min(0.9, configuredMinSpecializedShare + ((avgLaneSignal - 0.5) * 0.25))) * 1000
+    Math.max(0, Math.min(0.9, configuredMinSpecializedShare + ((avgLaneSignal - 0.5) * 0.25))) * 1000
   ) / 1000;
   const requiredSpecializedCount = Math.max(0, Math.ceil(workingPlans.length * adaptiveMinSpecializedShare));
   let specialistAssignedCount = 0;
+  const specialistRebalanceCandidates: Array<{
+    plan: any;
+    selection: { role: string; lane: string; fitScore: number };
+    laneFitThreshold: number;
+  }> = [];
+  let rebalancedCount = 0;
   const laneUtilizationTargets = Object.fromEntries(
     getSpecialistLaneNames().map((lane) => {
       const signal = laneTelemetrySignals[lane] ?? { completionRate: 0, roi: 0 };
@@ -1204,6 +1210,35 @@ export function buildTokenFirstBatches(
       specialistAssignedCount += 1;
       if (laneUtilizationTargets[selection.lane]) {
         laneUtilizationTargets[selection.lane].achievedSpecializedCount += 1;
+      }
+    } else if (selection.role !== "Evolution Worker") {
+      specialistRebalanceCandidates.push({
+        plan,
+        selection: { role: selection.role, lane: selection.lane, fitScore: selection.fitScore },
+        laneFitThreshold,
+      });
+    }
+  }
+
+  // Dispatch admission rebalancing: when specialist utilization is below target,
+  // promote top-fit specialist candidates before token-first role packing.
+  if (specialistAssignedCount < requiredSpecializedCount && specialistRebalanceCandidates.length > 0) {
+    const needed = requiredSpecializedCount - specialistAssignedCount;
+    const promoted = specialistRebalanceCandidates
+      .sort((a, b) => b.selection.fitScore - a.selection.fitScore)
+      .slice(0, needed);
+    for (const candidate of promoted) {
+      candidate.plan._originalRole = candidate.plan.role;
+      candidate.plan.role = candidate.selection.role;
+      candidate.plan._specialistFitLocked = true;
+      candidate.plan._specialistRebalanced = true;
+      candidate.plan._fitLane = candidate.selection.lane;
+      candidate.plan._fitScore = candidate.selection.fitScore;
+      candidate.plan._fitScoreThreshold = candidate.laneFitThreshold;
+      specialistAssignedCount += 1;
+      rebalancedCount += 1;
+      if (laneUtilizationTargets[candidate.selection.lane]) {
+        laneUtilizationTargets[candidate.selection.lane].achievedSpecializedCount += 1;
       }
     }
   }
@@ -1336,6 +1371,8 @@ export function buildTokenFirstBatches(
       requiredSpecializedCount,
       achievedSpecializedCount: specialistAssignedCount,
       targetMet: specialistAssignedCount >= requiredSpecializedCount,
+      rebalancedCount,
+      rebalanceApplied: rebalancedCount > 0,
       laneUtilizationTargets: Object.fromEntries(
         Object.entries(laneUtilizationTargets).map(([lane, target]) => [lane, {
           ...target,

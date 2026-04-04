@@ -304,6 +304,13 @@ export function hasReplayClosureEvidence(value: unknown): boolean {
 }
 
 /**
+ * True when output includes explicit clean-tree evidence marker.
+ */
+export function hasCleanTreeStatusEvidence(output: unknown): boolean {
+  return /CLEAN_TREE_STATUS\s*=\s*clean\b/i.test(String(output || ""));
+}
+
+/**
  * Extract the merged commit SHA from worker output.
  *
  * Returns the value from the explicit BOX_MERGED_SHA=<sha> marker when present.

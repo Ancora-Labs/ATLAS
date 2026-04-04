@@ -248,6 +248,9 @@ export function assignWorkersToPlans(
         total: 0,
         specializedShare: 0,
         minSpecializedShare: DEFAULT_SPECIALIZATION_TARGETS.minSpecializedShare,
+        adaptiveMinSpecializedShare: DEFAULT_SPECIALIZATION_TARGETS.minSpecializedShare,
+        specializedDeficit: 0,
+        admissionReady: true,
         specializationTargetsMet: true,
       },
     };
@@ -280,6 +283,9 @@ export function assignWorkersToPlans(
   const configuredMinSpecializedShare = Number(config?.workerPool?.specializationTargets?.minSpecializedShare ?? DEFAULT_SPECIALIZATION_TARGETS.minSpecializedShare);
   const adaptiveMinSpecializedShare = computeAdaptiveSpecializedShareTarget(configuredMinSpecializedShare, lanePerformance);
   const specializationTargetsMet = assignments.length === 0 ? true : specializedShare >= adaptiveMinSpecializedShare;
+  const specializedDeficit = assignments.length === 0
+    ? 0
+    : Math.max(0, Math.ceil(assignments.length * adaptiveMinSpecializedShare) - specializedCount);
 
   const pool = { assignments, diversityIndex, activeLaneCount, laneCounts: Object.fromEntries(laneCounts) };
 
@@ -298,6 +304,8 @@ export function assignWorkersToPlans(
       specializedShare,
       minSpecializedShare: configuredMinSpecializedShare,
       adaptiveMinSpecializedShare,
+      specializedDeficit,
+      admissionReady: specializedDeficit === 0,
       specializationTargetsMet,
     },
   };

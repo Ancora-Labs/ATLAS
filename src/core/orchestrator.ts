@@ -34,7 +34,7 @@ import { readJson, readJsonSafe, writeJson, cleanupStaleTempFiles, READ_JSON_REA
 import { updatePipelineProgress, readPipelineProgress } from "./pipeline_progress.js";
 import { loadEscalationQueue, sortEscalationQueue, processEscalationQueueClosures } from "./escalation_queue.js";
 import { computeCycleSLOs, persistSloMetrics, detectCoupledAlerts } from "./slo_checker.js";
-import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealth, persistCycleHealthDivergence, CYCLE_PHASE, computeRuntimeContractProbe } from "./cycle_analytics.js";
+import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealthComposite, CYCLE_PHASE, computeRuntimeContractProbe } from "./cycle_analytics.js";
 import { computeBaselineRecoveryState, persistBaselineMetrics, PARSER_CONFIDENCE_RECOVERY_THRESHOLD } from "./parser_baseline_recovery.js";
 import { computeDispatchStrictness, loadReplayRegressionState, DISPATCH_STRICTNESS } from "./parser_replay_harness.js";
 import {
@@ -2783,14 +2783,32 @@ async function runSingleCycle(config) {
 
   if (useTokenFirst) {
     const reroutes = (workerBatches as any[])?.[0]?.specialistReroutes;
+    const specializationTarget = (workerBatches as any[])?.[0]?.specialistUtilizationTarget;
     const rerouteMsg = Array.isArray(reroutes) && reroutes.length > 0
       ? ` | specialist→evo reroutes: ${reroutes.join(", ")}`
+      : "";
+    const rebalanceMsg = specializationTarget?.rebalanceApplied === true
+      ? ` | specialist rebalance: +${Number(specializationTarget.rebalancedCount || 0)}`
       : "";
     await appendProgress(config,
       `[BATCH_PLANNER] Token-first packing: ${normalizedPlansForBatching.length} plan(s) → ${workerBatches.length} batch(es)${
         athenaPreBatched ? " (Athena-selected batches applied)" : ""
-      }${rerouteMsg}`
+      }${rerouteMsg}${rebalanceMsg}`
     );
+
+    if (
+      config?.runtime?.enforceSpecialistUtilizationAdmission === true
+      && specializationTarget
+      && specializationTarget.targetMet !== true
+    ) {
+      const achieved = Number(specializationTarget.achievedSpecializedCount || 0);
+      const required = Number(specializationTarget.requiredSpecializedCount || 0);
+      await appendProgress(
+        config,
+        `[BATCH_PLANNER] Specialist utilization admission blocked dispatch: achieved=${achieved} required=${required}`
+      );
+      return;
+    }
   }
 
   // ── Premium request gate ───────────────────────────────────────────────────
@@ -2810,12 +2828,14 @@ async function runSingleCycle(config) {
 
   const dispatchCheckpoint = await beginDispatchCheckpoint(config, workerBatches, plans.length);
   let workersDone = 0;
+  let pendingCycleHealthRecord: Record<string, unknown> | null = null;
   const allWorkerResults: Array<{
     roleName: string;
     status: string;
     verificationEvidence?: unknown;
     dispatchContract?: {
       doneWorkerWithVerificationReportEvidence?: boolean;
+      doneWorkerWithCleanTreeStatusEvidence?: boolean;
       dispatchBlockReason?: string | null;
       replayClosure?: {
         contractSatisfied?: boolean;
@@ -2940,6 +2960,7 @@ async function runSingleCycle(config) {
               workerContract: workerResult.verificationEvidence,
               replayClosure: replayClosureContract,
               doneWorkerWithVerificationReportEvidence: workerResult?.dispatchContract?.doneWorkerWithVerificationReportEvidence === true,
+              doneWorkerWithCleanTreeStatusEvidence: workerResult?.dispatchContract?.doneWorkerWithCleanTreeStatusEvidence === true,
               dispatchBlockReason: workerResult?.dispatchBlockReason || null,
             },
           });
@@ -3128,7 +3149,7 @@ async function runSingleCycle(config) {
     // not when metric definitions change (dual-channel contract).
     const coupledAlerts = detectCoupledAlerts(sloRecord, analyticsRecord.funnel?.completionRate ?? null);
     const healthRecord = computeCycleHealth(analyticsRecord, [], coupledAlerts);
-    await persistCycleHealth(config, healthRecord);
+    pendingCycleHealthRecord = healthRecord;
 
     await appendProgress(config, `[ANALYTICS] Cycle analytics written — confidence=${analyticsRecord.confidence.level} sloStatus=${analyticsRecord.kpis.sloStatus} phase=${analyticsRecord.phase} health=${healthRecord.healthScore}`);
   } catch (err) {
@@ -3368,6 +3389,12 @@ async function runSingleCycle(config) {
         .map((row) => String(row?.dispatchBlockReason || row?.dispatchContract?.dispatchBlockReason || "").trim())
         .filter(Boolean)
     )];
+    const doneWorkerCleanTreeCount = allWorkerResults.filter((row) => {
+      const status = String(row?.status || "").toLowerCase();
+      if (status !== "done" && status !== "success") return false;
+      if (row?.dispatchContract?.doneWorkerWithCleanTreeStatusEvidence === true) return true;
+      return /CLEAN_TREE_STATUS\s*=\s*clean\b/i.test(String(row?.verificationEvidence || ""));
+    }).length;
     const seamChecks = {
       prometheus: {
         pass: seamProbe.criteria.prometheusGeneratedAtAndKeyFindings.pass === true,
@@ -3387,6 +3414,12 @@ async function runSingleCycle(config) {
           ? []
           : [`no done/success worker produced VERIFICATION_REPORT evidence (count=${doneWorkerEvidenceCount})`],
       },
+      cleanTree: {
+        pass: doneWorkerCleanTreeCount > 0,
+        failReasons: doneWorkerCleanTreeCount > 0
+          ? []
+          : ["no done/success worker produced CLEAN_TREE_STATUS=clean evidence"],
+      },
       dispatchBlockReason: {
         pass: seamProbe.criteria.dispatchBlockReasonOutcomes.pass === true,
         failReasons: seamProbe.criteria.dispatchBlockReasonOutcomes.pass === true
@@ -3397,11 +3430,13 @@ async function runSingleCycle(config) {
     const seamContractSatisfied = seamChecks.prometheus.pass
       && seamChecks.athena.pass
       && seamChecks.worker.pass
+      && seamChecks.cleanTree.pass
       && seamChecks.dispatchBlockReason.pass;
     const seamFailReasons = [
       ...seamChecks.prometheus.failReasons,
       ...seamChecks.athena.failReasons,
       ...seamChecks.worker.failReasons,
+      ...seamChecks.cleanTree.failReasons,
       ...seamChecks.dispatchBlockReason.failReasons,
     ];
     await writeJson(path.join(stateDir, "cycle_proof_evidence.json"), {
@@ -3478,9 +3513,12 @@ async function runSingleCycle(config) {
     const healthFile = await readJson(path.join(stateDir, "orchestrator_health.json"), null);
     const operationalStatus = healthFile?.orchestratorStatus ?? ORCHESTRATOR_STATUS.OPERATIONAL;
     const divergence = computeHealthDivergence(operationalStatus, plannerHealth);
-    await persistCycleHealthDivergence(config, {
-      ...divergence,
-      recordedAt: new Date().toISOString(),
+    await persistCycleHealthComposite(config, {
+      healthRecord: pendingCycleHealthRecord,
+      divergenceSnapshot: {
+        ...divergence,
+        recordedAt: new Date().toISOString(),
+      },
     });
     if (divergence.isWarning) {
       await appendProgress(config,
@@ -3499,6 +3537,9 @@ async function runSingleCycle(config) {
     }
   } catch (err) {
     warn(`[orchestrator] Health divergence check failed (non-fatal): ${String(err?.message || err)}`);
+    if (pendingCycleHealthRecord) {
+      await persistCycleHealthComposite(config, { healthRecord: pendingCycleHealthRecord }).catch(() => {});
+    }
   }
 
   // ── Delta analytics + strategy retune (Wave 6) ───────────────────────────

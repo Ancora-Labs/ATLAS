@@ -22,7 +22,7 @@ import { appendProgress, appendLineageEntry, appendFailureClassification } from 
 import { buildAgentArgs, nameToSlug } from "./agent_loader.js";
 import { buildVerificationChecklist, CANONICAL_VERIFICATION_REPORT_TEMPLATE } from "./verification_profiles.js";
 import { getVerificationCommands, classifyNodeTestGlobWindowsArtifact } from "./verification_command_registry.js";
-import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence } from "./verification_gate.js";
+import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence } from "./verification_gate.js";
 import {
   enforceModelPolicy,
   routeModelWithUncertainty,
@@ -153,6 +153,7 @@ type ParsedWorkerResponse = ReturnType<typeof parseWorkerResponse> & {
 
 type DispatchVerificationContract = {
   doneWorkerWithVerificationReportEvidence: boolean;
+  doneWorkerWithCleanTreeStatusEvidence: boolean;
   dispatchBlockReason: string | null;
   replayClosure: {
     contractSatisfied: boolean;
@@ -990,8 +991,9 @@ export function parseWorkerResponse(stdout, stderr) {
   const summary = meaningfulLines.join("\n") || output;
 
   // Extract verification evidence from worker output
-  const verificationReport = parseVerificationReport(output);
-  const responsiveMatrix = parseResponsiveMatrix(output);
+  const verificationReport = parseVerificationReport(combined);
+  const responsiveMatrix = parseResponsiveMatrix(combined);
+  const cleanTreeStatus = hasCleanTreeStatusEvidence(combined);
 
   // Extract explicit merged SHA marker (BOX_MERGED_SHA=<sha>).
   // Stored for audit and lineage — also surfaced in the done-path artifact check.
@@ -1009,6 +1011,7 @@ export function parseWorkerResponse(stdout, stderr) {
     fullOutput: output,
     verificationReport,
     responsiveMatrix,
+    cleanTreeStatus,
     mergedSha,
   };
 }
@@ -1090,6 +1093,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     const replayClosure = buildReplayClosureEvidence(summary);
     const dispatchContract: DispatchVerificationContract = {
       doneWorkerWithVerificationReportEvidence: false,
+      doneWorkerWithCleanTreeStatusEvidence: false,
       dispatchBlockReason: `role_capability_check_failed:${capabilityCheck.code}`,
       replayClosure: {
         contractSatisfied: replayClosure.contractSatisfied === true,
@@ -1297,6 +1301,9 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     doneWorkerWithVerificationReportEvidence:
       (normalizedWorkerStatus === "done" || normalizedWorkerStatus === "success")
       && hasVerificationReportEvidence(parsed.fullOutput || ""),
+    doneWorkerWithCleanTreeStatusEvidence:
+      (normalizedWorkerStatus === "done" || normalizedWorkerStatus === "success")
+      && parsed.cleanTreeStatus === true,
     dispatchBlockReason: normalizedWorkerStatus === "blocked"
       ? (parsed.dispatchBlockReason || "worker_reported_blocked_without_reason")
       : null,

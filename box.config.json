@@ -109,7 +109,8 @@
     "workerContextTokenLimit": 150000,
     "trustBoundaryMode": "warn",
     "planQualityMinScore": 0,
-    "mandatoryTaskCoverageMode": "enforce"
+    "mandatoryTaskCoverageMode": "enforce",
+    "enforceSpecialistUtilizationAdmission": true
   },
   "roadmap": {
     "strategy": "roadmap-first",

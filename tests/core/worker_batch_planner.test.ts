@@ -1070,7 +1070,7 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
     paths: { stateDir: "__missing_state_for_test__" },
     ...config,
     workerPool: {
-      specializationTargets: { fitScoreThreshold: 0.99 },
+      specializationTargets: { fitScoreThreshold: 0.99, minSpecializedShare: 0 },
     },
   };
 
@@ -1115,6 +1115,26 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
     assert.equal(batches[0].role, "governance-worker");
     const plan = (batches[0].plans as any[])[0];
     assert.equal(plan._specialistFitLocked, true, "high-fit specialist plan must be locked to specialist lane");
+  });
+
+  it("rebalances specialist assignment when utilization target is unmet", () => {
+    const rebalanceConfig = {
+      ...config,
+      paths: { stateDir: "__missing_state_for_test__" },
+      workerPool: {
+        specializationTargets: { fitScoreThreshold: 0.99, minSpecializedShare: 0.5 },
+      },
+    };
+    const plans = [
+      makePlan("evolution-worker", "Core implementation task"),
+      makePlan("governance-worker", "Small generic maintenance task"),
+    ];
+    const batches = buildTokenFirstBatches(plans, rebalanceConfig);
+    const roles = new Set(batches.map((batch) => batch.role));
+    assert.ok(roles.has("governance-worker"), "rebalance should keep at least one specialist lane active");
+    const target = (batches[0] as any).specialistUtilizationTarget;
+    assert.equal(target.rebalanceApplied, true);
+    assert.ok(target.rebalancedCount >= 1);
   });
 
   it("negative path: high threshold disables specialist lock and allows reroute", () => {
