@@ -125,7 +125,11 @@ export const VERIFICATION_CMD_REWRITE_RULES: ReadonlyArray<{ match: RegExp; repl
  * @returns {string} canonical command safe to run on all platforms
  */
 export function rewriteVerificationCommand(cmd: string): string {
-  const text = String(cmd || "").trim();
+  let text = String(cmd || "").trim();
+  // Strip non-portable shell pipe tails (e.g. `2>&1 | grep -E '...'`).
+  // These are bash-only constructs and are silently dropped on Windows workers.
+  // The leading test command is preserved as-is for dispatch.
+  text = text.replace(/\s+2>&1\s*\|.*$/i, "").replace(/\s+\|\s*grep\b.*$/i, "").trim();
   const rule = VERIFICATION_CMD_REWRITE_RULES.find(r => r.match.test(text));
   return rule ? rule.replacement : text;
 }

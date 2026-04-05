@@ -21,7 +21,7 @@ import fs from "node:fs/promises";
 import { appendProgress, appendAlert, ALERT_SEVERITY } from "./state_tracker.js";
 import { readStopRequest, writeDaemonPid, clearDaemonPid, clearStopRequest, readReloadRequest, clearReloadRequest } from "./daemon_control.js";
 import { loadConfig } from "../config.js";
-import { runJesusCycle } from "./jesus_supervisor.js";
+import { runJesusCycle, appendJesusOutcomeLedger, buildJesusDecisionOutcome } from "./jesus_supervisor.js";
 import { runPrometheusAnalysis, loadTopicMemory, saveTopicMemory, topicKey as prometheusTopicKey, findCanonicalTopicKey } from "./prometheus.js";
 import { runAthenaPlanReview, ATHENA_PLAN_REVIEW_REASON_CODE, hasFiniteAthenaOverallScore } from "./athena_reviewer.js";
 import { runWorkerConversation, isAnalyticsCompletedWorkerStatus } from "./worker_runner.js";
@@ -65,7 +65,7 @@ import {
 import { isGovernanceCanaryBreachActive } from "./governance_canary.js";
 import { executeRollback, ROLLBACK_LEVEL, ROLLBACK_TRIGGER } from "./rollback_engine.js";
 import { initializeAggregateLiveLog, appendAggregateLiveLogSync } from "./live_log.js";
-import { buildRoleExecutionBatches, buildTokenFirstBatches } from "./worker_batch_planner.js";
+import { buildRoleExecutionBatches, buildTokenFirstBatches, measureWaveBoundaryIdleGap, shouldPackAcrossWaveBoundary } from "./worker_batch_planner.js";
 import { agentFileExists, nameToSlug } from "./agent_loader.js";
 import { getRoleRegistry, assertRoleCapabilityForTask, isAthenaReviewOrPostmortemTask } from "./role_registry.js";
 import {
@@ -92,6 +92,8 @@ import {
   OPTIMIZER_STATUS,
   buildPolicyImpactByInterventionId,
 } from "./intervention_optimizer.js";
+import { evaluateInterventionsForCycle } from "./intervention_judge.js";
+import { evaluateAutonomyBand, type CycleSample } from "./autonomy_band_monitor.js";
 import { validatePlanEvidenceCoupling } from "./evidence_envelope.js";
 import { runResearchScout } from "./research_scout.js";
 import { runResearchSynthesizer } from "./research_synthesizer.js";
@@ -2809,6 +2811,21 @@ async function runSingleCycle(config) {
       const optimizerResult = runInterventionOptimizer(interventions, budgetInput, {
         policyImpactByInterventionId,
         benchmarkTelemetry: benchmarkTelemetry.length > 0 ? benchmarkTelemetry : undefined,
+        rerouteReasons: await (async () => {
+          // Read reroute history from previous cycle to penalize underperforming lanes.
+          try {
+            const { readFile } = await import("node:fs/promises");
+            const rerouteHistoryPath = path.join(stateDir, "reroute_history.jsonl");
+            const raw = await readFile(rerouteHistoryPath, "utf8");
+            const lines = raw.split("\n").filter(l => l.trim().length > 0);
+            // Use last 20 reroute records as the penalty window
+            return lines.slice(-20).map(line => {
+              try { return JSON.parse(line); } catch { return null; }
+            }).filter(Boolean);
+          } catch {
+            return [];
+          }
+        })(),
       });
 
       // Capture usage counters for cycle analytics propagation
@@ -2926,6 +2943,7 @@ async function runSingleCycle(config) {
 
   if (useTokenFirst) {
     const reroutes = (workerBatches as any[])?.[0]?.specialistReroutes;
+    const rerouteReasons = (workerBatches as any[])?.[0]?.specialistRerouteReasons;
     const specializationTarget = (workerBatches as any[])?.[0]?.specialistUtilizationTarget;
     const rerouteMsg = Array.isArray(reroutes) && reroutes.length > 0
       ? ` | specialist→evo reroutes: ${reroutes.join(", ")}`
@@ -2938,6 +2956,32 @@ async function runSingleCycle(config) {
         athenaPreBatched ? " (Athena-selected batches applied)" : ""
       }${rerouteMsg}${rebalanceMsg}`
     );
+    // Emit structured reroute telemetry for each rerouted specialist so the
+    // adaptive threshold cycle can observe the reason codes and lane scores.
+    if (Array.isArray(rerouteReasons) && rerouteReasons.length > 0) {
+      for (const reason of rerouteReasons) {
+        await appendProgress(config,
+          `[BATCH_PLANNER] specialist_reroute reason=${reason.reasonCode} role=${reason.role} lane=${reason.lane} fillRatio=${reason.fillRatio} laneScore=${reason.laneScore} adaptiveThreshold=${reason.adaptiveFillThreshold}`
+        );
+      }
+      // Persist reroute reasons to reroute_history.jsonl for next-cycle optimizer EV penalty.
+      try {
+        const { appendFileSync } = await import("node:fs");
+        const rerouteHistoryPath = path.join(stateDir, "reroute_history.jsonl");
+        for (const reason of rerouteReasons) {
+          appendFileSync(rerouteHistoryPath, JSON.stringify({
+            recordedAt: new Date().toISOString(),
+            role: reason.role,
+            lane: reason.lane,
+            reasonCode: reason.reasonCode,
+            fillRatio: reason.fillRatio,
+            laneScore: reason.laneScore,
+          }) + "\n", "utf8");
+        }
+      } catch (err) {
+        warn(`[orchestrator] reroute history persist failed (non-fatal): ${String(err?.message || err)}`);
+      }
+    }
 
     if (
       config?.runtime?.enforceSpecialistUtilizationAdmission === true
@@ -2999,6 +3043,8 @@ async function runSingleCycle(config) {
   // batches completed successfully (the loop returns early on any failure),
   // giving a hard sequential barrier between waves.
   let currentDispatchWave: number | null = null;
+  let waveBoundaryStartMs: number | null = null;  // ms timestamp when last wave completed
+  let waveBatchCount = 0;                          // batches dispatched in current wave
   const cycleRetryTelemetry = await loadRetryTelemetryContext(config);
 
   for (const batch of workerBatches) {
@@ -3016,12 +3062,46 @@ async function runSingleCycle(config) {
         await appendProgress(config,
           `[WAVE_BOUNDARY] Wave ${currentDispatchWave} complete — all batches succeeded. Crossing to wave ${batchWave}.`
         );
+        // ── Measure and persist wave boundary idle gap ──────────────────────
+        const waveBoundaryEndMs = Date.now();
+        if (waveBoundaryStartMs !== null) {
+          try {
+            const { appendFileSync } = await import("node:fs");
+            const idleRecord = measureWaveBoundaryIdleGap(
+              currentDispatchWave,
+              batchWave,
+              waveBoundaryStartMs,
+              waveBoundaryEndMs,
+              waveBatchCount,
+            );
+            appendFileSync(
+              path.join(stateDir, "wave_boundary_idle.jsonl"),
+              JSON.stringify(idleRecord) + "\n",
+              "utf8",
+            );
+            await appendProgress(config,
+              `[WAVE_BOUNDARY] Idle gap measured: waveFrom=${idleRecord.waveFrom} waveTo=${idleRecord.waveTo} idleMs=${idleRecord.idleMs} batchCount=${idleRecord.batchCount}`
+            );
+            // Log packing opportunity if the heuristic detects a safe co-pack
+            const fromBatches = (workerBatches as any[]).filter(b => b.wave === currentDispatchWave);
+            const toBatches = (workerBatches as any[]).filter(b => b.wave === batchWave);
+            if (shouldPackAcrossWaveBoundary(fromBatches, toBatches)) {
+              await appendProgress(config,
+                `[WAVE_BOUNDARY] Packing opportunity detected: singleton wave ${currentDispatchWave} could be co-packed into wave ${batchWave} (no dependency violation)`
+              );
+            }
+          } catch (wbErr) {
+            warn(`[orchestrator] wave boundary idle persist failed (non-fatal): ${String(wbErr?.message || wbErr)}`);
+          }
+        }
+        waveBatchCount = 0;
       }
       currentDispatchWave = batchWave;
       await appendProgress(config,
         `[WAVE_BOUNDARY] Starting wave ${batchWave} — batch ${workersDone + 1}/${workerBatches.length}`
       );
     }
+    waveBatchCount += 1;
 
     await safeUpdatePipelineProgress(config, "workers_running", `Running worker batch ${workersDone + 1}/${workerBatches.length}: ${batch.role}`, {
       workersTotal: workerBatches.length,
@@ -3154,6 +3234,10 @@ async function runSingleCycle(config) {
 
     await appendProgress(config, `[WORKER_BATCH] ✓ BATCH ${workersDone}/${workerBatches.length} DONE  role=${batch.role}  status=${workerResult?.status || "unknown"}  total_req=${_cycleRequests}`);
 
+    // Record the timestamp when this batch completed — used as the idle-gap start
+    // when the next wave boundary crossing is detected.
+    waveBoundaryStartMs = Date.now();
+
     // ── Token calibration: record estimated vs proxy-actual tokens ──────────
     // Use worker response length as a proxy for actual token consumption.
     // Real provider-level token counts can replace this when available.
@@ -3213,6 +3297,28 @@ async function runSingleCycle(config) {
     workersTotal: workerBatches.length,
     workersDone: workerBatches.length
   });
+
+  // ── Jesus outcome ledger — per-cycle strategy-to-outcome closure ────────────
+  // Records directive hash, plan/execution counts, budget delta, and CI outcome
+  // so that Jesus can observe strategy effectiveness across cycles.
+  try {
+    const successfulWorkerCount = allWorkerResults.filter(r => r.status === "done" || r.status === "success").length;
+    const jesusOutcome = buildJesusDecisionOutcome({
+      directiveHash: String((jesusDecision as any)?.githubStateHash || ""),
+      plansGenerated: prometheusAnalysis?.plans?.length ?? 0,
+      plansExecuted: successfulWorkerCount,
+      budgetDelta: typeof (optimizerUsage as any)?.totalBudgetUsed === "number"
+        ? (optimizerUsage as any).totalBudgetUsed
+        : 0,
+      ciOutcome: String((jesusDecision as any)?.githubCiContext?.latestMainCi?.conclusion || "unknown"),
+    });
+    await appendJesusOutcomeLedger(stateDir, jesusOutcome);
+    await appendProgress(config,
+      `[JESUS_LEDGER] Outcome recorded: plansGenerated=${jesusOutcome.plansGenerated} plansExecuted=${jesusOutcome.plansExecuted} ciOutcome=${jesusOutcome.ciOutcome}`
+    );
+  } catch (ledgerErr) {
+    warn(`[orchestrator] jesus outcome ledger emit failed (non-fatal): ${String(ledgerErr?.message || ledgerErr)}`);
+  }
 
   // ── SLO check: compute and persist cycle-level SLO metrics ─────────────────
   // cycle_id = pipeline_progress.startedAt (the canonical cycle identifier).
@@ -3300,6 +3406,164 @@ async function runSingleCycle(config) {
     // Analytics are advisory — never block orchestration
     warn(`[orchestrator] Cycle analytics failed (non-fatal): ${String(err?.message || err)}`);
     await appendProgress(config, `[ANALYTICS] Cycle analytics failed (non-fatal): ${String(err?.message || err)}`);
+  }
+
+  // ── Intervention judge: evaluate cycle outcomes and decide promote/hold/rework/rollback ──
+  // Mandatory per cycle — produces state/intervention_judge_report.json.
+  // Deterministic decision layer runs first; AI (intervention-reviewer) is consulted
+  // only for ambiguous cases. Hard guardrail breaches override AI recommendations.
+  // Advisory — never blocks orchestration.
+  try {
+    if (config.runtime?.interventionJudgeEnabled === false) {
+      await appendProgress(config, "[INTERVENTION_JUDGE] Skipped — interventionJudgeEnabled=false");
+    } else {
+      const analyticsForJudge = pendingCycleHealthRecord
+        ? await readJson(path.join(stateDir, "cycle_analytics.json"), null)
+        : null;
+      const latestAnalytics = analyticsForJudge?.lastCycle ?? analyticsForJudge ?? null;
+      const interventionJudgeReport = await evaluateInterventionsForCycle(config, {
+        cycleId: String((await readPipelineProgress(config))?.startedAt || cycleStartedAt),
+        plans: Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans : [],
+        analyticsRecord: latestAnalytics,
+        healthRecord: pendingCycleHealthRecord,
+        workerResults: allWorkerResults.map(r => ({ roleName: r.roleName, status: r.status })),
+        requestBudget: prometheusAnalysis?.requestBudget ?? null,
+      });
+
+      const decisions = Array.isArray(interventionJudgeReport?.decisions) ? interventionJudgeReport.decisions : [];
+      const decisionSummary = decisions.map((d: any) => `${d.interventionId}=${d.decision}`).join(", ");
+      await appendProgress(config, `[INTERVENTION_JUDGE] Cycle evaluation complete — ${decisions.length} decision(s): ${decisionSummary || "none"}`);
+
+      // Action executor: convert judge decisions into deterministic runtime actions.
+      // Promote/Hold/Rework are ledgered; Rollback optionally triggers rollback engine.
+      const policyLedgerPath = path.join(stateDir, "intervention_policy_ledger.json");
+      const policyLedger = await readJson(policyLedgerPath, {
+        schemaVersion: 1,
+        entries: [],
+        updatedAt: null,
+      });
+      const existingEntries = Array.isArray(policyLedger?.entries) ? policyLedger.entries : [];
+      const actionCounters = { promote: 0, hold: 0, rework: 0, rollback: 0, rollbackExecuted: 0 };
+
+      for (const d of decisions as any[]) {
+        const finalDecision = String(d?.decision || "hold").toLowerCase();
+        if (finalDecision === "promote") actionCounters.promote += 1;
+        else if (finalDecision === "rework") actionCounters.rework += 1;
+        else if (finalDecision === "rollback") actionCounters.rollback += 1;
+        else actionCounters.hold += 1;
+
+        existingEntries.push({
+          recordedAt: new Date().toISOString(),
+          cycleId: String(interventionJudgeReport?.cycleId || cycleStartedAt),
+          interventionId: String(d?.interventionId || "unknown"),
+          decision: finalDecision,
+          reason: String(d?.reason || "unknown"),
+          decisionMode: String(d?.decisionMode || "unknown"),
+          aiUsed: d?.aiReviewStatus === "ok",
+          aiConfidence: typeof d?.aiConfidence === "number" ? d.aiConfidence : null,
+        });
+
+        if (finalDecision === "rollback" && config.runtime?.interventionJudgeExecuteRollback === true) {
+          const rollbackResult = await executeRollback({
+            level: ROLLBACK_LEVEL.CONFIG_ONLY,
+            trigger: ROLLBACK_TRIGGER.CANARY_ROLLBACK,
+            evidence: {
+              controlValue: (d?.rollbackControlValue && typeof d.rollbackControlValue === "object") ? d.rollbackControlValue : {},
+              reasonCode: "INTERVENTION_JUDGE_ROLLBACK",
+              interventionId: String(d?.interventionId || "unknown"),
+            },
+            config,
+            stateDir,
+          });
+          if (rollbackResult?.ok) {
+            actionCounters.rollbackExecuted += 1;
+          }
+          await appendProgress(config, `[INTERVENTION_JUDGE] Rollback decision executed for ${String(d?.interventionId || "unknown")} ok=${String(Boolean(rollbackResult?.ok))} reason=${String(rollbackResult?.reason || "none")}`);
+        }
+      }
+
+      if (existingEntries.length > 400) {
+        existingEntries.splice(0, existingEntries.length - 400);
+      }
+      await writeJson(policyLedgerPath, {
+        schemaVersion: 1,
+        entries: existingEntries,
+        updatedAt: new Date().toISOString(),
+      });
+
+      await appendProgress(
+        config,
+        `[INTERVENTION_EXECUTOR] promote=${actionCounters.promote} hold=${actionCounters.hold} rework=${actionCounters.rework} rollback=${actionCounters.rollback} rollbackExecuted=${actionCounters.rollbackExecuted}`
+      );
+    }
+  } catch (err) {
+    // Advisory — never blocks orchestration
+    warn(`[orchestrator] Intervention judge failed (non-fatal): ${String(err?.message || err)}`);
+    await appendProgress(config, `[INTERVENTION_JUDGE] Evaluation failed (non-fatal): ${String(err?.message || err)}`);
+  }
+
+  // ── Autonomy band evaluation: composite score + state machine ──
+  // Advisory — never blocks orchestration. Shadow-mode by default.
+  try {
+    if (config.runtime?.autonomyBand?.enabled !== false) {
+      const { readCycleAnalytics, computeResearchCapacityGain } = await import("./cycle_analytics.js");
+      const { getRecentCapacity, computeTrend } = await import("./capacity_scoreboard.js");
+      const analytics = await readCycleAnalytics(config);
+      const recentCap = await getRecentCapacity(config, 10);
+      const capTrend = computeTrend(recentCap, "parserConfidence");
+      const catastropheState = await readJson(path.join(stateDir, "catastrophe_state.json"), null);
+      const benchmarkGroundTruth = await readJson(path.join(stateDir, "benchmark_ground_truth.json"), null);
+      const benchmarkGainResult = computeResearchCapacityGain(
+        Array.isArray(benchmarkGroundTruth?.entries) ? benchmarkGroundTruth.entries : [],
+        5,
+      );
+
+      const totalWorkers = allWorkerResults?.length ?? 0;
+      const completedWorkers = allWorkerResults?.filter((w: any) => w.status === "completed" || w.status === "success").length ?? 0;
+      const completionRate = totalWorkers > 0 ? completedWorkers / totalWorkers : null;
+      const crashCount = allWorkerResults?.filter((w: any) => w.status === "crashed" || w.status === "error").length ?? 0;
+      const crashRate = totalWorkers > 0 ? crashCount / totalWorkers : null;
+
+      const athenaRejectRate = typeof analytics?.athenaRejectRate === "number" ? analytics.athenaRejectRate : null;
+      const parserFallbackRate = typeof prometheusAnalysis?.parserContextPenalty === "number"
+        ? Math.max(0, Math.min(1, prometheusAnalysis.parserContextPenalty))
+        : null;
+      const contractFailRate = typeof prometheusAnalysis?._planContractPassRate === "number"
+        ? Math.max(0, Math.min(1, 1 - prometheusAnalysis._planContractPassRate))
+        : null;
+
+      const premiumEfficiency = typeof prometheusAnalysis?.requestBudget?.utilization === "number"
+        ? prometheusAnalysis.requestBudget.utilization
+        : null;
+
+      const hardGuardrailBreach = Array.isArray(catastropheState?.lastDetections)
+        && catastropheState.lastDetections.length > 0;
+
+      const sample: CycleSample = {
+        cycleId: `cycle-${Date.now()}`,
+        recordedAt: new Date().toISOString(),
+        phase: String(analytics?.phase || CYCLE_PHASE.COMPLETED),
+        completionRate,
+        premiumEfficiency,
+        athenaRejectRate,
+        parserFallbackRate,
+        contractFailRate,
+        benchmarkGain: benchmarkGainResult.capacityGain,
+        crashCount,
+        crashRate,
+        hardGuardrailBreach,
+        capacityTrend: capTrend,
+      };
+
+      const bandResult = await evaluateAutonomyBand(config, sample);
+      await appendProgress(
+        config,
+        `[AUTONOMY_BAND] state=${bandResult.state} phase=${bandResult.executionPhase} composite=${bandResult.compositeScore?.toFixed(3) ?? "N/A"} shadow=${config.runtime?.autonomyBand?.shadowMode !== false}`,
+      );
+    }
+  } catch (err: any) {
+    warn(`[orchestrator] Autonomy band evaluation failed (non-fatal): ${String(err?.message || err)}`);
+    await appendProgress(config, `[AUTONOMY_BAND] Evaluation failed (non-fatal): ${String(err?.message || err)}`);
   }
 
   // ── Catastrophe detection: scan for systemic failure patterns each cycle ──
@@ -3630,6 +3894,9 @@ async function runSingleCycle(config) {
     const firstBatchSpecialization = Array.isArray(workerBatches) && workerBatches.length > 0
       ? (workerBatches[0] as any)?.specialistUtilizationTarget
       : null;
+    const firstBatchRerouteReasons = Array.isArray(workerBatches) && workerBatches.length > 0
+      ? ((workerBatches[0] as any)?.specialistRerouteReasons ?? [])
+      : [];
     // Read lane telemetry from the cycle analytics record computed this cycle
     // (if available) to persist lane distribution trends in the scoreboard.
     let cycleAnalyticsRecord: any = null;
@@ -3650,6 +3917,10 @@ async function runSingleCycle(config) {
       workersDone: workersDone,
       specializedShareTarget: Number(firstBatchSpecialization?.adaptiveMinSpecializedShare ?? firstBatchSpecialization?.minSpecializedShare ?? 0),
       specializedShareTargetMet: firstBatchSpecialization?.targetMet === true,
+      specialistRerouteCount: Array.isArray(firstBatchRerouteReasons) ? firstBatchRerouteReasons.length : 0,
+      ...(Array.isArray(firstBatchRerouteReasons) && firstBatchRerouteReasons.length > 0
+        ? { specialistRerouteReasons: firstBatchRerouteReasons }
+        : {}),
       ...(cycleLaneTelemetry ? { laneTelemetry: cycleLaneTelemetry } : {}),
       ...(optimizerUsage ? { optimizerUsage } : {}),
     });

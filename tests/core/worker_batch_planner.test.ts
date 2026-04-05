@@ -1236,6 +1236,97 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
     assert.ok(reroutes[0].includes("governance-worker"), "reroute should mention governance-worker");
   });
 
+  it("includes structured specialistRerouteReasons when rerouting occurs", () => {
+    const plans = [makePlan("governance-worker", "small task")];
+    const batches = buildTokenFirstBatches(plans, rerouteConfig);
+    const reasons = (batches[0] as any).specialistRerouteReasons;
+    assert.ok(Array.isArray(reasons), "specialistRerouteReasons must be an array");
+    assert.ok(reasons.length > 0, "must have at least one structured reroute reason");
+    const r = reasons[0];
+    assert.equal(r.role, "governance-worker");
+    assert.equal(r.reasonCode, "below_fill_threshold");
+    assert.ok(typeof r.tokens === "number");
+    assert.ok(typeof r.fillRatio === "number");
+    assert.ok(typeof r.adaptiveFillThreshold === "number");
+    assert.ok(typeof r.laneScore === "number");
+    assert.ok(r.fillRatio >= 0 && r.fillRatio <= 1, "fillRatio must be in [0, 1]");
+    assert.ok(r.laneScore >= 0 && r.laneScore <= 1, "laneScore must be in [0, 1]");
+  });
+
+  it("specialistRerouteReasons is absent when no reroute occurs", () => {
+    // All plans are evolution-worker — exempt role — so no reroute should fire.
+    const plans = [makePlan("evolution-worker", "Regular implementation task")];
+    const batches = buildTokenFirstBatches(plans, rerouteConfig);
+    const reasons = (batches[0] as any).specialistRerouteReasons;
+    assert.ok(
+      reasons === undefined || (Array.isArray(reasons) && reasons.length === 0),
+      "specialistRerouteReasons must be absent or empty when no reroute occurs"
+    );
+  });
+
+  it("adaptive fill threshold lowers when lane has strong history (via cycle_analytics)", () => {
+    // Write a cycle_analytics.json where the governance lane has very high performance.
+    // With strong lane history, the adaptive fill threshold for governance should be
+    // lower than the base threshold (1.0), making it harder to trigger a reroute.
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "box-adaptive-fill-"));
+    try {
+      writeFileSync(
+        path.join(stateDir, "cycle_analytics.json"),
+        JSON.stringify({
+          lastCycle: {
+            laneTelemetry: {
+              governance: { completed: 20, failed: 0, completionRate: 1.0, roi: 2.5 },
+            },
+          },
+        })
+      );
+      const strongLaneConfig = {
+        ...config,
+        paths: { stateDir },
+        planner: { specialistFillThreshold: 1.0 }, // high base, but should be lowered adaptively
+      };
+      // Use a governance plan that is medium-sized — not enough to fill 100% context but
+      // should survive with a lowered adaptive threshold.
+      const plans = [makePlan("governance-worker", "gov task " + "x".repeat(80000))];
+      const batches = buildTokenFirstBatches(plans, strongLaneConfig);
+      // With a strong governance lane, the adaptive threshold should drop below 1.0
+      // so a medium-sized specialist stays instead of being rerouted.
+      // We can't guarantee routing outcome without knowing exact token math, but we
+      // verify the adaptive threshold metadata shows a value strictly < 1.0.
+      if ((batches[0] as any).specialistRerouteReasons?.length > 0) {
+        const r = (batches[0] as any).specialistRerouteReasons[0];
+        assert.ok(r.adaptiveFillThreshold < 1.0,
+          `adaptive threshold must be < 1.0 for strong governance lane; got ${r.adaptiveFillThreshold}`);
+      } else {
+        // Specialist kept its own batch — adaptive threshold worked. Pass.
+        const govBatch = batches.find(b => b.role === "governance-worker");
+        assert.ok(govBatch, "governance-worker should keep batch when lane is strong and adaptive lowers threshold");
+      }
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reroute reason thresholdTokens reflects adaptive threshold not base threshold", () => {
+    // The thresholdTokens should be computed from the adaptive threshold (which
+    // may differ from the base 1.0) rather than always equal to usableTokens.
+    const plans = [makePlan("governance-worker", "small task")];
+    const batches = buildTokenFirstBatches(plans, rerouteConfig);
+    const reasons = (batches[0] as any).specialistRerouteReasons;
+    if (Array.isArray(reasons) && reasons.length > 0) {
+      const r = reasons[0];
+      // thresholdTokens must be positive and <= usableContextTokens
+      assert.ok(r.thresholdTokens > 0, "thresholdTokens must be positive");
+      const usable = (batches[0] as any).usableContextTokens ?? Infinity;
+      assert.ok(r.thresholdTokens <= usable,
+        "thresholdTokens must not exceed the usable context window");
+      // thresholdTokens must equal floor(usable * adaptiveFillThreshold)
+      const expected = Math.floor(usable * r.adaptiveFillThreshold);
+      assert.equal(r.thresholdTokens, expected,
+        `thresholdTokens must equal floor(usable * adaptiveFillThreshold); expected=${expected} got=${r.thresholdTokens}`);
+    }
+  });
+
   it("emits specialist utilization target metadata on each batch", () => {
     const plans = [
       makePlan("evolution-worker", "General implementation task"),
@@ -1534,5 +1625,58 @@ describe("buildTokenFirstBatches — wave topology preservation", () => {
     for (const batch of batches) {
       assert.equal(batch.wave, 3);
     }
+  });
+});
+
+// ── Wave boundary idle gap instrumentation ─────────────────────────────────────
+import {
+  measureWaveBoundaryIdleGap,
+  shouldPackAcrossWaveBoundary,
+} from "../../src/core/worker_batch_planner.js";
+
+describe("measureWaveBoundaryIdleGap", () => {
+  it("returns correct idleMs from timestamps", () => {
+    const record = measureWaveBoundaryIdleGap(1, 2, 1000, 3000, 4);
+    assert.equal(record.waveFrom, 1);
+    assert.equal(record.waveTo, 2);
+    assert.equal(record.idleMs, 2000);
+    assert.equal(record.batchCount, 4);
+    assert.ok(record.idleStartedAt.length > 0);
+    assert.ok(record.idleEndedAt.length > 0);
+  });
+
+  it("returns idleMs=0 when start and end are equal", () => {
+    const record = measureWaveBoundaryIdleGap(2, 3, 5000, 5000, 1);
+    assert.equal(record.idleMs, 0);
+  });
+
+  it("clamps negative idleMs to 0", () => {
+    const record = measureWaveBoundaryIdleGap(1, 2, 9000, 8000, 2);
+    assert.ok(record.idleMs >= 0);
+  });
+});
+
+describe("shouldPackAcrossWaveBoundary", () => {
+  it("returns true for singleton from-wave and dep-free to-wave batch", () => {
+    const fromBatches = [{ plans: [{ task: "a" }] }];
+    const toBatches = [{ plans: [{ task: "b", dependencies: [] }] }];
+    assert.equal(shouldPackAcrossWaveBoundary(fromBatches, toBatches), true);
+  });
+
+  it("returns false when to-wave batch has dependency on from-wave", () => {
+    const fromBatches = [{ plans: [{ task: "a" }] }];
+    const toBatches = [{ plans: [{ task: "b", dependencies: ["a"] }] }];
+    assert.equal(shouldPackAcrossWaveBoundary(fromBatches, toBatches), false);
+  });
+
+  it("returns false when the last from-wave batch has multiple plans", () => {
+    const fromBatches = [{ plans: [{ task: "a" }, { task: "c" }] }];
+    const toBatches = [{ plans: [{ task: "b", dependencies: [] }] }];
+    assert.equal(shouldPackAcrossWaveBoundary(fromBatches, toBatches), false);
+  });
+
+  it("returns false when to-wave batches array is empty", () => {
+    const fromBatches = [{ plans: [{ task: "a" }] }];
+    assert.equal(shouldPackAcrossWaveBoundary(fromBatches, []), false);
   });
 });

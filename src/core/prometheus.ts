@@ -67,6 +67,9 @@ import {
   PROMPT_BUDGET_PARTITION,
   compileRankedContextSection,
   boundStructuredList,
+  estimateTokenCost,
+  compilePrometheusContextShortlist,
+  type ShortlistItem,
 } from "./prompt_compiler.js";
 import {
   scanProject,
@@ -4068,19 +4071,36 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     );
     
     if (entries.length > 0) {
-      const formatShortlist = (items: Array<{ lesson: string; score: number; impact: number; freshness: number }>) =>
-        items.map((item, index) =>
-          `${index + 1}. ${item.lesson} (score=${item.score.toFixed(2)}, impact=${item.impact.toFixed(2)}, freshness=${item.freshness.toFixed(2)})`
-        ).join("\n");
-      postmortemShortlistSection = `\n\n## POSTMORTEM SHORTLISTS (ranked deterministic top-10)
-Recent:
-${formatShortlist(shortlist.recentTop10)}
+      // ── Token-partitioned postmortem shortlist (compilePrometheusContextShortlist) ──
+      // Converts ranked lesson entries into ShortlistItem[] and enforces the
+      // TOKEN_PARTITION_LIMITS.behaviorPatterns cap so repeated long-tail blocks
+      // cannot exhaust the prompt budget.
+      const shortlistItems: ShortlistItem[] = [
+        ...shortlist.recentTop10,
+        ...shortlist.highImpactTop10,
+        ...shortlist.unresolvedTop10,
+      ].reduce<ShortlistItem[]>((acc, item) => {
+        if (!acc.some(a => a.id === item.lesson)) {
+          acc.push({
+            id: item.lesson,
+            text: `${item.lesson} (score=${item.score.toFixed(2)}, impact=${item.impact.toFixed(2)}, freshness=${item.freshness.toFixed(2)})`,
+            recencyScore: Math.max(0, Math.min(1, item.freshness)),
+            impactScore: Math.max(0, Math.min(1, item.impact)),
+            resolved: !item.unresolved,
+          });
+        }
+        return acc;
+      }, []);
 
-High impact:
-${formatShortlist(shortlist.highImpactTop10)}
-
-Unresolved:
-${formatShortlist(shortlist.unresolvedTop10)}`;
+      postmortemShortlistSection = compilePrometheusContextShortlist(
+        "POSTMORTEM SHORTLISTS (ranked recent+high-impact+unresolved)",
+        shortlistItems,
+        "behaviorPatterns",
+        { maxItems: 15, includeResolved: false },
+      );
+      if (postmortemShortlistSection) {
+        postmortemShortlistSection = "\n\n" + postmortemShortlistSection;
+      }
 
       // Extract patterns: recurring issues, worker problems, quality trends
       const focusedEntries = entries
@@ -5478,7 +5498,86 @@ Mandatory requirements:
     }
   }
 
+  // ── Emit per-cycle planner metrics (Task 1 observability) ────────────────
+  // Non-blocking: append to prometheus_cycle_metrics.jsonl for budget efficiency
+  // measurement. Captures: findingsInjectedCount, coverageGateRetries, planCount,
+  // estimatedPromptTokens, estimatedTokenCost, diagnosticsFreshnessSnapshot.
+  try {
+    const promptTokens = Math.ceil(contextPrompt.length / 4);
+    const tokenCost = estimateTokenCost(promptTokens);
+    const freshnessSnap = diagnosticsFreshnessSection
+      ? String(diagnosticsFreshnessSection).slice(0, 200).trim() || null
+      : null;
+    await emitPlannerCycleMetrics(stateDir, {
+      schemaVersion: PROMETHEUS_CYCLE_METRICS_SCHEMA_VERSION,
+      cycleId: analysis.analyzedAt || new Date().toISOString(),
+      recordedAt: new Date().toISOString(),
+      findingsInjectedCount: mandatoryFindings.length,
+      coverageGateRetries: parserContractResult.retried ? 1 : 0,
+      planCount: Array.isArray(analysis.plans) ? analysis.plans.length : 0,
+      estimatedPromptTokens: promptTokens,
+      estimatedTokenCost: tokenCost,
+      diagnosticsFreshnessSnapshot: freshnessSnap,
+    });
+  } catch { /* non-fatal — metrics emission must never block planning */ }
+
   return analysis;
+}
+
+// ── Per-cycle planner metrics ──────────────────────────────────────────────────
+//
+// Emitted at the end of every successful runPrometheusAnalysis() call.
+// Appended to state/prometheus_cycle_metrics.jsonl so budget efficiency
+// can be measured and improved across cycles.
+
+/** Schema version for prometheus_cycle_metrics.jsonl entries. */
+export const PROMETHEUS_CYCLE_METRICS_SCHEMA_VERSION = 1;
+
+/** Per-cycle planner observability record. */
+export interface PlannerCycleMetrics {
+  schemaVersion: number;
+  /** ISO timestamp matching analysis.analyzedAt — used as the cycle identity key. */
+  cycleId: string;
+  recordedAt: string;
+  /** Number of mandatory health-audit findings injected into the prompt. */
+  findingsInjectedCount: number;
+  /**
+   * 1 when the parser contract gate triggered a retry this cycle; 0 otherwise.
+   * Proxy for how often the planner output needed correction.
+   */
+  coverageGateRetries: number;
+  /** Number of plans in the final analysis (after all gates). */
+  planCount: number;
+  /** Estimated token count for the full context prompt (chars / 4). */
+  estimatedPromptTokens: number;
+  /** Estimated USD cost for the prompt tokens at default model pricing. */
+  estimatedTokenCost: number;
+  /**
+   * Compact snapshot (≤200 chars) of the diagnostics freshness section text,
+   * or null when no freshness section was built this cycle.
+   */
+  diagnosticsFreshnessSnapshot: string | null;
+}
+
+/**
+ * Append a PlannerCycleMetrics record to state/prometheus_cycle_metrics.jsonl.
+ *
+ * Uses appendFileSync so each record is a single atomic line write.
+ * Never throws — all errors are silently swallowed to prevent blocking planning.
+ *
+ * @param stateDir - path to the state directory
+ * @param metrics  - the record to persist
+ */
+export async function emitPlannerCycleMetrics(
+  stateDir: string,
+  metrics: PlannerCycleMetrics,
+): Promise<void> {
+  try {
+    const { appendFileSync } = await import("node:fs");
+    const filePath = path.join(stateDir, "prometheus_cycle_metrics.jsonl");
+    const entry = JSON.stringify(metrics) + "\n";
+    appendFileSync(filePath, entry, "utf8");
+  } catch { /* non-fatal */ }
 }
 
 // ── Fallback provenance and low-confidence quarantine ─────────────────────────

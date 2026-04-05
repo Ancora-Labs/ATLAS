@@ -277,6 +277,44 @@ const PAT_HTTP_ERROR  = /HTTP\s+[45]\d\d|fetch\s+error|API\s+error|api\s+fail/i;
 const PAT_POLICY      = /policy|permission\s+denied|access\s+denied|forbidden|unauthorized/i;
 const PAT_VERIFY      = /test\s+fail|assertion|verify|verification\s+fail|rework/i;
 
+// ── Windows process termination exit codes ──────────────────────────────────
+// 0x40010004 (1073807364) = STATUS_CONTROL_C_EXIT — process killed by Ctrl+C or TerminateProcess
+// 0xC000013A (3221225786) = STATUS_CONTROL_C_EXIT (signed variant)
+// 0xC0000005 (3221225477) = STATUS_ACCESS_VIOLATION — segfault equivalent
+// These are non-transient environment-class failures: the process was forcibly terminated.
+const WIN32_KILLED_EXIT_CODES = new Set([1073807364, 3221225786, 3221225477]);
+
+/**
+ * Classify a numeric exit code into a failure reason.
+ * Returns null when the exit code is not a recognized crash signature.
+ */
+export function classifyExitCode(exitCode: number | null | undefined): {
+  reasonCode: string;
+  retryClass: "cooldown" | "no_retry" | null;
+  primaryClass: string;
+  confidence: number;
+} | null {
+  if (exitCode == null || !Number.isFinite(exitCode)) return null;
+  if (WIN32_KILLED_EXIT_CODES.has(exitCode)) {
+    return {
+      reasonCode: "WIN32_PROCESS_TERMINATED",
+      retryClass: "cooldown",
+      primaryClass: FAILURE_CLASS.ENVIRONMENT,
+      confidence: 0.90,
+    };
+  }
+  // Signal-killed on Unix (128 + signal): SIGKILL=137, SIGTERM=143, SIGABRT=134
+  if (exitCode >= 128 && exitCode <= 192) {
+    return {
+      reasonCode: `UNIX_SIGNAL_${exitCode - 128}`,
+      retryClass: "cooldown",
+      primaryClass: FAILURE_CLASS.ENVIRONMENT,
+      confidence: 0.85,
+    };
+  }
+  return null;
+}
+
 /**
  * Apply classification rules to a validated input and return primaryClass + confidence.
  *
@@ -309,6 +347,14 @@ function determineClass(input) {
     return { primaryClass: FAILURE_CLASS.VERIFICATION, confidence: 0.85 };
   }
   if (rc === "WORKER_ERROR") {
+    // Sub-classify WORKER_ERROR by exit code first (deterministic, highest signal)
+    const exitCodeMatch = /exit[=:]?\s*(\d+)/i.exec(combined);
+    if (exitCodeMatch) {
+      const exitClassification = classifyExitCode(Number(exitCodeMatch[1]));
+      if (exitClassification) {
+        return { primaryClass: exitClassification.primaryClass, confidence: exitClassification.confidence };
+      }
+    }
     // Sub-classify WORKER_ERROR by error text patterns
     if (PAT_TIMEOUT.test(combined)) {
       return { primaryClass: FAILURE_CLASS.ENVIRONMENT, confidence: 0.80 };

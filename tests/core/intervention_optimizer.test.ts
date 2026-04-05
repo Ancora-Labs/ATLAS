@@ -934,3 +934,52 @@ describe("persistOptimizerLog — parse-safe JSONL + freshness metadata", () => 
     }
   });
 });
+
+// ── Reroute EV penalty ─────────────────────────────────────────────────────────
+import {
+  applyRerouteCostPenalty,
+  REROUTE_EV_PENALTY_COEFFICIENT,
+  REROUTE_EV_MAX_PENALTY,
+} from "../../src/core/intervention_optimizer.js";
+
+describe("applyRerouteCostPenalty", () => {
+  it("penalizes positive EV when role matches reroute reason", () => {
+    const penalized = applyRerouteCostPenalty(1.0, "backend", [
+      { role: "backend", reasonCode: "FILL_RATIO_BELOW_THRESHOLD", lane: "lane-1" },
+    ]);
+    assert.ok(penalized < 1.0, "EV must be reduced for matching role");
+  });
+
+  it("does not penalize when role does not match reroute reasons", () => {
+    const penalized = applyRerouteCostPenalty(1.0, "frontend", [
+      { role: "backend", reasonCode: "FILL_RATIO_BELOW_THRESHOLD", lane: "lane-1" },
+    ]);
+    assert.equal(penalized, 1.0);
+  });
+
+  it("does not worsen negative EV (no double-penalization)", () => {
+    const penalized = applyRerouteCostPenalty(-0.5, "backend", [
+      { role: "backend", reasonCode: "FILL_RATIO_BELOW_THRESHOLD", lane: "lane-1" },
+    ]);
+    assert.equal(penalized, -0.5);
+  });
+
+  it("caps penalty at REROUTE_EV_MAX_PENALTY regardless of reroute count", () => {
+    const manyReroutes = Array.from({ length: 20 }, () => ({
+      role: "backend", reasonCode: "FILL_RATIO_BELOW_THRESHOLD", lane: "lane-1",
+    }));
+    const penalized = applyRerouteCostPenalty(1.0, "backend", manyReroutes);
+    assert.ok(penalized >= 1.0 - REROUTE_EV_MAX_PENALTY - 0.001,
+      `penalty must not exceed REROUTE_EV_MAX_PENALTY=${REROUTE_EV_MAX_PENALTY}`);
+  });
+
+  it("applies REROUTE_EV_PENALTY_COEFFICIENT for a single reroute", () => {
+    const penalized = applyRerouteCostPenalty(1.0, "backend", [
+      { role: "backend", reasonCode: "FILL_RATIO_BELOW_THRESHOLD", lane: "lane-1" },
+    ]);
+    const expectedMin = 1.0 - REROUTE_EV_PENALTY_COEFFICIENT - 0.001;
+    const expectedMax = 1.0 - REROUTE_EV_PENALTY_COEFFICIENT + 0.001;
+    assert.ok(penalized >= expectedMin && penalized <= expectedMax,
+      `expected ~${1.0 - REROUTE_EV_PENALTY_COEFFICIENT} got ${penalized}`);
+  });
+});

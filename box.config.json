@@ -110,7 +110,40 @@
     "trustBoundaryMode": "warn",
     "planQualityMinScore": 0,
     "mandatoryTaskCoverageMode": "enforce",
-    "enforceSpecialistUtilizationAdmission": true
+    "enforceSpecialistUtilizationAdmission": true,
+    "interventionJudgeEnabled": true,
+    "interventionJudgeMinSamples": 3,
+    "interventionJudgeWindowSize": 5,
+    "interventionJudgeAutoApplyLowRisk": false,
+    "interventionJudgeAiEnabled": true,
+    "interventionJudgeAiTimeoutMs": 120000,
+    "interventionJudgeExecuteRollback": false,
+    "autonomyBand": {
+      "enabled": true,
+      "shadowMode": true,
+      "thresholds": {
+        "minBootstrapCycles": 10,
+        "stabilizingWindow": 30,
+        "hardGuardrailWindow": 50,
+        "compositeScoreMin": 0.72,
+        "completionRateMin": 0.75,
+        "premiumEfficiencyMin": 0.60,
+        "athenaRejectRateMax": 0.15,
+        "hardGuardrailBreachMax": 2,
+        "inBandMinBenchmarkGain": 0.10,
+        "inBandMaxCompletionVariance": 0.05,
+        "inBandRequireCompletedPhase": true,
+        "regressCrashWindow": 10,
+        "regressCrashThreshold": 3,
+        "regressCompletionWindow": 10,
+        "regressCompletionMin": 0.40,
+        "regressAthenaRejectWindow": 5,
+        "regressAthenaRejectMax": 0.40,
+        "exploitationWindow": 10,
+        "exploitationMinBenchmarkGain": 0.15,
+        "exploitationMaxCompletionVariance": 0.04
+      }
+    }
   },
   "roadmap": {
     "strategy": "roadmap-first",

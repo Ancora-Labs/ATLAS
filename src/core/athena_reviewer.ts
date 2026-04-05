@@ -1579,6 +1579,12 @@ export function normalizePatchedPlansForDispatch(plans: unknown[]): Record<strin
       role: p.role && String(p.role).trim() ? String(p.role).trim() : "evolution-worker",
       // wave must be a positive integer; malformed values fall back to 1.
       wave: Number.isFinite(Number(p.wave)) && Number(p.wave) >= 1 ? Number(p.wave) : 1,
+      // capacityDelta must be a finite number in [-1.0, 1.0]; Athena may omit it.
+      capacityDelta: Number.isFinite(Number(p.capacityDelta)) && Number(p.capacityDelta) >= -1 && Number(p.capacityDelta) <= 1
+        ? Number(p.capacityDelta) : 0.1,
+      // requestROI must be a positive finite number; Athena may omit it.
+      requestROI: Number.isFinite(Number(p.requestROI)) && Number(p.requestROI) > 0
+        ? Number(p.requestROI) : 1.0,
     };
   });
 }
@@ -2498,7 +2504,7 @@ Prometheus has produced a plan. Your job is to validate it AND FIX any issues yo
   - if same role + low/medium risk + no hard dependency barrier, merge into one role session/wave and keep deterministic order via dependencies
   - only split into another wave when there is a true dependency or cross-role race barrier
 - Vague acceptance criteria → rewrite with numeric threshold (e.g., "fallback rate < 5%")
-- Missing verification → add a concrete test command
+- Missing verification → add a concrete test command referencing a specific test file path, e.g. npm test -- tests/core/foo.test.ts or npm test -- tests/core/foo.test.ts — test: expected description. NEVER write just "npm test" or "npm test -- --grep 'pattern'" alone — always include the test file path like "npm test -- tests/core/foo.test.ts".
 - Missing scope → fill from target_files
 
 ## PROMETHEUS PLAN TO REVIEW
@@ -2539,7 +2545,7 @@ Respond with your assessment, then:
       "before_state": "current state",
       "after_state": "desired state",
       "acceptance_criteria": ["measurable criteria with numeric thresholds"],
-      "verification": "concrete test command",
+      "verification": "npm test -- tests/core/foo.test.ts — test: expected description (use a specific test file path, NOT --grep alone)",
       "riskLevel": "low",
       "_batchIndex": 1,
       "_batchTotal": 2,

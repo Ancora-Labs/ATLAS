@@ -4124,3 +4124,63 @@ describe("tagStaleDiagnosticsBackedPlans", () => {
     assert.equal(result, plans, "same array reference must be returned");
   });
 });
+
+// ── Planner cycle metrics emission ─────────────────────────────────────────────
+import {
+  estimateTokenCost,
+} from "../../src/core/prompt_compiler.js";
+import {
+  emitPlannerCycleMetrics,
+  PlannerCycleMetrics,
+} from "../../src/core/prometheus.js";
+
+describe("estimateTokenCost", () => {
+  it("computes cost correctly for 1000 tokens at default rate", () => {
+    assert.equal(estimateTokenCost(1000), 0.003);
+  });
+
+  it("returns 0 for zero tokens", () => {
+    assert.equal(estimateTokenCost(0), 0);
+  });
+
+  it("returns 0 for negative tokens (clamped)", () => {
+    assert.ok(estimateTokenCost(-1) === 0);
+  });
+
+  it("computes cost correctly for 1M tokens", () => {
+    assert.equal(estimateTokenCost(1_000_000), 3.0);
+  });
+
+  it("respects custom costPerMillionTokens", () => {
+    assert.equal(estimateTokenCost(1000, 5.0), 0.005);
+  });
+});
+
+describe("emitPlannerCycleMetrics", () => {
+  it("creates metrics file and appends a parseable JSONL line", async () => {
+    const { mkdtempSync: mkdtmp, rmSync: rm, readFileSync: readFile } = await import("node:fs");
+    const { tmpdir: osTmpDir } = await import("node:os");
+    const tmpDir = mkdtmp(path.join(osTmpDir(), "prom-metrics-"));
+    try {
+      const metrics = {
+        schemaVersion: 1,
+        cycleId: "cycle-test-1",
+        recordedAt: new Date().toISOString(),
+        findingsInjectedCount: 5,
+        coverageGateRetries: 1,
+        planCount: 3,
+        estimatedPromptTokens: 10000,
+        estimatedTokenCost: 0.030,
+        diagnosticsFreshnessSnapshot: { allFresh: true, staleSources: [] },
+      } satisfies PlannerCycleMetrics;
+      await emitPlannerCycleMetrics(tmpDir, metrics);
+      const raw = readFile(path.join(tmpDir, "prometheus_cycle_metrics.jsonl"), "utf8");
+      const parsed = JSON.parse(raw.trim());
+      assert.equal(parsed.cycleId, "cycle-test-1");
+      assert.equal(parsed.planCount, 3);
+      assert.equal(parsed.schemaVersion, 1);
+    } finally {
+      rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});

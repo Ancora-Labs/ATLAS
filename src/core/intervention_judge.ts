@@ -94,6 +94,15 @@ function decideIntervention(
   };
 }
 
+function isAmbiguousCandidate(
+  candidate: { decision: string; reason: string; sampleCount: number },
+  minSamples: number
+): boolean {
+  return candidate.decision === INTERVENTION_DECISION.HOLD
+    && String(candidate.reason || "").startsWith("mixed_signal:")
+    && Number(candidate.sampleCount) >= minSamples;
+}
+
 async function runAiInterventionReview(config: any, cycleMetrics: any, candidates: any[]) {
   const enabled = config?.runtime?.interventionJudgeAiEnabled !== false;
   if (!enabled || !Array.isArray(candidates) || candidates.length === 0) {
@@ -290,6 +299,32 @@ export async function evaluateInterventionsForCycle(
     requestBudget?: any;
   }
 ) {
+  const judgeEnabled = config?.runtime?.interventionJudgeEnabled !== false;
+  if (!judgeEnabled) {
+    const disabledReport = {
+      schemaVersion: 1,
+      cycleId: String(input?.cycleId || new Date().toISOString()),
+      generatedAt: new Date().toISOString(),
+      metrics: {
+        completionRate: null,
+        premiumEfficiency: null,
+        healthScore: String(input?.healthRecord?.healthScore || "unknown").toLowerCase(),
+        dispatched: 0,
+        completed: 0,
+      },
+      aiReview: {
+        enabled: false,
+        status: "skipped",
+        reason: "intervention_judge_disabled",
+        requestedCandidates: 0,
+        reviewedCandidates: 0,
+      },
+      decisions: [],
+    };
+    await writeJson(reportFilePath(config), disabledReport);
+    return disabledReport;
+  }
+
   const minSamples = Number.isFinite(Number(config?.runtime?.interventionJudgeMinSamples))
     ? Math.max(1, Math.floor(Number(config.runtime.interventionJudgeMinSamples)))
     : DEFAULTS.minSamples;
@@ -378,6 +413,8 @@ export async function evaluateInterventionsForCycle(
     });
   }
 
+  const aiCandidates = deterministicCandidates.filter((c) => isAmbiguousCandidate(c, minSamples));
+
   const aiReview = await runAiInterventionReview(config, {
     cycleId: sample.cycleId,
     completionRate,
@@ -385,10 +422,11 @@ export async function evaluateInterventionsForCycle(
     healthScore,
     dispatched,
     completed,
-  }, deterministicCandidates);
+  }, aiCandidates);
 
   for (const c of deterministicCandidates) {
-    const aiForId = aiReview.ok ? aiReview.byId[c.interventionId] : undefined;
+    const aiEligible = isAmbiguousCandidate(c, minSamples);
+    const aiForId = aiEligible && aiReview.ok ? aiReview.byId[c.interventionId] : undefined;
     const finalVerdict = blendDecisionWithSafetyGate(
       c.decision,
       c.riskLevel,
@@ -407,7 +445,11 @@ export async function evaluateInterventionsForCycle(
       aiDecision: aiForId?.decision ?? null,
       aiConfidence: typeof aiForId?.confidence === "number" ? aiForId.confidence : null,
       aiRationale: aiForId?.rationale ?? null,
-      aiReviewStatus: aiReview.ok ? "ok" : `failed:${aiReview.reason}`,
+      aiReviewStatus: !aiEligible
+        ? "skipped:not_ambiguous"
+        : aiReview.ok
+          ? (aiForId ? "ok" : "missing_review")
+          : `failed:${aiReview.reason}`,
       decision: finalVerdict.decision,
       reason: finalVerdict.reason,
       decisionMode: finalVerdict.mode,
@@ -434,8 +476,10 @@ export async function evaluateInterventionsForCycle(
     },
     aiReview: {
       enabled: config?.runtime?.interventionJudgeAiEnabled !== false,
-      status: aiReview.ok ? "ok" : "failed",
+      status: aiCandidates.length === 0 ? "skipped" : (aiReview.ok ? "ok" : "failed"),
       reason: aiReview.reason,
+      requestedCandidates: aiCandidates.length,
+      reviewedCandidates: aiReview.ok ? Object.keys(aiReview.byId || {}).length : 0,
     },
     decisions,
   };

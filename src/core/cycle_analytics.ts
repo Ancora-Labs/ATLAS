@@ -910,6 +910,66 @@ export async function readCycleAnalytics(config) {
   return data;
 }
 
+// ── Jesus outcome ledger reader ────────────────────────────────────────────────
+
+/**
+ * Read the last N entries from state/jesus_outcome_ledger.jsonl.
+ *
+ * Returns an empty array when the file does not exist or cannot be read.
+ * Entries are returned in append order (oldest first).
+ *
+ * @param stateDir - path to the state directory
+ * @param limit    - maximum number of records to return (default: 20)
+ */
+export async function readJesusOutcomeLedger(
+  stateDir: string,
+  limit = 20,
+): Promise<Array<Record<string, unknown>>> {
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const filePath = path.join(stateDir, "jesus_outcome_ledger.jsonl");
+    const raw = await readFile(filePath, "utf8");
+    const lines = raw.split("\n").filter(l => l.trim().length > 0);
+    const safeLimit = Math.max(1, Math.floor(Number(limit) || 20));
+    return lines.slice(-safeLimit).map(line => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean) as Array<Record<string, unknown>>;
+  } catch {
+    return [];
+  }
+}
+
+// ── Wave boundary idle telemetry reader ────────────────────────────────────────
+
+/**
+ * Read the last N entries from state/wave_boundary_idle.jsonl.
+ *
+ * Returns an empty array when the file does not exist or cannot be read.
+ * Entries are returned in append order (oldest first).
+ *
+ * @param stateDir - path to the state directory
+ * @param limit    - maximum number of records to return (default: 50)
+ */
+export async function readWaveBoundaryTelemetry(
+  stateDir: string,
+  limit = 50,
+): Promise<Array<Record<string, unknown>>> {
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const filePath = path.join(stateDir, "wave_boundary_idle.jsonl");
+    const raw = await readFile(filePath, "utf8");
+    const lines = raw.split("\n").filter(l => l.trim().length > 0);
+    const safeLimit = Math.max(1, Math.floor(Number(limit) || 50));
+    return lines.slice(-safeLimit).map(line => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean) as Array<Record<string, unknown>>;
+  } catch {
+    return [];
+  }
+}
+
+
+
 // ── Dual analytics channels ────────────────────────────────────────────────────
 //
 // WHY TWO CHANNELS:

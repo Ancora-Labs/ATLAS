@@ -192,6 +192,24 @@ export function estimateTokens(text) {
 }
 
 /**
+ * Estimate the USD cost for a given token count.
+ *
+ * Default rate: $3.00 per 1M tokens (Claude Sonnet 4 input pricing).
+ * Callers may override via costPerMillionTokens.
+ *
+ * @param tokens - token count (output of estimateTokens / estimatePromptTokens.total)
+ * @param costPerMillionTokens - cost rate override (default: 3.0)
+ * @returns estimated cost in USD, rounded to 6 decimal places
+ */
+export function estimateTokenCost(tokens: number, costPerMillionTokens = 3.0): number {
+  if (!Number.isFinite(tokens) || tokens <= 0) return 0;
+  const rate = Number.isFinite(costPerMillionTokens) && costPerMillionTokens >= 0
+    ? costPerMillionTokens
+    : 3.0;
+  return Math.round((tokens / 1_000_000) * rate * 1_000_000) / 1_000_000;
+}
+
+/**
  * Estimate per-section and total token usage for an array of sections.
  *
  * @param {Array<{ name: string, content: string }>} sections

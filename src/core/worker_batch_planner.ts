@@ -10,6 +10,10 @@ import {
   buildLanePerformanceFromCycleTelemetry,
   buildLaneTelemetrySignals,
   computeSpecialistFitThreshold,
+  getLaneScore,
+  computeAdaptiveSpecialistFillThreshold,
+  SpecialistRerouteReason,
+  SPECIALIST_REROUTE_REASON_CODE,
 } from "./capability_pool.js";
 import { compactSingletonWaves } from "./dag_scheduler.js";
 import { rankModelsByTaskKindExpectedValue } from "./model_policy.js";
@@ -1402,11 +1406,13 @@ export function buildTokenFirstBatches(
 
   // ── Specialist-threshold routing ──────────────────────────────────────────
   // For each role group where the role is a specialist (not evolution-worker),
-  // check if total estimated tokens fill at least specialistFillThreshold of usable
-  // context.  If not, reroute those plans to evolution-worker for co-packing.
+  // check if total estimated tokens fill at least the adaptive fill threshold of
+  // usable context.  If not, reroute those plans to evolution-worker for co-packing.
+  // The threshold is adapted per lane: lanes with strong performance records get a
+  // lower threshold (less gatekeeping), degraded lanes get a higher threshold.
   const specialistThreshold = resolveSpecialistFillThreshold(config);
-  const minSpecialistTokens = Math.floor(usableTokens * specialistThreshold);
   const reroutedRoles: string[] = [];
+  const specialistRerouteReasons: SpecialistRerouteReason[] = [];
 
   for (const [key, group] of byRole) {
     if (SPECIALIST_EXEMPT_ROLES.has(group.role)) continue;
@@ -1414,16 +1420,46 @@ export function buildTokenFirstBatches(
     if (hasLockedSpecialistPlan) continue;
     const groupCoeff = getCoeff(group.role);
     const groupTokens = group.plans.reduce((sum, p) => sum + estimatePlanTokens(p, groupCoeff), 0);
+
+    // Resolve the canonical lane for this role group.
+    const groupLane = String(group.plans.find((p: any) => p._fitLane)?._fitLane || "implementation");
+    // Compute per-lane adaptive fill threshold: good lane → lower bar (specialist stays);
+    // degraded lane → higher bar (specialist rerouted to evo-worker more readily).
+    const adaptiveFillThreshold = computeAdaptiveSpecialistFillThreshold(
+      specialistThreshold,
+      groupLane,
+      lanePerformance,
+    );
+    const minSpecialistTokens = Math.floor(usableTokens * adaptiveFillThreshold);
+
     if (groupTokens < minSpecialistTokens) {
-      // Below threshold — reroute to evolution-worker
-      reroutedRoles.push(`${group.role}(${groupTokens}tok)`);
+      // Below adaptive threshold — reroute to evolution-worker and record reason.
+      const laneScore = getLaneScore(lanePerformance, groupLane);
+      const fillRatio = usableTokens > 0
+        ? Math.round((groupTokens / usableTokens) * 1000) / 1000
+        : 0;
+      const rerouteReason: SpecialistRerouteReason = {
+        role: group.role,
+        lane: groupLane,
+        tokens: groupTokens,
+        thresholdTokens: minSpecialistTokens,
+        fillRatio,
+        adaptiveFillThreshold,
+        reasonCode: SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD,
+        laneScore,
+      };
+      reroutedRoles.push(`${group.role}(${groupTokens}tok,adaptive=${adaptiveFillThreshold},lane=${groupLane})`);
+      specialistRerouteReasons.push(rerouteReason);
       const evoKey = "evolution-worker";
       if (!byRole.has(evoKey)) {
         byRole.set(evoKey, { role: "evolution-worker", plans: [] });
       }
-      // Tag plans with original role for observability, then move them
+      // Tag plans with original role and reroute reason for observability, then move them
       for (const plan of group.plans) {
         plan._originalSpecialistRole = group.role;
+        plan._rerouteReason = rerouteReason.reasonCode;
+        plan._rerouteLane = groupLane;
+        plan._rerouteLaneScore = laneScore;
         plan.role = "evolution-worker";
         byRole.get(evoKey)!.plans.push(plan);
       }
@@ -1531,6 +1567,7 @@ export function buildTokenFirstBatches(
       laneTelemetrySignals,
     },
     ...(reroutedRoles.length > 0 ? { specialistReroutes: reroutedRoles } : {}),
+    ...(specialistRerouteReasons.length > 0 ? { specialistRerouteReasons } : {}),
   }));
 }
 
@@ -1566,3 +1603,101 @@ export function buildFitScoredBatches(
 
   return buildRoleExecutionBatches(assignedPlans, config);
 }
+
+// ── Wave-boundary idle gap instrumentation ─────────────────────────────────────
+//
+// Measures elapsed time at wave boundaries (when the orchestrator transitions
+// from one wave to the next) and provides a packing heuristic to reduce stall
+// time without violating dependency ordering.
+
+/**
+ * Canonical idle-gap record emitted at each wave boundary crossing.
+ * Persisted to state/wave_boundary_idle.jsonl for observability.
+ */
+export interface WaveBoundaryIdleRecord {
+  /** Wave number that just completed. */
+  waveFrom: number;
+  /** Wave number about to start. */
+  waveTo: number;
+  /** ISO timestamp when the last batch of waveFrom completed. */
+  idleStartedAt: string;
+  /** ISO timestamp when the first batch of waveTo started dispatching. */
+  idleEndedAt: string;
+  /** Idle duration in milliseconds. */
+  idleMs: number;
+  /** Total number of batches dispatched during the completed wave. */
+  batchCount: number;
+}
+
+/**
+ * Construct a WaveBoundaryIdleRecord from measured timestamps.
+ *
+ * Pure function — no I/O.
+ *
+ * @param waveFrom   - wave number that just finished
+ * @param waveTo     - wave number about to start
+ * @param startMs    - ms timestamp when idle period began (last batch of waveFrom done)
+ * @param endMs      - ms timestamp when idle period ended (first batch of waveTo starting)
+ * @param batchCount - number of batches in the completed wave
+ */
+export function measureWaveBoundaryIdleGap(
+  waveFrom: number,
+  waveTo: number,
+  startMs: number,
+  endMs: number,
+  batchCount: number,
+): WaveBoundaryIdleRecord {
+  const idleMs = Math.max(0, endMs - startMs);
+  return {
+    waveFrom,
+    waveTo,
+    idleStartedAt: new Date(startMs).toISOString(),
+    idleEndedAt: new Date(endMs).toISOString(),
+    idleMs,
+    batchCount: Math.max(0, batchCount),
+  };
+}
+
+/**
+ * Wave-packing heuristic: returns true when the last batch in waveFrom consists
+ * of exactly one singleton plan AND no plan in waveTo declares a dependency on
+ * that singleton.
+ *
+ * When true, the wave boundary stall can be avoided by co-packing the singleton
+ * into waveTo.  The caller is responsible for performing the actual repack; this
+ * function only signals whether it is safe.
+ *
+ * Returns false conservatively whenever dependency analysis is uncertain.
+ *
+ * @param waveFromBatches - all batches assigned to the completing wave
+ * @param waveToBatches   - all batches assigned to the next wave
+ */
+export function shouldPackAcrossWaveBoundary(
+  waveFromBatches: Array<{ plans: any[] }>,
+  waveToBatches: Array<{ plans: any[] }>,
+): boolean {
+  if (!Array.isArray(waveFromBatches) || waveFromBatches.length === 0) return false;
+  if (!Array.isArray(waveToBatches) || waveToBatches.length === 0) return false;
+
+  const lastFromBatch = waveFromBatches[waveFromBatches.length - 1];
+  const fromPlans = Array.isArray(lastFromBatch?.plans) ? lastFromBatch.plans : [];
+  // Only co-pack when the completing wave has exactly one singleton plan remaining
+  if (fromPlans.length !== 1) return false;
+
+  const fromPlanId = String(
+    fromPlans[0]?.task_id || fromPlans[0]?.id || fromPlans[0]?.task || "",
+  );
+  if (!fromPlanId) return false;
+
+  // Conservatively reject if any plan in waveTo depends on the singleton
+  for (const batch of waveToBatches) {
+    const toPlans = Array.isArray(batch?.plans) ? batch.plans : [];
+    for (const plan of toPlans) {
+      const deps = Array.isArray(plan?.dependencies) ? plan.dependencies : [];
+      if (deps.map(String).includes(fromPlanId)) return false;
+    }
+  }
+
+  return true;
+}
+

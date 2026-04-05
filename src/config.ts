@@ -235,11 +235,13 @@ export async function loadConfig(): Promise<Config> {
     maxPlansPerDependencyBatch: env.maxPlansPerDependencyBatch
       ? Number(env.maxPlansPerDependencyBatch)
       : Number(fileConfig?.runtime?.maxPlansPerDependencyBatch ?? 6),
+    interventionJudgeEnabled: Boolean(fileConfig?.runtime?.interventionJudgeEnabled ?? true),
     interventionJudgeMinSamples: Number(fileConfig?.runtime?.interventionJudgeMinSamples ?? 3),
     interventionJudgeWindowSize: Number(fileConfig?.runtime?.interventionJudgeWindowSize ?? 5),
     interventionJudgeAutoApplyLowRisk: Boolean(fileConfig?.runtime?.interventionJudgeAutoApplyLowRisk ?? false),
     interventionJudgeAiEnabled: Boolean(fileConfig?.runtime?.interventionJudgeAiEnabled ?? true),
     interventionJudgeAiTimeoutMs: Number(fileConfig?.runtime?.interventionJudgeAiTimeoutMs ?? 120000),
+    interventionJudgeExecuteRollback: Boolean(fileConfig?.runtime?.interventionJudgeExecuteRollback ?? false),
     interventionJudgeAiModel: String(fileConfig?.runtime?.interventionJudgeAiModel || "").trim() || null,
     workerForbiddenPathPrefixes: Array.isArray(fileConfig?.runtime?.workerForbiddenPathPrefixes)
       ? fileConfig.runtime.workerForbiddenPathPrefixes.map((item) => String(item))

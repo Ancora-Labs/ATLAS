@@ -168,6 +168,47 @@ export const INTERVENTION_ERROR_CODE = Object.freeze({
   INVALID_FIELD:  "INVALID_FIELD",
 });
 
+/**
+ * EV penalty coefficient applied per rerouted specialist batch.
+ * Each reroute occurrence reduces the EV for interventions in that role by this fraction.
+ * Bounded by REROUTE_EV_MAX_PENALTY to prevent blocking all work.
+ */
+export const REROUTE_EV_PENALTY_COEFFICIENT = 0.15;
+
+/**
+ * Maximum total EV penalty fraction that can be applied from reroute history.
+ * Caps the penalty even when many reroutes are observed.
+ */
+export const REROUTE_EV_MAX_PENALTY = 0.20;
+
+/**
+ * Apply a bounded EV penalty to an intervention whose role was recently rerouted.
+ *
+ * Each reroute occurrence for the given role reduces the EV by
+ * REROUTE_EV_PENALTY_COEFFICIENT, capped at REROUTE_EV_MAX_PENALTY.
+ * Only applied to positive EVs — negative EVs are not made worse.
+ *
+ * @param ev             - current expected value
+ * @param role           - intervention role
+ * @param rerouteReasons - reroute reasons from previous cycle(s)
+ * @returns adjusted EV (≤ original)
+ */
+export function applyRerouteCostPenalty(
+  ev: number,
+  role: string,
+  rerouteReasons: Array<{ role: string; reasonCode: string }>,
+): number {
+  if (!Array.isArray(rerouteReasons) || rerouteReasons.length === 0) return ev;
+  const matchingReroutes = rerouteReasons.filter(r => r.role === role);
+  if (matchingReroutes.length === 0) return ev;
+  if (ev <= 0) return ev; // only penalize positive EVs
+  const totalPenaltyFraction = Math.min(
+    REROUTE_EV_MAX_PENALTY,
+    matchingReroutes.length * REROUTE_EV_PENALTY_COEFFICIENT,
+  );
+  return Math.round((ev * (1 - totalPenaltyFraction)) * 1000) / 1000;
+}
+
 // ── Sparse data constant ──────────────────────────────────────────────────────
 
 /**
@@ -794,6 +835,34 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
     }
   }
 
+  // ── Reroute history EV penalty (Task 2) ──────────────────────────────────
+  // Apply bounded EV penalties to interventions whose role was repeatedly rerouted
+  // in the previous cycle.  Repeated high-cost reroutes are a signal that the lane
+  // is underperforming; reducing EV for that role shifts budget to healthier lanes.
+  const rerouteReasons: Array<{ role: string; reasonCode: string }> = Array.isArray(options?.rerouteReasons)
+    ? options.rerouteReasons
+    : [];
+  let reroutteCostPenaltiesApplied = 0;
+  if (rerouteReasons.length > 0) {
+    adjustedInterventions = adjustedInterventions.map((intervention) => {
+      const adjustedEV = applyRerouteCostPenalty(
+        computeExpectedValue(intervention).ev,
+        String(intervention.role || ""),
+        rerouteReasons,
+      );
+      const baseEV = computeExpectedValue(intervention).ev;
+      if (adjustedEV === baseEV) return intervention;
+      // Store adjusted successProbability that would produce the target EV
+      // (approximation: scale successProbability by the EV ratio)
+      const evRatio = baseEV !== 0 ? adjustedEV / baseEV : 1;
+      const adjustedSP = Math.max(0, Math.min(1,
+        Math.round((intervention.successProbability * evRatio) * 1000) / 1000,
+      ));
+      reroutteCostPenaltiesApplied += 1;
+      return { ...intervention, successProbability: adjustedSP, _reroutePenaltyApplied: true };
+    });
+  }
+
   // Rank by descending EV (with confidence penalties applied)
   const ranked = rankInterventions(adjustedInterventions);
 
@@ -808,6 +877,7 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
     policyImpactPenaltiesApplied,
     benchmarkTelemetryCount: benchmarkTelemetry.length,
     benchmarkBoostsApplied,
+    rerouteCostPenaltiesApplied: reroutteCostPenaltiesApplied,
     ...reconciled,
   };
 }

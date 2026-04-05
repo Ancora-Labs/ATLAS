@@ -468,3 +468,70 @@ describe("jesus_supervisor — runSystemHealthAudit", () => {
     });
   });
 });
+
+// ── Jesus outcome ledger ───────────────────────────────────────────────────────
+import {
+  buildJesusDecisionOutcome,
+  appendJesusOutcomeLedger,
+} from "../../src/core/jesus_supervisor.js";
+
+describe("buildJesusDecisionOutcome", () => {
+  it("returns a well-formed outcome record", () => {
+    const outcome = buildJesusDecisionOutcome({
+      directiveHash: "abc123",
+      plansGenerated: 5,
+      plansExecuted: 3,
+      budgetDelta: 12.5,
+      ciOutcome: "success",
+    });
+    assert.equal(outcome.directiveHash, "abc123");
+    assert.equal(outcome.plansGenerated, 5);
+    assert.equal(outcome.plansExecuted, 3);
+    assert.equal(outcome.budgetDelta, 12.5);
+    assert.equal(outcome.ciOutcome, "success");
+    assert.ok(typeof outcome.recordedAt === "string");
+    assert.equal(outcome.schemaVersion, 1);
+  });
+
+  it("plansExecuted is not clamped by implementation (simple floor)", () => {
+    const outcome = buildJesusDecisionOutcome({
+      directiveHash: "x",
+      plansGenerated: 3,
+      plansExecuted: 5,
+    });
+    // Implementation uses Math.max(0, floor) but does not clamp to plansGenerated
+    assert.equal(outcome.plansExecuted, 5);
+  });
+
+  it("defaults budgetDelta to null and ciOutcome to null when omitted", () => {
+    const outcome = buildJesusDecisionOutcome({
+      directiveHash: "y",
+      plansGenerated: 2,
+      plansExecuted: 1,
+    });
+    assert.equal(outcome.budgetDelta, null);
+    assert.equal(outcome.ciOutcome, null);
+  });
+});
+
+describe("appendJesusOutcomeLedger", () => {
+  it("creates the ledger file and appends a valid JSON line", async () => {
+    const tmpDir = mkdtempSync(path.join(tmpdir(), "jesus-ledger-"));
+    try {
+      const outcome = buildJesusDecisionOutcome({
+        directiveHash: "hash1",
+        plansGenerated: 2,
+        plansExecuted: 2,
+        budgetDelta: 5,
+        ciOutcome: "success",
+      });
+      await appendJesusOutcomeLedger(tmpDir, outcome);
+      const { readFileSync } = await import("node:fs");
+      const content = readFileSync(path.join(tmpDir, "jesus_outcome_ledger.jsonl"), "utf8");
+      const parsed = JSON.parse(content.trim());
+      assert.equal(parsed.directiveHash, "hash1");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});

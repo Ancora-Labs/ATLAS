@@ -41,7 +41,7 @@ import {
 import { appendEscalation, BLOCKING_REASON_CLASS, NEXT_ACTION, resolveEscalationsForTask } from "./escalation_queue.js";
 import { buildTaskFingerprint, buildLineageId, LINEAGE_ENTRY_STATUS } from "./lineage_graph.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
-import { classifyFailure } from "./failure_classifier.js";
+import { classifyFailure, classifyExitCode } from "./failure_classifier.js";
 import { resolveRetryAction, persistRetryMetric } from "./retry_strategy.js";
 
 type WorkerRunnerConfig = {
@@ -802,6 +802,11 @@ function buildConversationContext(history, instruction, sessionState: WorkerSess
   parts.push(`  Test:  ${verifCmds.test}`);
   parts.push(`  Lint:  ${verifCmds.lint}`);
   parts.push(`  Build: ${verifCmds.build}`);
+  parts.push("\n## TEST SCOPE POLICY (REQUIRED)");
+  parts.push("Run ONLY tests that are directly related to your change set (targeted tests).");
+  parts.push("Do NOT run the full repository test suite unless the task explicitly requires full-suite validation.");
+  parts.push("If no specific test target is provided, infer the smallest relevant test set from touched files and verification commands.");
+  parts.push("In your evidence, state exactly which targeted tests you ran and why they are sufficient for this task.");
 
   // Prompt tier budget — informs the worker how much reasoning depth is expected.
   // T3 (architectural): deep think required, critic mandatory, multi-pass.
@@ -917,7 +922,7 @@ function buildConversationContext(history, instruction, sessionState: WorkerSess
     parts.push("No specific test file target was detected in this task's verification commands.");
     parts.push("You MUST provide specific test evidence in your VERIFICATION_REPORT:");
     parts.push("  - Run targeted tests: 'npm test -- tests/core/<module>.test.ts'");
-    parts.push("  - Reference it explicitly in evidence. Do NOT run the full test suite.");
+    parts.push("  - Reference it explicitly in evidence. Do NOT run the full test suite unless explicitly requested by task text.");
     parts.push("  - Generic 'npm test passed' alone is NOT accepted as verification evidence.");
   }
 
@@ -1276,12 +1281,15 @@ export async function runWorkerConversation(config, roleName, instruction, histo
 
   if (result.status !== 0) {
     const isTransient = result.aborted === true && /transient API error circuit breaker/i.test(stderr);
+    const exitCodeInfo = classifyExitCode(result.status);
+    const reasonCode = isTransient ? "TRANSIENT_API_ERROR" : exitCodeInfo?.reasonCode ?? (result.timedOut ? "PROCESS_TIMEOUT" : "UNKNOWN_EXIT");
+    const retryClass = isTransient ? "cooldown" : exitCodeInfo?.retryClass ?? (result.timedOut ? "cooldown" : null);
     const label = isTransient ? `TransientAPIError` : result.timedOut ? `Timeout` : `Error exit=${result.status}`;
     await appendLiveWorkerLog(
       liveLogPath,
-      `\n[${new Date().toISOString()}] END status=error exit=${result.status}${result.timedOut ? " timeout=true" : ""}${isTransient ? " transient=true" : ""}\n`
+      `\n[${new Date().toISOString()}] END status=error exit=${result.status} reason_code=${reasonCode} retry_class=${retryClass ?? "none"}${result.timedOut ? " timeout=true" : ""}${isTransient ? " transient=true" : ""}\n`
     );
-    await appendProgress(config, `[WORKER:${roleName}] ${label}`);
+    await appendProgress(config, `[WORKER:${roleName}] ${label} reason_code=${reasonCode} retry_class=${retryClass ?? "none"}`);
     const errorMsg = truncate(stderr || stdout || "unknown error", 300);
 
     // Persist structured escalation for worker errors/timeouts (non-critical write)
