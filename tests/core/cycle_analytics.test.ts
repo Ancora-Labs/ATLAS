@@ -421,7 +421,8 @@ describe("computeCycleAnalytics — outcomes (AC1)", () => {
     const config = makeConfig("state");
     const record = computeCycleAnalytics(config, {
       pipelineProgress: makePipelineProgress(),
-      workerResults: [{ roleName: "coder", status: "done" }],
+      // dispatchContract flag satisfies seam contract (Task 3: verification evidence required for SUCCESS).
+      workerResults: [{ roleName: "coder", status: "done", dispatchContract: { doneWorkerWithVerificationReportEvidence: true } }],
       planCount: 1,
       phase: CYCLE_PHASE.COMPLETED,
     });
@@ -463,7 +464,9 @@ describe("computeCycleAnalytics — outcomes (AC1)", () => {
       phase: CYCLE_PHASE.COMPLETED,
     });
     assert.equal(record.outcomes.tasksCompleted, 1);
-    assert.equal(record.outcomes.status, CYCLE_OUTCOME_STATUS.SUCCESS);
+    // Skipped workers produce no verification evidence; seam contract is not satisfied.
+    // Outcome degrades SUCCESS → PARTIAL (Task 3). The tasksCompleted count is the primary invariant.
+    assert.equal(record.outcomes.status, CYCLE_OUTCOME_STATUS.PARTIAL);
   });
 
   it("outcomes.status is NO_PLANS when planCount=0 and phase=INCOMPLETE", () => {
@@ -1338,8 +1341,10 @@ describe("computeCycleAnalytics — evidence envelope guards", () => {
       workerResults: [envelopeLike],
       phase: CYCLE_PHASE.COMPLETED,
     });
-    // Outcome must be SUCCESS because status="done" — not FAILED from the envelope fields
-    assert.equal(record.outcomes.status, CYCLE_OUTCOME_STATUS.SUCCESS);
+    // Outcome must not be FAILED because status="done" — envelope fields must not cause FAILED.
+    // With Task 3 seam binding: object-shaped verificationEvidence doesn't parse as a
+    // VERIFICATION_REPORT, so seamContractSatisfied=false → outcome degrades to PARTIAL.
+    assert.equal(record.outcomes.status, CYCLE_OUTCOME_STATUS.PARTIAL);
     assert.equal(record.outcomes.tasksCompleted, 1);
     assert.equal(record.outcomes.tasksFailed, 0);
   });

@@ -163,7 +163,7 @@ const CAPABILITY_SOURCE_SIGNATURES: Readonly<Record<string, string[]>> = Object.
   "prometheus-plan-structural-lint":      ["validateallplans", "plan_contract_validator"],
   "pre-athena-plan-structural-validation":["validateallplans", "plan_contract_validator"],
   "prometheus-token-budget-floor":        ["invalid_token_budget", "minimum token budgets", "token floor"],
-  "ci-failure-log-injection":             ["hydratedispatchcontextwithcievidence", "ci failure evidence"],
+  "ci-failure-log-injection":             ["hydratedispatchcontextwithcievidence", "ci failure evidence", "injectcifailurecontextifmissing"],
   "packet-granularity-governor":          ["max_actionable_steps_per_packet", "autosplitpacket"],
   "output-fidelity-gate":                 ["detectprocessthoughtmarkers", "output-fidelity-gate"],
   "specialization-admission-control":     ["specialization_admission", "laneadmissiongate"],

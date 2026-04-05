@@ -55,6 +55,7 @@ import {
   ensurePersistedAnalysisTimestamps,
   validateCycleProofEvidenceSeams,
   buildTrustedMemoryShortlist,
+  normalizeScalarContractField,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments } from "../../src/core/prompt_compiler.js";
 import {
@@ -3904,5 +3905,110 @@ describe("MAX_ACTIONABLE_STEPS_PER_PACKET and PACKET_OVERSIZE_REASON", () => {
   it("PACKET_OVERSIZE_REASON is a non-empty string", () => {
     assert.equal(typeof PACKET_OVERSIZE_REASON, "string");
     assert.ok(PACKET_OVERSIZE_REASON.length > 0);
+  });
+});
+
+describe("normalizeScalarContractField — parse-boundary normalization", () => {
+  it("returns the number unchanged for a bare finite number", () => {
+    const result = normalizeScalarContractField(0.5, "capacityDelta");
+    assert.equal(result.value, 0.5);
+    assert.equal(result.provenance, null);
+  });
+
+  it("returns NaN with null provenance for null input", () => {
+    const result = normalizeScalarContractField(null, "capacityDelta");
+    assert.ok(Number.isNaN(result.value));
+    assert.equal(result.provenance, null);
+  });
+
+  it("returns NaN with null provenance for undefined input", () => {
+    const result = normalizeScalarContractField(undefined, "requestROI");
+    assert.ok(Number.isNaN(result.value));
+    assert.equal(result.provenance, null);
+  });
+
+  it("extracts scalar from object-shaped { value } field", () => {
+    const result = normalizeScalarContractField({ value: 0.3 }, "capacityDelta");
+    assert.equal(result.value, 0.3);
+    assert.ok(typeof result.provenance === "string" && result.provenance.includes("object_coercion"));
+    assert.ok(result.provenance!.includes("capacityDelta"));
+    assert.ok(result.provenance!.includes("value"));
+  });
+
+  it("extracts scalar from object-shaped { estimate } field", () => {
+    const result = normalizeScalarContractField({ estimate: 2.0 }, "requestROI");
+    assert.equal(result.value, 2.0);
+    assert.ok(result.provenance!.includes("estimate"));
+  });
+
+  it("extracts scalar from object-shaped { amount } field", () => {
+    const result = normalizeScalarContractField({ amount: -0.2 }, "capacityDelta");
+    assert.equal(result.value, -0.2);
+    assert.ok(result.provenance!.includes("amount"));
+  });
+
+  it("prefers 'value' over 'estimate' when both keys are present", () => {
+    const result = normalizeScalarContractField({ value: 1.5, estimate: 3.0 }, "requestROI");
+    assert.equal(result.value, 1.5, "value key must take priority over estimate");
+  });
+
+  it("returns NaN with no_scalar_key provenance when object has no canonical key", () => {
+    const result = normalizeScalarContractField({ unknown_field: 0.5 }, "capacityDelta");
+    assert.ok(Number.isNaN(result.value));
+    assert.ok(typeof result.provenance === "string" && result.provenance.includes("no_scalar_key"));
+  });
+
+  it("normalizePrometheusParsedOutput handles object-shaped capacityDelta in plans", () => {
+    const parsed = {
+      projectHealth: "needs-work",
+      plans: [
+        {
+          task: "Fix object-shaped ROI plan",
+          role: "evolution-worker",
+          wave: 1,
+          capacityDelta: { value: 0.4 },
+          requestROI: { estimate: 2.5 },
+          acceptance_criteria: ["Scalar values are extracted correctly"],
+          target_files: ["src/core/prometheus.ts"],
+        },
+      ],
+    };
+
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.equal(Array.isArray(result.plans), true);
+    assert.equal(result.plans.length, 1);
+    const plan = result.plans[0];
+    assert.equal(plan.capacityDelta, 0.4, "capacityDelta must be extracted from {value} object");
+    assert.equal(plan.requestROI, 2.5, "requestROI must be extracted from {estimate} object");
+  });
+
+  it("normalizePrometheusParsedOutput falls back to defaults for unresolvable object fields", () => {
+    const parsed = {
+      projectHealth: "needs-work",
+      plans: [
+        {
+          task: "Unresolvable ROI plan",
+          role: "evolution-worker",
+          wave: 1,
+          capacityDelta: { bad_key: 0.4 },
+          requestROI: { also_bad: 2.5 },
+          acceptance_criteria: ["Fallback defaults applied"],
+          target_files: ["src/core/prometheus.ts"],
+        },
+      ],
+    };
+
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    const plan = result.plans[0];
+    // Default values must be applied when no canonical key is found
+    assert.equal(plan.capacityDelta, 0.1, "capacityDelta must fall back to 0.1 default");
+    assert.equal(plan.requestROI, 1.0, "requestROI must fall back to 1.0 default");
+  });
+
+  it("negative path: integer zero capacityDelta is preserved (boundary edge)", () => {
+    // 0 is valid (neutral), so it must be preserved rather than defaulted.
+    const result = normalizeScalarContractField(0, "capacityDelta");
+    assert.equal(result.value, 0);
+    assert.equal(result.provenance, null);
   });
 });

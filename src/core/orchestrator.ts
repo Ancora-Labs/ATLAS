@@ -34,7 +34,7 @@ import { readJson, readJsonSafe, writeJson, cleanupStaleTempFiles, READ_JSON_REA
 import { updatePipelineProgress, readPipelineProgress } from "./pipeline_progress.js";
 import { loadEscalationQueue, sortEscalationQueue, processEscalationQueueClosures } from "./escalation_queue.js";
 import { computeCycleSLOs, persistSloMetrics, detectCoupledAlerts } from "./slo_checker.js";
-import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealthComposite, CYCLE_PHASE, computeRuntimeContractProbe } from "./cycle_analytics.js";
+import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealthComposite, CYCLE_PHASE, computeRuntimeContractProbe, readCycleAnalytics } from "./cycle_analytics.js";
 import { computeBaselineRecoveryState, persistBaselineMetrics, PARSER_CONFIDENCE_RECOVERY_THRESHOLD } from "./parser_baseline_recovery.js";
 import { computeDispatchStrictness, loadReplayRegressionState, DISPATCH_STRICTNESS } from "./parser_replay_harness.js";
 import {
@@ -53,7 +53,7 @@ import { appendCapacityEntry } from "./capacity_scoreboard.js";
 import { computeCapabilityDelta } from "./delta_analytics.js";
 import { evaluateRetune } from "./strategy_retuner.js";
 import { compileLessonsToPolicies } from "./learning_policy_compiler.js";
-import { assignWorkersToPlans, enforceLaneDiversity, evaluateSpecializationAdmissionGate } from "./capability_pool.js";
+import { assignWorkersToPlans, enforceLaneDiversity, evaluateSpecializationAdmissionGate, buildLanePerformanceFromCycleTelemetry } from "./capability_pool.js";
 import { runDoctor } from "./doctor.js";
 import { validateAllPlans } from "./plan_contract_validator.js";
 import {
@@ -90,6 +90,7 @@ import {
   buildBudgetFromConfig,
   persistOptimizerLog,
   OPTIMIZER_STATUS,
+  buildPolicyImpactByInterventionId,
 } from "./intervention_optimizer.js";
 import { validatePlanEvidenceCoupling } from "./evidence_envelope.js";
 import { runResearchScout } from "./research_scout.js";
@@ -2535,10 +2536,23 @@ async function runSingleCycle(config) {
   // Funnel tracking: capture approved count before quality/freeze gates reduce plans.
   const funnelApprovedCount: number = plans.length;
 
+  // ── Lane performance: read previous cycle telemetry for informed dispatch ───
+  // Building lanePerformance before the capability pool call lets the pool use
+  // measured lane ROI (rather than static estimates) to route plans to the
+  // strongest available worker lane.
+  let lanePerformanceFromCycle: ReturnType<typeof buildLanePerformanceFromCycleTelemetry> = {};
+  try {
+    const prevAnalyticsForLane = await readCycleAnalytics(config);
+    const prevLaneTelemetry = (prevAnalyticsForLane as any)?.lastCycle?.laneTelemetry;
+    if (prevLaneTelemetry && typeof prevLaneTelemetry === "object") {
+      lanePerformanceFromCycle = buildLanePerformanceFromCycleTelemetry(prevLaneTelemetry);
+    }
+  } catch { /* non-fatal: no previous cycle analytics yet */ }
+
   // ── Capability pool: assign workers based on task capability matching ──────
   let capabilityPoolResult = null;
   try {
-    const poolResult = assignWorkersToPlans(plans, config);
+    const poolResult = assignWorkersToPlans(plans, config, lanePerformanceFromCycle);
     capabilityPoolResult = poolResult;
     if (poolResult.diversityIndex > 0) {
       await appendProgress(config, `[CAPABILITY_POOL] Worker diversity index: ${poolResult.diversityIndex} (0=single-worker, 1=fully diversified)`);
@@ -2735,11 +2749,76 @@ async function runSingleCycle(config) {
   // Its selected[] output is the authoritative set of plans admitted to dispatch.
   // Fail-open when the optimizer cannot run (invalid budget config, empty input,
   // or any exception) so a missing budget configuration never halts work.
+  let optimizerUsage: {
+    policyImpactPenaltiesApplied: number;
+    benchmarkBoostsApplied: number;
+    benchmarkTelemetryCount: number;
+    failureClassificationsApplied: number;
+  } | null = null;
+
   if (config?.runtime?.disableOptimizerAdmission !== true) {
     try {
       const interventions = buildInterventionsFromPlan(plans, config);
       const budgetInput = buildBudgetFromConfig(prometheusAnalysis?.requestBudget, config);
-      const optimizerResult = runInterventionOptimizer(interventions, budgetInput);
+
+      // ── Policy impact: load learned policies and map to intervention scores ──
+      let policyImpactByInterventionId: Record<string, unknown> | undefined;
+      try {
+        const learnedPoliciesRaw = await readJson(path.join(stateDir, "learned_policies.json"), []);
+        const learnedPolicies = Array.isArray(learnedPoliciesRaw) ? learnedPoliciesRaw : [];
+        if (learnedPolicies.length > 0 && Array.isArray(prometheusAnalysis?.plans)) {
+          policyImpactByInterventionId = buildPolicyImpactByInterventionId(
+            prometheusAnalysis.plans,
+            learnedPolicies,
+          );
+        }
+      } catch {
+        // Non-fatal: learned policies unavailable, optimizer uses static estimates
+      }
+
+      // ── Benchmark telemetry: lane-level performance from previous cycle ─────
+      const benchmarkTelemetry: Array<{ interventionId: string; observedSuccessRate: number; sampleCount: number }> = [];
+      try {
+        const prevAnalytics = await readCycleAnalytics(config);
+        const prevLaneTelemetry = prevAnalytics?.lastCycle?.laneTelemetry;
+        if (prevLaneTelemetry && typeof prevLaneTelemetry === "object") {
+          // Convert lane-level telemetry to per-intervention benchmark signals.
+          // Each plan is matched to its lane; the lane's observed completion rate
+          // becomes the benchmark for that intervention.
+          for (const plan of (Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans : [])) {
+            const role = String(plan?.role || "evolution-worker");
+            const lane = role.replace(/[-_]worker$/i, "").toLowerCase();
+            const laneSignal = prevLaneTelemetry[lane] ?? prevLaneTelemetry["implementation"];
+            if (!laneSignal) continue;
+            const rate = Number(laneSignal.completionRate);
+            if (!Number.isFinite(rate)) continue;
+            const interventionId = String(plan?.intervention_id || plan?.id || plan?.task_id || "");
+            if (interventionId) {
+              benchmarkTelemetry.push({
+                interventionId,
+                observedSuccessRate: Math.max(0, Math.min(1, rate)),
+                sampleCount: Number(laneSignal.dispatched ?? 1),
+              });
+            }
+          }
+        }
+      } catch {
+        // Non-fatal: lane telemetry unavailable, optimizer uses static estimates
+      }
+
+      const optimizerResult = runInterventionOptimizer(interventions, budgetInput, {
+        policyImpactByInterventionId,
+        benchmarkTelemetry: benchmarkTelemetry.length > 0 ? benchmarkTelemetry : undefined,
+      });
+
+      // Capture usage counters for cycle analytics propagation
+      const optimizerResultAny = optimizerResult as any;
+      optimizerUsage = {
+        policyImpactPenaltiesApplied: Number(optimizerResultAny.policyImpactPenaltiesApplied ?? 0),
+        benchmarkBoostsApplied: Number(optimizerResultAny.benchmarkBoostsApplied ?? 0),
+        benchmarkTelemetryCount: Number(optimizerResultAny.benchmarkTelemetryCount ?? 0),
+        failureClassificationsApplied: Number(optimizerResultAny.failureClassificationsApplied ?? 0),
+      };
 
       // Persist for observability regardless of outcome
       await persistOptimizerLog(stateDir, optimizerResult).catch(() => {});
@@ -2767,7 +2846,7 @@ async function runSingleCycle(config) {
           }
         } else {
           await appendProgress(config,
-            `[OPTIMIZER] Budget admission: all ${plans.length} plan(s) admitted (status=${optimizerResult.status})`
+            `[OPTIMIZER] Budget admission: all ${plans.length} plan(s) admitted (status=${optimizerResult.status}) policyPenalties=${optimizerUsage.policyImpactPenaltiesApplied} benchmarkBoosts=${optimizerUsage.benchmarkBoostsApplied}`
           );
         }
       }
@@ -3199,6 +3278,7 @@ async function runSingleCycle(config) {
       prometheusAnalysis,
       athenaPlanReview: planReview,
       parserBaselineRecovery: baselineRecoveryRecord ?? null,
+      optimizerUsage,
       funnelCounts: {
         generated:  Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans.length : null,
         approved:   funnelApprovedCount,
@@ -3550,6 +3630,14 @@ async function runSingleCycle(config) {
     const firstBatchSpecialization = Array.isArray(workerBatches) && workerBatches.length > 0
       ? (workerBatches[0] as any)?.specialistUtilizationTarget
       : null;
+    // Read lane telemetry from the cycle analytics record computed this cycle
+    // (if available) to persist lane distribution trends in the scoreboard.
+    let cycleAnalyticsRecord: any = null;
+    try {
+      cycleAnalyticsRecord = await readCycleAnalytics(config);
+    } catch { /* non-fatal */ }
+    const cycleLaneTelemetry = cycleAnalyticsRecord?.lastCycle?.laneTelemetry ?? null;
+
     await appendCapacityEntry(config, {
       parserConfidence: prometheusAnalysis?.parserConfidence ?? null,
       parserCoreConfidence: prometheusAnalysis?.parserCoreConfidence ?? null,
@@ -3562,6 +3650,8 @@ async function runSingleCycle(config) {
       workersDone: workersDone,
       specializedShareTarget: Number(firstBatchSpecialization?.adaptiveMinSpecializedShare ?? firstBatchSpecialization?.minSpecializedShare ?? 0),
       specializedShareTargetMet: firstBatchSpecialization?.targetMet === true,
+      ...(cycleLaneTelemetry ? { laneTelemetry: cycleLaneTelemetry } : {}),
+      ...(optimizerUsage ? { optimizerUsage } : {}),
     });
   } catch (err) {
     warn(`[orchestrator] Capacity scoreboard update failed (non-fatal): ${String(err?.message || err)}`);

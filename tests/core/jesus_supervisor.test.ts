@@ -271,6 +271,13 @@ describe("jesus_supervisor — runSystemHealthAudit", () => {
         "utf8",
       );
 
+      // Both orchestrator AND worker-runner signatures are required since Task 5.
+      writeFileSync(
+        path.join(repoDir, "src", "core", "worker_runner.ts"),
+        "export async function injectCiFailureContextIfMissing(plan: any, config: any) {}",
+        "utf8",
+      );
+
       writeFileSync(
         path.join(stateDir, "knowledge_memory.json"),
         JSON.stringify({
@@ -300,6 +307,49 @@ describe("jesus_supervisor — runSystemHealthAudit", () => {
       assert.equal(capGap.note, "verified_present_in_source");
     });
   });
+
+  it("keeps ci-failure-log-injection gap at original severity when worker_runner signature is missing", async () => {
+    await withTempRepo(async ({ stateDir, repoDir }) => {
+      // Only orchestrator content — worker_runner.ts is absent.
+      writeFileSync(
+        path.join(repoDir, "src", "core", "orchestrator.ts"),
+        "export async function hydrateDispatchContextWithCiEvidence(){} const note='CI failure evidence';",
+        "utf8",
+      );
+
+      writeFileSync(
+        path.join(stateDir, "knowledge_memory.json"),
+        JSON.stringify({
+          lessons: [],
+          capabilityGaps: [
+            {
+              gap: "Missing capability: workers lack CI failure evidence context",
+              severity: "critical",
+              capability: "ci-failure-log-injection",
+              proposedFix: "Inject CI failure logs into worker context",
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        { latestMainCi: null, failedCiRuns: [], pullRequests: [] },
+        {},
+        {},
+      );
+
+      const capGap = findings.find((f: any) => f.area === "capability-gap");
+      assert.ok(capGap, "capability-gap finding should exist");
+      // Without worker_runner injectCiFailureContextIfMissing, the gap must NOT be downgraded.
+      assert.notEqual(capGap.severity, "info",
+        "gap should remain at original severity when worker_runner signature is absent"
+      );
+      assert.notEqual(capGap.note, "verified_present_in_source");
+    });
+  });
+
 
   it("keeps unverified capability gaps at original severity", async () => {
     await withTempRepo(async ({ stateDir, repoDir }) => {

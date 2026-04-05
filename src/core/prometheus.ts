@@ -1632,6 +1632,50 @@ export function buildDeterministicRequestBudget(plans = [], executionStrategy: a
   };
 }
 
+/**
+ * Extract a scalar number from a raw plan contract field that may be either a
+ * primitive number/string or an object-shaped value emitted by some LLM responses
+ * (e.g. `{ "value": 0.5 }`).
+ *
+ * Accepted object shapes (checked in priority order):
+ *   value · estimate · amount · score · number · v
+ *
+ * Returns `{ value: NaN, provenance: null }` for null/undefined inputs.
+ * Returns `{ value: NaN, provenance: "no_scalar_key:<field>" }` when the object
+ * exists but contains none of the canonical keys as a finite number.
+ * When coercion succeeds, `provenance` is set to `"object_coercion:<field>:<key>"`
+ * so callers can log it without losing the original parse context.
+ *
+ * @param rawValue  — raw field value from the parsed plan object
+ * @param fieldName — field label used in provenance messages
+ */
+export function normalizeScalarContractField(
+  rawValue: unknown,
+  fieldName: string,
+): { value: number; provenance: string | null } {
+  if (rawValue === null || rawValue === undefined) {
+    return { value: NaN, provenance: null };
+  }
+  // Fast path: primitive (number or numeric string) — no object coercion needed.
+  if (typeof rawValue === "number" || typeof rawValue === "string") {
+    return { value: Number(rawValue), provenance: null };
+  }
+  // Object-shaped: try canonical scalar keys in priority order.
+  if (typeof rawValue === "object" && !Array.isArray(rawValue)) {
+    const obj = rawValue as Record<string, unknown>;
+    for (const key of ["value", "estimate", "amount", "score", "number", "v"] as const) {
+      if (key in obj && obj[key] !== null && obj[key] !== undefined) {
+        const extracted = Number(obj[key]);
+        if (Number.isFinite(extracted)) {
+          return { value: extracted, provenance: `object_coercion:${fieldName}:${key}` };
+        }
+      }
+    }
+    return { value: NaN, provenance: `no_scalar_key:${fieldName}` };
+  }
+  return { value: Number(rawValue), provenance: null };
+}
+
 function normalizePlanFromTask(task, index, fallbackWave = 1) {
   const src = (task && typeof task === "object") ? task : {};
   const taskText = String(src.task || src.title || src.task_id || src.id || `Task-${index + 1}`).trim();
@@ -1684,6 +1728,25 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
           riskLevel,
         }));
 
+  // ── Parse-boundary normalization for object-shaped contract fields ─────────
+  // Some LLM responses emit capacityDelta/requestROI as objects like
+  // { "value": 0.5 } instead of bare scalars.  Normalize at the parse boundary
+  // so the contract validator always receives the expected numeric type.
+  const cdNorm = normalizeScalarContractField(src.capacityDelta, "capacityDelta");
+  const roiNorm = normalizeScalarContractField(src.requestROI, "requestROI");
+  if (cdNorm.provenance !== null) {
+    console.warn(`[prometheus:normalize] ${taskText}: capacityDelta object-shaped coercion (${cdNorm.provenance})`);
+  }
+  if (roiNorm.provenance !== null) {
+    console.warn(`[prometheus:normalize] ${taskText}: requestROI object-shaped coercion (${roiNorm.provenance})`);
+  }
+  const normalizedCapacityDelta = Number.isFinite(cdNorm.value) && cdNorm.value >= -1 && cdNorm.value <= 1
+    ? cdNorm.value
+    : 0.1;
+  const normalizedRequestROI = Number.isFinite(roiNorm.value) && roiNorm.value > 0
+    ? roiNorm.value
+    : 1.0;
+
   return {
     ...src,
     role: normalizedRole,
@@ -1731,17 +1794,10 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
     waveDepends: Array.isArray(src.waveDepends)
       ? (src.waveDepends as any[]).map(Number).filter(n => Number.isFinite(n))
       : [],
-    // capacityDelta: expected measurable change in system capacity ∈ [-1.0, 1.0].
-    // Preserved from source when valid; defaults to 0.1 (conservative positive impact)
-    // when AI omits it so downstream gates do not reject the plan.
-    capacityDelta: Number.isFinite(Number(src.capacityDelta)) && Number(src.capacityDelta) >= -1 && Number(src.capacityDelta) <= 1
-      ? Number(src.capacityDelta)
-      : 0.1,
-    // requestROI: expected return-on-investment for premium request consumed.
-    // Preserved from source when valid; defaults to 1.0 (break-even) when AI omits it.
-    requestROI: Number.isFinite(Number(src.requestROI)) && Number(src.requestROI) > 0
-      ? Number(src.requestROI)
-      : 1.0,
+    // capacityDelta / requestROI: normalized at parse boundary above via
+    // normalizeScalarContractField() to handle object-shaped LLM outputs.
+    capacityDelta: normalizedCapacityDelta,
+    requestROI: normalizedRequestROI,
     // estimatedExecutionTokens: approximate total tokens this task is expected
     // to consume in a worker run; used for token-capacity-aware batching.
     estimatedExecutionTokens,
@@ -5470,5 +5526,38 @@ export function buildRoutingOutcomeSection(premiumUsageData: any): string {
     .join("\n");
 
   return `\n\n## ROUTING OUTCOME SIGNALS\nObserved outcomes from recent premium usage telemetry (last ${recent.length} entries):\n${lines}\nUse this to calibrate uncertainty and escalation for hard tasks.`;
+}
+
+/**
+ * Format lane performance telemetry from the previous cycle as a Prometheus
+ * prompt section.  This allows Prometheus to make informed role-assignment
+ * decisions based on measured lane completion rates rather than static defaults.
+ *
+ * Lanes with low completion rates should receive fewer or smaller tasks.
+ * Lanes with high completion rates are good candidates for additional work.
+ *
+ * Returns "" when no telemetry is available (safe no-op).
+ *
+ * @param laneTelemetry — laneTelemetry record from the previous cycle analytics
+ */
+export function buildLaneTelemetryPromptSection(laneTelemetry: unknown): string {
+  if (!laneTelemetry || typeof laneTelemetry !== "object" || Array.isArray(laneTelemetry)) {
+    return "";
+  }
+  const entries = Object.entries(laneTelemetry as Record<string, unknown>)
+    .filter(([, v]) => v && typeof v === "object")
+    .map(([lane, raw]) => {
+      const entry = raw as Record<string, unknown>;
+      const dispatched = Number(entry.dispatched ?? 0);
+      const completed = Number(entry.completed ?? 0);
+      const failed = Number(entry.failed ?? 0);
+      const completionRate = typeof entry.completionRate === "number" ? entry.completionRate : null;
+      const roi = typeof entry.roi === "number" ? entry.roi : null;
+      const rateStr = completionRate !== null ? (completionRate * 100).toFixed(0) + "%" : "n/a";
+      const roiStr = roi !== null ? roi.toFixed(2) : "n/a";
+      return `  - lane=${lane} | dispatched=${dispatched} | completed=${completed} | failed=${failed} | completionRate=${rateStr} | roi=${roiStr}`;
+    });
+  if (entries.length === 0) return "";
+  return `\n\n## LANE PERFORMANCE TELEMETRY (previous cycle)\nUse this to shape role assignments — prefer lanes with higher completion rates for critical tasks:\n${entries.join("\n")}`;
 }
 

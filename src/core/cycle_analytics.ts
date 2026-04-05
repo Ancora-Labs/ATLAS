@@ -577,6 +577,7 @@ export function computeCycleAnalytics(config, {
   prometheusAnalysis = null,
   athenaPlanReview = null,
   parserBaselineRecovery = null,
+  optimizerUsage = null,
   funnelCounts = null,
   tierCounts = null,
   fastPathCounts = null,
@@ -659,6 +660,26 @@ export function computeCycleAnalytics(config, {
 
   const outcomeStatus = computeOutcomeStatus(phase, safeWorkerResults, planCount);
 
+  // Confidence (deterministic, not statistical)
+  const confidence = computeConfidence(canonicalEvents, sloRecord, pipelineProgress);
+  const runtimeContractProbe = computeRuntimeContractProbe({
+    prometheusAnalysis,
+    athenaPlanReview,
+    workerResults,
+  });
+
+  // ── Seam contract binding: SUCCESS cannot be produced without worker verification evidence ──
+  // Gates specifically on the done-worker verification evidence criterion (not the full probe)
+  // because prometheus/athena signals are not required in all execution paths (e.g. headless
+  // or test invocations). The invariant enforced here is: "if done workers exist but none
+  // produced a VERIFICATION_REPORT, the cycle cannot be SUCCESS-shaped."
+  // PARTIAL and FAILED are preserved unchanged. Cycles with no workers (null) are not gated.
+  const seamContractSatisfied = runtimeContractProbe.criteria.doneWorkerWithVerificationReportEvidence.pass;
+  const boundOutcomeStatus =
+    outcomeStatus === CYCLE_OUTCOME_STATUS.SUCCESS && !seamContractSatisfied
+      ? CYCLE_OUTCOME_STATUS.PARTIAL
+      : outcomeStatus;
+
   const outcomes = {
     tasksDispatched,
     tasksCompleted,
@@ -667,11 +688,12 @@ export function computeCycleAnalytics(config, {
       ? !!(stageTimestamps?.athena_approved)
       : null,
     selfImprovementRan: null,  // set externally after self-improvement cycle
-    status: outcomeStatus,
+    status: boundOutcomeStatus,
+    seamContractSatisfied,
   };
 
   // Explicit reason code when outcome status is UNKNOWN (no silent ambiguity).
-  if (outcomeStatus === CYCLE_OUTCOME_STATUS.UNKNOWN) {
+  if (boundOutcomeStatus === CYCLE_OUTCOME_STATUS.UNKNOWN) {
     const unknownReason = !Array.isArray(safeWorkerResults)
       ? "workerResults not provided"
       : (safeWorkerResults.length === 0
@@ -684,14 +706,6 @@ export function computeCycleAnalytics(config, {
       unknownReason,
     });
   }
-
-  // Confidence (deterministic, not statistical)
-  const confidence = computeConfidence(canonicalEvents, sloRecord, pipelineProgress);
-  const runtimeContractProbe = computeRuntimeContractProbe({
-    prometheusAnalysis,
-    athenaPlanReview,
-    workerResults,
-  });
   const structuralAnalytics = {
     doneWorkerVerificationEvidenceCount: Array.isArray(workerResults)
       ? workerResults.filter((item) => {
@@ -783,6 +797,7 @@ export function computeCycleAnalytics(config, {
     runtimeContractProbe,
     structuralAnalytics,
     laneTelemetry,
+    optimizerUsage: optimizerUsage ?? null,
     parserBaselineRecovery: parserBaselineRecovery ?? null,
     stageTransitions: Array.isArray(stageTransitions) ? stageTransitions : [],
     dropReasons:      Array.isArray(dropReasons) ? dropReasons : [],
