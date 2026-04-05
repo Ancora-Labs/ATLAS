@@ -4063,9 +4063,6 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     const entries = Array.isArray(postmortems?.entries) ? postmortems.entries : [];
     postmortemEntries = entries; // expose to carry-forward gate after plan validation
     const shortlist = buildRankedLessonShortlists(entries, { limit: 10 });
-    const shortlistLessons = new Set(
-      shortlist.combinedTop10.map((item) => String(item.lesson || "").toLowerCase().replace(/\s+/g, " ").trim()).filter(Boolean),
-    );
     const unresolvedShortlistLessons = new Set(
       shortlist.unresolvedTop10.map((item) => String(item.lesson || "").toLowerCase().replace(/\s+/g, " ").trim()).filter(Boolean),
     );
@@ -4102,71 +4099,20 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
         postmortemShortlistSection = "\n\n" + postmortemShortlistSection;
       }
 
-      // Extract patterns: recurring issues, worker problems, quality trends
-      const focusedEntries = entries
-        .filter((entry) => {
-          const lesson = String(entry?.lessonLearned || entry?.lesson || entry?.followUpTask || "").toLowerCase().replace(/\s+/g, " ").trim();
-          return lesson && shortlistLessons.has(lesson);
-        });
-      const last20 = (focusedEntries.length > 0 ? focusedEntries : entries.slice(-10)).slice(-10);
-      
-      // Count issue patterns
-      const issuePatterns: Record<string, any> = {};
-      const workerProblems: Record<string, any> = {};
-      let totalQualityScore = 0;
-      let lowQualityCount = 0;
-      
-      for (const entry of last20) {
-        // Track worker performance
-        const worker = entry.workerName || "unknown";
-        if (!workerProblems[worker]) workerProblems[worker] = { count: 0, failureReasons: [] };
-        workerProblems[worker].count++;
-        
-        // Track quality score
-        const score = Number(entry.qualityScore) || 0;
-        totalQualityScore += score;
-        if (score < 6) lowQualityCount++;
-        
-        // Extract issue keywords from lesson learned
-        const deviation = entry.deviation || "unknown";
-        
-        if (deviation === "major" || score < 5) {
-          if (!issuePatterns[worker]) issuePatterns[worker] = [];
-          issuePatterns[worker].push({
-            issue: entry.expectedOutcome?.slice(0, 80) || "unclear",
-            score: score,
-            deviation: deviation
-          });
+      // ── Shortlist-based behavior patterns section ─────────────────────────
+      // Replaces old long-tail manual analysis with compilePrometheusContextShortlist:
+      // selects ranked high-impact+unresolved items under TOKEN_PARTITION_LIMITS
+      // behaviorPatterns cap so repeated large blocks cannot exhaust the prompt budget.
+      if (shortlistItems.length > 0) {
+        const bpSection = compilePrometheusContextShortlist(
+          "BEHAVIOR PATTERNS FROM POSTMORTEMS (ranked high-impact+unresolved)",
+          shortlistItems,
+          "behaviorPatterns",
+          { maxItems: 10, includeResolved: false },
+        );
+        if (bpSection) {
+          behaviorPatternsSection = "\n\n" + bpSection;
         }
-      }
-      
-      // Build pattern analysis
-      const patterns = [];
-      for (const [worker, problems] of Object.entries(workerProblems)) {
-        if (problems.count >= 2) {
-          patterns.push(`- **${worker}**: appeared in ${problems.count}/${last20.length} recent postmortems`);
-          if (issuePatterns[worker]) {
-            for (const p of issuePatterns[worker].slice(0, 2)) {
-              patterns.push(`  - Issue: ${p.issue} (quality=${p.score}, deviation=${p.deviation})`);
-            }
-          }
-        }
-      }
-      
-      if (patterns.length > 0) {
-        const avgQuality = (totalQualityScore / last20.length).toFixed(2);
-        behaviorPatternsSection = `\n\n## BEHAVIOR PATTERNS FROM RECENT POSTMORTEMS (last ${last20.length} cycles)
-Average decision quality: ${avgQuality}/10
-Low-quality outcomes: ${lowQualityCount}/${last20.length}
-
-Recurring issues and worker performance:
-${patterns.join("\n")}
-
-**Strategic implications:** Your plan should address why these patterns persist despite code changes.
-Consider whether the root causes are:
-1. Insufficient optimization (algorithm complexity, not just code cleanup)
-2. External constraints (I/O, database, infrastructure limits)
-3. Scaling challenges (metrics degrade with input size growth)`;
       }
       
       // Carry-forward follow-ups — retire items already resolved in ledger or coordination

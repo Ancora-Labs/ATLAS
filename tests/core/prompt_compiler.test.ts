@@ -5,6 +5,8 @@ import {
   compilePrompt,
   estimateTokens,
   estimatePromptTokens,
+  estimateTokenCost,
+  boundStructuredList,
   COMMON_SECTIONS,
   PROMPT_TIERS,
   stripFluff,
@@ -691,5 +693,68 @@ describe("compilePrometheusContextShortlist", () => {
   it("negative: staleWarning=false produces no warning footer", () => {
     const output = compilePrometheusContextShortlist("TEST", items, "carryForward", { staleWarning: false });
     assert.ok(!output.includes("STALE"), "no stale warning when not requested");
+  });
+});
+
+// ── estimateTokenCost ────────────────────────────────────────────────────────
+
+describe("estimateTokenCost()", () => {
+  it("computes cost correctly for 1000 tokens at default rate ($3/M)", () => {
+    assert.equal(estimateTokenCost(1000), 0.003);
+  });
+
+  it("returns 0 for zero tokens", () => {
+    assert.equal(estimateTokenCost(0), 0);
+  });
+
+  it("returns 0 for negative tokens", () => {
+    assert.equal(estimateTokenCost(-100), 0);
+  });
+
+  it("computes cost for 1M tokens at default rate = $3.00", () => {
+    assert.equal(estimateTokenCost(1_000_000), 3.0);
+  });
+
+  it("respects custom costPerMillionTokens override", () => {
+    assert.equal(estimateTokenCost(1000, 5.0), 0.005);
+  });
+
+  it("negative: returns 0 for non-finite input", () => {
+    assert.equal(estimateTokenCost(Infinity), 0);
+    assert.equal(estimateTokenCost(NaN), 0);
+  });
+});
+
+// ── boundStructuredList ──────────────────────────────────────────────────────
+
+describe("boundStructuredList()", () => {
+  it("returns bounded, de-duped, non-empty entries", () => {
+    const result = boundStructuredList(["alpha", "beta", "gamma"], { maxItems: 2 });
+    assert.deepEqual(result, ["alpha", "beta"]);
+  });
+
+  it("strips empty entries", () => {
+    const result = boundStructuredList(["", "hello", "  ", "world"]);
+    assert.deepEqual(result, ["hello", "world"]);
+  });
+
+  it("de-duplicates case-insensitively", () => {
+    const result = boundStructuredList(["Hello", "HELLO", "world"]);
+    assert.equal(result.length, 2, "case-insensitive duplicates must be removed");
+    assert.equal(result[0], "Hello");
+    assert.equal(result[1], "world");
+  });
+
+  it("truncates items exceeding maxItemChars", () => {
+    const long = "a".repeat(300);
+    const result = boundStructuredList([long], { maxItemChars: 20 });
+    assert.ok(result[0].endsWith("..."), "long item must end with ellipsis");
+    assert.ok(result[0].length <= 20, "item must be bounded to maxItemChars");
+  });
+
+  it("negative: returns empty array for non-array input", () => {
+    assert.deepEqual(boundStructuredList(null), []);
+    assert.deepEqual(boundStructuredList(undefined), []);
+    assert.deepEqual(boundStructuredList("not-an-array"), []);
   });
 });

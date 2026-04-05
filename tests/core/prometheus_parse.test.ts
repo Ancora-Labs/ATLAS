@@ -2974,7 +2974,7 @@ describe("rankPlansByClosureYield — planning rank boost for low yield", () => 
 // ── Task 2: Cycle-delta section prioritization ─────────────────────────────────
 
 describe("PROMETHEUS_CYCLE_DELTA_SECTION_NAMES — cycle-delta section priority", () => {
-  const DELTA_NAMES = ["research-intelligence", "topic-memory", "behavior-patterns", "carry-forward"];
+  const DELTA_NAMES = ["research-intelligence", "topic-memory", "behavior-patterns", "carry-forward", "postmortem-shortlist"];
 
   it("exports PROMETHEUS_CYCLE_DELTA_SECTION_NAMES as a non-empty ReadonlySet", () => {
     assert.ok(PROMETHEUS_CYCLE_DELTA_SECTION_NAMES instanceof Set,
@@ -4182,5 +4182,24 @@ describe("emitPlannerCycleMetrics", () => {
     } finally {
       rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it("negative: does not throw when stateDir does not exist", async () => {
+    const metrics = {
+      schemaVersion: 1,
+      cycleId: "cycle-nonexistent",
+      recordedAt: new Date().toISOString(),
+      findingsInjectedCount: 0,
+      coverageGateRetries: 0,
+      planCount: 0,
+      estimatedPromptTokens: 0,
+      estimatedTokenCost: 0,
+      diagnosticsFreshnessSnapshot: null,
+    } satisfies PlannerCycleMetrics;
+    // Must not throw — metrics emission is non-blocking
+    await assert.doesNotReject(
+      () => emitPlannerCycleMetrics("/nonexistent-path-xyz-abc-999", metrics),
+      "emitPlannerCycleMetrics must not throw on missing stateDir",
+    );
   });
 });
