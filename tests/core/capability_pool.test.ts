@@ -815,3 +815,71 @@ describe("capability_pool — evaluateSpecializationAdmissionGate", () => {
   });
 });
 
+// ── computeAdaptiveSpecialistFillThreshold ────────────────────────────────────
+
+import {
+  computeAdaptiveSpecialistFillThreshold,
+  SPECIALIST_REROUTE_REASON_CODE,
+} from "../../src/core/capability_pool.js";
+
+describe("capability_pool — computeAdaptiveSpecialistFillThreshold", () => {
+  it("returns base threshold unchanged when no lane performance data exists (neutral prior)", () => {
+    const result = computeAdaptiveSpecialistFillThreshold(0.8, "quality", {});
+    assert.equal(result, 0.8);
+  });
+
+  it("lowers threshold for a strong-performing lane (more specialist-friendly)", () => {
+    let ledger = {};
+    for (let i = 0; i < 10; i++) ledger = recordLaneOutcome(ledger, "quality", { success: true });
+    const result = computeAdaptiveSpecialistFillThreshold(0.8, "quality", ledger);
+    assert.ok(result < 0.8, `expected lowered threshold for strong lane; got ${result}`);
+  });
+
+  it("raises threshold for a consistently failing lane (more conservative)", () => {
+    let ledger = {};
+    for (let i = 0; i < 10; i++) ledger = recordLaneOutcome(ledger, "infra", { success: false });
+    const result = computeAdaptiveSpecialistFillThreshold(0.5, "infra", ledger);
+    assert.ok(result > 0.5, `expected raised threshold for failing lane; got ${result}`);
+  });
+
+  it("result is always clamped to [0, 1]", () => {
+    let ledger = {};
+    for (let i = 0; i < 20; i++) ledger = recordLaneOutcome(ledger, "governance", { success: true });
+    const result = computeAdaptiveSpecialistFillThreshold(0.0, "governance", ledger);
+    assert.ok(result >= 0 && result <= 1, `result must be in [0, 1]; got ${result}`);
+  });
+
+  it("handles non-finite baseFillThreshold by defaulting to 1.0", () => {
+    const result = computeAdaptiveSpecialistFillThreshold(NaN, "quality", {});
+    assert.equal(result, 1.0);
+  });
+
+  it("handles empty/missing lane name gracefully and returns base unchanged", () => {
+    const result = computeAdaptiveSpecialistFillThreshold(0.6, "", {});
+    assert.equal(result, 0.6);
+  });
+
+  it("handles missing lanePerformance parameter (undefined) same as empty ledger", () => {
+    const result = computeAdaptiveSpecialistFillThreshold(0.7, "quality", undefined);
+    assert.equal(result, 0.7);
+  });
+
+  it("negative path: output is monotonically decreasing as lane score increases past 0.5", () => {
+    // Higher lane score → lower adaptive threshold
+    let ldgr: any = {};
+    for (let i = 0; i < 5; i++) ldgr = recordLaneOutcome(ldgr, "quality", { success: false }); // score ~0.25
+    const threshLow = computeAdaptiveSpecialistFillThreshold(0.8, "quality", ldgr);
+
+    let ldgr2: any = {};
+    for (let i = 0; i < 5; i++) ldgr2 = recordLaneOutcome(ldgr2, "quality", { success: true }); // score ~0.75
+    const threshHigh = computeAdaptiveSpecialistFillThreshold(0.8, "quality", ldgr2);
+
+    assert.ok(threshHigh < threshLow,
+      `strong lane (${threshHigh}) should have lower threshold than weak lane (${threshLow})`);
+  });
+
+  it("SPECIALIST_REROUTE_REASON_CODE exports a stable BELOW_FILL_THRESHOLD code", () => {
+    assert.equal(SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD, "below_fill_threshold");
+  });
+});
+

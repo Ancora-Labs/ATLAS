@@ -633,6 +633,95 @@ export function computeSpecialistFitThreshold(
   return Math.round(Math.max(0, Math.min(1, adjusted)) * 1000) / 1000;
 }
 
+// ── Specialist reroute telemetry ──────────────────────────────────────────────
+
+/**
+ * Stable reason codes emitted when a specialist worker is rerouted to
+ * evolution-worker by the fill-threshold admission gate.
+ * Consumers can pattern-match on these codes without parsing free-text.
+ */
+export const SPECIALIST_REROUTE_REASON_CODE = Object.freeze({
+  BELOW_FILL_THRESHOLD: "below_fill_threshold",
+} as const);
+
+export type SpecialistRerouteReasonCode =
+  (typeof SPECIALIST_REROUTE_REASON_CODE)[keyof typeof SPECIALIST_REROUTE_REASON_CODE];
+
+/**
+ * Structured record emitted whenever a specialist worker group is rerouted to
+ * evolution-worker by the specialist fill-threshold gate inside
+ * buildTokenFirstBatches.
+ *
+ * Deterministic: every reroute event produces exactly one record.
+ * Callers (orchestrator, scoreboard) can aggregate or log these records without
+ * re-parsing free-text strings.
+ */
+export interface SpecialistRerouteReason {
+  /** Specialist role that was rerouted (e.g. "quality-worker"). */
+  role: string;
+  /** Capability lane of the specialist (e.g. "quality"). */
+  lane: string;
+  /** Estimated token total for the specialist plan group (pre-reroute). */
+  tokens: number;
+  /**
+   * Adaptive fill threshold in absolute tokens (usableTokens * adaptiveFillThreshold).
+   * The group's `tokens` fell below this value, triggering the reroute.
+   */
+  thresholdTokens: number;
+  /** Fraction of usable context window actually filled by this group (0–1). */
+  fillRatio: number;
+  /** Adaptive fill threshold fraction (0–1) used for this reroute decision. */
+  adaptiveFillThreshold: number;
+  /** Stable reason code for pattern matching. */
+  reasonCode: SpecialistRerouteReasonCode;
+  /**
+   * Laplace-smoothed lane performance score (0–1) at the time of reroute.
+   * 0.5 means no history.  Used to compute adaptiveFillThreshold.
+   */
+  laneScore: number;
+}
+
+/**
+ * Compute an adaptive specialist fill threshold for a specific lane.
+ *
+ * The fill threshold controls how much of the usable context window a
+ * specialist group must fill before it keeps its own batch.  When a lane has
+ * a strong performance record (high score), we lower the threshold so
+ * specialists are not rerouted unnecessarily — their track record earns them
+ * leniency.  When a lane is consistently underperforming, we raise the
+ * threshold so the gate is more conservative, steering work to evolution-worker
+ * until the specialist lane recovers.
+ *
+ * Adjustment formula:
+ *   laneScore ∈ [0, 1]; neutral = 0.5
+ *   adjustment = (0.5 - laneScore) * 0.3
+ *   adjusted   = clamp(baseFillThreshold + adjustment, 0, 1)
+ *
+ * Effect:
+ *   - laneScore = 0.5 (no history) → no change (deterministic neutral)
+ *   - laneScore = 0.9 (good lane)  → threshold lowered (specialist stays more easily)
+ *   - laneScore = 0.2 (poor lane)  → threshold raised (specialist rerouted more readily)
+ *
+ * @param baseFillThreshold — configured fill threshold (0–1)
+ * @param lane              — capability lane name
+ * @param lanePerformance   — optional historical lane outcomes
+ * @returns adaptive threshold in [0, 1], rounded to 3 decimal places
+ */
+export function computeAdaptiveSpecialistFillThreshold(
+  baseFillThreshold: number,
+  lane: string,
+  lanePerformance?: LanePerformanceLedger,
+): number {
+  const safeBase = Number.isFinite(baseFillThreshold)
+    ? Math.max(0, Math.min(1, baseFillThreshold))
+    : 1.0;
+  if (!lane) return safeBase;
+  const score = getLaneScore(lanePerformance ?? {}, lane);
+  // Lower threshold when lane performs well; raise when it underperforms.
+  const adjustment = (0.5 - score) * 0.3;
+  return Math.round(Math.max(0, Math.min(1, safeBase + adjustment)) * 1000) / 1000;
+}
+
 // ── Specialization admission gate ────────────────────────────────────────────
 
 /**

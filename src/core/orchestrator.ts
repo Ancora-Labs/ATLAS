@@ -2926,6 +2926,7 @@ async function runSingleCycle(config) {
 
   if (useTokenFirst) {
     const reroutes = (workerBatches as any[])?.[0]?.specialistReroutes;
+    const rerouteReasons = (workerBatches as any[])?.[0]?.specialistRerouteReasons;
     const specializationTarget = (workerBatches as any[])?.[0]?.specialistUtilizationTarget;
     const rerouteMsg = Array.isArray(reroutes) && reroutes.length > 0
       ? ` | specialist→evo reroutes: ${reroutes.join(", ")}`
@@ -2938,6 +2939,15 @@ async function runSingleCycle(config) {
         athenaPreBatched ? " (Athena-selected batches applied)" : ""
       }${rerouteMsg}${rebalanceMsg}`
     );
+    // Emit structured reroute telemetry for each rerouted specialist so the
+    // adaptive threshold cycle can observe the reason codes and lane scores.
+    if (Array.isArray(rerouteReasons) && rerouteReasons.length > 0) {
+      for (const reason of rerouteReasons) {
+        await appendProgress(config,
+          `[BATCH_PLANNER] specialist_reroute reason=${reason.reasonCode} role=${reason.role} lane=${reason.lane} fillRatio=${reason.fillRatio} laneScore=${reason.laneScore} adaptiveThreshold=${reason.adaptiveFillThreshold}`
+        );
+      }
+    }
 
     if (
       config?.runtime?.enforceSpecialistUtilizationAdmission === true
@@ -3630,6 +3640,9 @@ async function runSingleCycle(config) {
     const firstBatchSpecialization = Array.isArray(workerBatches) && workerBatches.length > 0
       ? (workerBatches[0] as any)?.specialistUtilizationTarget
       : null;
+    const firstBatchRerouteReasons = Array.isArray(workerBatches) && workerBatches.length > 0
+      ? ((workerBatches[0] as any)?.specialistRerouteReasons ?? [])
+      : [];
     // Read lane telemetry from the cycle analytics record computed this cycle
     // (if available) to persist lane distribution trends in the scoreboard.
     let cycleAnalyticsRecord: any = null;
@@ -3650,6 +3663,10 @@ async function runSingleCycle(config) {
       workersDone: workersDone,
       specializedShareTarget: Number(firstBatchSpecialization?.adaptiveMinSpecializedShare ?? firstBatchSpecialization?.minSpecializedShare ?? 0),
       specializedShareTargetMet: firstBatchSpecialization?.targetMet === true,
+      specialistRerouteCount: Array.isArray(firstBatchRerouteReasons) ? firstBatchRerouteReasons.length : 0,
+      ...(Array.isArray(firstBatchRerouteReasons) && firstBatchRerouteReasons.length > 0
+        ? { specialistRerouteReasons: firstBatchRerouteReasons }
+        : {}),
       ...(cycleLaneTelemetry ? { laneTelemetry: cycleLaneTelemetry } : {}),
       ...(optimizerUsage ? { optimizerUsage } : {}),
     });

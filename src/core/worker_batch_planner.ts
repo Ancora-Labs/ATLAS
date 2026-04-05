@@ -10,6 +10,10 @@ import {
   buildLanePerformanceFromCycleTelemetry,
   buildLaneTelemetrySignals,
   computeSpecialistFitThreshold,
+  getLaneScore,
+  computeAdaptiveSpecialistFillThreshold,
+  SpecialistRerouteReason,
+  SPECIALIST_REROUTE_REASON_CODE,
 } from "./capability_pool.js";
 import { compactSingletonWaves } from "./dag_scheduler.js";
 import { rankModelsByTaskKindExpectedValue } from "./model_policy.js";
@@ -1402,11 +1406,13 @@ export function buildTokenFirstBatches(
 
   // ── Specialist-threshold routing ──────────────────────────────────────────
   // For each role group where the role is a specialist (not evolution-worker),
-  // check if total estimated tokens fill at least specialistFillThreshold of usable
-  // context.  If not, reroute those plans to evolution-worker for co-packing.
+  // check if total estimated tokens fill at least the adaptive fill threshold of
+  // usable context.  If not, reroute those plans to evolution-worker for co-packing.
+  // The threshold is adapted per lane: lanes with strong performance records get a
+  // lower threshold (less gatekeeping), degraded lanes get a higher threshold.
   const specialistThreshold = resolveSpecialistFillThreshold(config);
-  const minSpecialistTokens = Math.floor(usableTokens * specialistThreshold);
   const reroutedRoles: string[] = [];
+  const specialistRerouteReasons: SpecialistRerouteReason[] = [];
 
   for (const [key, group] of byRole) {
     if (SPECIALIST_EXEMPT_ROLES.has(group.role)) continue;
@@ -1414,16 +1420,46 @@ export function buildTokenFirstBatches(
     if (hasLockedSpecialistPlan) continue;
     const groupCoeff = getCoeff(group.role);
     const groupTokens = group.plans.reduce((sum, p) => sum + estimatePlanTokens(p, groupCoeff), 0);
+
+    // Resolve the canonical lane for this role group.
+    const groupLane = String(group.plans.find((p: any) => p._fitLane)?._fitLane || "implementation");
+    // Compute per-lane adaptive fill threshold: good lane → lower bar (specialist stays);
+    // degraded lane → higher bar (specialist rerouted to evo-worker more readily).
+    const adaptiveFillThreshold = computeAdaptiveSpecialistFillThreshold(
+      specialistThreshold,
+      groupLane,
+      lanePerformance,
+    );
+    const minSpecialistTokens = Math.floor(usableTokens * adaptiveFillThreshold);
+
     if (groupTokens < minSpecialistTokens) {
-      // Below threshold — reroute to evolution-worker
-      reroutedRoles.push(`${group.role}(${groupTokens}tok)`);
+      // Below adaptive threshold — reroute to evolution-worker and record reason.
+      const laneScore = getLaneScore(lanePerformance, groupLane);
+      const fillRatio = usableTokens > 0
+        ? Math.round((groupTokens / usableTokens) * 1000) / 1000
+        : 0;
+      const rerouteReason: SpecialistRerouteReason = {
+        role: group.role,
+        lane: groupLane,
+        tokens: groupTokens,
+        thresholdTokens: minSpecialistTokens,
+        fillRatio,
+        adaptiveFillThreshold,
+        reasonCode: SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD,
+        laneScore,
+      };
+      reroutedRoles.push(`${group.role}(${groupTokens}tok,adaptive=${adaptiveFillThreshold},lane=${groupLane})`);
+      specialistRerouteReasons.push(rerouteReason);
       const evoKey = "evolution-worker";
       if (!byRole.has(evoKey)) {
         byRole.set(evoKey, { role: "evolution-worker", plans: [] });
       }
-      // Tag plans with original role for observability, then move them
+      // Tag plans with original role and reroute reason for observability, then move them
       for (const plan of group.plans) {
         plan._originalSpecialistRole = group.role;
+        plan._rerouteReason = rerouteReason.reasonCode;
+        plan._rerouteLane = groupLane;
+        plan._rerouteLaneScore = laneScore;
         plan.role = "evolution-worker";
         byRole.get(evoKey)!.plans.push(plan);
       }
@@ -1531,6 +1567,7 @@ export function buildTokenFirstBatches(
       laneTelemetrySignals,
     },
     ...(reroutedRoles.length > 0 ? { specialistReroutes: reroutedRoles } : {}),
+    ...(specialistRerouteReasons.length > 0 ? { specialistRerouteReasons } : {}),
   }));
 }
 
