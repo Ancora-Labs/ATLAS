@@ -234,6 +234,55 @@ const MAX_RESEARCH_GAPS = 2000;
 const MAX_CONNECTIONS = 20;
 const MAX_PLANNER_SIGNALS = 12;
 
+/** Minimum number of actionable signals required per topic to pass the quality gate. */
+const SYNTHESIS_MIN_ACTIONABLE_DENSITY_PER_TOPIC = 1;
+
+export interface SynthesisTopicDensity {
+  topic: string;
+  /** Count of non-empty actionable signals: netFindings + applicableIdeas + prometheusReadySummary entries */
+  actionableCount: number;
+  passed: boolean;
+}
+
+export interface SynthesisQualityGate {
+  /** True when all topics meet the minimum actionable density threshold. */
+  passed: boolean;
+  /** Whether a retry was attempted due to insufficient density. */
+  retried: boolean;
+  topicDensities: SynthesisTopicDensity[];
+}
+
+/**
+ * Compute actionable density for each topic.
+ * A signal counts if it is a non-empty string (source prometheusReadySummary)
+ * or a non-empty array item (netFindings, applicableIdeas).
+ */
+export function computeSynthesisActionableDensity(topics: Array<Record<string, unknown>>): SynthesisTopicDensity[] {
+  return topics.map((t) => {
+    const topicName = String(t.topic || "");
+    let count = 0;
+
+    const findings = Array.isArray(t.netFindings) ? t.netFindings : [];
+    count += findings.filter((f) => typeof f === "string" && f.trim().length > 0).length;
+
+    const ideas = Array.isArray(t.applicableIdeas) ? t.applicableIdeas : [];
+    count += ideas.filter((i) => typeof i === "string" && i.trim().length > 0).length;
+
+    const sources = Array.isArray(t.sources) ? t.sources as Array<Record<string, unknown>> : [];
+    for (const src of sources) {
+      if (typeof src.prometheusReadySummary === "string" && src.prometheusReadySummary.trim().length > 0) {
+        count++;
+      }
+    }
+
+    return {
+      topic: topicName,
+      actionableCount: count,
+      passed: count >= SYNTHESIS_MIN_ACTIONABLE_DENSITY_PER_TOPIC,
+    };
+  });
+}
+
 function toSingleLine(value: unknown, maxLen = 240): string {
   const compact = String(value || "")
     .replace(/[\r\n\t]+/g, " ")
@@ -324,6 +373,7 @@ export function sanitizeResearchSynthesisForPersistence(payload: {
   scoutSourceCount: number;
   model: string;
   lastConsumedAt?: string;
+  qualityGate?: SynthesisQualityGate;
 }): Record<string, unknown> {
   const rawTopics = Array.isArray(payload.topics) ? payload.topics : [];
   const topics = rawTopics.slice(0, MAX_SYNTHESIS_TOPICS).map((topic) => {
@@ -375,6 +425,7 @@ export function sanitizeResearchSynthesisForPersistence(payload: {
     scoutSourceCount: Number.isFinite(Number(payload.scoutSourceCount)) ? Math.max(0, Number(payload.scoutSourceCount)) : 0,
     model: toSingleLine(payload.model, 80) || "gpt-5.3-codex",
     plannerSignals,
+    ...(payload.qualityGate ? { qualityGate: payload.qualityGate } : {}),
     ...(payload.lastConsumedAt ? { lastConsumedAt: String(payload.lastConsumedAt) } : {}),
   };
 }
@@ -390,6 +441,7 @@ export interface ResearchSynthesisResult {
   scoutSourceCount: number;
   model: string;
   error?: string;
+  qualityGate?: SynthesisQualityGate;
 }
 
 /**
@@ -491,22 +543,128 @@ ${scoutRawText}`),
   const crossTopicConnections = extractCrossTopicConnections(cleanRaw);
   const researchGaps = extractResearchGaps(cleanRaw);
 
+  // ── Synthesis quality gate ────────────────────────────────────────────────
+  // Check that each parsed topic carries at minimum one actionable signal.
+  // When the gate fails, retry once with constrained repair instructions.
+  let finalTopics = topics;
+  let finalCrossTopicConnections = crossTopicConnections;
+  let finalResearchGaps = researchGaps;
+  let retried = false;
+
+  const initialDensities = computeSynthesisActionableDensity(topics);
+  const lowDensityTopics = initialDensities.filter(d => !d.passed);
+
+  if (lowDensityTopics.length > 0) {
+    // Gate failed — retry once with constrained repair instructions
+    retried = true;
+    appendLiveLogSync(
+      stateDir,
+      `\n[quality_gate_retry] ${ts()} — ${lowDensityTopics.length} topic(s) below density threshold. Retrying with repair prompt.\n`
+    );
+    await appendProgress(
+      config,
+      `[RESEARCH_SYNTHESIZER][QUALITY_GATE] Density insufficient for ${lowDensityTopics.length} topic(s). Retrying.`
+    );
+
+    const deficientTopicNames = lowDensityTopics.map(d => `- ${d.topic}`).join("\n");
+    const repairPrompt = compilePrompt([
+      section("task", `## REPAIR TASK
+The previous synthesis run produced topics with insufficient actionable content.
+Each topic MUST have at least one concrete finding, applicable idea, or prometheus-ready summary.
+
+Topics requiring repair:
+${deficientTopicNames}
+
+Re-synthesize ONLY the deficient topics listed above.
+For each topic, include:
+  - At least one **Net Finding** (concrete, factual statement)
+  - At least one **Applicable Idea for BOX** (specific improvement suggestion)
+  - At least one **Source** with a **Prometheus-Ready Summary** (actionable 1-2 sentence summary)
+
+Preserve all already-adequate topics unchanged.
+Follow your agent definition's output format exactly.`),
+      section("scout-output", `## RESEARCH SCOUT RAW OUTPUT\n${scoutRawText}`),
+    ], {
+      tokenBudget: resolveMaxPromptBudget(
+        config,
+        String(model || "gpt-5.3-codex"),
+        Number(config?.runtime?.researchSynthesizerPromptTokenBudget)
+      ) || undefined,
+    });
+
+    const repairArgs = buildAgentArgs({
+      agentSlug: "research-synthesizer",
+      prompt: repairPrompt,
+      model,
+      allowAll: true,
+      maxContinues: undefined,
+    });
+
+    appendLiveLogSync(stateDir, `\n[repair_start] ${ts()}\n`);
+
+    let repairResult: any;
+    try {
+      repairResult = await spawnAsync(command, repairArgs, {
+        env: process.env,
+        onStdout(chunk: Buffer) { appendLiveLogSync(stateDir, chunk.toString("utf8")); },
+        onStderr(chunk: Buffer) { appendLiveLogSync(stateDir, chunk.toString("utf8")); },
+      });
+    } catch (err) {
+      appendLiveLogSync(stateDir, `\n[repair_error] ${ts()} — ${String((err as any)?.message || err)}\n`);
+      repairResult = { status: 1, stdout: "", stderr: "" };
+    }
+
+    appendLiveLogSync(stateDir, `\n[repair_end] ${ts()} exit=${repairResult?.status}\n`);
+
+    if (repairResult?.status === 0) {
+      const repairRaw = stripExecutionTranscriptNoise(String(repairResult?.stdout || repairResult?.stderr || ""));
+      await appendAgentContextUsage(config, {
+        agent: "research-synthesizer-repair",
+        model: String(model || "gpt-5.3-codex"),
+        promptText: repairPrompt,
+        status: "success",
+      });
+      const repairedTopics = parseSynthesisTopics(repairRaw);
+      // Merge repaired topics over originals by topic name
+      const topicMap = new Map(topics.map(t => [String(t.topic || ""), t]));
+      for (const rt of repairedTopics) {
+        const key = String(rt.topic || "");
+        if (key) topicMap.set(key, rt);
+      }
+      finalTopics = Array.from(topicMap.values());
+      finalCrossTopicConnections = extractCrossTopicConnections(repairRaw) || crossTopicConnections;
+      finalResearchGaps = extractResearchGaps(repairRaw) || researchGaps;
+    } else {
+      // Repair spawn failed — fall through with original topics (fail-open)
+      await appendProgress(config, `[RESEARCH_SYNTHESIZER][QUALITY_GATE] Repair attempt failed — proceeding with original output`);
+    }
+  }
+
+  const qualityGateDensities = computeSynthesisActionableDensity(finalTopics);
+  const gatePassed = qualityGateDensities.every(d => d.passed);
+  const qualityGate: SynthesisQualityGate = {
+    passed: gatePassed,
+    retried,
+    topicDensities: qualityGateDensities,
+  };
+
   const output: ResearchSynthesisResult = {
     success: true,
-    topicCount: topics.length,
-    topics,
-    crossTopicConnections,
-    researchGaps,
+    topicCount: finalTopics.length,
+    topics: finalTopics,
+    crossTopicConnections: finalCrossTopicConnections,
+    researchGaps: finalResearchGaps,
     rawText: cleanRaw,
     synthesizedAt: new Date().toISOString(),
     scoutSourceCount: sourceCount,
     model,
+    qualityGate,
   };
 
   // Persist synthesis for Prometheus to read
   await writeJson(path.join(stateDir, "research_synthesis.json"), sanitizeResearchSynthesisForPersistence(output));
 
-  await appendProgress(config, `[RESEARCH_SYNTHESIZER] Complete — ${topics.length} topic(s) synthesized from ${sourceCount} source(s)`);
+  await appendProgress(config, `[RESEARCH_SYNTHESIZER] Complete — ${finalTopics.length} topic(s) synthesized from ${sourceCount} source(s) [qualityGate=${gatePassed ? "passed" : "failed"}]`);
 
   return output;
 }

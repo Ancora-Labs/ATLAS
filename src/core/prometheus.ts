@@ -135,7 +135,7 @@ export function detectModelFallback(rawText) {
   return { agent: match[1], requestedModel: match[2], fallbackModel: match[3] };
 }
 
-export function buildPrometheusPlanningPolicy(config) {
+export function buildPrometheusPlanningPolicy(config, laneTelemetry?: Record<string, unknown> | null) {
   const planner = config?.planner || {};
   const configuredMaxWorkersPerWave = Math.max(1, Number(planner.defaultMaxWorkersPerWave || config?.maxParallelWorkers || 10));
   const rawMaxTasks = Number(planner.maxTasks);
@@ -143,13 +143,29 @@ export function buildPrometheusPlanningPolicy(config) {
   const maxWorkersPerWave = maxTasks > 0
     ? Math.min(configuredMaxWorkersPerWave, maxTasks)
     : configuredMaxWorkersPerWave;
+
+  // Bounded packet-size defaults — prevent over-bundling by capping plans per packet
+  const rawMaxPlansPerPacket = Number(planner.maxPlansPerPacket);
+  const maxPlansPerPacket = Number.isFinite(rawMaxPlansPerPacket) && rawMaxPlansPerPacket > 0
+    ? Math.max(1, Math.min(20, Math.floor(rawMaxPlansPerPacket)))
+    : 5; // default: cap at 5 plans per packet to prevent context overflow
+
+  // Lane telemetry: surface per-lane performance signals for planner awareness.
+  // Each lane entry carries { dispatched, completed, failed, completionRate, roi, specialistLane }.
+  // Prometheus uses this to avoid over-planning into lanes with low recent completion rates.
+  const resolvedLaneTelemetry = (laneTelemetry && typeof laneTelemetry === "object")
+    ? laneTelemetry
+    : null;
+
   return {
     maxTasks,
     maxWorkersPerWave,
+    maxPlansPerPacket,
     preferFewestWorkers: planner.preferFewestWorkers !== false,
     allowSameCycleFollowUps: Boolean(planner.allowSameCycleFollowUps),
     requireDependencyAwareWaves: planner.requireDependencyAwareWaves !== false,
-    enforcePrometheusExecutionStrategy: planner.enforcePrometheusExecutionStrategy !== false
+    enforcePrometheusExecutionStrategy: planner.enforcePrometheusExecutionStrategy !== false,
+    laneTelemetry: resolvedLaneTelemetry,
   };
 }
 
@@ -3898,7 +3914,17 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   await appendProgress(config, `[PROMETHEUS] ${prometheusName} awakening — starting deep repository analysis (simplified mode)`);
   await appendPrometheusLiveLog(stateDir, "leadership_live", `[${ts()}] ${prometheusName.padEnd(20)} Awakening — direct Copilot CLI scan starting...`);
 
-  const planningPolicy = buildPrometheusPlanningPolicy(config);
+  // ── Load lane telemetry from previous cycle analytics for context injection ──
+  let prevLaneTelemetry: Record<string, unknown> | null = null;
+  try {
+    const prevAnalytics = await readJson(path.join(stateDir, "cycle_analytics.json"), null);
+    const raw = (prevAnalytics as any)?.lastCycle?.laneTelemetry;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      prevLaneTelemetry = raw as Record<string, unknown>;
+    }
+  } catch { /* non-fatal — proceed without lane telemetry */ }
+
+  const planningPolicy = buildPrometheusPlanningPolicy(config, prevLaneTelemetry);
   const diagnosticsFreshnessSection = await buildDiagnosticsFreshnessPromptSection(stateDir);
   let researchSectionText = "";
   let researchTopicCount = 0;
@@ -3923,6 +3949,16 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     researchTopicCount = researchContext.topicCount;
     researchSourceCount = researchContext.sourceCount;
     researchCoverageTarget = researchContext.coverageTarget;
+    // Warn when synthesis quality gate did not pass — plans may lack actionable density.
+    const qg = (researchSynthesis as any)?.qualityGate;
+    if (qg && qg.passed === false) {
+      await appendProgress(
+        config,
+        `[PROMETHEUS][WARN] Research synthesis quality gate did not pass (retried=${qg.retried}). ` +
+        `${(qg.topicDensities ?? []).filter((d: any) => !d.passed).length} topic(s) below minimum actionable density. ` +
+        `Plans may have reduced signal quality.`
+      );
+    }
     if (researchSectionText) {
       await appendProgress(
         config,
@@ -4226,27 +4262,35 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   cycleDeltaParts.push(`## PLANNING POLICY
 - maxTasks: ${planningPolicy.maxTasks > 0 ? planningPolicy.maxTasks : "UNLIMITED"}
 - maxWorkersPerWave: ${planningPolicy.maxWorkersPerWave}
+- maxPlansPerPacket: ${planningPolicy.maxPlansPerPacket} (HARD CAP — do not exceed)
 - preferFewestWorkers: ${planningPolicy.preferFewestWorkers}
 - requireDependencyAwareWaves: ${planningPolicy.requireDependencyAwareWaves}
 - researchCoverageTarget: ${researchCoverageTarget > 0 ? researchCoverageTarget : "AUTO(0 when no research artifacts)"}
 - Do NOT create extra waves without explicit task-level dependsOn/dependencies evidence.
 - Avoid single-task waves unless dependency constraints force them.
 
-## BUNDLED WORK PACKAGES — MANDATORY
-Each plan packet you produce is ONE AI worker call consuming the model's FULL context window (~160k tokens for Claude Sonnet, ~400k for GPT-5 Codex). A single-sentence task is a catastrophic waste of this capacity.
+## BUNDLED WORK PACKAGES — BOUNDED
+Each plan packet you produce is ONE AI worker call. Bundle related work, but respect the maxPlansPerPacket cap (${planningPolicy.maxPlansPerPacket} steps).
 
 RULE: Every packet MUST contain enough work to justify a full AI context call. This means:
 1. GROUP related sub-tasks into a single packet. If you find 5 small fixes in the same area, bundle ALL of them into ONE packet with ordered steps.
 2. A packet's task field must describe a COMPLETE feature or improvement area, not a single micro-fix.
-3. Do NOT impose an artificial packet-count ceiling. Emit as many high-value packets as evidence supports.
+3. Emit as many high-value packets as evidence supports, but each packet must stay within the maxPlansPerPacket cap.
 4. Each packet's scope should cover multiple related files and multiple related behaviors.
-5. EXCEPTION: Only create separate packets when there is a HARD dependency ordering requirement.
+5. Plans covering 5+ target files MUST declare estimatedExecutionTokens >= 8000.
+6. EXCEPTION: Only create separate packets when there is a HARD dependency ordering requirement.
 
 ## STRUCTURAL CORRECTNESS — LEARN THESE PATTERNS
 ### dependencies — use EXACT packet titles, never aliases
 ### acceptance_criteria — every item MUST contain a numeric threshold
 ### wave assignments — tasks with dependencies must be in a later wave`);
   if (diagnosticsFreshnessSection) cycleDeltaParts.push(diagnosticsFreshnessSection);
+
+  // Lane telemetry: inject per-lane performance signals to guide role assignment
+  if (planningPolicy.laneTelemetry) {
+    const laneTelemetrySection = buildLaneTelemetryPromptSection(planningPolicy.laneTelemetry);
+    if (laneTelemetrySection) cycleDeltaParts.push(laneTelemetrySection);
+  }
 
   // Research intelligence summary (topics only — Prometheus reads full synthesis file itself)
   if (researchTopicsList.length > 0) {

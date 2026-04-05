@@ -705,3 +705,86 @@ describe("runInterventionOptimizer — failureClassifications option (AC #5)", (
     assert.equal(result.rejected[0].role, "defect-worker");
   });
 });
+
+// ── loadRecentFailureClassifications + persistFailureClassification ────────────
+
+import { loadRecentFailureClassifications, persistFailureClassification } from "../../src/core/failure_classifier.js";
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs/promises";
+
+describe("persistFailureClassification + loadRecentFailureClassifications", () => {
+  async function makeTempDir(): Promise<string> {
+    const dir = path.join(os.tmpdir(), `fc-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  }
+
+  it("returns empty object when JSONL file does not exist", async () => {
+    const dir = await makeTempDir();
+    const result = await loadRecentFailureClassifications(dir);
+    assert.deepEqual(result, {});
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("persists a classification and loads it back", async () => {
+    const dir = await makeTempDir();
+    const classification = makeClassification({ primaryClass: FAILURE_CLASS.LOGIC_DEFECT });
+    await persistFailureClassification(dir, "my-worker", classification);
+
+    const loaded = await loadRecentFailureClassifications(dir);
+    assert.ok(typeof loaded["my-worker"] === "object", "classification should be keyed by role");
+    assert.equal((loaded["my-worker"] as any).primaryClass, FAILURE_CLASS.LOGIC_DEFECT);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("later entry for same role overrides earlier entry", async () => {
+    const dir = await makeTempDir();
+    const first  = makeClassification({ primaryClass: FAILURE_CLASS.LOGIC_DEFECT });
+    const second = makeClassification({ primaryClass: FAILURE_CLASS.RESOURCE_EXHAUSTION });
+    await persistFailureClassification(dir, "worker-a", first);
+    await persistFailureClassification(dir, "worker-a", second);
+
+    const loaded = await loadRecentFailureClassifications(dir);
+    assert.equal((loaded["worker-a"] as any).primaryClass, FAILURE_CLASS.RESOURCE_EXHAUSTION);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("respects the limit parameter", async () => {
+    const dir = await makeTempDir();
+    // Write 5 records for different roles
+    for (let i = 0; i < 5; i++) {
+      await persistFailureClassification(dir, `role-${i}`, makeClassification());
+    }
+    // Load with limit=2 — only last 2 records (role-3, role-4)
+    const loaded = await loadRecentFailureClassifications(dir, 2);
+    const keys = Object.keys(loaded);
+    assert.equal(keys.length, 2);
+    assert.ok(keys.includes("role-3"));
+    assert.ok(keys.includes("role-4"));
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("returns empty object on corrupted JSONL lines (partial parse)", async () => {
+    const dir = await makeTempDir();
+    const filePath = path.join(dir, "worker_failure_classifications.jsonl");
+    await fs.writeFile(filePath, "not-valid-json\n", "utf8");
+
+    const result = await loadRecentFailureClassifications(dir);
+    assert.deepEqual(result, {});
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("ignores records missing role or classification fields", async () => {
+    const dir = await makeTempDir();
+    const filePath = path.join(dir, "worker_failure_classifications.jsonl");
+    await fs.writeFile(filePath,
+      JSON.stringify({ role: "", classification: makeClassification() }) + "\n" +
+      JSON.stringify({ role: "good-role", classification: null }) + "\n",
+      "utf8"
+    );
+    const result = await loadRecentFailureClassifications(dir);
+    assert.deepEqual(result, {});
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+});

@@ -1536,3 +1536,44 @@ describe("cycle_analytics — DISPATCH_BLOCK_REMEDIATION outcome binding (Task 2
     assert.equal(CYCLE_OUTCOME_STATUS.DISPATCH_BLOCK_REMEDIATION, "dispatch_block_remediation");
   });
 });
+
+// ── interventionImpactCounters ─────────────────────────────────────────────────
+
+describe("interventionImpactCounters in cycle analytics record", () => {
+  it("is null when optimizerUsage is not provided", () => {
+    const record = computeCycleAnalytics(makeConfig(), { phase: CYCLE_PHASE.COMPLETED });
+    assert.equal(record.interventionImpactCounters, null);
+  });
+
+  it("surfaces failureClassificationsApplied from optimizerUsage", () => {
+    const record = computeCycleAnalytics(makeConfig(), {
+      phase: CYCLE_PHASE.COMPLETED,
+      optimizerUsage: { failureClassificationsApplied: 3 },
+    });
+    assert.equal(record.interventionImpactCounters?.failureClassificationsApplied, 3);
+  });
+
+  it("surfaces rerouteReasonsApplied from optimizerUsage", () => {
+    const record = computeCycleAnalytics(makeConfig(), {
+      phase: CYCLE_PHASE.COMPLETED,
+      optimizerUsage: { rerouteReasonsApplied: 2 },
+    });
+    assert.equal(record.interventionImpactCounters?.rerouteReasonsApplied, 2);
+  });
+
+  it("returns null when optimizerUsage has no tracked counter fields", () => {
+    const record = computeCycleAnalytics(makeConfig(), {
+      phase: CYCLE_PHASE.COMPLETED,
+      optimizerUsage: { someOtherField: "value" },
+    });
+    assert.equal(record.interventionImpactCounters, null);
+  });
+
+  it("ignores non-numeric counter values", () => {
+    const record = computeCycleAnalytics(makeConfig(), {
+      phase: CYCLE_PHASE.COMPLETED,
+      optimizerUsage: { failureClassificationsApplied: "not-a-number" },
+    });
+    assert.equal(record.interventionImpactCounters, null);
+  });
+});

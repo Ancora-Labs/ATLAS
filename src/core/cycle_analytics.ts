@@ -542,6 +542,32 @@ function computeOutcomeStatus(phase, workerResults, planCount) {
   return CYCLE_OUTCOME_STATUS.FAILED;
 }
 
+// ── Intervention Impact Counters ─────────────────────────────────────────────
+
+/**
+ * Build a compact counters summary from an optimizer usage record.
+ * Surfaces `failureClassificationsApplied` and any other optimizer signals
+ * so that cycle_analytics consumers can track failure-driven adjustments
+ * without needing to parse the full optimizerUsage payload.
+ *
+ * Returns null when optimizerUsage is not available.
+ */
+function buildInterventionImpactCounters(optimizerUsage: any): Record<string, number> | null {
+  if (!optimizerUsage || typeof optimizerUsage !== "object") return null;
+  const counters: Record<string, number> = {};
+  const fields = [
+    "failureClassificationsApplied",
+    "rerouteReasonsApplied",
+    "benchmarkAdjustmentsApplied",
+    "policyOverridesApplied",
+  ] as const;
+  for (const field of fields) {
+    const v = (optimizerUsage as any)[field];
+    if (typeof v === "number") counters[field] = v;
+  }
+  return Object.keys(counters).length > 0 ? counters : null;
+}
+
 // ── Core computation ──────────────────────────────────────────────────────────
 
 /**
@@ -853,6 +879,7 @@ export function computeCycleAnalytics(config, {
     structuralAnalytics,
     laneTelemetry,
     optimizerUsage: optimizerUsage ?? null,
+    interventionImpactCounters: buildInterventionImpactCounters(optimizerUsage),
     parserBaselineRecovery: parserBaselineRecovery ?? null,
     stageTransitions: Array.isArray(stageTransitions) ? stageTransitions : [],
     dropReasons:      Array.isArray(dropReasons) ? dropReasons : [],

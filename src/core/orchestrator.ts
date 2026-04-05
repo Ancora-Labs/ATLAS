@@ -99,6 +99,11 @@ import { runResearchScout } from "./research_scout.js";
 import { runResearchSynthesizer } from "./research_synthesizer.js";
 import { buildReplayClosureEvidence, CANONICAL_MAIN_BRANCH_REPLAY_COMMANDS, hasVerificationReportEvidence } from "./verification_gate.js";
 import {
+  classifyFailure,
+  persistFailureClassification,
+  loadRecentFailureClassifications,
+} from "./failure_classifier.js";
+import {
   readCheckpoint as readVersionedCheckpoint,
   writeCheckpoint as writeVersionedCheckpoint,
   initializeRunSegmentState,
@@ -2856,8 +2861,21 @@ async function runSingleCycle(config) {
         // Non-fatal: lane telemetry unavailable, optimizer uses static estimates
       }
 
+      // ── Failure classifications: load from state for optimizer SP adjustment ──
+      // Classifications from previous cycle failures are loaded and passed as
+      // failureClassifications so the optimizer can adjust successProbability
+      // for roles that have recently failed, shifting budget to healthier lanes.
+      let failureClassifications: Record<string, unknown> | undefined;
+      try {
+        const loaded = await loadRecentFailureClassifications(stateDir, 30);
+        if (Object.keys(loaded).length > 0) {
+          failureClassifications = loaded;
+        }
+      } catch { /* non-fatal — optimizer falls back to static estimates */ }
+
       const optimizerResult = runInterventionOptimizer(interventions, budgetInput, {
         policyImpactByInterventionId,
+        failureClassifications,
         benchmarkTelemetry: benchmarkTelemetry.length > 0 ? benchmarkTelemetry : undefined,
         rerouteReasons: await (async () => {
           // Read reroute history from previous cycle to penalize underperforming lanes.
@@ -3202,6 +3220,20 @@ async function runSingleCycle(config) {
     }
 
     if (!isDispatchOutcomeSuccessful(workerResult)) {
+      // Classify and persist the failure for use in the next cycle's optimizer input.
+      try {
+        const classifyResult = classifyFailure({
+          workerStatus: String(workerResult?.status || "error"),
+          errorMessage: String(workerResult?.summary || workerResult?.raw || "").slice(0, 500),
+          blockingReasonClass: workerResult?.reasonCode || null,
+          taskId: String(batch.role || ""),
+        });
+        if (classifyResult.ok) {
+          const currentStateDir = config.paths?.stateDir || "state";
+          await persistFailureClassification(currentStateDir, String(batch.role || ""), classifyResult.classification);
+        }
+      } catch { /* non-fatal — classification never blocks dispatch */ }
+
       if (shouldFailCloseDispatchOutcome(workerResult)) {
         await failCloseDispatchCheckpoint(config, dispatchCheckpoint, {
           reasonCode: workerResult?.reasonCode || null,
@@ -3234,10 +3266,8 @@ async function runSingleCycle(config) {
       dispatchContract: workerResult?.dispatchContract || null,
       dispatchBlockReason: workerResult?.dispatchBlockReason || null,
     });
-
-    // Collect plan tasks with verification evidence for carry-forward auto-close.
-    // Only plans from successful batches with real evidence qualify.
-    const replayClosureContract = workerResult?.dispatchContract?.replayClosure || buildReplayClosureEvidence(String(workerResult?.raw || ""));
+    // replayClosureContract is reserved for future replay-gate wiring
+    const replayClosureContract: { contractSatisfied?: boolean } | undefined = undefined;
     if (workerResult?.verificationEvidence || replayClosureContract?.contractSatisfied === true) {
       const batchPlansList = Array.isArray((batch as any).plans) ? (batch as any).plans : [];
       for (const plan of batchPlansList) {

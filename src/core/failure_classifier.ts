@@ -498,3 +498,80 @@ export function applyClassificationToSuccessProbability(successProbability, clas
 
   return Math.max(SP_ADJUSTMENT_FLOOR, adjusted);
 }
+
+// ── Orchestration state persistence ──────────────────────────────────────────
+
+/**
+ * Load recent failure classifications from orchestration state.
+ *
+ * Reads `state/worker_failure_classifications.jsonl`, returns the last `limit`
+ * entries as a `{ [role]: ClassificationResult }` map keyed by role name.
+ * When multiple classifications exist for the same role, the most recent one wins.
+ *
+ * Returns an empty object when the file does not exist or cannot be parsed.
+ * Never throws — failures are silent (non-fatal analytics path).
+ *
+ * @param stateDir — path to the BOX state directory
+ * @param limit    — maximum number of JSONL records to read (default: 30)
+ * @returns map of role → ClassificationResult for injection into the optimizer
+ */
+export async function loadRecentFailureClassifications(
+  stateDir: string,
+  limit = 30,
+): Promise<Record<string, unknown>> {
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const filePath = (await import("node:path")).join(stateDir, "worker_failure_classifications.jsonl");
+    const raw = await readFile(filePath, "utf8");
+    const lines = raw.split("\n").filter(l => l.trim().length > 0);
+    const safeLimit = Math.max(1, Math.floor(Number(limit) || 30));
+    const records = lines.slice(-safeLimit).map(line => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean);
+
+    // Build role → classification map; later entries override earlier ones for same role.
+    const byRole: Record<string, unknown> = {};
+    for (const record of records) {
+      if (!record || typeof record !== "object") continue;
+      const role = String(record.role || "");
+      const classification = record.classification;
+      if (!role || !classification || typeof classification !== "object") continue;
+      byRole[role] = classification;
+    }
+    return byRole;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Persist a failure classification for a worker role to orchestration state.
+ *
+ * Appends a JSONL record to `state/worker_failure_classifications.jsonl` so that
+ * subsequent cycles can feed it into the intervention optimizer.
+ *
+ * Never throws — persistence failures are logged but do not block orchestration.
+ *
+ * @param stateDir       — path to the BOX state directory
+ * @param role           — worker role name
+ * @param classification — ClassificationResult from classifyFailure
+ */
+export async function persistFailureClassification(
+  stateDir: string,
+  role: string,
+  classification: unknown,
+): Promise<void> {
+  try {
+    const pathModule = await import("node:path");
+    const { appendFile } = await import("node:fs/promises");
+    const filePath = pathModule.join(stateDir, "worker_failure_classifications.jsonl");
+    const record = {
+      role: String(role || ""),
+      classification,
+      recordedAt: new Date().toISOString(),
+    };
+    await appendFile(filePath, JSON.stringify(record) + "\n", "utf8");
+  } catch {
+    /* best-effort — never block orchestration */
+  }
+}

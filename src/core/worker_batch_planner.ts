@@ -23,6 +23,7 @@ import {
   isThinPacketForAdmission,
   MAX_ACTIONABLE_STEPS_PER_PACKET,
   PACKET_OVERSIZE_REASON,
+  resolvePacketSizePolicy,
 } from "./plan_contract_validator.js";
 
 const CHARS_PER_TOKEN = 4;
@@ -209,7 +210,7 @@ export function getUsableModelContextTokens(config, modelName) {
   return Math.max(1, windowTokens - reserveTokens);
 }
 
-export function estimatePlanTokens(plan, calibrationCoefficient?: number) {
+export function estimatePlanTokens(plan, calibrationCoefficient?: number, config?: unknown) {
   const payload = [
     plan?.task,
     plan?.context,
@@ -244,7 +245,22 @@ export function estimatePlanTokens(plan, calibrationCoefficient?: number) {
   const coeff = Number.isFinite(calibrationCoefficient) && (calibrationCoefficient as number) > 0
     ? calibrationCoefficient as number
     : 1.0;
-  return Math.max(1, Math.round(heuristicEstimate * coeff));
+  const calibrated = Math.max(1, Math.round(heuristicEstimate * coeff));
+
+  // Apply bounded token floor from packet-size policy to prevent under-estimation
+  // on multi-file plans (5+ target files must have at minimum 8k tokens).
+  // Single-file/no-file plans only get the minTokensPerPlan floor if they have
+  // target_files declared (i.e., they are explicitly scoped plans, not bare tasks).
+  const policy = resolvePacketSizePolicy(config);
+  if (fileCount >= policy.multiFileThreshold) {
+    return Math.max(calibrated, policy.minTokensForMultiFile);
+  }
+  // Only apply single-plan floor when the plan explicitly declares target files,
+  // to avoid suppressing calibration differentials on bare task estimates.
+  if (fileCount > 0 && calibrated < policy.minTokensPerPlan) {
+    return policy.minTokensPerPlan;
+  }
+  return calibrated;
 }
 
 /**

@@ -748,3 +748,102 @@ export const MAX_ACTIONABLE_STEPS_PER_PACKET = 3 as const;
  * Oversized bundles must be auto-split before admission.
  */
 export const PACKET_OVERSIZE_REASON = "packet_exceeds_actionable_steps_cap" as const;
+
+/**
+ * Bounded packet-size policy defaults to prevent over-bundling.
+ *
+ * Over-bundling occurs when too many plans are packed into one worker batch,
+ * causing context overflow and missed inter-plan ordering constraints.  These
+ * defaults apply when no explicit config is provided, preventing unbounded
+ * token accumulation in the common case.
+ *
+ * Token floor: plans covering 5+ files must declare at minimum 8k tokens
+ * (derived from system learning: Prometheus consistently underestimates at 2k
+ * per plan for 7-8 file scopes).
+ *
+ * Fields:
+ *   maxPlansPerPacket      — hard cap on plans per batch (overrides MAX_ACTIONABLE_STEPS_PER_PACKET
+ *                            when explicitly configured via config.planner.maxPlansPerPacket)
+ *   minTokensPerPlan       — minimum estimated token cost per plan; plans below this
+ *                            floor are treated as under-estimated and bumped up
+ *   minTokensForMultiFile  — minimum token floor for plans with 5+ target files
+ *   multiFileThreshold     — number of target files that triggers the higher token floor
+ */
+export const BOUNDED_PACKET_SIZE_POLICY = Object.freeze({
+  maxPlansPerPacket:      5,
+  minTokensPerPlan:       2000,
+  minTokensForMultiFile:  8000,
+  multiFileThreshold:     5,
+});
+
+/**
+ * Resolve the bounded packet-size policy from config, merging operator overrides
+ * with the defaults from BOUNDED_PACKET_SIZE_POLICY.
+ *
+ * All fields are clamped to safe ranges:
+ *   maxPlansPerPacket:     [1, 20]
+ *   minTokensPerPlan:      [500, 100_000]
+ *   minTokensForMultiFile: [1000, 200_000]
+ *   multiFileThreshold:    [1, 30]
+ *
+ * @param config — BOX config object (may be null/undefined)
+ * @returns resolved packet-size policy object
+ */
+export function resolvePacketSizePolicy(config: unknown): { maxPlansPerPacket: number; minTokensPerPlan: number; minTokensForMultiFile: number; multiFileThreshold: number } {
+  const planner = (config as any)?.planner ?? {};
+  const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
+  const rawMaxPlans = Number(planner.maxPlansPerPacket);
+  const maxPlansPerPacket = Number.isFinite(rawMaxPlans) && rawMaxPlans > 0
+    ? clamp(Math.floor(rawMaxPlans), 1, 20)
+    : BOUNDED_PACKET_SIZE_POLICY.maxPlansPerPacket;
+
+  const rawMinTokens = Number(planner.minTokensPerPlan);
+  const minTokensPerPlan = Number.isFinite(rawMinTokens) && rawMinTokens > 0
+    ? clamp(Math.floor(rawMinTokens), 500, 100_000)
+    : BOUNDED_PACKET_SIZE_POLICY.minTokensPerPlan;
+
+  const rawMinMultiFile = Number(planner.minTokensForMultiFile);
+  const minTokensForMultiFile = Number.isFinite(rawMinMultiFile) && rawMinMultiFile > 0
+    ? clamp(Math.floor(rawMinMultiFile), 1000, 200_000)
+    : BOUNDED_PACKET_SIZE_POLICY.minTokensForMultiFile;
+
+  const rawMultiFileThreshold = Number(planner.multiFileThreshold);
+  const multiFileThreshold = Number.isFinite(rawMultiFileThreshold) && rawMultiFileThreshold > 0
+    ? clamp(Math.floor(rawMultiFileThreshold), 1, 30)
+    : BOUNDED_PACKET_SIZE_POLICY.multiFileThreshold;
+
+  return { maxPlansPerPacket, minTokensPerPlan, minTokensForMultiFile, multiFileThreshold };
+}
+
+/**
+ * Apply bounded token floor to a plan's estimatedExecutionTokens.
+ *
+ * If the plan has >= multiFileThreshold target files but its token estimate
+ * is below minTokensForMultiFile, the estimate is raised to the floor.
+ * Otherwise, if the estimate is below minTokensPerPlan, it is raised to that floor.
+ *
+ * This corrects the systematic under-estimation observed in Prometheus output
+ * for multi-file scoped plans.
+ *
+ * @param plan   — plan object (any shape; target_files and estimatedExecutionTokens read)
+ * @param policy — resolved packet-size policy
+ * @returns corrected token estimate (never lower than input)
+ */
+export function applyTokenFloorToEstimate(
+  plan: unknown,
+  policy: ReturnType<typeof resolvePacketSizePolicy>,
+): number {
+  const p = plan as any;
+  const fileCount = Array.isArray(p?.target_files) ? p.target_files.filter(Boolean).length : 0;
+  const rawEstimate = Number(p?.estimatedExecutionTokens);
+  const estimate = Number.isFinite(rawEstimate) && rawEstimate > 0 ? rawEstimate : 0;
+
+  if (fileCount >= policy.multiFileThreshold) {
+    return Math.max(estimate, policy.minTokensForMultiFile);
+  }
+  if (estimate > 0) {
+    return Math.max(estimate, policy.minTokensPerPlan);
+  }
+  return estimate;
+}
