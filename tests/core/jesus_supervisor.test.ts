@@ -334,6 +334,47 @@ describe("jesus_supervisor — runSystemHealthAudit", () => {
     });
   });
 
+  it("does NOT downgrade gaps via heuristic text match — only explicit registry entries qualify", async () => {
+    // A gap whose proposedFix text coincidentally appears in source but whose
+    // capability key is NOT in the deterministic registry must NOT be downgraded.
+    await withTempRepo(async ({ stateDir, repoDir }) => {
+      // Inject source that contains the proposedFix text verbatim.
+      writeFileSync(
+        path.join(repoDir, "src", "core", "placeholder.ts"),
+        "export const ok = true; // Inject CI failure logs into worker context",
+        "utf8",
+      );
+      writeFileSync(
+        path.join(stateDir, "knowledge_memory.json"),
+        JSON.stringify({
+          lessons: [],
+          capabilityGaps: [
+            {
+              gap: "Missing heuristic-only capability",
+              severity: "critical",
+              capability: "heuristic-only-capability",
+              proposedFix: "Inject CI failure logs into worker context",
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        { latestMainCi: null, failedCiRuns: [], pullRequests: [] },
+        {},
+        {},
+      );
+
+      const capGap = findings.find((f: any) => f.area === "capability-gap");
+      assert.ok(capGap, "capability-gap finding should exist");
+      // Must stay at original severity — NOT downgraded to info
+      assert.equal(capGap.severity, "critical", "heuristic-only match must NOT downgrade severity");
+      assert.equal(capGap.note, undefined, "heuristic-only match must NOT add verification note");
+    });
+  });
+
   it("suppresses pre-head failed CI runs when latest main CI is successful", async () => {
     await withTempRepo(async ({ stateDir, repoDir }) => {
       writeFileSync(path.join(repoDir, "src", "core", "placeholder.ts"), "export const ok = true;", "utf8");

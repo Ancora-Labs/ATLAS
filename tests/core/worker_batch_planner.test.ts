@@ -15,6 +15,8 @@ import {
   buildTokenFirstBatches,
   estimatePlanTokens,
   getUsableModelContextTokens,
+  autosplitOversizedPacket,
+  checkPacketSizeCap,
 } from "../../src/core/worker_batch_planner.js";
 
 function buildPlan(index) {
@@ -1363,5 +1365,97 @@ describe("buildTokenFirstBatches — calibration coefficient", () => {
       (batchesExplicit[0] as any).estimatedTokens,
       "no calibration should equal coefficient 1.0"
     );
+  });
+});
+
+// ── autosplitOversizedPacket ──────────────────────────────────────────────────
+
+describe("autosplitOversizedPacket", () => {
+  it("returns single chunk when plans count <= maxSteps", () => {
+    const plans = [{ task: "A" }, { task: "B" }, { task: "C" }];
+    const chunks = autosplitOversizedPacket(plans, 3);
+    assert.equal(chunks.length, 1);
+    assert.equal(chunks[0].length, 3);
+  });
+
+  it("splits into chunks of maxSteps when oversized", () => {
+    const plans = [{ task: "A" }, { task: "B" }, { task: "C" }, { task: "D" }];
+    const chunks = autosplitOversizedPacket(plans, 2);
+    assert.equal(chunks.length, 2);
+    assert.equal(chunks[0].length, 2);
+    assert.equal(chunks[1].length, 2);
+  });
+
+  it("preserves all plans across chunks (no loss)", () => {
+    const plans = [
+      { task: "Fix auth", task_id: "T1" },
+      { task: "Fix CI", task_id: "T2" },
+      { task: "Fix types", task_id: "T3" },
+      { task: "Fix lint", task_id: "T4" },
+      { task: "Fix docs", task_id: "T5" },
+    ];
+    const chunks = autosplitOversizedPacket(plans, 2);
+    const allTasks = chunks.flat().map((p: any) => p.task_id);
+    assert.equal(allTasks.length, 5, "all plans must be preserved");
+    assert.ok(allTasks.includes("T1"));
+    assert.ok(allTasks.includes("T5"));
+  });
+
+  it("respects dependency ordering across chunks", () => {
+    const plans = [
+      { task: "Step B", task_id: "T2", dependsOn: ["T1"] },
+      { task: "Step A", task_id: "T1" },
+      { task: "Step C", task_id: "T3", dependsOn: ["T2"] },
+      { task: "Step D", task_id: "T4" },
+    ];
+    const chunks = autosplitOversizedPacket(plans, 2);
+    // T1 must appear before T2; T2 must appear before T3
+    const allSorted = chunks.flat();
+    const idxT1 = allSorted.findIndex((p: any) => p.task_id === "T1");
+    const idxT2 = allSorted.findIndex((p: any) => p.task_id === "T2");
+    const idxT3 = allSorted.findIndex((p: any) => p.task_id === "T3");
+    assert.ok(idxT1 < idxT2, "T1 must precede T2");
+    assert.ok(idxT2 < idxT3, "T2 must precede T3");
+  });
+
+  it("returns empty array for empty input", () => {
+    assert.deepEqual(autosplitOversizedPacket([], 3), []);
+  });
+
+  it("negative path: handles null input gracefully", () => {
+    assert.deepEqual(autosplitOversizedPacket(null as any, 3), []);
+  });
+});
+
+// ── checkPacketSizeCap ────────────────────────────────────────────────────────
+
+describe("checkPacketSizeCap", () => {
+  it("returns null when plans count is at the cap", () => {
+    const plans = [{ task: "A" }, { task: "B" }, { task: "C" }];
+    assert.equal(checkPacketSizeCap(plans, 3), null);
+  });
+
+  it("returns null when plans count is below the cap", () => {
+    assert.equal(checkPacketSizeCap([{ task: "A" }], 3), null);
+  });
+
+  it("returns violation string when plans count exceeds cap", () => {
+    const plans = [{ task: "A" }, { task: "B" }, { task: "C" }, { task: "D" }];
+    const result = checkPacketSizeCap(plans, 3);
+    assert.ok(typeof result === "string", "must return a string when oversized");
+    assert.ok(result.length > 0);
+    assert.ok(result.includes("4"));
+    assert.ok(result.includes("3"));
+  });
+
+  it("uses MAX_ACTIONABLE_STEPS_PER_PACKET as default cap", () => {
+    // 4 plans with default cap of 3 must trigger violation
+    const plans = [{ task: "A" }, { task: "B" }, { task: "C" }, { task: "D" }];
+    const result = checkPacketSizeCap(plans);
+    assert.ok(typeof result === "string");
+  });
+
+  it("returns null for non-array input", () => {
+    assert.equal(checkPacketSizeCap(null as any), null);
   });
 });

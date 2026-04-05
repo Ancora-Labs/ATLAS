@@ -14,6 +14,9 @@ import {
   buildInterventionRubricScore,
   decidePolicyMutationsFromEvidenceWindow,
   POLICY_MUTATION_EVIDENCE_WINDOW,
+  retireLowYieldPolicyFamilies,
+  LOW_YIELD_IMPACT_THRESHOLD,
+  LOW_YIELD_MIN_EVIDENCE_RECORDS,
 } from "../../src/core/learning_policy_compiler.js";
 
 describe("learning_policy_compiler", () => {
@@ -847,5 +850,80 @@ describe("policy mutation evidence window", () => {
     assert.equal(result.routed.length, 1);
     assert.equal(result.promptConstraints.length, 1);
     assert.equal(result.decisions[0].mutate, true);
+  });
+});
+
+// ── retireLowYieldPolicyFamilies ──────────────────────────────────────────────
+
+describe("retireLowYieldPolicyFamilies", () => {
+  it("retires policies with avg effectiveness below threshold when sufficient evidence exists", () => {
+    const policies = [{ id: "glob-false-fail", severity: "critical" }];
+    const attributions = [
+      { policyId: "glob-false-fail", decayedEffectiveness: 0.05 },
+      { policyId: "glob-false-fail", decayedEffectiveness: 0.08 },
+    ];
+    const { active, retired } = retireLowYieldPolicyFamilies(policies, attributions);
+    assert.equal(retired.length, 1, "low-yield policy must be retired");
+    assert.equal(active.length, 0);
+    assert.ok(retired[0]._retirementReason.includes("Low-yield"));
+    assert.ok(typeof retired[0]._avgDecayedEffectiveness === "number");
+  });
+
+  it("keeps policies with avg effectiveness above threshold", () => {
+    const policies = [{ id: "lint-failure", severity: "warning" }];
+    const attributions = [
+      { policyId: "lint-failure", decayedEffectiveness: 0.8 },
+      { policyId: "lint-failure", decayedEffectiveness: 0.9 },
+    ];
+    const { active, retired } = retireLowYieldPolicyFamilies(policies, attributions);
+    assert.equal(active.length, 1, "effective policy must remain active");
+    assert.equal(retired.length, 0);
+  });
+
+  it("keeps policies with fewer than minEvidenceRecords records", () => {
+    const policies = [{ id: "import-error", severity: "critical" }];
+    const attributions = [
+      { policyId: "import-error", decayedEffectiveness: 0.02 },
+      // only 1 record, below default min of 2
+    ];
+    const { active, retired } = retireLowYieldPolicyFamilies(policies, attributions, { minEvidenceRecords: 2 });
+    assert.equal(active.length, 1, "insufficient evidence must not trigger retirement");
+    assert.equal(retired.length, 0);
+  });
+
+  it("respects retireOnlySeverities filter", () => {
+    const policies = [
+      { id: "glob-false-fail", severity: "critical" },
+      { id: "lint-failure", severity: "warning" },
+    ];
+    const attributions = [
+      { policyId: "glob-false-fail", decayedEffectiveness: 0.02 },
+      { policyId: "glob-false-fail", decayedEffectiveness: 0.03 },
+      { policyId: "lint-failure", decayedEffectiveness: 0.02 },
+      { policyId: "lint-failure", decayedEffectiveness: 0.03 },
+    ];
+    // Only retire warnings, not criticals
+    const { active, retired } = retireLowYieldPolicyFamilies(policies, attributions, {
+      retireOnlySeverities: ["warning"],
+    });
+    assert.equal(retired.length, 1, "only warning severity must be retired");
+    assert.equal(retired[0].id, "lint-failure");
+    assert.ok(active.some((p: any) => p.id === "glob-false-fail"), "critical must remain active");
+  });
+
+  it("negative: returns all active for empty attribution records", () => {
+    const policies = [{ id: "state-corruption", severity: "critical" }];
+    const { active, retired } = retireLowYieldPolicyFamilies(policies, []);
+    assert.equal(active.length, 1);
+    assert.equal(retired.length, 0);
+  });
+
+  it("LOW_YIELD_IMPACT_THRESHOLD is a small positive number", () => {
+    assert.ok(LOW_YIELD_IMPACT_THRESHOLD > 0);
+    assert.ok(LOW_YIELD_IMPACT_THRESHOLD < 0.5);
+  });
+
+  it("LOW_YIELD_MIN_EVIDENCE_RECORDS is at least 1", () => {
+    assert.ok(LOW_YIELD_MIN_EVIDENCE_RECORDS >= 1);
   });
 });

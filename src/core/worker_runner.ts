@@ -612,13 +612,16 @@ function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {}, rou
   // 5. Apply routing adjustments derived from compiled lesson policies.
   //    Recurring failure classes (e.g. syntax errors, import errors) override the
   //    complexity-based selection since model capability was NOT the root cause.
+  const sonnetModel = config?.copilot?.sonnetModel || "Claude Sonnet 4.6";
   for (const adj of routingAdjustments) {
     if (adj.modelOverride === "force-sonnet") {
       const previous = candidate;
-      candidate = defaultModel;
+      // Use explicit Sonnet — not defaultModel, which may itself be Codex/Opus.
+      // force-sonnet means "this failure class is tooling, not reasoning — Sonnet is sufficient".
+      candidate = sonnetModel;
       try {
         appendProgress(config,
-          `[POLICY_ROUTE] ${roleName}: ${previous} → ${defaultModel} (policy=${adj.policyId}: ${adj.reason})`
+          `[POLICY_ROUTE] ${roleName}: ${previous} → ${sonnetModel} (policy=${adj.policyId}: ${adj.reason})`
         );
       } catch { /* non-critical */ }
       break; // First critical policy override wins
@@ -872,12 +875,25 @@ function buildConversationContext(history, instruction, sessionState: WorkerSess
   // model sees it right before the work description and again when writing its response.
   // Omitting any item → verification gate rejects the done status and triggers rework.
   if (!isDiscoverySafeTask(instruction.taskKind)) {
+    // Extract specific test file paths from the plan's verification field so workers
+    // run only the tests relevant to their changes — not the full 1000+ test suite.
+    const targetTestFiles = (() => {
+      const verText = String(instruction.verification || "");
+      const testFileRe = /(?:^|\d+\.\s*)(tests\/[^\s—\-–|\n\r]+(?:\.test\.ts|\.test\.js))/gm;
+      const found = new Set<string>();
+      let m;
+      while ((m = testFileRe.exec(verText)) !== null) found.add(m[1].trim());
+      return [...found];
+    })();
+    const testRunCmd = targetTestFiles.length > 0
+      ? `npm test -- ${targetTestFiles.join(" ")}`
+      : "npm test -- tests/core/<module>.test.ts";
     parts.push("");
     parts.push("## ⛔ MANDATORY COMPLETION GATE — CHECK BEFORE WRITING BOX_STATUS=done");
     parts.push("At the end of your response, you MUST include ALL four of these — the gate scans for them literally:");
     parts.push("  ✓ BOX_MERGED_SHA=<actual sha>            ← run: git rev-parse HEAD after merge");
     parts.push("  ✓ CLEAN_TREE_STATUS=clean                ← run: git status --porcelain (must produce empty output)");
-    parts.push("  ✓ ===NPM TEST OUTPUT START===            ← run: npm test -- <relevant test files>");
+    parts.push(`  ✓ ===NPM TEST OUTPUT START===            ← run: ${testRunCmd}`);
     parts.push("    <paste full raw test stdout here>");
     parts.push("    ===NPM TEST OUTPUT END===");
     parts.push("  ✓ ===VERIFICATION_REPORT===              ← use pass/fail/n/a, not placeholders");
@@ -919,6 +935,46 @@ function buildConversationContext(history, instruction, sessionState: WorkerSess
   }
 
   return parts.join("\n");
+}
+
+/**
+ * Inject CI_FAILURE_CONTEXT into a ci-fix worker instruction when the context
+ * doesn't already contain it.  Reads local state artifact logs in priority order.
+ * Always injects something — either log evidence or an explicit no-data marker.
+ *
+ * Exported for unit testing.
+ */
+export async function injectCiFailureContextIfMissing(
+  instruction: Record<string, unknown>,
+  config: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const existingCtx = String(instruction?.context || "");
+  if (existingCtx.includes("## CI_FAILURE_CONTEXT")) return instruction;
+
+  const stateDir = String((config as any)?.paths?.stateDir ?? "");
+  let ciContext: string | null = null;
+  if (stateDir) {
+    for (const artifactName of ["npm_test_full.log", "npm_test_relevant.log", "test_run.log", "build_run.log", "evo_run_latest.log"]) {
+      try {
+        const logContent = await fs.readFile(path.join(stateDir, artifactName), "utf8");
+        if (logContent.trim().length > 0) {
+          const excerpt = logContent.slice(-4000);
+          ciContext = `## CI_FAILURE_CONTEXT\nsource: worker_runner_fallback:${artifactName}\ncommit_sha: unknown\n\n${excerpt}`;
+          break;
+        }
+      } catch {
+        // Artifact missing — try next
+      }
+    }
+  }
+  if (!ciContext) {
+    ciContext = `## CI_FAILURE_CONTEXT\nsource: no_evidence_available\ncommit_sha: unknown\nnote: No CI failure logs could be retrieved. Do not speculate about the failure cause. Use npm test to reproduce and diagnose.`;
+  }
+  const trimmed = existingCtx.trim();
+  return {
+    ...instruction,
+    context: trimmed ? `${trimmed}\n\n${ciContext}` : ciContext,
+  };
 }
 
 // ── Parse worker response ────────────────────────────────────────────────────
@@ -1066,9 +1122,17 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     }
     : instruction;
 
+  // ── Worker-runner CI context fallback ─────────────────────────────────────
+  const taskKindNorm = String(instruction?.taskKind || "").toLowerCase().replace(/[_\s]+/g, "-");
+  const taskTextLower = String(instruction?.task || "").toLowerCase();
+  const isCiFixTask = taskKindNorm === "ci-fix" || /\bci[-_\s]?fix\b/.test(taskTextLower);
+  const ciFixEnrichedInstruction = isCiFixTask
+    ? await injectCiFailureContextIfMissing(instructionWithSemanticContext as Record<string, unknown>, config)
+    : instructionWithSemanticContext;
+
   // Build conversation-only context with prompt tier budget and hard constraints injected
   const conversationContext = buildConversationContext(
-    history, instructionWithSemanticContext, sessionState, config, workerKind,
+    history, ciFixEnrichedInstruction, sessionState, config, workerKind,
     {
       tier,
       hardConstraints,

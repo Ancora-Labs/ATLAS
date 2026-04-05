@@ -115,3 +115,69 @@ describe("orchestrator governance gate dry-run parity", () => {
   });
 });
 
+describe("orchestrator governance gate — specialization admission", () => {
+  it("does not block when no plans are provided (gate skipped)", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-gate-spec-"));
+    try {
+      const config = {
+        paths: { stateDir },
+        env: { targetRepo: "CanerDoqdu/Box" },
+        canary: { enabled: false },
+        systemGuardian: { enabled: false },
+        governanceFreeze: { enabled: false, manualOverrideActive: false },
+      };
+      const result = await evaluatePreDispatchGovernanceGate(config, [], "spec-no-plans");
+      assert.equal(result.blocked, false);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses bounded fallback and does not block when consecutiveBlockCycles meets max", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-gate-spec-bypass-"));
+    try {
+      // Write gate state at max to trigger bounded fallback.
+      const { SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES } = await import("../../src/core/capability_pool.js");
+      await fs.writeFile(
+        path.join(stateDir, "specialization_gate_state.json"),
+        JSON.stringify({ consecutiveBlockCycles: SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES }),
+        "utf8"
+      );
+      const config = {
+        paths: { stateDir },
+        env: { targetRepo: "CanerDoqdu/Box" },
+        canary: { enabled: false },
+        systemGuardian: { enabled: false },
+        governanceFreeze: { enabled: false, manualOverrideActive: false },
+        // Set target requiring 100% specialists — no plan can meet this, but bounded fallback should allow.
+        workerPool: { specializationTargets: { minSpecializedShare: 1.0 } },
+      };
+      // Provide a plan that would normally trigger the specialization gate.
+      const plans = [{
+        id: "T-spec-bypass",
+        task: "fix-bug",
+        role: "Evolution Worker",
+        files: [],
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["bug is fixed"],
+        dependsOn: [],
+      }];
+      const result = await evaluatePreDispatchGovernanceGate(config, plans, "spec-bypass-test");
+      // Should be non-blocked due to bounded fallback.
+      assert.equal(result.blocked, false);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("BLOCK_REASON.SPECIALIZATION_ADMISSION_GATE is a stable non-empty string", () => {
+    assert.equal(typeof BLOCK_REASON.SPECIALIZATION_ADMISSION_GATE, "string");
+    assert.ok((BLOCK_REASON.SPECIALIZATION_ADMISSION_GATE as string).length > 0);
+  });
+
+  it("GATE_PRECEDENCE.SPECIALIZATION_ADMISSION is greater than ROLLING_COMPLETION_YIELD", () => {
+    assert.ok(GATE_PRECEDENCE.SPECIALIZATION_ADMISSION > GATE_PRECEDENCE.ROLLING_COMPLETION_YIELD);
+  });
+});
+
+

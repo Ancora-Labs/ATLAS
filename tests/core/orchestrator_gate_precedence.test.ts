@@ -204,13 +204,13 @@ describe("evaluatePreDispatchGovernanceGate — gateIndex on blocked results", (
   it("rolling completion yield gate has highest precedence number (fires last)", () => {
     const maxPrecedence = Math.max(...Object.values(GATE_PRECEDENCE));
     assert.equal(
-      GATE_PRECEDENCE.ROLLING_COMPLETION_YIELD,
+      GATE_PRECEDENCE.SPECIALIZATION_ADMISSION,
       maxPrecedence,
-      "ROLLING_COMPLETION_YIELD must have the highest precedence number (fires last)"
+      "SPECIALIZATION_ADMISSION must have the highest precedence number (fires last)"
     );
     assert.ok(
-      GATE_PRECEDENCE.DEPENDENCY_READINESS < GATE_PRECEDENCE.ROLLING_COMPLETION_YIELD,
-      "DEPENDENCY_READINESS must fire before ROLLING_COMPLETION_YIELD"
+      GATE_PRECEDENCE.ROLLING_COMPLETION_YIELD < GATE_PRECEDENCE.SPECIALIZATION_ADMISSION,
+      "ROLLING_COMPLETION_YIELD must fire before SPECIALIZATION_ADMISSION"
     );
   });
 

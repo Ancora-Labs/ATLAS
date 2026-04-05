@@ -55,6 +55,8 @@ import {
   buildThinPacketRejectionReason,
   computePacketDensityMetrics,
   isThinPacketForAdmission,
+  scanParsedOutputForProcessThought,
+  OUTPUT_FIDELITY_GATE_FAIL_REASON,
 } from "./plan_contract_validator.js";
 import {
   section,
@@ -4387,6 +4389,77 @@ Mandatory parser fields:
     aiResult = retryAiResult;
   }
 
+  // ── Output fidelity gate — process-thought marker rejection ─────────────
+  // Check for process-thought markers (<think>, <reasoning>, [THINKING], etc.)
+  // in strategic fields of the raw parsed output.  These tokens are internal
+  // reasoning artifacts that must never appear in persisted plans.
+  // On first violation we issue one constrained retry with an explicit diff.
+  // On repeated violation we fail-closed: plans=[], failReason=output-fidelity-gate.
+  let rawParsedInput = aiResult?.parsed || buildNarrativeFallbackParsed({ ...aiResult, raw });
+  {
+    const fidelityContaminated = scanParsedOutputForProcessThought(rawParsedInput);
+    if (fidelityContaminated.length > 0) {
+      await appendProgress(
+        config,
+        `[PROMETHEUS][FIDELITY] Process-thought markers detected in fields: ${fidelityContaminated.join(", ")} — retrying once`
+      );
+      // One constrained retry
+      let fidelityRetryParsed: unknown = null;
+      try {
+        const fidelityRetryPrompt = `${contextPrompt}
+
+## OUTPUT_FIDELITY_RETRY
+Your previous response contained process-thought markers (<think>, <reasoning>, [THINKING], etc.)
+in the following fields: ${fidelityContaminated.join(", ")}.
+These internal reasoning tokens must NOT appear in the JSON output or plan fields.
+Regenerate the full response ensuring all strategic fields (analysis, strategicNarrative, keyFindings, plans[].task, plans[].context) contain ONLY final actionable content — no thinking fragments.`;
+        const fidelityRetryArgs = buildAgentArgs({
+          agentSlug: "prometheus",
+          prompt: fidelityRetryPrompt,
+          model: prometheusModel,
+          allowAll: true,
+          noAskUser: true,
+          maxContinues: undefined,
+        });
+        appendLiveLogSync(stateDir, `\n[fidelity_retry_start] ${ts()}\n`);
+        const fidelityRetryResult = await spawnAsync(command, fidelityRetryArgs, {
+          env: process.env,
+          timeoutMs: prometheusTimeoutMs,
+          earlyExitMarker: "===END===",
+          onStdout(chunk) { appendLiveLogSync(stateDir, chunk.toString("utf8")); },
+          onStderr(chunk)  { appendLiveLogSync(stateDir, chunk.toString("utf8")); },
+        }) as { status?: number; stdout?: string; stderr?: string };
+        appendLiveLogSync(stateDir, `\n[fidelity_retry_end] ${ts()} exit=${fidelityRetryResult.status}\n`);
+        if (fidelityRetryResult.status === 0) {
+          const retryRaw = `${String(fidelityRetryResult.stdout || "")}\n${String(fidelityRetryResult.stderr || "")}`.trim();
+          const retryAi = parseAgentOutput(retryRaw);
+          fidelityRetryParsed = retryAi?.parsed || buildNarrativeFallbackParsed({ ...retryAi, raw: retryRaw });
+        }
+      } catch (fidelityErr) {
+        await appendProgress(config, `[PROMETHEUS][FIDELITY] Retry failed: ${String((fidelityErr as any)?.message || fidelityErr)}`);
+      }
+
+      const retryContaminated = fidelityRetryParsed ? scanParsedOutputForProcessThought(fidelityRetryParsed) : fidelityContaminated;
+      if (retryContaminated.length > 0 || !fidelityRetryParsed) {
+        // Fail-closed: persist empty plans with an explicit failReason
+        await appendProgress(
+          config,
+          `[PROMETHEUS][FIDELITY][${OUTPUT_FIDELITY_GATE_FAIL_REASON}] Repeated process-thought contamination after retry — fail-close plans=[]`
+        );
+        rawParsedInput = {
+          ...(rawParsedInput as object),
+          plans: [],
+          failReason: OUTPUT_FIDELITY_GATE_FAIL_REASON,
+          _fidelityGateFailed: true,
+          _fidelityContaminatedFields: fidelityContaminated,
+        };
+      } else {
+        rawParsedInput = fidelityRetryParsed as any;
+        await appendProgress(config, "[PROMETHEUS][FIDELITY] Retry clean — process-thought markers resolved");
+      }
+    }
+  }
+
   // ── Generation-boundary packet completeness gate ──────────────────────────
   // Reject unrecoverable incomplete packets BEFORE normalization so they never
   // enter the normalization pipeline. Unrecoverable means normalizePlanFromTask()
@@ -4397,7 +4470,6 @@ Mandatory parser fields:
   // This is the primary enforcement gate. The post-normalization capacityDelta/
   // requestROI filter below remains as a secondary safety net for plans injected
   // by non-rawPlans paths (alternative shapes, drift debt tasks).
-  let rawParsedInput = aiResult?.parsed || buildNarrativeFallbackParsed({ ...aiResult, raw });
   const mandatoryCoverageResult = validateMandatoryTaskCoverageContract(rawParsedInput, mandatoryFindings);
   const mandatoryCoverageMode = config?.runtime?.mandatoryTaskCoverageMode === "enforce" ? "enforce" : "warn";
   if (mandatoryCoverageMode === "enforce") {

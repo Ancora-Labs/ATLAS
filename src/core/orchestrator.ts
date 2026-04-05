@@ -53,7 +53,7 @@ import { appendCapacityEntry } from "./capacity_scoreboard.js";
 import { computeCapabilityDelta } from "./delta_analytics.js";
 import { evaluateRetune } from "./strategy_retuner.js";
 import { compileLessonsToPolicies } from "./learning_policy_compiler.js";
-import { assignWorkersToPlans, enforceLaneDiversity } from "./capability_pool.js";
+import { assignWorkersToPlans, enforceLaneDiversity, evaluateSpecializationAdmissionGate } from "./capability_pool.js";
 import { runDoctor } from "./doctor.js";
 import { validateAllPlans } from "./plan_contract_validator.js";
 import {
@@ -148,6 +148,8 @@ export const GATE_PRECEDENCE = Object.freeze({
   DEPENDENCY_READINESS:        9,
   /** Rolling completion yield is below the throttle threshold — dispatch is paused to prevent waste spirals. */
   ROLLING_COMPLETION_YIELD:   10,
+  /** Specialization admission gate — specialist share below adaptive lane target. */
+  SPECIALIZATION_ADMISSION:   11,
 });
 
 /**
@@ -175,6 +177,8 @@ export const BLOCK_REASON = Object.freeze({
   DEPENDENCY_READINESS_INCOMPLETE:"dependency_readiness_incomplete",
   /** Rolling completion yield fell at or below the throttle threshold. */
   ROLLING_YIELD_THROTTLE:         "rolling_yield_throttle",
+  /** Specialist share is below the adaptive lane utilization target. */
+  SPECIALIZATION_ADMISSION_GATE:  "specialization_admission_gate_failed",
 });
 
 /**
@@ -832,6 +836,66 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
     }
   } catch (yieldErr) {
     warn(`[orchestrator] rolling yield gate failed (non-fatal): ${String(yieldErr?.message || yieldErr)}`);
+  }
+
+  // ── Gate 11: Specialization admission gate ────────────────────────────
+  // Fires when the specialist share of the current plan set falls below the
+  // adaptive lane utilization target.  Bounded fallback: after
+  // SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES consecutive blocks the gate
+  // allows dispatch through with a warning to prevent deadlock.
+  //
+  // Opt-in: only active when config.workerPool.specializationTargets.minSpecializedShare
+  // is explicitly set to a positive value.  When not configured the gate is a no-op
+  // so existing workflows are not disrupted.
+  const configuredSpecShareTarget = Number(
+    (config as any)?.workerPool?.specializationTargets?.minSpecializedShare
+  );
+  const specializationGateEnabled = plans.length > 0 && Number.isFinite(configuredSpecShareTarget) && configuredSpecShareTarget > 0;
+  if (specializationGateEnabled) {
+    try {
+      const gateStatePath = path.join(stateDir, "specialization_gate_state.json");
+      let consecutiveBlockCycles = 0;
+      try {
+        const raw = await fs.readFile(gateStatePath, "utf8");
+        const parsed = JSON.parse(raw);
+        consecutiveBlockCycles = Number(parsed?.consecutiveBlockCycles) || 0;
+      } catch {
+        // File absent or unreadable — start from 0.
+      }
+
+      // assignWorkersToPlans is synchronous; call it with current plans to get fresh utilization.
+      const poolSample = assignWorkersToPlans(plans, config);
+      const admissionResult = evaluateSpecializationAdmissionGate(
+        poolSample.specializationUtilization,
+        consecutiveBlockCycles
+      );
+
+      // Persist updated counter regardless of outcome so bypass counter resets on pass.
+      const newCount = admissionResult.blocked ? admissionResult.consecutiveBlockCycles : 0;
+      try {
+        await fs.mkdir(path.dirname(gateStatePath), { recursive: true });
+        await fs.writeFile(gateStatePath, JSON.stringify({ consecutiveBlockCycles: newCount, updatedAt: new Date().toISOString() }), "utf8");
+      } catch (writeErr) {
+        warn(`[orchestrator] specialization gate state write failed (non-fatal): ${String(writeErr?.message || writeErr)}`);
+      }
+
+      if (admissionResult.blocked) {
+        return {
+          blocked: true,
+          reason: admissionResult.reason,
+          action: undefined,
+          dispatchBlockReason: admissionResult.reason,
+          graphResult,
+          cycleId,
+          budgetEligibility,
+          gateIndex: GATE_PRECEDENCE.SPECIALIZATION_ADMISSION,
+        };
+      } else if (admissionResult.reason && admissionResult.reason.includes("bypassed_fallback")) {
+        warn(`[orchestrator] specialization admission gate bypassed (bounded fallback): ${admissionResult.reason}`);
+      }
+    } catch (specErr) {
+      warn(`[orchestrator] specialization admission gate failed (non-fatal): ${String(specErr?.message || specErr)}`);
+    }
   }
 
   return {
@@ -3832,7 +3896,7 @@ export async function appendCiFixContext(
     const runId = run?.runId;
     const headSha = String(run?.headSha ?? "");
 
-    // ── Primary: GitHub Actions logs ────────────────────────────────────────
+    // ── Step 1: GitHub Actions failed-job logs ───────────────────────────────
     try {
       const headers: Record<string, string> = { Accept: "application/vnd.github+json" };
       if (githubToken) headers.Authorization = `Bearer ${githubToken}`;
@@ -3866,8 +3930,44 @@ export async function appendCiFixContext(
       warn(`[orchestrator] CI evidence fetch failed for run ${String(runId)}: ${String(err?.message || err)}`);
     }
 
-    // ── Fallback: state artifact log ────────────────────────────────────────
     if (stateDir) {
+      // ── Step 2: Local npm_test artifacts (npm_test_full.log, npm_test_relevant.log) ─
+      for (const artifactName of ["npm_test_full.log", "npm_test_relevant.log"]) {
+        try {
+          const logContent = await fs.readFile(path.join(stateDir, artifactName), "utf8");
+          const parsed = _parseStateArtifactLog(logContent);
+          if (parsed.failedTestIds.length > 0) {
+            const block = _buildCiContextBlock({
+              source: `local_npm_test_artifact:${artifactName}`,
+              headSha: parsed.headSha || headSha,
+              ...parsed,
+            });
+            return baseContext ? `${baseContext}\n\n${block}` : block;
+          }
+        } catch {
+          // File missing or unreadable — continue to next artifact
+        }
+      }
+
+      // ── Step 3: Latest run logs (test_run.log, build_run.log) ───────────────
+      for (const runLogName of ["test_run.log", "build_run.log"]) {
+        try {
+          const logContent = await fs.readFile(path.join(stateDir, runLogName), "utf8");
+          const parsed = _parseStateArtifactLog(logContent);
+          if (parsed.failedTestIds.length > 0) {
+            const block = _buildCiContextBlock({
+              source: `local_run_log:${runLogName}`,
+              headSha: parsed.headSha || headSha,
+              ...parsed,
+            });
+            return baseContext ? `${baseContext}\n\n${block}` : block;
+          }
+        } catch {
+          // File missing or unreadable — continue
+        }
+      }
+
+      // ── Step 4: Fallback: evo_run_latest.log (original fallback) ────────────
       try {
         const logContent = await fs.readFile(path.join(stateDir, "evo_run_latest.log"), "utf8");
         const parsed = _parseStateArtifactLog(logContent);
@@ -3885,7 +3985,9 @@ export async function appendCiFixContext(
     }
   }
 
-  return baseContext;
+  // ── Step 5: Explicit no-data marker — ci-fix worker must know evidence is absent ─
+  const noDataBlock = `## CI_FAILURE_CONTEXT\nsource: no_evidence_available\ncommit_sha: unknown\nnote: No CI failure logs could be retrieved from GitHub or local artifacts. Worker must not speculate about failure cause.`;
+  return baseContext ? `${baseContext}\n\n${noDataBlock}` : noDataBlock;
 }
 
 /**

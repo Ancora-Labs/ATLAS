@@ -310,6 +310,11 @@ export function isNonSpecificVerification(value: string): boolean {
   if (/--testPathPattern=[^\s]/i.test(v)) return false;
   // Specific: contains a description separator used by the output format
   if (/[—\-–]\s*test[:\s]/i.test(v)) return false;
+  // Specific: contains a --grep (or -t) flag with a substantive test-name pattern (≥4 chars).
+  // Athena often writes `npm test -- --grep 'pattern'` which IS scoped to specific tests.
+  if (/--grep\s+['"][^'"]{4,}['"]/i.test(v)) return false;
+  // Specific: contains a --testNamePattern flag with a substantive pattern (aliased in some runners).
+  if (/--testNamePattern\s*=\s*['"][^'"]{4,}['"]/i.test(v)) return false;
   // Non-specific: matches a known bare CLI command (no file argument)
   return /^(npm|node|npx)\s/i.test(v) || /^run\s+(test|check)/i.test(v);
 }
@@ -630,3 +635,94 @@ export function isPacketQuarantined(packet: any): boolean {
   }
   return false;
 }
+
+// ── Output fidelity gate ──────────────────────────────────────────────────────
+
+/**
+ * failReason value written to the persisted analysis when the output-fidelity
+ * gate fires after both initial parse and one constrained retry both contain
+ * process-thought markers in strategic fields.
+ */
+export const OUTPUT_FIDELITY_GATE_FAIL_REASON = "output-fidelity-gate" as const;
+
+/**
+ * Regex patterns that identify process-thought markers — internal reasoning
+ * tokens emitted by some AI models that must NOT appear in persisted plan
+ * output (plans[], analysis text, strategicNarrative, keyFindings).
+ *
+ * Patterns are purposely broad (case-insensitive) to catch all variants.
+ */
+export const PROCESS_THOUGHT_MARKER_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /<think[\s>]/i,
+  /<\/think>/i,
+  /<reasoning[\s>]/i,
+  /<\/reasoning>/i,
+  /\[THINKING\]/i,
+  /\[\/THINKING\]/i,
+  /<internal>/i,
+  /<\/internal>/i,
+  /<!--\s*thinking/i,
+]);
+
+/**
+ * Detect whether a string contains process-thought markers.
+ * Pure function — no side effects.
+ *
+ * @param text — any string (plan task text, analysis narrative, etc.)
+ * @returns true when at least one process-thought marker is present
+ */
+export function detectProcessThoughtMarkers(text: string): boolean {
+  const s = String(text || "");
+  return PROCESS_THOUGHT_MARKER_PATTERNS.some((pattern) => pattern.test(s));
+}
+
+/**
+ * Scan the strategic fields of a parsed Prometheus output for process-thought
+ * markers.  Returns the list of contaminated field paths for audit logging.
+ *
+ * Strategic fields checked:
+ *   - analysis / strategicNarrative / keyFindings (top-level strings)
+ *   - plans[*].task and plans[*].context (per-plan strings)
+ *
+ * @param parsed — raw parsed object from AI output
+ * @returns array of field path strings that contain markers (empty = clean)
+ */
+export function scanParsedOutputForProcessThought(parsed: unknown): string[] {
+  const contaminated: string[] = [];
+  if (!parsed || typeof parsed !== "object") return contaminated;
+  const obj = parsed as Record<string, unknown>;
+
+  for (const field of ["analysis", "strategicNarrative", "keyFindings"]) {
+    if (typeof obj[field] === "string" && detectProcessThoughtMarkers(obj[field] as string)) {
+      contaminated.push(field);
+    }
+  }
+
+  const plans = Array.isArray(obj.plans) ? obj.plans : [];
+  for (let i = 0; i < plans.length; i++) {
+    const plan = plans[i];
+    if (!plan || typeof plan !== "object") continue;
+    const p = plan as Record<string, unknown>;
+    if (typeof p.task === "string" && detectProcessThoughtMarkers(p.task)) {
+      contaminated.push(`plans[${i}].task`);
+    }
+    if (typeof p.context === "string" && detectProcessThoughtMarkers(p.context)) {
+      contaminated.push(`plans[${i}].context`);
+    }
+  }
+
+  return contaminated;
+}
+
+/**
+ * Maximum number of actionable steps (plans) allowed per packet bundle by default.
+ * Operators may override via config.planner.maxActionableStepsPerPacket.
+ * The hard maximum is enforced before dispatch admission.
+ */
+export const MAX_ACTIONABLE_STEPS_PER_PACKET = 3 as const;
+
+/**
+ * Violation code emitted when a packet bundle exceeds the actionable-steps cap.
+ * Oversized bundles must be auto-split before admission.
+ */
+export const PACKET_OVERSIZE_REASON = "packet_exceeds_actionable_steps_cap" as const;

@@ -732,8 +732,10 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
   // Observable change: adjusted interventions are ranked lower under budget pressure.
   const failureClassifications = options?.failureClassifications;
   const policyImpactByInterventionId = options?.policyImpactByInterventionId;
+  const benchmarkTelemetry: any[] = Array.isArray(options?.benchmarkTelemetry) ? options.benchmarkTelemetry : [];
   let failureClassificationsApplied = 0;
   let policyImpactPenaltiesApplied = 0;
+  let benchmarkBoostsApplied = 0;
   let adjustedInterventions = interventions;
 
   if (failureClassifications && typeof failureClassifications === "object" && !Array.isArray(failureClassifications)) {
@@ -761,6 +763,37 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
     });
   }
 
+  // ── Benchmark telemetry signal: adjust impact multiplier based on observed yield ─
+  // benchmarkTelemetry entries: { interventionId, observedSuccessRate, sampleCount }
+  // Observed success rates above 0.5 boost impact; below 0.5 reduce it.
+  // This aligns ranking with measured ROI rather than static estimates.
+  if (benchmarkTelemetry.length > 0) {
+    const benchmarkByInterventionId = new Map<string, { observedSuccessRate: number; sampleCount: number }>();
+    for (const entry of benchmarkTelemetry) {
+      const id = String(entry?.interventionId || entry?.id || "");
+      const rate = Number(entry?.observedSuccessRate ?? entry?.successRate);
+      const count = Number(entry?.sampleCount ?? entry?.count ?? 0);
+      if (id && Number.isFinite(rate) && rate >= 0 && rate <= 1) {
+        benchmarkByInterventionId.set(id, { observedSuccessRate: rate, sampleCount: count });
+      }
+    }
+    if (benchmarkByInterventionId.size > 0) {
+      adjustedInterventions = adjustedInterventions.map((intervention) => {
+        const signal = benchmarkByInterventionId.get(String(intervention.id || ""));
+        if (!signal) return intervention;
+        // Only use signal if backed by at least 1 observation
+        if (signal.sampleCount < 1) return intervention;
+        // Blend observed rate with estimated successProbability (60% weight on observed)
+        const blended = Math.round(
+          (signal.observedSuccessRate * 0.6 + intervention.successProbability * 0.4) * 1000
+        ) / 1000;
+        if (blended === intervention.successProbability) return intervention;
+        benchmarkBoostsApplied += 1;
+        return { ...intervention, successProbability: blended, _benchmarkAdjusted: true };
+      });
+    }
+  }
+
   // Rank by descending EV (with confidence penalties applied)
   const ranked = rankInterventions(adjustedInterventions);
 
@@ -773,7 +806,8 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
     budgetUnit:     BUDGET_UNIT,
     failureClassificationsApplied,
     policyImpactPenaltiesApplied,
-    benchmarkTelemetryCount: Array.isArray(options?.benchmarkTelemetry) ? options.benchmarkTelemetry.length : 0,
+    benchmarkTelemetryCount: benchmarkTelemetry.length,
+    benchmarkBoostsApplied,
     ...reconciled,
   };
 }

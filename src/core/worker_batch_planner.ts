@@ -17,6 +17,8 @@ import {
   buildThinPacketRejectionReason,
   computePacketDensityMetrics,
   isThinPacketForAdmission,
+  MAX_ACTIONABLE_STEPS_PER_PACKET,
+  PACKET_OVERSIZE_REASON,
 } from "./plan_contract_validator.js";
 
 const CHARS_PER_TOKEN = 4;
@@ -559,6 +561,105 @@ export function autoBundleThinRelatedPackets(
   return { plans: out, bundledCount };
 }
 
+/**
+ * Split an oversized array of plans into chunks of at most `maxSteps` plans
+ * each, preserving `dependsOn` chains so dependency ordering is maintained
+ * across sub-packets.
+ *
+ * The split is deterministic:
+ *   1. Plans with a `dependsOn` referencing another plan in the same set are
+ *      placed in later chunks (after the plan they depend on).
+ *   2. Plans with no dependencies fill earlier chunks first.
+ *   3. Each chunk's `dependsOn` field is left intact so downstream dispatch
+ *      scheduling can still enforce ordering.
+ *
+ * @param plans      — array of plan objects (any shape, must have optional .dependsOn)
+ * @param maxSteps   — max plans per chunk (default MAX_ACTIONABLE_STEPS_PER_PACKET = 3)
+ * @returns array of plan-array chunks; each chunk has at most maxSteps entries
+ */
+export function autosplitOversizedPacket(
+  plans: any[],
+  maxSteps: number = MAX_ACTIONABLE_STEPS_PER_PACKET,
+): any[][] {
+  if (!Array.isArray(plans) || plans.length === 0) return [];
+  const cap = Math.max(1, Math.floor(maxSteps));
+  if (plans.length <= cap) return [plans];
+
+  // Topological sort: plans with declared dependsOn come after their dependencies.
+  // Build a dependency id set for each plan (normalized to lowercase strings).
+  const getId = (plan: any): string =>
+    String(plan?.task_id || plan?.id || plan?.title || plan?.task || "").trim().toLowerCase();
+
+  const idIndex = new Map<string, number>();
+  plans.forEach((p, i) => {
+    const id = getId(p);
+    if (id) idIndex.set(id, i);
+  });
+
+  const getDeps = (plan: any): string[] => {
+    const raw = plan?.dependsOn ?? plan?.dependencies;
+    if (!raw) return [];
+    const arr = Array.isArray(raw) ? raw : [raw];
+    return arr.map((d: any) => String(d || "").trim().toLowerCase()).filter(Boolean);
+  };
+
+  // Kahn's algorithm to get a dependency-respecting order
+  const inDegree = new Array(plans.length).fill(0);
+  const adj: number[][] = plans.map(() => []);
+  for (let i = 0; i < plans.length; i++) {
+    for (const dep of getDeps(plans[i])) {
+      const j = idIndex.get(dep);
+      if (j !== undefined && j !== i) {
+        adj[j].push(i); // j must come before i
+        inDegree[i]++;
+      }
+    }
+  }
+  const queue: number[] = [];
+  for (let i = 0; i < plans.length; i++) {
+    if (inDegree[i] === 0) queue.push(i);
+  }
+  const sorted: any[] = [];
+  while (queue.length > 0) {
+    const idx = queue.shift()!;
+    sorted.push(plans[idx]);
+    for (const next of adj[idx]) {
+      inDegree[next]--;
+      if (inDegree[next] === 0) queue.push(next);
+    }
+  }
+  // Any unresolved nodes (cycles) appended in original order
+  if (sorted.length < plans.length) {
+    const sortedIndices = new Set(sorted.map((p) => plans.indexOf(p)));
+    for (let i = 0; i < plans.length; i++) {
+      if (!sortedIndices.has(i)) sorted.push(plans[i]);
+    }
+  }
+
+  // Slice into chunks of `cap`
+  const chunks: any[][] = [];
+  for (let i = 0; i < sorted.length; i += cap) {
+    chunks.push(sorted.slice(i, i + cap));
+  }
+  return chunks;
+}
+
+/**
+ * Validate that a plans array does not exceed the actionable-steps cap.
+ * Returns the violation reason string if oversized, or null if compliant.
+ *
+ * @param plans     — array of plan objects
+ * @param maxSteps  — cap (default MAX_ACTIONABLE_STEPS_PER_PACKET)
+ * @returns violation reason string or null
+ */
+export function checkPacketSizeCap(plans: any[], maxSteps: number = MAX_ACTIONABLE_STEPS_PER_PACKET): string | null {
+  if (!Array.isArray(plans)) return null;
+  if (plans.length > maxSteps) {
+    return `${PACKET_OVERSIZE_REASON}: ${plans.length} plans exceeds cap of ${maxSteps}`;
+  }
+  return null;
+}
+
 function hasConflictFiles(plan: any, existing: any): boolean {
   const filesA = Array.isArray(plan?.filesInScope)
     ? plan.filesInScope
@@ -1054,7 +1155,35 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
           }
         }
 
-        compactedBatches.forEach((batch, index) => {
+        // ── Actionable-steps cap enforcement ─────────────────────────────
+        // Cap each compacted batch to at most maxActionableStepsPerPacket plans.
+        // Oversized batches are auto-split with dependency ordering preserved.
+        // Activated only when explicitly configured via
+        // config.planner.maxActionableStepsPerPacket (must be positive integer).
+        // Default behavior: no additional splitting beyond the dependency limit above.
+        const rawActionableCap = Number((config as any)?.planner?.maxActionableStepsPerPacket);
+        const actionableCap = Number.isFinite(rawActionableCap) && rawActionableCap > 0
+          ? Math.floor(rawActionableCap)
+          : 0; // 0 = disabled (default — preserves backward-compatible behaviour)
+
+        const actionableBatches: Array<{ plans: unknown[]; estimatedTokens: number; _oversizeSplit?: boolean }> = [];
+        for (const batch of compactedBatches) {
+          const batchPlans = batch.plans as any[];
+          if (actionableCap > 0 && batchPlans.length > actionableCap) {
+            const chunks = autosplitOversizedPacket(batchPlans, actionableCap);
+            for (const chunk of chunks) {
+              actionableBatches.push({
+                plans: chunk,
+                estimatedTokens: Math.round(batch.estimatedTokens * chunk.length / batchPlans.length),
+                _oversizeSplit: true,
+              });
+            }
+          } else {
+            actionableBatches.push(batch);
+          }
+        }
+
+        actionableBatches.forEach((batch, index) => {
           const utilization = selection.usableContextTokens > 0
             ? Math.round((batch.estimatedTokens / selection.usableContextTokens) * 100)
             : 0;
@@ -1071,8 +1200,9 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
             sharedBranch,
             wave: waveNum,
             roleBatchIndex: index + 1,
-            roleBatchTotal: compactedBatches.length,
-            githubFinalizer: index === compactedBatches.length - 1,
+            roleBatchTotal: actionableBatches.length,
+            githubFinalizer: index === actionableBatches.length - 1,
+            ...(batch._oversizeSplit ? { _oversizeSplit: true } : {}),
           });
         });
       }

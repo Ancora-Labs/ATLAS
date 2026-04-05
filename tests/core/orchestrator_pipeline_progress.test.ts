@@ -1632,6 +1632,7 @@ describe("pipeline progress — terminology drift prevention (stage IDs)", () =>
       PLAN_EVIDENCE_COUPLING_INVALID: "plan_evidence_coupling_invalid",
       DEPENDENCY_READINESS_INCOMPLETE:"dependency_readiness_incomplete",
       ROLLING_YIELD_THROTTLE:         "rolling_yield_throttle",
+      SPECIALIZATION_ADMISSION_GATE:  "specialization_admission_gate_failed",
     };
 
     for (const [key, expectedValue] of Object.entries(CANONICAL_BLOCK_REASONS)) {

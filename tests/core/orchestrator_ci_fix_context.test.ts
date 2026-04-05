@@ -97,7 +97,7 @@ describe("appendCiFixContext", () => {
     assert.ok(out.includes("source: state_fallback_artifacts"));
   });
 
-  it("negative path: returns base context unchanged when evidence is incomplete", async () => {
+  it("negative path: injects no-data marker when all evidence sources are exhausted", async () => {
     mock.method(globalThis, "fetch", async () => ({ ok: false, status: 404 } as any));
     await fs.writeFile(
       path.join(stateDir, "evo_run_latest.log"),
@@ -105,9 +105,37 @@ describe("appendCiFixContext", () => {
       "utf8"
     );
 
-    const plan = { taskKind: "ci-fix" };
+    const plan = {
+      taskKind: "ci-fix",
+      githubCiContext: { failedCiRuns: [{ runId: 999, headSha: "deadbeef" }] }
+    };
     const out = await appendCiFixContext(config, plan, "original");
-    assert.equal(out, "original");
+    assert.ok(out.includes("## CI_FAILURE_CONTEXT"), "CI_FAILURE_CONTEXT section must always be injected for ci-fix tasks");
+    assert.ok(out.includes("no_evidence_available"), "explicit no-data marker must be present when evidence is exhausted");
+  });
+
+  it("falls back to npm_test_full.log when GitHub and evo_run_latest have no failures", async () => {
+    mock.method(globalThis, "fetch", async () => ({ ok: false, status: 404 } as any));
+    await fs.writeFile(
+      path.join(stateDir, "npm_test_full.log"),
+      [
+        "commit=npm123sha",
+        "FAIL tests/core/npm_test_artifact.test.ts",
+        "AssertionError: expected 1 to equal 2",
+        "at run (tests/core/npm_test_artifact.test.ts:8:2)"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const plan = {
+      taskKind: "ci-fix",
+      githubCiContext: { failedCiRuns: [{ runId: 999, headSha: "npm123sha" }] }
+    };
+    const out = await appendCiFixContext(config, plan, "");
+
+    assert.ok(out.includes("## CI_FAILURE_CONTEXT"));
+    assert.ok(out.includes("failed_test_identifiers: tests/core/npm_test_artifact.test.ts"));
+    assert.ok(out.includes("local_npm_test_artifact:npm_test_full.log"));
   });
 
   it("applies deterministic source priority and structured truncation", async () => {

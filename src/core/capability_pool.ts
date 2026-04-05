@@ -632,3 +632,73 @@ export function computeSpecialistFitThreshold(
   const adjusted = safeBase - adjustment;
   return Math.round(Math.max(0, Math.min(1, adjusted)) * 1000) / 1000;
 }
+
+// ── Specialization admission gate ────────────────────────────────────────────
+
+/**
+ * Maximum number of consecutive cycles for which the specialization admission
+ * gate may block dispatch.  When this limit is reached, dispatch is allowed
+ * through with a fallback warning so the system never deadlocks on specialist
+ * availability alone.
+ */
+export const SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES = 3 as const;
+
+/**
+ * Block-reason string emitted when the specialization admission gate fires.
+ * Stable prefix — dynamic detail appended after ':'.
+ */
+export const SPECIALIZATION_ADMISSION_BLOCK_REASON = "specialization_admission_gate_failed" as const;
+
+/**
+ * Evaluate whether the current assignment pool satisfies the specialization
+ * admission gate.
+ *
+ * Gate fires when ALL of:
+ *   1. Specialization targets are NOT met (specializationTargetsMet = false).
+ *   2. At least one specialist worker is defined in the role registry (i.e., we
+ *      are not in a "no-specialist-available" topology).
+ *   3. The cycle has not already been blocked `maxBlockCycles` consecutive times
+ *      (bounded fallback protects against deadlock).
+ *
+ * Returns { blocked: true, reason, consecutiveBlockCycles } when the gate fires,
+ * or { blocked: false } when dispatch should proceed.
+ *
+ * @param specializationUtilization  — from assignWorkersToPlans result
+ * @param consecutiveBlockCycles     — how many consecutive cycles this gate has fired
+ * @param maxBlockCycles             — bounded fallback threshold (default SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES)
+ */
+export function evaluateSpecializationAdmissionGate(
+  specializationUtilization: {
+    specializationTargetsMet: boolean;
+    specializedShare: number;
+    minSpecializedShare: number;
+    adaptiveMinSpecializedShare: number;
+    specializedDeficit: number;
+    admissionReady: boolean;
+  },
+  consecutiveBlockCycles: number = 0,
+  maxBlockCycles: number = SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES,
+): { blocked: boolean; reason: string; consecutiveBlockCycles: number } {
+  if (!specializationUtilization || specializationUtilization.specializationTargetsMet) {
+    return { blocked: false, reason: "", consecutiveBlockCycles: 0 };
+  }
+
+  // Bounded fallback: if we've been blocking for maxBlockCycles consecutive cycles,
+  // allow through to prevent deadlock.
+  const safeMaxBlock = Math.max(1, Math.floor(maxBlockCycles));
+  if (consecutiveBlockCycles >= safeMaxBlock) {
+    return {
+      blocked: false,
+      reason: `specialization_admission_gate_bypassed_fallback: consecutive_blocks=${consecutiveBlockCycles} >= max=${safeMaxBlock}`,
+      consecutiveBlockCycles,
+    };
+  }
+
+  const pct = Math.round(specializationUtilization.specializedShare * 100);
+  const minPct = Math.round(specializationUtilization.adaptiveMinSpecializedShare * 100);
+  return {
+    blocked: true,
+    reason: `${SPECIALIZATION_ADMISSION_BLOCK_REASON}: specialized_share=${pct}% < adaptive_target=${minPct}% deficit=${specializationUtilization.specializedDeficit}`,
+    consecutiveBlockCycles: consecutiveBlockCycles + 1,
+  };
+}

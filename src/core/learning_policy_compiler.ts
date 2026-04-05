@@ -1033,6 +1033,112 @@ export interface PolicyMutationDecision {
   reason: string;
 }
 
+// ── Low-yield policy family retirement ───────────────────────────────────────
+
+/**
+ * Minimum policy impact yield below which a policy is considered low-yield.
+ * Yield is measured as the average decayedEffectiveness across impact attribution
+ * records for the policy family.
+ */
+export const LOW_YIELD_IMPACT_THRESHOLD = 0.15 as const;
+
+/**
+ * Minimum number of impact attribution records required before a policy can be
+ * retired as low-yield. Prevents premature retirement on sparse data.
+ */
+export const LOW_YIELD_MIN_EVIDENCE_RECORDS = 2 as const;
+
+/**
+ * Retire low-yield policy families based on measured impact attribution.
+ *
+ * A policy is retired as "low-yield" when:
+ *   1. There are at least LOW_YIELD_MIN_EVIDENCE_RECORDS attribution records for it.
+ *   2. The average decayedEffectiveness across those records is below
+ *      LOW_YIELD_IMPACT_THRESHOLD.
+ *   3. The policy is NOT in the `protected` set (critical severity policies are
+ *      kept until explicitly retired via closure evidence).
+ *
+ * This is distinct from half-life retirement (which uses cycle inactivity) —
+ * low-yield retirement uses actual measured effectiveness scores from the
+ * optimizer/attribution pipeline.
+ *
+ * @param policies         — active compiled policies
+ * @param attributionRecords — PolicyImpactAttribution records (from buildPolicyImpactAttribution)
+ * @param opts             — { lowYieldThreshold?, minEvidenceRecords?, retireOnlySeverities? }
+ * @returns { active, retired } partitioned policy lists
+ */
+export function retireLowYieldPolicyFamilies(
+  policies: any[],
+  attributionRecords: PolicyImpactAttribution[],
+  opts: {
+    lowYieldThreshold?: number;
+    minEvidenceRecords?: number;
+    retireOnlySeverities?: string[];
+  } = {},
+): { active: any[]; retired: any[] } {
+  if (!Array.isArray(policies)) return { active: [], retired: [] };
+
+  const threshold = Number.isFinite(Number(opts.lowYieldThreshold))
+    ? Number(opts.lowYieldThreshold)
+    : LOW_YIELD_IMPACT_THRESHOLD;
+  const minRecords = Number.isFinite(Number(opts.minEvidenceRecords))
+    ? Math.max(1, Math.floor(Number(opts.minEvidenceRecords)))
+    : LOW_YIELD_MIN_EVIDENCE_RECORDS;
+  const allowedSeverities = Array.isArray(opts.retireOnlySeverities)
+    ? new Set(opts.retireOnlySeverities.map((s) => String(s).toLowerCase()))
+    : null; // null = retire any severity
+
+  // Build impact attribution index by policyId
+  const effectivenessByPolicyId = new Map<string, number[]>();
+  for (const record of (Array.isArray(attributionRecords) ? attributionRecords : [])) {
+    const id = String(record?.policyId || "").trim();
+    if (!id) continue;
+    const eff = Number(record?.decayedEffectiveness);
+    if (!Number.isFinite(eff)) continue;
+    if (!effectivenessByPolicyId.has(id)) effectivenessByPolicyId.set(id, []);
+    effectivenessByPolicyId.get(id)!.push(Math.max(0, Math.min(1, eff)));
+  }
+
+  const active: any[] = [];
+  const retired: any[] = [];
+
+  for (const policy of policies) {
+    const policyId = String(policy?.id || "").trim();
+    const severity = String(policy?.severity || "warning").toLowerCase();
+
+    // Skip if severity filter is set and doesn't match
+    if (allowedSeverities !== null && !allowedSeverities.has(severity)) {
+      active.push(policy);
+      continue;
+    }
+
+    const records = effectivenessByPolicyId.get(policyId);
+    if (!records || records.length < minRecords) {
+      active.push(policy);
+      continue;
+    }
+
+    const avgEffectiveness = records.reduce((s, v) => s + v, 0) / records.length;
+    if (avgEffectiveness <= threshold) {
+      retired.push({
+        ...policy,
+        _retiredAt: new Date().toISOString(),
+        _retirementReason: `Low-yield policy family: avg effectiveness ${Math.round(avgEffectiveness * 1000) / 1000} <= threshold ${threshold} over ${records.length} attribution records`,
+        _avgDecayedEffectiveness: Math.round(avgEffectiveness * 1000) / 1000,
+        _evidenceRecordCount: records.length,
+      });
+    } else {
+      active.push({
+        ...policy,
+        _avgDecayedEffectiveness: Math.round(avgEffectiveness * 1000) / 1000,
+        _evidenceRecordCount: records.length,
+      });
+    }
+  }
+
+  return { active, retired };
+}
+
 export interface PolicyMutationResult {
   routed: ReturnType<typeof deriveRoutingAdjustments>;
   promptConstraints: ReturnType<typeof buildPromptHardConstraints>;

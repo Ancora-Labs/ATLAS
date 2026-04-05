@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { inferCapabilityTag, selectWorkerForPlan, assignWorkersToPlans, enforceLaneDiversity, computeDispatchMetrics, buildWorkerChain, detectLaneConflicts, recordLaneOutcome, getLaneScore, scoreWorkerTaskFit, selectWorkerByFitScore, buildLanePerformanceFromCycleTelemetry, buildLaneTelemetrySignals, computeSpecialistFitThreshold } from "../../src/core/capability_pool.js";
+import { inferCapabilityTag, selectWorkerForPlan, assignWorkersToPlans, enforceLaneDiversity, computeDispatchMetrics, buildWorkerChain, detectLaneConflicts, recordLaneOutcome, getLaneScore, scoreWorkerTaskFit, selectWorkerByFitScore, buildLanePerformanceFromCycleTelemetry, buildLaneTelemetrySignals, computeSpecialistFitThreshold, evaluateSpecializationAdmissionGate, SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES, SPECIALIZATION_ADMISSION_BLOCK_REASON } from "../../src/core/capability_pool.js";
 
 describe("capability_pool", () => {
   describe("inferCapabilityTag", () => {
@@ -748,3 +748,70 @@ describe("capability_pool — computeSpecialistFitThreshold", () => {
     assert.ok(adjusted > 0.7, `expected raised threshold, got ${adjusted}`);
   });
 });
+
+describe("capability_pool — evaluateSpecializationAdmissionGate", () => {
+  const MET_UTILIZATION = {
+    specializationTargetsMet: true,
+    specializedShare: 0.8,
+    minSpecializedShare: 0.5,
+    adaptiveMinSpecializedShare: 0.5,
+    specializedDeficit: 0,
+    admissionReady: true,
+  };
+  const NOT_MET_UTILIZATION = {
+    specializationTargetsMet: false,
+    specializedShare: 0.2,
+    minSpecializedShare: 0.5,
+    adaptiveMinSpecializedShare: 0.5,
+    specializedDeficit: 2,
+    admissionReady: false,
+  };
+
+  it("does NOT block when specialization targets are met", () => {
+    const result = evaluateSpecializationAdmissionGate(MET_UTILIZATION, 0);
+    assert.equal(result.blocked, false);
+    assert.equal(result.consecutiveBlockCycles, 0);
+  });
+
+  it("blocks when specialization targets are not met and within max cycles", () => {
+    const result = evaluateSpecializationAdmissionGate(NOT_MET_UTILIZATION, 0);
+    assert.equal(result.blocked, true);
+    assert.ok(result.reason.startsWith(SPECIALIZATION_ADMISSION_BLOCK_REASON));
+    assert.equal(result.consecutiveBlockCycles, 1);
+  });
+
+  it("increments consecutiveBlockCycles on each block", () => {
+    const result = evaluateSpecializationAdmissionGate(NOT_MET_UTILIZATION, 1);
+    assert.equal(result.blocked, true);
+    assert.equal(result.consecutiveBlockCycles, 2);
+  });
+
+  it("bypasses gate (bounded fallback) when consecutiveBlockCycles >= maxBlockCycles", () => {
+    const max = SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES;
+    const result = evaluateSpecializationAdmissionGate(NOT_MET_UTILIZATION, max);
+    assert.equal(result.blocked, false);
+    assert.ok(result.reason.includes("bypassed_fallback"));
+  });
+
+  it("resets consecutiveBlockCycles to 0 when targets are met after prior blocks", () => {
+    const result = evaluateSpecializationAdmissionGate(MET_UTILIZATION, 2);
+    assert.equal(result.blocked, false);
+    assert.equal(result.consecutiveBlockCycles, 0);
+  });
+
+  it("exports SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES as a positive integer", () => {
+    assert.ok(Number.isInteger(SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES));
+    assert.ok(SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES >= 1);
+  });
+
+  it("exports SPECIALIZATION_ADMISSION_BLOCK_REASON as a non-empty string", () => {
+    assert.equal(typeof SPECIALIZATION_ADMISSION_BLOCK_REASON, "string");
+    assert.ok(SPECIALIZATION_ADMISSION_BLOCK_REASON.length > 0);
+  });
+
+  it("handles null/undefined utilization gracefully without blocking", () => {
+    const result = evaluateSpecializationAdmissionGate(null as any, 0);
+    assert.equal(result.blocked, false);
+  });
+});
+

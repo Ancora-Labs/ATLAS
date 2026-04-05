@@ -57,7 +57,15 @@ import {
   buildTrustedMemoryShortlist,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments } from "../../src/core/prompt_compiler.js";
-import { isNonSpecificVerification, validatePlanContract } from "../../src/core/plan_contract_validator.js";
+import {
+  isNonSpecificVerification,
+  validatePlanContract,
+  detectProcessThoughtMarkers,
+  scanParsedOutputForProcessThought,
+  OUTPUT_FIDELITY_GATE_FAIL_REASON,
+  MAX_ACTIONABLE_STEPS_PER_PACKET,
+  PACKET_OVERSIZE_REASON,
+} from "../../src/core/plan_contract_validator.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = path.join(__dirname, "..", "fixtures");
@@ -3796,5 +3804,105 @@ describe("health-audit mandatory task injection contract", () => {
     });
     assert.ok(diff.includes("missing=[none]"));
     assert.ok(diff.includes("invalid=[none]"));
+  });
+});
+
+// ── Output fidelity gate — process-thought marker detection ───────────────────
+
+describe("detectProcessThoughtMarkers", () => {
+  it("detects <think> opening tag", () => {
+    assert.equal(detectProcessThoughtMarkers("<think>some reasoning</think>"), true);
+  });
+
+  it("detects <reasoning> tag", () => {
+    assert.equal(detectProcessThoughtMarkers("<reasoning>internal</reasoning>"), true);
+  });
+
+  it("detects [THINKING] bracket marker", () => {
+    assert.equal(detectProcessThoughtMarkers("Here is the plan. [THINKING] let me reconsider"), true);
+  });
+
+  it("detects case-insensitive variants", () => {
+    assert.equal(detectProcessThoughtMarkers("<THINK>text"), true);
+    assert.equal(detectProcessThoughtMarkers("<Reasoning>text"), true);
+  });
+
+  it("returns false for clean text with no markers", () => {
+    assert.equal(detectProcessThoughtMarkers("Fix the authentication bug in src/auth.ts"), false);
+  });
+
+  it("returns false for empty string", () => {
+    assert.equal(detectProcessThoughtMarkers(""), false);
+  });
+
+  it("returns false for non-string input coerced to string", () => {
+    assert.equal(detectProcessThoughtMarkers(null as any), false);
+  });
+});
+
+describe("scanParsedOutputForProcessThought", () => {
+  it("returns empty array for clean output", () => {
+    const parsed = {
+      analysis: "Clean analysis text",
+      plans: [{ task: "Fix the auth bug", context: "auth module needs update" }],
+    };
+    assert.deepEqual(scanParsedOutputForProcessThought(parsed), []);
+  });
+
+  it("detects contamination in top-level analysis field", () => {
+    const parsed = { analysis: "<think>should I plan this?</think> Final plan." };
+    const result = scanParsedOutputForProcessThought(parsed);
+    assert.ok(result.includes("analysis"), "analysis field should be flagged");
+  });
+
+  it("detects contamination in plans[].task", () => {
+    const parsed = {
+      plans: [{ task: "<reasoning>hmm</reasoning> Fix the bug" }],
+    };
+    const result = scanParsedOutputForProcessThought(parsed);
+    assert.ok(result.includes("plans[0].task"), "plans[0].task must be flagged");
+  });
+
+  it("detects contamination in plans[].context", () => {
+    const parsed = {
+      plans: [{ task: "Fix bug", context: "[THINKING] let me check context [/THINKING]" }],
+    };
+    const result = scanParsedOutputForProcessThought(parsed);
+    assert.ok(result.includes("plans[0].context"), "plans[0].context must be flagged");
+  });
+
+  it("returns empty array for null/non-object input", () => {
+    assert.deepEqual(scanParsedOutputForProcessThought(null), []);
+    assert.deepEqual(scanParsedOutputForProcessThought("string"), []);
+  });
+
+  it("reports all contaminated fields, not just the first", () => {
+    const parsed = {
+      analysis: "<think>thinking</think>",
+      strategicNarrative: "<reasoning>reasoning</reasoning>",
+      plans: [{ task: "<think>t</think>Fix it", context: "clean" }],
+    };
+    const result = scanParsedOutputForProcessThought(parsed);
+    assert.ok(result.includes("analysis"));
+    assert.ok(result.includes("strategicNarrative"));
+    assert.ok(result.includes("plans[0].task"));
+    assert.equal(result.includes("plans[0].context"), false, "clean context must not be flagged");
+  });
+});
+
+describe("OUTPUT_FIDELITY_GATE_FAIL_REASON", () => {
+  it("is the string 'output-fidelity-gate'", () => {
+    assert.equal(OUTPUT_FIDELITY_GATE_FAIL_REASON, "output-fidelity-gate");
+  });
+});
+
+describe("MAX_ACTIONABLE_STEPS_PER_PACKET and PACKET_OVERSIZE_REASON", () => {
+  it("MAX_ACTIONABLE_STEPS_PER_PACKET is 3", () => {
+    assert.equal(MAX_ACTIONABLE_STEPS_PER_PACKET, 3);
+  });
+
+  it("PACKET_OVERSIZE_REASON is a non-empty string", () => {
+    assert.equal(typeof PACKET_OVERSIZE_REASON, "string");
+    assert.ok(PACKET_OVERSIZE_REASON.length > 0);
   });
 });

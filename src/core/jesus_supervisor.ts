@@ -146,41 +146,43 @@ function loadSourceEvidenceIndex(repoRoot: string): string {
   }
 }
 
+/**
+ * Deterministic capability signature registry.
+ * Each entry maps a known capability ID to an exhaustive list of source-level
+ * identifiers that MUST ALL be present for the capability to be considered
+ * implemented.  Only capabilities with explicit entries in this registry can
+ * be downgraded — all others stay at their original severity so they remain
+ * actionable.  Heuristic substring / proposedFix / gapText matching has been
+ * removed because it produced false-positives that suppressed real findings.
+ */
+const CAPABILITY_SOURCE_SIGNATURES: Readonly<Record<string, string[]>> = Object.freeze({
+  "dispatch-block-reason-reporting":      ["dispatchblockreason", "dispatch blocked"],
+  "jesus-findings-to-plan-requirements":  ["mandatory_tasks", "buildmandatorytaskspromptsection", "extractmandatoryhealthauditfindings"],
+  "athena-gate-pre-check":                ["gateblockrisk"],
+  "athena-gate-feasibility-check":        ["gateblockrisk"],
+  "prometheus-plan-structural-lint":      ["validateallplans", "plan_contract_validator"],
+  "pre-athena-plan-structural-validation":["validateallplans", "plan_contract_validator"],
+  "prometheus-token-budget-floor":        ["invalid_token_budget", "minimum token budgets", "token floor"],
+  "ci-failure-log-injection":             ["hydratedispatchcontextwithcievidence", "ci failure evidence"],
+  "packet-granularity-governor":          ["max_actionable_steps_per_packet", "autosplitpacket"],
+  "output-fidelity-gate":                 ["detectprocessthoughtmarkers", "output-fidelity-gate"],
+  "specialization-admission-control":     ["specialization_admission", "laneadmissiongate"],
+});
+
+/**
+ * Return true only when ALL required source signatures for a known capability
+ * are found in the lowercased source index.  Unknown capabilities (not in the
+ * registry) always return false so their findings remain actionable.
+ */
 function isCapabilityGapVerifiedPresentInSource(
   sourceIndex: string,
-  gap: { capability?: unknown; proposedFix?: unknown; gap?: unknown },
+  gap: { capability?: unknown },
 ): boolean {
   if (!sourceIndex) return false;
   const capability = String(gap?.capability || "").trim().toLowerCase();
-  const proposedFix = String(gap?.proposedFix || "").trim().toLowerCase();
-  const gapText = String(gap?.gap || "").trim().toLowerCase();
-
-  const capabilitySignatures: Record<string, string[]> = {
-    "dispatch-block-reason-reporting": ["dispatchblockreason", "dispatch blocked"],
-    "jesus-findings-to-plan-requirements": ["mandatory_tasks", "buildmandatorytaskspromptsection", "extractmandatoryhealthauditfindings"],
-    "athena-gate-pre-check": ["gateblockrisk"],
-    "athena-gate-feasibility-check": ["gateblockrisk"],
-    "prometheus-plan-structural-lint": ["validateallplans", "plan_contract_validator"],
-    "pre-athena-plan-structural-validation": ["validateallplans", "plan_contract_validator"],
-    "prometheus-token-budget-floor": ["invalid_token_budget", "minimum token budgets", "token floor"],
-    "ci-failure-log-injection": ["hydratedispatchcontextwithcievidence", "ci failure evidence"],
-  };
-
-  const signatures = capabilitySignatures[capability] || [];
-  if (signatures.length > 0) {
-    return signatures.every((sig) => sourceIndex.includes(sig));
-  }
-
-  if (capability && capability.length > 3 && sourceIndex.includes(capability.replace(/-/g, " "))) {
-    return true;
-  }
-  if (proposedFix && proposedFix.length > 20 && sourceIndex.includes(proposedFix.slice(0, 40))) {
-    return true;
-  }
-  if (gapText && gapText.length > 20 && sourceIndex.includes(gapText.slice(0, 40))) {
-    return true;
-  }
-  return false;
+  const signatures = CAPABILITY_SOURCE_SIGNATURES[capability];
+  if (!signatures || signatures.length === 0) return false;
+  return signatures.every((sig) => sourceIndex.includes(sig));
 }
 
 export async function runSystemHealthAudit(config, githubState, AthenaCoordination, sessions) {

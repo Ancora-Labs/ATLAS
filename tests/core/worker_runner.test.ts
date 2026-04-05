@@ -1,11 +1,15 @@
-import { describe, it } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
 import {
   parseWorkerResponse,
   detectRepoContamination,
   attemptBranchCleanlinessRecovery,
   shouldEnableFullToolAccess,
-  evaluateWorkerRoleCapability
+  evaluateWorkerRoleCapability,
+  injectCiFailureContextIfMissing,
 } from "../../src/core/worker_runner.js";
 import { isProcessAlive } from "../../src/core/daemon_control.js";
 
@@ -315,5 +319,62 @@ describe("isProcessAlive", () => {
   it("returns false for a pid that does not exist (very high number)", () => {
     // PID 9999999 is astronomically unlikely to be a real process
     assert.equal(isProcessAlive(9999999), false);
+  });
+});
+
+// ── injectCiFailureContextIfMissing ──────────────────────────────────────────
+
+describe("injectCiFailureContextIfMissing", () => {
+  let stateDir: string;
+
+  beforeEach(async () => {
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-worker-ci-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("skips injection when CI_FAILURE_CONTEXT already present", async () => {
+    const instruction = { task: "fix ci", context: "## CI_FAILURE_CONTEXT\nalready present" };
+    const result = await injectCiFailureContextIfMissing(instruction, { paths: { stateDir } });
+    assert.equal(result.context, instruction.context, "must not double-inject");
+  });
+
+  it("injects from npm_test_full.log when available", async () => {
+    await fs.writeFile(path.join(stateDir, "npm_test_full.log"), "FAIL tests/core/auth.test.ts\nError: bad", "utf8");
+    const instruction = { task: "fix ci", context: "" };
+    const result = await injectCiFailureContextIfMissing(instruction, { paths: { stateDir } });
+    assert.ok(String(result.context).includes("## CI_FAILURE_CONTEXT"));
+    assert.ok(String(result.context).includes("worker_runner_fallback:npm_test_full.log"));
+  });
+
+  it("falls back through artifact priority order", async () => {
+    // Only test_run.log available
+    await fs.writeFile(path.join(stateDir, "test_run.log"), "FAIL tests/core/runner.test.ts\nTypeError: x", "utf8");
+    const instruction = { task: "fix ci", context: "" };
+    const result = await injectCiFailureContextIfMissing(instruction, { paths: { stateDir } });
+    assert.ok(String(result.context).includes("worker_runner_fallback:test_run.log"));
+  });
+
+  it("injects no-data marker when no artifacts exist", async () => {
+    const instruction = { task: "fix ci", context: "" };
+    const result = await injectCiFailureContextIfMissing(instruction, { paths: { stateDir } });
+    assert.ok(String(result.context).includes("## CI_FAILURE_CONTEXT"));
+    assert.ok(String(result.context).includes("no_evidence_available"));
+  });
+
+  it("preserves existing context and appends CI block", async () => {
+    await fs.writeFile(path.join(stateDir, "npm_test_full.log"), "FAIL tests/core/x.test.ts\nError: fail", "utf8");
+    const instruction = { task: "fix ci", context: "existing context" };
+    const result = await injectCiFailureContextIfMissing(instruction, { paths: { stateDir } });
+    assert.ok(String(result.context).startsWith("existing context"));
+    assert.ok(String(result.context).includes("## CI_FAILURE_CONTEXT"));
+  });
+
+  it("negative: does not inject when stateDir is empty string", async () => {
+    const instruction = { task: "fix ci", context: "" };
+    const result = await injectCiFailureContextIfMissing(instruction, { paths: { stateDir: "" } });
+    assert.ok(String(result.context).includes("no_evidence_available"), "must still inject no-data marker");
   });
 });

@@ -583,6 +583,43 @@ describe("runInterventionOptimizer — happy path", () => {
     const miss = result.selected.find((item) => item.id === "policy-miss");
     assert.ok(hit.adjustedSuccessProbability < miss.adjustedSuccessProbability);
   });
+
+  it("applies benchmark telemetry to boost successProbability for matching interventions", () => {
+    const interventions = [
+      makeIntervention({ id: "bench-hit", successProbability: 0.5, impact: 0.8, riskCost: 0.2 }),
+      makeIntervention({ id: "bench-miss", successProbability: 0.5, impact: 0.8, riskCost: 0.2 }),
+    ];
+    const result = runInterventionOptimizer(interventions, makeBudget(), {
+      benchmarkTelemetry: [
+        { interventionId: "bench-hit", observedSuccessRate: 0.9, sampleCount: 5 },
+      ],
+    });
+    assert.equal(result.benchmarkBoostsApplied, 1, "one boost should be applied");
+    assert.equal(result.benchmarkTelemetryCount, 1);
+    const hit = result.selected.find((item: any) => item.id === "bench-hit");
+    const miss = result.selected.find((item: any) => item.id === "bench-miss");
+    // bench-hit should have higher adjusted SP because observed rate (0.9) > estimated (0.5)
+    assert.ok(hit.adjustedSuccessProbability > miss.adjustedSuccessProbability,
+      "benchmark-boosted intervention must rank higher");
+  });
+
+  it("benchmark telemetry is skipped for entries with sampleCount < 1", () => {
+    const interventions = [
+      makeIntervention({ id: "sparse-bench", successProbability: 0.5 }),
+    ];
+    const result = runInterventionOptimizer(interventions, makeBudget(), {
+      benchmarkTelemetry: [
+        { interventionId: "sparse-bench", observedSuccessRate: 0.95, sampleCount: 0 },
+      ],
+    });
+    assert.equal(result.benchmarkBoostsApplied, 0, "sparse telemetry must not be applied");
+  });
+
+  it("benchmarkTelemetryCount is 0 when no telemetry provided", () => {
+    const result = runInterventionOptimizer([makeIntervention({})], makeBudget());
+    assert.equal(result.benchmarkTelemetryCount, 0);
+    assert.equal(result.benchmarkBoostsApplied, 0);
+  });
 });
 
 describe("buildPolicyImpactByInterventionId", () => {
