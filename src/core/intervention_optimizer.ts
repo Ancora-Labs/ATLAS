@@ -196,6 +196,27 @@ export const REROUTE_EV_MAX_PENALTY = 0.20;
 export const REROUTE_ESCALATION_THRESHOLD = 2;
 
 /**
+ * Canonical schema for records written to state/reroute_history.jsonl by the
+ * orchestrator dispatch phase when specialist roles are rerouted.
+ *
+ * Each line in the file is a JSON-serialised object with exactly these fields.
+ * This schema is the contract between the orchestrator (writer) and the optimizer
+ * (reader) — the optimizer's applyRerouteCostPenalty() reads `role` and `reasonCode`.
+ *
+ * Field semantics:
+ *   recordedAt          — ISO 8601 timestamp when the reroute was recorded
+ *   role                — specialist role name that was rerouted (non-empty string)
+ *   lane                — lane identifier for the rerouted role (non-empty string)
+ *   reasonCode          — machine-readable reason (e.g. "fill_threshold", "performance_degraded")
+ *   fillRatio           — actual fill ratio at time of reroute (number 0–1)
+ *   laneScore           — composite lane score at time of reroute (number)
+ */
+export const REROUTE_HISTORY_RECORD_SCHEMA = Object.freeze({
+  required: Object.freeze(["recordedAt", "role", "lane", "reasonCode", "fillRatio", "laneScore"]),
+  reasonCodeExamples: Object.freeze(["fill_threshold", "performance_degraded", "below_fill_threshold"]),
+});
+
+/**
  * Apply a bounded EV penalty to an intervention whose role was recently rerouted.
  *
  * Penalty coefficient is differentiated by reason code:

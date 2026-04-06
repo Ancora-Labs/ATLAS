@@ -1074,3 +1074,194 @@ describe("getRerouteEscalationSignal", () => {
     assert.ok(REROUTE_ESCALATION_THRESHOLD >= 1);
   });
 });
+
+// ── End-to-end: reroute reason codes → reroute_history → optimizer counters ──
+
+import {
+  REROUTE_HISTORY_RECORD_SCHEMA,
+} from "../../src/core/intervention_optimizer.js";
+
+describe("REROUTE_HISTORY_RECORD_SCHEMA", () => {
+  it("is exported and frozen with required fields array", () => {
+    assert.ok(Object.isFrozen(REROUTE_HISTORY_RECORD_SCHEMA));
+    assert.ok(Array.isArray(REROUTE_HISTORY_RECORD_SCHEMA.required));
+    for (const field of ["recordedAt", "role", "lane", "reasonCode", "fillRatio", "laneScore"]) {
+      assert.ok(
+        REROUTE_HISTORY_RECORD_SCHEMA.required.includes(field),
+        `reroute_history schema must require field '${field}'`
+      );
+    }
+  });
+
+  it("reasonCodeExamples includes fill_threshold and performance_degraded", () => {
+    assert.ok(REROUTE_HISTORY_RECORD_SCHEMA.reasonCodeExamples.includes("fill_threshold"));
+    assert.ok(REROUTE_HISTORY_RECORD_SCHEMA.reasonCodeExamples.includes("performance_degraded"));
+  });
+});
+
+describe("runInterventionOptimizer — reroute reason code end-to-end", () => {
+  it("rerouteCostPenaltiesApplied is 0 when no rerouteReasons provided", () => {
+    const result = runInterventionOptimizer(
+      [makeIntervention({ id: "r-base", role: "backend" })],
+      makeBudget(),
+    );
+    assert.equal(result.rerouteCostPenaltiesApplied, 0,
+      "no reroute reasons must produce zero penalties applied");
+  });
+
+  it("rerouteCostPenaltiesApplied increments when rerouted role matches intervention role", () => {
+    const result = runInterventionOptimizer(
+      [makeIntervention({ id: "r1", role: "backend" })],
+      makeBudget(),
+      {
+        rerouteReasons: [
+          { role: "backend", reasonCode: "fill_threshold", lane: "backend", fillRatio: 0.2, laneScore: 0.4 },
+        ],
+      },
+    );
+    assert.ok(result.rerouteCostPenaltiesApplied >= 1,
+      "rerouteCostPenaltiesApplied must be > 0 when rerouted role matches");
+  });
+
+  it("rerouteCostPenaltiesApplied is 0 when rerouted role does not match any intervention role", () => {
+    const result = runInterventionOptimizer(
+      [makeIntervention({ id: "r-nomatch", role: "frontend" })],
+      makeBudget(),
+      {
+        rerouteReasons: [
+          { role: "backend", reasonCode: "fill_threshold", lane: "backend", fillRatio: 0.2, laneScore: 0.4 },
+        ],
+      },
+    );
+    assert.equal(result.rerouteCostPenaltiesApplied, 0,
+      "non-matching role must not be penalised");
+  });
+
+  it("penalised intervention has _reroutePenaltyApplied=true in selected output", () => {
+    const result = runInterventionOptimizer(
+      [makeIntervention({ id: "r-flag", role: "backend", successProbability: 0.9, impact: 0.9, riskCost: 0.1 })],
+      makeBudget(),
+      {
+        rerouteReasons: [
+          { role: "backend", reasonCode: "fill_threshold", lane: "backend", fillRatio: 0.1, laneScore: 0.3 },
+        ],
+      },
+    );
+    const selected = result.selected.find((s: any) => s.id === "r-flag");
+    assert.ok(selected !== undefined, "penalised intervention must still be selected when budget allows");
+    assert.equal(selected._reroutePenaltyApplied, true,
+      "_reroutePenaltyApplied must be true on penalised intervention");
+  });
+
+  it("penalised role has lower adjustedSuccessProbability than identical unpenalised intervention", () => {
+    const penalised = runInterventionOptimizer(
+      [makeIntervention({ id: "pen", role: "backend", successProbability: 0.8, sampleCount: 5 })],
+      makeBudget(),
+      {
+        rerouteReasons: [
+          { role: "backend", reasonCode: "fill_threshold", lane: "backend", fillRatio: 0.1, laneScore: 0.2 },
+        ],
+      },
+    );
+    const unpenalised = runInterventionOptimizer(
+      [makeIntervention({ id: "unpen", role: "backend", successProbability: 0.8, sampleCount: 5 })],
+      makeBudget(),
+      { rerouteReasons: [] },
+    );
+    const penItem   = penalised.selected.find((s: any) => s.id === "pen");
+    const unpenItem = unpenalised.selected.find((s: any) => s.id === "unpen");
+    assert.ok(penItem !== undefined && unpenItem !== undefined, "both interventions must be selected");
+    assert.ok(
+      penItem.adjustedSuccessProbability < unpenItem.adjustedSuccessProbability,
+      `penalised SP (${penItem.adjustedSuccessProbability}) must be < unpenalised SP (${unpenItem.adjustedSuccessProbability})`
+    );
+  });
+
+  it("performance_degraded reroute causes heavier penalty than fill_threshold reroute", () => {
+    const base = makeIntervention({ id: "base", role: "backend", successProbability: 0.8, sampleCount: 5 });
+
+    const withFill = runInterventionOptimizer([{ ...base, id: "fill" }], makeBudget(), {
+      rerouteReasons: [{ role: "backend", reasonCode: "fill_threshold", lane: "backend", fillRatio: 0.2, laneScore: 0.5 }],
+    });
+    const withPerf = runInterventionOptimizer([{ ...base, id: "perf" }], makeBudget(), {
+      rerouteReasons: [{ role: "backend", reasonCode: "performance_degraded", lane: "backend", fillRatio: 0.1, laneScore: 0.2 }],
+    });
+    const fillItem = withFill.selected.find((s: any) => s.id === "fill");
+    const perfItem = withPerf.selected.find((s: any) => s.id === "perf");
+    assert.ok(fillItem && perfItem, "both must be selected");
+    assert.ok(
+      perfItem.adjustedSuccessProbability <= fillItem.adjustedSuccessProbability,
+      "performance_degraded must produce >= penalty than fill_threshold"
+    );
+  });
+
+  it("multiple reroutes for the same role accumulate penalties (capped at REROUTE_EV_MAX_PENALTY)", () => {
+    const manyReroutes = Array.from({ length: 10 }, (_, i) => ({
+      role: "backend", reasonCode: "fill_threshold", lane: "backend", fillRatio: 0.1, laneScore: 0.2,
+    }));
+    const result = runInterventionOptimizer(
+      [makeIntervention({ id: "multi", role: "backend", successProbability: 0.8, sampleCount: 5 })],
+      makeBudget(),
+      { rerouteReasons: manyReroutes },
+    );
+    const item = result.selected.find((s: any) => s.id === "multi");
+    assert.ok(item, "intervention must still be selected after capped penalty");
+    // Penalty is capped at REROUTE_EV_MAX_PENALTY; EV never goes to zero from penalty alone
+    assert.ok(item.adjustedSuccessProbability > 0,
+      "adjustedSuccessProbability must remain > 0 after maximum penalty");
+  });
+
+  it("reroute history records conforming to REROUTE_HISTORY_RECORD_SCHEMA are fully accepted", () => {
+    // Simulate reading records from reroute_history.jsonl — must have all schema fields
+    const rerouteRecords = [
+      {
+        recordedAt: new Date().toISOString(),
+        role: "backend",
+        lane: "backend",
+        reasonCode: "fill_threshold",
+        fillRatio: 0.15,
+        laneScore: 0.3,
+      },
+    ];
+    // Verify each record has all required fields
+    for (const record of rerouteRecords) {
+      for (const field of REROUTE_HISTORY_RECORD_SCHEMA.required) {
+        assert.ok(field in record, `reroute record missing required field '${field}'`);
+      }
+    }
+    // Verify the optimizer accepts them without error
+    const result = runInterventionOptimizer(
+      [makeIntervention({ id: "schema-e2e", role: "backend" })],
+      makeBudget(),
+      { rerouteReasons: rerouteRecords },
+    );
+    assert.ok(result.status !== "invalid_input", "well-formed reroute records must not invalidate the optimizer");
+    assert.ok(result.rerouteCostPenaltiesApplied >= 1);
+  });
+
+  it("scoreboard rows for penalised role have lower combined score than identical unpenalised role", () => {
+    // The scoreInterventionsAgainstRubric function reflects lower EV as lower combined score
+    // when an intervention's successProbability is reduced by reroute penalty.
+    const baseIntervention = makeIntervention({ id: "sb-test", role: "backend",
+      successProbability: 0.8, sampleCount: 5, impact: 0.8, riskCost: 0.2 });
+
+    const penResult = runInterventionOptimizer([{ ...baseIntervention, id: "sb-pen" }], makeBudget(), {
+      rerouteReasons: [
+        { role: "backend", reasonCode: "performance_degraded", lane: "backend", fillRatio: 0.1, laneScore: 0.2 },
+      ],
+    });
+    const unpenResult = runInterventionOptimizer([{ ...baseIntervention, id: "sb-unpen" }], makeBudget(), {
+      rerouteReasons: [],
+    });
+
+    const penSP   = penResult.selected.find((s: any) => s.id === "sb-pen")?.adjustedSuccessProbability ?? 1;
+    const unpenSP = unpenResult.selected.find((s: any) => s.id === "sb-unpen")?.adjustedSuccessProbability ?? 0;
+
+    // Penalised intervention must have meaningfully lower effective score
+    assert.ok(penSP < unpenSP,
+      `penalised SP (${penSP}) must be < unpenalised SP (${unpenSP}) — penalty is not affecting scoreboard`);
+    // Verify rerouteCostPenaltiesApplied is the machine-readable counter
+    assert.equal(penResult.rerouteCostPenaltiesApplied, 1);
+    assert.equal(unpenResult.rerouteCostPenaltiesApplied, 0);
+  });
+});

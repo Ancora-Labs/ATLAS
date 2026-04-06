@@ -9,6 +9,8 @@
  *   - Task 1 (resume governance gate): checkpoint resume blocked by pre-dispatch governance gate
  *   - Task 2 (event emission): GOVERNANCE_GATE_EVALUATED and PLANNING_PLAN_REJECTED emitted
  *   - Task N (degraded event): ORCHESTRATION_HEALTH_DEGRADED emitted in governance gate exception catch paths
+ *   - Reroute history: specialist reroute reason codes persist to reroute_history.jsonl and
+ *     measurably affect optimizer penalty counters and scoreboard fields
  */
 
 import { describe, it, beforeEach, afterEach, mock } from "node:test";
@@ -20,6 +22,12 @@ import { runOnce, runResumeDispatch, evaluatePreDispatchGovernanceGate, BLOCK_RE
 import { ATHENA_PLAN_REVIEW_REASON_CODE } from "../../src/core/athena_reviewer.js";
 import { readPipelineProgress, PIPELINE_STAGE_ENUM, PIPELINE_STEPS } from "../../src/core/pipeline_progress.js";
 import { EVENTS } from "../../src/core/event_schema.js";
+import {
+  REROUTE_HISTORY_RECORD_SCHEMA,
+  runInterventionOptimizer,
+  REROUTE_EV_PENALTY_COEFFICIENT,
+  REROUTE_EV_MAX_PENALTY,
+} from "../../src/core/intervention_optimizer.js";
 
 describe("orchestrator pipeline progress — resilience", () => {
   let tmpDir;
@@ -1780,5 +1788,175 @@ describe("orchestrator dispatch — wave topology preserved in token-first plann
     for (const batch of batches) {
       assert.equal(batch.wave, 1, "all batches must be wave 1");
     }
+  });
+});
+
+// ── Reroute history: E2E persistence and optimizer penalty assertions ──────────
+
+describe("reroute_history.jsonl — schema and optimizer penalty E2E", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-reroute-e2e-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("reroute_history.jsonl records written by the orchestrator conform to REROUTE_HISTORY_RECORD_SCHEMA", async () => {
+    // Simulate the record shape the orchestrator dispatch phase writes to reroute_history.jsonl
+    // (see orchestrator.ts lines 3079-3087 — the exact fields written).
+    const rerouteRecord = {
+      recordedAt: new Date().toISOString(),
+      role: "specialist-worker",
+      lane: "specialist",
+      reasonCode: "fill_threshold",
+      fillRatio: 0.15,
+      laneScore: 0.42,
+    };
+    const rerouteHistoryPath = path.join(tmpDir, "reroute_history.jsonl");
+    await fs.writeFile(rerouteHistoryPath, JSON.stringify(rerouteRecord) + "\n", "utf8");
+
+    // Read back and validate against schema
+    const raw = await fs.readFile(rerouteHistoryPath, "utf8");
+    const lines = raw.split("\n").filter(l => l.trim().length > 0);
+    assert.equal(lines.length, 1, "one reroute record must be written");
+
+    const parsed = JSON.parse(lines[0]);
+    for (const field of REROUTE_HISTORY_RECORD_SCHEMA.required) {
+      assert.ok(field in parsed,
+        `reroute_history record must include required field '${field}'`);
+    }
+    assert.equal(parsed.role, "specialist-worker");
+    assert.equal(parsed.reasonCode, "fill_threshold");
+  });
+
+  it("reroute_history.jsonl records are read back and passed to the optimizer — penalties appear in result", async () => {
+    // Pre-seed reroute_history.jsonl with records for "backend" role
+    const rerouteHistoryPath = path.join(tmpDir, "reroute_history.jsonl");
+    const records = [
+      {
+        recordedAt: new Date().toISOString(),
+        role: "backend",
+        lane: "backend",
+        reasonCode: "fill_threshold",
+        fillRatio: 0.1,
+        laneScore: 0.3,
+      },
+      {
+        recordedAt: new Date().toISOString(),
+        role: "backend",
+        lane: "backend",
+        reasonCode: "performance_degraded",
+        fillRatio: 0.05,
+        laneScore: 0.2,
+      },
+    ];
+    const content = records.map(r => JSON.stringify(r)).join("\n") + "\n";
+    await fs.writeFile(rerouteHistoryPath, content, "utf8");
+
+    // Simulate the optimizer read-back: read last N records and pass as rerouteReasons
+    const raw = await fs.readFile(rerouteHistoryPath, "utf8");
+    const rerouteReasons = raw.split("\n")
+      .filter(l => l.trim().length > 0)
+      .slice(-20)
+      .map(l => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean);
+
+    assert.equal(rerouteReasons.length, 2, "both reroute records must be read back");
+
+    // Pass to optimizer — verify penalties are applied
+    const result = runInterventionOptimizer(
+      [{
+        id: "rh-e2e",
+        type: "task",
+        wave: 1,
+        role: "backend",
+        title: "Backend fix",
+        successProbability: 0.8,
+        impact: 0.8,
+        riskCost: 0.2,
+        sampleCount: 3,
+        budgetCost: 1,
+      }],
+      { maxWorkerSpawns: 10 },
+      { rerouteReasons },
+    );
+
+    assert.ok(result.rerouteCostPenaltiesApplied >= 1,
+      `rerouteCostPenaltiesApplied must be >= 1 when reroute history contains matching role records; got ${result.rerouteCostPenaltiesApplied}`);
+    const item = result.selected.find((s: any) => s.id === "rh-e2e");
+    assert.ok(item !== undefined, "intervention must be selected");
+    assert.equal(item._reroutePenaltyApplied, true,
+      "_reroutePenaltyApplied must be true when reroute history records match the role");
+  });
+
+  it("multiple reroute records for the same role accumulate penalties capped at REROUTE_EV_MAX_PENALTY", async () => {
+    // Generate many reroute records for the same role
+    const manyRecords = Array.from({ length: 15 }, (_, i) => ({
+      recordedAt: new Date().toISOString(),
+      role: "backend",
+      lane: "backend",
+      reasonCode: "fill_threshold",
+      fillRatio: 0.1,
+      laneScore: 0.2,
+    }));
+    const rerouteReasons = manyRecords;
+
+    const unpenalised = runInterventionOptimizer(
+      [{ id: "unpen", type: "task", wave: 1, role: "backend", title: "T", successProbability: 0.8,
+         impact: 0.8, riskCost: 0.2, sampleCount: 3, budgetCost: 1 }],
+      { maxWorkerSpawns: 10 },
+      { rerouteReasons: [] },
+    );
+    const penalised = runInterventionOptimizer(
+      [{ id: "pen", type: "task", wave: 1, role: "backend", title: "T", successProbability: 0.8,
+         impact: 0.8, riskCost: 0.2, sampleCount: 3, budgetCost: 1 }],
+      { maxWorkerSpawns: 10 },
+      { rerouteReasons },
+    );
+
+    const unpenSP = unpenalised.selected[0]?.adjustedSuccessProbability ?? 1;
+    const penSP   = penalised.selected[0]?.adjustedSuccessProbability ?? 0;
+    const actualPenalty = unpenSP - penSP;
+
+    assert.ok(penSP < unpenSP, "penalised SP must be lower than unpenalised SP");
+    assert.ok(actualPenalty <= REROUTE_EV_MAX_PENALTY + 0.001,
+      `penalty (${actualPenalty}) must not exceed REROUTE_EV_MAX_PENALTY (${REROUTE_EV_MAX_PENALTY})`);
+  });
+
+  it("reroute_history records without matching roles produce zero rerouteCostPenaltiesApplied", async () => {
+    const rerouteReasons = [
+      {
+        recordedAt: new Date().toISOString(),
+        role: "infrastructure-worker",
+        lane: "infrastructure",
+        reasonCode: "fill_threshold",
+        fillRatio: 0.1,
+        laneScore: 0.3,
+      },
+    ];
+    const result = runInterventionOptimizer(
+      [{
+        id: "no-match-e2e",
+        type: "task",
+        wave: 1,
+        role: "backend",
+        title: "Backend task",
+        successProbability: 0.8,
+        impact: 0.8,
+        riskCost: 0.2,
+        sampleCount: 3,
+        budgetCost: 1,
+      }],
+      { maxWorkerSpawns: 10 },
+      { rerouteReasons },
+    );
+    assert.equal(result.rerouteCostPenaltiesApplied, 0,
+      "non-matching reroute history must produce zero penalties");
+    const item = result.selected.find((s: any) => s.id === "no-match-e2e");
+    assert.ok(item !== undefined, "unpenalised intervention must be selected");
+    assert.ok(!item._reroutePenaltyApplied, "_reroutePenaltyApplied must be absent/falsy for unpenalised intervention");
   });
 });

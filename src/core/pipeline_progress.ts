@@ -237,22 +237,43 @@ export const SLO_TIMESTAMP_STAGES = Object.freeze([
 ]);
 
 /**
+ * Minimum funnel completionRate (dispatched→completed) required for a queue to be
+ * considered execution-effective.  When cycle_analytics.json reports a completionRate
+ * below this value (and at least one plan was dispatched in the previous cycle), the
+ * queue is treated as NOT viable even if pending work exists — replan suppression is
+ * lifted so Jesus can trigger a fresh Prometheus analysis rather than continue
+ * dispatching work that consistently fails to complete.
+ *
+ * Value chosen at 0.2: a cycle where fewer than 1-in-5 dispatched plans complete
+ * indicates a systemic execution failure, not normal throughput variance.
+ */
+export const QUEUE_VIABILITY_MIN_COMPLETION_RATE = 0.2;
+
+/**
  * Compute whether the current plan queue has viable pending work.
  *
- * A queue is "viable" when:
+ * A queue is "viable" when ALL of the following are true:
  *   1. prometheus_analysis.json contains at least one plan, AND
  *   2. athena_plan_review.json shows approved=true, AND
- *   3. the dispatch_checkpoint is NOT already "complete" for this plan set.
+ *   3. the dispatch_checkpoint is NOT already "complete" for this plan set, AND
+ *   4. cycle_analytics.json funnel.completionRate is null (no data) OR ≥
+ *      QUEUE_VIABILITY_MIN_COMPLETION_RATE (execution-effective).
+ *
+ * Condition 4 ensures Jesus only suppresses replans when queued work is both
+ * pending AND execution-effective.  A queue with a very low completion rate
+ * (workers consistently failing) is not considered viable — replan suppression
+ * is lifted so the system can replan rather than keep dispatching failing work.
  *
  * This is used by jesus_supervisor to gate age-based replanning:
  * if there are viable pending plans, a Prometheus replan triggered solely by
  * plan-age is suppressed — the existing approved work is executed first.
  *
  * Returns:
- *   viable       — true when pending work exists and should be executed
- *   pendingCount — estimated number of pending plans
- *   totalCount   — total plan count in prometheus_analysis
- *   reason       — machine-readable reason code
+ *   viable         — true when pending work exists and should be executed
+ *   pendingCount   — estimated number of pending plans
+ *   totalCount     — total plan count in prometheus_analysis
+ *   reason         — machine-readable reason code
+ *   completionRate — funnel completionRate from cycle_analytics (null if absent)
  *
  * Never throws — all read errors return viable=false with reason="read-error".
  */
@@ -261,6 +282,7 @@ export async function computeQueueViability(config: object): Promise<{
   pendingCount: number;
   totalCount: number;
   reason: string;
+  completionRate: number | null;
 }> {
   const stateDir = (config as any)?.paths?.stateDir || "state";
   try {
@@ -271,14 +293,14 @@ export async function computeQueueViability(config: object): Promise<{
       ? prometheusAnalysis.plans.length : 0;
 
     if (totalCount === 0) {
-      return { viable: false, pendingCount: 0, totalCount: 0, reason: "no-plans" };
+      return { viable: false, pendingCount: 0, totalCount: 0, reason: "no-plans", completionRate: null };
     }
 
     const athenaReview = await readJson(
       path.join(stateDir, "athena_plan_review.json"), null
     );
     if (!athenaReview?.approved) {
-      return { viable: false, pendingCount: 0, totalCount, reason: "athena-not-approved" };
+      return { viable: false, pendingCount: 0, totalCount, reason: "athena-not-approved", completionRate: null };
     }
 
     const checkpoint = await readJson(
@@ -289,7 +311,7 @@ export async function computeQueueViability(config: object): Promise<{
     if (checkpoint?.status === "complete") {
       const checkpointPlanCount = Number(checkpoint?.planCount ?? checkpoint?.totalPlans ?? 0);
       if (checkpointPlanCount === totalCount) {
-        return { viable: false, pendingCount: 0, totalCount, reason: "all-complete" };
+        return { viable: false, pendingCount: 0, totalCount, reason: "all-complete", completionRate: null };
       }
     }
 
@@ -304,16 +326,52 @@ export async function computeQueueViability(config: object): Promise<{
     const pendingCount = Math.max(0, totalCount - completedEstimate);
 
     if (pendingCount === 0) {
-      return { viable: false, pendingCount: 0, totalCount, reason: "all-complete" };
+      return { viable: false, pendingCount: 0, totalCount, reason: "all-complete", completionRate: null };
     }
+
+    // ── Execution-effectiveness gate: check funnel completionRate ────────────
+    // Read cycle_analytics.json directly (no import from cycle_analytics.ts to
+    // avoid circular dependency: cycle_analytics already imports pipeline_progress).
+    // If the previous cycle's funnel.completionRate is below QUEUE_VIABILITY_MIN_COMPLETION_RATE
+    // and at least one plan was dispatched, the queue is execution-ineffective:
+    // suppress replan suppression so Jesus can trigger a fresh plan.
+    let completionRate: number | null = null;
+    try {
+      const cycleAnalytics = await readJson(
+        path.join(stateDir, "cycle_analytics.json"), null
+      );
+      // cycle_analytics.json may be a snapshot or wrapped in {lastCycle: ...}
+      const funnelSource = cycleAnalytics?.funnel ?? cycleAnalytics?.lastCycle?.funnel ?? null;
+      const rawRate = funnelSource?.completionRate;
+      const rawDispatched = funnelSource?.dispatched;
+      if (typeof rawRate === "number" && Number.isFinite(rawRate)) {
+        completionRate = rawRate;
+        const dispatched = typeof rawDispatched === "number" && Number.isFinite(rawDispatched)
+          ? rawDispatched : 1; // treat unknown dispatched as >0 to be conservative
+        if (dispatched > 0 && completionRate < QUEUE_VIABILITY_MIN_COMPLETION_RATE) {
+          return {
+            viable: false,
+            pendingCount,
+            totalCount,
+            reason: "low-completion-rate",
+            completionRate,
+          };
+        }
+      }
+    } catch {
+      // Non-fatal: if cycle_analytics is missing or unreadable, skip this gate.
+      // Absence of analytics data should not block execution.
+    }
+
     return {
       viable: true,
       pendingCount,
       totalCount,
       reason: `${pendingCount}/${totalCount}-pending`,
+      completionRate,
     };
   } catch {
-    return { viable: false, pendingCount: 0, totalCount: 0, reason: "read-error" };
+    return { viable: false, pendingCount: 0, totalCount: 0, reason: "read-error", completionRate: null };
   }
 }
 

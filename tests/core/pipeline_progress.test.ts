@@ -9,6 +9,7 @@ import {
   PIPELINE_PROGRESS_SCHEMA,
   PIPELINE_SEGMENT_HISTORY_MAX,
   PROGRESS_ERROR_CODE,
+  QUEUE_VIABILITY_MIN_COMPLETION_RATE,
   updatePipelineProgress,
   readPipelineProgress,
 } from "../../src/core/pipeline_progress.js";
@@ -138,6 +139,135 @@ describe("computeQueueViability", () => {
     const result = await computeQueueViability(makeConfig(testDir));
     assert.equal(result.viable, false);
     assert.equal(result.reason, "no-plans");
+    await teardown();
+  });
+
+  // ── completionRate gate ────────────────────────────────────────────────────
+
+  it("returns viable=false with reason=low-completion-rate when funnel completionRate is below threshold", async () => {
+    await setup();
+    await writeJson(path.join(testDir, "prometheus_analysis.json"), {
+      plans: [{ id: "p1" }, { id: "p2" }]
+    });
+    await writeJson(path.join(testDir, "athena_plan_review.json"), { approved: true });
+    await writeJson(path.join(testDir, "cycle_analytics.json"), {
+      funnel: { dispatched: 5, completed: 0, completionRate: 0.0 }
+    });
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, false);
+    assert.equal(result.reason, "low-completion-rate");
+    assert.equal(result.completionRate, 0.0);
+    await teardown();
+  });
+
+  it("returns viable=false when completionRate is just below QUEUE_VIABILITY_MIN_COMPLETION_RATE", async () => {
+    const { QUEUE_VIABILITY_MIN_COMPLETION_RATE } = await import("../../src/core/pipeline_progress.js");
+    await setup();
+    await writeJson(path.join(testDir, "prometheus_analysis.json"), {
+      plans: [{ id: "p1" }]
+    });
+    await writeJson(path.join(testDir, "athena_plan_review.json"), { approved: true });
+    const belowThreshold = Math.max(0, QUEUE_VIABILITY_MIN_COMPLETION_RATE - 0.01);
+    await writeJson(path.join(testDir, "cycle_analytics.json"), {
+      funnel: { dispatched: 10, completed: 1, completionRate: belowThreshold }
+    });
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, false);
+    assert.equal(result.reason, "low-completion-rate");
+    await teardown();
+  });
+
+  it("returns viable=true when completionRate meets QUEUE_VIABILITY_MIN_COMPLETION_RATE threshold", async () => {
+    const { QUEUE_VIABILITY_MIN_COMPLETION_RATE } = await import("../../src/core/pipeline_progress.js");
+    await setup();
+    await writeJson(path.join(testDir, "prometheus_analysis.json"), {
+      plans: [{ id: "p1" }]
+    });
+    await writeJson(path.join(testDir, "athena_plan_review.json"), { approved: true });
+    await writeJson(path.join(testDir, "cycle_analytics.json"), {
+      funnel: { dispatched: 10, completed: 3, completionRate: QUEUE_VIABILITY_MIN_COMPLETION_RATE }
+    });
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, true);
+    assert.equal(result.completionRate, QUEUE_VIABILITY_MIN_COMPLETION_RATE);
+    await teardown();
+  });
+
+  it("returns viable=true when cycle_analytics is missing (no data — do not penalise)", async () => {
+    await setup();
+    await writeJson(path.join(testDir, "prometheus_analysis.json"), {
+      plans: [{ id: "p1" }]
+    });
+    await writeJson(path.join(testDir, "athena_plan_review.json"), { approved: true });
+    // No cycle_analytics.json written — absence should not block viability
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, true);
+    assert.equal(result.completionRate, null);
+    await teardown();
+  });
+
+  it("returns viable=true when cycle_analytics funnel completionRate is null (missing data sentinel)", async () => {
+    await setup();
+    await writeJson(path.join(testDir, "prometheus_analysis.json"), {
+      plans: [{ id: "p1" }]
+    });
+    await writeJson(path.join(testDir, "athena_plan_review.json"), { approved: true });
+    await writeJson(path.join(testDir, "cycle_analytics.json"), {
+      funnel: { dispatched: null, completed: null, completionRate: null }
+    });
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, true);
+    assert.equal(result.completionRate, null);
+    await teardown();
+  });
+
+  it("reads completionRate from lastCycle.funnel when top-level funnel is absent (composite schema)", async () => {
+    const { QUEUE_VIABILITY_MIN_COMPLETION_RATE } = await import("../../src/core/pipeline_progress.js");
+    await setup();
+    await writeJson(path.join(testDir, "prometheus_analysis.json"), {
+      plans: [{ id: "p1" }]
+    });
+    await writeJson(path.join(testDir, "athena_plan_review.json"), { approved: true });
+    await writeJson(path.join(testDir, "cycle_analytics.json"), {
+      lastCycle: {
+        funnel: { dispatched: 5, completed: 0, completionRate: 0.0 }
+      }
+    });
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, false);
+    assert.equal(result.reason, "low-completion-rate");
+    await teardown();
+  });
+
+  it("does not fail when dispatched is 0 in funnel (avoid division edge case)", async () => {
+    await setup();
+    await writeJson(path.join(testDir, "prometheus_analysis.json"), {
+      plans: [{ id: "p1" }]
+    });
+    await writeJson(path.join(testDir, "athena_plan_review.json"), { approved: true });
+    // dispatched=0 means no work was dispatched; completionRate=0 with dispatched=0 should not block
+    await writeJson(path.join(testDir, "cycle_analytics.json"), {
+      funnel: { dispatched: 0, completed: 0, completionRate: 0.0 }
+    });
+    const result = await computeQueueViability(makeConfig(testDir));
+    // dispatched=0 means the gate condition (dispatched>0 && rate<threshold) is false → viable
+    assert.equal(result.viable, true);
+    await teardown();
+  });
+
+  it("returns completionRate field in result for all viable=true outcomes", async () => {
+    await setup();
+    await writeJson(path.join(testDir, "prometheus_analysis.json"), {
+      plans: [{ id: "p1" }]
+    });
+    await writeJson(path.join(testDir, "athena_plan_review.json"), { approved: true });
+    await writeJson(path.join(testDir, "cycle_analytics.json"), {
+      funnel: { dispatched: 5, completed: 4, completionRate: 0.8 }
+    });
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, true);
+    assert.equal(result.completionRate, 0.8);
+    assert.ok("completionRate" in result, "completionRate field must always be present in result");
     await teardown();
   });
 });

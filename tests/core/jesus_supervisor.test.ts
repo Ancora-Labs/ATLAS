@@ -4,11 +4,13 @@
  * Covers:
  *   - validateDirectivePayload: required field enforcement and fail-close semantics
  *   - validateExpectedOutcomeMeasurable: concrete measurable outcome verification
+ *   - queue viability + completionRate gate: replan suppression respects execution-effectiveness
  */
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
+import fs from "node:fs/promises";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import {
@@ -16,6 +18,10 @@ import {
   validateDirectivePayload,
   validateExpectedOutcomeMeasurable,
 } from "../../src/core/jesus_supervisor.js";
+import {
+  computeQueueViability,
+  QUEUE_VIABILITY_MIN_COMPLETION_RATE,
+} from "../../src/core/pipeline_progress.js";
 
 // ── Shared fixtures ────────────────────────────────────────────────────────────
 
@@ -551,5 +557,101 @@ describe("appendJesusOutcomeLedger", () => {
       "appendJesusOutcomeLedger must not throw on write failure (fail-open)",
     );
     rmSync(tmpBase, { recursive: true, force: true });
+  });
+});
+
+// ── Queue viability + completionRate gate ──────────────────────────────────────
+// Tests that verify Jesus only suppresses replans when queued work is both
+// pending (existing checks) AND execution-effective (new completionRate gate).
+
+describe("jesus replan-suppression via computeQueueViability — completionRate gate", () => {
+  async function makeTmpDir() {
+    return fs.mkdtemp(path.join(tmpdir(), "jesus-qv-"));
+  }
+
+  function cfg(dir: string) {
+    return { paths: { stateDir: dir } };
+  }
+
+  async function seed(dir: string, files: Record<string, unknown>) {
+    for (const [name, data] of Object.entries(files)) {
+      await fs.writeFile(path.join(dir, name), JSON.stringify(data), "utf8");
+    }
+  }
+
+  it("viable=true when pending plans exist AND completionRate is above threshold (replan suppressed)", async () => {
+    const dir = await makeTmpDir();
+    try {
+      await seed(dir, {
+        "prometheus_analysis.json": { plans: [{ id: "t1" }, { id: "t2" }] },
+        "athena_plan_review.json": { approved: true },
+        "cycle_analytics.json": { funnel: { dispatched: 4, completed: 3, completionRate: 0.75 } },
+      });
+      const result = await computeQueueViability(cfg(dir));
+      assert.equal(result.viable, true, "replan should be suppressed: pending work + high completion rate");
+      assert.equal(result.completionRate, 0.75);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("viable=false when pending plans exist BUT completionRate is below threshold (replan NOT suppressed)", async () => {
+    const dir = await makeTmpDir();
+    try {
+      await seed(dir, {
+        "prometheus_analysis.json": { plans: [{ id: "t1" }, { id: "t2" }] },
+        "athena_plan_review.json": { approved: true },
+        "cycle_analytics.json": { funnel: { dispatched: 5, completed: 0, completionRate: 0.0 } },
+      });
+      const result = await computeQueueViability(cfg(dir));
+      assert.equal(result.viable, false, "replan must NOT be suppressed: pending work but zero completion rate");
+      assert.equal(result.reason, "low-completion-rate");
+      assert.ok(typeof result.completionRate === "number");
+      assert.ok(result.completionRate! < QUEUE_VIABILITY_MIN_COMPLETION_RATE);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("viable=true when pending plans exist AND no cycle_analytics (absence does not penalise)", async () => {
+    const dir = await makeTmpDir();
+    try {
+      await seed(dir, {
+        "prometheus_analysis.json": { plans: [{ id: "t1" }] },
+        "athena_plan_review.json": { approved: true },
+        // No cycle_analytics.json
+      });
+      const result = await computeQueueViability(cfg(dir));
+      assert.equal(result.viable, true, "missing analytics must not block replan suppression");
+      assert.equal(result.completionRate, null);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("viable=false (reason=low-completion-rate) takes precedence over viable pending count", async () => {
+    const dir = await makeTmpDir();
+    try {
+      await seed(dir, {
+        "prometheus_analysis.json": { plans: [{ id: "t1" }, { id: "t2" }, { id: "t3" }] },
+        "athena_plan_review.json": { approved: true },
+        "dispatch_checkpoint.json": { status: "in_progress", totalPlans: 3, completedPlans: 1 },
+        "cycle_analytics.json": {
+          funnel: { dispatched: 10, completed: 1, completionRate: 0.1 } // below 0.2 threshold
+        },
+      });
+      const result = await computeQueueViability(cfg(dir));
+      assert.equal(result.viable, false);
+      assert.equal(result.reason, "low-completion-rate");
+      assert.ok(result.pendingCount > 0, "pendingCount should still reflect pending work");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("QUEUE_VIABILITY_MIN_COMPLETION_RATE is exported as a positive number between 0 and 1", () => {
+    assert.ok(typeof QUEUE_VIABILITY_MIN_COMPLETION_RATE === "number");
+    assert.ok(QUEUE_VIABILITY_MIN_COMPLETION_RATE > 0);
+    assert.ok(QUEUE_VIABILITY_MIN_COMPLETION_RATE < 1);
   });
 });

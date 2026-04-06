@@ -941,7 +941,7 @@ ${workersList}`;
       if (queueViability.viable) {
         // Valid pending work exists — skip the age-based replan, let orchestrator execute
         await appendProgress(config,
-          `[JESUS] Age-based replan suppressed — queue has ${queueViability.pendingCount}/${queueViability.totalCount} viable pending plan(s) (reason=${queueViability.reason})`
+          `[JESUS] Age-based replan suppressed — queue has ${queueViability.pendingCount}/${queueViability.totalCount} viable pending plan(s) (reason=${queueViability.reason} completionRate=${queueViability.completionRate ?? "n/a"})`
         );
       } else {
         d.callPrometheus = true;
