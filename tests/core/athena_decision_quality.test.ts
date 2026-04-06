@@ -38,6 +38,7 @@ import {
   computeGateBlockRiskFromSignals,
   ATHENA_PLAN_REVIEW_REASON_CODE,
   checkPlanPremortemGate,
+  computePlanBatchFingerprint,
 } from "../../src/core/athena_reviewer.js";
 
 import {
@@ -46,6 +47,8 @@ import {
 } from "../../src/core/self_improvement.js";
 
 import { getDecisionQualityTrend } from "../../src/dashboard/live_dashboard.ts";
+
+import { computeCycleAnalytics } from "../../src/core/cycle_analytics.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = path.join(__dirname, "..", "fixtures");
@@ -1195,5 +1198,188 @@ describe("checkPlanPremortemGate", () => {
   it("negative path: returns empty violations for empty plan array", () => {
     const violations = checkPlanPremortemGate([]);
     assert.deepEqual(violations, []);
+  });
+});
+
+// ── runAthenaPlanReview — LOW_RISK_UNCHANGED fast path ────────────────────────
+
+describe("runAthenaPlanReview — LOW_RISK_UNCHANGED fast path", () => {
+  let tmpDir: string;
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-lru-test-"));
+  });
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns LOW_RISK_UNCHANGED when fingerprint matches cached approved review", async () => {
+    const plans = [
+      {
+        task: "Add in-memory LRU cache for request deduplication across identical API calls",
+        role: "evolution-worker",
+        wave: 1,
+        riskLevel: "low",
+        acceptance_criteria: ["Cache hit rate >= 80% on load test"],
+        verification: "npm test -- tests/dedup.test.ts",
+      },
+    ];
+    const fingerprint = computePlanBatchFingerprint(plans);
+    const priorReview = {
+      approved: true,
+      planBatchFingerprint: fingerprint,
+      overallScore: 8,
+      reviewedAt: new Date(Date.now() - 3600_000).toISOString(),
+    };
+    await fs.writeFile(
+      path.join(tmpDir, "athena_plan_review.json"),
+      JSON.stringify(priorReview),
+      "utf8",
+    );
+    const config = {
+      paths: {
+        stateDir: tmpDir,
+        progressFile: path.join(tmpDir, "progress.log"),
+      },
+      runtime: { disablePlanReviewCache: false },
+      env: { targetRepo: "test/repo" },
+    };
+    const result = await runAthenaPlanReview(config, { plans });
+    assert.ok(result.autoApproved === true,
+      "should be auto-approved via LOW_RISK_UNCHANGED path");
+    assert.equal(
+      result.autoApproveReason?.code,
+      ATHENA_FAST_PATH_REASON.LOW_RISK_UNCHANGED,
+      "autoApproveReason.code must be LOW_RISK_UNCHANGED when fingerprint matches cached approved review",
+    );
+  });
+
+  it("negative path: does NOT use LOW_RISK_UNCHANGED when cached review was not approved", async () => {
+    const subDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-lru-rejected-"));
+    try {
+      const plans = [
+        {
+          task: "Add in-memory LRU cache for request deduplication across identical API calls",
+          role: "evolution-worker",
+          wave: 1,
+          riskLevel: "low",
+          acceptance_criteria: ["Cache hit rate >= 80%"],
+          verification: "npm test -- tests/dedup.test.ts",
+        },
+      ];
+      const fingerprint = computePlanBatchFingerprint(plans);
+      const priorReview = {
+        approved: false,  // previously REJECTED
+        planBatchFingerprint: fingerprint,
+        overallScore: 3,
+        reviewedAt: new Date(Date.now() - 3600_000).toISOString(),
+      };
+      await fs.writeFile(
+        path.join(subDir, "athena_plan_review.json"),
+        JSON.stringify(priorReview),
+        "utf8",
+      );
+      const config = {
+        paths: {
+          stateDir: subDir,
+          progressFile: path.join(subDir, "progress.log"),
+        },
+        runtime: { disablePlanReviewCache: false },
+        env: { targetRepo: "test/repo" },
+      };
+      const result = await runAthenaPlanReview(config, { plans });
+      assert.notEqual(
+        result.autoApproveReason?.code,
+        ATHENA_FAST_PATH_REASON.LOW_RISK_UNCHANGED,
+        "must not auto-approve via LOW_RISK_UNCHANGED when cached review was rejected",
+      );
+    } finally {
+      await fs.rm(subDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── fastPathCounts.byReasonCode — per-code utilization telemetry ──────────────
+
+describe("fastPathCounts.byReasonCode — per-code utilization telemetry", () => {
+  const makeAnalyticsConfig = () => ({ paths: { stateDir: "state" } });
+
+  it("byReasonCode is present on every fastPathCounts record", () => {
+    const record = computeCycleAnalytics(makeAnalyticsConfig(), {
+      fastPathCounts: { athenaAutoApproved: 1, athenaFullReview: 0 },
+    });
+    assert.ok("byReasonCode" in record.fastPathCounts,
+      "byReasonCode must always be present on fastPathCounts");
+  });
+
+  it("all byReasonCode slots are null when autoApproveReasonCode is absent", () => {
+    const record = computeCycleAnalytics(makeAnalyticsConfig(), {
+      fastPathCounts: { athenaAutoApproved: 3, athenaFullReview: 0 },
+    });
+    assert.equal(record.fastPathCounts.byReasonCode.LOW_RISK_UNCHANGED,    null);
+    assert.equal(record.fastPathCounts.byReasonCode.HIGH_QUALITY_LOW_RISK, null);
+    assert.equal(record.fastPathCounts.byReasonCode.DELTA_REVIEW_APPROVED, null);
+  });
+
+  it("populates LOW_RISK_UNCHANGED slot with athenaAutoApproved count", () => {
+    const record = computeCycleAnalytics(makeAnalyticsConfig(), {
+      fastPathCounts: {
+        athenaAutoApproved: 5,
+        athenaFullReview: 0,
+        autoApproveReasonCode: ATHENA_FAST_PATH_REASON.LOW_RISK_UNCHANGED,
+      },
+    });
+    assert.equal(record.fastPathCounts.byReasonCode.LOW_RISK_UNCHANGED, 5);
+    assert.equal(record.fastPathCounts.byReasonCode.HIGH_QUALITY_LOW_RISK, null);
+    assert.equal(record.fastPathCounts.byReasonCode.DELTA_REVIEW_APPROVED, null);
+  });
+
+  it("populates HIGH_QUALITY_LOW_RISK slot with athenaAutoApproved count", () => {
+    const record = computeCycleAnalytics(makeAnalyticsConfig(), {
+      fastPathCounts: {
+        athenaAutoApproved: 2,
+        athenaFullReview: 0,
+        autoApproveReasonCode: ATHENA_FAST_PATH_REASON.HIGH_QUALITY_LOW_RISK,
+      },
+    });
+    assert.equal(record.fastPathCounts.byReasonCode.HIGH_QUALITY_LOW_RISK, 2);
+    assert.equal(record.fastPathCounts.byReasonCode.LOW_RISK_UNCHANGED,    null);
+    assert.equal(record.fastPathCounts.byReasonCode.DELTA_REVIEW_APPROVED, null);
+  });
+
+  it("populates DELTA_REVIEW_APPROVED slot with athenaAutoApproved count", () => {
+    const record = computeCycleAnalytics(makeAnalyticsConfig(), {
+      fastPathCounts: {
+        athenaAutoApproved: 4,
+        athenaFullReview: 1,
+        autoApproveReasonCode: ATHENA_FAST_PATH_REASON.DELTA_REVIEW_APPROVED,
+      },
+    });
+    assert.equal(record.fastPathCounts.byReasonCode.DELTA_REVIEW_APPROVED, 4);
+    assert.equal(record.fastPathCounts.byReasonCode.LOW_RISK_UNCHANGED,    null);
+    assert.equal(record.fastPathCounts.byReasonCode.HIGH_QUALITY_LOW_RISK, null);
+  });
+
+  it("negative path: unknown reason code leaves all slots null (no silent pollution)", () => {
+    const record = computeCycleAnalytics(makeAnalyticsConfig(), {
+      fastPathCounts: {
+        athenaAutoApproved: 3,
+        athenaFullReview: 0,
+        autoApproveReasonCode: "FUTURE_UNKNOWN_CODE",
+      },
+    });
+    assert.equal(record.fastPathCounts.byReasonCode.LOW_RISK_UNCHANGED,    null);
+    assert.equal(record.fastPathCounts.byReasonCode.HIGH_QUALITY_LOW_RISK, null);
+    assert.equal(record.fastPathCounts.byReasonCode.DELTA_REVIEW_APPROVED, null);
+  });
+
+  it("negative path: slot is null when athenaAutoApproved is absent (no count to assign)", () => {
+    const record = computeCycleAnalytics(makeAnalyticsConfig(), {
+      fastPathCounts: {
+        athenaFullReview: 3,
+        autoApproveReasonCode: ATHENA_FAST_PATH_REASON.LOW_RISK_UNCHANGED,
+      },
+    });
+    assert.equal(record.fastPathCounts.byReasonCode.LOW_RISK_UNCHANGED, null,
+      "slot must not be populated when athenaAutoApproved is absent");
   });
 });
