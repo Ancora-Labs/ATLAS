@@ -12,6 +12,7 @@ import {
   computeSpecialistFitThreshold,
   getLaneScore,
   computeAdaptiveSpecialistFillThreshold,
+  computeAdaptiveSpecializedShareTarget,
   SpecialistRerouteReason,
   SPECIALIST_REROUTE_REASON_CODE,
   buildReroutePenaltyLedger,
@@ -1334,17 +1335,10 @@ export function buildTokenFirstBatches(
   const reroutePenaltyLedger: ReroutePenaltyLedger = buildReroutePenaltyLedger(rerouteHistoryRecords);
   const specialistFitThreshold = resolveSpecialistFitThreshold(config);
   const configuredMinSpecializedShare = Number((config as any)?.workerPool?.specializationTargets?.minSpecializedShare ?? 0.35);
-  const laneSignalEntries = Object.values(laneTelemetrySignals);
-  const avgLaneSignal = laneSignalEntries.length > 0
-    ? laneSignalEntries.reduce((sum, signal) => {
-      const roiScore = Math.max(0, Math.min(1, signal.roi / 2));
-      const completionScore = Math.max(0, Math.min(1, signal.completionRate));
-      return sum + ((roiScore * 0.6) + (completionScore * 0.4));
-    }, 0) / laneSignalEntries.length
-    : 0.5;
-  const adaptiveMinSpecializedShare = Math.round(
-    Math.max(0, Math.min(0.9, configuredMinSpecializedShare + ((avgLaneSignal - 0.5) * 0.25))) * 1000
-  ) / 1000;
+  // Use the canonical adaptive share target from capability_pool so that
+  // token-first, Athena-prebatched, and role-split paths all derive the same
+  // value and scoreboard / gate telemetry stay aligned with workerPool policy.
+  const adaptiveMinSpecializedShare = computeAdaptiveSpecializedShareTarget(configuredMinSpecializedShare, lanePerformance);
   const requiredSpecializedCount = Math.max(0, Math.ceil(workingPlans.length * adaptiveMinSpecializedShare));
   let specialistAssignedCount = 0;
   const specialistRebalanceCandidates: Array<{

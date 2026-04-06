@@ -19,6 +19,10 @@ import {
   checkPacketSizeCap,
 } from "../../src/core/worker_batch_planner.js";
 import { validatePacketBatchAdmission } from "../../src/core/plan_contract_validator.js";
+import {
+  computeAdaptiveSpecializedShareTarget,
+  buildLanePerformanceFromCycleTelemetry,
+} from "../../src/core/capability_pool.js";
 
 function buildPlan(index) {
   return {
@@ -1342,6 +1346,39 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
     assert.equal(typeof target.requiredSpecializedCount, "number");
     assert.equal(typeof target.achievedSpecializedCount, "number");
     assert.equal(typeof target.targetMet, "boolean");
+  });
+
+  it("adaptiveMinSpecializedShare matches computeAdaptiveSpecializedShareTarget (unified formula)", () => {
+    // buildTokenFirstBatches must delegate adaptiveMinSpecializedShare to the
+    // canonical computeAdaptiveSpecializedShareTarget so that scoreboard values
+    // are identical across token-first, Athena-prebatched, and role-split paths.
+    const configuredMin = 0.4;
+    const testConfig: any = {
+      ...config,
+      // Provide a non-existent stateDir so no cycle_analytics.json is loaded
+      // from disk, giving us a deterministic empty lanePerformance.
+      paths: { stateDir: "__nonexistent_dir_for_test__" },
+      workerPool: { specializationTargets: { minSpecializedShare: configuredMin } },
+    };
+    const plans = [
+      makePlan("evolution-worker", "Task A"),
+      makePlan("evolution-worker", "Task B"),
+    ];
+    const batches = buildTokenFirstBatches(plans, testConfig);
+    const target = (batches[0] as any).specialistUtilizationTarget;
+    assert.ok(target, "specialistUtilizationTarget must be present");
+
+    // Expected: same computation as computeAdaptiveSpecializedShareTarget with
+    // no lane performance data (empty ledger → returns configuredMin unchanged).
+    const emptyLanePerf = buildLanePerformanceFromCycleTelemetry({});
+    const expected = computeAdaptiveSpecializedShareTarget(configuredMin, emptyLanePerf);
+    assert.equal(
+      target.adaptiveMinSpecializedShare,
+      expected,
+      `adaptiveMinSpecializedShare must equal computeAdaptiveSpecializedShareTarget result; got ${target.adaptiveMinSpecializedShare} expected ${expected}`,
+    );
+    // minSpecializedShare must always reflect the configured value
+    assert.equal(target.minSpecializedShare, configuredMin);
   });
 
   it("feeds lane ROI/completion telemetry into per-lane specialist fit thresholds", () => {

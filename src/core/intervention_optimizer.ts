@@ -938,6 +938,11 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
   // Reconcile all three budget constraints simultaneously
   const reconciled = reconcileBudgets(ranked, budget);
 
+  // Capture optional specializationContext passed by the orchestrator so the
+  // persisted log records the active workerPool specialization policy for
+  // alignment diagnostics between scoreboard, gate, and optimizer telemetry.
+  const specializationContext = options?.specializationContext ?? null;
+
   return {
     schemaVersion:  OPTIMIZER_LOG_SCHEMA_VERSION,
     generatedAt,
@@ -947,6 +952,7 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
     benchmarkTelemetryCount: benchmarkTelemetry.length,
     benchmarkBoostsApplied,
     rerouteCostPenaltiesApplied,
+    ...(specializationContext !== null ? { specializationContext } : {}),
     ...reconciled,
   };
 }

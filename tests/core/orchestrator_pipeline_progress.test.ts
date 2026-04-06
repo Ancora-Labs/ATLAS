@@ -2094,6 +2094,79 @@ describe("Athena-preassigned batch — specialist utilization telemetry derived"
   });
 });
 
+// ── Unified specialization target derivation ──────────────────────────────────
+
+import { computeAdaptiveSpecializedShareTarget } from "../../src/core/capability_pool.js";
+
+describe("specialization target derivation — unified across dispatch paths", () => {
+  it("buildTokenFirstBatches adaptiveMinSpecializedShare equals computeAdaptiveSpecializedShareTarget (no lane data)", () => {
+    // With no cycle_analytics state, lanePerformance is empty so the canonical
+    // function returns the configuredMin unchanged.  Token-first must agree.
+    const configuredMin = 0.45;
+    const plans = [
+      { id: "p1", role: "evolution-worker", task: "Task A", wave: 1, taskKind: "implementation" },
+    ];
+    const config: any = {
+      workerPool: { specializationTargets: { minSpecializedShare: configuredMin } },
+      // Use a missing stateDir so no cycle analytics can be loaded from disk
+      paths: { stateDir: "__nonexistent_dir_for_test__" },
+    };
+    const batches = buildTokenFirstBatches(plans, config);
+    const target = (batches[0] as any)?.specialistUtilizationTarget;
+    assert.ok(target, "specialistUtilizationTarget must be present");
+
+    // With empty lane performance (no disk data), canonical function returns configuredMin clamped
+    const expected = computeAdaptiveSpecializedShareTarget(configuredMin, {});
+    assert.equal(
+      target.adaptiveMinSpecializedShare,
+      expected,
+      `token-first path adaptiveMin (${target.adaptiveMinSpecializedShare}) must equal canonical result (${expected})`,
+    );
+  });
+
+  it("assignWorkersToPlans and buildTokenFirstBatches produce consistent adaptiveMinSpecializedShare when lane data absent", () => {
+    // Both paths must produce the same adaptive target when no lane data is available,
+    // ensuring scoreboard values are aligned regardless of which path was taken.
+    const configuredMin = 0.35;
+    const plans = [
+      { id: "a1", role: "evolution-worker", task: "Task A", wave: 1 },
+      { id: "a2", role: "quality-worker",   task: "Task B", wave: 1 },
+    ];
+    const config: any = {
+      workerPool: { specializationTargets: { minSpecializedShare: configuredMin } },
+      paths: { stateDir: "__nonexistent_dir_for_test__" },
+    };
+
+    const poolResult = assignWorkersToPlans(plans, config);
+    const batchResults = buildTokenFirstBatches(plans.map(p => ({ ...p, taskKind: "implementation" })), config);
+
+    const poolAdaptive = poolResult.specializationUtilization?.adaptiveMinSpecializedShare;
+    const batchAdaptive = (batchResults[0] as any)?.specialistUtilizationTarget?.adaptiveMinSpecializedShare;
+
+    assert.ok(typeof poolAdaptive === "number", "capability pool must produce a numeric adaptiveMinSpecializedShare");
+    assert.ok(typeof batchAdaptive === "number", "token-first batch must produce a numeric adaptiveMinSpecializedShare");
+    assert.equal(poolAdaptive, batchAdaptive,
+      `capability pool (${poolAdaptive}) and token-first path (${batchAdaptive}) must agree on adaptiveMinSpecializedShare`);
+  });
+
+  it("negative path: configuredMin=0 produces adaptiveMinSpecializedShare at the lower clamp floor", () => {
+    // Negative: configuredMin=0 → computeAdaptiveSpecializedShareTarget clamps to 0
+    // Both pool and batch must agree on this clamped value.
+    const plans = [{ id: "z1", role: "evolution-worker", task: "Z", wave: 1, taskKind: "implementation" }];
+    const config: any = {
+      workerPool: { specializationTargets: { minSpecializedShare: 0 } },
+      paths: { stateDir: "__nonexistent_dir_for_test__" },
+    };
+
+    const batches = buildTokenFirstBatches(plans, config);
+    const batchAdaptive = (batches[0] as any)?.specialistUtilizationTarget?.adaptiveMinSpecializedShare;
+    const canonical = computeAdaptiveSpecializedShareTarget(0, {});
+
+    assert.equal(batchAdaptive, canonical,
+      `zero configuredMin: token-first (${batchAdaptive}) must equal canonical (${canonical})`);
+  });
+});
+
 // ── Task 2: modelRoutingTelemetry producer pipeline ────────────────────────────
 import { computeCycleAnalytics, buildModelRoutingTelemetry, MIN_TELEMETRY_SAMPLE_THRESHOLD } from "../../src/core/cycle_analytics.js";
 import { rankModelsByTaskKindExpectedValue } from "../../src/core/model_policy.js";

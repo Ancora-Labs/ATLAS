@@ -1266,6 +1266,43 @@ describe("runInterventionOptimizer — reroute reason code end-to-end", () => {
   });
 });
 
+// ── specializationContext pass-through ────────────────────────────────────────
+
+describe("runInterventionOptimizer — specializationContext telemetry alignment", () => {
+  it("includes specializationContext in result when provided via options", () => {
+    const ctx = {
+      specializedShare: 0.4,
+      minSpecializedShare: 0.35,
+      adaptiveMinSpecializedShare: 0.37,
+      specializationTargetsMet: true,
+    };
+    const result = runInterventionOptimizer(
+      [makeIntervention()],
+      makeBudget(),
+      { specializationContext: ctx },
+    );
+    assert.ok(result.status !== "invalid_input");
+    assert.deepEqual((result as any).specializationContext, ctx,
+      "specializationContext must be passed through to optimizer result for log alignment");
+  });
+
+  it("omits specializationContext from result when not provided", () => {
+    const result = runInterventionOptimizer([makeIntervention()], makeBudget());
+    assert.ok(!Object.prototype.hasOwnProperty.call(result, "specializationContext"),
+      "specializationContext must be absent when not supplied");
+  });
+
+  it("negative path: null specializationContext is omitted from result", () => {
+    const result = runInterventionOptimizer(
+      [makeIntervention()],
+      makeBudget(),
+      { specializationContext: null },
+    );
+    assert.ok(!Object.prototype.hasOwnProperty.call(result, "specializationContext"),
+      "null specializationContext must not appear in result");
+  });
+});
+
 // ── buildInterventionsFromPlan: role normalization ────────────────────────────
 
 describe("buildInterventionsFromPlan — role normalization", () => {

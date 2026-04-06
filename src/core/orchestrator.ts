@@ -2980,6 +2980,10 @@ async function runSingleCycle(config) {
         policyImpactByInterventionId,
         failureClassifications,
         benchmarkTelemetry: benchmarkTelemetry.length > 0 ? benchmarkTelemetry : undefined,
+        // Pass capability pool specialization utilization so the optimizer log records
+        // the active workerPool policy alongside selection decisions for alignment
+        // diagnostics between scoreboard, gate, and optimizer telemetry.
+        specializationContext: (capabilityPoolResult as any)?.specializationUtilization ?? null,
         rerouteReasons: await (async () => {
           // Read reroute history from previous cycle to penalize underperforming lanes.
           try {
