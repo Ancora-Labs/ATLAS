@@ -139,6 +139,80 @@ export function isDaemonProcess(pid) {
   }
 }
 
+// ── Cooperative cancellation contract ────────────────────────────────────────
+
+/**
+ * Error thrown by CancellationToken.throwIfCancelled() when the token is
+ * cancelled.  Callers that need to distinguish cancellation from other errors
+ * can catch this class directly.
+ */
+export class CancelledError extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    super(`Operation cancelled: ${reason}`);
+    this.name = "CancelledError";
+    this.reason = String(reason || "cancelled");
+  }
+}
+
+/**
+ * Cooperative cancellation token for long-running dispatch loops.
+ *
+ * Create with createCancellationToken() and pass through runSingleCycle /
+ * runEvolutionLoop / runWorkerConversation.  At each cooperative checkpoint
+ * callers call token.throwIfCancelled() to surface a stop signal that would
+ * otherwise only be detected at the top of the next main-loop iteration.
+ *
+ * Design: intentionally minimal — no AbortController dependency, so existing
+ * code paths remain backward-compatible when no token is provided.
+ */
+export interface CancellationToken {
+  /** True once cancel() has been called. Read-only after creation. */
+  readonly cancelled: boolean;
+  /** Human-readable reason string, or null if not yet cancelled. */
+  readonly reason: string | null;
+  /**
+   * Cancel the token.  Idempotent — repeated calls are no-ops.
+   * @param reason — human-readable reason for cancellation
+   */
+  cancel(reason: string): void;
+  /**
+   * Throw CancelledError if the token is already cancelled.
+   * Use at cooperative checkpoints inside dispatch/evolution loops.
+   */
+  throwIfCancelled(): void;
+}
+
+/**
+ * Create a fresh, non-cancelled CancellationToken.
+ *
+ * @example
+ *   const token = createCancellationToken();
+ *   // … pass token through the dispatch loop …
+ *   token.cancel("stop-requested");  // from the daemon stop-file poller
+ *
+ * @returns {CancellationToken}
+ */
+export function createCancellationToken(): CancellationToken {
+  let _cancelled = false;
+  let _reason: string | null = null;
+  return {
+    get cancelled() { return _cancelled; },
+    get reason()    { return _reason;    },
+    cancel(reason: string) {
+      if (!_cancelled) {
+        _cancelled = true;
+        _reason = String(reason || "cancelled");
+      }
+    },
+    throwIfCancelled() {
+      if (_cancelled) {
+        throw new CancelledError(_reason ?? "cancelled");
+      }
+    },
+  };
+}
+
 /**
  * Kill ALL running daemon processes (not just the one in the PID file).
  * Prevents orphan daemons from accumulating when box:off only kills one PID

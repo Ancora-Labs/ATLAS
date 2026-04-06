@@ -30,6 +30,8 @@ import { getRoleRegistry } from "./role_registry.js";
 import { checkPostMergeArtifact, collectArtifactGaps, ARTIFACT_GATE_ERROR_PREFIX, isArtifactGateRequired, buildArtifactAuditEntry } from "./verification_gate.js";
 import { VERIFICATION_DEFAULTS, rewriteVerificationCommand, checkForbiddenCommands, normalizeCommandBatch } from "./verification_command_registry.js";
 import { isNonSpecificVerification } from "./plan_contract_validator.js";
+import { CancelledError } from "./daemon_control.js";
+import type { CancellationToken } from "./daemon_control.js";
 
 type EvolutionTask = {
   task_id?: string;
@@ -968,7 +970,8 @@ function extractAthenaVerdict(athenaResult) {
  * @param {string} [options.fromTaskId]  - force start from this task_id (skip prior)
  * @param {boolean} [options.dryRun]    - log plan but don't execute workers
  */
-export async function runEvolutionLoop(config, options: { fromTaskId?: string; dryRun?: boolean } = {}) {
+export async function runEvolutionLoop(config, options: { fromTaskId?: string; dryRun?: boolean; token?: CancellationToken | null } = {}) {
+  const { token: _token } = options;
   const stateDir = config.paths?.stateDir || "state";
   const maxAttempts = config.runtime?.autonomousMaxAttemptsPerTask || DEFAULT_MAX_ATTEMPTS;
 
@@ -1000,6 +1003,10 @@ export async function runEvolutionLoop(config, options: { fromTaskId?: string; d
 
   // 4. Sequential execution loop
   for (let i = startIndex; i < tasks.length; i++) {
+    // ── Cooperative cancellation: check at each task boundary ───────────────
+    if (_token?.cancelled) {
+      throw new CancelledError(_token.reason || "evolution-loop-cancelled");
+    }
     const task = tasks[i];
     const taskState = progress.tasks[task.task_id];
 
@@ -1063,6 +1070,10 @@ export async function runEvolutionLoop(config, options: { fromTaskId?: string; d
     // Rework loop for this task
     let taskDone = false;
     while (!taskDone && taskState.attempts < maxAttempts) {
+      // ── Cooperative cancellation: check at each rework attempt boundary ───
+      if (_token?.cancelled) {
+        throw new CancelledError(_token.reason || "evolution-rework-cancelled");
+      }
       taskState.attempts += 1;
       taskState.status = "in_progress";
       await saveProgress(stateDir, progress);
