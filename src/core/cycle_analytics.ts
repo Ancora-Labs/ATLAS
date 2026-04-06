@@ -891,6 +891,17 @@ export function computeCycleAnalytics(config, {
 }
 
 /**
+ * Minimum number of usable samples required for a task-kind's telemetry to be
+ * trusted by the expected-value routing logic.  Below this threshold the
+ * ranker falls back to the original model order deterministically rather than
+ * acting on statistically unreliable data (e.g. a single-sample 100 % or 0 %
+ * success rate).
+ *
+ * Consumers: rankModelsByTaskKindExpectedValue in model_policy.ts.
+ */
+export const MIN_TELEMETRY_SAMPLE_THRESHOLD = 3;
+
+/**
  * Aggregate per-task-kind model outcome telemetry from the premium usage log.
  *
  * Each entry in premiumUsageLog is expected to have the shape:
@@ -902,6 +913,7 @@ export function computeCycleAnalytics(config, {
  * Shape of byTaskKind:
  *   {
  *     [taskKind]: {
+ *       sampleCount: number,          // usable entries for this task kind
  *       default: { successProbability, capacityImpact, requestCost },
  *       models: {
  *         [modelName]: { successProbability, capacityImpact, requestCost }
@@ -911,6 +923,7 @@ export function computeCycleAnalytics(config, {
  */
 export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
   byTaskKind: Record<string, {
+    sampleCount: number;
     default: { successProbability: number; capacityImpact: number; requestCost: number };
     models: Record<string, { successProbability: number; capacityImpact: number; requestCost: number }>;
   }>;
@@ -951,6 +964,7 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
   };
 
   const resultByTaskKind: Record<string, {
+    sampleCount: number;
     default: EcoPoint;
     models: Record<string, EcoPoint>;
   }> = {};
@@ -966,6 +980,7 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
     }
 
     resultByTaskKind[taskKind] = {
+      sampleCount: allAcc.total,
       default: toEcoPoint(allAcc),
       models: modelPoints,
     };

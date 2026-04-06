@@ -15,6 +15,10 @@
 import path from "node:path";
 import { readJson, writeJson } from "./fs_utils.js";
 
+// Minimum usable samples required per task kind before telemetry is trusted for routing.
+// Must stay in sync with MIN_TELEMETRY_SAMPLE_THRESHOLD exported from cycle_analytics.ts.
+const MIN_TELEMETRY_SAMPLE_THRESHOLD = 3;
+
 // ── Banned model patterns (case-insensitive) ─────────────────────────────────
 // These patterns match against the resolved model slug BEFORE any CLI call.
 // If a model matches ANY pattern, it is rejected unconditionally.
@@ -1287,6 +1291,14 @@ export function rankModelsByTaskKindExpectedValue(
   const taskTelemetry = byTaskKind && typeof byTaskKind === "object" ? byTaskKind[key] : null;
   if (!taskTelemetry || typeof taskTelemetry !== "object") {
     return { rankedModels: original, scoreByModel: {}, usedTelemetry: false, reason: "telemetry-missing" };
+  }
+
+  // Enforce minimum sample threshold: routing on sparse data is worse than no routing.
+  const taskSampleCount = typeof (taskTelemetry as any).sampleCount === "number"
+    ? (taskTelemetry as any).sampleCount
+    : Infinity; // legacy telemetry without sampleCount is trusted as-is
+  if (taskSampleCount < MIN_TELEMETRY_SAMPLE_THRESHOLD) {
+    return { rankedModels: original, scoreByModel: {}, usedTelemetry: false, reason: "telemetry-below-threshold" };
   }
 
   const defaultPoint = normalizeEconomicsPoint((taskTelemetry as any).default);
