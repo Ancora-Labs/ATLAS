@@ -34,6 +34,10 @@ import {
   AUTO_APPROVE_DELTA_REVIEW_THRESHOLD,
   AUTO_APPROVE_HIGH_QUALITY_THRESHOLD,
   runAthenaPlanReview,
+  GATE_BLOCK_RISK,
+  computeGateBlockRiskFromSignals,
+  ATHENA_PLAN_REVIEW_REASON_CODE,
+  checkPlanPremortemGate,
 } from "../../src/core/athena_reviewer.js";
 
 import {
@@ -968,5 +972,228 @@ describe("AUTO_APPROVE threshold calibration", () => {
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+// ── computeGateBlockRiskFromSignals ───────────────────────────────────────────
+
+describe("computeGateBlockRiskFromSignals", () => {
+  it("returns LOW risk with no active signals", () => {
+    const r = computeGateBlockRiskFromSignals({});
+    assert.equal(r.gateBlockRisk, GATE_BLOCK_RISK.LOW);
+    assert.equal(r.requiresCorrection, false);
+    assert.deepEqual(r.activeGateSignals, []);
+  });
+
+  it("returns HIGH risk when freezeActive=true", () => {
+    const r = computeGateBlockRiskFromSignals({ freezeActive: true });
+    assert.equal(r.gateBlockRisk, GATE_BLOCK_RISK.HIGH);
+    assert.equal(r.requiresCorrection, true);
+    assert.ok(r.activeGateSignals.includes("governance_freeze_active"));
+  });
+
+  it("returns HIGH risk when canaryBreachActive=true", () => {
+    const r = computeGateBlockRiskFromSignals({ canaryBreachActive: true });
+    assert.equal(r.gateBlockRisk, GATE_BLOCK_RISK.HIGH);
+    assert.equal(r.requiresCorrection, true);
+    assert.ok(r.activeGateSignals.includes("governance_canary_breach"));
+  });
+
+  it("returns MEDIUM risk when criticalDebtBlocked=true alone", () => {
+    const r = computeGateBlockRiskFromSignals({ criticalDebtBlocked: true });
+    assert.equal(r.gateBlockRisk, GATE_BLOCK_RISK.MEDIUM);
+    assert.equal(r.requiresCorrection, true);
+    assert.ok(r.activeGateSignals.includes("critical_debt_overdue"));
+  });
+
+  it("returns HIGH risk when forceCheckpointActive=true", () => {
+    const r = computeGateBlockRiskFromSignals({ forceCheckpointActive: true });
+    assert.equal(r.gateBlockRisk, GATE_BLOCK_RISK.HIGH);
+    assert.equal(r.requiresCorrection, true);
+    assert.ok(r.activeGateSignals.includes("force_checkpoint_validation_active"));
+  });
+
+  it("HIGH wins over MEDIUM when freeze and criticalDebt are both active", () => {
+    const r = computeGateBlockRiskFromSignals({ freezeActive: true, criticalDebtBlocked: true });
+    assert.equal(r.gateBlockRisk, GATE_BLOCK_RISK.HIGH);
+    assert.equal(r.requiresCorrection, true);
+    assert.ok(r.activeGateSignals.includes("governance_freeze_active"));
+    assert.ok(r.activeGateSignals.includes("critical_debt_overdue"));
+  });
+
+  it("negative path: all signals false → LOW, requiresCorrection=false", () => {
+    const r = computeGateBlockRiskFromSignals({
+      freezeActive: false,
+      canaryBreachActive: false,
+      criticalDebtBlocked: false,
+      forceCheckpointActive: false,
+    });
+    assert.equal(r.gateBlockRisk, GATE_BLOCK_RISK.LOW);
+    assert.equal(r.requiresCorrection, false);
+  });
+});
+
+// ── gateBlockRisk HIGH blocks auto-approve fast path ─────────────────────────
+
+describe("runAthenaPlanReview — gateBlockRisk blocks auto-approve fast path", () => {
+  it("HIGH gateBlockRisk prevents auto-approve for high-quality low-risk plans", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-gate-block-"));
+    try {
+      // Well-specified low-risk plan that would pass the HIGH_QUALITY threshold without a gate
+      const plans = [{
+        role: "evolution-worker",
+        task: "Add request deduplication middleware with an in-memory LRU cache for identical API calls",
+        scope: "src/middleware/dedup.ts",
+        target_files: ["src/middleware/dedup.ts", "tests/middleware/dedup.test.ts"],
+        acceptance_criteria: ["Cache hit rate >= 80% on identical requests in load test"],
+        verification: "npm test -- tests/middleware/dedup.test.ts",
+        verification_commands: ["npm test -- tests/middleware/dedup.test.ts"],
+        riskLevel: "low",
+        wave: 1,
+        capacityDelta: 0.1,
+        requestROI: 2.0,
+      }];
+      const config: any = {
+        paths: {
+          stateDir: tmpDir,
+          progressFile: path.join(tmpDir, "progress.log"),
+        },
+        env: { copilotCliCommand: "__missing__", targetRepo: "test/repo" },
+        copilot: { leadershipAutopilot: false },
+        runtime: { disablePlanReviewCache: false },
+        // Manually activate governance freeze → gateBlockRisk=HIGH, requiresCorrection=true
+        governanceFreeze: { manualOverrideActive: true },
+      };
+      const result = await runAthenaPlanReview(config, { plans });
+      // Auto-approve must NOT have fired when the governance gate is active
+      assert.ok(result.autoApproved !== true,
+        "auto-approve must be blocked when gateBlockRisk is HIGH");
+      assert.ok(result.approved !== true,
+        "plan must not be approved when governance gate requires correction");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── Premortem gate enforcement is not bypassed by auto-approve ────────────────
+
+describe("runAthenaPlanReview — premortem gate enforced before auto-approve", () => {
+  it("high-risk plan without premortem is blocked regardless of quality score", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-premortem-gate-"));
+    try {
+      // High-risk, well-specified plan (score >= 65) but intentionally missing premortem
+      const plans = [{
+        role: "evolution-worker",
+        task: "Replace authentication provider with OAuth2 and migrate all existing sessions",
+        scope: "src/auth",
+        target_files: ["src/auth/provider.ts", "tests/auth/oauth.test.ts"],
+        acceptance_criteria: ["All auth tests pass", "Session migration success rate >= 99%"],
+        verification: "npm test -- tests/auth/oauth.test.ts",
+        verification_commands: ["npm test -- tests/auth/oauth.test.ts"],
+        riskLevel: "high",  // ← requires premortem; none provided
+        wave: 1,
+        capacityDelta: 0.1,
+        requestROI: 2.0,
+      }];
+      const config: any = {
+        paths: {
+          stateDir: tmpDir,
+          progressFile: path.join(tmpDir, "progress.log"),
+        },
+        env: { copilotCliCommand: "__missing__", targetRepo: "test/repo" },
+        runtime: { disablePlanReviewCache: false },
+      };
+      const result = await runAthenaPlanReview(config, { plans });
+      assert.equal(result.approved, false, "high-risk plan without premortem must be blocked");
+      assert.equal(
+        (result as any).reason?.code,
+        ATHENA_PLAN_REVIEW_REASON_CODE.MISSING_PREMORTEM,
+        "reason code must be MISSING_PREMORTEM",
+      );
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("negative path: low-risk plan is not blocked by premortem gate", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-premortem-low-"));
+    try {
+      // Low-risk plan — premortem gate must not fire even without a premortem field
+      const plans = [{
+        role: "evolution-worker",
+        task: "Add request deduplication middleware with an in-memory LRU cache for identical API calls",
+        scope: "src/middleware/dedup.ts",
+        target_files: ["src/middleware/dedup.ts"],
+        acceptance_criteria: ["Cache hit rate >= 80% on identical requests"],
+        verification: "npm test -- tests/middleware/dedup.test.ts",
+        riskLevel: "low",
+        wave: 1,
+        capacityDelta: 0.1,
+        requestROI: 2.0,
+      }];
+      const config: any = {
+        paths: {
+          stateDir: tmpDir,
+          progressFile: path.join(tmpDir, "progress.log"),
+        },
+        env: { copilotCliCommand: "__missing__", targetRepo: "test/repo" },
+        runtime: { disablePlanReviewCache: false },
+      };
+      const result = await runAthenaPlanReview(config, { plans });
+      // Must NOT be blocked by the premortem gate
+      assert.notEqual(
+        (result as any).reason?.code,
+        ATHENA_PLAN_REVIEW_REASON_CODE.MISSING_PREMORTEM,
+        "low-risk plan must not be blocked by premortem gate",
+      );
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── checkPlanPremortemGate unit tests ─────────────────────────────────────────
+
+describe("checkPlanPremortemGate", () => {
+  it("returns empty violations for low-risk plan (no premortem required)", () => {
+    const violations = checkPlanPremortemGate([
+      { task: "Fix lint warning", role: "evolution-worker", wave: 1, riskLevel: "low" },
+    ]);
+    assert.deepEqual(violations, []);
+  });
+
+  it("returns violation for high-risk plan missing premortem entirely", () => {
+    const violations = checkPlanPremortemGate([
+      { task: "Rewrite auth layer", role: "security-worker", wave: 1, riskLevel: "high" },
+    ]);
+    assert.ok(violations.length > 0, "must flag missing premortem on high-risk plan");
+  });
+
+  it("returns empty violations for high-risk plan with valid premortem", () => {
+    const validPremortem = {
+      riskLevel: "high",
+      scenario: "Auth provider migration fails mid-flight and sessions are invalidated",
+      failurePaths: ["OAuth callback unreachable", "Session store migration timeout"],
+      mitigations: ["Feature flag to rollback to legacy provider", "Session store backup"],
+      detectionSignals: ["5xx rate > 1% on /auth endpoints"],
+      guardrails: ["Canary deployment limited to 5% traffic"],
+      rollbackPlan: "Revert OAuth provider flag and restore session backup",
+    };
+    const violations = checkPlanPremortemGate([
+      {
+        task: "Migrate auth to OAuth2",
+        role: "security-worker",
+        wave: 1,
+        riskLevel: "high",
+        premortem: validPremortem,
+      },
+    ]);
+    assert.deepEqual(violations, []);
+  });
+
+  it("negative path: returns empty violations for empty plan array", () => {
+    const violations = checkPlanPremortemGate([]);
+    assert.deepEqual(violations, []);
   });
 });
