@@ -1594,7 +1594,7 @@ export function buildTokenFirstBatches(
     }
   }
 
-  return flattened.map((batch, index) => ({
+  const mapped = flattened.map((batch, index) => ({
     ...batch,
     bundleIndex: index + 1,
     totalBundles: flattened.length,
@@ -1617,6 +1617,12 @@ export function buildTokenFirstBatches(
     },
     ...(reroutedRoles.length > 0 ? { specialistReroutes: reroutedRoles } : {}),
     ...(specialistRerouteReasons.length > 0 ? { specialistRerouteReasons } : {}),
+  }));
+
+  return mapped.map((batch, index) => ({
+    ...batch,
+    bundleIndex: index + 1,
+    totalBundles: mapped.length,
   }));
 }
 

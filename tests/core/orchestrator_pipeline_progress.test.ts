@@ -28,6 +28,10 @@ import {
   REROUTE_EV_PENALTY_COEFFICIENT,
   REROUTE_EV_MAX_PENALTY,
 } from "../../src/core/intervention_optimizer.js";
+import {
+  applyDispatchBoundaryHardCap,
+  MAX_ACTIONABLE_STEPS_PER_PACKET,
+} from "../../src/core/plan_contract_validator.js";
 
 describe("orchestrator pipeline progress — resilience", () => {
   let tmpDir;
@@ -2509,5 +2513,86 @@ describe("scoreboard persistence — specialization target fallback to capabilit
       minSpecializedShare: Number(capPoolUtil.minSpecializedShare ?? 0),
     } : null);
     assert.strictEqual(effectiveSpecTarget, null);
+  });
+});
+
+// ── Dispatch-boundary hard cap — applyDispatchBoundaryHardCap ─────────────────
+//
+// Verifies the unconditional final safeguard that splits any batch descriptor
+// exceeding MAX_ACTIONABLE_STEPS_PER_PACKET into smaller chunks.  This cap fires
+// after ALL batching paths converge, regardless of earlier config-gated checks.
+describe("dispatch-boundary hard cap — applyDispatchBoundaryHardCap", () => {
+  it("passes batches with ≤ MAX_ACTIONABLE_STEPS_PER_PACKET plans through unchanged", () => {
+    const plans = [{ task: "A" }, { task: "B" }, { task: "C" }];
+    const batches = [{ role: "evolution-worker", plans, estimatedTokens: 1000 }];
+    const result = applyDispatchBoundaryHardCap(batches);
+    assert.equal(result.length, 1, "single batch within cap must not be split");
+    assert.equal(result[0].plans.length, MAX_ACTIONABLE_STEPS_PER_PACKET);
+    assert.ok(!(result[0] as any)._dispatchHardCapSplit, "within-cap batch must not carry split marker");
+  });
+
+  it("splits a batch with 4 plans into [3, 1]", () => {
+    const plans = [{ task: "A" }, { task: "B" }, { task: "C" }, { task: "D" }];
+    const batches = [{ role: "evolution-worker", plans, estimatedTokens: 4000 }];
+    const result = applyDispatchBoundaryHardCap(batches);
+    assert.equal(result.length, 2, "4-plan batch must be split into 2 batches");
+    assert.equal(result[0].plans.length, 3, "first chunk must have 3 plans");
+    assert.equal(result[1].plans.length, 1, "second chunk must have 1 plan");
+    assert.ok((result[0] as any)._dispatchHardCapSplit, "split batch must carry _dispatchHardCapSplit marker");
+    assert.ok((result[1] as any)._dispatchHardCapSplit, "split batch must carry _dispatchHardCapSplit marker");
+  });
+
+  it("splits a batch with 6 plans into [3, 3]", () => {
+    const plans = Array.from({ length: 6 }, (_, i) => ({ task: `T${i}` }));
+    const batches = [{ role: "evolution-worker", plans, estimatedTokens: 6000 }];
+    const result = applyDispatchBoundaryHardCap(batches);
+    assert.equal(result.length, 2, "6-plan batch must be split into 2 batches of 3");
+    assert.equal(result[0].plans.length, 3);
+    assert.equal(result[1].plans.length, 3);
+  });
+
+  it("handles multiple batches — only oversized ones are split", () => {
+    const ok = [{ task: "A" }, { task: "B" }];
+    const oversized = Array.from({ length: 5 }, (_, i) => ({ task: `X${i}` }));
+    const batches = [
+      { role: "evolution-worker", plans: ok, estimatedTokens: 2000 },
+      { role: "ci-worker", plans: oversized, estimatedTokens: 5000 },
+    ];
+    const result = applyDispatchBoundaryHardCap(batches);
+    // First batch (2 plans) passes through; second (5 plans) becomes [3, 2]
+    assert.equal(result.length, 3, "5-plan batch splits into 2; total batches = 1 + 2 = 3");
+    assert.equal(result[0].plans.length, 2);
+    assert.equal(result[1].plans.length, 3);
+    assert.equal(result[2].plans.length, 2);
+  });
+
+  it("preserves all non-plans fields on split chunks", () => {
+    const plans = Array.from({ length: 4 }, (_, i) => ({ task: `P${i}` }));
+    const batches = [{ role: "ci-worker", plans, estimatedTokens: 4000, wave: 2, taskKind: "ci-fix" }];
+    const result = applyDispatchBoundaryHardCap(batches);
+    assert.equal(result.length, 2);
+    assert.equal((result[0] as any).role, "ci-worker", "role must be preserved on split chunks");
+    assert.equal((result[0] as any).wave, 2, "wave must be preserved on split chunks");
+    assert.equal((result[0] as any).taskKind, "ci-fix", "taskKind must be preserved on split chunks");
+  });
+
+  it("returns empty array unchanged", () => {
+    const result = applyDispatchBoundaryHardCap([]);
+    assert.equal(result.length, 0, "empty input must return empty output");
+  });
+
+  it("NEGATIVE PATH: exactly 3 plans is NOT split (boundary condition)", () => {
+    const plans = [{ task: "A" }, { task: "B" }, { task: "C" }];
+    const batches = [{ role: "evolution-worker", plans, estimatedTokens: 3000 }];
+    const result = applyDispatchBoundaryHardCap(batches);
+    assert.equal(result.length, 1, "batch at exact cap must not be split");
+    assert.equal(result[0].plans.length, 3);
+  });
+
+  it("NEGATIVE PATH: 2 plans is NOT split", () => {
+    const plans = [{ task: "A" }, { task: "B" }];
+    const batches = [{ role: "evolution-worker", plans, estimatedTokens: 2000 }];
+    const result = applyDispatchBoundaryHardCap(batches);
+    assert.equal(result.length, 1, "batch below cap must not be split");
   });
 });
