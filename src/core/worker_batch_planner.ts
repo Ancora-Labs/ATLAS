@@ -14,6 +14,8 @@ import {
   computeAdaptiveSpecialistFillThreshold,
   SpecialistRerouteReason,
   SPECIALIST_REROUTE_REASON_CODE,
+  buildReroutePenaltyLedger,
+  ReroutePenaltyLedger,
 } from "./capability_pool.js";
 import { compactSingletonWaves } from "./dag_scheduler.js";
 import { rankModelsByTaskKindExpectedValue } from "./model_policy.js";
@@ -162,6 +164,30 @@ function loadCycleAnalyticsTelemetry(config: any): any | null {
     return JSON.parse(readFileSync(analyticsPath, "utf8"));
   } catch {
     return null;
+  }
+}
+
+/**
+ * Load the last N reroute history records from reroute_history.jsonl.
+ * Used by buildTokenFirstBatches to build a per-lane penalty ledger so
+ * specialists with repeated reroutes face a raised fill threshold.
+ *
+ * @param config  — BOX config (reads config.paths.stateDir)
+ * @param limit   — maximum number of records to read from the tail of the file
+ * @returns array of raw reroute records (lane + reasonCode fields expected)
+ */
+function loadRerouteHistory(config: any, limit = 30): Array<{ lane?: string; reasonCode?: string }> {
+  const stateDir = String(config?.paths?.stateDir || "state");
+  const historyPath = path.join(stateDir, "reroute_history.jsonl");
+  if (!existsSync(historyPath)) return [];
+  try {
+    const raw = readFileSync(historyPath, "utf8");
+    const lines = raw.split("\n").filter(l => l.trim().length > 0);
+    return lines.slice(-limit).map(line => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean) as Array<{ lane?: string; reasonCode?: string }>;
+  } catch {
+    return [];
   }
 }
 
@@ -1301,6 +1327,11 @@ export function buildTokenFirstBatches(
   const laneTelemetry = telemetry?.lastCycle?.laneTelemetry ?? {};
   const lanePerformance = buildLanePerformanceFromCycleTelemetry(laneTelemetry);
   const laneTelemetrySignals = buildLaneTelemetrySignals(laneTelemetry);
+  // Load reroute penalty history from disk and build per-lane ledger.
+  // Specialists that have been repeatedly rerouted face a raised fill threshold
+  // (reason-code weighted), not only the lane performance adjustment.
+  const rerouteHistoryRecords = loadRerouteHistory(config);
+  const reroutePenaltyLedger: ReroutePenaltyLedger = buildReroutePenaltyLedger(rerouteHistoryRecords);
   const specialistFitThreshold = resolveSpecialistFitThreshold(config);
   const configuredMinSpecializedShare = Number((config as any)?.workerPool?.specializationTargets?.minSpecializedShare ?? 0.35);
   const laneSignalEntries = Object.values(laneTelemetrySignals);
@@ -1441,10 +1472,12 @@ export function buildTokenFirstBatches(
     const groupLane = String(group.plans.find((p: any) => p._fitLane)?._fitLane || "implementation");
     // Compute per-lane adaptive fill threshold: good lane → lower bar (specialist stays);
     // degraded lane → higher bar (specialist rerouted to evo-worker more readily).
+    // Reroute penalty history further raises the bar for lanes with repeated reroutes.
     const adaptiveFillThreshold = computeAdaptiveSpecialistFillThreshold(
       specialistThreshold,
       groupLane,
       lanePerformance,
+      reroutePenaltyLedger,
     );
     const minSpecialistTokens = Math.floor(usableTokens * adaptiveFillThreshold);
 

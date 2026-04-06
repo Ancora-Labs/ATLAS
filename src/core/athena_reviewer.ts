@@ -29,7 +29,8 @@ import {
   migrateData,
   recordMigrationTelemetry,
   STATE_FILE_TYPE,
-  MIGRATION_REASON
+  MIGRATION_REASON,
+  backfillDecisionQualityLabel,
 } from "./schema_registry.js";
 import {
   validateLeadershipContract,
@@ -82,6 +83,13 @@ export const ATHENA_FAST_PATH_REASON = Object.freeze({
    * Requires no prior cached fingerprint — high plan quality is sufficient evidence.
    */
   HIGH_QUALITY_LOW_RISK: "HIGH_QUALITY_LOW_RISK",
+  /**
+   * All plans are low-risk and every plan scores at or above the delta-review threshold.
+   * A prior cached review exists but the fingerprint changed (i.e. the batch changed).
+   * The AI review call is skipped because the delta does not rise to material risk.
+   * Reserves full AI review capacity for genuinely changed or high-risk packets.
+   */
+  DELTA_REVIEW_APPROVED: "DELTA_REVIEW_APPROVED",
 } as const);
 
 // ── Deterministic plan-batch fingerprinting ───────────────────────────────────
@@ -2186,6 +2194,20 @@ export async function assessGovernanceGateBlockRisk(config): Promise<GateBlockRi
  */
 export const AUTO_APPROVE_HIGH_QUALITY_THRESHOLD = 80;
 
+/**
+ * Quality score (0-100) that each plan in a changed low-risk batch must reach
+ * for the delta-review fast path to approve the batch without a full AI call.
+ *
+ * Same threshold as HIGH_QUALITY_LOW_RISK (80) because the quality bar must be
+ * equally high when the fingerprint has changed.  The distinction from
+ * HIGH_QUALITY_LOW_RISK is that a prior cached review IS present on disk;
+ * this path covers incremental improvements to already-reviewed batches rather
+ * than brand-new submissions.
+ *
+ * Can be overridden via config.runtime.autoApproveDeltaReviewThreshold.
+ */
+export const AUTO_APPROVE_DELTA_REVIEW_THRESHOLD = 80;
+
 // ── Plan Review (pre-work gate) ─────────────────────────────────────────────
 
 function buildPlanReviewBlocker(code: string, source = "athena_reviewer") {
@@ -2402,7 +2424,7 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
     // deterministic quality gate, and there is NO prior cached review on disk,
     // the batch is well-specified enough to approve without a prior cached review.
     // If a cached review exists but the fingerprint does not match (plans changed),
-    // we fall through to the AI review so the changed plans are properly re-evaluated.
+    // we fall through to the delta-review path below.
     // Guardrail precedence is preserved: quality, pre-mortem, and governance gates
     // all ran unconditionally before reaching this point.
     if (!cachedReviewExists) {
@@ -2433,6 +2455,46 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
           autoApproveReason: {
             code: ATHENA_FAST_PATH_REASON.HIGH_QUALITY_LOW_RISK,
             message: `All plans are low-risk and cleared the high-quality threshold (≥ ${highQualityThreshold})`,
+          },
+          reviewedAt: new Date().toISOString(),
+        };
+      }
+    }
+
+    // ── Delta-review fast path (cached review exists, fingerprint changed) ───
+    // When a prior cached review exists but the fingerprint changed (batch was
+    // materially modified), still skip the AI call when every plan scores at or
+    // above the delta-review threshold.  This preserves full AI review capacity
+    // for genuinely high-risk or low-quality changes while allowing clean incremental
+    // improvements to flow through without a premium-request spend.
+    if (cachedReviewExists) {
+      const deltaThreshold = typeof config?.runtime?.autoApproveDeltaReviewThreshold === "number"
+        ? config.runtime.autoApproveDeltaReviewThreshold
+        : AUTO_APPROVE_DELTA_REVIEW_THRESHOLD;
+      const allDeltaQuality = plans.length > 0 &&
+        plans.every(p => scorePlanQuality(p).score >= deltaThreshold);
+      if (allDeltaQuality) {
+        await appendProgress(
+          config,
+          `[ATHENA] Plan review DELTA-APPROVED — all ${plans.length} changed low-risk plan(s) score ≥ ${deltaThreshold}`
+        );
+        chatLog(
+          stateDir,
+          athenaName,
+          `Plan delta-approved (changed low-risk batch, threshold=${deltaThreshold})`
+        );
+        return {
+          approved: true,
+          overallScore: deltaThreshold,
+          summary: `All ${plans.length} plan(s) are low-risk with changed fingerprint and scored at or above the delta-review threshold (${deltaThreshold})`,
+          planReviews: plans.map((p, i) => buildFallbackPlanReview(p, i)),
+          corrections: [],
+          appliedFixes: [],
+          unresolvedIssues: [],
+          autoApproved: true,
+          autoApproveReason: {
+            code: ATHENA_FAST_PATH_REASON.DELTA_REVIEW_APPROVED,
+            message: `All plans are low-risk with changed fingerprint and cleared the delta-review threshold (≥ ${deltaThreshold})`,
           },
           reviewedAt: new Date().toISOString(),
         };
@@ -3231,6 +3293,7 @@ export async function runAthenaPostmortem(
 
     history.push(enrichedPostmortem);
     if (history.length > 50) history.splice(0, history.length - 50);
+    backfillDecisionQualityLabel(history);
     await writeJson(postmortemsFilePath, addSchemaVersion(history, STATE_FILE_TYPE.ATHENA_POSTMORTEMS));
     await writeJson(path.join(stateDir, "athena_latest_postmortem.json"), enrichedPostmortem);
 
@@ -3326,6 +3389,7 @@ export async function runAthenaPostmortem(
     };
     pastPostmortems.push(enrichedDupPm);
     if (pastPostmortems.length > 50) pastPostmortems.splice(0, pastPostmortems.length - 50);
+    backfillDecisionQualityLabel(pastPostmortems);
     await writeJson(postmortemsFilePath, addSchemaVersion(pastPostmortems, STATE_FILE_TYPE.ATHENA_POSTMORTEMS));
     await writeJson(path.join(stateDir, "athena_latest_postmortem.json"), enrichedDupPm);
     return enrichedDupPm;
@@ -3429,6 +3493,7 @@ ${recurrenceContext}
     };
     pastPostmortems.push(enrichedFallbackPostmortem);
     if (pastPostmortems.length > 50) pastPostmortems.splice(0, pastPostmortems.length - 50);
+    backfillDecisionQualityLabel(pastPostmortems);
     await writeJson(postmortemsFilePath, addSchemaVersion(pastPostmortems, STATE_FILE_TYPE.ATHENA_POSTMORTEMS));
     await writeJson(path.join(stateDir, "athena_latest_postmortem.json"), enrichedFallbackPostmortem);
     return enrichedFallbackPostmortem;
@@ -3494,6 +3559,7 @@ ${recurrenceContext}
   };
   history.push(enrichedPostmortem);
   if (history.length > 50) history.splice(0, history.length - 50);
+  backfillDecisionQualityLabel(history);
   await writeJson(postmortemsFilePath, addSchemaVersion(history, STATE_FILE_TYPE.ATHENA_POSTMORTEMS));
 
   // Also write latest for dashboard visibility

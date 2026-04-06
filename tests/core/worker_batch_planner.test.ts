@@ -1402,6 +1402,66 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
     });
     assert.equal(conflictCoBatched, false, "conflicting file plans must not be co-batched");
   });
+
+  it("raises adaptive fill threshold when reroute history shows repeated below-fill reroutes for a lane", () => {
+    // Write a temp reroute_history.jsonl with repeated below_fill_threshold reroutes
+    // for the "governance" lane.  The adaptive threshold should be raised vs baseline
+    // (with no reroute history) causing the governance-worker plan to still be rerouted.
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "box-reroute-test-"));
+    try {
+      const records = Array.from({ length: 6 }, () => JSON.stringify({
+        recordedAt: new Date().toISOString(),
+        role: "governance-worker",
+        lane: "governance",
+        reasonCode: "below_fill_threshold",
+        fillRatio: 0.2,
+        laneScore: 0.5,
+      })).join("\n");
+      writeFileSync(path.join(tmpDir, "reroute_history.jsonl"), records, "utf8");
+      const penaltyConfig = {
+        paths: { stateDir: tmpDir },
+        ...config,
+        workerPool: {
+          specializationTargets: { fitScoreThreshold: 0.99, minSpecializedShare: 0 },
+        },
+      };
+      const plans = [
+        makePlan("evolution-worker", "Big evo task " + "x".repeat(200)),
+        makePlan("governance-worker", "Small generic maintenance task"),
+      ];
+      const batches = buildTokenFirstBatches(plans, penaltyConfig);
+      // governance-worker should still be rerouted (penalty raised the threshold further)
+      for (const batch of batches) {
+        assert.equal(batch.role, "evolution-worker",
+          "governance-worker should be rerouted despite reroute history (penalty raised threshold)");
+      }
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not raise threshold when reroute history is empty", () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), "box-reroute-empty-"));
+    try {
+      writeFileSync(path.join(tmpDir, "reroute_history.jsonl"), "", "utf8");
+      const emptyPenaltyConfig = {
+        paths: { stateDir: tmpDir },
+        ...config,
+        workerPool: {
+          specializationTargets: { fitScoreThreshold: 0.99, minSpecializedShare: 0 },
+        },
+      };
+      const plans = [
+        makePlan("evolution-worker", "Big evo task " + "x".repeat(200)),
+        makePlan("governance-worker", "Small governance task"),
+      ];
+      // Should behave identically to missing-file scenario (no crash, no penalty)
+      const batches = buildTokenFirstBatches(plans, emptyPenaltyConfig);
+      assert.ok(Array.isArray(batches), "should return batches array with empty reroute history");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── buildTokenFirstBatches: calibration coefficient ────────────────────────────

@@ -29,7 +29,9 @@ import {
   migrateData,
   addSchemaVersion,
   extractPostmortemEntries,
-  recordMigrationTelemetry
+  recordMigrationTelemetry,
+  backfillDecisionQualityLabel,
+  VALID_DECISION_QUALITY_LABELS,
 } from "../../src/core/schema_registry.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -454,5 +456,50 @@ describe("migrateData — negative paths", () => {
     const result = migrateData(corrupt, STATE_FILE_TYPE.WORKER_SESSIONS);
     assert.equal(result.ok, false);
     assert.equal(result.reason, MIGRATION_REASON.INVALID_DATA);
+  });
+});
+
+// ── backfillDecisionQualityLabel ─────────────────────────────────────────────
+
+describe("backfillDecisionQualityLabel", () => {
+  it("backfills entries missing decisionQualityLabel with 'inconclusive'", () => {
+    const entries = [
+      { workerName: "evo", taskCompleted: true },
+      { workerName: "gov", decisionQualityLabel: "correct" },
+      { workerName: "arc", decisionQualityLabel: "" },
+    ];
+    const { entries: out, backfilledCount } = backfillDecisionQualityLabel(entries as any);
+    assert.equal(backfilledCount, 2, "two entries should be backfilled");
+    assert.equal(out[0].decisionQualityLabel, "inconclusive");
+    assert.equal(out[0].decisionQualityLabelReason, "BACKFILLED_MISSING");
+    assert.equal(out[1].decisionQualityLabel, "correct", "already-correct entry must be unchanged");
+    assert.equal(out[2].decisionQualityLabel, "inconclusive");
+  });
+
+  it("does not touch entries that already have valid labels", () => {
+    for (const label of VALID_DECISION_QUALITY_LABELS) {
+      const entries = [{ decisionQualityLabel: label }];
+      const { backfilledCount } = backfillDecisionQualityLabel(entries as any);
+      assert.equal(backfilledCount, 0, `label '${label}' should not be backfilled`);
+    }
+  });
+
+  it("returns empty result and zero count for non-array input", () => {
+    const { entries, backfilledCount } = backfillDecisionQualityLabel(null as any);
+    assert.deepEqual(entries, []);
+    assert.equal(backfilledCount, 0);
+  });
+
+  it("returns zero count for empty array input", () => {
+    const { entries, backfilledCount } = backfillDecisionQualityLabel([]);
+    assert.deepEqual(entries, []);
+    assert.equal(backfilledCount, 0);
+  });
+
+  it("negative path: invalid label value is treated as missing and backfilled", () => {
+    const entries = [{ decisionQualityLabel: "UNKNOWN_VALUE" }];
+    const { backfilledCount } = backfillDecisionQualityLabel(entries as any);
+    assert.equal(backfilledCount, 1, "invalid label must be backfilled");
+    assert.equal(entries[0].decisionQualityLabel, "inconclusive");
   });
 });

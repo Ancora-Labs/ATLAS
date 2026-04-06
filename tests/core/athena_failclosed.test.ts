@@ -431,7 +431,7 @@ describe("runAthenaPlanReview — deterministic auto-approve for low-risk unchan
     );
   });
 
-  it("falls through to AI review (fails closed) when last review has a different fingerprint", async () => {
+  it("returns DELTA_REVIEW_APPROVED (not LOW_RISK_UNCHANGED) when last review has a different fingerprint but plans are high quality", async () => {
     const staleFingerprint = "0000000000000000";
     await fs.writeFile(
       path.join(tmpDir, "athena_plan_review.json"),
@@ -451,11 +451,14 @@ describe("runAthenaPlanReview — deterministic auto-approve for low-risk unchan
     const prometheusOutput = { plans: LOW_RISK_PLANS, analyzedAt: new Date().toISOString() };
     const result = await runAthenaPlanReview(config, prometheusOutput);
 
-    // With no valid AI binary, the call fails; the result must not be auto-approved
-    assert.equal(result.autoApproved, undefined,
-      "mismatched fingerprint must not trigger auto-approve");
-    assert.notEqual(result.reason?.code, "LOW_RISK_UNCHANGED",
-      "mismatched fingerprint must fall through to AI, not return auto-approve");
+    // With a changed fingerprint and high-quality plans, the delta-review fast path
+    // approves the batch — it must NOT return LOW_RISK_UNCHANGED (fingerprint mismatch).
+    assert.notEqual(result.autoApproveReason?.code, "LOW_RISK_UNCHANGED",
+      "mismatched fingerprint must not trigger LOW_RISK_UNCHANGED");
+    assert.equal(result.autoApproveReason?.code, "DELTA_REVIEW_APPROVED",
+      "high-quality plans with changed fingerprint must use DELTA_REVIEW_APPROVED");
+    assert.equal(result.autoApproved, true,
+      "delta-review path must set autoApproved=true for high-quality low-risk plans");
   });
 
   it("never auto-approves when any plan has riskLevel=high even if fingerprint matches", async () => {
