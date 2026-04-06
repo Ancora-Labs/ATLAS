@@ -2834,6 +2834,23 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
       .map((plan, i) => normalizePlanFromTask(plan, i, plan?.wave || 1));
   }
 
+  // Deterministic research-topic accounting fallback:
+  // if the model omits synthesis_sources/informational_topics_consumed, recover
+  // source linkage from lexical matching so planning does not become context-blind.
+  const researchTopicsForLinkage = Array.isArray((aiResult as any)?.researchTopics)
+    ? ((aiResult as any).researchTopics as unknown[]).map((t) => String(t || "").trim()).filter(Boolean)
+    : [];
+  const existingInformationalTopicsConsumed = Array.isArray((input as any)?.informational_topics_consumed)
+    ? ((input as any).informational_topics_consumed as unknown[]).map((t) => String(t || "").trim()).filter(Boolean)
+    : [];
+  const linkageResult = applyDeterministicResearchSourceLinkage(
+    plans,
+    researchTopicsForLinkage,
+    existingInformationalTopicsConsumed,
+  );
+  plans = linkageResult.plans;
+  const normalizedInformationalTopicsConsumed = linkageResult.informationalTopicsConsumed;
+
   const health = normalizeProjectHealthAlias(String(input.projectHealth || "").trim());
   const projectHealth = ["good", "needs-work", "critical"].includes(health)
     ? health
@@ -2923,6 +2940,32 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
     parserConfidencePenalties.push({ reason: "request_budget_fallback", component: "requestBudget", delta: -0.1 });
   }
 
+  // ── Research source-linkage check ────────────────────────────────────────
+  // When research context is injected, plans must either reference topics via
+  // synthesis_sources[] or explicitly mark reviewed topics as informational.
+  // Missing both signals indicates context-blind planning and is penalized.
+  const researchTopicCount = Number((input as any)?.researchContext?.topicCount || 0);
+  const informationalTopicsConsumed = normalizedInformationalTopicsConsumed.length;
+  const sourceLinkedPlans = (Array.isArray(plans) ? plans : [])
+    .filter((p: any) => Array.isArray(p?.synthesis_sources) && p.synthesis_sources.length > 0)
+    .length;
+  let sourceLinkageScore = 1.0;
+  if (researchTopicCount > 0 && sourceLinkedPlans === 0 && informationalTopicsConsumed === 0) {
+    sourceLinkageScore = 0.6;
+    parserConfidencePenalties.push({
+      reason: `research_source_linkage_missing_topics_${researchTopicCount}`,
+      component: "sourceLinkage",
+      delta: -0.4,
+    });
+  } else if (researchTopicCount > 0 && sourceLinkedPlans === 0 && informationalTopicsConsumed > 0) {
+    sourceLinkageScore = 0.85;
+    parserConfidencePenalties.push({
+      reason: "research_source_linkage_informational_only",
+      component: "sourceLinkage",
+      delta: -0.15,
+    });
+  }
+
   // ── Bottleneck coverage check ────────────────────────────────────────────
   // When the input declared topBottlenecks, every bottleneck should be
   // addressed by at least one generated plan.  A coverage ratio below
@@ -2950,6 +2993,7 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
     plansShape:         plansShapeScore,
     healthField:        healthFieldScore,
     requestBudget:      requestBudgetScore,
+    sourceLinkage:      sourceLinkageScore,
     bottleneckCoverage: bottleneckCoverageScore,
   };
 
@@ -2997,9 +3041,99 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
     parserConfidenceComponents,
     parserConfidencePenalties,
     bottleneckCoverage: bnCovResult,
+    informational_topics_consumed: normalizedInformationalTopicsConsumed,
     _parserBelowFloor: belowFloor,
     _parserConfidenceFloor: PARSER_CONFIDENCE_FLOOR,
     plans: finalPlans
+  };
+}
+
+const TOPIC_MATCH_STOP_WORDS = new Set([
+  "the", "and", "for", "with", "from", "into", "that", "this", "those", "these",
+  "agent", "agents", "system", "systems", "benchmark", "benchmarks", "evaluation", "evaluations",
+  "general", "framework", "frameworks", "model", "models", "use", "using", "based",
+]);
+
+function tokenizeTopicForMatch(value: string): string[] {
+  const tokens = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]+/g, " ")
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 4 && !TOPIC_MATCH_STOP_WORDS.has(t));
+  return [...new Set(tokens)];
+}
+
+function applyDeterministicResearchSourceLinkage(
+  plans: any[],
+  researchTopics: string[],
+  existingInformationalTopicsConsumed: string[],
+): { plans: any[]; informationalTopicsConsumed: string[] } {
+  const planList = Array.isArray(plans) ? plans : [];
+  const topics = Array.isArray(researchTopics) ? researchTopics.filter(Boolean) : [];
+  const informationalSeed = Array.isArray(existingInformationalTopicsConsumed)
+    ? existingInformationalTopicsConsumed.filter(Boolean)
+    : [];
+  if (topics.length === 0) {
+    return {
+      plans: planList,
+      informationalTopicsConsumed: [...new Set(informationalSeed)],
+    };
+  }
+
+  const topicCatalog = topics.map((topic) => ({
+    topic,
+    key: topicKey(topic),
+    tokens: tokenizeTopicForMatch(topic),
+  }));
+  const consumedTopicKeys = new Set<string>();
+
+  const linkedPlans = planList.map((plan: any) => {
+    const existingSources = Array.isArray(plan?.synthesis_sources)
+      ? plan.synthesis_sources.map((s: unknown) => String(s || "").trim()).filter(Boolean)
+      : [];
+
+    if (existingSources.length > 0) {
+      for (const source of existingSources) consumedTopicKeys.add(topicKey(source));
+      return { ...plan, synthesis_sources: [...new Set(existingSources)] };
+    }
+
+    const haystack = [plan?.task, plan?.title, plan?.context, plan?.scope]
+      .map((v) => String(v || "").toLowerCase())
+      .join(" \n ");
+
+    let bestTopic: { topic: string; key: string; tokens: string[] } | null = null;
+    let bestScore = 0;
+    for (const candidate of topicCatalog) {
+      if (candidate.tokens.length === 0) continue;
+      let score = 0;
+      for (const token of candidate.tokens) {
+        if (haystack.includes(token)) score += 1;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestTopic = candidate;
+      }
+    }
+
+    if (bestTopic && bestScore >= 2) {
+      consumedTopicKeys.add(bestTopic.key);
+      return { ...plan, synthesis_sources: [bestTopic.topic] };
+    }
+
+    return { ...plan, synthesis_sources: [] };
+  });
+
+  const informational = [...new Set(informationalSeed)];
+  for (const candidate of topicCatalog) {
+    if (!consumedTopicKeys.has(candidate.key)) {
+      informational.push(candidate.topic);
+    }
+  }
+
+  return {
+    plans: linkedPlans,
+    informationalTopicsConsumed: [...new Set(informational)],
   };
 }
 
@@ -5284,7 +5418,7 @@ Mandatory requirements:
 
   const parsedForValidation = normalizePrometheusParsedOutput(
     rawParsedInput,
-    { ...aiResult, raw }
+    { ...aiResult, raw, researchTopics: researchTopicsList }
   );
 
   if (planningPolicy.requireDependencyAwareWaves && Array.isArray(parsedForValidation.plans) && parsedForValidation.plans.length > 0) {

@@ -718,6 +718,74 @@ describe("normalizePrometheusParsedOutput — confidence components", () => {
     assert.equal(result.parserContextPenalty, 0,
       "context-penalty channel must be 0 when no context signals are present");
   });
+
+  // ── Source-linkage confidence component ───────────────────────────────────
+
+  it("sourceLinkage=1.0 and no penalty when no research context is declared", () => {
+    const parsed = {
+      projectHealth: "good",
+      plans: [{ task: "Fix trust boundary", role: "evolution-worker" }],
+      requestBudget: { estimatedPremiumRequestsTotal: 1, errorMarginPercent: 15, hardCapTotal: 2 },
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.equal(result.parserConfidenceComponents.sourceLinkage, 1.0,
+      "no research context → sourceLinkage must be 1.0");
+    assert.ok(!result.parserConfidencePenalties.some(p => p.component === "sourceLinkage"),
+      "no sourceLinkage penalty when researchContext is absent");
+  });
+
+  it("sourceLinkage=0.6 and full penalty when research topics present but no synthesis_sources or informational_topics_consumed", () => {
+    const parsed = {
+      projectHealth: "good",
+      plans: [{ task: "Fix trust boundary", role: "evolution-worker" }],
+      requestBudget: { estimatedPremiumRequestsTotal: 1, errorMarginPercent: 15, hardCapTotal: 2 },
+      researchContext: { topicCount: 3 },
+      // no informational_topics_consumed, no synthesis_sources on plans
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.equal(result.parserConfidenceComponents.sourceLinkage, 0.6,
+      "blind planning with research context must set sourceLinkage=0.6");
+    const penalty = result.parserConfidencePenalties.find(p => p.component === "sourceLinkage");
+    assert.ok(penalty, "must have a sourceLinkage penalty for context-blind planning");
+    assert.ok(penalty.reason.startsWith("research_source_linkage_missing_topics_"),
+      `penalty reason must be research_source_linkage_missing_topics_N, got: ${penalty.reason}`);
+    assert.equal(penalty.delta, -0.4, "full blind-planning penalty must be -0.4");
+  });
+
+  it("sourceLinkage=0.85 and softer penalty when research topics present, no synthesis_sources, but informational_topics_consumed exists", () => {
+    const parsed = {
+      projectHealth: "good",
+      plans: [{ task: "Fix trust boundary", role: "evolution-worker" }],
+      requestBudget: { estimatedPremiumRequestsTotal: 1, errorMarginPercent: 15, hardCapTotal: 2 },
+      researchContext: { topicCount: 2 },
+      informational_topics_consumed: ["Security Analysis Topic"],
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.equal(result.parserConfidenceComponents.sourceLinkage, 0.85,
+      "informational-only consumption must set sourceLinkage=0.85");
+    const penalty = result.parserConfidencePenalties.find(p => p.component === "sourceLinkage");
+    assert.ok(penalty, "must have a sourceLinkage penalty for informational-only consumption");
+    assert.equal(penalty.reason, "research_source_linkage_informational_only");
+    assert.equal(penalty.delta, -0.15, "informational-only penalty must be -0.15");
+  });
+
+  it("sourceLinkage=1.0 and no penalty when plans declare synthesis_sources (positive path)", () => {
+    const parsed = {
+      projectHealth: "good",
+      plans: [{
+        task: "Fix trust boundary based on research",
+        role: "evolution-worker",
+        synthesis_sources: ["Security Analysis Topic"],
+      }],
+      requestBudget: { estimatedPremiumRequestsTotal: 1, errorMarginPercent: 15, hardCapTotal: 2 },
+      researchContext: { topicCount: 1 },
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.equal(result.parserConfidenceComponents.sourceLinkage, 1.0,
+      "plans with synthesis_sources must score sourceLinkage=1.0");
+    assert.ok(!result.parserConfidencePenalties.some(p => p.component === "sourceLinkage"),
+      "no sourceLinkage penalty when plans are properly linked to research sources");
+  });
 });
 
 describe("computeBottleneckCoverage", () => {

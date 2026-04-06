@@ -488,6 +488,22 @@ function buildNoveltyReplanPrompt(basePrompt: string, skippedPlans: Array<{ plan
   ].join("\n");
 }
 
+function buildSourceLinkageReplanPrompt(basePrompt: string, topicCount: number): string {
+  return [
+    String(basePrompt || "Full repository self-evolution analysis").trim(),
+    "",
+    "ADDITIONAL ORCHESTRATOR GATE CONTEXT:",
+    `Latest plan batch is blind to research context: researchContext.topicCount=${topicCount}, but no plan declared synthesis_sources and no informational_topics_consumed were emitted.`,
+    "This causes low-relevance planning and backlog stagnation.",
+    "",
+    "MANDATORY OUTPUT UPDATE:",
+    "- Every plan that uses research context MUST include synthesis_sources with one or more exact topic names from RESEARCH INTELLIGENCE.",
+    "- Any topic reviewed but not converted into a plan MUST be listed in informational_topics_consumed.",
+    "- Do not leave both fields empty when researchContext.topicCount > 0.",
+    "- Keep plans actionable with deterministic verification commands.",
+  ].join("\n");
+}
+
 /** Write orchestrator health record to state/orchestrator_health.json. Exported for downstream use. */
 export async function writeOrchestratorHealth(stateDir, status, reason, details = null) {
   await writeJson(path.join(stateDir, "orchestrator_health.json"), {
@@ -2481,6 +2497,68 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     await appendProgress(config, "[CYCLE] Prometheus produced no plans — cycle complete");
     await safeUpdatePipelineProgress(config, "cycle_complete", "Prometheus produced no plans — nothing to dispatch");
     return;
+  }
+
+  // ── Source-linkage quality gate (research-context blindness) ─────────────
+  // When research context is injected but neither plan synthesis_sources nor
+  // informational_topics_consumed are present, force one corrective Prometheus
+  // re-plan (budget permitting). This prevents low-relevance, context-blind
+  // plans from flowing into dispatch.
+  {
+    const researchTopicCount = Number((prometheusAnalysis as any)?.researchContext?.topicCount || 0);
+    const sourceLinkedPlanCount = (Array.isArray((prometheusAnalysis as any)?.plans) ? (prometheusAnalysis as any).plans : [])
+      .filter((p: any) => Array.isArray(p?.synthesis_sources) && p.synthesis_sources.length > 0)
+      .length;
+    const informationalConsumedCount = Array.isArray((prometheusAnalysis as any)?.informational_topics_consumed)
+      ? (prometheusAnalysis as any).informational_topics_consumed.length
+      : 0;
+    const blindPlanningDetected =
+      researchTopicCount > 0 &&
+      sourceLinkedPlanCount === 0 &&
+      informationalConsumedCount === 0;
+
+    if (blindPlanningDetected) {
+      await appendProgress(config,
+        `[CYCLE] Source-linkage gate detected blind planning: researchTopics=${researchTopicCount} linkedPlans=${sourceLinkedPlanCount} informationalConsumed=${informationalConsumedCount}`
+      );
+      if (canSpendLeadership(1)) {
+        try {
+          const linkagePrompt = buildSourceLinkageReplanPrompt(
+            jesusDecision.briefForPrometheus || jesusDecision.thinking || "Full repository analysis",
+            researchTopicCount
+          );
+          const replannedWithLinkage = await runPrometheusAnalysis(config, {
+            prompt: linkagePrompt,
+            requestedBy: "OrchestratorSourceLinkageGate",
+            driftReport: architectureDriftReport,
+            bypassCache: true,
+            bypassReason: "missing_source_linkage",
+          });
+          await spendPremium("prometheus", "source_linkage_replan");
+          const replannedSourceLinkedCount = (Array.isArray((replannedWithLinkage as any)?.plans) ? (replannedWithLinkage as any).plans : [])
+            .filter((p: any) => Array.isArray(p?.synthesis_sources) && p.synthesis_sources.length > 0)
+            .length;
+          const replannedInformationalCount = Array.isArray((replannedWithLinkage as any)?.informational_topics_consumed)
+            ? (replannedWithLinkage as any).informational_topics_consumed.length
+            : 0;
+          await appendProgress(config,
+            `[PROMETHEUS] ↺ Source-linkage re-plan complete — linkedPlans=${replannedSourceLinkedCount} informationalConsumed=${replannedInformationalCount} req#${_cycleRequests} this cycle`
+          );
+          if (replannedWithLinkage && Array.isArray(replannedWithLinkage.plans) && replannedWithLinkage.plans.length > 0) {
+            prometheusAnalysis = replannedWithLinkage;
+          }
+        } catch (err) {
+          warn(`[orchestrator] Source-linkage re-plan failed (non-fatal): ${String((err as any)?.message || err)}`);
+          await appendProgress(config,
+            `[CYCLE] Source-linkage re-plan failed (non-fatal): ${String((err as any)?.message || err)}`
+          );
+        }
+      } else {
+        await appendProgress(config,
+          `[CYCLE] Source-linkage re-plan skipped — leadership budget reached (${_cycleRequests}/${leadershipBudget})`
+        );
+      }
+    }
   }
 
   // ── Parser confidence hard-stop gate ──────────────────────────────────────
