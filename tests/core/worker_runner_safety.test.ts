@@ -45,7 +45,7 @@ describe("worker_runner artifact hard-block gate", () => {
   });
 
   it("checkPostMergeArtifact: rejects when SHA present but test output absent", () => {
-    const artifact = checkPostMergeArtifact("Merged commit abc1234 into main — deployment complete.");
+    const artifact = checkPostMergeArtifact("BOX_MERGED_SHA=abc1234\nDeployment complete.");
     assert.equal(artifact.hasSha, true);
     assert.equal(artifact.hasTestOutput, false);
     assert.equal(artifact.hasArtifact, false);
@@ -71,7 +71,7 @@ describe("worker_runner artifact hard-block gate", () => {
 
   it("checkPostMergeArtifact: accepts valid evidence with SHA and test block", () => {
     const output = [
-      "Merged abc1234 into main",
+      "BOX_MERGED_SHA=abc1234",
       "CLEAN_TREE_STATUS=clean",
       "VERIFICATION_REPORT: BUILD=pass; TESTS=pass",
       "===NPM TEST OUTPUT START===",

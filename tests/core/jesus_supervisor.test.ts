@@ -368,7 +368,7 @@ describe("jesus_supervisor — runSystemHealthAudit", () => {
           capabilityGaps: [
             {
               gap: "Missing impossible capability",
-              severity: "important",
+              severity: "warning",
               capability: "non-existent-capability",
               proposedFix: "Implement imaginary feature",
             },
@@ -386,7 +386,7 @@ describe("jesus_supervisor — runSystemHealthAudit", () => {
 
       const capGap = findings.find((f: any) => f.area === "capability-gap");
       assert.ok(capGap, "capability-gap finding should exist");
-      assert.equal(capGap.severity, "important");
+      assert.equal(capGap.severity, "warning");
       assert.equal(capGap.note, undefined);
     });
   });

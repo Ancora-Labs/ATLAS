@@ -393,7 +393,7 @@ describe("artifact gate — hard-block integration across done-emission paths", 
 
   it("worker runtime path: SHA + test output present → artifact gate clears", () => {
     const workerOutput = [
-      "Merged abc1234 into main at 14:22 UTC",
+      "BOX_MERGED_SHA=abc1234",
       "CLEAN_TREE_STATUS=clean",
       "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass",
       "===NPM TEST OUTPUT START===",
@@ -552,13 +552,13 @@ describe("artifact gate regression — collectArtifactGaps covers all gap combin
 
   it("checkPostMergeArtifact: missing test output block produces hasTestOutput=false", () => {
     const output = [
-      "Merged f1a2b3c into main",
-      // No '# tests N # pass N # fail N' line
+      "BOX_MERGED_SHA=f1a2b3c",
+      // No '===NPM TEST OUTPUT START===' block
       "BOX_STATUS=done",
     ].join("\n");
     const artifact = checkPostMergeArtifact(output);
     assert.equal(artifact.hasSha, true, "SHA must be detected");
-    assert.equal(artifact.hasTestOutput, false, "missing test output line must yield hasTestOutput=false");
+    assert.equal(artifact.hasTestOutput, false, "missing test output block must yield hasTestOutput=false");
     assert.equal(artifact.hasArtifact, false, "incomplete artifact must be false");
   });
 
@@ -597,7 +597,7 @@ describe("env-contract regression — worker contract and dispatch command gate"
     const result = validateWorkerContract("backend", {
       status: "done",
       fullOutput: [
-        "Merged abc123f into main",
+        "BOX_MERGED_SHA=abc123f",
         "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 25 # pass 25 # fail 0",

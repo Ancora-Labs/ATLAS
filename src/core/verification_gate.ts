@@ -92,17 +92,16 @@ export function checkNamedTestProof(
 }
 
 // ── Post-merge verification artifact patterns (Packet 1) ───────────────────
-// Worker output must contain a git SHA and raw npm test stdout block for
-// BOX_STATUS=done to be accepted on merge-oriented tasks.
-
-/** Regex matching a 7-40 character hex git SHA in output. */
-const GIT_SHA_PATTERN = /\b[0-9a-f]{7,40}\b/i;
+// Worker output must contain an explicit BOX_MERGED_SHA marker and a raw
+// npm test stdout block for BOX_STATUS=done to be accepted on merge-oriented
+// tasks.  Loose hex-string detection was removed — only the explicit
+// BOX_MERGED_SHA=<sha> marker is accepted to prevent incidental hex values
+// (e.g. config hashes, PR numbers) from satisfying the SHA requirement.
 
 /**
- * Regex matching an explicit BOX_MERGED_SHA marker.
- * Workers that include this explicit marker provide stronger evidence than
- * pattern-detected hex strings, since it unambiguously identifies the post-merge
- * commit SHA rather than any incidental hex value in the output.
+ * Regex matching an explicit BOX_MERGED_SHA=<sha> marker.
+ * This is the ONLY accepted form of SHA evidence — loose 7-40 hex string
+ * detection has been removed to eliminate ambiguity from incidental values.
  */
 const BOX_MERGED_SHA_PATTERN = /BOX_MERGED_SHA\s*=\s*([0-9a-f]{7,40})/i;
 
@@ -147,7 +146,7 @@ export const ALL_POST_MERGE_PLACEHOLDERS: readonly string[] = Object.freeze([
  */
 export const ARTIFACT_GAP = Object.freeze({
   UNFILLED_PLACEHOLDER: "Post-merge artifact block contains unfilled template placeholders — replace every placeholder with actual output (BOX_MERGED_SHA=<sha>, CLEAN_TREE_STATUS=clean, and the ===NPM TEST OUTPUT START=== block with real test output)",
-  MISSING_SHA:          "Post-merge git SHA missing — run 'git rev-parse HEAD' on merged state and include the SHA",
+  MISSING_SHA:          "Post-merge explicit BOX_MERGED_SHA marker missing — run 'git rev-parse HEAD' after merge and include 'BOX_MERGED_SHA=<sha>' in your output (loose hex strings are not accepted)",
   MISSING_TEST_OUTPUT:  "Post-merge raw npm test output missing — run 'npm test' on merged state and paste raw stdout",
   DIRTY_TREE:           "Post-merge clean-tree evidence missing — include explicit CLEAN_TREE_STATUS=clean from 'git status --porcelain'",
 });
@@ -171,12 +170,12 @@ export const ARTIFACT_GAP_CODE = Object.freeze({
 
 /**
  * Check if worker output contains the required post-merge verification artifact.
- * The artifact is: a git SHA + raw npm test stdout block.
+ * The artifact is: an explicit BOX_MERGED_SHA marker + raw npm test stdout block.
  *
- * Explicit markers are preferred over pattern detection:
- *   - BOX_MERGED_SHA=<sha>  takes precedence over any 7-40 hex string in the output.
- *   - ===NPM TEST OUTPUT START=== ... ===NPM TEST OUTPUT END=== block is preferred over
- *     scattered npm output patterns; falls back to the legacy pattern for compatibility.
+ * SHA detection is strict — only the explicit BOX_MERGED_SHA=<sha> marker is
+ * accepted.  Loose 7-40 hex string matching has been removed to prevent
+ * incidental hex values (config hashes, PR numbers, etc.) from satisfying the
+ * SHA requirement and creating ambiguous completion evidence.
  *
  * @param {string} output — full worker output text
  * @returns {{ hasArtifact: boolean, hasSha: boolean, hasTestOutput: boolean, hasUnfilledPlaceholder: boolean, mergedSha: string | null, hasExplicitShaMarker: boolean, hasExplicitTestBlock: boolean }}
@@ -184,11 +183,12 @@ export const ARTIFACT_GAP_CODE = Object.freeze({
 export function checkPostMergeArtifact(output) {
   const text = String(output || "");
 
-  // Prefer explicit BOX_MERGED_SHA=<sha> marker; fall back to loose hex detection.
+  // SHA evidence requires an explicit BOX_MERGED_SHA=<sha> marker.
+  // Loose hex string detection has been removed — only the explicit marker counts.
   const explicitShaMatch = BOX_MERGED_SHA_PATTERN.exec(text);
   const hasExplicitShaMarker = explicitShaMatch !== null;
   const mergedSha: string | null = explicitShaMatch ? explicitShaMatch[1] : null;
-  const hasSha = hasExplicitShaMarker || GIT_SHA_PATTERN.test(text);
+  const hasSha = hasExplicitShaMarker;
 
   // Post-merge test evidence is structural: explicit raw block markers are required.
   const hasExplicitTestBlock = NPM_TEST_BLOCK_PATTERN.test(text);

@@ -202,7 +202,7 @@ describe("verification_gate worker contract enforcement", () => {
     const parsedResponse = {
       status: "done",
       fullOutput: [
-        "Merged commit abc123d into main",
+        "BOX_MERGED_SHA=abc123d",
         "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 10 # pass 10 # fail 0",
@@ -357,7 +357,7 @@ describe("verification_gate — post-merge artifact (Packet 1/3)", () => {
   });
 
   it("checkPostMergeArtifact detects present SHA and explicit test output block", () => {
-    const result = checkPostMergeArtifact("Commit: abc123d\nCLEAN_TREE_STATUS=clean\n===NPM TEST OUTPUT START===\n# tests 5 pass 5 fail 0\n===NPM TEST OUTPUT END===");
+    const result = checkPostMergeArtifact("BOX_MERGED_SHA=abc123d\nCLEAN_TREE_STATUS=clean\n===NPM TEST OUTPUT START===\n# tests 5 pass 5 fail 0\n===NPM TEST OUTPUT END===");
     assert.equal(result.hasSha, true);
     assert.equal(result.hasTestOutput, true);
   });
@@ -368,7 +368,7 @@ describe("verification_gate — post-merge artifact (Packet 1/3)", () => {
   });
 
   it("checkPostMergeArtifact returns clean result for complete explicit artifact", () => {
-    const text = "abc123d\nCLEAN_TREE_STATUS=clean\n===NPM TEST OUTPUT START===\n# tests 10 pass\n===NPM TEST OUTPUT END===";
+    const text = "BOX_MERGED_SHA=abc123d\nCLEAN_TREE_STATUS=clean\n===NPM TEST OUTPUT START===\n# tests 10 pass\n===NPM TEST OUTPUT END===";
     const result = checkPostMergeArtifact(text);
     assert.equal(result.hasSha, true);
     assert.equal(result.hasTestOutput, true);
@@ -463,7 +463,7 @@ describe("verification_gate — SHA + raw npm output enforced across done-capabl
     const result = validateWorkerContract("test", {
       status: "done",
       fullOutput: [
-        "abc123d merged into main",
+        "BOX_MERGED_SHA=abc123d",
         "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 10 # pass 10 # fail 0",
@@ -525,7 +525,7 @@ describe("verification_gate — artifact check mandatory across all completion p
       status: "done",
       fullOutput: [
         "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=n/a",
-        "Merged at abc1234",
+        "BOX_MERGED_SHA=abc1234",
         "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "  3 passing",
@@ -797,7 +797,7 @@ describe("verification_gate — artifact gate non-bypassable (Task 1 hardening)"
     const result = validateWorkerContract("backend", {
       status: "done",
       fullOutput: [
-        "Merged abc1234 into main",
+        "BOX_MERGED_SHA=abc1234",
         "CLEAN_TREE_STATUS=clean",
         "===NPM TEST OUTPUT START===",
         "# tests 5 # pass 5 # fail 0",
@@ -920,12 +920,13 @@ describe("verification_gate — BOX_MERGED_SHA explicit marker (Task 3)", () => 
     assert.equal(result.mergedSha, "abc1234f");
   });
 
-  it("checkPostMergeArtifact falls back to loose hex detection when no explicit marker", () => {
+  it("negative path: checkPostMergeArtifact rejects loose hex SHA when no explicit BOX_MERGED_SHA marker", () => {
+    // Loose hex string detection has been removed — ambiguous hex values no longer satisfy the SHA requirement.
     const output = "Merged abc1234f into main\n# tests 5 pass";
     const result = checkPostMergeArtifact(output);
-    assert.equal(result.hasSha, true);
+    assert.equal(result.hasSha, false, "loose hex SHA must not satisfy the SHA requirement");
     assert.equal(result.hasExplicitShaMarker, false);
-    assert.equal(result.mergedSha, null, "loose SHA detection must not set mergedSha");
+    assert.equal(result.mergedSha, null);
   });
 
   it("extractMergedSha returns the SHA from BOX_MERGED_SHA= marker", () => {

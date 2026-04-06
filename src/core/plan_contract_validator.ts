@@ -19,8 +19,12 @@ import { checkForbiddenCommands } from "./verification_command_registry.js";
  * Defined here (plan_contract_validator.ts) as the canonical source and re-exported
  * from prometheus.ts for backward compatibility.  Use this import when you only need
  * the taxonomy without importing the full prometheus module.
+ *
+ * "important" has been removed — findings previously using that severity must use
+ * "warning" instead.  "important" is bridged to "warning" at extraction time in
+ * normalizeMandatorySeverity() to handle legacy stored findings.
  */
-export const PLAN_CONTRACT_MANDATORY_SEVERITIES: ReadonlySet<string> = new Set(["critical", "important"]);
+export const PLAN_CONTRACT_MANDATORY_SEVERITIES: ReadonlySet<string> = new Set(["critical", "warning"]);
 
 /**
  * Canonical deterministic violation code taxonomy.

@@ -3768,17 +3768,35 @@ describe("buildRoutingOutcomeSection", () => {
 });
 
 describe("health-audit mandatory task injection contract", () => {
-  it("extractMandatoryHealthAuditFindings keeps only critical/important entries", () => {
+  it("extractMandatoryHealthAuditFindings keeps only critical/warning entries (bridges legacy 'important' to 'warning')", () => {
     const payload = {
       findings: [
-        { area: "a", severity: "warning", finding: "ignore", remediation: "n/a", capabilityNeeded: "warn-only" },
+        // "warning" is now a mandatory severity — previously "warning" was filtered out; that changes
+        { area: "a", severity: "info", finding: "ignore", remediation: "n/a", capabilityNeeded: "info-only" },
         { area: "b", severity: "critical", finding: "must map", remediation: "fix now", capabilityNeeded: "cap-critical" },
+        // legacy "important" is bridged to "warning" at extraction time
         { area: "c", severity: "important", finding: "must map too", remediation: "fix soon", capabilityNeeded: "cap-important" },
       ],
     };
     const result = extractMandatoryHealthAuditFindings(payload);
     assert.equal(result.length, 2);
     assert.deepEqual(result.map((f) => f.id), ["cap-critical", "cap-important"]);
+    // Bridged finding has severity "warning" not "important"
+    assert.equal(result[1].severity, "warning", "legacy 'important' must be bridged to 'warning'");
+  });
+
+  it("extractMandatoryHealthAuditFindings extracts warning severity findings as mandatory", () => {
+    // "warning" replaces "important" as a mandatory severity.
+    const payload = {
+      findings: [
+        { area: "a", severity: "info", finding: "skip", remediation: "n/a", capabilityNeeded: "info-gap" },
+        { area: "b", severity: "warning", finding: "must map", remediation: "fix soon", capabilityNeeded: "cap-warning" },
+      ],
+    };
+    const result = extractMandatoryHealthAuditFindings(payload);
+    assert.equal(result.length, 1, "warning severity must be included as mandatory");
+    assert.equal(result[0].id, "cap-warning");
+    assert.equal(result[0].severity, "warning");
   });
 
   it("buildMandatoryTasksPromptSection renders MANDATORY_TASKS with finding ids", () => {
@@ -3808,19 +3826,19 @@ describe("health-audit mandatory task injection contract", () => {
         capabilityNeeded: "cap-critical",
       },
       {
-        id: "cap-important",
+        id: "cap-warning",
         area: "system-learning",
-        severity: "important" as const,
-        finding: "important finding",
+        severity: "warning" as const,
+        finding: "warning finding",
         remediation: "review",
-        capabilityNeeded: "cap-important",
+        capabilityNeeded: "cap-warning",
       },
     ];
     const payload = {
       plans: [{ task: "Implement cap-critical flow", title: "Implement cap-critical flow" }],
       mandatoryTaskCoverage: [
         { findingId: "cap-critical", status: "mapped", planTask: "Implement cap-critical flow" },
-        { findingId: "cap-important", status: "excluded", justification: "Blocked by active governance gate this cycle." },
+        { findingId: "cap-warning", status: "excluded", justification: "Blocked by active governance gate this cycle." },
       ],
     };
     const result = validateMandatoryTaskCoverageContract(payload, findings);

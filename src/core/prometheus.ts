@@ -170,7 +170,7 @@ export function buildPrometheusPlanningPolicy(config, laneTelemetry?: Record<str
   };
 }
 
-export const HEALTH_AUDIT_MANDATORY_SEVERITIES: ReadonlySet<string> = new Set(["critical", "important"]);
+export const HEALTH_AUDIT_MANDATORY_SEVERITIES: ReadonlySet<string> = new Set(["critical", "warning"]);
 
 /**
  * Minimum character length for a strategic field value to be considered
@@ -257,7 +257,7 @@ export function isStrategicFieldToolTraceContaminated(text: string): boolean {
 export interface MandatoryHealthAuditFinding {
   id: string;
   area: string;
-  severity: "critical" | "important";
+  severity: "critical" | "warning";
   finding: string;
   remediation: string;
   capabilityNeeded: string;
@@ -279,9 +279,12 @@ function sanitizeMandatoryFindingId(value: unknown): string {
     .slice(0, 80);
 }
 
-function normalizeMandatorySeverity(value: unknown): "critical" | "important" | "" {
+function normalizeMandatorySeverity(value: unknown): "critical" | "warning" | "" {
   const severity = String(value || "").trim().toLowerCase();
-  return severity === "critical" || severity === "important" ? severity : "";
+  if (severity === "critical") return "critical";
+  // Bridge legacy "important" → "warning" for backward compatibility with stored findings.
+  if (severity === "warning" || severity === "important") return "warning";
+  return "";
 }
 
 function buildMandatoryFindingId(entry: Record<string, unknown>, index: number): string {
@@ -325,7 +328,7 @@ export function buildMandatoryTasksPromptSection(findings: MandatoryHealthAuditF
     `${i + 1}. id=${f.id} | severity=${f.severity} | area=${sanitizePromptLine(f.area, 80)} | finding=${sanitizePromptLine(f.finding, 240)} | remediation=${sanitizePromptLine(f.remediation, 240)}`
   ).join("\n");
   return `## MANDATORY_TASKS
-The following findings are loaded from state/health_audit_findings.json (severity in {critical, important}).
+The following findings are loaded from state/health_audit_findings.json (severity in {critical, warning}).
 For EACH finding, you MUST do exactly one:
 1. Map it to at least one concrete task in plans[] (status="mapped"), OR
 2. Exclude it explicitly with cycle-specific justification (status="excluded" + non-empty justification).

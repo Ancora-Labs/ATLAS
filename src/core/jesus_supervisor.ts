@@ -224,7 +224,7 @@ export async function runSystemHealthAudit(config, githubState, AthenaCoordinati
 
       findings.push({
         area: "ci",
-        severity: "important",
+        severity: "warning",
         finding: `Failed CI: ${run.name} on branch ${run.branch} (${run.commit})`,
         remediation: `Fix CI failure on ${run.branch} — this blocks PR merge`,
         capabilityNeeded: "ci-fix"
@@ -283,7 +283,7 @@ export async function runSystemHealthAudit(config, githubState, AthenaCoordinati
     if (incompleteWaves.length > 0) {
       findings.push({
         area: "execution-gaps",
-        severity: "important",
+        severity: "warning",
         finding: `${incompleteWaves.length} wave(s) not yet completed: ${incompleteWaves.map(w => w.id).join(", ")}`,
         remediation: "Continue execution of incomplete waves in next Athena cycle",
         capabilityNeeded: "wave-continuation"
@@ -314,7 +314,7 @@ export async function runSystemHealthAudit(config, githubState, AthenaCoordinati
         const originalSeverity = String(gap?.severity || "warning").toLowerCase();
         const verifiedPresent = isCapabilityGapVerifiedPresentInSource(sourceIndex, gap);
         const shouldDowngrade =
-          verifiedPresent && (originalSeverity === "critical" || originalSeverity === "important");
+          verifiedPresent && (originalSeverity === "critical" || originalSeverity === "warning");
         findings.push({
           area: "capability-gap",
           severity: shouldDowngrade ? "info" : (gap.severity || "warning"),
@@ -334,7 +334,7 @@ function formatHealthAuditFindings(findings) {
   if (findings.length === 0) return "  No structural issues detected — system is healthy.";
 
   return findings.map((f, i) => {
-    const icon = f.severity === "critical" ? "🔴" : f.severity === "important" ? "🟡" : "🟢";
+    const icon = f.severity === "critical" ? "🔴" : f.severity === "warning" ? "🟡" : "🟢";
     return `  ${i + 1}. ${icon} [${f.area}] ${f.finding}\n     → ${f.remediation}`;
   }).join("\n");
 }
@@ -574,7 +574,7 @@ function buildCapacityDeltaReport(d, healthFindings, kpis) {
 
   // Extract bottlenecks from health findings
   const criticalFindings = (healthFindings || []).filter(f => f.severity === "critical");
-  const importantFindings = (healthFindings || []).filter(f => f.severity === "important");
+  const warningFindings = (healthFindings || []).filter(f => f.severity === "warning");
 
   for (const f of criticalFindings.slice(0, 3)) {
     topBottlenecks.push({
@@ -589,7 +589,7 @@ function buildCapacityDeltaReport(d, healthFindings, kpis) {
     });
   }
 
-  for (const f of importantFindings.slice(0, 2)) {
+  for (const f of warningFindings.slice(0, 2)) {
     topBottlenecks.push({
       area: f.area,
       severity: f.severity,
@@ -601,7 +601,7 @@ function buildCapacityDeltaReport(d, healthFindings, kpis) {
   if (kpis.parserConfidence !== "n/a" && Number(kpis.parserConfidence) < 0.5) {
     topBottlenecks.push({
       area: "parser-reliability",
-      severity: "important",
+      severity: "warning",
       description: `Parser confidence is ${kpis.parserConfidence} — plan quality may be degraded`,
     });
     projectedGains.push({
@@ -717,10 +717,10 @@ export async function runJesusCycle(config) {
   try {
     const calibrationHealthFindings = await runSystemHealthAudit(config, githubState, AthenaCoordination, sessions);
     const criticalCount = calibrationHealthFindings.filter(f => f.severity === "critical").length;
-    const importantCount = calibrationHealthFindings.filter(f => f.severity === "important").length;
+    const warningCount = calibrationHealthFindings.filter(f => f.severity === "warning").length;
     let realizedHealth = "good";
     if (criticalCount > 0) realizedHealth = "critical";
-    else if (importantCount > 0) realizedHealth = "degraded";
+    else if (warningCount > 0) realizedHealth = "degraded";
 
     const prevPrometheusAt = lastDirective?.decidedAt
       ? new Date(lastDirective.decidedAt).getTime() : 0;
