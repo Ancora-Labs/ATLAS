@@ -967,3 +967,40 @@ export function validatePacketBatchAdmission(
   const reason = `${PACKET_OVERSIZE_REASON}: role group(s) [${oversizedRoles.join(", ")}] exceed per-role cap of ${cap} — decompose before dispatch`;
   return { blocked: true, reason, oversizedRoles };
 }
+
+/**
+ * Final dispatch-boundary hard cap: split any batch descriptor whose plans array
+ * exceeds MAX_ACTIONABLE_STEPS_PER_PACKET into smaller chunks.
+ *
+ * This is an unconditional last-resort safeguard applied at the dispatch boundary
+ * after all batching paths (Athena-prebatched, token-first, standard role-split)
+ * converge.  It guarantees no worker ever receives more than
+ * MAX_ACTIONABLE_STEPS_PER_PACKET tasks, even when earlier packet checks pass or
+ * are bypassed by alternate batching paths.
+ *
+ * Split chunks carry a `_dispatchHardCapSplit: true` marker so telemetry consumers
+ * can observe when the hard cap triggered.
+ *
+ * @param batches — array of batch descriptors (any shape with a `plans` array)
+ * @param cap     — maximum plans per batch (default: MAX_ACTIONABLE_STEPS_PER_PACKET)
+ * @returns a new array of batch descriptors; no batch exceeds the cap
+ */
+export function applyDispatchBoundaryHardCap<T extends { plans: unknown[] }>(
+  batches: T[],
+  cap: number = MAX_ACTIONABLE_STEPS_PER_PACKET,
+): T[] {
+  if (!Array.isArray(batches) || batches.length === 0) return batches;
+  const maxPerBatch = Math.max(1, Math.floor(cap));
+  const result: T[] = [];
+  for (const batch of batches) {
+    const plans = Array.isArray(batch.plans) ? batch.plans : [];
+    if (plans.length <= maxPerBatch) {
+      result.push(batch);
+    } else {
+      for (let offset = 0; offset < plans.length; offset += maxPerBatch) {
+        result.push({ ...batch, plans: plans.slice(offset, offset + maxPerBatch), _dispatchHardCapSplit: true } as T);
+      }
+    }
+  }
+  return result;
+}

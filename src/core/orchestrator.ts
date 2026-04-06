@@ -55,7 +55,7 @@ import { evaluateRetune } from "./strategy_retuner.js";
 import { compileLessonsToPolicies } from "./learning_policy_compiler.js";
 import { assignWorkersToPlans, enforceLaneDiversity, evaluateSpecializationAdmissionGate, buildLanePerformanceFromCycleTelemetry, buildReroutePenaltyLedger, SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES } from "./capability_pool.js";
 import { runDoctor } from "./doctor.js";
-import { validateAllPlans, validatePacketBatchAdmission } from "./plan_contract_validator.js";
+import { validateAllPlans, validatePacketBatchAdmission, applyDispatchBoundaryHardCap } from "./plan_contract_validator.js";
 import {
   resolveDependencyGraph,
   computeReadinessGate,
@@ -1388,7 +1388,11 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
     const resolved = resolveWorkerRole(p?.role, p?.taskKind || p?.kind || "implementation");
     return resolved !== (p?.role || "") ? { ...p, role: resolved } : p;
   });
-  const workerBatches = buildRoleExecutionBatches(_normalizedPlansResume, config);
+  const _rawWorkerBatchesResume = buildRoleExecutionBatches(_normalizedPlansResume, config);
+  // ── Final dispatch-boundary hard cap (resume path) ───────────────────────
+  // Applied unconditionally so no resumed batch exceeds MAX_ACTIONABLE_STEPS_PER_PACKET,
+  // regardless of which batching path produced it.
+  const workerBatches = applyDispatchBoundaryHardCap(_rawWorkerBatchesResume as any[]) as typeof _rawWorkerBatchesResume;
   if (workerBatches.length === 0) return false;
 
   let checkpoint = await readDispatchCheckpoint(config);
@@ -3040,7 +3044,7 @@ async function runSingleCycle(config) {
 
   // If Athena already assigned deterministic batch indexes, keep those batches
   // and worker choices as-is instead of re-packing in orchestrator.
-  const workerBatches = athenaPreBatched
+  const _rawWorkerBatches = athenaPreBatched
     ? (() => {
         const grouped = new Map<number, any[]>();
         for (const plan of normalizedPlansForBatching as any[]) {
@@ -3084,6 +3088,13 @@ async function runSingleCycle(config) {
           }
         })()
       : buildRoleExecutionBatches(normalizedPlansForBatching, config, capabilityPoolResult));
+
+  // ── Final dispatch-boundary hard cap ─────────────────────────────────────
+  // Unconditional last safeguard: applied after all three batching paths
+  // (Athena-prebatched, token-first, standard role-split) so no batch descriptor
+  // delivered to a worker ever exceeds MAX_ACTIONABLE_STEPS_PER_PACKET tasks,
+  // regardless of config state or which path produced the batches.
+  const workerBatches = applyDispatchBoundaryHardCap(_rawWorkerBatches as any[]) as typeof _rawWorkerBatches;
 
   // ── Specialist telemetry for Athena-preassigned batches (Task 3) ───────────
   // buildTokenFirstBatches normally stamps specialistReroutes / specialistRerouteReasons /

@@ -22,6 +22,7 @@ import { rankModelsByTaskKindExpectedValue } from "./model_policy.js";
 import {
   buildThinPacketRejectionReason,
   computePacketDensityMetrics,
+  applyDispatchBoundaryHardCap,
   isThinPacketForAdmission,
   MAX_ACTIONABLE_STEPS_PER_PACKET,
   PACKET_OVERSIZE_REASON,
@@ -1230,7 +1231,21 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
           actionableBatches.push(batch);
         }
 
-        actionableBatches.forEach((batch, index) => {
+        // ── Final dispatch-boundary hard cap ─────────────────────────────────
+        // Unconditional split: guarantees no batch descriptor delivered to a
+        // worker ever exceeds MAX_ACTIONABLE_STEPS_PER_PACKET tasks, regardless
+        // of earlier config-gated checks or batching-path bypasses.
+        const hardCappedBatches = applyDispatchBoundaryHardCap(actionableBatches);
+        if (hardCappedBatches.length !== actionableBatches.length && typeof console !== "undefined") {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[worker_batch_planner] dispatch-boundary hard cap applied: ` +
+            `${actionableBatches.length} batch(es) → ${hardCappedBatches.length} ` +
+            `(each ≤ ${MAX_ACTIONABLE_STEPS_PER_PACKET} tasks)`
+          );
+        }
+
+        hardCappedBatches.forEach((batch, index) => {
           const utilization = selection.usableContextTokens > 0
             ? Math.round((batch.estimatedTokens / selection.usableContextTokens) * 100)
             : 0;
@@ -1247,8 +1262,8 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
             sharedBranch,
             wave: waveNum,
             roleBatchIndex: index + 1,
-            roleBatchTotal: actionableBatches.length,
-            githubFinalizer: index === actionableBatches.length - 1,
+            roleBatchTotal: hardCappedBatches.length,
+            githubFinalizer: index === hardCappedBatches.length - 1,
           });
         });
       }
@@ -1594,7 +1609,7 @@ export function buildTokenFirstBatches(
     }
   }
 
-  return flattened.map((batch, index) => ({
+  const mapped = flattened.map((batch, index) => ({
     ...batch,
     bundleIndex: index + 1,
     totalBundles: flattened.length,
@@ -1617,6 +1632,23 @@ export function buildTokenFirstBatches(
     },
     ...(reroutedRoles.length > 0 ? { specialistReroutes: reroutedRoles } : {}),
     ...(specialistRerouteReasons.length > 0 ? { specialistRerouteReasons } : {}),
+  }));
+
+  // ── Final dispatch-boundary hard cap ───────────────────────────────────────
+  // Unconditional last safeguard: applied after token-first packing so no
+  // batch delivered by this path exceeds MAX_ACTIONABLE_STEPS_PER_PACKET tasks.
+  const hardCapped = applyDispatchBoundaryHardCap(mapped);
+  if (hardCapped.length !== mapped.length && typeof console !== "undefined") {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[worker_batch_planner] buildTokenFirstBatches: dispatch-boundary hard cap applied: ` +
+      `${mapped.length} batch(es) → ${hardCapped.length} (each ≤ ${MAX_ACTIONABLE_STEPS_PER_PACKET} tasks)`
+    );
+  }
+  return hardCapped.map((batch, index) => ({
+    ...batch,
+    bundleIndex: index + 1,
+    totalBundles: hardCapped.length,
   }));
 }
 
