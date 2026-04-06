@@ -1,6 +1,7 @@
 import path from "node:path";
 import crypto from "node:crypto";
 import { readJsonSafe, READ_JSON_REASON, writeJsonAtomic } from "./fs_utils.js";
+import type { CancellationToken } from "./daemon_control.js";
 
 export const CHECKPOINT_SCHEMA_VERSION = 2;
 export const CHECKPOINT_FORMAT = "resumable_v2";
@@ -206,4 +207,17 @@ export async function writeCheckpoint(config, checkpoint, opts = {}) {
   const envelope = createVersionedCheckpointEnvelope(checkpoint, previousCheckpoint, checkpointKind);
   await writeJsonAtomic(filePath, envelope);
   return options.returnEnvelope ? envelope : filePath;
+}
+
+/**
+ * Cooperative cancellation checkpoint for use inside checkpoint-writing flows.
+ *
+ * Throws CancelledError if the provided token is already cancelled; otherwise
+ * returns immediately.  Safe to call with null/undefined — treated as no-op so
+ * callers that have not opted into cancellation are unaffected.
+ *
+ * @param token — CancellationToken from createCancellationToken(), or null/undefined
+ */
+export function checkCancellationAtCheckpoint(token?: CancellationToken | null): void {
+  token?.throwIfCancelled();
 }

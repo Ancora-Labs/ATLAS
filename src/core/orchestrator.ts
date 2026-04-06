@@ -19,7 +19,8 @@
 import path from "node:path";
 import fs from "node:fs/promises";
 import { appendProgress, appendAlert, ALERT_SEVERITY, appendGovernanceBlockEvent } from "./state_tracker.js";
-import { readStopRequest, writeDaemonPid, clearDaemonPid, clearStopRequest, readReloadRequest, clearReloadRequest } from "./daemon_control.js";
+import { readStopRequest, writeDaemonPid, clearDaemonPid, clearStopRequest, readReloadRequest, clearReloadRequest, createCancellationToken } from "./daemon_control.js";
+import type { CancellationToken } from "./daemon_control.js";
 import { loadConfig } from "../config.js";
 import { runJesusCycle, appendJesusOutcomeLedger, buildJesusDecisionOutcome } from "./jesus_supervisor.js";
 import { runPrometheusAnalysis, loadTopicMemory, saveTopicMemory, topicKey as prometheusTopicKey, findCanonicalTopicKey } from "./prometheus.js";
@@ -112,6 +113,7 @@ import {
   applyRunSegmentRollover,
   RUN_SEGMENT_BATCH_SPAN_DEFAULT,
   RUN_SEGMENT_HISTORY_MAX_DEFAULT,
+  checkCancellationAtCheckpoint,
 } from "./checkpoint_engine.js";
 import { assessRetryExpectedROI, rankModelsByTaskKindExpectedValue } from "./model_policy.js";
 
@@ -2198,7 +2200,7 @@ async function resolveAdaptivePlanCap(config: any, stateDir: string): Promise<{ 
 
 // ── Single full cycle: Jesus → Prometheus → Athena → Workers → Athena ──────
 
-async function runSingleCycle(config) {
+async function runSingleCycle(config, _token?: CancellationToken | null) {
   const stateDir = config.paths?.stateDir || "state";
   const cycleStartedAt = new Date().toISOString();
   let _cycleRequests = 0;
@@ -3421,6 +3423,13 @@ async function runSingleCycle(config) {
             fillRatio: reason.fillRatio,
             laneScore: reason.laneScore,
           }) + "\n", "utf8");
+          emitEvent(EVENTS.POLICY_REROUTE_PENALTY_APPLIED, EVENT_DOMAIN.POLICY, `reroute-${reason.role}-${Date.now()}`, {
+            role: reason.role,
+            lane: reason.lane,
+            reasonCode: reason.reasonCode,
+            fillRatio: reason.fillRatio,
+            laneScore: reason.laneScore,
+          });
         }
       } catch (err) {
         warn(`[orchestrator] reroute history persist failed (non-fatal): ${String(err?.message || err)}`);
@@ -3492,8 +3501,14 @@ async function runSingleCycle(config) {
   const cycleRetryTelemetry = await loadRetryTelemetryContext(config);
 
   for (const batch of workerBatches) {
+    // ── Cooperative cancellation checkpoint ─────────────────────────────────
+    // Check both the in-process token and the on-disk stop file so a stop
+    // request is honoured within the current batch cycle rather than only at
+    // the top of the next main-loop iteration.
+    checkCancellationAtCheckpoint(_token);
     const stopReq = await readStopRequest(config);
     if (stopReq?.requestedAt) {
+      _token?.cancel(`stop-requested:${stopReq.reason || "unknown"}`);
       await appendProgress(config, `[CYCLE] Stop requested — halting dispatch`);
       return;
     }
@@ -3593,6 +3608,13 @@ async function runSingleCycle(config) {
           config,
           `[CYCLE] Transient API error — retry suppressed (low ROI): expected_gain=${retryDecision.expectedGain.toFixed(3)} threshold=${retryDecision.threshold.toFixed(3)} reason=${retryDecision.reason}`
         );
+        emitEvent(EVENTS.POLICY_RETRY_SUPPRESSED, EVENT_DOMAIN.POLICY, `retry-suppress-${Date.now()}`, {
+          role: String(batch.role || "unknown"),
+          expectedGain: retryDecision.expectedGain,
+          threshold: retryDecision.threshold,
+          reason: retryDecision.reason,
+          attempt: transientRetries + 1,
+        });
       }
       break;
     }
@@ -4594,6 +4616,9 @@ async function mainLoop(config) {
       break;
     }
 
+    // Create a per-cycle cancellation token so deep dispatch loops can honour
+    // an in-flight stop request without waiting for the next iteration boundary.
+    const cycleToken = createCancellationToken();
     // Hot-reload config
     try {
       const reloadReq = await readReloadRequest(config);
@@ -4616,7 +4641,7 @@ async function mainLoop(config) {
         await appendProgress(config, `[LOOP] Escalation to Jesus: ${escalation.reason || "(no reason)"}`);
         await writeJson(path.join(stateDir, "jesus_escalation.json"), {});
         // Escalation triggers a fresh full cycle
-        await runSingleCycle(config);
+        await runSingleCycle(config, cycleToken);
         continue;
       }
     } catch { /* escalation file may not exist */ }
@@ -4656,7 +4681,7 @@ async function mainLoop(config) {
         // There's remaining work — run a new full cycle
         // Jesus will see the current state and decide appropriately
         await appendProgress(config, `[LOOP] ${completed.length}/${totalPlans} plans done, ${pending.length} remaining — starting new cycle`);
-        await runSingleCycle(config);
+        await runSingleCycle(config, cycleToken);
         await sleep(RE_EVAL_SLEEP_MS);
         continue;
       }
@@ -4731,10 +4756,10 @@ async function mainLoop(config) {
 
       // Start a new Prometheus cycle to find new work
       await appendProgress(config, "[LOOP] Post-completion done — running Prometheus for next iteration");
-      await runSingleCycle(config);
+      await runSingleCycle(config, cycleToken);
     } else {
       // No plans at all — first run or fresh start
-      await runSingleCycle(config);
+      await runSingleCycle(config, cycleToken);
     }
 
     await safeUpdatePipelineProgress(config, "idle", "Cycle complete — waiting before next iteration");

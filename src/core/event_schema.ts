@@ -117,6 +117,22 @@ export const EVENTS = Object.freeze({
   // Payload fields: taskId, stageWhenDropped, reason, dropCode (SPAN_CONTRACT.dropReason)
   //                 spanId, parentSpanId, traceId, agentId      (SPAN_CONTRACT.fields)
   PLANNING_TASK_DROPPED:             "box.v1.planning.taskDropped",
+
+  // Policy domain — model routing decision finalized for a worker dispatch.
+  // Payload fields: roleName (string), resolvedModel (string), tier ("T1"|"T2"|"T3"),
+  //                 wasDowngraded (boolean), routingReasonCode (string), taskKind (string|null)
+  POLICY_MODEL_ROUTED:               "box.v1.policy.modelRouted",
+
+  // Policy domain — transient-error retry suppressed due to low expected ROI.
+  // Payload fields: role (string), expectedGain (number), threshold (number),
+  //                 reason (string), attempt (number)
+  POLICY_RETRY_SUPPRESSED:           "box.v1.policy.retrySuppressed",
+
+  // Policy domain — EV penalty applied to an intervention role because of
+  // specialist reroute history in the current cycle.
+  // Payload fields: role (string), lane (string), reasonCode (string),
+  //                 fillRatio (number), penaltyFraction (number)
+  POLICY_REROUTE_PENALTY_APPLIED:    "box.v1.policy.reroutePenaltyApplied",
 });
 
 /** Flat set of all valid event name strings — for O(1) lookup. */

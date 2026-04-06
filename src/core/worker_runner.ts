@@ -44,6 +44,9 @@ import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_sch
 import { classifyFailure, classifyExitCode } from "./failure_classifier.js";
 import { resolveRetryAction, persistRetryMetric } from "./retry_strategy.js";
 import { filterMemoryEntriesByTrust, isPrivilegedMemoryRequester } from "./trust_boundary.js";
+import { emitEvent } from "./logger.js";
+import { CancelledError } from "./daemon_control.js";
+import type { CancellationToken } from "./daemon_control.js";
 
 type WorkerRunnerConfig = {
   env?: Record<string, string | undefined>;
@@ -1137,7 +1140,7 @@ export function parseWorkerResponse(stdout, stderr) {
 
 // ── Main Worker Conversation ─────────────────────────────────────────────────
 
-export async function runWorkerConversation(config, roleName, instruction, history = [], sessionState: WorkerSessionState = {}) {
+export async function runWorkerConversation(config, roleName, instruction, history = [], sessionState: WorkerSessionState = {}, _token?: CancellationToken | null) {
   const taskHints: TaskHints = {
     estimatedLines: Number(instruction.estimatedLines || 0),
     estimatedDurationMinutes: Number(instruction.estimatedDurationMinutes || 0),
@@ -1190,6 +1193,26 @@ export async function runWorkerConversation(config, roleName, instruction, histo
 
   // Classify complexity tier for prompt budget injection
   const { tier } = classifyComplexityTier(taskHints);
+
+  // ── Cooperative cancellation: check before spawning subprocess ───────────
+  if (_token?.cancelled) {
+    throw new CancelledError(_token.reason || "cancelled-before-dispatch");
+  }
+
+  // ── Typed event: model routing decision telemetry ─────────────────────────
+  // Emit after model is fully resolved (including deliberation escalation)
+  // so downstream consumers see the final routing decision, not an intermediate one.
+  try {
+    const policyResult = enforceModelPolicy(model, taskHints, config?.copilot?.defaultModel || "Claude Sonnet 4.6");
+    emitEvent(EVENTS.POLICY_MODEL_ROUTED, EVENT_DOMAIN.POLICY, `model-route-${roleName}-${Date.now()}`, {
+      roleName,
+      resolvedModel: model,
+      tier,
+      wasDowngraded: policyResult.downgraded,
+      routingReasonCode: deliberation.mode === "multi-attempt" ? "hard-task-escalation" : "standard",
+      taskKind: instruction.taskKind || "general",
+    });
+  } catch { /* telemetry is non-critical */ }
 
   const command = config.env?.copilotCliCommand || "copilot";
   const agentSlug = nameToSlug(roleName); // "king-david", "esther", etc.
@@ -1314,6 +1337,13 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   const TRANSIENT_ERROR_THRESHOLD = 10;
   let transientErrorCount = 0;
   const abortController = new AbortController();
+
+  // Propagate external cancellation token into the subprocess AbortController.
+  // This allows the orchestrator's per-cycle token to surface here and abort
+  // a long-running copilot CLI spawn without waiting for the next stop check.
+  if (_token?.cancelled) {
+    abortController.abort(_token.reason || "cancelled-before-spawn");
+  }
 
   const result = await spawnAsync(command, args, {
     env: {
