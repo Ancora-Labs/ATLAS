@@ -259,6 +259,52 @@ export function extractPostmortemEntries(raw) {
   return [];
 }
 
+/**
+ * Valid values for the `decisionQualityLabel` field on a postmortem entry.
+ * These labels are the only strings accepted on write paths and migration.
+ */
+export const VALID_DECISION_QUALITY_LABELS = Object.freeze([
+  "correct",
+  "delayed-correct",
+  "incorrect",
+  "inconclusive",
+] as const);
+
+export type DecisionQualityLabel = typeof VALID_DECISION_QUALITY_LABELS[number];
+
+/**
+ * Backfill postmortem entries that are missing a `decisionQualityLabel`.
+ *
+ * Missing or blank labels are set to `"inconclusive"` — the conservative choice
+ * for entries whose outcome cannot be determined from historical data.
+ *
+ * An optional `reason` string is added as `decisionQualityLabelReason` to
+ * distinguish programmatic backfills from labels set at review time.
+ *
+ * @param entries  — array of postmortem entry objects (mutated in-place for efficiency)
+ * @returns { entries, backfilledCount }
+ */
+export function backfillDecisionQualityLabel(
+  entries: Array<Record<string, unknown>>,
+): { entries: Array<Record<string, unknown>>; backfilledCount: number } {
+  if (!Array.isArray(entries)) return { entries: [], backfilledCount: 0 };
+  let backfilledCount = 0;
+  for (const entry of entries) {
+    if (entry && typeof entry === "object") {
+      const label = entry["decisionQualityLabel"];
+      if (
+        typeof label !== "string" ||
+        !(VALID_DECISION_QUALITY_LABELS as readonly string[]).includes(label)
+      ) {
+        entry["decisionQualityLabel"] = "inconclusive";
+        entry["decisionQualityLabelReason"] = "BACKFILLED_MISSING";
+        backfilledCount++;
+      }
+    }
+  }
+  return { entries, backfilledCount };
+}
+
 // ── Migration telemetry ───────────────────────────────────────────────────────
 
 /**

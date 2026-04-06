@@ -29,8 +29,10 @@ import {
   POSTMORTEM_REVIEW_STATUS,
   runAthenaPostmortem,
   POSTMORTEM_RECOMMENDATION,
-  DECISION_QUALITY_LABEL,
   deriveDeterministicRecommendation,
+  ATHENA_FAST_PATH_REASON,
+  AUTO_APPROVE_DELTA_REVIEW_THRESHOLD,
+  runAthenaPlanReview,
 } from "../../src/core/athena_reviewer.js";
 
 import {
@@ -770,5 +772,127 @@ describe("deriveDeterministicRecommendation", () => {
     assert.equal(deriveDeterministicRecommendation(""),             POSTMORTEM_RECOMMENDATION.REWORK);
     assert.equal(deriveDeterministicRecommendation("some-future"),  POSTMORTEM_RECOMMENDATION.REWORK);
     assert.equal(deriveDeterministicRecommendation(null as any),    POSTMORTEM_RECOMMENDATION.REWORK);
+  });
+});
+
+// ── ATHENA_FAST_PATH_REASON: delta-review ─────────────────────────────────────
+
+describe("ATHENA_FAST_PATH_REASON enum", () => {
+  it("exports DELTA_REVIEW_APPROVED constant", () => {
+    assert.equal(ATHENA_FAST_PATH_REASON.DELTA_REVIEW_APPROVED, "DELTA_REVIEW_APPROVED");
+    assert.ok(Object.isFrozen(ATHENA_FAST_PATH_REASON), "ATHENA_FAST_PATH_REASON must be frozen");
+  });
+
+  it("still exports the two original constants unchanged", () => {
+    assert.equal(ATHENA_FAST_PATH_REASON.LOW_RISK_UNCHANGED, "LOW_RISK_UNCHANGED");
+    assert.equal(ATHENA_FAST_PATH_REASON.HIGH_QUALITY_LOW_RISK, "HIGH_QUALITY_LOW_RISK");
+  });
+});
+
+describe("AUTO_APPROVE_DELTA_REVIEW_THRESHOLD", () => {
+  it("is a number at or above 0 and at or below 100", () => {
+    assert.ok(typeof AUTO_APPROVE_DELTA_REVIEW_THRESHOLD === "number");
+    assert.ok(AUTO_APPROVE_DELTA_REVIEW_THRESHOLD >= 0 && AUTO_APPROVE_DELTA_REVIEW_THRESHOLD <= 100);
+  });
+});
+
+// ── Delta-review fast path integration ───────────────────────────────────────
+
+describe("runAthenaPlanReview — delta-review fast path", () => {
+  let tmpDir: string;
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-delta-test-"));
+  });
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns DELTA_REVIEW_APPROVED when cached review exists, fingerprint changed, all plans high quality", async () => {
+    // Write a prior cached review with a different fingerprint (simulates fingerprint changed)
+    const priorReview = {
+      approved: true,
+      planBatchFingerprint: "deadbeef00000000", // intentionally different from actual batch
+      overallScore: 90,
+      reviewedAt: new Date(Date.now() - 3600000).toISOString(),
+    };
+    await fs.writeFile(
+      path.join(tmpDir, "athena_plan_review.json"),
+      JSON.stringify(priorReview),
+      "utf8",
+    );
+
+    // High-quality low-risk plans that will score above the delta threshold
+    const plans = [
+      {
+        task: "Refactor utility module to remove duplication and improve coverage",
+        role: "evolution-worker",
+        wave: 1,
+        riskLevel: "low",
+        acceptance_criteria: ["All unit tests pass", "No lint errors", "Coverage remains at or above 90%"],
+        verification: "Run npm test and npm run lint; confirm exit code 0",
+        context: "utility.ts currently has two near-identical helpers that can be merged",
+      },
+    ];
+
+    const config = {
+      paths: {
+        stateDir: tmpDir,
+        progressFile: path.join(tmpDir, "progress.log"),
+      },
+      runtime: {
+        disablePlanReviewCache: false,
+        autoApproveDeltaReviewThreshold: 0, // threshold=0 so any plan score passes
+      },
+      env: { targetRepo: "test/repo" },
+    };
+
+    const result = await runAthenaPlanReview(config, { plans });
+    assert.ok(result.autoApproved, "result should be auto-approved via delta path");
+    assert.equal(
+      result.autoApproveReason?.code,
+      ATHENA_FAST_PATH_REASON.DELTA_REVIEW_APPROVED,
+      "auto-approve reason code must be DELTA_REVIEW_APPROVED",
+    );
+  });
+
+  it("negative path: does NOT delta-approve when cached review exists but plan quality is below threshold", async () => {
+    // Use a sub-dir so the cached review is the one we write
+    const subDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-delta-low-"));
+    try {
+      const priorReview = {
+        approved: true,
+        planBatchFingerprint: "00000000ffffffff",
+        overallScore: 80,
+        reviewedAt: new Date(Date.now() - 3600000).toISOString(),
+      };
+      await fs.writeFile(
+        path.join(subDir, "athena_plan_review.json"),
+        JSON.stringify(priorReview),
+        "utf8",
+      );
+      const plans = [
+        { task: "x", role: "evolution-worker", wave: 1, riskLevel: "low" },
+      ];
+      const config = {
+        paths: {
+          stateDir: subDir,
+          progressFile: path.join(subDir, "progress.log"),
+        },
+        runtime: {
+          disablePlanReviewCache: false,
+          autoApproveDeltaReviewThreshold: 100, // threshold=100, no plan can reach it
+        },
+        env: { targetRepo: "test/repo" },
+      };
+      const result = await runAthenaPlanReview(config, { plans });
+      // Should NOT have the delta reason code
+      assert.notEqual(
+        result.autoApproveReason?.code,
+        ATHENA_FAST_PATH_REASON.DELTA_REVIEW_APPROVED,
+        "should not delta-approve when quality is below threshold",
+      );
+    } finally {
+      await fs.rm(subDir, { recursive: true, force: true });
+    }
   });
 });

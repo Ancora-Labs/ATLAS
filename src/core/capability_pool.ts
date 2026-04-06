@@ -717,14 +717,17 @@ export interface SpecialistRerouteReason {
  *   - laneScore = 0.2 (poor lane)  → threshold raised (specialist rerouted more readily)
  *
  * @param baseFillThreshold — configured fill threshold (0–1)
- * @param lane              — capability lane name
- * @param lanePerformance   — optional historical lane outcomes
+ * @param lane                  — capability lane name
+ * @param lanePerformance       — optional historical lane outcomes
+ * @param reroutePenaltyLedger  — optional per-lane reroute penalty history; raises threshold
+ *                                when a specialist has been repeatedly rerouted
  * @returns adaptive threshold in [0, 1], rounded to 3 decimal places
  */
 export function computeAdaptiveSpecialistFillThreshold(
   baseFillThreshold: number,
   lane: string,
   lanePerformance?: LanePerformanceLedger,
+  reroutePenaltyLedger?: ReroutePenaltyLedger,
 ): number {
   const safeBase = Number.isFinite(baseFillThreshold)
     ? Math.max(0, Math.min(1, baseFillThreshold))
@@ -733,7 +736,80 @@ export function computeAdaptiveSpecialistFillThreshold(
   const score = getLaneScore(lanePerformance ?? {}, lane);
   // Lower threshold when lane performs well; raise when it underperforms.
   const adjustment = (0.5 - score) * 0.3;
-  return Math.round(Math.max(0, Math.min(1, safeBase + adjustment)) * 1000) / 1000;
+  let adjusted = safeBase + adjustment;
+
+  // Apply reroute penalty: each recent reroute of this lane raises the threshold
+  // proportionally to the reason-code weight, so repeatedly rerouted specialists
+  // must fill more context before keeping their own batch.
+  if (reroutePenaltyLedger && reroutePenaltyLedger[lane]) {
+    const laneReroutes = reroutePenaltyLedger[lane];
+    let penaltyTotal = 0;
+    for (const [code, count] of Object.entries(laneReroutes)) {
+      const weight = (REROUTE_REASON_WEIGHT as Record<string, number>)[code] ?? 0.03;
+      // Each additional reroute adds weight, capped per reason to prevent extreme values.
+      penaltyTotal += Math.min(count * weight, 0.25);
+    }
+    // Total penalty capped at 0.3 (30% threshold increase) to remain bounded.
+    adjusted += Math.min(penaltyTotal, 0.3);
+  }
+
+  return Math.round(Math.max(0, Math.min(1, adjusted)) * 1000) / 1000;
+}
+
+// ── Reroute penalty history ───────────────────────────────────────────────────
+
+/**
+ * Per-lane reroute counts indexed by reason code.
+ * Used to apply proportional fill-threshold penalties when specialists are
+ * repeatedly rerouted via the same mechanism (fill deficiency, performance
+ * degradation, or dependency isolation).
+ *
+ * Shape: { [lane]: { [reasonCode]: count } }
+ */
+export type ReroutePenaltyLedger = Record<string, Record<string, number>>;
+
+/**
+ * Penalty weight applied per occurrence of each reroute reason code.
+ *
+ * Higher weight → threshold rises faster after repeated reroutes of this type.
+ * All weights are in (0, 0.25] so a single reroute event never produces
+ * an extreme adjustment.
+ *
+ * - BELOW_FILL_THRESHOLD (0.05): token underfill is mild; raise threshold
+ *   slowly to encourage the specialist to accumulate more work.
+ * - PERFORMANCE_DEGRADED (0.10): lane quality issue; raise threshold more
+ *   aggressively so work drains to evolution-worker until specialist recovers.
+ * - DEPENDENCY_ISOLATION (0.03): wave-constraint artifact; minimal penalty
+ *   because isolation is structural, not indicative of poor specialist perf.
+ */
+export const REROUTE_REASON_WEIGHT = Object.freeze({
+  [SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD]: 0.05,
+  [SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED]: 0.10,
+  [SPECIALIST_REROUTE_REASON_CODE.DEPENDENCY_ISOLATION]: 0.03,
+} as const);
+
+/**
+ * Build a per-lane reroute penalty ledger from raw reroute history records.
+ *
+ * Each record is expected to have `lane` and `reasonCode` fields.
+ * Records missing either field are silently skipped.
+ *
+ * @param records  — array of reroute history records (e.g. from reroute_history.jsonl)
+ * @returns ledger mapping lane → reasonCode → occurrence count
+ */
+export function buildReroutePenaltyLedger(
+  records: Array<{ lane?: string; reasonCode?: string }>
+): ReroutePenaltyLedger {
+  const ledger: ReroutePenaltyLedger = {};
+  if (!Array.isArray(records)) return ledger;
+  for (const r of records) {
+    const lane = String(r?.lane || "").trim();
+    const code = String(r?.reasonCode || "").trim();
+    if (!lane || !code) continue;
+    if (!ledger[lane]) ledger[lane] = {};
+    ledger[lane][code] = (ledger[lane][code] || 0) + 1;
+  }
+  return ledger;
 }
 
 // ── Specialization admission gate ────────────────────────────────────────────
