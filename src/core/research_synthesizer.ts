@@ -803,6 +803,18 @@ Follow your agent definition's output format exactly.`),
   const gatePassed = qualityGateDensities.every(d => d.passed);
   const { passedTopics, quarantinedTopics } = quarantineLowDensityTopics(finalTopics, qualityGateDensities);
   const degradedPlanningMode = quarantinedTopics.length > 0 && passedTopics.length === 0;
+
+  // Build recovery signal when all topics are quarantined.
+  // Invariant: degradedPlanningMode=true MUST be paired with a non-empty recoverySignal
+  // so Prometheus always has at least a minimal planning context, never an empty shell.
+  let recoverySignal = degradedPlanningMode
+    ? buildQualityGateRecoverySignal(quarantinedTopics)
+    : "";
+  if (degradedPlanningMode && !recoverySignal) {
+    // All topic names were empty — build a fallback signal so the invariant holds.
+    recoverySignal = `All ${quarantinedTopics.length} research topic(s) quarantined due to insufficient actionable density. No named topics available — prefer conservative, evidence-backed tasks.`;
+  }
+
   const qualityGate: SynthesisQualityGate = {
     passed: gatePassed,
     retried,
@@ -812,9 +824,8 @@ Follow your agent definition's output format exactly.`),
     // Partial quarantine (some passed) does not warrant degraded mode — Prometheus
     // still has valid signal to plan from.
     degradedPlanningMode,
-    // When fully degraded (all topics quarantined), provide a minimal recovery signal
-    // from topic names so Prometheus is never left with an empty planning context.
-    ...(degradedPlanningMode ? { recoverySignal: buildQualityGateRecoverySignal(quarantinedTopics) } : {}),
+    // Always non-empty when degradedPlanningMode=true (invariant enforced above).
+    ...(degradedPlanningMode ? { recoverySignal } : {}),
   };
 
   const output: ResearchSynthesisResult = {

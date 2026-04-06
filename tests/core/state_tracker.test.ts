@@ -14,6 +14,7 @@ import {
   loadPolicyClosureHistory,
   loadInterventionOptimizerLog,
   appendInterventionOptimizerEntry,
+  appendGovernanceBlockEvent,
 } from "../../src/core/state_tracker.js";
 import {
   OPTIMIZER_LOG_JSONL_SCHEMA,
@@ -324,6 +325,65 @@ describe("appendInterventionOptimizerEntry", () => {
     assert.equal(record.jsonlSchema, OPTIMIZER_LOG_JSONL_SCHEMA);
     assert.equal(record.recordType, OPTIMIZER_LOG_RECORD_TYPE);
     assert.equal(record.freshness.status, "fresh");
+  });
+});
+
+// ── appendGovernanceBlockEvent (Task 2) ──────────────────────────────────────
+
+describe("appendGovernanceBlockEvent", () => {
+  let blockDir: string;
+  let config: any;
+
+  beforeEach(async () => {
+    blockDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-gov-block-"));
+    config = { paths: { stateDir: blockDir } };
+  });
+
+  afterEach(async () => {
+    await fs.rm(blockDir, { recursive: true, force: true });
+  });
+
+  it("writes a JSONL record to governance_blocks.jsonl", async () => {
+    await appendGovernanceBlockEvent(config, {
+      cycleId: "cycle-12345",
+      blockReason: "GOVERNANCE_FREEZE_ACTIVE:monthly-freeze",
+      blockedAt: "2025-01-01T10:00:00.000Z",
+      gateSource: "pre_dispatch_gate",
+    });
+    const filePath = path.join(blockDir, "governance_blocks.jsonl");
+    const line = (await fs.readFile(filePath, "utf8")).trim();
+    const record = JSON.parse(line);
+    assert.equal(record.cycleId, "cycle-12345");
+    assert.equal(record.blockReason, "GOVERNANCE_FREEZE_ACTIVE:monthly-freeze");
+    assert.equal(record.gateSource, "pre_dispatch_gate");
+    assert.equal(record.schemaVersion, 1);
+  });
+
+  it("appends multiple records (log is cumulative)", async () => {
+    await appendGovernanceBlockEvent(config, {
+      cycleId: "c1", blockReason: "reason-1", blockedAt: "2025-01-01T10:00:00Z", gateSource: "pre_dispatch_gate",
+    });
+    await appendGovernanceBlockEvent(config, {
+      cycleId: "c2", blockReason: "reason-2", blockedAt: "2025-01-01T11:00:00Z", gateSource: "lane_diversity_gate",
+    });
+    const filePath = path.join(blockDir, "governance_blocks.jsonl");
+    const lines = (await fs.readFile(filePath, "utf8")).trim().split("\n");
+    assert.equal(lines.length, 2, "both block events must be recorded");
+    const r1 = JSON.parse(lines[0]);
+    const r2 = JSON.parse(lines[1]);
+    assert.equal(r1.cycleId, "c1");
+    assert.equal(r2.gateSource, "lane_diversity_gate");
+  });
+
+  it("negative: missing record fields fall back gracefully (no throw)", async () => {
+    await assert.doesNotReject(
+      appendGovernanceBlockEvent(config, {
+        cycleId: "",
+        blockReason: "",
+        blockedAt: "",
+        gateSource: "",
+      })
+    );
   });
 });
 

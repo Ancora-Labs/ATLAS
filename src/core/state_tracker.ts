@@ -887,3 +887,44 @@ export async function loadPolicyClosureHistory(config): Promise<any[]> {
   }
 }
 
+/**
+ * Append a structured governance block event to governance_blocks.jsonl.
+ *
+ * Records every cycle that was blocked before dispatch so that downstream
+ * consumers (Athena, metrics) can correlate block frequency and reasons
+ * without parsing free-text progress logs or alert messages.
+ *
+ * File: state/governance_blocks.jsonl (NDJSON append log)
+ *
+ * @param config
+ * @param record.cycleId     — ISO timestamp or opaque cycle identifier
+ * @param record.blockReason — canonical block reason from evaluatePreDispatchGovernanceGate
+ * @param record.blockedAt   — ISO 8601 timestamp when block fired
+ * @param record.gateSource  — which gate fired: "pre_dispatch_gate" | "lane_diversity_gate" | ...
+ */
+export async function appendGovernanceBlockEvent(
+  config,
+  record: {
+    cycleId: string;
+    blockReason: string;
+    blockedAt: string;
+    gateSource: string;
+  }
+): Promise<void> {
+  const stateDir = config?.paths?.stateDir || "state";
+  const filePath = path.join(stateDir, "governance_blocks.jsonl");
+  const entry = {
+    cycleId:     String(record.cycleId || ""),
+    blockReason: String(record.blockReason || ""),
+    blockedAt:   String(record.blockedAt || new Date().toISOString()),
+    gateSource:  String(record.gateSource || "unknown"),
+    schemaVersion: 1,
+  };
+  try {
+    await fs.appendFile(filePath, JSON.stringify(entry) + "\n", "utf8");
+  } catch (err) {
+    // Non-fatal: telemetry append failure must never block orchestration
+    console.error(`[state_tracker] appendGovernanceBlockEvent failed: ${String((err as any)?.message || err)}`);
+  }
+}
+

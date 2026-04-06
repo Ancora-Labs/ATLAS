@@ -4166,13 +4166,20 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     const researchContext = buildResearchPromptSection(effectiveSynthesis, researchScout, planningPolicy, researchArtifactUpdatedAtMs);
     researchSectionText = researchContext.sectionText;
     // Prepend degraded-mode warning so Prometheus knows its research context is incomplete.
-    if (degradedPlanningModeActive && researchSectionText) {
-      researchSectionText =
+    // When ALL topics are quarantined, researchSectionText may be empty — inject the
+    // recovery signal regardless so Prometheus always receives a non-empty planning context.
+    if (degradedPlanningModeActive) {
+      const recoverySignal = typeof qg?.recoverySignal === "string" && qg.recoverySignal.trim()
+        ? qg.recoverySignal.trim()
+        : "";
+      const degradedHeader =
         `## ⚠️ DEGRADED PLANNING MODE\n` +
-        `Research synthesis quality gate failed. Some topics were quarantined due to insufficient ` +
-        `actionable density. Plans derived from the remaining topics may have reduced signal quality. ` +
-        `Prefer conservative, evidence-backed tasks.\n\n` +
-        researchSectionText;
+        `Research synthesis quality gate failed. All research topics were quarantined due to ` +
+        `insufficient actionable density. Plans must be conservative and evidence-backed.\n` +
+        (recoverySignal
+          ? `Recovery signal: ${recoverySignal}\n\n`
+          : `No topic recovery signal available — derive tasks from repository state only.\n\n`);
+      researchSectionText = degradedHeader + (researchSectionText || "");
     }
     researchTopicCount = researchContext.topicCount;
     researchSourceCount = researchContext.sourceCount;

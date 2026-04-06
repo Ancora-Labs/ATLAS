@@ -64,11 +64,11 @@ describe("capability_pool", () => {
       assert.equal(selection.lane, "infrastructure");
     });
 
-    it("implementation task routes to Evolution Worker", () => {
+    it("implementation task routes to evolution-worker (kebab-case canonical identity)", () => {
       // Use a task with no domain keywords — pure implementation falls back to runtime-refactor → implementation lane
       const plan = { task: "Update the response parsing logic" };
       const selection = selectWorkerForPlan(plan);
-      assert.equal(selection.role, "Evolution Worker");
+      assert.equal(selection.role, "evolution-worker");
       assert.equal(selection.lane, "implementation");
     });
 

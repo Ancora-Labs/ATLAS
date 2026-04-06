@@ -208,9 +208,9 @@ export async function collectWorkSummary(config) {
 
   // Collect per-worker outcomes
   const workerOutcomes = [];
-  const knownRoles = ["Evolution Worker"];
+  const knownRoles = ["evolution-worker"];
   for (const role of knownRoles) {
-    const slug = role.toLowerCase().replace(/\s+/g, "_");
+    const slug = role.replace(/\s+/g, "-");
     const workerState = await readJson(path.join(stateDir, `worker_${slug}.json`), null);
     if (!workerState) continue;
 

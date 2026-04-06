@@ -1062,7 +1062,7 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
 
   const roleBuckets = new Map();
   for (const plan of sortedPlans) {
-    const roleName = String(plan?.role || "Evolution Worker");
+    const roleName = String(plan?.role || "evolution-worker");
     if (!roleBuckets.has(roleName)) roleBuckets.set(roleName, []);
     roleBuckets.get(roleName).push(plan);
   }
@@ -1378,7 +1378,7 @@ export function buildTokenFirstBatches(
     plan._fitScore = selection.fitScore;
     plan._fitLane = selection.lane;
     plan._fitScoreThreshold = laneFitThreshold;
-    if (selection.role !== "Evolution Worker" && selection.fitScore >= laneFitThreshold) {
+    if (selection.role !== "evolution-worker" && selection.fitScore >= laneFitThreshold) {
       if (laneUtilizationTargets[selection.lane]) {
         laneUtilizationTargets[selection.lane].fitEligibleCount += 1;
       }
@@ -1389,7 +1389,7 @@ export function buildTokenFirstBatches(
       if (laneUtilizationTargets[selection.lane]) {
         laneUtilizationTargets[selection.lane].achievedSpecializedCount += 1;
       }
-    } else if (selection.role !== "Evolution Worker") {
+    } else if (selection.role !== "evolution-worker") {
       specialistRebalanceCandidates.push({
         plan,
         selection: { role: selection.role, lane: selection.lane, fitScore: selection.fitScore },

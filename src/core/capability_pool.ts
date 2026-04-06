@@ -279,7 +279,7 @@ export function assignWorkersToPlans(
     : 1;
   const diversityIndex = Math.round((1 - maxShare) * 100) / 100;
   const activeLaneCount = laneCounts.size;
-  const specializedCount = assignments.filter(a => String(a.selection?.role || "") !== "Evolution Worker").length;
+  const specializedCount = assignments.filter(a => String(a.selection?.role || "") !== "evolution-worker").length;
   const specializedShare = assignments.length > 0
     ? Math.round((specializedCount / assignments.length) * 1000) / 1000
     : 0;
@@ -527,7 +527,7 @@ export function scoreWorkerTaskFit(
  * sorts first alphabetically by name is chosen — guaranteeing deterministic
  * output for identical inputs.
  *
- * Falls back to "Evolution Worker" when no workers are registered.
+ * Falls back to "evolution-worker" when no workers are registered.
  *
  * @param plan    — plan object to match against worker capabilities
  * @param config  — BOX config (unused currently; reserved for future custom registrations)
@@ -546,7 +546,7 @@ export function selectWorkerByFitScore(
     // Higher score first; alphabetical name as deterministic tie-breaker
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
 
-  const best = scored[0] ?? { name: "Evolution Worker", score: 0 };
+  const best = scored[0] ?? { name: "evolution-worker", score: 0 };
   const lane = getLaneForWorkerName(best.name, "implementation");
   const capTag = inferCapabilityTag(plan);
 

@@ -18,7 +18,7 @@
 
 import path from "node:path";
 import fs from "node:fs/promises";
-import { appendProgress, appendAlert, ALERT_SEVERITY } from "./state_tracker.js";
+import { appendProgress, appendAlert, ALERT_SEVERITY, appendGovernanceBlockEvent } from "./state_tracker.js";
 import { readStopRequest, writeDaemonPid, clearDaemonPid, clearStopRequest, readReloadRequest, clearReloadRequest } from "./daemon_control.js";
 import { loadConfig } from "../config.js";
 import { runJesusCycle, appendJesusOutcomeLedger, buildJesusDecisionOutcome } from "./jesus_supervisor.js";
@@ -2957,6 +2957,23 @@ async function runSingleCycle(config) {
           message: diversityMsg,
         });
         warn(`[orchestrator] Lane diversity gate blocked dispatch: ${diversityMsg}`);
+        try {
+          const blockedAnalytics = computeCycleAnalytics(config, {
+            phase: CYCLE_PHASE.INCOMPLETE,
+            dispatchBlockReason: `lane_diversity_gate_blocked:${diversityMsg}`,
+            pipelineProgress: null,
+            workerResults: null,
+          });
+          await persistCycleAnalytics(config, blockedAnalytics);
+          await appendGovernanceBlockEvent(config, {
+            cycleId: String(cycleStartedAt || new Date().toISOString()),
+            blockReason: `lane_diversity_gate_blocked:${diversityMsg}`,
+            blockedAt: new Date().toISOString(),
+            gateSource: "lane_diversity_gate",
+          });
+        } catch (analyticsErr) {
+          warn(`[orchestrator] Blocked-cycle analytics write failed (non-fatal): ${String(analyticsErr?.message || analyticsErr)}`);
+        }
         return;
       }
     }
@@ -2987,6 +3004,23 @@ async function runSingleCycle(config) {
           title: "Worker dispatch blocked by pre-dispatch governance gate",
           message: `reason=${reasonMsg} action=${gateDecision.action || "none"} cycleId=${cycleId}`
         });
+        try {
+          const blockedAnalytics = computeCycleAnalytics(config, {
+            phase: CYCLE_PHASE.INCOMPLETE,
+            dispatchBlockReason: reasonMsg,
+            pipelineProgress: null,
+            workerResults: null,
+          });
+          await persistCycleAnalytics(config, blockedAnalytics);
+          await appendGovernanceBlockEvent(config, {
+            cycleId: cycleId,
+            blockReason: reasonMsg,
+            blockedAt: new Date().toISOString(),
+            gateSource: "pre_dispatch_gate",
+          });
+        } catch (analyticsErr) {
+          warn(`[orchestrator] Blocked-cycle analytics write failed (non-fatal): ${String(analyticsErr?.message || analyticsErr)}`);
+        }
         return;
       }
     } catch (err) {
