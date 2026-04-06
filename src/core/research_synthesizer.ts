@@ -250,6 +250,10 @@ export interface SynthesisQualityGate {
   /** Whether a retry was attempted due to insufficient density. */
   retried: boolean;
   topicDensities: SynthesisTopicDensity[];
+  /** Topic names that still failed density after retry and were quarantined from the planning context. */
+  quarantinedTopics: string[];
+  /** True when any topic was quarantined — signals degraded planning mode to Prometheus. */
+  degradedPlanningMode: boolean;
 }
 
 /**
@@ -281,6 +285,24 @@ export function computeSynthesisActionableDensity(topics: Array<Record<string, u
       passed: count >= SYNTHESIS_MIN_ACTIONABLE_DENSITY_PER_TOPIC,
     };
   });
+}
+
+/**
+ * Partition synthesis topics into passed and quarantined sets based on density results.
+ *
+ * Topics that failed density after the retry pass are quarantined — they must not
+ * be injected into the Prometheus planning prompt because they carry no actionable signal.
+ */
+export function quarantineLowDensityTopics(
+  topics: Array<Record<string, unknown>>,
+  densities: SynthesisTopicDensity[],
+): { passedTopics: Array<Record<string, unknown>>; quarantinedTopics: string[] } {
+  const failedSet = new Set(densities.filter(d => !d.passed).map(d => d.topic));
+  const passedTopics = topics.filter(t => !failedSet.has(String(t.topic || "")));
+  const quarantinedTopics = topics
+    .filter(t => failedSet.has(String(t.topic || "")))
+    .map(t => String(t.topic || ""));
+  return { passedTopics, quarantinedTopics };
 }
 
 function toSingleLine(value: unknown, maxLen = 240): string {
@@ -642,10 +664,13 @@ Follow your agent definition's output format exactly.`),
 
   const qualityGateDensities = computeSynthesisActionableDensity(finalTopics);
   const gatePassed = qualityGateDensities.every(d => d.passed);
+  const { quarantinedTopics } = quarantineLowDensityTopics(finalTopics, qualityGateDensities);
   const qualityGate: SynthesisQualityGate = {
     passed: gatePassed,
     retried,
     topicDensities: qualityGateDensities,
+    quarantinedTopics,
+    degradedPlanningMode: quarantinedTopics.length > 0,
   };
 
   const output: ResearchSynthesisResult = {

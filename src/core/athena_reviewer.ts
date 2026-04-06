@@ -960,6 +960,33 @@ export const POSTMORTEM_PARSE_REASON = Object.freeze({
 const VALID_RECOMMENDATIONS = new Set(Object.values(POSTMORTEM_RECOMMENDATION));
 
 /**
+ * Derive a deterministic postmortem recommendation from the decision quality label.
+ *
+ * Used as the fallback when the AI omits the `recommendation` field.  Prevents
+ * the silent default-to-"proceed" that masks inconclusive or failed outcomes.
+ *
+ * Derivation rules (in priority order):
+ *   incorrect   → escalate  (rollback scenario; human intervention required)
+ *   inconclusive → rework   (evidence missing; cannot confirm success)
+ *   correct | delayed-correct → proceed (positive outcome with known label)
+ *   unknown label → rework  (safe default for any unrecognized label value)
+ *
+ * @param dqlLabel — label from computeDecisionQualityLabel / computeDecisionQualityLabelWithEvidence
+ */
+export function deriveDeterministicRecommendation(dqlLabel: string): string {
+  if (dqlLabel === DECISION_QUALITY_LABEL.INCORRECT)    return POSTMORTEM_RECOMMENDATION.ESCALATE;
+  if (dqlLabel === DECISION_QUALITY_LABEL.INCONCLUSIVE) return POSTMORTEM_RECOMMENDATION.REWORK;
+  if (
+    dqlLabel === DECISION_QUALITY_LABEL.CORRECT ||
+    dqlLabel === DECISION_QUALITY_LABEL.DELAYED_CORRECT
+  ) {
+    return POSTMORTEM_RECOMMENDATION.PROCEED;
+  }
+  // Safe default for any future unknown label — never silently proceed.
+  return POSTMORTEM_RECOMMENDATION.REWORK;
+}
+
+/**
  * Normalize a postmortem record's pass/fail status.
  *
  * Strategy: normalize on read (no silent fallback for critical state).
@@ -3156,7 +3183,7 @@ export async function runAthenaPostmortem(
     || (workerStatus === "timeout" ? "timeout" : null)
     || (workerStatus === "rollback" ? "rollback" : null)
     || null;
-  const dql = computeDecisionQualityLabel(rawOutcome);
+  const dql = computeDecisionQualityLabelWithEvidence(rawOutcome, workerResult);
 
   // Evolution executor passes local verification results and pre-review context
   const verificationOutput = workerResult?.verificationOutput || null;
@@ -3421,7 +3448,9 @@ ${recurrenceContext}
     qualityScore: d.qualityScore || 0,
     followUpNeeded: d.followUpNeeded === true,
     followUpTask: d.followUpTask || "",
-    recommendation: d.recommendation || "proceed",
+    recommendation: d.recommendation && VALID_RECOMMENDATIONS.has(d.recommendation)
+      ? d.recommendation
+      : deriveDeterministicRecommendation(dql.label),
     decisionQualityLabel: dql.label,
     decisionQualityLabelReason: dql.reason,
     decisionQualityStatus: dql.status,

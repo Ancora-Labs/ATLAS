@@ -42,6 +42,27 @@ export const PROMPT_BUDGET_PARTITION = Object.freeze({
   EXPANDABLE: "expandable" as const,
 });
 
+/**
+ * Minimum execution token floor per packet scope lane.
+ *
+ * System-learning: Prometheus consistently underestimates token budgets for
+ * multi-file plans (~2 k declared for 7–8 file scopes).  The LARGE lane
+ * enforces a hard 8 k floor to prevent under-resourced dispatch.
+ *
+ * These constants are the single authoritative source for lane token floors;
+ * LANE_PACKET_SIZE_DEFAULTS in plan_contract_validator references the same values.
+ */
+export const LANE_MIN_EXECUTION_TOKENS = Object.freeze({
+  /** 1–2 files */
+  SMALL:   2000,
+  /** 3–4 files */
+  MEDIUM:  4000,
+  /** 5+ files — guards against Prometheus underestimation on multi-file scopes */
+  LARGE:   8000,
+  /** Fallback when file count is unknown */
+  DEFAULT: 2000,
+} as const);
+
 export type PromptBudgetPartition = "invariant" | "required" | "expandable";
 
 /**

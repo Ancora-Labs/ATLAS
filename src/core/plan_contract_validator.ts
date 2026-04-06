@@ -211,7 +211,51 @@ export function buildThinPacketRejectionReason(
   );
 }
 
-/** Canonical 10 planning dimensions used by Prometheus/critic leverage scoring. */
+/** Canonical packet scope lane names based on target-file count. */
+export const PACKET_LANE = Object.freeze({
+  /** 1–2 files: typical single-module fix or targeted feature. */
+  SMALL:   "small",
+  /** 3–4 files: cross-module feature or refactor. */
+  MEDIUM:  "medium",
+  /** 5+ files: multi-module evolution (system-learning: Prometheus underestimates token budget here). */
+  LARGE:   "large",
+  /** Fallback when file count is unknown. */
+  DEFAULT: "default",
+} as const);
+
+/**
+ * Per-lane minimum packet-density thresholds.
+ *
+ * System-learning: Prometheus consistently declares ~2 k tokens for plans covering
+ * 5+ files.  The LARGE lane enforces a hard 8 k floor.
+ */
+export const LANE_PACKET_SIZE_DEFAULTS: Record<string, PacketDensityThresholds> = Object.freeze({
+  [PACKET_LANE.SMALL]:   { minTargetFiles: 1, minAcceptanceCriteria: 1, minTaskChars: 20, minExecutionTokens: 2000 },
+  [PACKET_LANE.MEDIUM]:  { minTargetFiles: 3, minAcceptanceCriteria: 2, minTaskChars: 30, minExecutionTokens: 4000 },
+  [PACKET_LANE.LARGE]:   { minTargetFiles: 5, minAcceptanceCriteria: 3, minTaskChars: 40, minExecutionTokens: 8000 },
+  [PACKET_LANE.DEFAULT]: { minTargetFiles: 1, minAcceptanceCriteria: 1, minTaskChars: 20, minExecutionTokens: 2000 },
+});
+
+/**
+ * Classify a packet into its scope lane based on declared target-file count.
+ */
+export function classifyPacketLane(targetFileCount: number): string {
+  if (!Number.isFinite(targetFileCount) || targetFileCount < 0) return PACKET_LANE.DEFAULT;
+  if (targetFileCount >= 5) return PACKET_LANE.LARGE;
+  if (targetFileCount >= 3) return PACKET_LANE.MEDIUM;
+  return PACKET_LANE.SMALL;
+}
+
+/**
+ * Return the density thresholds for a packet based on its target-file count.
+ * Used by Prometheus to enforce lane-appropriate token floors at thin-packet admission.
+ */
+export function getPacketThresholdsForLane(targetFileCount: number): PacketDensityThresholds {
+  const lane = classifyPacketLane(targetFileCount);
+  return LANE_PACKET_SIZE_DEFAULTS[lane];
+}
+
+
 export const EQUAL_DIMENSION_SET = Object.freeze([
   "architecture",
   "speed",
@@ -402,11 +446,13 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
     });
   } else if (isAmbiguousTask(String(plan.task))) {
     // Only flag ambiguity when the task passes the length check (avoids duplicate errors).
+    // Hard admission: ambiguous task descriptions block dispatch — they cannot be
+    // deterministically evaluated or routed to the correct worker.
     violations.push({
       field: "task",
       message: `Task description is too generic/ambiguous: "${String(plan.task).trim().slice(0, 80)}". ` +
         "Specify a concrete artifact, system component, or measurable outcome.",
-      severity: PLAN_VIOLATION_SEVERITY.WARNING,
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
       code: PACKET_VIOLATION_CODE.TASK_AMBIGUOUS,
     });
   }
@@ -466,12 +512,13 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
       code: PACKET_VIOLATION_CODE.MISSING_ACCEPTANCE_CRITERIA,
     });
   } else if (plan.acceptance_criteria.length > MAX_ACCEPTANCE_CRITERIA_PER_TASK) {
-    // Oversized AC list — the task is compound and must be decomposed.
+    // Oversized AC list — hard admission: compound tasks cannot be routed, budgeted,
+    // or reliably verified. Must be decomposed into independently-verifiable work items.
     violations.push({
       field: "acceptance_criteria",
       message: `Task has ${plan.acceptance_criteria.length} acceptance criteria (max ${MAX_ACCEPTANCE_CRITERIA_PER_TASK}). ` +
         "Oversized tasks must be decomposed into smaller, independently-verifiable work items.",
-      severity: PLAN_VIOLATION_SEVERITY.WARNING,
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
       code: PACKET_VIOLATION_CODE.TASK_TOO_LARGE,
     });
   }
@@ -483,11 +530,13 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
       ? plan.target_files
       : null;
   if (inScopeFiles !== null && inScopeFiles.length > MAX_FILES_IN_SCOPE_PER_TASK) {
+    // Hard admission: tasks spanning more than MAX_FILES_IN_SCOPE_PER_TASK files
+    // cannot be reliably verified or budgeted — decompose into focused work items.
     violations.push({
       field: "filesInScope",
       message: `Task declares ${inScopeFiles.length} files in scope (max ${MAX_FILES_IN_SCOPE_PER_TASK}). ` +
         "Tasks with broad file coverage are oversized — decompose into focused work items.",
-      severity: PLAN_VIOLATION_SEVERITY.WARNING,
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
       code: PACKET_VIOLATION_CODE.TASK_TOO_LARGE,
     });
   }
