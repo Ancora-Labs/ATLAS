@@ -66,7 +66,7 @@
 
 import path from "node:path";
 import fs from "node:fs/promises";
-import { applyClassificationToSuccessProbability } from "./failure_classifier.js";
+import { applyClassificationToSuccessProbability, normalizeRoleKey } from "./failure_classifier.js";
 import { readJson, writeJson } from "./fs_utils.js";
 
 // ── Budget unit ───────────────────────────────────────────────────────────────
@@ -827,7 +827,8 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
 
   if (failureClassifications && typeof failureClassifications === "object" && !Array.isArray(failureClassifications)) {
     adjustedInterventions = interventions.map((intervention) => {
-      const classification = failureClassifications[intervention.role];
+      const normalizedRole = normalizeRoleKey(String(intervention.role || ""));
+      const classification = failureClassifications[normalizedRole];
       if (!classification) return intervention;
       const adjustedSP = applyClassificationToSuccessProbability(intervention.successProbability, classification);
       if (adjustedSP === intervention.successProbability) return intervention;

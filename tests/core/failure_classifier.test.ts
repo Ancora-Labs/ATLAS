@@ -706,7 +706,97 @@ describe("runInterventionOptimizer — failureClassifications option (AC #5)", (
   });
 });
 
-// ── loadRecentFailureClassifications + persistFailureClassification ────────────
+// ── normalizeRoleKey ──────────────────────────────────────────────────────────
+
+import { normalizeRoleKey } from "../../src/core/failure_classifier.js";
+
+describe("normalizeRoleKey", () => {
+  it("lowercases uppercase role names", () => {
+    assert.equal(normalizeRoleKey("EVOLUTION_WORKER"), "evolution_worker");
+  });
+
+  it("replaces spaces with hyphens", () => {
+    assert.equal(normalizeRoleKey("Evolution Worker"), "evolution-worker");
+  });
+
+  it("collapses multiple spaces to a single hyphen", () => {
+    assert.equal(normalizeRoleKey("Evolution  Worker"), "evolution-worker");
+  });
+
+  it("trims leading and trailing whitespace", () => {
+    assert.equal(normalizeRoleKey("  backend-worker  "), "backend-worker");
+  });
+
+  it("handles already-normalized keys unchanged", () => {
+    assert.equal(normalizeRoleKey("evolution-worker"), "evolution-worker");
+  });
+
+  it("handles empty string without throwing", () => {
+    assert.equal(normalizeRoleKey(""), "");
+  });
+
+  it("returns empty string for null/undefined coercion", () => {
+    assert.equal(normalizeRoleKey(null as any), "");
+    assert.equal(normalizeRoleKey(undefined as any), "");
+  });
+
+  it("normalizes mixed case and spaces correctly", () => {
+    assert.equal(normalizeRoleKey("CI Fix Worker"), "ci-fix-worker");
+  });
+});
+
+describe("loadRecentFailureClassifications — normalized role key lookup", () => {
+  async function makeTempDir2(): Promise<string> {
+    const dir = path.join(os.tmpdir(), `fc-norm-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  }
+
+  it("normalizes keys: 'Evolution Worker' and 'evolution-worker' resolve to same entry", async () => {
+    const dir = await makeTempDir2();
+    const classification = makeClassification({ primaryClass: FAILURE_CLASS.LOGIC_DEFECT });
+    // persist with space-format role
+    await persistFailureClassification(dir, "Evolution Worker", classification);
+
+    const loaded = await loadRecentFailureClassifications(dir);
+    // normalized key should be "evolution-worker"
+    assert.ok("evolution-worker" in loaded, "should be keyed by normalized role");
+    assert.equal((loaded["evolution-worker"] as any).primaryClass, FAILURE_CLASS.LOGIC_DEFECT);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("later entry with different casing overrides earlier entry for same normalized key", async () => {
+    const dir = await makeTempDir2();
+    const first  = makeClassification({ primaryClass: FAILURE_CLASS.LOGIC_DEFECT });
+    const second = makeClassification({ primaryClass: FAILURE_CLASS.POLICY });
+    await persistFailureClassification(dir, "evolution worker", first);
+    await persistFailureClassification(dir, "Evolution Worker", second);
+
+    const loaded = await loadRecentFailureClassifications(dir);
+    const key = "evolution-worker";
+    assert.ok(key in loaded);
+    assert.equal((loaded[key] as any).primaryClass, FAILURE_CLASS.POLICY);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("optimizer failureClassifications lookup matches normalized key", () => {
+    // Simulates the optimizer scenario: classification stored under normalized key,
+    // looked up with space-variant role (normalized by optimizer before lookup).
+    const interventions = [
+      makeIntervention({ id: "i-ew", role: "Evolution Worker", successProbability: 0.8, impact: 0.9 }),
+      makeIntervention({ id: "i-clean", role: "clean-worker", successProbability: 0.8, impact: 0.9 }),
+    ];
+    const policyClassification = makeClassification({ primaryClass: FAILURE_CLASS.POLICY, flagged: false });
+    const result = runInterventionOptimizer(interventions, { maxWorkerSpawns: 2 }, {
+      failureClassifications: { "evolution-worker": policyClassification },
+    });
+    assert.equal(result.status, OPTIMIZER_STATUS.OK);
+    // "evolution-worker" normalized key should match "Evolution Worker" role → SP reduced
+    assert.equal(result.failureClassificationsApplied, 1);
+    // clean-worker should rank higher (no SP penalty)
+    assert.equal(result.selected[0].role, "clean-worker");
+  });
+});
 
 import { loadRecentFailureClassifications, persistFailureClassification } from "../../src/core/failure_classifier.js";
 import os from "node:os";

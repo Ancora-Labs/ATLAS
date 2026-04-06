@@ -237,6 +237,87 @@ export const SLO_TIMESTAMP_STAGES = Object.freeze([
 ]);
 
 /**
+ * Compute whether the current plan queue has viable pending work.
+ *
+ * A queue is "viable" when:
+ *   1. prometheus_analysis.json contains at least one plan, AND
+ *   2. athena_plan_review.json shows approved=true, AND
+ *   3. the dispatch_checkpoint is NOT already "complete" for this plan set.
+ *
+ * This is used by jesus_supervisor to gate age-based replanning:
+ * if there are viable pending plans, a Prometheus replan triggered solely by
+ * plan-age is suppressed — the existing approved work is executed first.
+ *
+ * Returns:
+ *   viable       — true when pending work exists and should be executed
+ *   pendingCount — estimated number of pending plans
+ *   totalCount   — total plan count in prometheus_analysis
+ *   reason       — machine-readable reason code
+ *
+ * Never throws — all read errors return viable=false with reason="read-error".
+ */
+export async function computeQueueViability(config: object): Promise<{
+  viable: boolean;
+  pendingCount: number;
+  totalCount: number;
+  reason: string;
+}> {
+  const stateDir = (config as any)?.paths?.stateDir || "state";
+  try {
+    const prometheusAnalysis = await readJson(
+      path.join(stateDir, "prometheus_analysis.json"), null
+    );
+    const totalCount = Array.isArray(prometheusAnalysis?.plans)
+      ? prometheusAnalysis.plans.length : 0;
+
+    if (totalCount === 0) {
+      return { viable: false, pendingCount: 0, totalCount: 0, reason: "no-plans" };
+    }
+
+    const athenaReview = await readJson(
+      path.join(stateDir, "athena_plan_review.json"), null
+    );
+    if (!athenaReview?.approved) {
+      return { viable: false, pendingCount: 0, totalCount, reason: "athena-not-approved" };
+    }
+
+    const checkpoint = await readJson(
+      path.join(stateDir, "dispatch_checkpoint.json"), null
+    );
+
+    // If checkpoint is marked complete for this plan set, nothing pending
+    if (checkpoint?.status === "complete") {
+      const checkpointPlanCount = Number(checkpoint?.planCount ?? checkpoint?.totalPlans ?? 0);
+      if (checkpointPlanCount === totalCount) {
+        return { viable: false, pendingCount: 0, totalCount, reason: "all-complete" };
+      }
+    }
+
+    // Estimate pending count from checkpoint progress
+    const batchTotal = Number(checkpoint?.totalPlans || totalCount);
+    const batchDone = Math.min(
+      Number(checkpoint?.completedPlans || 0),
+      batchTotal,
+    );
+    const completedEstimate = batchTotal > 0
+      ? Math.round((batchDone / batchTotal) * totalCount) : 0;
+    const pendingCount = Math.max(0, totalCount - completedEstimate);
+
+    if (pendingCount === 0) {
+      return { viable: false, pendingCount: 0, totalCount, reason: "all-complete" };
+    }
+    return {
+      viable: true,
+      pendingCount,
+      totalCount,
+      reason: `${pendingCount}/${totalCount}-pending`,
+    };
+  } catch {
+    return { viable: false, pendingCount: 0, totalCount: 0, reason: "read-error" };
+  }
+}
+
+/**
  * Canonical schema for pipeline_progress.json.
  * Published for tests and dashboard consumers to validate against.
  */

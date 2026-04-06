@@ -13,7 +13,134 @@ import {
   readPipelineProgress,
 } from "../../src/core/pipeline_progress.js";
 
-// ── PIPELINE_STEPS structure tests ─────────────────────────────────────────
+// ── computeQueueViability ─────────────────────────────────────────────────────
+
+import { computeQueueViability } from "../../src/core/pipeline_progress.js";
+
+describe("computeQueueViability", () => {
+  let testDir: string;
+
+  async function setup() {
+    testDir = path.join(os.tmpdir(), `qv-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(testDir, { recursive: true });
+  }
+
+  async function teardown() {
+    await fs.rm(testDir, { recursive: true, force: true });
+  }
+
+  function makeConfig(dir: string) {
+    return { paths: { stateDir: dir } };
+  }
+
+  async function writeJson(filePath: string, data: unknown) {
+    await fs.writeFile(filePath, JSON.stringify(data), "utf8");
+  }
+
+  it("returns viable=false with reason=no-plans when prometheus_analysis has no plans", async () => {
+    await setup();
+    await writeJson(path.join(testDir, "prometheus_analysis.json"), { plans: [] });
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, false);
+    assert.equal(result.reason, "no-plans");
+    await teardown();
+  });
+
+  it("returns viable=false with reason=no-plans when prometheus_analysis is missing", async () => {
+    await setup();
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, false);
+    assert.equal(result.reason, "no-plans");
+    await teardown();
+  });
+
+  it("returns viable=false with reason=athena-not-approved when athena review is absent", async () => {
+    await setup();
+    await writeJson(path.join(testDir, "prometheus_analysis.json"), {
+      plans: [{ id: "p1" }, { id: "p2" }]
+    });
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, false);
+    assert.equal(result.reason, "athena-not-approved");
+    assert.equal(result.totalCount, 2);
+    await teardown();
+  });
+
+  it("returns viable=false with reason=athena-not-approved when athena review is not approved", async () => {
+    await setup();
+    await writeJson(path.join(testDir, "prometheus_analysis.json"), {
+      plans: [{ id: "p1" }]
+    });
+    await writeJson(path.join(testDir, "athena_plan_review.json"), { approved: false });
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, false);
+    assert.equal(result.reason, "athena-not-approved");
+    await teardown();
+  });
+
+  it("returns viable=true when approved and dispatch checkpoint is not complete", async () => {
+    await setup();
+    await writeJson(path.join(testDir, "prometheus_analysis.json"), {
+      plans: [{ id: "p1" }, { id: "p2" }, { id: "p3" }]
+    });
+    await writeJson(path.join(testDir, "athena_plan_review.json"), { approved: true });
+    await writeJson(path.join(testDir, "dispatch_checkpoint.json"), {
+      status: "in_progress",
+      totalPlans: 3,
+      completedPlans: 1,
+    });
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, true);
+    assert.equal(result.totalCount, 3);
+    assert.ok(result.pendingCount > 0);
+    await teardown();
+  });
+
+  it("returns viable=false with reason=all-complete when checkpoint status=complete and plan count matches", async () => {
+    await setup();
+    await writeJson(path.join(testDir, "prometheus_analysis.json"), {
+      plans: [{ id: "p1" }, { id: "p2" }]
+    });
+    await writeJson(path.join(testDir, "athena_plan_review.json"), { approved: true });
+    await writeJson(path.join(testDir, "dispatch_checkpoint.json"), {
+      status: "complete",
+      planCount: 2,
+    });
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, false);
+    assert.equal(result.reason, "all-complete");
+    await teardown();
+  });
+
+  it("returns viable=true with no checkpoint file (fresh queue)", async () => {
+    await setup();
+    await writeJson(path.join(testDir, "prometheus_analysis.json"), {
+      plans: [{ id: "p1" }]
+    });
+    await writeJson(path.join(testDir, "athena_plan_review.json"), { approved: true });
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, true);
+    assert.equal(result.totalCount, 1);
+    await teardown();
+  });
+
+  it("returns viable=false when prometheus_analysis is missing from non-existent dir", async () => {
+    const result = await computeQueueViability({ paths: { stateDir: "/does/not/exist/ever" } });
+    assert.equal(result.viable, false);
+    // readJson returns null for missing files, so we get no-plans (graceful fail-open)
+    assert.ok(result.reason === "no-plans" || result.reason === "read-error");
+    assert.equal(result.pendingCount, 0);
+  });
+
+  it("returns viable=false with reason=read-error on malformed state files", async () => {
+    await setup();
+    await fs.writeFile(path.join(testDir, "prometheus_analysis.json"), "NOT JSON", "utf8");
+    const result = await computeQueueViability(makeConfig(testDir));
+    assert.equal(result.viable, false);
+    assert.equal(result.reason, "no-plans");
+    await teardown();
+  });
+});
 
 const EXPECTED_STEP_IDS = [
   "idle",

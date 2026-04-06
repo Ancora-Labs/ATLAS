@@ -33,6 +33,7 @@ import {
   appendCalibrationHistory,
 } from "./jesus_calibration.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
+import { computeQueueViability } from "./pipeline_progress.js";
 
 // ── Span contract emitter ─────────────────────────────────────────────────────
 
@@ -931,11 +932,28 @@ ${workersList}`;
 
   const d = aiResult.parsed;
 
-  // Safety net: force callPrometheus=true when no valid Prometheus analysis exists
+  // Safety net: force callPrometheus=true when no valid Prometheus analysis exists.
+  // Queue-viability gate: if there are viable pending plans in the queue, suppress the
+  // age-based replan so existing approved work is executed before an expensive replan.
   if (!d.callPrometheus && prometheusAgeHours > 6) {
-    d.callPrometheus = true;
-    d.prometheusReason = (d.prometheusReason || "") + " [OVERRIDE: no recent Prometheus analysis — forced callPrometheus=true]";
-    await appendProgress(config, `[JESUS] callPrometheus overridden to true — Prometheus analysis is ${prometheusAgeHours === Infinity ? "missing" : prometheusAgeHours.toFixed(1) + "h old"}`);
+    try {
+      const queueViability = await computeQueueViability(config);
+      if (queueViability.viable) {
+        // Valid pending work exists — skip the age-based replan, let orchestrator execute
+        await appendProgress(config,
+          `[JESUS] Age-based replan suppressed — queue has ${queueViability.pendingCount}/${queueViability.totalCount} viable pending plan(s) (reason=${queueViability.reason})`
+        );
+      } else {
+        d.callPrometheus = true;
+        d.prometheusReason = (d.prometheusReason || "") + " [OVERRIDE: no recent Prometheus analysis and no viable queued plans — forced callPrometheus=true]";
+        await appendProgress(config, `[JESUS] callPrometheus overridden to true — Prometheus analysis is ${prometheusAgeHours === Infinity ? "missing" : prometheusAgeHours.toFixed(1) + "h old"}, queueViability=${queueViability.reason}`);
+      }
+    } catch {
+      // Fall back to age-only override on any error
+      d.callPrometheus = true;
+      d.prometheusReason = (d.prometheusReason || "") + " [OVERRIDE: no recent Prometheus analysis — forced callPrometheus=true]";
+      await appendProgress(config, `[JESUS] callPrometheus overridden to true — Prometheus analysis is ${prometheusAgeHours === Infinity ? "missing" : prometheusAgeHours.toFixed(1) + "h old"}`);
+    }
   }
 
   // ── Safety net: force replanning if Athena rejected the previous plan ──────

@@ -502,11 +502,33 @@ export function applyClassificationToSuccessProbability(successProbability, clas
 // ── Orchestration state persistence ──────────────────────────────────────────
 
 /**
+ * Normalize a worker role name to a canonical key used for failure-classification
+ * lookups and persistence.
+ *
+ * Transforms any casing/spacing variant to lowercase-hyphenated form so that
+ * "Evolution Worker", "evolution worker", and "evolution-worker" all resolve to
+ * the same key. This prevents silent misses in the intervention optimizer when
+ * Prometheus emits role names that differ only in formatting.
+ *
+ * @param role — raw role string (e.g. "Evolution Worker")
+ * @returns    — normalized key  (e.g. "evolution-worker")
+ */
+export function normalizeRoleKey(role: string): string {
+  return String(role || "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-");
+}
+
+/**
  * Load recent failure classifications from orchestration state.
  *
  * Reads `state/worker_failure_classifications.jsonl`, returns the last `limit`
  * entries as a `{ [role]: ClassificationResult }` map keyed by role name.
  * When multiple classifications exist for the same role, the most recent one wins.
+ *
+ * Keys are normalized via {@link normalizeRoleKey} so lookups are
+ * case- and whitespace-insensitive.
  *
  * Returns an empty object when the file does not exist or cannot be parsed.
  * Never throws — failures are silent (non-fatal analytics path).
@@ -530,10 +552,11 @@ export async function loadRecentFailureClassifications(
     }).filter(Boolean);
 
     // Build role → classification map; later entries override earlier ones for same role.
+    // Keys are normalized so "Evolution Worker" and "evolution-worker" resolve to the same entry.
     const byRole: Record<string, unknown> = {};
     for (const record of records) {
       if (!record || typeof record !== "object") continue;
-      const role = String(record.role || "");
+      const role = normalizeRoleKey(String(record.role || ""));
       const classification = record.classification;
       if (!role || !classification || typeof classification !== "object") continue;
       byRole[role] = classification;

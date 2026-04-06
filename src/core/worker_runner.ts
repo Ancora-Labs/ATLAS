@@ -1108,7 +1108,27 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // ── Task 1: Uncertainty-aware model selection ─────────────────────────────
   // resolveModel now uses routeModelWithUncertainty (backed by historical ROI)
   // and applies policy routing adjustments from recurring failure lessons.
-  const model = resolveModel(config, roleName, instruction.taskKind, taskHints, routingAdjustments);
+  let model = resolveModel(config, roleName, instruction.taskKind, taskHints, routingAdjustments);
+
+  // ── Hard-task escalation: deliberation.mode → strong model upgrade ─────────
+  // assessHardTaskEscalation (called inside decideDeliberationPolicy) can signal
+  // that the task requires multi-attempt deliberation. When that happens, also
+  // upgrade the model to strongModel if it is different from the resolved model,
+  // ensuring hard tasks run on the most capable model available.
+  if (deliberation.mode === "multi-attempt") {
+    const defaultModel = config?.copilot?.defaultModel || "Claude Sonnet 4.6";
+    const strongModel = config?.copilot?.strongModel || defaultModel;
+    if (model !== strongModel) {
+      const escalated = enforceModelPolicy(strongModel, taskHints, defaultModel);
+      if (!escalated.downgraded) {
+        const previousModel = model;
+        model = strongModel;
+        appendProgress(config,
+          `[HARD_TASK_ESCALATION] ${roleName}: model upgraded ${previousModel} → ${model} (deliberation=multi-attempt reason=${deliberation.reason || "complex-task"})`
+        ).catch(() => { /* non-critical */ });
+      }
+    }
+  }
 
   // Classify complexity tier for prompt budget injection
   const { tier } = classifyComplexityTier(taskHints);

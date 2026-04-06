@@ -584,3 +584,84 @@ describe("recommendRetryDeliberationMode", () => {
     assert.ok(result.searchBudget >= 1);
   });
 });
+
+// ── applyRetryROIGate ─────────────────────────────────────────────────────────
+
+import { applyRetryROIGate } from "../../src/core/retry_strategy.js";
+
+describe("applyRetryROIGate", () => {
+  const baseDecision = {
+    retryAction: RETRY_ACTION.REWORK,
+    reason: "logic_defect rework path",
+  };
+
+  function roiAllow(): { allowRetry: boolean; expectedGain: number; threshold: number; reason: string } {
+    return { allowRetry: true, expectedGain: 0.7, threshold: 0.18, reason: "gain-above-threshold" };
+  }
+
+  function roiDeny(): { allowRetry: boolean; expectedGain: number; threshold: number; reason: string } {
+    return { allowRetry: false, expectedGain: 0.05, threshold: 0.18, reason: "gain-below-threshold" };
+  }
+
+  it("passes through unchanged when allowRetry=true", () => {
+    const result = applyRetryROIGate(baseDecision, roiAllow());
+    assert.equal(result.retryAction, RETRY_ACTION.REWORK);
+    assert.equal(result.roiGateApplied, false);
+  });
+
+  it("overrides retryable action to ESCALATE when allowRetry=false", () => {
+    const result = applyRetryROIGate(baseDecision, roiDeny());
+    assert.equal(result.retryAction, RETRY_ACTION.ESCALATE);
+    assert.equal(result.roiGateApplied, true);
+    assert.ok(result.reason.includes("roi-gate"));
+    assert.ok(result.reason.includes("allowRetry=false"));
+  });
+
+  it("overrides retry action to ESCALATE when allowRetry=false", () => {
+    const retryDecision = { retryAction: RETRY_ACTION.RETRY, reason: "immediate retry" };
+    const result = applyRetryROIGate(retryDecision, roiDeny());
+    assert.equal(result.retryAction, RETRY_ACTION.ESCALATE);
+    assert.equal(result.roiGateApplied, true);
+  });
+
+  it("overrides cooldown_retry to ESCALATE when allowRetry=false", () => {
+    const cooldownDecision = { retryAction: RETRY_ACTION.COOLDOWN_RETRY, reason: "transient error" };
+    const result = applyRetryROIGate(cooldownDecision, roiDeny());
+    assert.equal(result.retryAction, RETRY_ACTION.ESCALATE);
+    assert.equal(result.roiGateApplied, true);
+  });
+
+  it("passes through ESCALATE action unchanged even when allowRetry=false", () => {
+    const escalateDecision = { retryAction: RETRY_ACTION.ESCALATE, reason: "already escalated" };
+    const result = applyRetryROIGate(escalateDecision, roiDeny());
+    assert.equal(result.retryAction, RETRY_ACTION.ESCALATE);
+    assert.equal(result.roiGateApplied, false);
+  });
+
+  it("passes through REASSIGN action unchanged even when allowRetry=false", () => {
+    const reassignDecision = { retryAction: RETRY_ACTION.REASSIGN, reason: "policy violation" };
+    const result = applyRetryROIGate(reassignDecision, roiDeny());
+    assert.equal(result.retryAction, RETRY_ACTION.REASSIGN);
+    assert.equal(result.roiGateApplied, false);
+  });
+
+  it("passes through SPLIT action unchanged even when allowRetry=false", () => {
+    const splitDecision = { retryAction: RETRY_ACTION.SPLIT, reason: "policy split" };
+    const result = applyRetryROIGate(splitDecision, roiDeny());
+    assert.equal(result.retryAction, RETRY_ACTION.SPLIT);
+    assert.equal(result.roiGateApplied, false);
+  });
+
+  it("preserves other decision fields when overriding retryAction", () => {
+    const richDecision = { retryAction: RETRY_ACTION.REWORK, reason: "rework needed", taskId: "T-123", failureClass: "logic_defect" };
+    const result = applyRetryROIGate(richDecision, roiDeny());
+    assert.equal(result.taskId, "T-123");
+    assert.equal(result.failureClass, "logic_defect");
+  });
+
+  it("includes gain and threshold values in overridden reason", () => {
+    const result = applyRetryROIGate(baseDecision, roiDeny());
+    assert.ok(result.reason.includes("0.050"), `reason should include gain: ${result.reason}`);
+    assert.ok(result.reason.includes("0.180"), `reason should include threshold: ${result.reason}`);
+  });
+});

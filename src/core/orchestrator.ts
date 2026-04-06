@@ -102,6 +102,7 @@ import {
   classifyFailure,
   persistFailureClassification,
   loadRecentFailureClassifications,
+  normalizeRoleKey,
 } from "./failure_classifier.js";
 import {
   readCheckpoint as readVersionedCheckpoint,
@@ -3230,7 +3231,7 @@ async function runSingleCycle(config) {
         });
         if (classifyResult.ok) {
           const currentStateDir = config.paths?.stateDir || "state";
-          await persistFailureClassification(currentStateDir, String(batch.role || ""), classifyResult.classification);
+          await persistFailureClassification(currentStateDir, normalizeRoleKey(String(batch.role || "")), classifyResult.classification);
         }
       } catch { /* non-fatal — classification never blocks dispatch */ }
 
@@ -3255,6 +3256,20 @@ async function runSingleCycle(config) {
       await appendProgress(config,
         `[CYCLE] Worker batch ${workersDone + 1}/${workerBatches.length} ended with status=${workerResult?.status || "unknown"}; checkpoint not advanced so it can be retried`
       );
+      // Emit retry ROI signal for non-transient failures to inform next-cycle decisions.
+      try {
+        const nonTransientROI = assessRetryExpectedROI({
+          attempt: transientRetries + 1,
+          maxRetries: MAX_TRANSIENT_RETRIES,
+          taskKind: String((batch as any)?.taskKind || "implementation"),
+          premiumUsageData: cycleRetryTelemetry.premiumUsageData,
+          benchmarkGroundTruth: cycleRetryTelemetry.benchmarkGroundTruth,
+          minExpectedGain: Number(config?.runtime?.retryRoiMinExpectedGain ?? 0.18),
+        });
+        await appendProgress(config,
+          `[RETRY_ROI] batch=${batch.role} allowRetry=${nonTransientROI.allowRetry} gain=${nonTransientROI.expectedGain.toFixed(3)} threshold=${nonTransientROI.threshold.toFixed(3)} reason=${nonTransientROI.reason}`
+        );
+      } catch { /* non-fatal — ROI logging must never block orchestration */ }
       return;
     }
 

@@ -556,6 +556,39 @@ export function recommendRetryDeliberationMode(decision: {
   };
 }
 
+// ── Retry ROI gate ────────────────────────────────────────────────────────────
+
+/**
+ * Apply a retry ROI gate to a resolved retry decision.
+ *
+ * When the ROI signal indicates that another retry attempt is not economically
+ * worthwhile (`allowRetry=false`), any retryable action (retry, cooldown_retry,
+ * rework) is overridden to ESCALATE so that the orchestrator stops consuming
+ * premium budget on diminishing-return retries.
+ *
+ * Non-retryable actions (escalate, reassign, split) are always passed through
+ * unchanged — they are already directing work away from the current worker.
+ *
+ * @param decision  — resolved retry decision from resolveRetryAction
+ * @param retryROI  — ROI signal from assessRetryExpectedROI
+ * @returns decision with retryAction potentially overridden to ESCALATE
+ */
+export function applyRetryROIGate(
+  decision: { retryAction: string; reason: string; [key: string]: unknown },
+  retryROI: { allowRetry: boolean; expectedGain: number; threshold: number; reason: string },
+): { retryAction: string; reason: string; roiGateApplied: boolean; [key: string]: unknown } {
+  const passThrough = [RETRY_ACTION.ESCALATE, RETRY_ACTION.REASSIGN, RETRY_ACTION.SPLIT];
+  if (retryROI.allowRetry || passThrough.includes(decision.retryAction as any)) {
+    return { ...decision, roiGateApplied: false };
+  }
+  return {
+    ...decision,
+    retryAction: RETRY_ACTION.ESCALATE,
+    reason: `${decision.reason} [roi-gate: allowRetry=false expectedGain=${retryROI.expectedGain.toFixed(3)} threshold=${retryROI.threshold.toFixed(3)} reason=${retryROI.reason}]`,
+    roiGateApplied: true,
+  };
+}
+
 // ── State persistence helpers ─────────────────────────────────────────────────
 
 import path from "node:path";
