@@ -7,6 +7,44 @@ import {
   quarantineLowDensityTopics,
 } from "../../src/core/research_synthesizer.js";
 
+// ── Task 1 invariant: partial quarantine must not trigger degraded mode ────────
+
+describe("qualityGate degradedPlanningMode invariant", () => {
+  it("degradedPlanningMode is false when partial quarantine (some topics pass)", () => {
+    const topics = [
+      { topic: "CI/CD automation", netFindings: ["Fix CI matrix", "Add parallel jobs"] },
+      { topic: "Low density topic", netFindings: [] },
+    ];
+    const densities = [
+      { topic: "CI/CD automation",    actionableCount: 2, passed: true },
+      { topic: "Low density topic",   actionableCount: 0, passed: false },
+    ];
+    const { quarantinedTopics, passedTopics } = quarantineLowDensityTopics(topics as any, densities);
+    assert.equal(quarantinedTopics.length, 1, "one topic should be quarantined");
+    assert.equal(passedTopics.length, 1, "one topic should pass");
+
+    // Mirror how research_synthesizer.ts computes degradedPlanningMode.
+    const degradedPlanningMode = quarantinedTopics.length > 0 && passedTopics.length === 0;
+    assert.equal(degradedPlanningMode, false,
+      "partial quarantine MUST NOT trigger degraded mode — valid signal remains");
+  });
+
+  it("degradedPlanningMode is true only when ALL topics are quarantined", () => {
+    const topics = [
+      { topic: "Empty A", netFindings: [] },
+      { topic: "Empty B", netFindings: [] },
+    ];
+    const densities = [
+      { topic: "Empty A", actionableCount: 0, passed: false },
+      { topic: "Empty B", actionableCount: 0, passed: false },
+    ];
+    const { quarantinedTopics, passedTopics } = quarantineLowDensityTopics(topics as any, densities);
+    const degradedPlanningMode = quarantinedTopics.length > 0 && passedTopics.length === 0;
+    assert.equal(degradedPlanningMode, true,
+      "degraded mode must activate when ALL topics are quarantined");
+  });
+});
+
 describe("research_synthesizer persistence hardening", () => {
   it("strips execution transcript noise while preserving synthesis content", () => {
     const raw = [

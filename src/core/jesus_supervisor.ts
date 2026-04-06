@@ -459,6 +459,31 @@ const VALID_DECISION_TYPES = new Set(["tactical", "strategic", "emergency", "wai
  * @param expectedOutcome - The expectedOutcome block attached to the directive.
  * @returns {{ valid: boolean, gaps: string[], hasMeasurableOutcome: boolean }}
  */
+
+/**
+ * Strip operational tool traces and free-form internal reasoning from a directive
+ * text field before persistence.  Prevents tool_call lines, thinking blocks, and
+ * role prefixes from leaking into jesus_directive.json and polluting downstream
+ * planning context for Prometheus.
+ *
+ * Exported for testing.
+ */
+export function sanitizeDirectiveFieldForPersistence(text: string): string {
+  const raw = String(text || "");
+  // Remove <thinking>...</thinking> blocks (potentially multiline).
+  const noThinking = raw.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
+  const lines = noThinking.split(/\r?\n/);
+  const filtered = lines.filter((line) => {
+    const norm = line.trim();
+    if (!norm) return false;
+    if (/^(tool_call|tool_result|function_call|assistant:|system:|user:)/i.test(norm)) return false;
+    if (/^copilot>/i.test(norm)) return false;
+    if (/^\[?(synthesizer_start|synthesizer_end|research_synthesizer_live)\]/i.test(norm)) return false;
+    return true;
+  });
+  return filtered.join("\n").trim();
+}
+
 export function validateDirectivePayload(
   directive: Record<string, unknown>,
   expectedOutcome: Record<string, unknown>
@@ -1024,6 +1049,7 @@ ${workersList}`;
 
   const directive = {
     ...d,
+    briefForPrometheus: sanitizeDirectiveFieldForPersistence(String((d as any).briefForPrometheus || "")),
     thinking: aiResult.thinking,
     fullOutput: (aiResult as any).raw || "",
     decidedAt: new Date().toISOString(),

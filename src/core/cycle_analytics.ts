@@ -188,6 +188,7 @@ export const CYCLE_ANALYTICS_SCHEMA = Object.freeze({
       "laneTelemetry",
       "stageTransitions",
       "dropReasons",
+      "modelRoutingTelemetry",
     ],
     cycleIdSource: "pipeline_progress.startedAt",
     phaseEnum: Object.freeze([...Object.values(CYCLE_PHASE)]),
@@ -947,7 +948,7 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
     models: Record<string, { successProbability: number; capacityImpact: number; requestCost: number }>;
   }>;
   sampleCount: number;
-} | null {
+} {
   if (!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) return { byTaskKind: {}, sampleCount: 0 };
 
   type EcoPoint = { successProbability: number; capacityImpact: number; requestCost: number };

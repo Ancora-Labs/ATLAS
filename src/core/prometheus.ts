@@ -405,6 +405,41 @@ function sanitizePromptLine(value: unknown, maxLen = 220): string {
   return compact.length > maxLen ? `${compact.slice(0, maxLen - 3)}...` : compact;
 }
 
+/**
+ * Strip operational tool traces and free-form internal reasoning from a planning
+ * text field before persistence.  Prevents tool_call lines, thinking blocks, and
+ * role prefixes from leaking into downstream planning artifacts (prometheus_analysis.json).
+ *
+ * Exported for testing.
+ */
+export function sanitizePlanningFieldForPersistence(text: string): string {
+  const raw = String(text || "");
+  // Remove <thinking>...</thinking> blocks (potentially multiline).
+  const noThinking = raw.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
+  const lines = noThinking.split(/\r?\n/);
+  const filtered = lines.filter((line) => {
+    const norm = line.trim();
+    if (!norm) return false;
+    if (/^(tool_call|tool_result|function_call|assistant:|system:|user:)/i.test(norm)) return false;
+    if (/^copilot>/i.test(norm)) return false;
+    if (/^\[?(synthesizer_start|synthesizer_end|research_synthesizer_live)\]/i.test(norm)) return false;
+    return true;
+  });
+  return filtered.join("\n").trim();
+}
+
+/**
+ * Returns true ONLY when ALL topics are quarantined (passedTopics is empty).
+ * Partial quarantine (some topics pass) does NOT constitute degraded mode.
+ * Exported for testing.
+ */
+export function isResearchDegradedModeActive(
+  quarantinedTopicNames: string[],
+  passedTopics: unknown[],
+): boolean {
+  return quarantinedTopicNames.length > 0 && passedTopics.length === 0;
+}
+
 function normalizeResearchTopic(value: unknown): string {
   const text = sanitizePromptLine(value, 180)
     .replace(/^[-*\u2022\u25cf\u25cb\u00b7\s]+/, "")
@@ -3966,13 +4001,24 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
       const quarantinedSet = new Set(quarantinedTopicNames);
       const passedTopics = allTopics.filter((t: any) => !quarantinedSet.has(String(t?.topic || "")));
       if (quarantinedTopicNames.length > 0) {
-        degradedPlanningModeActive = true;
+        // Always filter quarantined topics from the effective synthesis injected into the prompt.
         effectiveSynthesis = { ...(researchSynthesis as any), topics: passedTopics };
-        await appendProgress(
-          config,
-          `[PROMETHEUS][DEGRADED_PLANNING] ${quarantinedTopicNames.length} low-density topic(s) quarantined from planning context ` +
-          `(retried=${qg.retried}). Operating in degraded planning mode.`
-        );
+        if (passedTopics.length === 0) {
+          // ALL topics quarantined — no valid signal remains. Enter degraded planning mode.
+          degradedPlanningModeActive = true;
+          await appendProgress(
+            config,
+            `[PROMETHEUS][DEGRADED_PLANNING] ${quarantinedTopicNames.length} low-density topic(s) quarantined from planning context ` +
+            `(retried=${qg.retried}). All topics quarantined — operating in degraded planning mode.`
+          );
+        } else {
+          // PARTIAL quarantine — valid signal retained in passedTopics. NOT degraded.
+          await appendProgress(
+            config,
+            `[PROMETHEUS][PARTIAL_QUARANTINE] ${quarantinedTopicNames.length} low-density topic(s) quarantined ` +
+            `(retried=${qg.retried}). ${passedTopics.length} valid topic(s) retained — continuing in normal planning mode.`
+          );
+        }
       } else {
         await appendProgress(
           config,
@@ -5417,6 +5463,16 @@ Mandatory requirements:
   });
 
   try {
+    // Sanitize plan text fields before persistence to strip operational tool traces.
+    if (Array.isArray((analysis as any).plans)) {
+      (analysis as any).plans = (analysis as any).plans.map((plan: any) => ({
+        ...plan,
+        task: sanitizePlanningFieldForPersistence(String(plan.task || "")),
+        context: plan.context != null
+          ? sanitizePlanningFieldForPersistence(String(plan.context))
+          : plan.context,
+      }));
+    }
     await writeJson(path.join(stateDir, "prometheus_analysis.json"), addSchemaVersion(analysis, STATE_FILE_TYPE.PROMETHEUS_ANALYSIS));
   } catch (writeErr) {
     // Critical planning ledger write failed — emit structured WARN so the orchestrator

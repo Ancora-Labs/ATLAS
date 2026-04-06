@@ -15,6 +15,7 @@
 import path from "node:path";
 import { readJson, writeJson } from "./fs_utils.js";
 import { MIN_TELEMETRY_SAMPLE_THRESHOLD } from "./telemetry_thresholds.js";
+export { MIN_TELEMETRY_SAMPLE_THRESHOLD };
 
 // ── Banned model patterns (case-insensitive) ─────────────────────────────────
 // These patterns match against the resolved model slug BEFORE any CLI call.

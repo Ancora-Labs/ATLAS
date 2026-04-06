@@ -30,6 +30,7 @@ import {
   rankModelsByTaskKindExpectedValue,
   assessRetryExpectedROI,
   RETRY_EXPECTED_GAIN_MIN_THRESHOLD,
+  MIN_TELEMETRY_SAMPLE_THRESHOLD,
 } from "../../src/core/model_policy.js";
 
 describe("model_policy — complexity tiers", () => {
@@ -960,5 +961,67 @@ describe("rankModelsByTaskKindExpectedValue", () => {
     );
     assert.equal(result.usedTelemetry, false);
     assert.deepEqual(result.rankedModels, ["Claude Sonnet 4.6", "GPT-5.3-Codex"]);
+  });
+});
+
+// ── Task 3: modelRoutingTelemetry threshold-gated consumption ─────────────────
+
+describe("rankModelsByTaskKindExpectedValue — threshold enforcement", () => {
+  it("returns reason=telemetry-below-threshold when sampleCount < MIN_TELEMETRY_SAMPLE_THRESHOLD", () => {
+    const belowThreshold = Math.max(0, MIN_TELEMETRY_SAMPLE_THRESHOLD - 1);
+    const cycleAnalytics = {
+      modelRoutingTelemetry: {
+        byTaskKind: {
+          "ci-fix": {
+            sampleCount: belowThreshold,
+            default: { successProbability: 0.9, capacityImpact: 0.8, requestCost: 1 },
+            models: {},
+          },
+        },
+      },
+    };
+    const result = rankModelsByTaskKindExpectedValue(
+      "ci-fix",
+      ["Claude Sonnet 4.6", "GPT-5.3-Codex"],
+      cycleAnalytics,
+    );
+    assert.equal(result.usedTelemetry, false,
+      "sparse telemetry must not be used for routing");
+    assert.equal(result.reason, "telemetry-below-threshold",
+      "reason must identify the threshold gate");
+    assert.deepEqual(result.rankedModels, ["Claude Sonnet 4.6", "GPT-5.3-Codex"],
+      "original order must be preserved as deterministic fallback");
+  });
+
+  it("uses telemetry when sampleCount >= MIN_TELEMETRY_SAMPLE_THRESHOLD", () => {
+    const cycleAnalytics = {
+      modelRoutingTelemetry: {
+        byTaskKind: {
+          "ci-fix": {
+            sampleCount: MIN_TELEMETRY_SAMPLE_THRESHOLD,
+            default: { successProbability: 0.5, capacityImpact: 0.5, requestCost: 1 },
+            models: {
+              "GPT-5.3-Codex": { successProbability: 0.95, capacityImpact: 0.9, requestCost: 1 },
+              "Claude Sonnet 4.6": { successProbability: 0.6, capacityImpact: 0.5, requestCost: 1 },
+            },
+          },
+        },
+      },
+    };
+    const result = rankModelsByTaskKindExpectedValue(
+      "ci-fix",
+      ["Claude Sonnet 4.6", "GPT-5.3-Codex"],
+      cycleAnalytics,
+    );
+    assert.equal(result.usedTelemetry, true,
+      "telemetry at or above threshold must be used");
+    assert.equal(result.rankedModels[0], "GPT-5.3-Codex",
+      "higher expected-value model must be ranked first");
+  });
+
+  it("MIN_TELEMETRY_SAMPLE_THRESHOLD is exported as a positive integer", () => {
+    assert.ok(typeof MIN_TELEMETRY_SAMPLE_THRESHOLD === "number");
+    assert.ok(MIN_TELEMETRY_SAMPLE_THRESHOLD > 0);
+    assert.ok(Number.isInteger(MIN_TELEMETRY_SAMPLE_THRESHOLD));
   });
 });

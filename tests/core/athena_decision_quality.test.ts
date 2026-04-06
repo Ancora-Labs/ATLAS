@@ -39,6 +39,7 @@ import {
   ATHENA_PLAN_REVIEW_REASON_CODE,
   checkPlanPremortemGate,
   computePlanBatchFingerprint,
+  sanitizeAthenaReviewFieldForPersistence,
 } from "../../src/core/athena_reviewer.js";
 
 import {
@@ -1381,5 +1382,43 @@ describe("fastPathCounts.byReasonCode — per-code utilization telemetry", () =>
     });
     assert.equal(record.fastPathCounts.byReasonCode.LOW_RISK_UNCHANGED, null,
       "slot must not be populated when athenaAutoApproved is absent");
+  });
+});
+
+// ── Task 2: sanitizeAthenaReviewFieldForPersistence ───────────────────────────
+
+describe("sanitizeAthenaReviewFieldForPersistence", () => {
+  it("strips tool_call lines from review summary", () => {
+    const input = "Plan approved — solid acceptance criteria.\ntool_call: read_file state/foo.json\nScore: 8/10.";
+    const result = sanitizeAthenaReviewFieldForPersistence(input);
+    assert.ok(!result.includes("tool_call:"), "tool_call lines must be stripped");
+    assert.ok(result.includes("Plan approved"), "genuine content must be preserved");
+    assert.ok(result.includes("Score: 8/10."), "genuine content must be preserved");
+  });
+
+  it("strips <thinking>...</thinking> blocks from review rationale", () => {
+    const input = "Review result: approved.\n<thinking>Internal deliberation...</thinking>\nCorrections: none.";
+    const result = sanitizeAthenaReviewFieldForPersistence(input);
+    assert.ok(!result.includes("<thinking>"), "thinking blocks must be stripped");
+    assert.ok(!result.includes("Internal deliberation"), "thinking content must be stripped");
+    assert.ok(result.includes("Review result: approved."), "genuine content preserved");
+    assert.ok(result.includes("Corrections: none."), "genuine content preserved");
+  });
+
+  it("strips function_call and tool_result prefixed lines", () => {
+    const input = "function_call: approve_plan\ntool_result: {approved: true}\nApproved with score 9.";
+    const result = sanitizeAthenaReviewFieldForPersistence(input);
+    assert.ok(!result.includes("function_call:"), "function_call lines must be stripped");
+    assert.ok(!result.includes("tool_result:"), "tool_result lines must be stripped");
+    assert.ok(result.includes("Approved with score 9."), "genuine content preserved");
+  });
+
+  it("returns empty string for empty input", () => {
+    assert.equal(sanitizeAthenaReviewFieldForPersistence(""), "");
+  });
+
+  it("negative path: does not strip clean review text", () => {
+    const clean = "Plan approved. Score 8/10. Corrections applied to verification commands.";
+    assert.equal(sanitizeAthenaReviewFieldForPersistence(clean), clean);
   });
 });

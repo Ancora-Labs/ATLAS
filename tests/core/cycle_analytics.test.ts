@@ -37,6 +37,8 @@ import {
   CYCLE_HEALTH_SCHEMA,
   HEALTH_SCORE,
   CANONICAL_EVENT_NAMES,
+  buildModelRoutingTelemetry,
+  MIN_TELEMETRY_SAMPLE_THRESHOLD,
 } from "../../src/core/cycle_analytics.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -1646,5 +1648,59 @@ describe("interventionImpactCounters in cycle analytics record", () => {
       optimizerUsage: { failureClassificationsApplied: "not-a-number" },
     });
     assert.equal(record.interventionImpactCounters, null);
+  });
+});
+
+// ── Task 3: modelRoutingTelemetry contract ─────────────────────────────────────
+
+describe("modelRoutingTelemetry schema contract", () => {
+  it("modelRoutingTelemetry is declared as required in CYCLE_ANALYTICS_SCHEMA.cycleRecord", () => {
+    assert.ok(
+      CYCLE_ANALYTICS_SCHEMA.cycleRecord.required.includes("modelRoutingTelemetry"),
+      "modelRoutingTelemetry must be a required field in the cycle record schema"
+    );
+  });
+
+  it("computeCycleAnalytics always includes modelRoutingTelemetry even with empty log", () => {
+    const record = computeCycleAnalytics(makeConfig(), { phase: CYCLE_PHASE.COMPLETED });
+    assert.ok(record.modelRoutingTelemetry !== null && record.modelRoutingTelemetry !== undefined,
+      "modelRoutingTelemetry must always be present in analytics record");
+    assert.ok(typeof record.modelRoutingTelemetry === "object",
+      "modelRoutingTelemetry must be an object");
+    assert.ok("byTaskKind" in record.modelRoutingTelemetry,
+      "modelRoutingTelemetry must have byTaskKind field");
+    assert.ok(typeof (record.modelRoutingTelemetry as any).sampleCount === "number",
+      "modelRoutingTelemetry must have a numeric sampleCount");
+  });
+
+  it("computeCycleAnalytics modelRoutingTelemetry.sampleCount is 0 for empty premium log", () => {
+    const record = computeCycleAnalytics(makeConfig(), {
+      phase: CYCLE_PHASE.COMPLETED,
+      premiumUsageLog: [],
+    });
+    assert.equal((record.modelRoutingTelemetry as any).sampleCount, 0);
+    assert.deepEqual((record.modelRoutingTelemetry as any).byTaskKind, {});
+  });
+
+  it("buildModelRoutingTelemetry aggregates usage entries by taskKind and model", () => {
+    const log = [
+      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done" },
+      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done" },
+      { model: "GPT-5.3-Codex",     taskKind: "implementation", outcome: "blocked" },
+      { model: "Claude Sonnet 4.6", taskKind: "ci-fix",          outcome: "done" },
+    ];
+    const result = buildModelRoutingTelemetry(log);
+    assert.ok(result !== null, "must never return null");
+    assert.ok("implementation" in result.byTaskKind, "implementation taskKind must be present");
+    assert.ok("ci-fix" in result.byTaskKind, "ci-fix taskKind must be present");
+    const implEntry = result.byTaskKind["implementation"];
+    assert.equal(implEntry.sampleCount, 3);
+    assert.ok("Claude Sonnet 4.6" in implEntry.models, "Claude model must be tracked");
+  });
+
+  it("MIN_TELEMETRY_SAMPLE_THRESHOLD is exported and is a positive integer", () => {
+    assert.ok(typeof MIN_TELEMETRY_SAMPLE_THRESHOLD === "number", "must be a number");
+    assert.ok(MIN_TELEMETRY_SAMPLE_THRESHOLD > 0, "must be positive");
+    assert.ok(Number.isInteger(MIN_TELEMETRY_SAMPLE_THRESHOLD), "must be an integer");
   });
 });

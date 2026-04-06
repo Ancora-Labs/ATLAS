@@ -112,7 +112,7 @@ import {
   RUN_SEGMENT_BATCH_SPAN_DEFAULT,
   RUN_SEGMENT_HISTORY_MAX_DEFAULT,
 } from "./checkpoint_engine.js";
-import { assessRetryExpectedROI } from "./model_policy.js";
+import { assessRetryExpectedROI, rankModelsByTaskKindExpectedValue } from "./model_policy.js";
 
 /**
  * Orchestrator health status enum.
@@ -1968,6 +1968,28 @@ async function dispatchWorker(config, plan) {
   } else {
     await appendProgress(config, `[DISPATCH] Sending task to ${roleName}: ${task}`);
   }
+
+  // ── Model routing telemetry: log expected-value ranking for this taskKind ────
+  // Reads previous cycle analytics and logs which model is preferred for the
+  // current task kind, respecting MIN_TELEMETRY_SAMPLE_THRESHOLD.  Non-blocking —
+  // routing decision is advisory only; actual model selection is in worker_runner.
+  try {
+    const { readCycleAnalytics } = await import("./cycle_analytics.js");
+    const prevAnalytics = await readCycleAnalytics(config);
+    const candidates = [
+      config?.copilot?.defaultModel || "Claude Sonnet 4.6",
+      config?.copilot?.strongModel,
+      config?.copilot?.efficientModel,
+    ].filter((m): m is string => typeof m === "string" && m.length > 0);
+    if (candidates.length > 0) {
+      const routing = rankModelsByTaskKindExpectedValue(taskKind, candidates, prevAnalytics);
+      if (routing.usedTelemetry) {
+        await appendProgress(config,
+          `[DISPATCH][MODEL_ROUTING] taskKind=${taskKind} preferredModel=${routing.rankedModels[0]} (telemetry-backed)`
+        );
+      }
+    }
+  } catch { /* non-critical — routing telemetry log must never block dispatch */ }
 
   const result = await runWorkerConversation(config, roleName, {
     task,

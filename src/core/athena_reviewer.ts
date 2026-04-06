@@ -1633,6 +1633,31 @@ export function normalizePatchedPlansForDispatch(plans: unknown[]): Record<strin
  * We deterministically normalize the command batch here so re-validation does
  * not repeatedly fail on known-rewritable command forms.
  */
+
+/**
+ * Strip operational tool traces and free-form internal reasoning from an Athena
+ * review text field before persistence.  Prevents tool_call lines, thinking blocks,
+ * and role prefixes from leaking into athena_plan_review.json and postmortem records,
+ * which feed downstream planning context.
+ *
+ * Exported for testing.
+ */
+export function sanitizeAthenaReviewFieldForPersistence(text: string): string {
+  const raw = String(text || "");
+  // Remove <thinking>...</thinking> blocks (potentially multiline).
+  const noThinking = raw.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
+  const lines = noThinking.split(/\r?\n/);
+  const filtered = lines.filter((line) => {
+    const norm = line.trim();
+    if (!norm) return false;
+    if (/^(tool_call|tool_result|function_call|assistant:|system:|user:)/i.test(norm)) return false;
+    if (/^copilot>/i.test(norm)) return false;
+    if (/^\[?(synthesizer_start|synthesizer_end|research_synthesizer_live)\]/i.test(norm)) return false;
+    return true;
+  });
+  return filtered.join("\n").trim();
+}
+
 export function sanitizePatchedPlanVerificationCommands(
   plans: Record<string, unknown>[]
 ): Record<string, unknown>[] {
@@ -3023,6 +3048,7 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
 
   await writeJson(path.join(stateDir, "athena_plan_review.json"), {
     ...result,
+    summary: sanitizeAthenaReviewFieldForPersistence(String(result.summary || "")),
     planBatchFingerprint: computePlanBatchFingerprint(plans),
   });
 

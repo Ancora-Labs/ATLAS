@@ -927,3 +927,42 @@ describe("retireLowYieldPolicyFamilies", () => {
     assert.ok(LOW_YIELD_MIN_EVIDENCE_RECORDS >= 1);
   });
 });
+
+// ── Task 4: uplift binding — evidence window gates policy mutation ─────────────
+
+describe("decidePolicyMutationsFromEvidenceWindow — uplift binding", () => {
+  it("negative path: returns empty routed when evidence window is insufficient", () => {
+    const policies = [{ id: "low-signal-policy", severity: "warning" }];
+    // Only 1 evidence record — below the POLICY_MUTATION_EVIDENCE_WINDOW threshold.
+    const evidence = [
+      buildInterventionRubricScore("inv-1", "cycle-1", "low-signal-policy", {
+        architecture: 0.6, speed: 0.6, "task-quality": 0.6,
+      }, 0.7),
+    ];
+    const result = decidePolicyMutationsFromEvidenceWindow(policies, evidence);
+    assert.equal(result.routed.length, 0,
+      "insufficient evidence window must NOT produce policy mutations");
+    assert.equal(result.deferred.length, 1,
+      "policy with insufficient evidence must be deferred, not routed");
+  });
+
+  it("POLICY_MUTATION_EVIDENCE_WINDOW is exported as a positive integer", () => {
+    assert.ok(typeof POLICY_MUTATION_EVIDENCE_WINDOW === "number",
+      "POLICY_MUTATION_EVIDENCE_WINDOW must be a number");
+    assert.ok(POLICY_MUTATION_EVIDENCE_WINDOW >= 1,
+      "evidence window must be at least 1 cycle");
+    assert.ok(Number.isInteger(POLICY_MUTATION_EVIDENCE_WINDOW),
+      "evidence window must be an integer");
+  });
+
+  it("buildInterventionRubricScore returns a record with required fields", () => {
+    const score = buildInterventionRubricScore("inv-x", "cycle-x", "policy-x", {
+      architecture: 0.75, speed: 0.8,
+    }, 0.9);
+    assert.equal(score.interventionId, "inv-x", "interventionId must match");
+    assert.equal(score.policyId, "policy-x", "policyId must match");
+    assert.ok(typeof score.rubricScore === "number", "rubricScore must be a number");
+    assert.ok(typeof score.combinedScore === "number", "combinedScore must be a number");
+    assert.ok(typeof score.scoredAt === "string", "scoredAt must be an ISO string");
+  });
+});

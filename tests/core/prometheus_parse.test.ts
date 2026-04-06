@@ -56,6 +56,8 @@ import {
   validateCycleProofEvidenceSeams,
   buildTrustedMemoryShortlist,
   normalizeScalarContractField,
+  isResearchDegradedModeActive,
+  sanitizePlanningFieldForPersistence,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments } from "../../src/core/prompt_compiler.js";
 import {
@@ -4678,5 +4680,73 @@ describe("sanitizeResearchSynthesisForPersistence — topic-level prometheusRead
     const t = result.topics[0];
     assert.ok("prometheusReadySummary" in t, "prometheusReadySummary key must always be present on topic");
     assert.strictEqual(t.prometheusReadySummary, "", "empty signal → empty string, not undefined");
+  });
+});
+
+// ── Task 1: isResearchDegradedModeActive ─────────────────────────────────────
+
+describe("isResearchDegradedModeActive", () => {
+  it("returns false when no topics are quarantined", () => {
+    assert.equal(isResearchDegradedModeActive([], [{ topic: "A" }]), false);
+  });
+
+  it("returns false for partial quarantine (some topics pass)", () => {
+    assert.equal(isResearchDegradedModeActive(["low-density"], [{ topic: "A" }]), false,
+      "partial quarantine must NOT enter degraded mode");
+  });
+
+  it("returns true only when ALL topics are quarantined (zero passed)", () => {
+    assert.equal(isResearchDegradedModeActive(["A", "B"], []), true,
+      "degraded mode activates only when zero valid topics remain");
+  });
+
+  it("returns false when quarantined list is empty and passed is also empty", () => {
+    // No quarantines happened — cannot be degraded by quarantine.
+    assert.equal(isResearchDegradedModeActive([], []), false);
+  });
+});
+
+// ── Task 2: sanitizePlanningFieldForPersistence ───────────────────────────────
+
+describe("sanitizePlanningFieldForPersistence", () => {
+  it("strips tool_call lines from planning field text", () => {
+    const input = "Implement the feature.\ntool_call: read_file src/foo.ts\nVerify with npm test.";
+    const result = sanitizePlanningFieldForPersistence(input);
+    assert.ok(!result.includes("tool_call:"), "tool_call lines must be stripped");
+    assert.ok(result.includes("Implement the feature."), "genuine content must be preserved");
+    assert.ok(result.includes("Verify with npm test."), "genuine content must be preserved");
+  });
+
+  it("strips tool_result lines", () => {
+    const input = "Fix the bug.\ntool_result: {status: ok}\nDone.";
+    const result = sanitizePlanningFieldForPersistence(input);
+    assert.ok(!result.includes("tool_result:"));
+    assert.ok(result.includes("Fix the bug."));
+  });
+
+  it("strips <thinking>...</thinking> blocks", () => {
+    const input = "Task: Add logging.\n<thinking>Internal reasoning here...</thinking>\nAcceptance: log emitted.";
+    const result = sanitizePlanningFieldForPersistence(input);
+    assert.ok(!result.includes("<thinking>"), "thinking tags must be stripped");
+    assert.ok(!result.includes("Internal reasoning"), "thinking content must be stripped");
+    assert.ok(result.includes("Task: Add logging."), "genuine content must be preserved");
+  });
+
+  it("strips role prefix lines (assistant:, user:, system:)", () => {
+    const input = "assistant: Here is my plan.\nFix the failing test.\nuser: ok";
+    const result = sanitizePlanningFieldForPersistence(input);
+    assert.ok(!result.includes("assistant:"), "role prefixes must be stripped");
+    assert.ok(!result.includes("user:"), "role prefixes must be stripped");
+    assert.ok(result.includes("Fix the failing test."), "genuine content preserved");
+  });
+
+  it("returns empty string for empty input", () => {
+    assert.equal(sanitizePlanningFieldForPersistence(""), "");
+    assert.equal(sanitizePlanningFieldForPersistence("   "), "");
+  });
+
+  it("preserves clean text unchanged", () => {
+    const clean = "Implement feature X with proper error handling.";
+    assert.equal(sanitizePlanningFieldForPersistence(clean), clean);
   });
 });

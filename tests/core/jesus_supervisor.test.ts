@@ -17,6 +17,7 @@ import {
   runSystemHealthAudit,
   validateDirectivePayload,
   validateExpectedOutcomeMeasurable,
+  sanitizeDirectiveFieldForPersistence,
 } from "../../src/core/jesus_supervisor.js";
 import {
   computeQueueViability,
@@ -653,5 +654,50 @@ describe("jesus replan-suppression via computeQueueViability — completionRate 
     assert.ok(typeof QUEUE_VIABILITY_MIN_COMPLETION_RATE === "number");
     assert.ok(QUEUE_VIABILITY_MIN_COMPLETION_RATE > 0);
     assert.ok(QUEUE_VIABILITY_MIN_COMPLETION_RATE < 1);
+  });
+});
+
+// ── Task 2: sanitizeDirectiveFieldForPersistence ──────────────────────────────
+
+describe("sanitizeDirectiveFieldForPersistence", () => {
+  it("strips tool_call lines from briefForPrometheus text", () => {
+    const input = "Check GitHub issues.\ntool_call: list_files state/\nActivate appropriate workers.";
+    const result = sanitizeDirectiveFieldForPersistence(input);
+    assert.ok(!result.includes("tool_call:"), "tool_call lines must be stripped");
+    assert.ok(result.includes("Check GitHub issues."), "genuine content must be preserved");
+    assert.ok(result.includes("Activate appropriate workers."), "genuine content must be preserved");
+  });
+
+  it("strips <thinking>...</thinking> blocks including multiline", () => {
+    const input = "Strategic brief.\n<thinking>\nInternal reasoning\nacross lines\n</thinking>\nPriority: fix CI.";
+    const result = sanitizeDirectiveFieldForPersistence(input);
+    assert.ok(!result.includes("<thinking>"), "thinking tags must be stripped");
+    assert.ok(!result.includes("Internal reasoning"), "thinking content must be removed");
+    assert.ok(result.includes("Strategic brief."), "genuine content must be preserved");
+    assert.ok(result.includes("Priority: fix CI."), "genuine content must be preserved");
+  });
+
+  it("strips role prefix lines (assistant:, user:, system:)", () => {
+    const input = "assistant: OK, here is the brief.\nFix the failing build.\nuser: understood";
+    const result = sanitizeDirectiveFieldForPersistence(input);
+    assert.ok(!result.includes("assistant:"), "assistant prefix must be stripped");
+    assert.ok(!result.includes("user:"), "user prefix must be stripped");
+    assert.ok(result.includes("Fix the failing build."), "genuine content preserved");
+  });
+
+  it("returns empty string for empty or whitespace input", () => {
+    assert.equal(sanitizeDirectiveFieldForPersistence(""), "");
+    assert.equal(sanitizeDirectiveFieldForPersistence("   \n\n  "), "");
+  });
+
+  it("preserves clean strategic text unchanged", () => {
+    const clean = "Focus on fixing CI failures and improving test coverage.";
+    assert.equal(sanitizeDirectiveFieldForPersistence(clean), clean);
+  });
+
+  it("negative path: does not strip normal content that happens to contain 'tool' as a word", () => {
+    const input = "The build tool must be configured correctly.";
+    const result = sanitizeDirectiveFieldForPersistence(input);
+    assert.ok(result.includes("build tool"), "word 'tool' in content must not be stripped");
   });
 });

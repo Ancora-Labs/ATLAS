@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { computeCapacityIndex, appendCapacityEntry, getRecentCapacity, computeTrend } from "../../src/core/capacity_scoreboard.js";
+import { computeCapacityIndex, appendCapacityEntry, getRecentCapacity, computeTrend, computeROIWeightedCapacityIndex } from "../../src/core/capacity_scoreboard.js";
 
 describe("capacity_scoreboard", () => {
   describe("existing exports", () => {
@@ -253,5 +253,50 @@ describe("capacity_scoreboard", () => {
       assert.equal(coreTrend, "improving", "parser core trend should be improving");
       assert.equal(aggregateTrend, "stable", "aggregate trend should be stable (contextual penalties unchanged)");
     });
+  });
+});
+
+// ── Task 4: computeROIWeightedCapacityIndex ────────────────────────────────────
+
+describe("computeROIWeightedCapacityIndex", () => {
+  it("returns composite, dimensions, and roiWeight fields", () => {
+    const result = computeROIWeightedCapacityIndex({ parserConfidence: 0.8 }, 0.7);
+    assert.ok(typeof result.composite === "number", "composite must be a number");
+    assert.ok(typeof result.roiWeight === "number", "roiWeight must be a number");
+    assert.ok(result.dimensions && typeof result.dimensions === "object", "dimensions must be present");
+  });
+
+  it("applies high-ROI boost when tierROI >= 0.8", () => {
+    const highROI = computeROIWeightedCapacityIndex({}, 0.9);
+    const baseROI = computeROIWeightedCapacityIndex({}, 0.5);
+    assert.ok(highROI.roiWeight > baseROI.roiWeight,
+      "high tierROI must yield a higher roiWeight than mid-range tierROI");
+  });
+
+  it("applies low-ROI penalty when tierROI < 0.3", () => {
+    const lowROI  = computeROIWeightedCapacityIndex({}, 0.1);
+    const zeroROI = computeROIWeightedCapacityIndex({}, 0);
+    assert.ok(lowROI.roiWeight < 1.0,
+      "low tierROI (>0 but <0.3) must apply roiWeight penalty below 1.0");
+    assert.equal(zeroROI.roiWeight, 1.0,
+      "zero tierROI (no data) must leave roiWeight at neutral 1.0");
+  });
+
+  it("modelTaskFit dimension is non-negative and bounded by 1", () => {
+    const result = computeROIWeightedCapacityIndex({ premiumEfficiency: 0.8 }, 0.6);
+    assert.ok(result.dimensions.modelTaskFit >= 0, "modelTaskFit must be >= 0");
+    assert.ok(result.dimensions.modelTaskFit <= 1, "modelTaskFit must be <= 1");
+  });
+
+  it("returns deltas when previousIndex is provided", () => {
+    const base = computeROIWeightedCapacityIndex({}, 0.5);
+    const next = computeROIWeightedCapacityIndex({ parserConfidence: 1 }, 0.8, base);
+    assert.ok(next.deltas !== null, "deltas must be present when previousIndex is provided");
+    assert.ok(typeof next.deltas === "object", "deltas must be an object");
+  });
+
+  it("negative path: deltas is null when no previousIndex provided", () => {
+    const result = computeROIWeightedCapacityIndex({}, 0.5, null);
+    assert.equal(result.deltas, null, "deltas must be null when no previous index");
   });
 });

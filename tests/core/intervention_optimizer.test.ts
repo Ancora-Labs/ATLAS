@@ -1388,3 +1388,51 @@ describe("runInterventionOptimizer — applied-counter field names", () => {
       "benchmarkAdjustmentsApplied must NOT appear — use benchmarkBoostsApplied");
   });
 });
+
+// ── Task 4: scoreInterventionsAgainstRubric — uplift binding ──────────────────
+
+describe("scoreInterventionsAgainstRubric — uplift binding", () => {
+  it("computes combinedScore as weighted blend of rubricScore and outcomeScore", () => {
+    const interventions = [{ id: "inv-1" }];
+    const rubricByInterventionId = {
+      "inv-1": { architecture: 0.8, testCoverage: 0.6 },
+    };
+    const rows = scoreInterventionsAgainstRubric(interventions, rubricByInterventionId, {
+      outcomeByInterventionId: { "inv-1": 0.9 },
+      policyByInterventionId:  { "inv-1": "policy-A" },
+      cycleId: "test-cycle-1",
+    });
+    assert.equal(rows.length, 1, "one scored row expected");
+    const row = rows[0];
+    assert.equal(row.interventionId, "inv-1");
+    assert.equal(row.policyId, "policy-A");
+    assert.ok(typeof row.rubricScore === "number", "rubricScore must be a number");
+    assert.ok(typeof row.outcomeScore === "number", "outcomeScore must be a number");
+    assert.ok(typeof row.combinedScore === "number", "combinedScore must be a number");
+    // Combined = rubricScore*0.6 + outcomeScore*0.4
+    const expectedRubric = (0.8 + 0.6) / 2;
+    const expectedCombined = Math.round((expectedRubric * 0.6 + 0.9 * 0.4) * 1000) / 1000;
+    assert.equal(row.combinedScore, expectedCombined,
+      "combinedScore must equal rubricScore*0.6 + outcomeScore*0.4");
+  });
+
+  it("negative path: skips interventions without a policyId", () => {
+    const interventions = [{ id: "inv-orphan" }];
+    const rubricByInterventionId = { "inv-orphan": { architecture: 0.9 } };
+    const rows = scoreInterventionsAgainstRubric(interventions, rubricByInterventionId, {
+      outcomeByInterventionId: { "inv-orphan": 1.0 },
+      // no policyByInterventionId — no policy binding
+    });
+    assert.equal(rows.length, 0,
+      "interventions without policy binding must be excluded from scored output");
+  });
+
+  it("clamps outcomeScore to [0,1] range", () => {
+    const interventions = [{ id: "inv-2" }];
+    const rows = scoreInterventionsAgainstRubric(interventions, { "inv-2": { quality: 0.8 } }, {
+      outcomeByInterventionId: { "inv-2": 1.5 }, // out of range
+      policyByInterventionId:  { "inv-2": "policy-B" },
+    });
+    assert.equal(rows[0].outcomeScore, 1.0, "outcomeScore must be clamped to 1.0 max");
+  });
+});
