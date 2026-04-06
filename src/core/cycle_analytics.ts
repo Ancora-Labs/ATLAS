@@ -620,6 +620,7 @@ export function computeCycleAnalytics(config, {
   fastPathCounts = null,
   stageTransitions = [],
   dropReasons = [],
+  premiumUsageLog = [],
 }: any = {}) {
   const missingData = [];
   const stageTimestamps = pipelineProgress?.stageTimestamps || null;
@@ -885,7 +886,92 @@ export function computeCycleAnalytics(config, {
     parserBaselineRecovery: parserBaselineRecovery ?? null,
     stageTransitions: Array.isArray(stageTransitions) ? stageTransitions : [],
     dropReasons:      Array.isArray(dropReasons) ? dropReasons : [],
+    modelRoutingTelemetry: buildModelRoutingTelemetry(premiumUsageLog ?? []),
   };
+}
+
+/**
+ * Aggregate per-task-kind model outcome telemetry from the premium usage log.
+ *
+ * Each entry in premiumUsageLog is expected to have the shape:
+ *   { model: string, taskKind: string, outcome: "done"|"partial"|"blocked"|"error" }
+ *
+ * Returns null when the log is empty or has no usable entries.
+ * Returns { byTaskKind, sampleCount } when data is present.
+ *
+ * Shape of byTaskKind:
+ *   {
+ *     [taskKind]: {
+ *       default: { successProbability, capacityImpact, requestCost },
+ *       models: {
+ *         [modelName]: { successProbability, capacityImpact, requestCost }
+ *       }
+ *     }
+ *   }
+ */
+export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
+  byTaskKind: Record<string, {
+    default: { successProbability: number; capacityImpact: number; requestCost: number };
+    models: Record<string, { successProbability: number; capacityImpact: number; requestCost: number }>;
+  }>;
+  sampleCount: number;
+} | null {
+  if (!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) return null;
+
+  type EcoPoint = { successProbability: number; capacityImpact: number; requestCost: number };
+  type Accumulator = { done: number; total: number };
+
+  // Grouped tallies: taskKind → model → { done, total }
+  const byTaskKindModel: Record<string, Record<string, Accumulator>> = {};
+  let usableEntries = 0;
+
+  for (const entry of premiumUsageLog) {
+    if (
+      typeof entry !== "object" || entry === null
+      || typeof (entry as Record<string, unknown>).taskKind !== "string"
+      || typeof (entry as Record<string, unknown>).model !== "string"
+      || typeof (entry as Record<string, unknown>).outcome !== "string"
+    ) continue;
+
+    const { taskKind, model, outcome } = entry as Record<string, string>;
+    if (!taskKind || !model) continue;
+
+    byTaskKindModel[taskKind] ??= {};
+    byTaskKindModel[taskKind][model] ??= { done: 0, total: 0 };
+    byTaskKindModel[taskKind][model].total++;
+    if (outcome === "done") byTaskKindModel[taskKind][model].done++;
+    usableEntries++;
+  }
+
+  if (usableEntries === 0) return null;
+
+  const toEcoPoint = (acc: Accumulator): EcoPoint => {
+    const sp = acc.total > 0 ? acc.done / acc.total : 0;
+    return { successProbability: sp, capacityImpact: sp, requestCost: 1.0 };
+  };
+
+  const resultByTaskKind: Record<string, {
+    default: EcoPoint;
+    models: Record<string, EcoPoint>;
+  }> = {};
+
+  for (const [taskKind, modelMap] of Object.entries(byTaskKindModel)) {
+    const allAcc: Accumulator = { done: 0, total: 0 };
+    const modelPoints: Record<string, EcoPoint> = {};
+
+    for (const [modelName, acc] of Object.entries(modelMap)) {
+      allAcc.done += acc.done;
+      allAcc.total += acc.total;
+      modelPoints[modelName] = toEcoPoint(acc);
+    }
+
+    resultByTaskKind[taskKind] = {
+      default: toEcoPoint(allAcc),
+      models: modelPoints,
+    };
+  }
+
+  return { byTaskKind: resultByTaskKind, sampleCount: usableEntries };
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────

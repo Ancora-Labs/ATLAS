@@ -4304,3 +4304,159 @@ describe("emitPlannerCycleMetrics", () => {
     );
   });
 });
+
+// ── Task 1: Hardened synthesis actionable density ──────────────────────────────
+import {
+  computeSynthesisActionableDensity,
+  sanitizeResearchSynthesisForPersistence,
+} from "../../src/core/research_synthesizer.js";
+
+describe("computeSynthesisActionableDensity — hardened fallback signals", () => {
+  it("counts prometheusReadySummary as actionable", () => {
+    const topics = [{
+      topic: "T1",
+      sources: [{ prometheusReadySummary: "Use typed schemas to gate dispatch." }],
+    }];
+    const result = computeSynthesisActionableDensity(topics);
+    assert.strictEqual(result[0].passed, true);
+    assert.ok(result[0].actionableCount >= 1);
+  });
+
+  it("counts extractedContent as actionable when prometheusReadySummary is absent", () => {
+    const topics = [{
+      topic: "T1",
+      sources: [{ prometheusReadySummary: "", extractedContent: "Raw finding about staged repair pipelines." }],
+    }];
+    const result = computeSynthesisActionableDensity(topics);
+    assert.strictEqual(result[0].passed, true);
+    assert.ok(result[0].actionableCount >= 1);
+  });
+
+  it("counts scoutFindings as actionable when prometheusReadySummary and extractedContent are absent", () => {
+    const topics = [{
+      topic: "T1",
+      sources: [{ prometheusReadySummary: "", extractedContent: "", scoutFindings: "Scout: observed compaction threshold issues." }],
+    }];
+    const result = computeSynthesisActionableDensity(topics);
+    assert.strictEqual(result[0].passed, true);
+    assert.ok(result[0].actionableCount >= 1);
+  });
+
+  it("does not double-count when both extractedContent and scoutFindings are set", () => {
+    const topics = [{
+      topic: "T1",
+      sources: [{
+        prometheusReadySummary: "",
+        extractedContent: "Some content.",
+        scoutFindings: "Some findings.",
+      }],
+    }];
+    const result = computeSynthesisActionableDensity(topics);
+    // extractedContent is the first fallback; scoutFindings is skipped for the same source
+    assert.strictEqual(result[0].actionableCount, 1);
+  });
+
+  it("negative: all fields empty → fails density check", () => {
+    const topics = [{
+      topic: "T1",
+      sources: [{ prometheusReadySummary: "", extractedContent: "", scoutFindings: "" }],
+    }];
+    const result = computeSynthesisActionableDensity(topics);
+    assert.strictEqual(result[0].passed, false);
+    assert.strictEqual(result[0].actionableCount, 0);
+  });
+
+  it("negative: no sources → fails density check", () => {
+    const topics = [{ topic: "T1", sources: [] }];
+    const result = computeSynthesisActionableDensity(topics);
+    assert.strictEqual(result[0].passed, false);
+    assert.strictEqual(result[0].actionableCount, 0);
+  });
+
+  it("netFindings still count toward density independently of sources", () => {
+    const topics = [{
+      topic: "T1",
+      netFindings: ["Finding A", "Finding B"],
+      sources: [],
+    }];
+    const result = computeSynthesisActionableDensity(topics);
+    assert.ok(result[0].actionableCount >= 2);
+    assert.strictEqual(result[0].passed, true);
+  });
+});
+
+describe("sanitizeResearchSynthesisForPersistence — prometheusReadySummary fallback derivation", () => {
+  const makePayload = (sources: Record<string, unknown>[]) => ({
+    success: true,
+    topicCount: 1,
+    topics: [{
+      topic: "T1",
+      freshness: "unknown",
+      confidence: "0.9",
+      sourceCount: sources.length,
+      sourceList: sources.map(s => String(s.url)),
+      netFindings: [],
+      applicableIdeas: [],
+      risks: [],
+      conflictingViews: [],
+      sources,
+    }],
+    crossTopicConnections: [],
+    researchGaps: "",
+    synthesizedAt: new Date().toISOString(),
+    scoutSourceCount: sources.length,
+    model: "test-model",
+  });
+
+  it("preserves existing prometheusReadySummary when set", () => {
+    const synthesis = makePayload([{
+      title: "Source A",
+      url: "https://example.com/a",
+      prometheusReadySummary: "Use typed schemas.",
+      extractedContent: "Raw content.",
+      scoutFindings: "Scout finding.",
+    }]);
+    const result = sanitizeResearchSynthesisForPersistence(synthesis) as any;
+    const src = result.topics[0].sources[0];
+    assert.strictEqual(src.prometheusReadySummary, "Use typed schemas.");
+  });
+
+  it("derives prometheusReadySummary from extractedContent when original is empty", () => {
+    const synthesis = makePayload([{
+      title: "Source A",
+      url: "https://example.com/a",
+      prometheusReadySummary: "",
+      extractedContent: "Staged repair pipelines reduce wasted LLM calls significantly.",
+      scoutFindings: "",
+    }]);
+    const result = sanitizeResearchSynthesisForPersistence(synthesis) as any;
+    const src = result.topics[0].sources[0];
+    assert.ok(src.prometheusReadySummary.length > 0, "prometheusReadySummary must be derived from extractedContent");
+  });
+
+  it("derives prometheusReadySummary from scoutFindings when prometheusReadySummary and extractedContent are both empty", () => {
+    const synthesis = makePayload([{
+      title: "Source A",
+      url: "https://example.com/a",
+      prometheusReadySummary: "",
+      extractedContent: "",
+      scoutFindings: "Scout observed hook intercept patterns in agent configuration.",
+    }]);
+    const result = sanitizeResearchSynthesisForPersistence(synthesis) as any;
+    const src = result.topics[0].sources[0];
+    assert.ok(src.prometheusReadySummary.length > 0, "prometheusReadySummary must be derived from scoutFindings");
+  });
+
+  it("negative: all content fields empty → prometheusReadySummary remains empty string", () => {
+    const synthesis = makePayload([{
+      title: "Source A",
+      url: "https://example.com/a",
+      prometheusReadySummary: "",
+      extractedContent: "",
+      scoutFindings: "",
+    }]);
+    const result = sanitizeResearchSynthesisForPersistence(synthesis) as any;
+    const src = result.topics[0].sources[0];
+    assert.strictEqual(src.prometheusReadySummary, "");
+  });
+});

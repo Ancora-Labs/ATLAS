@@ -3638,6 +3638,7 @@ async function runSingleCycle(config) {
         dispatched: funnelDispatchedCount,
         completed:  allWorkerResults.filter(r => isAnalyticsCompletedWorkerStatus(r.status)).length,
       },
+      premiumUsageLog: await readJson(path.join(stateDir, "premium_usage_log.json"), []),
     });
     await persistCycleAnalytics(config, analyticsRecord);
 

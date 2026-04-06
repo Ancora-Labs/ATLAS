@@ -276,6 +276,12 @@ export function computeSynthesisActionableDensity(topics: Array<Record<string, u
     for (const src of sources) {
       if (typeof src.prometheusReadySummary === "string" && src.prometheusReadySummary.trim().length > 0) {
         count++;
+      } else if (typeof src.extractedContent === "string" && src.extractedContent.trim().length > 0) {
+        // extractedContent is a direct actionable signal when prometheusReadySummary is absent
+        count++;
+      } else if (typeof src.scoutFindings === "string" && src.scoutFindings.trim().length > 0) {
+        // scoutFindings is a raw but actionable signal
+        count++;
       }
     }
 
@@ -414,7 +420,9 @@ export function sanitizeResearchSynthesisForPersistence(payload: {
           knowledgeType: toSingleLine(src.knowledgeType, 64),
           scoutFindings: toSingleLine(src.scoutFindings, MAX_TOPIC_TEXT),
           synthesizerEnrichment: toSingleLine(src.synthesizerEnrichment, MAX_TOPIC_TEXT),
-          prometheusReadySummary: toSingleLine(src.prometheusReadySummary, MAX_TOPIC_TEXT),
+          prometheusReadySummary: toSingleLine(src.prometheusReadySummary, MAX_TOPIC_TEXT)
+            || toSingleLine(src.extractedContent, MAX_TOPIC_TEXT)
+            || toSingleLine(src.scoutFindings, MAX_TOPIC_TEXT),
         };
       })
       .filter((source) => Object.values(source).some(Boolean));

@@ -2089,3 +2089,133 @@ describe("Athena-preassigned batch — specialist utilization telemetry derived"
     assert.ok(Array.isArray(batches) && batches.length === 0, "empty plans must produce empty batches");
   });
 });
+
+// ── Task 2: modelRoutingTelemetry producer pipeline ────────────────────────────
+import { computeCycleAnalytics, buildModelRoutingTelemetry } from "../../src/core/cycle_analytics.js";
+import { rankModelsByTaskKindExpectedValue } from "../../src/core/model_policy.js";
+
+describe("buildModelRoutingTelemetry — producer pipeline", () => {
+  const sampleLog = [
+    { model: "claude-sonnet-4", taskKind: "ci-fix",       outcome: "done",    durationMs: 12000 },
+    { model: "claude-sonnet-4", taskKind: "ci-fix",       outcome: "done",    durationMs: 11000 },
+    { model: "claude-sonnet-4", taskKind: "ci-fix",       outcome: "partial", durationMs: 14000 },
+    { model: "gpt-4o",          taskKind: "ci-fix",       outcome: "error",   durationMs:  8000 },
+    { model: "gpt-4o",          taskKind: "feature",      outcome: "done",    durationMs: 30000 },
+    { model: "gpt-4o",          taskKind: "feature",      outcome: "done",    durationMs: 28000 },
+  ];
+
+  it("returns null for empty log", () => {
+    assert.strictEqual(buildModelRoutingTelemetry([]), null);
+  });
+
+  it("returns null for log with invalid entries only", () => {
+    const bad = [{ bad: "entry" }, null, "string", 42];
+    assert.strictEqual(buildModelRoutingTelemetry(bad as unknown[]), null);
+  });
+
+  it("produces byTaskKind with default and per-model economics", () => {
+    const result = buildModelRoutingTelemetry(sampleLog);
+    assert.ok(result !== null);
+    assert.ok("byTaskKind" in result!);
+    assert.ok("ci-fix" in result!.byTaskKind);
+    assert.ok("feature" in result!.byTaskKind);
+  });
+
+  it("computes correct successProbability for ci-fix/claude-sonnet-4 (2/3 done)", () => {
+    const result = buildModelRoutingTelemetry(sampleLog)!;
+    const sonnet = result.byTaskKind["ci-fix"].models["claude-sonnet-4"];
+    // 2 done out of 3 total
+    assert.strictEqual(Math.round(sonnet.successProbability * 100), 67);
+  });
+
+  it("computes correct successProbability for ci-fix default (2 done out of 4 total across models)", () => {
+    const result = buildModelRoutingTelemetry(sampleLog)!;
+    const def = result.byTaskKind["ci-fix"].default;
+    // claude: 2 done/3, gpt: 0 done/1 → total 2/4 = 0.5
+    assert.strictEqual(def.successProbability, 0.5);
+  });
+
+  it("sampleCount equals number of usable entries", () => {
+    const result = buildModelRoutingTelemetry(sampleLog)!;
+    assert.strictEqual(result.sampleCount, sampleLog.length);
+  });
+
+  it("requestCost is always 1.0", () => {
+    const result = buildModelRoutingTelemetry(sampleLog)!;
+    for (const [, kindData] of Object.entries(result.byTaskKind)) {
+      assert.strictEqual(kindData.default.requestCost, 1.0);
+      for (const [, modelData] of Object.entries(kindData.models)) {
+        assert.strictEqual(modelData.requestCost, 1.0);
+      }
+    }
+  });
+
+  it("negative: missing taskKind or model fields are skipped without throwing", () => {
+    const mixed = [
+      ...sampleLog,
+      { model: "x", outcome: "done" }, // no taskKind
+      { taskKind: "ci-fix", outcome: "done" }, // no model
+    ];
+    // Should not throw and still produce a result from the valid entries
+    const result = buildModelRoutingTelemetry(mixed as unknown[]);
+    assert.ok(result !== null);
+    assert.strictEqual(result!.sampleCount, sampleLog.length); // malformed entries excluded
+  });
+});
+
+describe("computeCycleAnalytics — modelRoutingTelemetry integration", () => {
+  const sampleLog = [
+    { model: "claude-sonnet-4", taskKind: "ci-fix", outcome: "done",    durationMs: 12000 },
+    { model: "claude-sonnet-4", taskKind: "ci-fix", outcome: "blocked", durationMs: 11000 },
+    { model: "gpt-4o",          taskKind: "feature", outcome: "done",   durationMs: 30000 },
+  ];
+
+  it("includes modelRoutingTelemetry in analytics record when premiumUsageLog provided", () => {
+    const config = {};
+    const record: any = computeCycleAnalytics(config, { premiumUsageLog: sampleLog });
+    assert.ok(record.modelRoutingTelemetry !== null, "modelRoutingTelemetry must be present");
+    assert.ok("byTaskKind" in record.modelRoutingTelemetry);
+  });
+
+  it("modelRoutingTelemetry is null when premiumUsageLog is empty", () => {
+    const config = {};
+    const record: any = computeCycleAnalytics(config, { premiumUsageLog: [] });
+    assert.strictEqual(record.modelRoutingTelemetry, null);
+  });
+
+  it("modelRoutingTelemetry is null when premiumUsageLog is omitted", () => {
+    const config = {};
+    const record: any = computeCycleAnalytics(config, {});
+    assert.strictEqual(record.modelRoutingTelemetry, null);
+  });
+});
+
+describe("rankModelsByTaskKindExpectedValue — usedTelemetry flag from real telemetry", () => {
+  const sampleLog = [
+    { model: "claude-sonnet-4", taskKind: "ci-fix", outcome: "done",    durationMs: 12000 },
+    { model: "claude-sonnet-4", taskKind: "ci-fix", outcome: "done",    durationMs: 11000 },
+    { model: "gpt-4o",          taskKind: "ci-fix", outcome: "error",   durationMs:  8000 },
+  ];
+
+  it("returns usedTelemetry=true when real byTaskKind data is provided", () => {
+    const telemetry = buildModelRoutingTelemetry(sampleLog)!;
+    const cycleAnalytics = { modelRoutingTelemetry: telemetry };
+    const result = rankModelsByTaskKindExpectedValue(
+      "ci-fix",
+      ["claude-sonnet-4", "gpt-4o"],
+      cycleAnalytics,
+    );
+    assert.strictEqual(result.usedTelemetry, true);
+    assert.strictEqual(result.reason, "expected-value(taskKind)");
+  });
+
+  it("negative: returns usedTelemetry=false when cycleAnalytics is null", () => {
+    const result = rankModelsByTaskKindExpectedValue(
+      "ci-fix",
+      ["claude-sonnet-4", "gpt-4o"],
+      null,
+    );
+    assert.strictEqual(result.usedTelemetry, false);
+    assert.strictEqual(result.reason, "telemetry-missing");
+  });
+});
