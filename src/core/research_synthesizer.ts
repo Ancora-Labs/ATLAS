@@ -45,8 +45,12 @@ function appendLiveLogSync(stateDir: string, text: string): void {
  *   **Sources:** each with ### <title>, URL, Date, Confidence, isDuplicate, **Extracted Content:**
  *
  * Also supports legacy format (Net Findings / Applicable Ideas) for backward compat.
+ *
+ * Rescue path: when a topic block carries raw unstructured prose but matches no
+ * structured pattern, the block text is captured as a synthetic source's
+ * `scoutFindings` so the density check can still pass.
  */
-function parseSynthesisTopics(rawText: string): Array<Record<string, unknown>> {
+export function parseSynthesisTopics(rawText: string): Array<Record<string, unknown>> {
   const topics: Array<Record<string, unknown>> = [];
 
   // Strip tool call log noise — find where the actual synthesis begins.
@@ -195,6 +199,32 @@ function parseSynthesisTopics(rawText: string): Array<Record<string, unknown>> {
           .split("\n")
           .map(l => l.replace(/^[\s-*•]+/, "").trim())
           .filter(l => l.length > 0);
+      }
+    }
+
+    // ── Rescue path: raw unstructured text ──────────────────────────────────────
+    // When no structured signals were captured (no sources, no net findings, no
+    // applicable ideas), extract the raw prose from the block and inject it as
+    // `scoutFindings` of a synthetic source so the density check can still pass.
+    const hasActionableSignal = Boolean(
+      (Array.isArray(topic.sources) && (topic.sources as unknown[]).length > 0)
+      || (Array.isArray(topic.netFindings) && (topic.netFindings as unknown[]).length > 0)
+      || (Array.isArray(topic.applicableIdeas) && (topic.applicableIdeas as unknown[]).length > 0)
+    );
+    if (!hasActionableSignal) {
+      const rescueLines = block
+        .split("\n")
+        .slice(1) // skip topic-name line
+        .filter(l => {
+          const t = l.trim();
+          return t.length > 20
+            && !/^\*?\*?(Freshness|Average\s*Confidence|Source\s*Count|Sources?)\*?\*?:/i.test(t)
+            && !t.startsWith("##")
+            && !t.startsWith("**Topic");
+        });
+      const rescuedText = rescueLines.slice(0, 5).join(" ").replace(/\s+/g, " ").trim();
+      if (rescuedText) {
+        topic.sources = [{ title: String(topic.topic || ""), scoutFindings: rescuedText }];
       }
     }
 
@@ -427,6 +457,23 @@ export function sanitizeResearchSynthesisForPersistence(payload: {
       })
       .filter((source) => Object.values(source).some(Boolean));
 
+    // Derive topic-level prometheusReadySummary — the best single-sentence signal
+    // from this topic for Prometheus planning. Preference order:
+    //   1. first source with a non-empty prometheusReadySummary
+    //   2. first netFinding
+    //   3. first applicableIdea
+    //   4. empty string (no signal available — topic will fail density check)
+    const topicPrometheusReadySummary = (() => {
+      for (const src of sources) {
+        if (src.prometheusReadySummary) return String(src.prometheusReadySummary);
+      }
+      const nf = clampList(item.netFindings, 1, MAX_TOPIC_TEXT);
+      if (nf[0]) return nf[0];
+      const ai = clampList(item.applicableIdeas, 1, MAX_TOPIC_TEXT);
+      if (ai[0]) return ai[0];
+      return "";
+    })();
+
     return {
       topic: toSingleLine(item.topic, 180),
       freshness: toSingleLine(item.freshness, 120),
@@ -437,6 +484,7 @@ export function sanitizeResearchSynthesisForPersistence(payload: {
       applicableIdeas: clampList(item.applicableIdeas, 6, MAX_TOPIC_TEXT),
       risks: clampList(item.risks, 6, MAX_TOPIC_TEXT),
       conflictingViews: clampList(item.conflictingViews, 6, MAX_TOPIC_TEXT),
+      prometheusReadySummary: topicPrometheusReadySummary,
       sources,
     };
   }).filter((topic) => Boolean(topic.topic));

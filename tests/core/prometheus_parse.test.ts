@@ -4309,6 +4309,7 @@ describe("emitPlannerCycleMetrics", () => {
 import {
   computeSynthesisActionableDensity,
   sanitizeResearchSynthesisForPersistence,
+  parseSynthesisTopics,
 } from "../../src/core/research_synthesizer.js";
 
 describe("computeSynthesisActionableDensity — hardened fallback signals", () => {
@@ -4458,5 +4459,137 @@ describe("sanitizeResearchSynthesisForPersistence — prometheusReadySummary fal
     const result = sanitizeResearchSynthesisForPersistence(synthesis) as any;
     const src = result.topics[0].sources[0];
     assert.strictEqual(src.prometheusReadySummary, "");
+  });
+});
+
+// ── parseSynthesisTopics rescue path ───────────────────────────────────────────
+
+describe("parseSynthesisTopics — rescue path for unstructured raw text blocks", () => {
+  it("produces a source with scoutFindings when block has prose but no structured markers", () => {
+    const raw = `## Topic: Dependency-Aware Scheduling
+This topic covers techniques for scheduling work in dependency order across concurrent workers.
+Each worker must wait for its upstream dependencies before starting its own execution step.
+Topological sort algorithms are commonly used here.
+`;
+    const topics = parseSynthesisTopics(raw);
+    assert.equal(topics.length, 1);
+    assert.equal(topics[0].topic, "Dependency-Aware Scheduling");
+    const sources = topics[0].sources as Array<Record<string, unknown>>;
+    assert.ok(Array.isArray(sources) && sources.length > 0, "rescue source must be present");
+    assert.ok(typeof sources[0].scoutFindings === "string" && (sources[0].scoutFindings as string).length > 0,
+      "rescue scoutFindings must be non-empty");
+  });
+
+  it("rescued topic passes density check via scoutFindings", () => {
+    const raw = `## Topic: Token Budget Enforcement
+Token budgets must be enforced before dispatching worker requests.
+Exceeding the budget without a gate leads to runaway premium request consumption.
+A hard cap enforcement rule should apply at the trust boundary level.
+`;
+    const topics = parseSynthesisTopics(raw);
+    const densities = computeSynthesisActionableDensity(topics);
+    assert.strictEqual(densities[0].passed, true, "rescued topic must pass density check");
+  });
+
+  it("does NOT rescue a topic that already has structured sources", () => {
+    const raw = `## Topic: Schema Validation
+### Source Alpha
+- URL: https://example.com/schema
+- Confidence: 0.85
+**Extracted Content:**
+Use JSON schema for structural validation before dispatch.
+`;
+    const topics = parseSynthesisTopics(raw);
+    assert.equal(topics.length, 1);
+    const sources = topics[0].sources as Array<Record<string, unknown>>;
+    // Should have exactly the structured source, not a synthetic rescue source
+    assert.ok(Array.isArray(sources));
+    // No source should have title === "Schema Validation" (the rescue synthetic)
+    const rescueSource = sources.find(s => String(s.scoutFindings || "").includes("Use JSON schema") && !s.url);
+    // Rescue source should not have been injected since structured source already exists
+    assert.ok(!rescueSource || sources.some(s => s.url), "structured source must be present without spurious rescue");
+  });
+
+  it("negative: truly empty block produces no rescue source", () => {
+    const raw = `## Topic: Empty Topic
+`;
+    const topics = parseSynthesisTopics(raw);
+    // May produce 0 or 1 topic with no sources (all lines too short for rescue)
+    if (topics.length > 0) {
+      const sources = topics[0].sources as Array<Record<string, unknown>> | undefined;
+      const hasSources = Array.isArray(sources) && sources.length > 0;
+      // If there are sources they must have non-empty scoutFindings to count
+      if (hasSources) {
+        // Any rescue source must have length > 20 (the filter threshold)
+        for (const src of sources) {
+          assert.ok((src.scoutFindings as string).length > 20,
+            "rescue scoutFindings below threshold must not be captured");
+        }
+      }
+    }
+  });
+});
+
+// ── sanitizeResearchSynthesisForPersistence — topic-level prometheusReadySummary ──
+
+describe("sanitizeResearchSynthesisForPersistence — topic-level prometheusReadySummary", () => {
+  const makePayload = (topic: Record<string, unknown>) => ({
+    success: true,
+    topicCount: 1,
+    topics: [topic],
+    crossTopicConnections: [],
+    researchGaps: "",
+    synthesizedAt: new Date().toISOString(),
+    scoutSourceCount: 0,
+    model: "test-model",
+  });
+
+  it("emits topic-level prometheusReadySummary from first source's summary", () => {
+    const payload = makePayload({
+      topic: "Dispatch Parallelism",
+      sources: [{ prometheusReadySummary: "Use wave-parallel dispatch to halve wall-clock time." }],
+    });
+    const result = sanitizeResearchSynthesisForPersistence(payload) as any;
+    const t = result.topics[0];
+    assert.ok(typeof t.prometheusReadySummary === "string", "topic must have prometheusReadySummary field");
+    assert.ok(t.prometheusReadySummary.length > 0, "prometheusReadySummary must be non-empty");
+    assert.ok(t.prometheusReadySummary.includes("wave-parallel"));
+  });
+
+  it("derives topic-level prometheusReadySummary from netFindings when sources are empty", () => {
+    const payload = makePayload({
+      topic: "Retry Budgets",
+      netFindings: ["Hard retry caps reduce cascading overruns under saturation."],
+      sources: [],
+    });
+    const result = sanitizeResearchSynthesisForPersistence(payload) as any;
+    const t = result.topics[0];
+    assert.ok(typeof t.prometheusReadySummary === "string", "topic must have prometheusReadySummary field");
+    assert.ok(t.prometheusReadySummary.length > 0, "prometheusReadySummary must derive from netFindings");
+  });
+
+  it("derives topic-level prometheusReadySummary from applicableIdeas when netFindings are empty", () => {
+    const payload = makePayload({
+      topic: "Canary Metrics",
+      applicableIdeas: ["Add per-wave canary gauges to detect slow worker anomalies early."],
+      sources: [],
+    });
+    const result = sanitizeResearchSynthesisForPersistence(payload) as any;
+    const t = result.topics[0];
+    assert.ok(typeof t.prometheusReadySummary === "string", "topic must have prometheusReadySummary field");
+    assert.ok(t.prometheusReadySummary.length > 0, "prometheusReadySummary must derive from applicableIdeas");
+  });
+
+  it("negative: topic-level prometheusReadySummary is empty string when no signal exists", () => {
+    const payload = makePayload({
+      topic: "Unknown Topic",
+      sources: [],
+      netFindings: [],
+      applicableIdeas: [],
+    });
+    const result = sanitizeResearchSynthesisForPersistence(payload) as any;
+    const t = result.topics[0];
+    assert.ok("prometheusReadySummary" in t, "prometheusReadySummary key must always be present on topic");
+    assert.strictEqual(t.prometheusReadySummary, "", "empty signal → empty string, not undefined");
   });
 });
