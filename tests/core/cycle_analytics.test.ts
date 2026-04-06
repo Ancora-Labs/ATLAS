@@ -1553,12 +1553,12 @@ describe("interventionImpactCounters in cycle analytics record", () => {
     assert.equal(record.interventionImpactCounters?.failureClassificationsApplied, 3);
   });
 
-  it("surfaces rerouteReasonsApplied from optimizerUsage", () => {
+  it("surfaces rerouteCostPenaltiesApplied from optimizerUsage", () => {
     const record = computeCycleAnalytics(makeConfig(), {
       phase: CYCLE_PHASE.COMPLETED,
-      optimizerUsage: { rerouteReasonsApplied: 2 },
+      optimizerUsage: { rerouteCostPenaltiesApplied: 2 },
     });
-    assert.equal(record.interventionImpactCounters?.rerouteReasonsApplied, 2);
+    assert.equal(record.interventionImpactCounters?.rerouteCostPenaltiesApplied, 2);
   });
 
   it("returns null when optimizerUsage has no tracked counter fields", () => {
