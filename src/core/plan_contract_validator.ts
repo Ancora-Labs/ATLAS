@@ -211,7 +211,51 @@ export function buildThinPacketRejectionReason(
   );
 }
 
-/** Canonical 10 planning dimensions used by Prometheus/critic leverage scoring. */
+/** Canonical packet scope lane names based on target-file count. */
+export const PACKET_LANE = Object.freeze({
+  /** 1–2 files: typical single-module fix or targeted feature. */
+  SMALL:   "small",
+  /** 3–4 files: cross-module feature or refactor. */
+  MEDIUM:  "medium",
+  /** 5+ files: multi-module evolution (system-learning: Prometheus underestimates token budget here). */
+  LARGE:   "large",
+  /** Fallback when file count is unknown. */
+  DEFAULT: "default",
+} as const);
+
+/**
+ * Per-lane minimum packet-density thresholds.
+ *
+ * System-learning: Prometheus consistently declares ~2 k tokens for plans covering
+ * 5+ files.  The LARGE lane enforces a hard 8 k floor.
+ */
+export const LANE_PACKET_SIZE_DEFAULTS: Record<string, PacketDensityThresholds> = Object.freeze({
+  [PACKET_LANE.SMALL]:   { minTargetFiles: 1, minAcceptanceCriteria: 1, minTaskChars: 20, minExecutionTokens: 2000 },
+  [PACKET_LANE.MEDIUM]:  { minTargetFiles: 3, minAcceptanceCriteria: 2, minTaskChars: 30, minExecutionTokens: 4000 },
+  [PACKET_LANE.LARGE]:   { minTargetFiles: 5, minAcceptanceCriteria: 3, minTaskChars: 40, minExecutionTokens: 8000 },
+  [PACKET_LANE.DEFAULT]: { minTargetFiles: 1, minAcceptanceCriteria: 1, minTaskChars: 20, minExecutionTokens: 2000 },
+});
+
+/**
+ * Classify a packet into its scope lane based on declared target-file count.
+ */
+export function classifyPacketLane(targetFileCount: number): string {
+  if (!Number.isFinite(targetFileCount) || targetFileCount < 0) return PACKET_LANE.DEFAULT;
+  if (targetFileCount >= 5) return PACKET_LANE.LARGE;
+  if (targetFileCount >= 3) return PACKET_LANE.MEDIUM;
+  return PACKET_LANE.SMALL;
+}
+
+/**
+ * Return the density thresholds for a packet based on its target-file count.
+ * Used by Prometheus to enforce lane-appropriate token floors at thin-packet admission.
+ */
+export function getPacketThresholdsForLane(targetFileCount: number): PacketDensityThresholds {
+  const lane = classifyPacketLane(targetFileCount);
+  return LANE_PACKET_SIZE_DEFAULTS[lane];
+}
+
+
 export const EQUAL_DIMENSION_SET = Object.freeze([
   "architecture",
   "speed",
@@ -402,11 +446,13 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
     });
   } else if (isAmbiguousTask(String(plan.task))) {
     // Only flag ambiguity when the task passes the length check (avoids duplicate errors).
+    // Hard admission: ambiguous task descriptions block dispatch — they cannot be
+    // deterministically evaluated or routed to the correct worker.
     violations.push({
       field: "task",
       message: `Task description is too generic/ambiguous: "${String(plan.task).trim().slice(0, 80)}". ` +
         "Specify a concrete artifact, system component, or measurable outcome.",
-      severity: PLAN_VIOLATION_SEVERITY.WARNING,
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
       code: PACKET_VIOLATION_CODE.TASK_AMBIGUOUS,
     });
   }
@@ -466,12 +512,13 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
       code: PACKET_VIOLATION_CODE.MISSING_ACCEPTANCE_CRITERIA,
     });
   } else if (plan.acceptance_criteria.length > MAX_ACCEPTANCE_CRITERIA_PER_TASK) {
-    // Oversized AC list — the task is compound and must be decomposed.
+    // Oversized AC list — hard admission: compound tasks cannot be routed, budgeted,
+    // or reliably verified. Must be decomposed into independently-verifiable work items.
     violations.push({
       field: "acceptance_criteria",
       message: `Task has ${plan.acceptance_criteria.length} acceptance criteria (max ${MAX_ACCEPTANCE_CRITERIA_PER_TASK}). ` +
         "Oversized tasks must be decomposed into smaller, independently-verifiable work items.",
-      severity: PLAN_VIOLATION_SEVERITY.WARNING,
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
       code: PACKET_VIOLATION_CODE.TASK_TOO_LARGE,
     });
   }
@@ -483,11 +530,13 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
       ? plan.target_files
       : null;
   if (inScopeFiles !== null && inScopeFiles.length > MAX_FILES_IN_SCOPE_PER_TASK) {
+    // Hard admission: tasks spanning more than MAX_FILES_IN_SCOPE_PER_TASK files
+    // cannot be reliably verified or budgeted — decompose into focused work items.
     violations.push({
       field: "filesInScope",
       message: `Task declares ${inScopeFiles.length} files in scope (max ${MAX_FILES_IN_SCOPE_PER_TASK}). ` +
         "Tasks with broad file coverage are oversized — decompose into focused work items.",
-      severity: PLAN_VIOLATION_SEVERITY.WARNING,
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
       code: PACKET_VIOLATION_CODE.TASK_TOO_LARGE,
     });
   }
@@ -656,6 +705,34 @@ export function isPacketQuarantined(packet: any): boolean {
     return packet._provenance.confidence < QUARANTINE_CONFIDENCE_THRESHOLD;
   }
   return false;
+}
+
+/**
+ * Filter a plans array into dispatchable and quarantined sets using
+ * `isPacketQuarantined` as the predicate.
+ *
+ * Complements `quarantineLowConfidencePackets` (which attaches provenance and
+ * partitions by confidence) by filtering plans that were already tagged
+ * `_quarantined: true` by any upstream mechanism (e.g. stale-diagnostics gate,
+ * explicit provenance attachment).
+ *
+ * @param plans — plan objects to partition
+ * @returns { dispatchable: any[], quarantined: any[] }
+ */
+export function filterQuarantinedPlans(
+  plans: any[],
+): { dispatchable: any[]; quarantined: any[] } {
+  if (!Array.isArray(plans)) return { dispatchable: [], quarantined: [] };
+  const dispatchable: any[] = [];
+  const quarantined: any[] = [];
+  for (const plan of plans) {
+    if (isPacketQuarantined(plan)) {
+      quarantined.push(plan);
+    } else {
+      dispatchable.push(plan);
+    }
+  }
+  return { dispatchable, quarantined };
 }
 
 // ── Output fidelity gate ──────────────────────────────────────────────────────
@@ -846,4 +923,47 @@ export function applyTokenFloorToEstimate(
     return Math.max(estimate, policy.minTokensPerPlan);
   }
   return estimate;
+}
+
+/**
+ * Hard admission check: validate that per-role plan groups do not exceed the
+ * actionable-steps cap before dispatch.
+ *
+ * Plans are grouped by role. If any role group contains more plans than the
+ * configured cap, dispatch must be blocked with a deterministic reason — the
+ * caller must decompose the work rather than relying on silent auto-splitting.
+ *
+ * @param plans            — all plans queued for dispatch
+ * @param maxStepsPerGroup — per-role cap (default: MAX_ACTIONABLE_STEPS_PER_PACKET)
+ * @returns { blocked, reason, oversizedRoles }
+ */
+export function validatePacketBatchAdmission(
+  plans: any[],
+  maxStepsPerGroup: number = MAX_ACTIONABLE_STEPS_PER_PACKET,
+): { blocked: boolean; reason: string | null; oversizedRoles: string[] } {
+  if (!Array.isArray(plans) || plans.length === 0) {
+    return { blocked: false, reason: null, oversizedRoles: [] };
+  }
+
+  const cap = Math.max(1, Math.floor(maxStepsPerGroup));
+
+  const roleGroups = new Map<string, number>();
+  for (const plan of plans) {
+    const role = String(plan?.role || "unknown").trim().toLowerCase();
+    roleGroups.set(role, (roleGroups.get(role) ?? 0) + 1);
+  }
+
+  const oversizedRoles: string[] = [];
+  for (const [role, count] of roleGroups) {
+    if (count > cap) {
+      oversizedRoles.push(`${role}(${count}>${cap})`);
+    }
+  }
+
+  if (oversizedRoles.length === 0) {
+    return { blocked: false, reason: null, oversizedRoles: [] };
+  }
+
+  const reason = `${PACKET_OVERSIZE_REASON}: role group(s) [${oversizedRoles.join(", ")}] exceed per-role cap of ${cap} — decompose before dispatch`;
+  return { blocked: true, reason, oversizedRoles };
 }

@@ -18,6 +18,7 @@ import {
   autosplitOversizedPacket,
   checkPacketSizeCap,
 } from "../../src/core/worker_batch_planner.js";
+import { validatePacketBatchAdmission } from "../../src/core/plan_contract_validator.js";
 
 function buildPlan(index) {
   return {
@@ -1554,6 +1555,80 @@ describe("checkPacketSizeCap", () => {
 
   it("returns null for non-array input", () => {
     assert.equal(checkPacketSizeCap(null as any), null);
+  });
+});
+
+// ── validatePacketBatchAdmission ──────────────────────────────────────────────
+
+describe("validatePacketBatchAdmission", () => {
+  it("returns blocked=false for empty input", () => {
+    const result = validatePacketBatchAdmission([], 3);
+    assert.equal(result.blocked, false);
+    assert.equal(result.reason, null);
+    assert.deepEqual(result.oversizedRoles, []);
+  });
+
+  it("returns blocked=false when all role groups are within the cap", () => {
+    const plans = [
+      { role: "Evolution Worker", task: "A" },
+      { role: "Evolution Worker", task: "B" },
+      { role: "Infrastructure Worker", task: "C" },
+    ];
+    const result = validatePacketBatchAdmission(plans, 2);
+    assert.equal(result.blocked, false);
+  });
+
+  it("returns blocked=true when a role group exceeds the cap", () => {
+    const plans = [
+      { role: "Evolution Worker", task: "A" },
+      { role: "Evolution Worker", task: "B" },
+      { role: "Evolution Worker", task: "C" },
+    ];
+    const result = validatePacketBatchAdmission(plans, 2);
+    assert.equal(result.blocked, true);
+    assert.ok(typeof result.reason === "string" && result.reason.length > 0);
+    assert.ok(result.oversizedRoles.length > 0, "oversizedRoles must be non-empty");
+    assert.ok(result.reason.includes("packet_exceeds_actionable_steps_cap"));
+  });
+
+  it("includes role name and counts in the reason string", () => {
+    const plans = [
+      { role: "CI Worker", task: "A" },
+      { role: "CI Worker", task: "B" },
+      { role: "CI Worker", task: "C" },
+    ];
+    const result = validatePacketBatchAdmission(plans, 2);
+    assert.ok(result.reason?.includes("ci worker"), `reason must contain normalized role name; got: ${result.reason}`);
+    assert.ok(result.reason?.includes("3>2"), `reason must contain count and cap; got: ${result.reason}`);
+  });
+
+  it("uses MAX_ACTIONABLE_STEPS_PER_PACKET as default cap", () => {
+    // MAX_ACTIONABLE_STEPS_PER_PACKET = 3; 4 plans with same role triggers violation
+    const plans = [
+      { role: "Evo", task: "A" },
+      { role: "Evo", task: "B" },
+      { role: "Evo", task: "C" },
+      { role: "Evo", task: "D" },
+    ];
+    const result = validatePacketBatchAdmission(plans);
+    assert.equal(result.blocked, true, "must block with default cap of 3 when 4 plans share a role");
+  });
+
+  it("NEGATIVE PATH: multiple role groups each below cap is not blocked", () => {
+    const plans = [
+      { role: "Worker A", task: "1" },
+      { role: "Worker A", task: "2" },
+      { role: "Worker B", task: "3" },
+      { role: "Worker B", task: "4" },
+      { role: "Worker C", task: "5" },
+    ];
+    const result = validatePacketBatchAdmission(plans, 3);
+    assert.equal(result.blocked, false, "2+2+1 plans across 3 roles must pass a cap of 3");
+  });
+
+  it("returns blocked=false for null input", () => {
+    const result = validatePacketBatchAdmission(null as any, 3);
+    assert.equal(result.blocked, false);
   });
 });
 

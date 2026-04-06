@@ -1537,6 +1537,88 @@ describe("dependency readiness gate — pre-dispatch governance gate integration
   });
 });
 
+// ── Oversized packet hard admission gate ──────────────────────────────────────
+
+describe("oversized packet hard admission gate — evaluatePreDispatchGovernanceGate (Gate 12)", () => {
+  let tmpDir;
+  let config;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-oversize-gate-"));
+    config = {
+      paths: { stateDir: tmpDir },
+      env: { copilotCliCommand: "__missing__", targetRepo: "CanerDoqdu/Box" },
+      systemGuardian: { enabled: false },
+      canary:          { enabled: false },
+      planner: { maxActionableStepsPerPacket: 2 },
+    };
+    await fs.writeFile(
+      path.join(tmpDir, "policy.json"),
+      JSON.stringify({ blockedCommands: [] }, null, 2),
+      "utf8"
+    );
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("blocks dispatch when a role group exceeds maxActionableStepsPerPacket", async () => {
+    const plans = [
+      { role: "Evolution Worker", task: "Task A", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
+      { role: "Evolution Worker", task: "Task B", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
+      { role: "Evolution Worker", task: "Task C", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(config, plans, "oversize-gate-block");
+    assert.equal(result.blocked, true, "dispatch must be blocked when role group exceeds cap");
+    assert.ok(
+      result.reason?.startsWith(BLOCK_REASON.OVERSIZED_PACKET),
+      `reason must start with OVERSIZED_PACKET prefix; got: ${result.reason}`
+    );
+    assert.equal(result.gateIndex, 12, "gateIndex must be 12 (OVERSIZED_PACKET)");
+  });
+
+  it("allows dispatch when all role groups are within the cap", async () => {
+    const plans = [
+      { role: "Evolution Worker", task: "Task A", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
+      { role: "Evolution Worker", task: "Task B", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
+      { role: "Infrastructure Worker", task: "Task C", verification_commands: ["npm run build"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(config, plans, "oversize-gate-pass");
+    assert.equal(result.blocked, false, "dispatch must not be blocked when all role groups are within cap");
+  });
+
+  it("NEGATIVE PATH: gate does not fire when maxActionableStepsPerPacket is not configured", async () => {
+    const configNoCapLimit = {
+      paths: { stateDir: tmpDir },
+      env: { copilotCliCommand: "__missing__", targetRepo: "CanerDoqdu/Box" },
+      systemGuardian: { enabled: false },
+      canary:          { enabled: false },
+      // no planner.maxActionableStepsPerPacket
+    };
+    const plans = [
+      { role: "Evolution Worker", task: "Task A", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
+      { role: "Evolution Worker", task: "Task B", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
+      { role: "Evolution Worker", task: "Task C", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
+      { role: "Evolution Worker", task: "Task D", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(configNoCapLimit, plans, "oversize-gate-no-config");
+    assert.equal(result.blocked, false, "gate must not fire when maxActionableStepsPerPacket is not configured (opt-in)");
+  });
+
+  it("blocks with deterministic OVERSIZED_PACKET reason containing role and count", async () => {
+    const plans = [
+      { role: "CI Worker", task: "Fix test A", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
+      { role: "CI Worker", task: "Fix test B", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
+      { role: "CI Worker", task: "Fix test C", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(config, plans, "oversize-gate-reason");
+    assert.equal(result.blocked, true);
+    assert.ok(result.reason?.includes("ci worker"), `reason must contain role name; got: ${result.reason}`);
+    assert.ok(result.reason?.includes("3>2"), `reason must contain count and cap; got: ${result.reason}`);
+  });
+});
+
 // ── Terminology drift prevention ──────────────────────────────────────────────
 //
 // These tests pin the exact canonical terminology used across:
@@ -1633,6 +1715,7 @@ describe("pipeline progress — terminology drift prevention (stage IDs)", () =>
       DEPENDENCY_READINESS_INCOMPLETE:"dependency_readiness_incomplete",
       ROLLING_YIELD_THROTTLE:         "rolling_yield_throttle",
       SPECIALIZATION_ADMISSION_GATE:  "specialization_admission_gate_failed",
+      OVERSIZED_PACKET:               "packet_exceeds_actionable_steps_cap",
     };
 
     for (const [key, expectedValue] of Object.entries(CANONICAL_BLOCK_REASONS)) {

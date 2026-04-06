@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { critiquePlan, runCriticPass, CRITIC_DIMENSION, CRITIC_PASS_THRESHOLD, evaluateACRichness, repairPlan, dualPassCriticRepair, AC_RICHNESS_THRESHOLD } from "../../src/core/plan_critic.js";
+import { MAX_ACCEPTANCE_CRITERIA_PER_TASK, MAX_FILES_IN_SCOPE_PER_TASK } from "../../src/core/plan_contract_validator.js";
 
 describe("plan_critic", () => {
   describe("critiquePlan", () => {
@@ -250,6 +251,62 @@ describe("plan_critic", () => {
     it("is a positive number", () => {
       assert.ok(AC_RICHNESS_THRESHOLD > 0);
       assert.ok(AC_RICHNESS_THRESHOLD <= 1);
+    });
+  });
+
+  describe("PACKET_SIZE_COMPLIANT dimension (hard admission for oversized packets)", () => {
+    it("scores 1.0 for a plan within AC and file caps", () => {
+      const plan = {
+        task: "Add validation to src/core/config.js",
+        verification: "npm test passes",
+        acceptance_criteria: Array.from({ length: 5 }, (_, i) => `AC ${i}`),
+        target_files: ["src/core/config.js", "src/core/other.js"],
+      };
+      const result = critiquePlan(plan);
+      assert.equal(result.dimensions[CRITIC_DIMENSION.PACKET_SIZE_COMPLIANT], 1.0);
+    });
+
+    it("scores 0.0 and flags issue when AC count exceeds MAX_ACCEPTANCE_CRITERIA_PER_TASK", () => {
+      const plan = {
+        task: "Implement deterministic parser contract for src/core/prometheus.ts output",
+        verification: "npm test passes",
+        acceptance_criteria: Array.from({ length: 11 }, (_, i) => `Criterion ${i + 1}`),
+        target_files: ["src/core/prometheus.ts"],
+      };
+      const result = critiquePlan(plan);
+      assert.equal(result.dimensions[CRITIC_DIMENSION.PACKET_SIZE_COMPLIANT], 0.0,
+        "oversized AC must score 0 on PACKET_SIZE_COMPLIANT");
+      assert.ok(result.issues.some(i => /oversized packet/i.test(i)),
+        "must flag oversized packet in issues");
+    });
+
+    it("scores 0.0 when target_files exceeds MAX_FILES_IN_SCOPE_PER_TASK", () => {
+      const plan = {
+        task: "Implement deterministic parser contract for src/core/prometheus.ts output",
+        verification: "npm test passes",
+        acceptance_criteria: ["AC 1"],
+        target_files: Array.from({ length: 31 }, (_, i) => `src/file${i}.ts`),
+      };
+      const result = critiquePlan(plan);
+      assert.equal(result.dimensions[CRITIC_DIMENSION.PACKET_SIZE_COMPLIANT], 0.0,
+        "oversized file count must score 0 on PACKET_SIZE_COMPLIANT");
+    });
+
+    it("negative path: PACKET_SIZE_COMPLIANT is 1.0 when filesInScope is exactly at cap", () => {
+      const plan = {
+        task: "Implement deterministic parser contract for src/core/prometheus.ts output",
+        verification: "npm test passes",
+        acceptance_criteria: Array.from({ length: MAX_ACCEPTANCE_CRITERIA_PER_TASK }, (_, i) => `Criterion ${i}`),
+        target_files: Array.from({ length: MAX_FILES_IN_SCOPE_PER_TASK }, (_, i) => `src/file${i}.ts`),
+      };
+      const result = critiquePlan(plan);
+      assert.equal(result.dimensions[CRITIC_DIMENSION.PACKET_SIZE_COMPLIANT], 1.0,
+        "exactly-at-cap values must not trigger PACKET_SIZE_COMPLIANT=0");
+    });
+
+    it("PACKET_SIZE_COMPLIANT is in CRITIC_DIMENSION export", () => {
+      assert.equal(typeof CRITIC_DIMENSION.PACKET_SIZE_COMPLIANT, "string");
+      assert.equal(CRITIC_DIMENSION.PACKET_SIZE_COMPLIANT, "PACKET_SIZE_COMPLIANT");
     });
   });
 });

@@ -19,6 +19,10 @@ import {
   computePacketDensityMetrics,
   isThinPacketForAdmission,
   buildThinPacketRejectionReason,
+  PACKET_LANE,
+  LANE_PACKET_SIZE_DEFAULTS,
+  classifyPacketLane,
+  getPacketThresholdsForLane,
 } from "../../src/core/plan_contract_validator.js";
 import { checkForbiddenCommands } from "../../src/core/verification_command_registry.js";
 
@@ -1161,31 +1165,32 @@ describe("validatePlanContract — decomposition caps and ambiguity", () => {
     );
   });
 
-  it("emits TASK_TOO_LARGE (WARNING) when acceptance_criteria exceeds the cap", () => {
+  it("emits TASK_TOO_LARGE (CRITICAL) when acceptance_criteria exceeds the cap", () => {
     const ac = Array.from({ length: MAX_ACCEPTANCE_CRITERIA_PER_TASK + 1 }, (_, i) => `Criterion ${i + 1}`);
     const result = validatePlanContract(baseValidPlan({ acceptance_criteria: ac }));
     const v = result.violations.find(x => x.code === PACKET_VIOLATION_CODE.TASK_TOO_LARGE && x.field === "acceptance_criteria");
     assert.ok(v, "must have TASK_TOO_LARGE violation on acceptance_criteria");
-    assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.WARNING);
+    assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.CRITICAL);
   });
 
-  it("plan remains valid (no CRITICAL) when only TASK_TOO_LARGE is triggered via oversized AC", () => {
+  it("plan is invalid (CRITICAL) when TASK_TOO_LARGE fires for oversized AC", () => {
     const ac = Array.from({ length: MAX_ACCEPTANCE_CRITERIA_PER_TASK + 1 }, (_, i) => `Criterion ${i + 1}`);
     const result = validatePlanContract(baseValidPlan({ acceptance_criteria: ac }));
-    // WARNING-only; plan is still valid unless there are CRITICALs
-    assert.ok(result.violations.every(v => v.severity !== PLAN_VIOLATION_SEVERITY.CRITICAL),
-      "only WARNING violations expected for oversized AC");
+    // CRITICAL violation — plan must be invalid and blocked from dispatch
+    assert.equal(result.valid, false, "oversized AC must make plan invalid");
+    assert.ok(result.violations.some(v => v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL),
+      "oversized AC must produce a CRITICAL violation");
   });
 
-  it("emits TASK_TOO_LARGE (WARNING) for filesInScope exceeding the cap", () => {
+  it("emits TASK_TOO_LARGE (CRITICAL) for filesInScope exceeding the cap", () => {
     const files = Array.from({ length: MAX_FILES_IN_SCOPE_PER_TASK + 1 }, (_, i) => `src/file${i}.ts`);
     const result = validatePlanContract(baseValidPlan({ filesInScope: files }));
     const v = result.violations.find(x => x.code === PACKET_VIOLATION_CODE.TASK_TOO_LARGE && x.field === "filesInScope");
     assert.ok(v, "must have TASK_TOO_LARGE violation on filesInScope");
-    assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.WARNING);
+    assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.CRITICAL);
   });
 
-  it("emits TASK_TOO_LARGE (WARNING) for target_files exceeding the cap", () => {
+  it("emits TASK_TOO_LARGE (CRITICAL) for target_files exceeding the cap", () => {
     const files = Array.from({ length: MAX_FILES_IN_SCOPE_PER_TASK + 1 }, (_, i) => `src/file${i}.ts`);
     const result = validatePlanContract(baseValidPlan({ target_files: files }));
     const v = result.violations.find(x => x.code === PACKET_VIOLATION_CODE.TASK_TOO_LARGE && x.field === "filesInScope");
@@ -1201,12 +1206,12 @@ describe("validatePlanContract — decomposition caps and ambiguity", () => {
     );
   });
 
-  it("emits TASK_AMBIGUOUS (WARNING) for a generic task description", () => {
+  it("emits TASK_AMBIGUOUS (CRITICAL) for a generic task description", () => {
     const result = validatePlanContract(baseValidPlan({ task: "fix bugs" }));
     const v = result.violations.find(x => x.code === PACKET_VIOLATION_CODE.TASK_AMBIGUOUS);
     assert.ok(v, "must have TASK_AMBIGUOUS violation for generic description");
     assert.equal(v!.field, "task");
-    assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.WARNING);
+    assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.CRITICAL);
   });
 
   it("does NOT emit TASK_AMBIGUOUS for a specific task description", () => {
@@ -1412,5 +1417,67 @@ describe("validatePlanContract — stale diagnostics gate", () => {
       "string",
     );
     assert.equal(PACKET_VIOLATION_CODE.STALE_DIAGNOSTICS_BACKED, "stale_diagnostics_backed");
+  });
+});
+
+// ── Lane-aware packet-size defaults ──────────────────────────────────────────
+
+describe("lane-aware packet-size defaults", () => {
+  it("PACKET_LANE exports four canonical lane keys", () => {
+    assert.equal(PACKET_LANE.SMALL,   "small");
+    assert.equal(PACKET_LANE.MEDIUM,  "medium");
+    assert.equal(PACKET_LANE.LARGE,   "large");
+    assert.equal(PACKET_LANE.DEFAULT, "default");
+  });
+
+  it("classifyPacketLane maps file count to correct lane", () => {
+    assert.equal(classifyPacketLane(0),  "small",   "0 files → small");
+    assert.equal(classifyPacketLane(1),  "small",   "1 file → small");
+    assert.equal(classifyPacketLane(2),  "small",   "2 files → small");
+    assert.equal(classifyPacketLane(3),  "medium",  "3 files → medium");
+    assert.equal(classifyPacketLane(4),  "medium",  "4 files → medium");
+    assert.equal(classifyPacketLane(5),  "large",   "5 files → large");
+    assert.equal(classifyPacketLane(10), "large",   "10 files → large");
+  });
+
+  it("negative path: classifyPacketLane returns default for invalid input", () => {
+    assert.equal(classifyPacketLane(-1),         "default");
+    assert.equal(classifyPacketLane(NaN),        "default");
+    assert.equal(classifyPacketLane(Infinity),   "default");
+  });
+
+  it("LARGE lane enforces ≥8000 minExecutionTokens (system-learning token floor)", () => {
+    const large = LANE_PACKET_SIZE_DEFAULTS[PACKET_LANE.LARGE];
+    assert.ok(large.minExecutionTokens >= 8000,
+      "large lane must enforce ≥8k token floor for multi-file plans");
+    assert.ok(large.minAcceptanceCriteria >= 3,
+      "large lane must require ≥3 acceptance criteria");
+  });
+
+  it("SMALL lane is lenient: minExecutionTokens ≤ LARGE", () => {
+    const small = LANE_PACKET_SIZE_DEFAULTS[PACKET_LANE.SMALL];
+    const large = LANE_PACKET_SIZE_DEFAULTS[PACKET_LANE.LARGE];
+    assert.ok(small.minExecutionTokens < large.minExecutionTokens,
+      "small lane token floor must be less than large lane");
+  });
+
+  it("getPacketThresholdsForLane returns large thresholds for 5+ files", () => {
+    const thresholds = getPacketThresholdsForLane(5);
+    assert.equal(thresholds.minExecutionTokens, LANE_PACKET_SIZE_DEFAULTS[PACKET_LANE.LARGE].minExecutionTokens);
+  });
+
+  it("getPacketThresholdsForLane returns small thresholds for 1-2 files", () => {
+    const thresholds1 = getPacketThresholdsForLane(1);
+    const thresholds2 = getPacketThresholdsForLane(2);
+    assert.equal(thresholds1.minExecutionTokens, LANE_PACKET_SIZE_DEFAULTS[PACKET_LANE.SMALL].minExecutionTokens);
+    assert.equal(thresholds2.minExecutionTokens, LANE_PACKET_SIZE_DEFAULTS[PACKET_LANE.SMALL].minExecutionTokens);
+  });
+
+  it("LANE_PACKET_SIZE_DEFAULTS has monotonically increasing token floors", () => {
+    const small  = LANE_PACKET_SIZE_DEFAULTS[PACKET_LANE.SMALL].minExecutionTokens;
+    const medium = LANE_PACKET_SIZE_DEFAULTS[PACKET_LANE.MEDIUM].minExecutionTokens;
+    const large  = LANE_PACKET_SIZE_DEFAULTS[PACKET_LANE.LARGE].minExecutionTokens;
+    assert.ok(small  <= medium, "small must not exceed medium token floor");
+    assert.ok(medium <= large,  "medium must not exceed large token floor");
   });
 });

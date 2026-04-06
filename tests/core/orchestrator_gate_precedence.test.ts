@@ -201,12 +201,16 @@ describe("evaluatePreDispatchGovernanceGate — gateIndex on blocked results", (
     );
   });
 
-  it("rolling completion yield gate has highest precedence number (fires last)", () => {
+  it("oversized packet gate has highest precedence number (fires last)", () => {
     const maxPrecedence = Math.max(...Object.values(GATE_PRECEDENCE));
     assert.equal(
-      GATE_PRECEDENCE.SPECIALIZATION_ADMISSION,
+      GATE_PRECEDENCE.OVERSIZED_PACKET,
       maxPrecedence,
-      "SPECIALIZATION_ADMISSION must have the highest precedence number (fires last)"
+      "OVERSIZED_PACKET must have the highest precedence number (fires last)"
+    );
+    assert.ok(
+      GATE_PRECEDENCE.SPECIALIZATION_ADMISSION < GATE_PRECEDENCE.OVERSIZED_PACKET,
+      "SPECIALIZATION_ADMISSION must fire before OVERSIZED_PACKET"
     );
     assert.ok(
       GATE_PRECEDENCE.ROLLING_COMPLETION_YIELD < GATE_PRECEDENCE.SPECIALIZATION_ADMISSION,

@@ -55,6 +55,7 @@ import {
   buildThinPacketRejectionReason,
   computePacketDensityMetrics,
   isThinPacketForAdmission,
+  getPacketThresholdsForLane,
   scanParsedOutputForProcessThought,
   OUTPUT_FIDELITY_GATE_FAIL_REASON,
 } from "./plan_contract_validator.js";
@@ -3944,21 +3945,58 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     researchSynthesisData = researchSynthesis;
     researchTopicsList = extractResearchTopics(researchSynthesis, researchScout);
     const researchArtifactUpdatedAtMs = await getLatestResearchArtifactUpdatedAtMs(stateDir);
-    const researchContext = buildResearchPromptSection(researchSynthesis, researchScout, planningPolicy, researchArtifactUpdatedAtMs);
+
+    // ── Research quality gate: quarantine low-density topics ─────────────────
+    // When the quality gate failed, filter out topics below minimum actionable density
+    // before injecting them into the Prometheus prompt.  This prevents low-signal
+    // topics from degrading plan quality; the resulting state is "degraded planning mode".
+    let effectiveSynthesis: unknown = researchSynthesis;
+    let degradedPlanningModeActive = false;
+    const qg = (researchSynthesis as any)?.qualityGate;
+    if (qg && qg.passed === false) {
+      const allTopics: unknown[] = Array.isArray((researchSynthesis as any)?.topics)
+        ? (researchSynthesis as any).topics
+        : [];
+      // Prefer persisted quarantinedTopics list (new schema); fall back to computing from densities.
+      const quarantinedTopicNames: string[] = Array.isArray(qg.quarantinedTopics)
+        ? qg.quarantinedTopics
+        : (Array.isArray(qg.topicDensities)
+            ? (qg.topicDensities as any[]).filter((d: any) => !d.passed).map((d: any) => String(d.topic || ""))
+            : []);
+      const quarantinedSet = new Set(quarantinedTopicNames);
+      const passedTopics = allTopics.filter((t: any) => !quarantinedSet.has(String(t?.topic || "")));
+      if (quarantinedTopicNames.length > 0) {
+        degradedPlanningModeActive = true;
+        effectiveSynthesis = { ...(researchSynthesis as any), topics: passedTopics };
+        await appendProgress(
+          config,
+          `[PROMETHEUS][DEGRADED_PLANNING] ${quarantinedTopicNames.length} low-density topic(s) quarantined from planning context ` +
+          `(retried=${qg.retried}). Operating in degraded planning mode.`
+        );
+      } else {
+        await appendProgress(
+          config,
+          `[PROMETHEUS][WARN] Research synthesis quality gate did not pass (retried=${qg.retried}). ` +
+          `${(qg.topicDensities ?? []).filter((d: any) => !d.passed).length} topic(s) below minimum actionable density. ` +
+          `Plans may have reduced signal quality.`
+        );
+      }
+    }
+
+    const researchContext = buildResearchPromptSection(effectiveSynthesis, researchScout, planningPolicy, researchArtifactUpdatedAtMs);
     researchSectionText = researchContext.sectionText;
+    // Prepend degraded-mode warning so Prometheus knows its research context is incomplete.
+    if (degradedPlanningModeActive && researchSectionText) {
+      researchSectionText =
+        `## ⚠️ DEGRADED PLANNING MODE\n` +
+        `Research synthesis quality gate failed. Some topics were quarantined due to insufficient ` +
+        `actionable density. Plans derived from the remaining topics may have reduced signal quality. ` +
+        `Prefer conservative, evidence-backed tasks.\n\n` +
+        researchSectionText;
+    }
     researchTopicCount = researchContext.topicCount;
     researchSourceCount = researchContext.sourceCount;
     researchCoverageTarget = researchContext.coverageTarget;
-    // Warn when synthesis quality gate did not pass — plans may lack actionable density.
-    const qg = (researchSynthesis as any)?.qualityGate;
-    if (qg && qg.passed === false) {
-      await appendProgress(
-        config,
-        `[PROMETHEUS][WARN] Research synthesis quality gate did not pass (retried=${qg.retried}). ` +
-        `${(qg.topicDensities ?? []).filter((d: any) => !d.passed).length} topic(s) below minimum actionable density. ` +
-        `Plans may have reduced signal quality.`
-      );
-    }
     if (researchSectionText) {
       await appendProgress(
         config,
@@ -4861,7 +4899,7 @@ Mandatory requirements:
     rawParsedInput._packetDensificationPostBundle = postBundleDensity;
     if (postBundleDensity.thinCount > 0) {
       const rejectedThinPackets: Array<{ index: number; reason: string }> = [];
-      const densityThresholds = {
+      const baseDensityThresholds = {
         minTaskChars: PROMETHEUS_PROMPT_DENSITY_MIN.minTaskChars,
         minTargetFiles: PROMETHEUS_PROMPT_DENSITY_MIN.minTargetFiles,
         minAcceptanceCriteria: PROMETHEUS_PROMPT_DENSITY_MIN.minAcceptanceCriteria,
@@ -4869,9 +4907,18 @@ Mandatory requirements:
       };
       rawParsedInput.plans = rawParsedInput.plans.filter((plan: any, i: number) => {
         const metrics = computePacketDensityMetrics(plan);
-        const thin = isThinPacketForAdmission(metrics, densityThresholds);
+        // Use lane-aware token floor: plans covering 5+ files must declare ≥8 k tokens.
+        const targetFileCount = Array.isArray(plan.target_files) ? plan.target_files.length : 0;
+        const laneThresholds = getPacketThresholdsForLane(targetFileCount);
+        const effectiveThresholds = {
+          minTaskChars: Math.max(baseDensityThresholds.minTaskChars, laneThresholds.minTaskChars),
+          minTargetFiles: Math.max(baseDensityThresholds.minTargetFiles, laneThresholds.minTargetFiles),
+          minAcceptanceCriteria: Math.max(baseDensityThresholds.minAcceptanceCriteria, laneThresholds.minAcceptanceCriteria),
+          minExecutionTokens: Math.max(baseDensityThresholds.minExecutionTokens, laneThresholds.minExecutionTokens),
+        };
+        const thin = isThinPacketForAdmission(metrics, effectiveThresholds);
         if (!thin) return true;
-        const reason = buildThinPacketRejectionReason(metrics, densityThresholds);
+        const reason = buildThinPacketRejectionReason(metrics, effectiveThresholds);
         plan._thinPacketRejected = true;
         plan._thinPacketReason = reason;
         rejectedThinPackets.push({ index: i, reason });
@@ -5199,6 +5246,43 @@ Mandatory requirements:
         `[PROMETHEUS][CONTRACT] Hard-filtered ${admissionRejectIndices.length} low-quality/redundant admission packet(s) missing required evidence or capacity-first justification`
       );
       parsed._capacityRoiFilteredCount = admissionRejectIndices.length;
+    }
+  }
+
+  // ── Low-confidence quarantine ────────────────────────────────────────────
+  // Attach aggregate parser confidence as provenance to plans that do not yet
+  // carry per-packet provenance, then run quarantineLowConfidencePackets so
+  // low-quality fallback plans are excluded from the dispatchable set.
+  // This executes the quarantine function in the normalization pipeline rather
+  // than leaving it as an untriggered utility — low-confidence packets must
+  // never reach dispatch.
+  if (Array.isArray(parsed.plans) && parsed.plans.length > 0) {
+    const parserConfidenceScore = typeof parsed.parserConfidence === "number"
+      ? parsed.parserConfidence
+      : 1.0;
+    const plansWithProvenance = parsed.plans.map((plan: any) =>
+      plan._provenance
+        ? plan
+        : attachFallbackProvenance(plan, {
+            source: "prometheus-normalization",
+            reason: "aggregate-parser-confidence",
+            confidence: parserConfidenceScore,
+            tag: parserConfidenceScore < QUARANTINE_CONFIDENCE_THRESHOLD
+              ? FALLBACK_PROVENANCE_TAG.PARSER_FALLBACK
+              : FALLBACK_PROVENANCE_TAG.DIRECT,
+          })
+    );
+    const quarantineResult = quarantineLowConfidencePackets(plansWithProvenance);
+    if (quarantineResult.quarantined.length > 0) {
+      parsed.plans = quarantineResult.allowed;
+      parsed._quarantinedPacketCount = quarantineResult.quarantined.length;
+      parsed._quarantinedPackets = quarantineResult.quarantined;
+      await appendProgress(config,
+        `[PROMETHEUS][QUARANTINE] ${quarantineResult.quarantined.length} low-confidence packet(s) excluded from dispatch ` +
+        `(parserConfidence=${parserConfidenceScore} < threshold=${QUARANTINE_CONFIDENCE_THRESHOLD})`
+      );
+    } else {
+      parsed.plans = plansWithProvenance;
     }
   }
 

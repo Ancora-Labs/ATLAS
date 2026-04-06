@@ -28,6 +28,9 @@ import {
   normalizeDecisionQualityLabel,
   POSTMORTEM_REVIEW_STATUS,
   runAthenaPostmortem,
+  POSTMORTEM_RECOMMENDATION,
+  DECISION_QUALITY_LABEL,
+  deriveDeterministicRecommendation,
 } from "../../src/core/athena_reviewer.js";
 
 import {
@@ -728,5 +731,44 @@ describe("isEnvelopeUnambiguous — negative paths (Task 3 gate)", () => {
   it("returns unambiguous=false for null input (structural check fails)", () => {
     const r = isEnvelopeUnambiguous(null);
     assert.equal(r.unambiguous, false);
+  });
+});
+
+// ── deriveDeterministicRecommendation ─────────────────────────────────────────
+
+describe("deriveDeterministicRecommendation", () => {
+  it("returns proceed for correct label", () => {
+    assert.equal(
+      deriveDeterministicRecommendation(DECISION_QUALITY_LABEL.CORRECT),
+      POSTMORTEM_RECOMMENDATION.PROCEED,
+    );
+  });
+
+  it("returns proceed for delayed-correct label", () => {
+    assert.equal(
+      deriveDeterministicRecommendation(DECISION_QUALITY_LABEL.DELAYED_CORRECT),
+      POSTMORTEM_RECOMMENDATION.PROCEED,
+    );
+  });
+
+  it("returns rework for inconclusive label — never silently proceed on missing evidence", () => {
+    assert.equal(
+      deriveDeterministicRecommendation(DECISION_QUALITY_LABEL.INCONCLUSIVE),
+      POSTMORTEM_RECOMMENDATION.REWORK,
+      "inconclusive outcome must produce rework, not proceed",
+    );
+  });
+
+  it("returns escalate for incorrect label (rollback scenario)", () => {
+    assert.equal(
+      deriveDeterministicRecommendation(DECISION_QUALITY_LABEL.INCORRECT),
+      POSTMORTEM_RECOMMENDATION.ESCALATE,
+    );
+  });
+
+  it("negative path: returns rework for unknown/empty label — safe default", () => {
+    assert.equal(deriveDeterministicRecommendation(""),             POSTMORTEM_RECOMMENDATION.REWORK);
+    assert.equal(deriveDeterministicRecommendation("some-future"),  POSTMORTEM_RECOMMENDATION.REWORK);
+    assert.equal(deriveDeterministicRecommendation(null as any),    POSTMORTEM_RECOMMENDATION.REWORK);
   });
 });

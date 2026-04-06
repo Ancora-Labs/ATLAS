@@ -8,7 +8,7 @@
  * This is NOT a replacement for Athena; it is a fast, deterministic pre-filter
  * that catches obvious plan deficiencies cheaply (no AI call).
  */
-import { EQUAL_DIMENSION_SET, normalizeLeverageRank } from "./plan_contract_validator.js";
+import { EQUAL_DIMENSION_SET, normalizeLeverageRank, MAX_ACCEPTANCE_CRITERIA_PER_TASK, MAX_FILES_IN_SCOPE_PER_TASK } from "./plan_contract_validator.js";
 
 /**
  * Critic rubric dimensions. Each returns a 0-1 score.
@@ -26,6 +26,8 @@ export const CRITIC_DIMENSION = Object.freeze({
   CAPACITY_FIRST:         "CAPACITY_FIRST",
   NON_RIGID_PLAN:         "NON_RIGID_PLAN",
   IMPLEMENTATION_EVIDENCE: "IMPLEMENTATION_EVIDENCE",
+  /** Hard-reject dimension: 0.0 when AC count > MAX or files > MAX; 1.0 otherwise. */
+  PACKET_SIZE_COMPLIANT:  "PACKET_SIZE_COMPLIANT",
 });
 
 /** Minimum composite score to pass the critic gate (0-1 scale). */
@@ -189,7 +191,24 @@ export function critiquePlan(plan) {
     issues.push("low-leverage/redundant packet missing measurable capacity-first justification");
   }
 
+  // 12. Packet size compliance: hard-reject when AC or file count exceeds contractual caps.
+  // This mirrors the CRITICAL violation in plan_contract_validator (TASK_TOO_LARGE) and
+  // ensures oversized packets are demoted by the critic even before contract validation runs.
+  const acCount = Array.isArray(plan.acceptance_criteria) ? plan.acceptance_criteria.length : 0;
+  const fileCount = Array.isArray(plan.target_files)
+    ? plan.target_files.length
+    : (Array.isArray(plan.filesInScope) ? plan.filesInScope.length : 0);
+  const isOversized = acCount > MAX_ACCEPTANCE_CRITERIA_PER_TASK || fileCount > MAX_FILES_IN_SCOPE_PER_TASK;
+  dimensions[CRITIC_DIMENSION.PACKET_SIZE_COMPLIANT] = isOversized ? 0.0 : 1.0;
+  if (acCount > MAX_ACCEPTANCE_CRITERIA_PER_TASK) {
+    issues.push(`Oversized packet: ${acCount} acceptance criteria exceeds max (${MAX_ACCEPTANCE_CRITERIA_PER_TASK}) — must decompose`);
+  }
+  if (fileCount > MAX_FILES_IN_SCOPE_PER_TASK) {
+    issues.push(`Oversized packet: ${fileCount} files in scope exceeds max (${MAX_FILES_IN_SCOPE_PER_TASK}) — must decompose`);
+  }
+
   // Composite score (equal weight)
+
   const values = Object.values(dimensions);
   const score = values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : 0;
 

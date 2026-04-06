@@ -4,6 +4,7 @@ import {
   stripExecutionTranscriptNoise,
   sanitizeResearchSynthesisForPersistence,
   computeSynthesisActionableDensity,
+  quarantineLowDensityTopics,
 } from "../../src/core/research_synthesizer.js";
 
 describe("research_synthesizer persistence hardening", () => {
@@ -162,5 +163,81 @@ describe("computeSynthesisActionableDensity", () => {
       model: "gpt-5.3-codex",
     });
     assert.equal((output as any).qualityGate, undefined);
+  });
+});
+
+// ── quarantineLowDensityTopics ─────────────────────────────────────────────────
+
+describe("quarantineLowDensityTopics", () => {
+  it("returns all topics as passed when all densities pass", () => {
+    const topics = [
+      { topic: "Topic A", netFindings: ["f1"] },
+      { topic: "Topic B", netFindings: ["f2"] },
+    ];
+    const densities = [
+      { topic: "Topic A", actionableCount: 2, passed: true },
+      { topic: "Topic B", actionableCount: 1, passed: true },
+    ];
+    const result = quarantineLowDensityTopics(topics as any, densities);
+    assert.equal(result.passedTopics.length, 2);
+    assert.deepEqual(result.quarantinedTopics, []);
+  });
+
+  it("quarantines topics that failed density check", () => {
+    const topics = [
+      { topic: "Good Topic",  netFindings: ["f1"] },
+      { topic: "Empty Topic", netFindings: [] },
+    ];
+    const densities = [
+      { topic: "Good Topic",  actionableCount: 1, passed: true },
+      { topic: "Empty Topic", actionableCount: 0, passed: false },
+    ];
+    const result = quarantineLowDensityTopics(topics as any, densities);
+    assert.equal(result.passedTopics.length, 1,  "only passed topics survive");
+    assert.equal(result.passedTopics[0].topic, "Good Topic");
+    assert.deepEqual(result.quarantinedTopics, ["Empty Topic"]);
+  });
+
+  it("quarantines all topics when all fail density", () => {
+    const topics = [{ topic: "A" }, { topic: "B" }];
+    const densities = [
+      { topic: "A", actionableCount: 0, passed: false },
+      { topic: "B", actionableCount: 0, passed: false },
+    ];
+    const result = quarantineLowDensityTopics(topics as any, densities);
+    assert.equal(result.passedTopics.length, 0);
+    assert.equal(result.quarantinedTopics.length, 2);
+  });
+
+  it("negative path: returns all topics as passed for empty densities array", () => {
+    const topics = [{ topic: "Topic X" }];
+    const result = quarantineLowDensityTopics(topics as any, []);
+    assert.equal(result.passedTopics.length, 1);
+    assert.deepEqual(result.quarantinedTopics, []);
+  });
+
+  it("sanitizeResearchSynthesisForPersistence passes quarantinedTopics through qualityGate", () => {
+    const qualityGate = {
+      passed: false,
+      retried: true,
+      topicDensities: [{ topic: "Bad Topic", actionableCount: 0, passed: false }],
+      quarantinedTopics: ["Bad Topic"],
+      degradedPlanningMode: true,
+    };
+    const output = sanitizeResearchSynthesisForPersistence({
+      success: true,
+      topicCount: 1,
+      topics: [{ topic: "Good Topic", netFindings: ["f1"], sources: [] }] as any,
+      crossTopicConnections: [],
+      researchGaps: "",
+      synthesizedAt: "2026-01-01T00:00:00.000Z",
+      scoutSourceCount: 0,
+      model: "gpt-5.3-codex",
+      qualityGate,
+    });
+    const qg = (output as any).qualityGate;
+    assert.ok(qg, "qualityGate must be persisted");
+    assert.deepEqual(qg.quarantinedTopics, ["Bad Topic"]);
+    assert.equal(qg.degradedPlanningMode, true);
   });
 });

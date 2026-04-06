@@ -66,6 +66,9 @@ import {
   OUTPUT_FIDELITY_GATE_FAIL_REASON,
   MAX_ACTIONABLE_STEPS_PER_PACKET,
   PACKET_OVERSIZE_REASON,
+  filterQuarantinedPlans,
+  isPacketQuarantined,
+  QUARANTINE_CONFIDENCE_THRESHOLD as PCV_QUARANTINE_THRESHOLD,
 } from "../../src/core/plan_contract_validator.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -3543,6 +3546,104 @@ describe("quarantineLowConfidencePackets", () => {
 
   it("QUARANTINE_CONFIDENCE_THRESHOLD is exported as 0.5", () => {
     assert.equal(QUARANTINE_CONFIDENCE_THRESHOLD, 0.5);
+  });
+});
+
+// ── filterQuarantinedPlans (plan_contract_validator) ─────────────────────────
+
+describe("filterQuarantinedPlans", () => {
+  it("separates plans with _quarantined=true from dispatchable plans", () => {
+    const plans = [
+      { task: "a", _quarantined: true },
+      { task: "b" },
+      { task: "c", _quarantined: false },
+    ];
+    const { dispatchable, quarantined } = filterQuarantinedPlans(plans);
+    assert.equal(quarantined.length, 1, "only _quarantined=true must be in quarantined set");
+    assert.equal(quarantined[0].task, "a");
+    assert.equal(dispatchable.length, 2);
+  });
+
+  it("quarantines plans with _provenance.confidence below threshold", () => {
+    const plans = [
+      { task: "low", _provenance: { confidence: 0.3, tag: "parser-fallback", attachedAt: new Date().toISOString() } },
+      { task: "high", _provenance: { confidence: 0.9, tag: "direct", attachedAt: new Date().toISOString() } },
+    ];
+    const { dispatchable, quarantined } = filterQuarantinedPlans(plans);
+    assert.equal(quarantined.length, 1);
+    assert.equal(quarantined[0].task, "low");
+    assert.equal(dispatchable.length, 1);
+  });
+
+  it("allows plans without provenance (backward compatible)", () => {
+    const plans = [{ task: "no-prov" }, { task: "also-no-prov" }];
+    const { dispatchable, quarantined } = filterQuarantinedPlans(plans);
+    assert.equal(dispatchable.length, 2);
+    assert.equal(quarantined.length, 0);
+  });
+
+  it("NEGATIVE PATH: returns empty sets for null input", () => {
+    const { dispatchable, quarantined } = filterQuarantinedPlans(null as any);
+    assert.deepEqual(dispatchable, []);
+    assert.deepEqual(quarantined, []);
+  });
+
+  it("PCV_QUARANTINE_THRESHOLD matches prometheus QUARANTINE_CONFIDENCE_THRESHOLD", () => {
+    assert.equal(PCV_QUARANTINE_THRESHOLD, 0.5, "thresholds must be consistent across modules");
+    assert.equal(PCV_QUARANTINE_THRESHOLD, QUARANTINE_CONFIDENCE_THRESHOLD);
+  });
+});
+
+// ── quarantine wiring in normalizePrometheusParsedOutput ─────────────────────
+
+describe("quarantine wiring — low-confidence packets excluded from dispatchable plans", () => {
+  it("quarantineLowConfidencePackets filters plans with _provenance.confidence < 0.5 from dispatch set", () => {
+    // Verify the wiring contract: plans with attached provenance below threshold
+    // are excluded from the allowed set — simulating what the normalization pipeline does.
+    const plans = [
+      { task: "T1", role: "Evolution Worker",
+        _provenance: { confidence: 0.3, tag: "parser-fallback", attachedAt: new Date().toISOString() } },
+      { task: "T2", role: "Evolution Worker",
+        _provenance: { confidence: 0.8, tag: "direct", attachedAt: new Date().toISOString() } },
+    ];
+    const { allowed, quarantined } = quarantineLowConfidencePackets(plans);
+    assert.equal(quarantined.length, 1, "plan with confidence 0.3 must be quarantined");
+    assert.equal(quarantined[0].task, "T1");
+    assert.equal(allowed.length, 1, "plan with confidence 0.8 must be in allowed set");
+    assert.equal(allowed[0].task, "T2");
+  });
+
+  it("NEGATIVE PATH: plans without provenance survive quarantine (backward compatible)", () => {
+    const plans = [
+      { task: "NoProv1", role: "Evolution Worker" },
+      { task: "NoProv2", role: "Evolution Worker" },
+    ];
+    const { allowed, quarantined } = quarantineLowConfidencePackets(plans);
+    assert.equal(allowed.length, 2, "plans without _provenance must pass through as high-confidence");
+    assert.equal(quarantined.length, 0);
+  });
+
+  it("attachFallbackProvenance attaches _provenance.confidence that quarantine can act on", () => {
+    const plan = { task: "fallback-plan", role: "Evolution Worker" };
+    const withProv = attachFallbackProvenance(plan, {
+      source: "prometheus-normalization",
+      reason: "aggregate-parser-confidence",
+      confidence: 0.3,
+      tag: FALLBACK_PROVENANCE_TAG.PARSER_FALLBACK,
+    });
+    assert.ok(withProv._provenance, "_provenance must be attached");
+    assert.equal(withProv._provenance.confidence, 0.3);
+    const { quarantined } = quarantineLowConfidencePackets([withProv]);
+    assert.equal(quarantined.length, 1, "plan with attached low confidence must be quarantined");
+    assert.equal(quarantined[0]._quarantined, true);
+    assert.ok(typeof quarantined[0]._quarantineReason === "string");
+  });
+
+  it("isPacketQuarantined returns true for plans tagged _quarantined=true", () => {
+    assert.equal(isPacketQuarantined({ task: "x", _quarantined: true }), true);
+    assert.equal(isPacketQuarantined({ task: "x" }), false);
+    assert.equal(isPacketQuarantined({ task: "x", _provenance: { confidence: 0.3 } }), true);
+    assert.equal(isPacketQuarantined({ task: "x", _provenance: { confidence: 0.8 } }), false);
   });
 });
 

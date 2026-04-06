@@ -34,7 +34,7 @@ import { readJson, readJsonSafe, writeJson, cleanupStaleTempFiles, READ_JSON_REA
 import { updatePipelineProgress, readPipelineProgress } from "./pipeline_progress.js";
 import { loadEscalationQueue, sortEscalationQueue, processEscalationQueueClosures } from "./escalation_queue.js";
 import { computeCycleSLOs, persistSloMetrics, detectCoupledAlerts } from "./slo_checker.js";
-import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealthComposite, CYCLE_PHASE, computeRuntimeContractProbe, readCycleAnalytics } from "./cycle_analytics.js";
+import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealthComposite, CYCLE_PHASE, computeRuntimeContractProbe, readCycleAnalytics, evaluateBenchmarkGroundTruth } from "./cycle_analytics.js";
 import { computeBaselineRecoveryState, persistBaselineMetrics, PARSER_CONFIDENCE_RECOVERY_THRESHOLD } from "./parser_baseline_recovery.js";
 import { computeDispatchStrictness, loadReplayRegressionState, DISPATCH_STRICTNESS } from "./parser_replay_harness.js";
 import {
@@ -55,7 +55,7 @@ import { evaluateRetune } from "./strategy_retuner.js";
 import { compileLessonsToPolicies } from "./learning_policy_compiler.js";
 import { assignWorkersToPlans, enforceLaneDiversity, evaluateSpecializationAdmissionGate, buildLanePerformanceFromCycleTelemetry } from "./capability_pool.js";
 import { runDoctor } from "./doctor.js";
-import { validateAllPlans } from "./plan_contract_validator.js";
+import { validateAllPlans, validatePacketBatchAdmission } from "./plan_contract_validator.js";
 import {
   resolveDependencyGraph,
   computeReadinessGate,
@@ -141,7 +141,9 @@ export const ORCHESTRATOR_STATUS = Object.freeze({
  *   7. MANDATORY_DRIFT_DEBT  — architecture integrity gate before plan validation
  *   8. PLAN_EVIDENCE_COUPLING — validates individual plan completeness
  *   9. DEPENDENCY_READINESS  — validates dependency confidence metadata
- *  10. ROLLING_COMPLETION_YIELD — throttles when recent yield is too low (last gate)
+ *  10. ROLLING_COMPLETION_YIELD — throttles when recent yield is too low
+ *  11. SPECIALIZATION_ADMISSION — specialist share below adaptive lane target
+ *  12. OVERSIZED_PACKET      — per-role plan group exceeds actionable-steps cap
  */
 export const GATE_PRECEDENCE = Object.freeze({
   BUDGET_ELIGIBILITY:          1,
@@ -159,6 +161,8 @@ export const GATE_PRECEDENCE = Object.freeze({
   ROLLING_COMPLETION_YIELD:   10,
   /** Specialization admission gate — specialist share below adaptive lane target. */
   SPECIALIZATION_ADMISSION:   11,
+  /** Oversized packet gate — per-role plan group exceeds the configured actionable-steps cap. */
+  OVERSIZED_PACKET:           12,
 });
 
 /**
@@ -188,6 +192,8 @@ export const BLOCK_REASON = Object.freeze({
   ROLLING_YIELD_THROTTLE:         "rolling_yield_throttle",
   /** Specialist share is below the adaptive lane utilization target. */
   SPECIALIZATION_ADMISSION_GATE:  "specialization_admission_gate_failed",
+  /** Per-role plan group exceeds the configured actionable-steps cap — decompose before dispatch. */
+  OVERSIZED_PACKET:               "packet_exceeds_actionable_steps_cap",
 });
 
 /**
@@ -904,6 +910,41 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       }
     } catch (specErr) {
       warn(`[orchestrator] specialization admission gate failed (non-fatal): ${String(specErr?.message || specErr)}`);
+    }
+  }
+
+  // ── Gate 12: Oversized packet hard admission ───────────────────────────
+  // When config.planner.maxActionableStepsPerPacket is configured, block dispatch
+  // if any per-role plan group exceeds the cap.  This converts the advisory
+  // auto-split fallback in buildRoleExecutionBatches into an explicit hard block
+  // so callers receive a deterministic reason rather than silent reshaping.
+  //
+  // Opt-in: only active when maxActionableStepsPerPacket is a positive integer.
+  // Fail-open: gate errors are non-fatal and never block dispatch.
+  {
+    const rawActionableCap = Number((config as any)?.planner?.maxActionableStepsPerPacket);
+    const actionableCap = Number.isFinite(rawActionableCap) && rawActionableCap > 0
+      ? Math.floor(rawActionableCap)
+      : 0;
+    if (actionableCap > 0 && plans.length > 0) {
+      try {
+        const oversizeCheck = validatePacketBatchAdmission(Array.isArray(plans) ? plans : [], actionableCap);
+        if (oversizeCheck.blocked) {
+          const blockReason = `${BLOCK_REASON.OVERSIZED_PACKET}:${oversizeCheck.reason}`;
+          return {
+            blocked: true,
+            reason: blockReason,
+            action: undefined,
+            dispatchBlockReason: blockReason,
+            graphResult,
+            cycleId,
+            budgetEligibility,
+            gateIndex: GATE_PRECEDENCE.OVERSIZED_PACKET,
+          };
+        }
+      } catch (oversizeErr) {
+        warn(`[orchestrator] oversized packet gate failed (non-fatal): ${String(oversizeErr?.message || oversizeErr)}`);
+      }
     }
   }
 
@@ -3651,10 +3692,6 @@ async function runSingleCycle(config) {
       const capTrend = computeTrend(recentCap, "parserConfidence");
       const catastropheState = await readJson(path.join(stateDir, "catastrophe_state.json"), null);
       const benchmarkGroundTruth = await readJson(path.join(stateDir, "benchmark_ground_truth.json"), null);
-      const benchmarkGainResult = computeResearchCapacityGain(
-        Array.isArray(benchmarkGroundTruth?.entries) ? benchmarkGroundTruth.entries : [],
-        5,
-      );
 
       const totalWorkers = allWorkerResults?.length ?? 0;
       const completedWorkers = allWorkerResults?.filter((w: any) => isAnalyticsCompletedWorkerStatus(w.status)).length ?? 0;
@@ -3662,7 +3699,41 @@ async function runSingleCycle(config) {
       const crashCount = allWorkerResults?.filter((w: any) => w.status === "crashed" || w.status === "error").length ?? 0;
       const crashRate = totalWorkers > 0 ? crashCount / totalWorkers : null;
 
-      const athenaRejectRate = typeof analytics?.athenaRejectRate === "number" ? analytics.athenaRejectRate : null;
+      const benchmarkEntries = Array.isArray(benchmarkGroundTruth?.entries) ? benchmarkGroundTruth.entries : [];
+      const cycleOutcomeStatus = totalWorkers === 0
+        ? "no_plans"
+        : (completedWorkers >= totalWorkers && crashCount === 0 ? "success" : (completedWorkers > 0 ? "partial" : "failed"));
+      const scoredRecommendations = evaluateBenchmarkGroundTruth(benchmarkEntries, {
+        status: cycleOutcomeStatus,
+        tasksCompleted: completedWorkers,
+        tasksDispatched: totalWorkers,
+      });
+
+      if (benchmarkEntries.length > 0 && scoredRecommendations.length > 0) {
+        benchmarkEntries[0] = {
+          ...benchmarkEntries[0],
+          recommendations: scoredRecommendations,
+          evaluatedAt: new Date().toISOString(),
+        };
+        await writeJson(path.join(stateDir, "benchmark_ground_truth.json"), {
+          schemaVersion: benchmarkGroundTruth?.schemaVersion || 1,
+          updatedAt: new Date().toISOString(),
+          entries: benchmarkEntries,
+        });
+      } else {
+        await appendProgress(
+          config,
+          `[AUTONOMY_BAND] benchmark scoring skipped - entries=${benchmarkEntries.length} recommendations_scored=${scoredRecommendations.length}`,
+        );
+      }
+
+      const benchmarkGainResult = computeResearchCapacityGain(benchmarkEntries, 5);
+
+      const athenaRejectRate = planReview?.approved === true
+        ? 0
+        : (planReview?.approved === false
+          ? 1
+          : (typeof analytics?.athenaRejectRate === "number" ? analytics.athenaRejectRate : null));
       const parserFallbackRate = typeof prometheusAnalysis?.parserContextPenalty === "number"
         ? Math.max(0, Math.min(1, prometheusAnalysis.parserContextPenalty))
         : null;
@@ -3670,8 +3741,15 @@ async function runSingleCycle(config) {
         ? Math.max(0, Math.min(1, 1 - prometheusAnalysis._planContractPassRate))
         : null;
 
-      const premiumEfficiency = typeof prometheusAnalysis?.requestBudget?.utilization === "number"
-        ? prometheusAnalysis.requestBudget.utilization
+      const verifiedDoneWorkers = allWorkerResults?.filter((row: any) => {
+        const status = String(row?.status || "").toLowerCase();
+        if (status !== "done" && status !== "success") return false;
+        const contractEvidence = row?.dispatchContract?.doneWorkerWithVerificationReportEvidence;
+        if (contractEvidence === true) return true;
+        return hasVerificationReportEvidence(String(row?.verificationEvidence || row?.fullOutput || ""));
+      }).length ?? 0;
+      const premiumEfficiency = _cycleRequests > 0
+        ? Math.max(0, Math.min(1, verifiedDoneWorkers / _cycleRequests))
         : null;
 
       const hardGuardrailBreach = Array.isArray(catastropheState?.lastDetections)

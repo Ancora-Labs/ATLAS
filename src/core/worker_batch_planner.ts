@@ -1176,31 +1176,32 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
         }
 
         // ── Actionable-steps cap enforcement ─────────────────────────────
-        // Cap each compacted batch to at most maxActionableStepsPerPacket plans.
-        // Oversized batches are auto-split with dependency ordering preserved.
-        // Activated only when explicitly configured via
-        // config.planner.maxActionableStepsPerPacket (must be positive integer).
-        // Default behavior: no additional splitting beyond the dependency limit above.
+        // The pre-dispatch governance gate (Gate 12: OVERSIZED_PACKET) is the
+        // primary hard-admission check when maxActionableStepsPerPacket is configured.
+        // If the gate passed and a batch still exceeds the cap here, it indicates
+        // a misconfiguration or a code path that bypassed the gate.  In that case
+        // we surface a warning but do NOT auto-split — the caller must fix the plan
+        // decomposition.  Auto-splitting silently hides oversized packets from
+        // operators and was the advisory fallback this gate replaces.
         const rawActionableCap = Number((config as any)?.planner?.maxActionableStepsPerPacket);
         const actionableCap = Number.isFinite(rawActionableCap) && rawActionableCap > 0
           ? Math.floor(rawActionableCap)
           : 0; // 0 = disabled (default — preserves backward-compatible behaviour)
 
-        const actionableBatches: Array<{ plans: unknown[]; estimatedTokens: number; _oversizeSplit?: boolean }> = [];
+        const actionableBatches: Array<{ plans: unknown[]; estimatedTokens: number }> = [];
         for (const batch of compactedBatches) {
           const batchPlans = batch.plans as any[];
           if (actionableCap > 0 && batchPlans.length > actionableCap) {
-            const chunks = autosplitOversizedPacket(batchPlans, actionableCap);
-            for (const chunk of chunks) {
-              actionableBatches.push({
-                plans: chunk,
-                estimatedTokens: Math.round(batch.estimatedTokens * chunk.length / batchPlans.length),
-                _oversizeSplit: true,
-              });
+            // Reached here despite the pre-dispatch gate — emit a deterministic warning.
+            // Do NOT auto-split: the plan must be decomposed before dispatch.
+            const violation = checkPacketSizeCap(batchPlans, actionableCap);
+            if (typeof console !== "undefined") {
+              // eslint-disable-next-line no-console
+              console.warn(`[worker_batch_planner] OVERSIZED_PACKET safety-net: ${violation}. ` +
+                "Pre-dispatch governance gate should have blocked this. Decompose the plan.");
             }
-          } else {
-            actionableBatches.push(batch);
           }
+          actionableBatches.push(batch);
         }
 
         actionableBatches.forEach((batch, index) => {
@@ -1222,7 +1223,6 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
             roleBatchIndex: index + 1,
             roleBatchTotal: actionableBatches.length,
             githubFinalizer: index === actionableBatches.length - 1,
-            ...(batch._oversizeSplit ? { _oversizeSplit: true } : {}),
           });
         });
       }
