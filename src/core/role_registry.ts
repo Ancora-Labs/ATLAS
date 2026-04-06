@@ -5,7 +5,7 @@
  * All other lanes get specialized workers that share the same agent tooling.
  */
 export const LANE_WORKER_NAMES: Readonly<Record<string, string>> = Object.freeze({
-  implementation:  "Evolution Worker",
+  implementation:  "evolution-worker",
   quality:         "quality-worker",
   governance:      "governance-worker",
   infrastructure:  "infrastructure-worker",
@@ -22,7 +22,7 @@ export const LANE_WORKER_NAMES: Readonly<Record<string, string>> = Object.freeze
  * Single-capability workers receive a specialist bonus in fit scoring.
  */
 export const WORKER_CAPABILITIES: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  "Evolution Worker":      Object.freeze(["runtime-refactor", "integration", "planner-improvement"]),
+  "evolution-worker":      Object.freeze(["runtime-refactor", "integration", "planner-improvement"]),
   "quality-worker":        Object.freeze(["test-infra", "planner-improvement"]),
   "governance-worker":     Object.freeze(["state-governance"]),
   "infrastructure-worker": Object.freeze(["infrastructure"]),
@@ -113,7 +113,7 @@ export function getRoleRegistry(config) {
     planner: { id: "planner", name: "Prometheus", model: "gpt-5.3-codex" },
     reviewer: { id: "reviewer", name: "Athena", model: "gpt-5.3-codex" },
     workers: {
-      evolution:      { id: "worker-evolution",      name: "Evolution Worker",      model: "gpt-5.3-codex", lane: "implementation" },
+      evolution:      { id: "worker-evolution",      name: "evolution-worker",      model: "gpt-5.3-codex", lane: "implementation" },
       quality:        { id: "worker-quality",         name: "quality-worker",        model: "gpt-5.3-codex", lane: "quality" },
       governance:     { id: "worker-governance",      name: "governance-worker",     model: "gpt-5.3-codex", lane: "governance" },
       infrastructure: { id: "worker-infrastructure",  name: "infrastructure-worker", model: "gpt-5.3-codex", lane: "infrastructure" },

@@ -1704,3 +1704,51 @@ describe("modelRoutingTelemetry schema contract", () => {
     assert.ok(Number.isInteger(MIN_TELEMETRY_SAMPLE_THRESHOLD), "must be an integer");
   });
 });
+
+// ── Task 2: dispatchBlockReason surfaced in outcomes ──────────────────────────
+
+describe("cycle_analytics — dispatchBlockReason in outcomes (Task 2)", () => {
+  it("surfaces dispatchBlockReason in outcomes when governance gate blocks cycle", () => {
+    const config = makeConfig("state");
+    const blockReason = "GOVERNANCE_FREEZE_ACTIVE:monthly-freeze-active";
+    const record = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.INCOMPLETE,
+      dispatchBlockReason: blockReason,
+    });
+    assert.equal(record.outcomes.dispatchBlockReason, blockReason,
+      "dispatchBlockReason must flow from opts into outcomes for observability");
+    assert.equal(record.phase, CYCLE_PHASE.INCOMPLETE);
+  });
+
+  it("outcomes.dispatchBlockReason is null when no block reason provided (normal cycle)", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.COMPLETED,
+      workerResults: [{ roleName: "evolution-worker", status: "done" }],
+      planCount: 1,
+    });
+    assert.equal(record.outcomes.dispatchBlockReason, null,
+      "dispatchBlockReason must be null when no block fires — no silent contamination of normal cycles");
+  });
+
+  it("negative: empty dispatchBlockReason string is stored as null (no empty sentinels)", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.INCOMPLETE,
+      dispatchBlockReason: "   ",
+    });
+    assert.equal(record.outcomes.dispatchBlockReason, null,
+      "whitespace-only dispatchBlockReason must be normalized to null");
+  });
+
+  it("pre_dispatch_gate block reason is preserved verbatim in outcomes", () => {
+    const config = makeConfig("state");
+    const reason = "LINEAGE_CYCLE_DETECTED:CYCLE_DETECTED";
+    const record = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.INCOMPLETE,
+      dispatchBlockReason: reason,
+    });
+    assert.equal(record.outcomes.dispatchBlockReason, reason);
+    assert.equal(record.phase, CYCLE_PHASE.INCOMPLETE);
+  });
+});

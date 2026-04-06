@@ -12,7 +12,7 @@ describe("role_registry", () => {
     const registry = getRoleRegistry(undefined);
     assert.equal(registry.ceoSupervisor.name, "Jesus");
     assert.equal(registry.planner.name, "Prometheus");
-    assert.equal(registry.workers.evolution.name, "Evolution Worker");
+    assert.equal(registry.workers.evolution.name, "evolution-worker");
   });
 
   it("negative path: merges custom workers without dropping fallback evolution worker", () => {
@@ -22,7 +22,7 @@ describe("role_registry", () => {
       }
     });
     assert.equal(registry.workers.backend.name, "Backend Worker");
-    assert.equal(registry.workers.evolution.name, "Evolution Worker");
+    assert.equal(registry.workers.evolution.name, "evolution-worker");
   });
 
   it("all six lane workers are registered", () => {
@@ -41,11 +41,11 @@ describe("role_registry", () => {
     }
   });
 
-  it("implementation lane maps to Evolution Worker", () => {
-    assert.equal(LANE_WORKER_NAMES["implementation"], "Evolution Worker");
+  it("implementation lane maps to kebab-case evolution-worker", () => {
+    assert.equal(LANE_WORKER_NAMES["implementation"], "evolution-worker");
   });
 
-  it("non-implementation lanes map to hyphenated worker names", () => {
+  it("all lanes map to kebab-case hyphenated worker names", () => {
     assert.equal(LANE_WORKER_NAMES["quality"], "quality-worker");
     assert.equal(LANE_WORKER_NAMES["governance"], "governance-worker");
     assert.equal(LANE_WORKER_NAMES["infrastructure"], "infrastructure-worker");

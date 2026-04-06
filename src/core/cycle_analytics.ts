@@ -615,6 +615,7 @@ function buildInterventionImpactCounters(optimizerUsage: any): Record<string, nu
  *                                                   HIGH_QUALITY_LOW_RISK, DELTA_REVIEW_APPROVED) enables
  *                                                   per-code breakdown in byReasonCode for utilization tracking.
  *                                                   null when not tracked by the caller.
+ * @param {string|null} opts.dispatchBlockReason    Governance block reason when cycle exits early. null on normal cycles.
  * @returns {object} Analytics record conforming to CYCLE_ANALYTICS_SCHEMA.cycleRecord.
  */
 export function computeCycleAnalytics(config, {
@@ -633,6 +634,7 @@ export function computeCycleAnalytics(config, {
   stageTransitions = [],
   dropReasons = [],
   premiumUsageLog = [],
+  dispatchBlockReason = null,
 }: any = {}) {
   const missingData = [];
   const stageTimestamps = pipelineProgress?.stageTimestamps || null;
@@ -786,6 +788,10 @@ export function computeCycleAnalytics(config, {
     // Populated when the full runtimeContractProbe failed and the outcome was
     // forced to DISPATCH_BLOCK_REMEDIATION.  null in all other cases.
     probeFailureRemediation,
+    // Governance block reason when the cycle exited early at a gate. null for normal cycles.
+    dispatchBlockReason: typeof dispatchBlockReason === "string" && dispatchBlockReason.trim()
+      ? dispatchBlockReason.trim()
+      : null,
   };
 
   // Explicit reason code when outcome status is UNKNOWN (no silent ambiguity).

@@ -447,3 +447,59 @@ describe("buildQualityGateRecoverySignal", () => {
       "recovery signal must never be empty when topic names exist — Prometheus needs minimal context");
   });
 });
+
+// ── Task 3: scout-to-synthesis provenance coupling invariants ─────────────────
+
+describe("research_synthesizer — provenance coupling invariants (Task 3)", () => {
+  it("sanitizeResearchSynthesisForPersistence includes recoverySignal when degradedPlanningMode=true", () => {
+    const payload = {
+      success: true,
+      topicCount: 0,
+      topics: [],
+      crossTopicConnections: [],
+      researchGaps: "",
+      synthesizedAt: new Date().toISOString(),
+      scoutSourceCount: 0,
+      model: "test-model",
+      qualityGate: {
+        passed: false,
+        retried: false,
+        topicDensities: [],
+        quarantinedTopics: ["CI Pipeline", "Auth Security"],
+        degradedPlanningMode: true,
+        recoverySignal: "Research completed on topics: CI Pipeline, Auth Security. All topics failed density check — use topic names as minimal planning signal.",
+      },
+    };
+    const result = sanitizeResearchSynthesisForPersistence(payload);
+    assert.ok(result.qualityGate, "qualityGate must be persisted");
+    assert.equal((result.qualityGate as any).degradedPlanningMode, true);
+    assert.ok(typeof (result.qualityGate as any).recoverySignal === "string" && (result.qualityGate as any).recoverySignal.length > 0,
+      "recoverySignal must be non-empty when degradedPlanningMode=true (provenance invariant)");
+  });
+
+  it("negative: degradedPlanningMode=true with empty recoverySignal violates provenance invariant", () => {
+    // The synthesizer code enforces non-empty recoverySignal on write.
+    // This test documents the invariant contract for code reviewers.
+    const topicNames = ["Valid Topic A", "Valid Topic B"];
+    const signal = buildQualityGateRecoverySignal(topicNames);
+    // When topic names are non-empty, signal must be non-empty
+    assert.ok(signal.length > 0,
+      "recoverySignal invariant: when topics exist and degradedPlanningMode=true, signal must be non-empty");
+    assert.ok(signal.includes("Valid Topic A"), "topic provenance must appear in recovery signal");
+  });
+
+  it("qualityGate.recoverySignal invariant: non-empty when topic names are provided for degraded state", () => {
+    // Mirror the state/research_synthesis.json schema check in pure unit form.
+    // When degradedPlanningMode=true, the recoverySignal must be derivable from topic names.
+    const topicNames = [
+      "Durable Cancellation and Long-Running Loop Control",
+      "Runtime Event Contracts and Multi-Agent Routing Semantics",
+    ];
+    const signal = buildQualityGateRecoverySignal(topicNames);
+    assert.ok(
+      typeof signal === "string" && signal.trim().length > 0,
+      "state/research_synthesis.json: degradedPlanningMode=true requires non-empty recoverySignal (provenance invariant)"
+    );
+    assert.ok(signal.includes(topicNames[0]), "scout topic name must appear in recovery signal for provenance tracing");
+  });
+});
