@@ -600,8 +600,12 @@ function buildInterventionImpactCounters(optimizerUsage: any): Record<string, nu
  *                                                   T1 = routine, T2 = medium, T3 = architectural.
  *                                                   null when not tracked by the caller.
  * @param {object|null} opts.fastPathCounts          Athena plan-review fast-path counts for this cycle.
- *                                                   Shape: { athenaAutoApproved: number|null, athenaFullReview: number|null }.
- *                                                   fastPathRate is derived from these two values.
+ *                                                   Shape: { athenaAutoApproved: number|null, athenaFullReview: number|null,
+ *                                                            autoApproveReasonCode?: string|null }.
+ *                                                   fastPathRate is derived from the two counts.
+ *                                                   autoApproveReasonCode (one of LOW_RISK_UNCHANGED,
+ *                                                   HIGH_QUALITY_LOW_RISK, DELTA_REVIEW_APPROVED) enables
+ *                                                   per-code breakdown in byReasonCode for utilization tracking.
  *                                                   null when not tracked by the caller.
  * @returns {object} Analytics record conforming to CYCLE_ANALYTICS_SCHEMA.cycleRecord.
  */
@@ -846,15 +850,29 @@ export function computeCycleAnalytics(config, {
 
   // ── Fast-path counts: Athena auto-approve vs full-review ──────────────────
   // fastPathRate is derived from the two counts; null when either is absent.
+  // autoApproveReasonCode populates byReasonCode for per-path utilization tracking.
   const rawAutoApproved = (fastPathCounts && typeof fastPathCounts.athenaAutoApproved === "number") ? fastPathCounts.athenaAutoApproved : null;
   const rawFullReview   = (fastPathCounts && typeof fastPathCounts.athenaFullReview   === "number") ? fastPathCounts.athenaFullReview   : null;
   const totalReviews = (rawAutoApproved !== null && rawFullReview !== null)
     ? rawAutoApproved + rawFullReview
     : null;
+  const rawReasonCode = (fastPathCounts && typeof fastPathCounts.autoApproveReasonCode === "string")
+    ? fastPathCounts.autoApproveReasonCode
+    : null;
+  const KNOWN_FAST_PATH_CODES = ["LOW_RISK_UNCHANGED", "HIGH_QUALITY_LOW_RISK", "DELTA_REVIEW_APPROVED"];
+  const byReasonCode: Record<string, number | null> = {
+    LOW_RISK_UNCHANGED:    null,
+    HIGH_QUALITY_LOW_RISK: null,
+    DELTA_REVIEW_APPROVED: null,
+  };
+  if (rawReasonCode !== null && KNOWN_FAST_PATH_CODES.includes(rawReasonCode) && rawAutoApproved !== null) {
+    byReasonCode[rawReasonCode] = rawAutoApproved;
+  }
   const fastPathCountsRecord = {
     athenaAutoApproved: rawAutoApproved,
     athenaFullReview:   rawFullReview,
     fastPathRate:       safeRatio(rawAutoApproved, totalReviews),
+    byReasonCode,
   };
 
   if (fastPathCounts === null || fastPathCounts === undefined) {

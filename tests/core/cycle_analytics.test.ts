@@ -995,6 +995,77 @@ describe("computeCycleAnalytics — fastPathCounts (fast-path telemetry)", () =>
     assert.equal(record.fastPathCounts.fastPathRate, null,
       "fastPathRate must be null when total reviews is 0 (no division by zero)");
   });
+
+  it("byReasonCode is present on every fastPathCounts record with three null slots by default", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      fastPathCounts: { athenaAutoApproved: 3, athenaFullReview: 0 },
+    });
+    assert.ok("byReasonCode" in record.fastPathCounts,
+      "byReasonCode must be present even when autoApproveReasonCode is not provided");
+    assert.equal(record.fastPathCounts.byReasonCode.LOW_RISK_UNCHANGED,    null);
+    assert.equal(record.fastPathCounts.byReasonCode.HIGH_QUALITY_LOW_RISK, null);
+    assert.equal(record.fastPathCounts.byReasonCode.DELTA_REVIEW_APPROVED, null);
+  });
+
+  it("populates LOW_RISK_UNCHANGED slot when autoApproveReasonCode=LOW_RISK_UNCHANGED", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      fastPathCounts: { athenaAutoApproved: 5, athenaFullReview: 0, autoApproveReasonCode: "LOW_RISK_UNCHANGED" },
+    });
+    assert.equal(record.fastPathCounts.byReasonCode.LOW_RISK_UNCHANGED,    5);
+    assert.equal(record.fastPathCounts.byReasonCode.HIGH_QUALITY_LOW_RISK, null);
+    assert.equal(record.fastPathCounts.byReasonCode.DELTA_REVIEW_APPROVED, null);
+  });
+
+  it("populates HIGH_QUALITY_LOW_RISK slot when autoApproveReasonCode=HIGH_QUALITY_LOW_RISK", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      fastPathCounts: { athenaAutoApproved: 2, athenaFullReview: 0, autoApproveReasonCode: "HIGH_QUALITY_LOW_RISK" },
+    });
+    assert.equal(record.fastPathCounts.byReasonCode.HIGH_QUALITY_LOW_RISK, 2);
+    assert.equal(record.fastPathCounts.byReasonCode.LOW_RISK_UNCHANGED,    null);
+    assert.equal(record.fastPathCounts.byReasonCode.DELTA_REVIEW_APPROVED, null);
+  });
+
+  it("populates DELTA_REVIEW_APPROVED slot when autoApproveReasonCode=DELTA_REVIEW_APPROVED", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      fastPathCounts: { athenaAutoApproved: 4, athenaFullReview: 1, autoApproveReasonCode: "DELTA_REVIEW_APPROVED" },
+    });
+    assert.equal(record.fastPathCounts.byReasonCode.DELTA_REVIEW_APPROVED, 4);
+    assert.equal(record.fastPathCounts.byReasonCode.LOW_RISK_UNCHANGED,    null);
+    assert.equal(record.fastPathCounts.byReasonCode.HIGH_QUALITY_LOW_RISK, null);
+  });
+
+  it("negative path: unknown autoApproveReasonCode leaves all byReasonCode slots null", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      fastPathCounts: { athenaAutoApproved: 3, athenaFullReview: 0, autoApproveReasonCode: "UNKNOWN_CODE" },
+    });
+    assert.equal(record.fastPathCounts.byReasonCode.LOW_RISK_UNCHANGED,    null);
+    assert.equal(record.fastPathCounts.byReasonCode.HIGH_QUALITY_LOW_RISK, null);
+    assert.equal(record.fastPathCounts.byReasonCode.DELTA_REVIEW_APPROVED, null);
+  });
+
+  it("negative path: null autoApproveReasonCode leaves all byReasonCode slots null", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      fastPathCounts: { athenaAutoApproved: 2, athenaFullReview: 0, autoApproveReasonCode: null },
+    });
+    assert.equal(record.fastPathCounts.byReasonCode.LOW_RISK_UNCHANGED,    null);
+    assert.equal(record.fastPathCounts.byReasonCode.HIGH_QUALITY_LOW_RISK, null);
+    assert.equal(record.fastPathCounts.byReasonCode.DELTA_REVIEW_APPROVED, null);
+  });
+
+  it("byReasonCode slot is null when autoApproved is null (no count to assign)", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      fastPathCounts: { athenaFullReview: 3, autoApproveReasonCode: "LOW_RISK_UNCHANGED" },
+    });
+    // athenaAutoApproved absent → null; slot must not be populated with non-number
+    assert.equal(record.fastPathCounts.byReasonCode.LOW_RISK_UNCHANGED, null);
+  });
 });
 
 
