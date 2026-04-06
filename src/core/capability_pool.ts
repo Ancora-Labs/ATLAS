@@ -829,11 +829,65 @@ export const SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES = 3 as const;
 export const SPECIALIZATION_ADMISSION_BLOCK_REASON = "specialization_admission_gate_failed" as const;
 
 /**
+ * Compute a signed delta that adjusts the specialist admission threshold based
+ * on the aggregate reroute reason intensity from the last cycle.
+ *
+ * Binding rationale:
+ *   - BELOW_FILL_THRESHOLD reroutes: specialists exist but context batches are
+ *     too thin.  This is a token-packing issue, not a quality failure.  Lower
+ *     the effective admission threshold to allow dispatch rather than deadlocking
+ *     on a structural token constraint.  Weight: −0.05 per occurrence (max −0.10).
+ *   - PERFORMANCE_DEGRADED reroutes: the specialist lane is consistently failing.
+ *     Raise the effective threshold to signal that more specialists must be
+ *     rebalanced before dispatch should proceed.  Weight: +0.05 per occurrence
+ *     (max +0.10).
+ *   - DEPENDENCY_ISOLATION reroutes: wave-boundary artifact.  Apply minimal
+ *     leniency since the reroute is structural, not indicative of poor quality.
+ *     Weight: −0.02 per occurrence (max −0.05).
+ *
+ * The net delta is bounded to [−0.15, +0.15] so a single reroute cycle never
+ * produces an extreme threshold swing.
+ *
+ * @param reroutePenaltyLedger — per-lane reroute counts indexed by reason code
+ * @returns signed delta in [−0.15, +0.15]; 0 when ledger is empty
+ */
+export function computeAdmissionThresholdFromRerouteIntensity(
+  reroutePenaltyLedger: ReroutePenaltyLedger,
+): number {
+  if (!reroutePenaltyLedger || typeof reroutePenaltyLedger !== "object") return 0;
+
+  let delta = 0;
+
+  for (const laneCounts of Object.values(reroutePenaltyLedger)) {
+    if (!laneCounts || typeof laneCounts !== "object") continue;
+    for (const [code, count] of Object.entries(laneCounts)) {
+      const n = Math.max(0, Math.floor(Number(count) || 0));
+      if (n === 0) continue;
+      if (code === SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD) {
+        // Token-packing issue: lower threshold (more lenient)
+        delta -= Math.min(n * 0.05, 0.10);
+      } else if (code === SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED) {
+        // Quality issue: raise threshold (stricter)
+        delta += Math.min(n * 0.05, 0.10);
+      } else if (code === SPECIALIST_REROUTE_REASON_CODE.DEPENDENCY_ISOLATION) {
+        // Structural wave-boundary artifact: minimal leniency
+        delta -= Math.min(n * 0.02, 0.05);
+      }
+    }
+  }
+
+  // Bound the net delta so no single cycle produces an extreme swing.
+  return Math.round(Math.max(-0.15, Math.min(0.15, delta)) * 1000) / 1000;
+}
+
+/**
  * Evaluate whether the current assignment pool satisfies the specialization
  * admission gate.
  *
  * Gate fires when ALL of:
- *   1. Specialization targets are NOT met (specializationTargetsMet = false).
+ *   1. The effective specialist share falls below the intensity-adjusted threshold.
+ *      The effective threshold is derived by applying the reroute-intensity delta
+ *      (from computeAdmissionThresholdFromRerouteIntensity) to the adaptive target.
  *   2. At least one specialist worker is defined in the role registry (i.e., we
  *      are not in a "no-specialist-available" topology).
  *   3. The cycle has not already been blocked `maxBlockCycles` consecutive times
@@ -845,6 +899,9 @@ export const SPECIALIZATION_ADMISSION_BLOCK_REASON = "specialization_admission_g
  * @param specializationUtilization  — from assignWorkersToPlans result
  * @param consecutiveBlockCycles     — how many consecutive cycles this gate has fired
  * @param maxBlockCycles             — bounded fallback threshold (default SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES)
+ * @param reroutePenaltyLedger       — optional per-lane reroute reason counts; adjusts
+ *                                     the effective admission threshold based on reroute
+ *                                     reason intensity from the prior cycle
  */
 export function evaluateSpecializationAdmissionGate(
   specializationUtilization: {
@@ -857,9 +914,21 @@ export function evaluateSpecializationAdmissionGate(
   },
   consecutiveBlockCycles: number = 0,
   maxBlockCycles: number = SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES,
-): { blocked: boolean; reason: string; consecutiveBlockCycles: number } {
-  if (!specializationUtilization || specializationUtilization.specializationTargetsMet) {
-    return { blocked: false, reason: "", consecutiveBlockCycles: 0 };
+  reroutePenaltyLedger?: ReroutePenaltyLedger,
+): { blocked: boolean; reason: string; consecutiveBlockCycles: number; effectiveAdaptiveMin: number } {
+  if (!specializationUtilization) {
+    return { blocked: false, reason: "", consecutiveBlockCycles: 0, effectiveAdaptiveMin: 0 };
+  }
+
+  // Bind admission threshold to reroute reason intensity: the effective threshold
+  // is adjusted up/down based on why specialists were rerouted last cycle.
+  const intensityDelta = computeAdmissionThresholdFromRerouteIntensity(reroutePenaltyLedger ?? {});
+  const rawAdaptiveMin = Number(specializationUtilization.adaptiveMinSpecializedShare) || 0;
+  const effectiveAdaptiveMin = Math.round(Math.max(0, Math.min(1, rawAdaptiveMin + intensityDelta)) * 1000) / 1000;
+  const effectiveTargetsMet = specializationUtilization.specializedShare >= effectiveAdaptiveMin;
+
+  if (effectiveTargetsMet) {
+    return { blocked: false, reason: "", consecutiveBlockCycles: 0, effectiveAdaptiveMin };
   }
 
   // Bounded fallback: if we've been blocking for maxBlockCycles consecutive cycles,
@@ -870,14 +939,19 @@ export function evaluateSpecializationAdmissionGate(
       blocked: false,
       reason: `specialization_admission_gate_bypassed_fallback: consecutive_blocks=${consecutiveBlockCycles} >= max=${safeMaxBlock}`,
       consecutiveBlockCycles,
+      effectiveAdaptiveMin,
     };
   }
 
   const pct = Math.round(specializationUtilization.specializedShare * 100);
-  const minPct = Math.round(specializationUtilization.adaptiveMinSpecializedShare * 100);
+  const minPct = Math.round(effectiveAdaptiveMin * 100);
+  const intensityNote = intensityDelta !== 0
+    ? ` intensity_delta=${intensityDelta > 0 ? "+" : ""}${intensityDelta.toFixed(3)}`
+    : "";
   return {
     blocked: true,
-    reason: `${SPECIALIZATION_ADMISSION_BLOCK_REASON}: specialized_share=${pct}% < adaptive_target=${minPct}% deficit=${specializationUtilization.specializedDeficit}`,
+    reason: `${SPECIALIZATION_ADMISSION_BLOCK_REASON}: specialized_share=${pct}% < effective_target=${minPct}%${intensityNote} deficit=${specializationUtilization.specializedDeficit}`,
     consecutiveBlockCycles: consecutiveBlockCycles + 1,
+    effectiveAdaptiveMin,
   };
 }

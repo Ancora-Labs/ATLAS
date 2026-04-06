@@ -53,7 +53,7 @@ import { appendCapacityEntry } from "./capacity_scoreboard.js";
 import { computeCapabilityDelta } from "./delta_analytics.js";
 import { evaluateRetune } from "./strategy_retuner.js";
 import { compileLessonsToPolicies } from "./learning_policy_compiler.js";
-import { assignWorkersToPlans, enforceLaneDiversity, evaluateSpecializationAdmissionGate, buildLanePerformanceFromCycleTelemetry } from "./capability_pool.js";
+import { assignWorkersToPlans, enforceLaneDiversity, evaluateSpecializationAdmissionGate, buildLanePerformanceFromCycleTelemetry, buildReroutePenaltyLedger, SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES } from "./capability_pool.js";
 import { runDoctor } from "./doctor.js";
 import { validateAllPlans, validatePacketBatchAdmission } from "./plan_contract_validator.js";
 import {
@@ -880,9 +880,25 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
 
       // assignWorkersToPlans is synchronous; call it with current plans to get fresh utilization.
       const poolSample = assignWorkersToPlans(plans, config);
+
+      // Read reroute history to bind admission threshold to reroute reason intensity.
+      // Specialists rerouted for token-fill reasons lower the effective threshold;
+      // performance-degraded reroutes raise it.  Missing file is non-fatal.
+      let admissionReroutePenaltyLedger = {};
+      try {
+        const rerouteHistoryPath = path.join(stateDir, "reroute_history.jsonl");
+        const rawHistory = await fs.readFile(rerouteHistoryPath, "utf8");
+        const historyRecords = rawHistory.split("\n").filter(Boolean).flatMap(line => {
+          try { return [JSON.parse(line)]; } catch { return []; }
+        });
+        admissionReroutePenaltyLedger = buildReroutePenaltyLedger(historyRecords);
+      } catch { /* reroute_history.jsonl absent or unreadable — proceed without intensity binding */ }
+
       const admissionResult = evaluateSpecializationAdmissionGate(
         poolSample.specializationUtilization,
-        consecutiveBlockCycles
+        consecutiveBlockCycles,
+        SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES,
+        admissionReroutePenaltyLedger,
       );
 
       // Persist updated counter regardless of outcome so bypass counter resets on pass.
@@ -4200,6 +4216,24 @@ async function runSingleCycle(config) {
     } catch { /* non-fatal */ }
     const cycleLaneTelemetry = cycleAnalyticsRecord?.lastCycle?.laneTelemetry ?? null;
 
+    // Ensure specialization targets are persisted consistently across dispatch paths.
+    // buildTokenFirstBatches stamps specialistUtilizationTarget on the first batch;
+    // buildRoleExecutionBatches does not.  Fall back to capabilityPoolResult when the
+    // batch-level data is absent so the Athena-prebatched and role-execution paths
+    // emit the same scoreboard fields as the token-first path.
+    const capPoolUtil = (capabilityPoolResult as any)?.specializationUtilization;
+    const effectiveSpecTarget: {
+      targetMet: boolean;
+      adaptiveMinSpecializedShare: number;
+      minSpecializedShare: number;
+    } | null = firstBatchSpecialization ?? (capPoolUtil
+      ? {
+          targetMet: capPoolUtil.specializationTargetsMet === true,
+          adaptiveMinSpecializedShare: Number(capPoolUtil.adaptiveMinSpecializedShare ?? capPoolUtil.minSpecializedShare ?? 0),
+          minSpecializedShare: Number(capPoolUtil.minSpecializedShare ?? 0),
+        }
+      : null);
+
     await appendCapacityEntry(config, {
       parserConfidence: prometheusAnalysis?.parserConfidence ?? null,
       parserCoreConfidence: prometheusAnalysis?.parserCoreConfidence ?? null,
@@ -4210,8 +4244,8 @@ async function runSingleCycle(config) {
       budgetUsed: prometheusAnalysis?.requestBudget?.estimatedPremiumRequestsTotal ?? 0,
       budgetLimit: prometheusAnalysis?.requestBudget?.hardCapTotal ?? 0,
       workersDone: workersDone,
-      specializedShareTarget: Number(firstBatchSpecialization?.adaptiveMinSpecializedShare ?? firstBatchSpecialization?.minSpecializedShare ?? 0),
-      specializedShareTargetMet: firstBatchSpecialization?.targetMet === true,
+      specializedShareTarget: Number(effectiveSpecTarget?.adaptiveMinSpecializedShare ?? effectiveSpecTarget?.minSpecializedShare ?? 0),
+      specializedShareTargetMet: effectiveSpecTarget?.targetMet === true,
       specialistRerouteCount: Array.isArray(firstBatchRerouteReasons) ? firstBatchRerouteReasons.length : 0,
       ...(Array.isArray(firstBatchRerouteReasons) && firstBatchRerouteReasons.length > 0
         ? { specialistRerouteReasons: firstBatchRerouteReasons }

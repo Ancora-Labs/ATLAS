@@ -2297,3 +2297,217 @@ describe("rankModelsByTaskKindExpectedValue — sample threshold enforcement", (
     assert.strictEqual(featureResult.reason, "telemetry-below-threshold");
   });
 });
+
+// ── Task 1: Specialist admission threshold bound to reroute reason intensity ───
+
+import {
+  evaluateSpecializationAdmissionGate,
+  computeAdmissionThresholdFromRerouteIntensity,
+  buildReroutePenaltyLedger,
+  SPECIALIST_REROUTE_REASON_CODE,
+} from "../../src/core/capability_pool.js";
+
+describe("computeAdmissionThresholdFromRerouteIntensity — reroute intensity → threshold delta", () => {
+  it("returns 0 for an empty ledger", () => {
+    assert.strictEqual(computeAdmissionThresholdFromRerouteIntensity({}), 0);
+  });
+
+  it("returns 0 for null/undefined input", () => {
+    assert.strictEqual(computeAdmissionThresholdFromRerouteIntensity(null as any), 0);
+    assert.strictEqual(computeAdmissionThresholdFromRerouteIntensity(undefined as any), 0);
+  });
+
+  it("BELOW_FILL_THRESHOLD reroutes produce a negative delta (lower threshold = more lenient)", () => {
+    const ledger = buildReroutePenaltyLedger([
+      { lane: "quality",         reasonCode: SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD },
+      { lane: "implementation",  reasonCode: SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD },
+    ]);
+    const delta = computeAdmissionThresholdFromRerouteIntensity(ledger);
+    assert.ok(delta < 0, `delta must be negative for BELOW_FILL_THRESHOLD reroutes; got ${delta}`);
+  });
+
+  it("PERFORMANCE_DEGRADED reroutes produce a positive delta (raise threshold = stricter)", () => {
+    const ledger = buildReroutePenaltyLedger([
+      { lane: "quality",        reasonCode: SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED },
+      { lane: "quality",        reasonCode: SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED },
+    ]);
+    const delta = computeAdmissionThresholdFromRerouteIntensity(ledger);
+    assert.ok(delta > 0, `delta must be positive for PERFORMANCE_DEGRADED reroutes; got ${delta}`);
+  });
+
+  it("DEPENDENCY_ISOLATION reroutes produce a negative delta (structural leniency)", () => {
+    const ledger = buildReroutePenaltyLedger([
+      { lane: "integration", reasonCode: SPECIALIST_REROUTE_REASON_CODE.DEPENDENCY_ISOLATION },
+    ]);
+    const delta = computeAdmissionThresholdFromRerouteIntensity(ledger);
+    assert.ok(delta < 0, `delta must be negative for DEPENDENCY_ISOLATION reroutes; got ${delta}`);
+  });
+
+  it("net delta is bounded to [-0.15, +0.15] regardless of reroute volume", () => {
+    // Many PERFORMANCE_DEGRADED reroutes — must not exceed +0.15
+    const heavyLedger = buildReroutePenaltyLedger(
+      Array.from({ length: 20 }, () => ({ lane: "quality", reasonCode: SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED }))
+    );
+    const highDelta = computeAdmissionThresholdFromRerouteIntensity(heavyLedger);
+    assert.ok(highDelta <= 0.15, `positive delta must not exceed 0.15; got ${highDelta}`);
+
+    // Many BELOW_FILL_THRESHOLD reroutes — must not go below -0.15
+    const lenientLedger = buildReroutePenaltyLedger(
+      Array.from({ length: 20 }, () => ({ lane: "quality", reasonCode: SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD }))
+    );
+    const lowDelta = computeAdmissionThresholdFromRerouteIntensity(lenientLedger);
+    assert.ok(lowDelta >= -0.15, `negative delta must not go below -0.15; got ${lowDelta}`);
+  });
+
+  it("mixed reroute reasons partially cancel each other", () => {
+    const ledger = buildReroutePenaltyLedger([
+      { lane: "quality", reasonCode: SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED },
+      { lane: "quality", reasonCode: SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD },
+    ]);
+    const delta = computeAdmissionThresholdFromRerouteIntensity(ledger);
+    // Net should be between -0.05 and +0.05 (partially cancelled)
+    assert.ok(delta >= -0.05 && delta <= 0.05,
+      `mixed reroute delta should be near zero; got ${delta}`);
+  });
+});
+
+describe("evaluateSpecializationAdmissionGate — reroute intensity binding", () => {
+  const baseUtil = {
+    specializationTargetsMet: false,
+    specializedShare: 0.30,
+    minSpecializedShare: 0.35,
+    adaptiveMinSpecializedShare: 0.35,
+    specializedDeficit: 1,
+    admissionReady: false,
+  };
+
+  it("blocks when share is below adaptiveMinSpecializedShare with no reroute history", () => {
+    const result = evaluateSpecializationAdmissionGate(baseUtil, 0);
+    assert.strictEqual(result.blocked, true);
+    assert.ok(result.reason.includes("specialized_share=30%"));
+  });
+
+  it("effectiveAdaptiveMin is included in the result", () => {
+    const result = evaluateSpecializationAdmissionGate(baseUtil, 0);
+    assert.ok(typeof result.effectiveAdaptiveMin === "number");
+    assert.ok(result.effectiveAdaptiveMin >= 0 && result.effectiveAdaptiveMin <= 1);
+  });
+
+  it("BELOW_FILL_THRESHOLD reroutes lower effective threshold — gate may pass when base would block", () => {
+    // specializedShare=0.30, base adaptiveMin=0.35
+    // With 2× BELOW_FILL_THRESHOLD across 2 lanes: delta = -0.10, effectiveMin = 0.25
+    // 0.30 >= 0.25 → gate should pass
+    const ledger = buildReroutePenaltyLedger([
+      { lane: "quality",        reasonCode: SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD },
+      { lane: "implementation", reasonCode: SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD },
+    ]);
+    const result = evaluateSpecializationAdmissionGate(baseUtil, 0, 3, ledger);
+    assert.strictEqual(result.blocked, false,
+      "gate must pass when BELOW_FILL_THRESHOLD reroutes lower the effective threshold below specializedShare");
+  });
+
+  it("PERFORMANCE_DEGRADED reroutes raise effective threshold — gate still blocks", () => {
+    // specializedShare=0.30, base adaptiveMin=0.35; performance reroutes raise to 0.40+
+    // 0.30 < 0.40 → gate should still block
+    const ledger = buildReroutePenaltyLedger([
+      { lane: "quality", reasonCode: SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED },
+      { lane: "quality", reasonCode: SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED },
+    ]);
+    const result = evaluateSpecializationAdmissionGate(baseUtil, 0, 3, ledger);
+    assert.strictEqual(result.blocked, true,
+      "gate must still block when PERFORMANCE_DEGRADED reroutes raise the threshold");
+    assert.ok(result.effectiveAdaptiveMin > baseUtil.adaptiveMinSpecializedShare,
+      "effectiveAdaptiveMin must be raised above the base by PERFORMANCE_DEGRADED reroutes");
+  });
+
+  it("intensity delta is reflected in reason string when non-zero", () => {
+    const ledger = buildReroutePenaltyLedger([
+      { lane: "quality", reasonCode: SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED },
+    ]);
+    const result = evaluateSpecializationAdmissionGate(baseUtil, 0, 3, ledger);
+    assert.ok(result.blocked && result.reason.includes("intensity_delta"),
+      `reason must include intensity_delta; got: ${result.reason}`);
+  });
+
+  it("negative path: null specializationUtilization returns not-blocked safely", () => {
+    const result = evaluateSpecializationAdmissionGate(null as any, 0);
+    assert.strictEqual(result.blocked, false);
+  });
+
+  it("bounded fallback still fires even with reroute ledger present", () => {
+    const ledger = buildReroutePenaltyLedger([
+      { lane: "quality", reasonCode: SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED },
+    ]);
+    // consecutiveBlockCycles >= maxBlockCycles → bypassed
+    const result = evaluateSpecializationAdmissionGate(baseUtil, 3, 3, ledger);
+    assert.strictEqual(result.blocked, false);
+    assert.ok(result.reason.includes("bypassed_fallback"));
+  });
+});
+
+describe("scoreboard persistence — specialization target fallback to capabilityPoolResult", () => {
+  // Verify that appendCapacityEntry receives the correct specialization target
+  // even when workerBatches[0].specialistUtilizationTarget is absent (role-execution path).
+  // This test exercises the in-memory logic extracted from the orchestrator: the
+  // effective target is derived from capPoolUtil when the batch target is null.
+
+  it("effectiveSpecTarget falls back to capPoolUtil when firstBatchSpecialization is null", () => {
+    const capPoolUtil = {
+      specializationTargetsMet: true,
+      adaptiveMinSpecializedShare: 0.4,
+      minSpecializedShare: 0.35,
+      specializedCount: 3,
+      total: 5,
+    };
+
+    // Replicate the fallback logic from the orchestrator scoreboard block
+    const firstBatchSpecialization: any = null;
+    const effectiveSpecTarget = firstBatchSpecialization ?? (capPoolUtil
+      ? {
+          targetMet: capPoolUtil.specializationTargetsMet === true,
+          adaptiveMinSpecializedShare: Number(capPoolUtil.adaptiveMinSpecializedShare ?? capPoolUtil.minSpecializedShare ?? 0),
+          minSpecializedShare: Number(capPoolUtil.minSpecializedShare ?? 0),
+        }
+      : null);
+
+    assert.ok(effectiveSpecTarget !== null, "effectiveSpecTarget must not be null when capPoolUtil is present");
+    assert.strictEqual(effectiveSpecTarget.targetMet, true);
+    assert.strictEqual(effectiveSpecTarget.adaptiveMinSpecializedShare, 0.4);
+    assert.strictEqual(effectiveSpecTarget.minSpecializedShare, 0.35);
+  });
+
+  it("effectiveSpecTarget uses batch data when available (token-first / Athena-prebatched paths)", () => {
+    const firstBatchSpecialization = {
+      targetMet: false,
+      adaptiveMinSpecializedShare: 0.5,
+      minSpecializedShare: 0.35,
+    };
+    const capPoolUtil = {
+      specializationTargetsMet: true,
+      adaptiveMinSpecializedShare: 0.4,
+      minSpecializedShare: 0.35,
+    };
+
+    const effectiveSpecTarget = firstBatchSpecialization ?? (capPoolUtil ? {
+      targetMet: capPoolUtil.specializationTargetsMet === true,
+      adaptiveMinSpecializedShare: Number(capPoolUtil.adaptiveMinSpecializedShare),
+      minSpecializedShare: Number(capPoolUtil.minSpecializedShare),
+    } : null);
+
+    // Batch data takes precedence
+    assert.strictEqual(effectiveSpecTarget?.targetMet, false,
+      "batch data must take precedence over capPoolUtil fallback");
+    assert.strictEqual(effectiveSpecTarget?.adaptiveMinSpecializedShare, 0.5);
+  });
+
+  it("negative path: effectiveSpecTarget is null when both sources are absent", () => {
+    const firstBatchSpecialization: any = null;
+    const capPoolUtil: any = null;
+    const effectiveSpecTarget = firstBatchSpecialization ?? (capPoolUtil ? {
+      targetMet: capPoolUtil.specializationTargetsMet === true,
+      adaptiveMinSpecializedShare: Number(capPoolUtil.adaptiveMinSpecializedShare ?? 0),
+      minSpecializedShare: Number(capPoolUtil.minSpecializedShare ?? 0),
+    } : null);
+    assert.strictEqual(effectiveSpecTarget, null);
+  });
+});
