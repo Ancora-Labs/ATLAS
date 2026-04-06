@@ -14,10 +14,7 @@
 
 import path from "node:path";
 import { readJson, writeJson } from "./fs_utils.js";
-
-// Minimum usable samples required per task kind before telemetry is trusted for routing.
-// Must stay in sync with MIN_TELEMETRY_SAMPLE_THRESHOLD exported from cycle_analytics.ts.
-const MIN_TELEMETRY_SAMPLE_THRESHOLD = 3;
+import { MIN_TELEMETRY_SAMPLE_THRESHOLD } from "./telemetry_thresholds.js";
 
 // ── Banned model patterns (case-insensitive) ─────────────────────────────────
 // These patterns match against the resolved model slug BEFORE any CLI call.

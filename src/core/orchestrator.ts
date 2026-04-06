@@ -4258,6 +4258,7 @@ async function runSingleCycle(config) {
       specializedShareTarget: Number(effectiveSpecTarget?.adaptiveMinSpecializedShare ?? effectiveSpecTarget?.minSpecializedShare ?? 0),
       specializedShareTargetMet: effectiveSpecTarget?.targetMet === true,
       specialistRerouteCount: Array.isArray(firstBatchRerouteReasons) ? firstBatchRerouteReasons.length : 0,
+      configuredMinSpecializedShare: Number(effectiveSpecTarget?.minSpecializedShare ?? 0),
       ...(Array.isArray(firstBatchRerouteReasons) && firstBatchRerouteReasons.length > 0
         ? { specialistRerouteReasons: firstBatchRerouteReasons }
         : {}),

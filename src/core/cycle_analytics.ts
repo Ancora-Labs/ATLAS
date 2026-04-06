@@ -899,7 +899,7 @@ export function computeCycleAnalytics(config, {
  *
  * Consumers: rankModelsByTaskKindExpectedValue in model_policy.ts.
  */
-export const MIN_TELEMETRY_SAMPLE_THRESHOLD = 3;
+export { MIN_TELEMETRY_SAMPLE_THRESHOLD } from "./telemetry_thresholds.js";
 
 /**
  * Aggregate per-task-kind model outcome telemetry from the premium usage log.
@@ -907,7 +907,8 @@ export const MIN_TELEMETRY_SAMPLE_THRESHOLD = 3;
  * Each entry in premiumUsageLog is expected to have the shape:
  *   { model: string, taskKind: string, outcome: "done"|"partial"|"blocked"|"error" }
  *
- * Returns null when the log is empty or has no usable entries.
+ * Returns an empty invariant { byTaskKind: {}, sampleCount: 0 } when the log is empty or
+ * has no usable entries — never returns null so callers can safely read .byTaskKind.
  * Returns { byTaskKind, sampleCount } when data is present.
  *
  * Shape of byTaskKind:
@@ -929,7 +930,7 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
   }>;
   sampleCount: number;
 } | null {
-  if (!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) return null;
+  if (!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) return { byTaskKind: {}, sampleCount: 0 };
 
   type EcoPoint = { successProbability: number; capacityImpact: number; requestCost: number };
   type Accumulator = { done: number; total: number };
@@ -956,7 +957,7 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
     usableEntries++;
   }
 
-  if (usableEntries === 0) return null;
+  if (usableEntries === 0) return { byTaskKind: {}, sampleCount: 0 };
 
   const toEcoPoint = (acc: Accumulator): EcoPoint => {
     const sp = acc.total > 0 ? acc.done / acc.total : 0;

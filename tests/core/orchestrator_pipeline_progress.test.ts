@@ -2108,13 +2108,15 @@ describe("buildModelRoutingTelemetry — producer pipeline", () => {
     { model: "gpt-4o",          taskKind: "feature",      outcome: "done",    durationMs: 28000 },
   ];
 
-  it("returns null for empty log", () => {
-    assert.strictEqual(buildModelRoutingTelemetry([]), null);
+  it("returns empty invariant for empty log", () => {
+    const result = buildModelRoutingTelemetry([]);
+    assert.deepStrictEqual(result, { byTaskKind: {}, sampleCount: 0 });
   });
 
-  it("returns null for log with invalid entries only", () => {
+  it("returns empty invariant for log with invalid entries only", () => {
     const bad = [{ bad: "entry" }, null, "string", 42];
-    assert.strictEqual(buildModelRoutingTelemetry(bad as unknown[]), null);
+    const result = buildModelRoutingTelemetry(bad as unknown[]);
+    assert.deepStrictEqual(result, { byTaskKind: {}, sampleCount: 0 });
   });
 
   it("produces byTaskKind with default and per-model economics", () => {
@@ -2189,16 +2191,16 @@ describe("computeCycleAnalytics — modelRoutingTelemetry integration", () => {
     assert.ok("byTaskKind" in record.modelRoutingTelemetry);
   });
 
-  it("modelRoutingTelemetry is null when premiumUsageLog is empty", () => {
+  it("modelRoutingTelemetry is empty invariant when premiumUsageLog is empty", () => {
     const config = {};
     const record: any = computeCycleAnalytics(config, { premiumUsageLog: [] });
-    assert.strictEqual(record.modelRoutingTelemetry, null);
+    assert.deepStrictEqual(record.modelRoutingTelemetry, { byTaskKind: {}, sampleCount: 0 });
   });
 
-  it("modelRoutingTelemetry is null when premiumUsageLog is omitted", () => {
+  it("modelRoutingTelemetry is empty invariant when premiumUsageLog is omitted", () => {
     const config = {};
     const record: any = computeCycleAnalytics(config, {});
-    assert.strictEqual(record.modelRoutingTelemetry, null);
+    assert.deepStrictEqual(record.modelRoutingTelemetry, { byTaskKind: {}, sampleCount: 0 });
   });
 });
 
@@ -2513,6 +2515,66 @@ describe("scoreboard persistence — specialization target fallback to capabilit
       minSpecializedShare: Number(capPoolUtil.minSpecializedShare ?? 0),
     } : null);
     assert.strictEqual(effectiveSpecTarget, null);
+  });
+
+  it("configuredMinSpecializedShare is distinct from adaptiveMinSpecializedShare when adaptation is active", () => {
+    const capPoolUtil = {
+      specializationTargetsMet: false,
+      adaptiveMinSpecializedShare: 0.5,
+      minSpecializedShare: 0.35,
+    };
+    const effectiveSpecTarget = {
+      targetMet: capPoolUtil.specializationTargetsMet === true,
+      adaptiveMinSpecializedShare: Number(capPoolUtil.adaptiveMinSpecializedShare),
+      minSpecializedShare: Number(capPoolUtil.minSpecializedShare),
+    };
+    // specializedShareTarget uses the adaptive value
+    const specializedShareTarget = Number(
+      effectiveSpecTarget.adaptiveMinSpecializedShare ?? effectiveSpecTarget.minSpecializedShare ?? 0,
+    );
+    // configuredMinSpecializedShare uses the policy value
+    const configuredMinSpecializedShare = Number(effectiveSpecTarget.minSpecializedShare ?? 0);
+
+    assert.strictEqual(specializedShareTarget, 0.5, "specializedShareTarget must use adaptive value");
+    assert.strictEqual(configuredMinSpecializedShare, 0.35, "configuredMinSpecializedShare must reflect policy");
+    assert.notStrictEqual(specializedShareTarget, configuredMinSpecializedShare,
+      "adaptive and configured targets must differ when adaptation is active");
+  });
+
+  it("configuredMinSpecializedShare equals specializedShareTarget when no adaptation is applied", () => {
+    const capPoolUtil = {
+      specializationTargetsMet: true,
+      adaptiveMinSpecializedShare: 0.35,
+      minSpecializedShare: 0.35,
+    };
+    const effectiveSpecTarget = {
+      targetMet: capPoolUtil.specializationTargetsMet === true,
+      adaptiveMinSpecializedShare: Number(capPoolUtil.adaptiveMinSpecializedShare),
+      minSpecializedShare: Number(capPoolUtil.minSpecializedShare),
+    };
+    const specializedShareTarget = Number(effectiveSpecTarget.adaptiveMinSpecializedShare ?? 0);
+    const configuredMinSpecializedShare = Number(effectiveSpecTarget.minSpecializedShare ?? 0);
+
+    assert.strictEqual(specializedShareTarget, configuredMinSpecializedShare,
+      "when adaptation is absent, adaptive and configured targets must be equal");
+  });
+});
+
+describe("rankModelsByTaskKindExpectedValue — empty-invariant consumer safety", () => {
+  it("falls back to original order when modelRoutingTelemetry has empty byTaskKind (sampleCount=0)", () => {
+    const cycleAnalytics = { modelRoutingTelemetry: { byTaskKind: {}, sampleCount: 0 } };
+    const models = ["claude-sonnet-4", "gpt-4o"];
+    const result = rankModelsByTaskKindExpectedValue("ci-fix", models, cycleAnalytics);
+    assert.strictEqual(result.usedTelemetry, false, "must not claim telemetry used with empty byTaskKind");
+    assert.deepStrictEqual(result.rankedModels, models, "original order must be preserved on empty telemetry");
+    assert.strictEqual(result.reason, "telemetry-missing", "reason must be telemetry-missing");
+  });
+
+  it("negative: empty invariant does NOT cause an error or undefined access", () => {
+    const cycleAnalytics = { modelRoutingTelemetry: { byTaskKind: {}, sampleCount: 0 } };
+    assert.doesNotThrow(() => {
+      rankModelsByTaskKindExpectedValue("feature", ["model-a"], cycleAnalytics);
+    });
   });
 });
 

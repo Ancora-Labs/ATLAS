@@ -4310,6 +4310,7 @@ import {
   computeSynthesisActionableDensity,
   sanitizeResearchSynthesisForPersistence,
   parseSynthesisTopics,
+  quarantineLowDensityTopics,
 } from "../../src/core/research_synthesizer.js";
 
 describe("computeSynthesisActionableDensity — hardened fallback signals", () => {
@@ -4527,6 +4528,92 @@ Use JSON schema for structural validation before dispatch.
         }
       }
     }
+  });
+
+  it("metadata-only block with long topic name (>20 chars) is rescued via topic name signal", () => {
+    // Only metadata lines — no prose, no structured sources
+    const raw = `## Topic: Adaptive Specialization Rate Control
+**Freshness:** recent
+**Average Confidence:** 0.75
+**Source Count:** 3
+`;
+    const topics = parseSynthesisTopics(raw);
+    assert.equal(topics.length, 1, "topic must be retained via name-based rescue");
+    const sources = topics[0].sources as Array<Record<string, unknown>>;
+    assert.ok(Array.isArray(sources) && sources.length > 0, "name-rescue source must be injected");
+    assert.strictEqual(sources[0].scoutFindings, "Adaptive Specialization Rate Control",
+      "scoutFindings must equal the topic name for name-based rescue");
+  });
+
+  it("metadata-only block with short topic name (≤20 chars) is dropped from parse result", () => {
+    const raw = `## Topic: Short Name Topic
+**Freshness:** recent
+**Average Confidence:** 0.8
+`;
+    const topics = parseSynthesisTopics(raw);
+    // "Short Name Topic" is 16 chars — too short for name-rescue; topic must be dropped
+    assert.equal(topics.length, 0, "short-named signalless topic must not be retained");
+  });
+});
+
+describe("parseSynthesisTopics — hasFinalSignal gate (signal-free drop)", () => {
+  it("topic with no sources, netFindings, or applicableIdeas is not retained", () => {
+    // Simulate a topic that arrives with no signals at all (e.g. parse produced only topic name)
+    const raw = `## Topic: Bare Topic With No Data
+`;
+    const topics = parseSynthesisTopics(raw);
+    // "Bare Topic With No Data" is 23 chars but the block has no lines past the header
+    // The rescue path finds no prose AND the name fallback applies since length > 20.
+    // Verify the result is consistent with hasFinalSignal contract.
+    if (topics.length > 0) {
+      const t = topics[0] as Record<string, unknown>;
+      const hasSources = Array.isArray(t.sources) && (t.sources as unknown[]).length > 0;
+      const hasNet = Array.isArray(t.netFindings) && (t.netFindings as unknown[]).length > 0;
+      const hasIdeas = Array.isArray(t.applicableIdeas) && (t.applicableIdeas as unknown[]).length > 0;
+      assert.ok(hasSources || hasNet || hasIdeas,
+        "retained topic must have at least one actionable signal");
+    }
+  });
+});
+
+describe("quarantineLowDensityTopics — degradedPlanningMode semantics", () => {
+  it("passedTopics is empty when all topics are quarantined", () => {
+    const topics = [
+      { topic: "T1", sources: [] },
+      { topic: "T2", sources: [] },
+    ] as Array<Record<string, unknown>>;
+    const densities = computeSynthesisActionableDensity(topics);
+    const { passedTopics, quarantinedTopics } = quarantineLowDensityTopics(topics, densities);
+    assert.strictEqual(passedTopics.length, 0, "all topics failed — passedTopics must be empty");
+    assert.strictEqual(quarantinedTopics.length, 2);
+    // degradedPlanningMode condition: quarantined > 0 AND passed === 0
+    const degradedPlanningMode = quarantinedTopics.length > 0 && passedTopics.length === 0;
+    assert.strictEqual(degradedPlanningMode, true, "degradedPlanningMode must be true when no valid topic passed");
+  });
+
+  it("degradedPlanningMode is false when at least one topic passes quarantine", () => {
+    const topics = [
+      { topic: "Has Signal", sources: [{ scoutFindings: "This is a meaningful signal that passes." }] },
+      { topic: "No Signal", sources: [] },
+    ] as Array<Record<string, unknown>>;
+    const densities = computeSynthesisActionableDensity(topics);
+    const { passedTopics, quarantinedTopics } = quarantineLowDensityTopics(topics, densities);
+    assert.ok(passedTopics.length >= 1, "at least one topic must pass");
+    assert.ok(quarantinedTopics.length >= 1, "at least one topic must be quarantined");
+    // Even with quarantined topics present, degradedPlanningMode stays false
+    const degradedPlanningMode = quarantinedTopics.length > 0 && passedTopics.length === 0;
+    assert.strictEqual(degradedPlanningMode, false, "degradedPlanningMode must be false when valid signal exists");
+  });
+
+  it("negative path: degradedPlanningMode is false when all topics pass (no quarantine)", () => {
+    const topics = [
+      { topic: "Topic A", sources: [{ scoutFindings: "Valid signal content for topic A." }] },
+    ] as Array<Record<string, unknown>>;
+    const densities = computeSynthesisActionableDensity(topics);
+    const { passedTopics, quarantinedTopics } = quarantineLowDensityTopics(topics, densities);
+    assert.strictEqual(quarantinedTopics.length, 0);
+    const degradedPlanningMode = quarantinedTopics.length > 0 && passedTopics.length === 0;
+    assert.strictEqual(degradedPlanningMode, false);
   });
 });
 

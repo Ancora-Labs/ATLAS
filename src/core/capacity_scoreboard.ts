@@ -29,6 +29,12 @@ const MAX_ENTRIES = 100;
  *   Used as the yield signal for coupled alert detection (YIELD_COLLAPSE_WITH_VERIFICATION_BREACH).
  * @property {number} [verificationLatencyMs] — verificationCompletionMs from the SLO record for this cycle;
  *   tracked here so the scoreboard can surface the coupled alert precondition as a persistent trend.
+ * @property {number} [specializedShareTarget] — adaptive specialization share target (0–1) derived from config + lane performance.
+ * @property {boolean} [specializedShareTargetMet] — whether the adaptive specialization target was met this cycle.
+ * @property {number} [configuredMinSpecializedShare] — configured (pre-adaptation) minimum specialized share from workerPool policy (0–1).
+ * @property {number} [specialistRerouteCount] — count of workers rerouted from specialist lane to evolution-worker this cycle.
+ * @property {object} [laneTelemetry] — per-lane capacity distribution snapshot from cycle analytics.
+ * @property {object} [optimizerUsage] — optimizer resource usage for the cycle.
  */
 
 /**

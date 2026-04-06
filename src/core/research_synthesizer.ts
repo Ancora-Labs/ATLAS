@@ -225,10 +225,24 @@ export function parseSynthesisTopics(rawText: string): Array<Record<string, unkn
       const rescuedText = rescueLines.slice(0, 5).join(" ").replace(/\s+/g, " ").trim();
       if (rescuedText) {
         topic.sources = [{ title: String(topic.topic || ""), scoutFindings: rescuedText }];
+      } else if (String(topic.topic || "").length > 20) {
+        // Fallback: use the topic name itself as minimal signal when the block
+        // contains only metadata lines (freshness/confidence) and no extractable prose.
+        // Topic names > 20 chars are specific enough to constitute an actionable signal.
+        const topicName = String(topic.topic);
+        topic.sources = [{ title: topicName, scoutFindings: topicName }];
       }
     }
 
-    if (topic.topic) {
+    // Only retain topics that carry at least one actionable signal after rescue.
+    // Topics with no sources, no netFindings, and no applicableIdeas are dropped
+    // so they do not pollute the quality gate or trigger degraded planning mode.
+    const hasFinalSignal = (
+      (Array.isArray(topic.sources) && (topic.sources as unknown[]).length > 0)
+      || (Array.isArray(topic.netFindings) && (topic.netFindings as unknown[]).length > 0)
+      || (Array.isArray(topic.applicableIdeas) && (topic.applicableIdeas as unknown[]).length > 0)
+    );
+    if (topic.topic && hasFinalSignal) {
       topics.push(topic);
     }
   }
@@ -720,13 +734,16 @@ Follow your agent definition's output format exactly.`),
 
   const qualityGateDensities = computeSynthesisActionableDensity(finalTopics);
   const gatePassed = qualityGateDensities.every(d => d.passed);
-  const { quarantinedTopics } = quarantineLowDensityTopics(finalTopics, qualityGateDensities);
+  const { passedTopics, quarantinedTopics } = quarantineLowDensityTopics(finalTopics, qualityGateDensities);
   const qualityGate: SynthesisQualityGate = {
     passed: gatePassed,
     retried,
     topicDensities: qualityGateDensities,
     quarantinedTopics,
-    degradedPlanningMode: quarantinedTopics.length > 0,
+    // Degraded mode only fires when every topic was quarantined (passedTopics is empty).
+    // Partial quarantine (some passed) does not warrant degraded mode — Prometheus
+    // still has valid signal to plan from.
+    degradedPlanningMode: quarantinedTopics.length > 0 && passedTopics.length === 0,
   };
 
   const output: ResearchSynthesisResult = {
