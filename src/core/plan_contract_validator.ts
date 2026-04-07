@@ -66,6 +66,12 @@ export const PACKET_VIOLATION_CODE = Object.freeze({
   FORBIDDEN_COMMAND:             "forbidden_command",
   /** verification_commands is absent, empty, or contains only blank entries. */
   MISSING_VERIFICATION_COUPLING: "missing_verification_coupling",
+  /**
+   * No named verification target could be resolved from verification or
+   * verification_commands — all entries are non-specific CLI commands.
+   * Plans with unbound targets risk high-latency, low-yield worker calls.
+   */
+  UNBOUND_VERIFICATION_TARGET:   "unbound_verification_target",
 
   // ── Acceptance criteria ──────────────────────────────────────────────────
   /** acceptance_criteria is absent or empty — no measurable completion signal. */
@@ -538,6 +544,26 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
         "Generic commands like 'npm test' alone are rejected.",
       severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
       code: PACKET_VIOLATION_CODE.NON_SPECIFIC_VERIFICATION,
+    });
+  }
+
+  // Verification target binding check: warn when no named verification target can be
+  // resolved from either verification or verification_commands.  Plans dispatched without
+  // a bound target risk high-latency, low-yield worker calls that cannot be evaluated.
+  // Only emitted when the plan has at least one verification field set (MISSING_VERIFICATION
+  // already covers the fully-absent case above).
+  const hasAnyVerificationField =
+    (plan.verification && String(plan.verification).trim().length > 0) ||
+    (Array.isArray(plan.verification_commands) && plan.verification_commands.some(
+      (cmd) => String(cmd ?? "").trim().length > 0,
+    ));
+  if (hasAnyVerificationField && resolveNamedVerificationTarget(plan) === null) {
+    violations.push({
+      field: "verification",
+      message: "No named verification target could be resolved from verification or verification_commands. " +
+        "All entries resolve to non-specific CLI commands — bind a specific test file before dispatch.",
+      severity: PLAN_VIOLATION_SEVERITY.WARNING,
+      code: PACKET_VIOLATION_CODE.UNBOUND_VERIFICATION_TARGET,
     });
   }
 

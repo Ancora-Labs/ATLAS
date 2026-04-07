@@ -117,12 +117,14 @@ export function computeWeightedDecisionScore(postmortems) {
  *   NO_ACTIVE_DATA      — both prometheus plans and evolution progress are empty
  */
 export const OUTCOME_DEGRADED_REASON = Object.freeze({
-  PROMETHEUS_ABSENT:  "PROMETHEUS_ABSENT",
-  PROMETHEUS_INVALID: "PROMETHEUS_INVALID",
-  EVOLUTION_ABSENT:   "EVOLUTION_ABSENT",
-  EVOLUTION_INVALID:  "EVOLUTION_INVALID",
-  WORKER_SESSIONS_STALE: "WORKER_SESSIONS_STALE",
-  NO_ACTIVE_DATA:     "NO_ACTIVE_DATA"
+  PROMETHEUS_ABSENT:             "PROMETHEUS_ABSENT",
+  PROMETHEUS_INVALID:            "PROMETHEUS_INVALID",
+  EVOLUTION_ABSENT:              "EVOLUTION_ABSENT",
+  EVOLUTION_INVALID:             "EVOLUTION_INVALID",
+  WORKER_SESSIONS_STALE:         "WORKER_SESSIONS_STALE",
+  NO_ACTIVE_DATA:                "NO_ACTIVE_DATA",
+  /** worker_cycle_artifacts.json absent (ENOENT) or failed schema migration — fallback path used. */
+  CANONICAL_ARTIFACT_ABSENT:     "CANONICAL_ARTIFACT_ABSENT",
 });
 
 // shouldTriggerSelfImprovement stub removed — real implementation is below
@@ -460,12 +462,12 @@ export async function collectCycleOutcomes(config) {
   const stateDir = config.paths?.stateDir || "state";
 
   // ── Primary state sources (canonical first) ──────────────────────────────
-  // Use readJsonSafe to distinguish MISSING (ENOENT) from INVALID (parse error).
-  const [prometheusResult, workerCycleArtifactsResult, evolutionResult, workerSessionsResult, pipelineProgressResult] = await Promise.all([
+  // Read canonical sources eagerly; legacy fallback files (evolution_progress,
+  // worker_sessions) are loaded lazily only when the canonical artifact is absent
+  // or unmigrateable, reducing I/O on the common path.
+  const [prometheusResult, workerCycleArtifactsResult, pipelineProgressResult] = await Promise.all([
     readJsonSafe(path.join(stateDir, "prometheus_analysis.json")),
     readJsonSafe(path.join(stateDir, WORKER_CYCLE_ARTIFACTS_FILE)),
-    readJsonSafe(path.join(stateDir, "evolution_progress.json")),
-    readJsonSafe(path.join(stateDir, "worker_sessions.json")),
     readJsonSafe(path.join(stateDir, "pipeline_progress.json")),
   ]);
   let workerSessions: Record<string, any> = {};
@@ -534,23 +536,29 @@ export async function collectCycleOutcomes(config) {
   }
 
   // Compatibility fallback for legacy files when canonical cycle artifacts are absent.
-  // Read-only path with explicit warning telemetry.
+  // Read-only with explicit warning telemetry (schema-versioned migration path).
+  // When canonical is absent, degrade immediately with CANONICAL_ARTIFACT_ABSENT so
+  // the reason code reflects the root cause rather than a symptom in legacy files.
   let workerSessionsStaleSignal: string | null = null;
   if (!usingCanonicalWorkerArtifacts) {
     warn("[self-improvement] canonical worker-cycle artifact absent; falling back to evolution_progress/worker_sessions compatibility path");
 
+    // Mark degraded with canonical-absent reason (primary signal for missing canonical data).
+    if (!degraded) {
+      degraded = true;
+      degradedReason = OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_ABSENT;
+    }
+
+    // Lazily read legacy files — only reached when canonical artifact is absent.
+    const [evolutionResult, workerSessionsResult] = await Promise.all([
+      readJsonSafe(path.join(stateDir, "evolution_progress.json")),
+      readJsonSafe(path.join(stateDir, "worker_sessions.json")),
+    ]);
+
     if (!evolutionResult.ok) {
-      if (!degraded) {
-        degraded = true;
-        degradedReason = evolutionResult.reason === READ_JSON_REASON.MISSING
-          ? OUTCOME_DEGRADED_REASON.EVOLUTION_ABSENT
-          : OUTCOME_DEGRADED_REASON.EVOLUTION_INVALID;
-      }
+      warn(`[self-improvement] legacy evolution_progress.json unavailable: reason=${evolutionResult.reason}`);
     } else if (evolutionResult.data?.tasks !== null && typeof evolutionResult.data?.tasks !== "object") {
-      if (!degraded) {
-        degraded = true;
-        degradedReason = OUTCOME_DEGRADED_REASON.EVOLUTION_INVALID;
-      }
+      warn("[self-improvement] legacy evolution_progress.json has invalid task structure");
     } else {
       const taskMap = evolutionResult.data?.tasks || {};
       completedTasks = Object.entries(taskMap)
@@ -559,7 +567,6 @@ export async function collectCycleOutcomes(config) {
     }
 
     // worker_sessions is required for per-worker outcome telemetry in fallback mode.
-    // Treat missing/invalid sessions OR stale empty sessions with worker artifacts as degraded.
     if (!workerSessionsResult.ok) {
       workerSessionsStaleSignal = workerSessionsResult.reason === READ_JSON_REASON.MISSING
         ? "ABSENT"
@@ -596,10 +603,6 @@ export async function collectCycleOutcomes(config) {
       warn(
         `[self-improvement] worker session artifacts stale: signal=${workerSessionsStaleSignal} stateDir=${stateDir}`
       );
-      if (!degraded) {
-        degraded = true;
-        degradedReason = OUTCOME_DEGRADED_REASON.WORKER_SESSIONS_STALE;
-      }
     }
   } else {
     workerSessionsStaleSignal = null;
@@ -612,7 +615,7 @@ export async function collectCycleOutcomes(config) {
     sourceFiles.push("worker_cycle_artifacts");
   } else {
     sourceFiles.push(workerSessionsStaleSignal ? "worker_sessions_stale" : "worker_sessions");
-    if (evolutionResult.ok) sourceFiles.push("evolution_progress_fallback");
+    sourceFiles.push("evolution_progress_fallback");
   }
   const metricsSource = sourceFiles.join("+");
 

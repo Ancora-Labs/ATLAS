@@ -44,6 +44,7 @@ import {
   computeCycleAnalytics,
   CYCLE_PHASE,
   CYCLE_OUTCOME_STATUS,
+  WORKER_CYCLE_ARTIFACTS_FILE,
 } from "../../src/core/cycle_analytics.js";
 import { isTerminalWorkerStatus } from "../../src/core/worker_runner.js";
 
@@ -1117,5 +1118,43 @@ describe("Integration: premium efficiency variants in cycle analytics kpis", () 
       (record.kpis.premiumEfficiencyRaw ?? 0) > (record.kpis.premiumEfficiencyAdjusted ?? 0),
       "execution penalty must be visible: raw should exceed adjusted",
     );
+  });
+});
+
+// ── Canonical telemetry spine integration ─────────────────────────────────────
+// Verifies that the canonical worker-cycle artifact filename constant is stable
+// and that terminal worker statuses used in canonical artifacts are fully
+// recognized by the observability pipeline.
+
+describe("canonical telemetry spine — artifact schema and terminal status coverage", () => {
+  it("WORKER_CYCLE_ARTIFACTS_FILE constant resolves to expected filename", () => {
+    assert.equal(WORKER_CYCLE_ARTIFACTS_FILE, "worker_cycle_artifacts.json",
+      "WORKER_CYCLE_ARTIFACTS_FILE must be the stable canonical filename");
+  });
+
+  it("all canonical workerActivity status values are recognized as terminal by isTerminalWorkerStatus", () => {
+    // These are the status values written into workerActivity entries in worker_cycle_artifacts.json.
+    const canonicalStatuses = ["done", "success", "skipped", "partial", "blocked", "error", "failed"];
+    for (const status of canonicalStatuses) {
+      assert.ok(isTerminalWorkerStatus(status),
+        `Status "${status}" used in canonical artifacts must be terminal`);
+    }
+  });
+
+  it("non-terminal status is not recognized as terminal", () => {
+    assert.equal(isTerminalWorkerStatus("in_progress"), false);
+    assert.equal(isTerminalWorkerStatus("pending"), false);
+    assert.equal(isTerminalWorkerStatus("running"), false);
+    assert.equal(isTerminalWorkerStatus(""), false);
+  });
+
+  it("computeCycleAnalytics produces a record that integrates worker session data", () => {
+    const workerSessions = {
+      "evolution-worker": { status: "idle", startedAt: new Date().toISOString() },
+    };
+    const record = computeCycleAnalytics({ workerSessions }, {});
+    // The record must be a non-null object with kpis — it consumed the session data
+    assert.ok(record !== null && typeof record === "object", "must return analytics record");
+    assert.ok("kpis" in record, "record must include kpis");
   });
 });

@@ -31,6 +31,9 @@ import {
 import {
   applyDispatchBoundaryHardCap,
   MAX_ACTIONABLE_STEPS_PER_PACKET,
+  validatePlanContract,
+  PACKET_VIOLATION_CODE,
+  PLAN_VIOLATION_SEVERITY,
 } from "../../src/core/plan_contract_validator.js";
 
 describe("orchestrator pipeline progress — resilience", () => {
@@ -2762,5 +2765,53 @@ describe("dispatch-boundary hard cap — applyDispatchBoundaryHardCap", () => {
     const batches = [{ role: "evolution-worker", plans, estimatedTokens: 2000 }];
     const result = applyDispatchBoundaryHardCap(batches);
     assert.equal(result.length, 1, "batch below cap must not be split");
+  });
+});
+
+// ── UNBOUND_VERIFICATION_TARGET — pre-dispatch binding gate ──────────────────
+
+describe("validatePlanContract — UNBOUND_VERIFICATION_TARGET", () => {
+  const VALID_BASE = {
+    id: "T-bind-001",
+    task: "Implement feature X in module Y",
+    role: "evolution-worker",
+    wave: 1,
+    verification: "npm test -- tests/core/foo.test.ts",
+    verification_commands: ["npm test -- tests/core/foo.test.ts"],
+    acceptance_criteria: ["foo.test.ts passes", "No regressions in module Y"],
+    dependencies: [],
+    capacityDelta: 0.1,
+    requestROI: 1.2,
+  };
+
+  it("no UNBOUND_VERIFICATION_TARGET when verification resolves to a named test file", () => {
+    const { violations } = validatePlanContract(VALID_BASE);
+    const unbound = violations.filter((v) => v.code === PACKET_VIOLATION_CODE.UNBOUND_VERIFICATION_TARGET);
+    assert.equal(unbound.length, 0, "specific test file reference must not trigger UNBOUND_VERIFICATION_TARGET");
+  });
+
+  it("emits UNBOUND_VERIFICATION_TARGET when all verification values are non-specific", () => {
+    const plan = {
+      ...VALID_BASE,
+      verification: "npm test",
+      verification_commands: ["npm run test"],
+    };
+    const { violations } = validatePlanContract(plan);
+    const unbound = violations.filter((v) => v.code === PACKET_VIOLATION_CODE.UNBOUND_VERIFICATION_TARGET);
+    // Note: NON_SPECIFIC_VERIFICATION fires for bare "npm test" in `verification`;
+    // UNBOUND_VERIFICATION_TARGET fires additionally when no target resolves from either field.
+    assert.ok(unbound.length > 0, "must emit UNBOUND_VERIFICATION_TARGET when no named target resolves");
+    assert.equal(unbound[0].severity, PLAN_VIOLATION_SEVERITY.WARNING, "unbound target is WARNING severity");
+  });
+
+  it("NEGATIVE PATH: no UNBOUND_VERIFICATION_TARGET when verification is absent (MISSING_VERIFICATION covers that case)", () => {
+    const plan = { ...VALID_BASE, verification: null, verification_commands: undefined };
+    const { violations } = validatePlanContract(plan);
+    const unbound = violations.filter((v) => v.code === PACKET_VIOLATION_CODE.UNBOUND_VERIFICATION_TARGET);
+    // When verification is absent, hasAnyVerificationField is false, so UNBOUND_VERIFICATION_TARGET is NOT emitted.
+    // MISSING_VERIFICATION is emitted instead.
+    assert.equal(unbound.length, 0, "UNBOUND_VERIFICATION_TARGET must not fire when verification is absent");
+    const missing = violations.filter((v) => v.code === PACKET_VIOLATION_CODE.MISSING_VERIFICATION);
+    assert.ok(missing.length > 0, "MISSING_VERIFICATION must fire when verification is absent");
   });
 });

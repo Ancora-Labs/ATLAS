@@ -254,6 +254,54 @@ export function applyOverbundleEVPenalty(ev: number, stepCount: number): number 
   return Math.round((ev * (1 - OVERBUNDLE_EV_PENALTY_COEFFICIENT)) * 1000) / 1000;
 }
 
+/**
+ * checkOverbundleHardAdmission — pre-dispatch hard admission gate for over-bundled packets.
+ *
+ * A plan packet is "over-bundled" when its ordered-step count (derived from
+ * acceptance_criteria, orderedSteps, or plans.length) exceeds the threshold.
+ * Over-bundled packets must be rejected or split before dispatch — this gate
+ * makes the block deterministic and machine-readable.
+ *
+ * Distinct from applyOverbundleEVPenalty (which is a soft scoring adjustment):
+ * this function returns a hard binary block decision so the orchestrator can
+ * reject or split the packet before it reaches any worker.
+ *
+ * @param plans     — plan objects to evaluate
+ * @param threshold — ordered-step cap (default: OVERBUNDLE_STEPS_THRESHOLD)
+ * @returns { blocked, reason, rejectedIds }
+ */
+export function checkOverbundleHardAdmission(
+  plans: any[],
+  threshold: number = OVERBUNDLE_STEPS_THRESHOLD,
+): { blocked: boolean; reason: string | null; rejectedIds: string[] } {
+  if (!Array.isArray(plans) || plans.length === 0) {
+    return { blocked: false, reason: null, rejectedIds: [] };
+  }
+  const cap = Math.max(1, Math.floor(Number.isFinite(threshold) ? threshold : OVERBUNDLE_STEPS_THRESHOLD));
+  const rejectedIds: string[] = [];
+
+  for (const plan of plans) {
+    const id = String(plan?.id ?? plan?.task_id ?? "").trim();
+    const steps = Array.isArray(plan?.orderedSteps)
+      ? plan.orderedSteps.length
+      : Array.isArray(plan?.acceptance_criteria)
+        ? plan.acceptance_criteria.length
+        : Array.isArray(plan?.plans)
+          ? plan.plans.length
+          : 1;
+    if (steps > cap) {
+      rejectedIds.push(id || `plan-idx-${plans.indexOf(plan)}`);
+    }
+  }
+
+  if (rejectedIds.length === 0) {
+    return { blocked: false, reason: null, rejectedIds: [] };
+  }
+
+  const reason = `overbundle_hard_admission: ${rejectedIds.length} packet(s) [${rejectedIds.join(", ")}] exceed ordered-step cap of ${cap} — split or decompose before dispatch`;
+  return { blocked: true, reason, rejectedIds };
+}
+
 
 
 /**

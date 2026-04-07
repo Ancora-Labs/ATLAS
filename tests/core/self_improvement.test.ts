@@ -144,6 +144,7 @@ describe("OUTCOME_DEGRADED_REASON", () => {
     assert.equal(OUTCOME_DEGRADED_REASON.EVOLUTION_INVALID,  "EVOLUTION_INVALID");
     assert.equal(OUTCOME_DEGRADED_REASON.WORKER_SESSIONS_STALE, "WORKER_SESSIONS_STALE");
     assert.equal(OUTCOME_DEGRADED_REASON.NO_ACTIVE_DATA,     "NO_ACTIVE_DATA");
+    assert.equal(OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_ABSENT, "CANONICAL_ARTIFACT_ABSENT");
   });
 });
 
@@ -159,6 +160,8 @@ describe("collectCycleOutcomes — no-Athena runtime", () => {
     await writeTestJson(tmpDir, "evolution_progress.json", EVOLUTION_PROGRESS);
     await writeTestJson(tmpDir, "worker_sessions.json", WORKER_SESSIONS);
     await writeTestJson(tmpDir, "athena_plan_review.json", ATHENA_PLAN_REVIEW);
+    // Canonical artifact present — required for degraded=false
+    await writeTestJson(tmpDir, WORKER_CYCLE_ARTIFACTS_FILE, makeWorkerCycleArtifacts());
     // Intentionally NO athena_coordination.json
     result = await collectCycleOutcomes(makeConfig(tmpDir));
   });
@@ -171,8 +174,8 @@ describe("collectCycleOutcomes — no-Athena runtime", () => {
     assert.equal(result.totalPlans, 2, "totalPlans must match prometheus plans count");
   });
 
-  it("returns completedCount from evolution_progress completed tasks", () => {
-    assert.equal(result.completedCount, 1, "only T-001 has status=completed");
+  it("returns completedCount from worker_cycle_artifacts completed tasks", () => {
+    assert.equal(result.completedCount, 1, "only T-001 has status=completed in canonical artifact");
   });
 
   it("returns projectHealth from prometheus_analysis", () => {
@@ -184,9 +187,9 @@ describe("collectCycleOutcomes — no-Athena runtime", () => {
     assert.equal(result.degradedReason, null);
   });
 
-  it("metricsSource includes prometheus_analysis and evolution_progress", () => {
+  it("metricsSource includes prometheus_analysis and worker_cycle_artifacts", () => {
     assert.ok(result.metricsSource.includes("prometheus_analysis"), "must credit prometheus_analysis");
-    assert.ok(result.metricsSource.includes("evolution_progress"), "must credit evolution_progress");
+    assert.ok(result.metricsSource.includes("worker_cycle_artifacts"), "must credit canonical worker_cycle_artifacts");
     assert.ok(!result.metricsSource.includes("athena_coordination"), "must not include Athena source");
   });
 
@@ -376,6 +379,8 @@ describe("collectCycleOutcomes — athena_coordination.json present but ignored"
     await writeTestJson(tmpDir, "prometheus_analysis.json", PROMETHEUS_ANALYSIS);
     await writeTestJson(tmpDir, "evolution_progress.json", EVOLUTION_PROGRESS);
     await writeTestJson(tmpDir, "worker_sessions.json", WORKER_SESSIONS);
+    // Canonical artifact present — required for degraded=false
+    await writeTestJson(tmpDir, WORKER_CYCLE_ARTIFACTS_FILE, makeWorkerCycleArtifacts());
     // Legacy Athena file still present on disk — should be ignored
     await writeTestJson(tmpDir, "athena_coordination.json", {
       completedTasks: ["T-001", "T-LEGACY-001"],
@@ -388,9 +393,9 @@ describe("collectCycleOutcomes — athena_coordination.json present but ignored"
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("completedCount only reflects evolution_progress (Athena ignored)", () => {
-    // evolution has only T-001 completed; legacy T-LEGACY-001 is NOT merged
-    assert.equal(result.completedCount, 1, "must only count evolution-derived completed tasks");
+  it("completedCount only reflects canonical artifacts (Athena ignored)", () => {
+    // canonical has only T-001 completed; legacy T-LEGACY-001 is NOT merged
+    assert.equal(result.completedCount, 1, "must only count canonical completed tasks");
   });
 
   it("metricsSource does NOT include athena_coordination", () => {
@@ -464,9 +469,9 @@ describe("collectCycleOutcomes — evolution_progress invalid JSON", () => {
     assert.equal(result.degraded, true);
   });
 
-  it("degradedReason=EVOLUTION_INVALID (not EVOLUTION_ABSENT)", () => {
-    assert.equal(result.degradedReason, OUTCOME_DEGRADED_REASON.EVOLUTION_INVALID,
-      "corrupt file must produce INVALID, not ABSENT");
+  it("degradedReason=CANONICAL_ARTIFACT_ABSENT when evolution_progress is corrupt and no canonical artifact", () => {
+    assert.equal(result.degradedReason, OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_ABSENT,
+      "absent canonical artifact produces CANONICAL_ARTIFACT_ABSENT reason regardless of legacy file state");
   });
 
   it("totalPlans still returns plan count from prometheus (other source still valid)", () => {
@@ -496,8 +501,8 @@ describe("collectCycleOutcomes — worker_sessions absent", () => {
     assert.equal(result.degraded, true);
   });
 
-  it("degradedReason=WORKER_SESSIONS_STALE for missing worker sessions", () => {
-    assert.equal(result.degradedReason, OUTCOME_DEGRADED_REASON.WORKER_SESSIONS_STALE);
+  it("degradedReason=CANONICAL_ARTIFACT_ABSENT for missing worker sessions (no canonical artifact)", () => {
+    assert.equal(result.degradedReason, OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_ABSENT);
   });
 });
 
@@ -524,8 +529,8 @@ describe("collectCycleOutcomes — worker_sessions stale vs worker artifacts", (
     assert.equal(result.degraded, true);
   });
 
-  it("degradedReason=WORKER_SESSIONS_STALE for stale session artifact", () => {
-    assert.equal(result.degradedReason, OUTCOME_DEGRADED_REASON.WORKER_SESSIONS_STALE);
+  it("degradedReason=CANONICAL_ARTIFACT_ABSENT for stale session artifact (no canonical artifact)", () => {
+    assert.equal(result.degradedReason, OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_ABSENT);
   });
 });
 
@@ -620,6 +625,7 @@ describe("collectCycleOutcomes — dispatchBlockReason from cycle_analytics.json
     await writeTestJson(tmpDir, "prometheus_analysis.json", PROMETHEUS_ANALYSIS);
     await writeTestJson(tmpDir, "evolution_progress.json", EVOLUTION_PROGRESS);
     await writeTestJson(tmpDir, "worker_sessions.json", WORKER_SESSIONS);
+    await writeTestJson(tmpDir, WORKER_CYCLE_ARTIFACTS_FILE, makeWorkerCycleArtifacts());
     await writeTestJson(tmpDir, "cycle_analytics.json", {
       schemaVersion: 1,
       lastCycle: {
@@ -653,6 +659,8 @@ describe("collectCycleOutcomes — dispatchBlockReason absent when cycle_analyti
     await writeTestJson(tmpDir, "prometheus_analysis.json", PROMETHEUS_ANALYSIS);
     await writeTestJson(tmpDir, "evolution_progress.json", EVOLUTION_PROGRESS);
     await writeTestJson(tmpDir, "worker_sessions.json", WORKER_SESSIONS);
+    // Canonical artifact present — required for degraded=false
+    await writeTestJson(tmpDir, WORKER_CYCLE_ARTIFACTS_FILE, makeWorkerCycleArtifacts());
     // Intentionally NO cycle_analytics.json
     result = await collectCycleOutcomes(makeConfig(tmpDir));
   });

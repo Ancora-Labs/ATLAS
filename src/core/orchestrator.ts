@@ -956,13 +956,17 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
     }
   }
 
-  // ── Gate 12: Oversized packet hard admission ───────────────────────────
-  // When config.planner.maxActionableStepsPerPacket is configured, block dispatch
-  // if any per-role plan group exceeds the cap.  This converts the advisory
-  // auto-split fallback in buildRoleExecutionBatches into an explicit hard block
-  // so callers receive a deterministic reason rather than silent reshaping.
+  // ── Gate 12: Oversized packet hard admission (always-on) ─────────────────
+  // Unconditional pre-dispatch gate: block dispatch when any per-role plan group
+  // exceeds the ordered-step complexity cap.  The cap is taken from
+  // config.planner.maxActionableStepsPerPacket when configured, or falls back to
+  // OVERBUNDLE_STEPS_THRESHOLD so the gate is always active regardless of config.
   //
-  // Opt-in: only active when maxActionableStepsPerPacket is a positive integer.
+  // Named verification targets are bound earlier in this function (above) so that
+  // by the time this gate runs every plan already carries a resolved verification
+  // target or a NON_SPECIFIC_VERIFICATION marker — preventing high-latency
+  // low-yield worker calls from reaching dispatch with unresolvable targets.
+  //
   // Fail-open: gate errors are non-fatal and never block dispatch.
   {
     const rawActionableCap = Number((config as any)?.planner?.maxActionableStepsPerPacket);
@@ -1864,27 +1868,38 @@ async function persistWorkerDispatchArtifacts(config, input: {
   }
 
   cycles[cycleId] = cycleRecord;
+  // Canonical write is the source of truth — must succeed before compatibility snapshots.
   await writeJson(path.join(stateDir, WORKER_CYCLE_ARTIFACTS_FILE), payload);
 
   // Compatibility snapshots for existing consumers.
-  const sessionsPath = path.join(stateDir, "worker_sessions.json");
-  const legacySessionsRaw = await readJson(sessionsPath, {});
-  const legacySessions = toLegacySessionsBody(legacySessionsRaw);
-  legacySessions[role] = cycleRecord.workerSessions[role];
-  await writeJson(sessionsPath, addSchemaVersion(legacySessions, STATE_FILE_TYPE.WORKER_SESSIONS));
+  // Each write is best-effort: a failure is logged but never propagates so the
+  // canonical artifact remains the authoritative record when compat writes fail.
+  try {
+    const sessionsPath = path.join(stateDir, "worker_sessions.json");
+    const legacySessionsRaw = await readJson(sessionsPath, {});
+    const legacySessions = toLegacySessionsBody(legacySessionsRaw);
+    legacySessions[role] = cycleRecord.workerSessions[role];
+    await writeJson(sessionsPath, addSchemaVersion(legacySessions, STATE_FILE_TYPE.WORKER_SESSIONS));
+  } catch (sessErr) {
+    warn(`[orchestrator] compat worker_sessions.json write failed (non-fatal): ${String((sessErr as any)?.message || sessErr)}`);
+  }
 
-  const workerPath = path.join(stateDir, roleToWorkerStateFile(role));
-  const existingWorkerState = await readJson(workerPath, {});
-  const existingActivity = Array.isArray(existingWorkerState?.activityLog) ? existingWorkerState.activityLog : [];
-  const latestEntry = cycleRecord.workerActivity[role][cycleRecord.workerActivity[role].length - 1] || null;
-  const nextActivity = latestEntry ? [...existingActivity, latestEntry] : existingActivity;
-  await writeJson(workerPath, {
-    ...(existingWorkerState && typeof existingWorkerState === "object" ? existingWorkerState : {}),
-    status: cycleRecord.workerSessions[role]?.status || "idle",
-    startedAt: cycleRecord.workerSessions[role]?.startedAt || null,
-    updatedAt: nowIso,
-    activityLog: nextActivity.slice(-200),
-  });
+  try {
+    const workerPath = path.join(stateDir, roleToWorkerStateFile(role));
+    const existingWorkerState = await readJson(workerPath, {});
+    const existingActivity = Array.isArray(existingWorkerState?.activityLog) ? existingWorkerState.activityLog : [];
+    const latestEntry = cycleRecord.workerActivity[role][cycleRecord.workerActivity[role].length - 1] || null;
+    const nextActivity = latestEntry ? [...existingActivity, latestEntry] : existingActivity;
+    await writeJson(workerPath, {
+      ...(existingWorkerState && typeof existingWorkerState === "object" ? existingWorkerState : {}),
+      status: cycleRecord.workerSessions[role]?.status || "idle",
+      startedAt: cycleRecord.workerSessions[role]?.startedAt || null,
+      updatedAt: nowIso,
+      activityLog: nextActivity.slice(-200),
+    });
+  } catch (workerStateErr) {
+    warn(`[orchestrator] compat worker state file write failed (non-fatal): role=${role} ${String((workerStateErr as any)?.message || workerStateErr)}`);
+  }
 }
 
 function getLastWorkerReportedStatus(session, role) {

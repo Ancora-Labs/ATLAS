@@ -47,6 +47,8 @@ import {
   scoreInterventionsAgainstRubric,
   buildBudgetFromConfig,
   persistOptimizerLog,
+  checkOverbundleHardAdmission,
+  OVERBUNDLE_STEPS_THRESHOLD,
 } from "../../src/core/intervention_optimizer.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1552,5 +1554,64 @@ describe("runInterventionOptimizer — overbundleStepCounts option", () => {
     const budget = makeBudget();
     const result = runInterventionOptimizer([intervention], budget, {}) as any;
     assert.equal(result.overbundlePenaltiesApplied, 0);
+  });
+});
+
+// ── checkOverbundleHardAdmission ─────────────────────────────────────────────
+
+describe("checkOverbundleHardAdmission", () => {
+  it("returns blocked=false for empty plans array", () => {
+    const r = checkOverbundleHardAdmission([]);
+    assert.equal(r.blocked, false);
+    assert.equal(r.reason, null);
+    assert.deepEqual(r.rejectedIds, []);
+  });
+
+  it("returns blocked=false when all plans are within threshold", () => {
+    const plans = [
+      { id: "P-001", orderedSteps: Array.from({ length: OVERBUNDLE_STEPS_THRESHOLD }, (_, i) => `step-${i}`) },
+      { id: "P-002", acceptance_criteria: ["a", "b", "c"] },
+    ];
+    const r = checkOverbundleHardAdmission(plans);
+    assert.equal(r.blocked, false);
+    assert.deepEqual(r.rejectedIds, []);
+  });
+
+  it("returns blocked=true and identifies rejectedIds for over-threshold plans", () => {
+    const overSteps = Array.from({ length: OVERBUNDLE_STEPS_THRESHOLD + 1 }, (_, i) => `step-${i}`);
+    const plans = [
+      { id: "P-OVER", orderedSteps: overSteps },
+      { id: "P-OK",   acceptance_criteria: ["a", "b"] },
+    ];
+    const r = checkOverbundleHardAdmission(plans);
+    assert.equal(r.blocked, true);
+    assert.ok(typeof r.reason === "string" && r.reason.length > 0, "reason must be non-empty string");
+    assert.deepEqual(r.rejectedIds, ["P-OVER"]);
+  });
+
+  it("uses acceptance_criteria length when orderedSteps is absent", () => {
+    const overCriteria = Array.from({ length: 12 }, (_, i) => `ac-${i}`);
+    const plans = [{ id: "P-AC", acceptance_criteria: overCriteria }];
+    const r = checkOverbundleHardAdmission(plans, 10);
+    assert.equal(r.blocked, true);
+    assert.deepEqual(r.rejectedIds, ["P-AC"]);
+  });
+
+  it("uses custom threshold override correctly", () => {
+    const plans = [{ id: "P-BIG", orderedSteps: ["s1", "s2", "s3"] }];
+    // threshold of 2 → 3 steps should block
+    const blocked = checkOverbundleHardAdmission(plans, 2);
+    assert.equal(blocked.blocked, true);
+    // threshold of 3 → exactly 3 steps should NOT block
+    const allowed = checkOverbundleHardAdmission(plans, 3);
+    assert.equal(allowed.blocked, false);
+  });
+
+  it("generates stable plan index id when plan.id is absent", () => {
+    const overSteps = Array.from({ length: 15 }, (_, i) => `s-${i}`);
+    const plans = [{ orderedSteps: overSteps }]; // no id field
+    const r = checkOverbundleHardAdmission(plans, 9);
+    assert.equal(r.blocked, true);
+    assert.ok(r.rejectedIds[0].startsWith("plan-idx-"), "must use plan-idx-N fallback id");
   });
 });
