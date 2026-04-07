@@ -400,6 +400,8 @@ export interface RouteROIEntry {
   roiDelta: number | null;
   routedAt: string;
   realizedAt: string | null;
+  /** Lineage contract ID tying this routing decision to dispatch, usage, and outcomes. */
+  lineageId: string | null;
 }
 
 /**
@@ -434,6 +436,7 @@ export async function appendRouteROIEntry(
     roiDelta:        entry.roiDelta ?? null,
     routedAt:        entry.routedAt || new Date().toISOString(),
     realizedAt:      entry.realizedAt ?? null,
+    lineageId:       entry.lineageId ?? null,
   };
 
   safeList.push(record);
@@ -693,6 +696,74 @@ export function routeModelWithClosureYield(
     effectiveFloor,
     closureYieldAdjustment,
     reason: `closure-yield-adjusted(${closureYieldAdjustment}): ${base.reason}`,
+  };
+}
+
+// ── Memory-hit-ratio routing — quality floor adjustment ───────────────────────
+//
+// Adjusts the quality floor based on the knowledge-memory hit ratio so that
+// model selection reflects how effectively memory is contributing to task success:
+//   - High hit ratio (≥ MEMORY_HIT_RATIO_HIGH) → relax floor (memory is helping;
+//     cheaper model likely sufficient since context is well-populated)
+//   - Low hit ratio (0 < ratio < MEMORY_HIT_RATIO_LOW) → tighten floor (memory is
+//     sparse; stronger model needed to compensate for missing context)
+//   - Zero / no history → floor unchanged (safe baseline; no signal yet)
+
+/** Memory hit ratio above this threshold is considered productive (floor relaxation allowed). */
+export const MEMORY_HIT_RATIO_HIGH = 0.70;
+
+/** Memory hit ratio below this threshold (and > 0) triggers floor tightening. */
+export const MEMORY_HIT_RATIO_LOW  = 0.30;
+
+/** Floor reduction applied when memory hit ratio is high. */
+export const MEMORY_FLOOR_RELAX_AMOUNT = 0.05;
+
+/** Floor increase applied when memory hit ratio is low (but > 0). */
+export const MEMORY_FLOOR_TIGHTEN_AMOUNT = 0.08;
+
+/**
+ * Route to the cheapest model that satisfies a quality floor adjusted by the
+ * knowledge-memory hit ratio.
+ *
+ * The effective floor is derived from `qualityFloor` and `memoryHitRatio`:
+ *   - ratio ≥ MEMORY_HIT_RATIO_HIGH → floor − MEMORY_FLOOR_RELAX_AMOUNT  (high hit; cheaper ok)
+ *   - 0 < ratio < MEMORY_HIT_RATIO_LOW → floor + MEMORY_FLOOR_TIGHTEN_AMOUNT (low hit; tighten)
+ *   - otherwise (zero / medium) → floor unchanged
+ * The effective floor is always clamped to [MIN_QUALITY_FLOOR, MAX_QUALITY_FLOOR].
+ *
+ * @param taskHints      — task scope for complexity-tier derivation
+ * @param modelOptions   — model pool; efficientModel / defaultModel / strongModel
+ *                         and optional qualityByModel score overrides
+ * @param qualityFloor   — caller-supplied minimum quality score (default 0.7)
+ * @param memoryHitRatio — recent memory hit ratio (0 = no data / no hits)
+ */
+export function routeModelWithMemoryHitRatio(
+  taskHints: TaskHints = {},
+  modelOptions: ModelOptions & { qualityByModel?: Record<string, number> } = {},
+  qualityFloor = 0.7,
+  memoryHitRatio = 0,
+): { model: string; tier: string; reason: string; meetsQualityFloor: boolean; effectiveFloor: number; memoryHitAdjustment: string; memoryHitRatio: number } {
+  let effectiveFloor = qualityFloor;
+  let memoryHitAdjustment = "none";
+
+  if (memoryHitRatio >= MEMORY_HIT_RATIO_HIGH) {
+    effectiveFloor = qualityFloor - MEMORY_FLOOR_RELAX_AMOUNT;
+    memoryHitAdjustment = `relaxed (memoryHitRatio=${memoryHitRatio} >= ${MEMORY_HIT_RATIO_HIGH})`;
+  } else if (memoryHitRatio > 0 && memoryHitRatio < MEMORY_HIT_RATIO_LOW) {
+    effectiveFloor = qualityFloor + MEMORY_FLOOR_TIGHTEN_AMOUNT;
+    memoryHitAdjustment = `tightened (memoryHitRatio=${memoryHitRatio} < ${MEMORY_HIT_RATIO_LOW})`;
+  }
+
+  effectiveFloor = Math.max(MIN_QUALITY_FLOOR, Math.min(MAX_QUALITY_FLOOR, effectiveFloor));
+  effectiveFloor = Math.round(effectiveFloor * 1000) / 1000;
+
+  const base = routeModelByCost(taskHints, modelOptions, effectiveFloor);
+  return {
+    ...base,
+    effectiveFloor,
+    memoryHitAdjustment,
+    memoryHitRatio,
+    reason: `memory-hit-adjusted(${memoryHitAdjustment}): ${base.reason}`,
   };
 }
 
@@ -1331,4 +1402,40 @@ export function rankModelsByTaskKindExpectedValue(
     usedTelemetry: true,
     reason: "expected-value(taskKind)",
   };
+}
+
+// ── Memory-hit routing adjustment (Task 2) ────────────────────────────────────
+//
+// Memory hits (injected knowledge-memory entries) are positively correlated with
+// completion quality when the hit rate is high.  When recent memory-hit rate is
+// low it may indicate the memory is stale or irrelevant — no routing adjustment
+// is applied in that case (fail-open so missing memory never blocks dispatch).
+
+/** Weight applied to memory hit ratio when adjusting the quality floor. */
+export const MEMORY_HIT_ROUTING_WEIGHT = 0.05 as const;
+
+/**
+ * Compute a routing floor adjustment from the recent memory-hit success ratio.
+ *
+ * Logic:
+ *   - hitRatio ≥ 0.7  → relax floor by MEMORY_HIT_ROUTING_WEIGHT (memory is effective)
+ *   - hitRatio > 0 and < 0.3 → tighten floor by MEMORY_HIT_ROUTING_WEIGHT (memory low effectiveness)
+ *   - otherwise → no adjustment
+ *
+ * Returns { adjustment, reason } where adjustment is the signed delta to add to the quality floor.
+ * Never throws — returns { adjustment: 0, reason: "no-data" } when hitRatio is absent.
+ *
+ * @param hitRatio — ratio of injected memory entries that correlated with a done outcome (0–1).
+ *                   Pass 0 or omit when no history exists.
+ */
+export function computeMemoryHitBonus(
+  hitRatio: number | undefined | null
+): { adjustment: number; reason: string } {
+  const ratio = typeof hitRatio === "number" && Number.isFinite(hitRatio)
+    ? Math.max(0, Math.min(1, hitRatio))
+    : -1;
+  if (ratio < 0) return { adjustment: 0, reason: "no-data" };
+  if (ratio >= 0.7) return { adjustment: -MEMORY_HIT_ROUTING_WEIGHT, reason: `memory-effective(ratio=${ratio.toFixed(2)})` };
+  if (ratio > 0 && ratio < 0.3) return { adjustment: MEMORY_HIT_ROUTING_WEIGHT, reason: `memory-low-effectiveness(ratio=${ratio.toFixed(2)})` };
+  return { adjustment: 0, reason: `memory-neutral(ratio=${ratio.toFixed(2)})` };
 }

@@ -672,3 +672,68 @@ export function filterMemoryEntriesByTrust<T>(entries: T[], opts: FilterMemoryEn
 
   return { selected, droppedLowTrustCount };
 }
+
+// ── Memory-hit telemetry contract (Task 2) ────────────────────────────────────
+
+/**
+ * Structured telemetry record for a single memory-retrieval event.
+ *
+ * Written to state/memory_hit_log.json after each worker dispatch to track
+ * how many knowledge-memory entries were injected and whether the dispatch
+ * succeeded.  Used by cycle_analytics to derive memory-hit effectiveness ratios
+ * and by model_policy to adjust quality-floor routing.
+ *
+ * Fields:
+ *   lineageId     — task lineage contract ID (ties to dispatch, model routing, usage).
+ *   taskId        — original task identifier (null when not available).
+ *   workerKind    — worker role kind (e.g. "implementation", "governance").
+ *   taskKind      — task domain label.
+ *   hintsInjected — number of knowledge-memory hint entries injected into the prompt.
+ *   lessonsInjected — number of lesson entries injected.
+ *   droppedLowTrust — number of entries dropped because trust level was LOW.
+ *   isPrivileged  — whether the worker is a privileged memory requester.
+ *   outcome       — task outcome recorded at closure ("done"|"partial"|"blocked"|"error"|null).
+ *   recordedAt    — ISO timestamp when the record was created.
+ */
+export interface MemoryHitRecord {
+  lineageId: string | null;
+  taskId: string | null;
+  workerKind: string | null;
+  taskKind: string | null;
+  hintsInjected: number;
+  lessonsInjected: number;
+  droppedLowTrust: number;
+  isPrivileged: boolean;
+  outcome: string | null;
+  recordedAt: string;
+}
+
+/**
+ * Build a MemoryHitRecord from filter results.
+ * outcome starts as null; it is updated when the task closes (via updateMemoryHitOutcome).
+ * Never throws — safe to call in any context.
+ */
+export function buildMemoryHitRecord(opts: {
+  lineageId?: string | null;
+  taskId?: string | null;
+  workerKind?: string | null;
+  taskKind?: string | null;
+  hintsInjected: number;
+  lessonsInjected: number;
+  droppedLowTrust: number;
+  isPrivileged: boolean;
+}): MemoryHitRecord {
+  return {
+    lineageId:       opts.lineageId      ?? null,
+    taskId:          opts.taskId         ?? null,
+    workerKind:      opts.workerKind     ?? null,
+    taskKind:        opts.taskKind       ?? null,
+    hintsInjected:   Math.max(0, Number(opts.hintsInjected  || 0)),
+    lessonsInjected: Math.max(0, Number(opts.lessonsInjected || 0)),
+    droppedLowTrust: Math.max(0, Number(opts.droppedLowTrust || 0)),
+    isPrivileged:    opts.isPrivileged === true,
+    outcome:         null,
+    recordedAt:      new Date().toISOString(),
+  };
+}
+

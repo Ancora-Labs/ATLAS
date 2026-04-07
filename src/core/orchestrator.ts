@@ -96,6 +96,7 @@ import {
 } from "./intervention_optimizer.js";
 import { evaluateInterventionsForCycle } from "./intervention_judge.js";
 import { evaluateAutonomyBand, type CycleSample } from "./autonomy_band_monitor.js";
+import { evaluateSelfDevExit } from "./self_dev_exit_monitor.js";
 import { validatePlanEvidenceCoupling } from "./evidence_envelope.js";
 import { runResearchScout } from "./research_scout.js";
 import { runResearchSynthesizer, persistBenchmarkEntry } from "./research_synthesizer.js";
@@ -4093,6 +4094,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       premiumUsageLog: await readJson(path.join(stateDir, "premium_usage_log.json"), []),
       premiumEfficiencyRaw: _premiumEfficiencyRaw,
       premiumEfficiencyAdjusted: _premiumEfficiencyAdjusted,
+      memoryHitLog: await readJson(path.join(stateDir, "memory_hit_log.json"), []),
     });
     await persistCycleAnalytics(config, analyticsRecord);
 
@@ -4308,6 +4310,13 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       await appendProgress(
         config,
         `[AUTONOMY_BAND] state=${bandResult.state} phase=${bandResult.executionPhase} composite=${bandResult.compositeScore?.toFixed(3) ?? "N/A"} shadow=${config.runtime?.autonomyBand?.shadowMode !== false}`,
+      );
+
+      // ── Self-dev marginal return exit policy (advisory) ──────────────────
+      const exitResult = await evaluateSelfDevExit(config, bandResult);
+      await appendProgress(
+        config,
+        `[SELF_DEV_EXIT] state=${exitResult.state} recommendation=${exitResult.recommendation} exploitationStreak=${exitResult.metrics.consecutiveExploitationCycles} noveltyYield=${exitResult.metrics.noveltyYield?.toFixed(3) ?? "N/A"} roiDelta=${exitResult.metrics.roiDelta?.toFixed(3) ?? "N/A"} benchmarkPending=${exitResult.metrics.benchmarkPendingRatio?.toFixed(3) ?? "N/A"} backlogOpen=${exitResult.metrics.backlogOpenRatio?.toFixed(3) ?? "N/A"}`,
       );
     }
   } catch (err: any) {

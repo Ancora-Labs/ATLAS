@@ -31,6 +31,11 @@ import {
   assessRetryExpectedROI,
   RETRY_EXPECTED_GAIN_MIN_THRESHOLD,
   MIN_TELEMETRY_SAMPLE_THRESHOLD,
+  routeModelWithMemoryHitRatio,
+  MEMORY_HIT_RATIO_HIGH,
+  MEMORY_HIT_RATIO_LOW,
+  MEMORY_FLOOR_RELAX_AMOUNT,
+  MEMORY_FLOOR_TIGHTEN_AMOUNT,
 } from "../../src/core/model_policy.js";
 
 describe("model_policy — complexity tiers", () => {
@@ -1023,5 +1028,98 @@ describe("rankModelsByTaskKindExpectedValue — threshold enforcement", () => {
     assert.ok(typeof MIN_TELEMETRY_SAMPLE_THRESHOLD === "number");
     assert.ok(MIN_TELEMETRY_SAMPLE_THRESHOLD > 0);
     assert.ok(Number.isInteger(MIN_TELEMETRY_SAMPLE_THRESHOLD));
+  });
+});
+
+// ── routeModelWithMemoryHitRatio ──────────────────────────────────────────────
+
+describe("routeModelWithMemoryHitRatio", () => {
+  const modelOptions = {
+    efficientModel: "Claude Haiku 4",
+    defaultModel:   "Claude Sonnet 4.6",
+    strongModel:    "Claude Opus 4.6",
+    qualityByModel: {
+      "Claude Haiku 4":    0.70,
+      "Claude Sonnet 4.6": 0.85,
+      "Claude Opus 4.6":   0.95,
+    },
+  };
+
+  it("exported constants have correct values", () => {
+    assert.equal(MEMORY_HIT_RATIO_HIGH, 0.70);
+    assert.equal(MEMORY_HIT_RATIO_LOW,  0.30);
+    assert.equal(MEMORY_FLOOR_RELAX_AMOUNT,  0.05);
+    assert.equal(MEMORY_FLOOR_TIGHTEN_AMOUNT, 0.08);
+  });
+
+  it("high ratio (>=0.70) relaxes the quality floor", () => {
+    // base floor 0.75, high ratio → relaxed to 0.70
+    const result = routeModelWithMemoryHitRatio({}, modelOptions, 0.75, MEMORY_HIT_RATIO_HIGH);
+    assert.ok(result.memoryHitAdjustment.startsWith("relaxed"),
+      "high hit ratio must relax the floor");
+    assert.ok(result.effectiveFloor < 0.75, "effective floor must be lower than base floor");
+  });
+
+  it("high ratio selects a cheaper model when floor is relaxed", () => {
+    // base floor 0.80, high ratio → relaxed to 0.75 → Haiku (0.70) fails, Sonnet (0.85) selected
+    const result = routeModelWithMemoryHitRatio({}, modelOptions, 0.80, 1.0);
+    assert.equal(result.model, "Claude Sonnet 4.6",
+      "relaxed floor should prefer lowest-cost qualifying model");
+  });
+
+  it("low ratio (0 < ratio < 0.30) tightens the quality floor", () => {
+    // base floor 0.75, low ratio → tightened to 0.83
+    const result = routeModelWithMemoryHitRatio({}, modelOptions, 0.75, 0.10);
+    assert.ok(result.memoryHitAdjustment.startsWith("tightened"),
+      "low hit ratio must tighten the floor");
+    assert.ok(result.effectiveFloor > 0.75, "effective floor must be higher than base floor");
+  });
+
+  it("low ratio forces stronger model when floor tightens past Sonnet", () => {
+    // base floor 0.80, very low ratio → tightened to 0.88 → Sonnet (0.85) fails, Opus (0.95) selected
+    const result = routeModelWithMemoryHitRatio({}, modelOptions, 0.80, 0.05);
+    assert.equal(result.model, "Claude Opus 4.6",
+      "tightened floor must require Opus when Sonnet no longer qualifies");
+  });
+
+  it("zero ratio (no data) leaves floor unchanged", () => {
+    const result = routeModelWithMemoryHitRatio({}, modelOptions, 0.75, 0);
+    assert.ok(result.memoryHitAdjustment.startsWith("none"),
+      "zero ratio must not adjust the floor");
+    assert.equal(result.effectiveFloor, 0.75, "effective floor must equal base floor");
+  });
+
+  it("effective floor is clamped to MAX_QUALITY_FLOOR (0.99)", () => {
+    // base floor 0.95 + tighten 0.08 = 1.03 → clamped to 0.99
+    const result = routeModelWithMemoryHitRatio({}, modelOptions, 0.95, 0.05);
+    assert.ok(result.effectiveFloor <= 0.99, "effective floor must not exceed 0.99");
+  });
+
+  it("effective floor is clamped to MIN_QUALITY_FLOOR (0.50)", () => {
+    // base floor 0.52 - relax 0.05 = 0.47 → clamped to 0.50
+    const result = routeModelWithMemoryHitRatio({}, modelOptions, 0.52, 1.0);
+    assert.ok(result.effectiveFloor >= 0.50, "effective floor must not go below 0.50");
+  });
+
+  it("result includes memoryHitRatio field matching the input ratio", () => {
+    const result = routeModelWithMemoryHitRatio({}, modelOptions, 0.75, 0.65);
+    assert.equal(result.memoryHitRatio, 0.65, "memoryHitRatio must echo back the input ratio");
+  });
+
+  it("result always has a meetsQualityFloor boolean", () => {
+    const result = routeModelWithMemoryHitRatio({}, modelOptions, 0.75, 0.5);
+    assert.equal(typeof result.meetsQualityFloor, "boolean");
+  });
+
+  it("reason string references memory-hit-adjusted", () => {
+    const result = routeModelWithMemoryHitRatio({}, modelOptions, 0.75, 1.0);
+    assert.ok(result.reason.includes("memory-hit-adjusted"),
+      "reason must reference memory-hit-adjusted");
+  });
+
+  it("negative path: empty modelOptions returns a model without throwing", () => {
+    const result = routeModelWithMemoryHitRatio({}, {}, 0.75, 0.8);
+    assert.ok(result.model, "must return a model even with empty options");
+    assert.equal(typeof result.meetsQualityFloor, "boolean");
   });
 });

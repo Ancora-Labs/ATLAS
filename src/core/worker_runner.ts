@@ -43,7 +43,8 @@ import { buildTaskFingerprint, buildLineageId, LINEAGE_ENTRY_STATUS } from "./li
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
 import { classifyFailure, classifyExitCode } from "./failure_classifier.js";
 import { resolveRetryAction, persistRetryMetric } from "./retry_strategy.js";
-import { filterMemoryEntriesByTrust, isPrivilegedMemoryRequester } from "./trust_boundary.js";
+import { filterMemoryEntriesByTrust, isPrivilegedMemoryRequester, buildMemoryHitRecord } from "./trust_boundary.js";
+import type { MemoryHitRecord } from "./trust_boundary.js";
 import { emitEvent } from "./logger.js";
 import { CancelledError } from "./daemon_control.js";
 import type { CancellationToken } from "./daemon_control.js";
@@ -266,6 +267,87 @@ function logPremiumUsage(config, roleName, model, taskKind, durationMs, { outcom
   try { writeFileSync(logPath, JSON.stringify(entries, null, 2), "utf8"); } catch { /* non-critical */ }
 }
 
+// ── Memory-hit telemetry ─────────────────────────────────────────────────────
+
+const MEMORY_HIT_LOG_FILE = "memory_hit_log.json";
+const MEMORY_HIT_LOG_MAX  = 200;
+
+/**
+ * Persist a MemoryHitRecord to state/memory_hit_log.json.
+ * Sync write — mirrors logPremiumUsage. Never throws.
+ */
+function logMemoryHit(config: WorkerRunnerConfig, record: MemoryHitRecord): void {
+  try {
+    const logPath = path.join(config.paths?.stateDir || "state", MEMORY_HIT_LOG_FILE);
+    let entries: MemoryHitRecord[] = [];
+    try {
+      if (existsSync(logPath)) {
+        const parsed2 = JSON.parse(readFileSync(logPath, "utf8"));
+        if (Array.isArray(parsed2)) entries = parsed2;
+      }
+    } catch { entries = []; }
+    entries.push(record);
+    if (entries.length > MEMORY_HIT_LOG_MAX) entries = entries.slice(-MEMORY_HIT_LOG_MAX);
+    try { writeFileSync(logPath, JSON.stringify(entries, null, 2), "utf8"); } catch { /* non-critical */ }
+  } catch { /* non-critical — telemetry must never block dispatch */ }
+}
+
+/**
+ * Update the most-recent memory hit entry matching taskId with the worker's
+ * final outcome.  Outcome mapping: ties the retrieval event to task completion.
+ * Never throws.
+ */
+function updateMemoryHitOutcome(config: WorkerRunnerConfig, taskId: string | null, outcome: string): void {
+  if (!taskId) return;
+  try {
+    const logPath = path.join(config.paths?.stateDir || "state", MEMORY_HIT_LOG_FILE);
+    if (!existsSync(logPath)) return;
+    let entries: MemoryHitRecord[] = [];
+    try {
+      const parsed2 = JSON.parse(readFileSync(logPath, "utf8"));
+      if (Array.isArray(parsed2)) entries = parsed2;
+    } catch { return; }
+    // Update last matching entry whose outcome is still null (unresolved)
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i] as any;
+      if (e && e.taskId === taskId && e.outcome === null) {
+        e.outcome = outcome;
+        break;
+      }
+    }
+    try { writeFileSync(logPath, JSON.stringify(entries, null, 2), "utf8"); } catch { /* non-critical */ }
+  } catch { /* non-critical */ }
+}
+
+/**
+ * Compute the memory hit ratio from the most-recent log entries.
+ *
+ * A "hit" is defined as a record where at least one hint or lesson was injected
+ * (hintsInjected + lessonsInjected > 0). Returns a value in [0, 1].
+ * Returns 0 when no data exists (fail-open — callers treat 0 as "no signal").
+ *
+ * @param config — BOX config object
+ * @param limit  — max entries to consider (default 50)
+ */
+export function computeMemoryHitRatio(config: WorkerRunnerConfig, limit = 50): number {
+  try {
+    const logPath = path.join(config.paths?.stateDir || "state", MEMORY_HIT_LOG_FILE);
+    if (!existsSync(logPath)) return 0;
+    const raw = JSON.parse(readFileSync(logPath, "utf8"));
+    if (!Array.isArray(raw) || raw.length === 0) return 0;
+    const recent = raw.slice(-limit);
+    let hits = 0;
+    for (const e of recent) {
+      if (!e || typeof e !== "object") continue;
+      const injected = Number((e as any).hintsInjected || 0) + Number((e as any).lessonsInjected || 0);
+      if (injected > 0) hits++;
+    }
+    return recent.length > 0 ? hits / recent.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function truncate(text, max) {
@@ -434,8 +516,16 @@ async function appendLiveWorkerLog(logPath, text) {
 function findWorkerByName(config, roleName) {
   const registry = getRoleRegistry(config);
   const workers = registry?.workers || {};
+  const normalize = (value: unknown) => String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const target = normalize(roleName);
   for (const [kind, worker] of Object.entries(workers) as Array<[string, WorkerRegistryEntry]>) {
-    if (worker?.name === roleName) return { kind, ...worker };
+    if (!worker?.name) continue;
+    if (worker.name === roleName) return { kind, ...worker };
+    if (normalize(worker.name) === target) return { kind, ...worker };
   }
   return null;
 }
@@ -1247,6 +1337,53 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     }
   );
 
+  // ── Memory-hit telemetry production ───────────────────────────────────────
+  // Emit a record capturing how many memory hints/lessons were available for
+  // this dispatch. Outcome starts null and is filled in after the worker returns.
+  const _memoryHitTaskId = String(instruction.taskId || instruction.task || roleName || "");
+  try {
+    const kmPath = path.join(config.paths?.stateDir || "state", "knowledge_memory.json");
+    let hintsInjected = 0;
+    let lessonsInjected = 0;
+    let droppedLowTrust = 0;
+    let isPrivileged = false;
+    if (existsSync(kmPath)) {
+      const km = JSON.parse(readFileSync(kmPath, "utf8"));
+      const privilegedCaller = isPrivilegedMemoryRequester(workerKind);
+      isPrivileged = privilegedCaller;
+      const targetFiltered = Array.isArray(km.promptHints)
+        ? km.promptHints.filter((h: any) => {
+            const target = String(h.targetAgent || "").toLowerCase();
+            return target === "all" || target === "workers" || target === String(workerKind || "").toLowerCase();
+          })
+        : [];
+      const { selected: filteredHints, droppedLowTrustCount: dropped1 } = filterMemoryEntriesByTrust(
+        targetFiltered, { includeLowTrust: privilegedCaller, privilegedCaller },
+      );
+      const rawLessons = Array.isArray(km.lessons) ? km.lessons.slice(-5) : [];
+      const { selected: filteredLessons, droppedLowTrustCount: dropped2 } = filterMemoryEntriesByTrust(
+        rawLessons, { includeLowTrust: privilegedCaller, privilegedCaller },
+      );
+      const criticalLessons = filteredLessons.filter(
+        (l: any) => l.severity === "critical" || l.severity === "warning",
+      );
+      hintsInjected   = filteredHints.length;
+      lessonsInjected = criticalLessons.length;
+      droppedLowTrust = dropped1 + dropped2;
+    }
+    const hitRecord = buildMemoryHitRecord({
+      lineageId:       String(instruction.lineageId || instruction.lineageRootId || ""),
+      taskId:          _memoryHitTaskId || null,
+      workerKind:      workerKind ?? null,
+      taskKind:        instruction.taskKind ?? null,
+      hintsInjected,
+      lessonsInjected,
+      droppedLowTrust,
+      isPrivileged,
+    });
+    logMemoryHit(config, hitRecord);
+  } catch { /* telemetry is non-critical */ }
+
   await appendProgress(
     config,
     `[WORKER:${roleName}] [${instruction.taskKind || "general"}→${model}] deliberation=${deliberation.mode} ${truncate(instruction.task, 70)}`
@@ -1614,6 +1751,11 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     outcome: parsed.status,
     taskId: instruction.taskId || instruction.task || null
   });
+
+  // ── Outcome mapping: tie memory-hit record to final worker outcome ─────────
+  // Updates the pre-dispatch hit record (outcome=null) with the actual result so
+  // cycle analytics can compute memory ROI (hitRate × successRateOnHits).
+  updateMemoryHitOutcome(config, _memoryHitTaskId || null, parsed.status);
 
   // ── Rework budget — pre-computed so both gates share the same values ─────────
   // Declared here (before the artifact gate) so the artifact gate can decide

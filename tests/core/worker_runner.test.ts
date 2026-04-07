@@ -11,6 +11,7 @@ import {
   evaluateWorkerRoleCapability,
   injectCiFailureContextIfMissing,
   applyMemoryTrustFilter,
+  computeMemoryHitRatio,
 } from "../../src/core/worker_runner.js";
 import { isProcessAlive } from "../../src/core/daemon_control.js";
 
@@ -447,5 +448,77 @@ describe("applyMemoryTrustFilter", () => {
   it("negative: non-privileged caller cannot force LOW trust inclusion", () => {
     const { selected } = applyMemoryTrustFilter([lowHint], "infrastructure");
     assert.equal(selected.length, 0, "non-privileged caller must not receive LOW trust hints");
+  });
+});
+
+// ── computeMemoryHitRatio ─────────────────────────────────────────────────────
+
+describe("computeMemoryHitRatio", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-memory-hit-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns 0 when no log file exists", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const ratio = await computeMemoryHitRatio(config);
+    assert.equal(ratio, 0, "missing log must yield ratio=0");
+  });
+
+  it("returns 0 for empty log array", async () => {
+    await fs.writeFile(path.join(tmpDir, "memory_hit_log.json"), "[]");
+    const config = { paths: { stateDir: tmpDir } };
+    const ratio = await computeMemoryHitRatio(config);
+    assert.equal(ratio, 0, "empty log must yield ratio=0");
+  });
+
+  it("returns 1.0 when all entries have hints injected", async () => {
+    const log = [
+      { taskId: "t1", hintsInjected: 2, lessonsInjected: 1, outcome: "done", isPrivileged: false, timestamp: "2024-01-01T00:00:00Z" },
+      { taskId: "t2", hintsInjected: 1, lessonsInjected: 0, outcome: null, isPrivileged: false, timestamp: "2024-01-01T00:00:00Z" },
+    ];
+    await fs.writeFile(path.join(tmpDir, "memory_hit_log.json"), JSON.stringify(log));
+    const config = { paths: { stateDir: tmpDir } };
+    const ratio = await computeMemoryHitRatio(config);
+    assert.equal(ratio, 1.0, "all entries with hints must yield ratio=1.0");
+  });
+
+  it("returns correct ratio for mixed hit/miss entries", async () => {
+    const log = [
+      { taskId: "t1", hintsInjected: 2, lessonsInjected: 0, outcome: "done", isPrivileged: false, timestamp: "2024-01-01T00:00:00Z" },
+      { taskId: "t2", hintsInjected: 0, lessonsInjected: 0, outcome: null, isPrivileged: false, timestamp: "2024-01-01T00:00:00Z" },
+      { taskId: "t3", hintsInjected: 0, lessonsInjected: 1, outcome: "done", isPrivileged: false, timestamp: "2024-01-01T00:00:00Z" },
+      { taskId: "t4", hintsInjected: 0, lessonsInjected: 0, outcome: null, isPrivileged: false, timestamp: "2024-01-01T00:00:00Z" },
+    ];
+    await fs.writeFile(path.join(tmpDir, "memory_hit_log.json"), JSON.stringify(log));
+    const config = { paths: { stateDir: tmpDir } };
+    const ratio = await computeMemoryHitRatio(config);
+    assert.equal(ratio, 0.5, "2 hits out of 4 entries must yield ratio=0.5");
+  });
+
+  it("respects limit parameter (only checks most recent N entries)", async () => {
+    // 4 entries: first 2 are misses, last 2 are hits — with limit=2, only hits counted → ratio=1.0
+    const log = [
+      { taskId: "t1", hintsInjected: 0, lessonsInjected: 0, outcome: null, isPrivileged: false, timestamp: "2024-01-01T00:00:00Z" },
+      { taskId: "t2", hintsInjected: 0, lessonsInjected: 0, outcome: null, isPrivileged: false, timestamp: "2024-01-01T00:00:00Z" },
+      { taskId: "t3", hintsInjected: 1, lessonsInjected: 0, outcome: "done", isPrivileged: false, timestamp: "2024-01-01T00:00:00Z" },
+      { taskId: "t4", hintsInjected: 2, lessonsInjected: 1, outcome: "done", isPrivileged: false, timestamp: "2024-01-01T00:00:00Z" },
+    ];
+    await fs.writeFile(path.join(tmpDir, "memory_hit_log.json"), JSON.stringify(log));
+    const config = { paths: { stateDir: tmpDir } };
+    const ratio = await computeMemoryHitRatio(config, 2);
+    assert.equal(ratio, 1.0, "limit=2 must only look at the 2 most-recent entries");
+  });
+
+  it("negative: returns 0 for corrupt/invalid JSON log file", async () => {
+    await fs.writeFile(path.join(tmpDir, "memory_hit_log.json"), "NOT_JSON{{{");
+    const config = { paths: { stateDir: tmpDir } };
+    const ratio = await computeMemoryHitRatio(config);
+    assert.equal(ratio, 0, "corrupt log must yield ratio=0 without throwing");
   });
 });

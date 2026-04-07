@@ -1657,27 +1657,55 @@ export function buildLineageSummary(lineageLog: unknown[]): {
 
 /**
  * Summarize memory hit telemetry from a memory-hit event log.
- * Returns hit/miss counts and the overall hit rate.
+ *
+ * A "hit" is a record where `hintsInjected + lessonsInjected > 0` (at least one
+ * knowledge-memory entry was injected into the prompt). Legacy records that carry
+ * `outcome === "hit"` / `outcome === "miss"` are also accepted for backward
+ * compatibility, but new records use the structured MemoryHitRecord shape.
+ *
+ * `outcomeRate` measures memory ROI: ratio of "done" worker outcomes among hit
+ * records that have a resolved outcome. Zero when no resolved hits exist.
  */
 export function buildMemoryHitTelemetry(memoryHitLog: unknown[]): {
   hits: number;
   misses: number;
   hitRate: number;
   sampleCount: number;
+  outcomeRate: number;
 } {
   if (!Array.isArray(memoryHitLog) || memoryHitLog.length === 0) {
-    return { hits: 0, misses: 0, hitRate: 0, sampleCount: 0 };
+    return { hits: 0, misses: 0, hitRate: 0, sampleCount: 0, outcomeRate: 0 };
   }
   let hits = 0;
   let misses = 0;
+  let hitWithDone = 0;
+  let hitResolved = 0;
   for (const entry of memoryHitLog) {
     if (typeof entry !== "object" || entry === null) continue;
-    const outcome = (entry as Record<string, unknown>).outcome;
+    const row = entry as Record<string, unknown>;
+    // Primary path: structured MemoryHitRecord
+    if (typeof row.hintsInjected === "number" || typeof row.lessonsInjected === "number") {
+      const injected = Number(row.hintsInjected || 0) + Number(row.lessonsInjected || 0);
+      if (injected > 0) {
+        hits++;
+        // Outcome mapping: count resolved outcomes for ROI computation
+        if (row.outcome !== null && row.outcome !== undefined) {
+          hitResolved++;
+          if (String(row.outcome).toLowerCase() === "done") hitWithDone++;
+        }
+      } else {
+        misses++;
+      }
+      continue;
+    }
+    // Legacy path: outcome === "hit" / "miss" (pre-MemoryHitRecord entries)
+    const outcome = row.outcome;
     if (outcome === "hit") hits++;
     else if (outcome === "miss") misses++;
   }
   const sampleCount = hits + misses;
-  const hitRate = sampleCount > 0 ? hits / sampleCount : 0;
-  return { hits, misses, hitRate, sampleCount };
+  const hitRate = sampleCount > 0 ? Math.round((hits / sampleCount) * 1000) / 1000 : 0;
+  const outcomeRate = hitResolved > 0 ? Math.round((hitWithDone / hitResolved) * 1000) / 1000 : 0;
+  return { hits, misses, hitRate, sampleCount, outcomeRate };
 }
 

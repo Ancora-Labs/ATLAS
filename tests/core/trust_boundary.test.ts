@@ -32,6 +32,7 @@ import {
   normalizeMemoryTrustMetadata,
   filterMemoryEntriesByTrust,
   isPrivilegedMemoryRequester,
+  buildMemoryHitRecord,
 } from "../../src/core/trust_boundary.js";
 
 // ── Schema artifact ───────────────────────────────────────────────────────────
@@ -734,5 +735,53 @@ describe("isPrivilegedMemoryRequester", () => {
 
   it("is case-insensitive (uppercase 'JESUS')", () => {
     assert.equal(isPrivilegedMemoryRequester("JESUS"), true);
+  });
+});
+
+// ── buildMemoryHitRecord ──────────────────────────────────────────────────────
+
+describe("buildMemoryHitRecord", () => {
+  it("returns an object with the required shape", () => {
+    const record = buildMemoryHitRecord({ taskId: "t1", hintsInjected: 2, lessonsInjected: 1, droppedLowTrust: 0, isPrivileged: false });
+    assert.equal(record.taskId, "t1");
+    assert.equal(record.hintsInjected, 2);
+    assert.equal(record.lessonsInjected, 1);
+    assert.equal(record.droppedLowTrust, 0);
+    assert.equal(record.isPrivileged, false);
+    assert.equal(record.outcome, null, "outcome must be null before dispatch");
+    assert.ok(typeof record.recordedAt === "string" && record.recordedAt.length > 0, "recordedAt must be a non-empty string");
+  });
+
+  it("outcome is null before dispatch", () => {
+    const record = buildMemoryHitRecord({ taskId: "t2", hintsInjected: 0, lessonsInjected: 0, droppedLowTrust: 0, isPrivileged: false });
+    assert.equal(record.outcome, null);
+  });
+
+  it("hintsInjected is clamped to >= 0", () => {
+    const record = buildMemoryHitRecord({ taskId: "t3", hintsInjected: -5, lessonsInjected: 0, droppedLowTrust: 0, isPrivileged: false });
+    assert.ok(record.hintsInjected >= 0, "hintsInjected must not be negative");
+  });
+
+  it("lessonsInjected is clamped to >= 0", () => {
+    const record = buildMemoryHitRecord({ taskId: "t4", hintsInjected: 0, lessonsInjected: -3, droppedLowTrust: 0, isPrivileged: false });
+    assert.ok(record.lessonsInjected >= 0, "lessonsInjected must not be negative");
+  });
+
+  it("isPrivileged reflects the input value", () => {
+    const privileged = buildMemoryHitRecord({ taskId: "t5", hintsInjected: 1, lessonsInjected: 0, droppedLowTrust: 0, isPrivileged: true });
+    assert.equal(privileged.isPrivileged, true);
+    const nonPrivileged = buildMemoryHitRecord({ taskId: "t6", hintsInjected: 1, lessonsInjected: 0, droppedLowTrust: 0, isPrivileged: false });
+    assert.equal(nonPrivileged.isPrivileged, false);
+  });
+
+  it("recordedAt is an ISO 8601 string", () => {
+    const record = buildMemoryHitRecord({ taskId: "t7", hintsInjected: 1, lessonsInjected: 0, droppedLowTrust: 0, isPrivileged: false });
+    assert.doesNotThrow(() => new Date(record.recordedAt), "recordedAt must be parseable as a Date");
+    assert.ok(record.recordedAt.includes("T"), "recordedAt must be in ISO 8601 format");
+  });
+
+  it("negative path: missing taskId falls back to null", () => {
+    const record = buildMemoryHitRecord({ hintsInjected: 1, lessonsInjected: 0, droppedLowTrust: 0, isPrivileged: false } as any);
+    assert.equal(record.taskId, null, "taskId must be null when not provided");
   });
 });
