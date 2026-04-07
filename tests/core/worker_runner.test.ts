@@ -14,6 +14,7 @@ import {
   computeMemoryHitRatio,
 } from "../../src/core/worker_runner.js";
 import { isProcessAlive } from "../../src/core/daemon_control.js";
+import { buildRoutingROISummary } from "../../src/core/cycle_analytics.js";
 
 // ── parseWorkerResponse ──────────────────────────────────────────────────────
 
@@ -520,5 +521,75 @@ describe("computeMemoryHitRatio", () => {
     const config = { paths: { stateDir: tmpDir } };
     const ratio = await computeMemoryHitRatio(config);
     assert.equal(ratio, 0, "corrupt log must yield ratio=0 without throwing");
+  });
+});
+
+// ── buildRoutingROISummary — lineage-key join for premium usage + routing ROI ──
+// These tests verify that premium usage log entries are correctly joined via
+// the shared lineageId key and that ROI is computed per-lineage group.
+
+describe("buildRoutingROISummary — lineage-keyed routing ROI", () => {
+  it("returns zero-state for empty log", () => {
+    const result = buildRoutingROISummary([]);
+    assert.equal(result.totalRequests, 0);
+    assert.equal(result.linkedRequests, 0);
+    assert.equal(result.linkedRatio, null);
+    assert.deepEqual(result.roiByLineageId, {});
+    assert.equal(result.overallLinkedROI, null);
+  });
+
+  it("counts entries without lineageId as unlinked", () => {
+    const log = [
+      { worker: "king-david", model: "Claude Sonnet 4.6", taskKind: "backend", outcome: "done", taskId: "1", lineageId: null },
+      { worker: "esther",     model: "Claude Sonnet 4.6", taskKind: "backend", outcome: "done", taskId: "2", lineageId: null },
+    ];
+    const result = buildRoutingROISummary(log);
+    assert.equal(result.totalRequests, 2);
+    assert.equal(result.linkedRequests, 0);
+    assert.equal(result.linkedRatio, 0);
+    assert.deepEqual(result.roiByLineageId, {});
+  });
+
+  it("groups done outcomes by lineageId and computes ROI", () => {
+    const log = [
+      { worker: "king-david", model: "Claude Sonnet 4.6", taskKind: "backend", outcome: "done",    lineageId: "lid-abc" },
+      { worker: "king-david", model: "Claude Sonnet 4.6", taskKind: "backend", outcome: "blocked", lineageId: "lid-abc" },
+      { worker: "esther",     model: "Claude Sonnet 4.6", taskKind: "scan",    outcome: "done",    lineageId: "lid-xyz" },
+    ];
+    const result = buildRoutingROISummary(log);
+    assert.equal(result.totalRequests, 3);
+    assert.equal(result.linkedRequests, 3);
+    assert.equal(result.linkedRatio, 1);
+    // lid-abc: 1 done / 2 total = 0.5
+    assert.equal(result.roiByLineageId["lid-abc"]?.roi, 0.5);
+    assert.equal(result.roiByLineageId["lid-abc"]?.success, 1);
+    assert.equal(result.roiByLineageId["lid-abc"]?.total, 2);
+    // lid-xyz: 1 done / 1 total = 1.0
+    assert.equal(result.roiByLineageId["lid-xyz"]?.roi, 1);
+    // overallLinkedROI: 2 done / 3 total = 0.667
+    assert.ok(typeof result.overallLinkedROI === "number");
+    assert.ok(result.overallLinkedROI > 0.6 && result.overallLinkedROI < 0.7);
+  });
+
+  it("computes linkedRatio correctly with mixed linked/unlinked entries", () => {
+    const log = [
+      { outcome: "done",    lineageId: "lid-1" },
+      { outcome: "done",    lineageId: "lid-1" },
+      { outcome: "blocked", lineageId: null     },
+      { outcome: "done",    lineageId: null     },
+    ];
+    const result = buildRoutingROISummary(log);
+    assert.equal(result.totalRequests, 4);
+    assert.equal(result.linkedRequests, 2);
+    assert.equal(result.linkedRatio, 0.5, "half of entries carry a lineageId");
+    assert.equal(result.overallLinkedROI, 1, "both linked entries are done");
+  });
+
+  it("negative: ignores non-object entries in the log", () => {
+    const log = [null, undefined, "not-an-object", 42,
+      { outcome: "done", lineageId: "lid-1" }];
+    const result = buildRoutingROISummary(log as unknown[]);
+    assert.equal(result.linkedRequests, 1);
+    assert.ok(result.totalRequests >= 1);
   });
 });

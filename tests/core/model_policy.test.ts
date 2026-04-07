@@ -36,6 +36,7 @@ import {
   MEMORY_HIT_RATIO_LOW,
   MEMORY_FLOOR_RELAX_AMOUNT,
   MEMORY_FLOOR_TIGHTEN_AMOUNT,
+  QUALITY_FLOOR_DEFAULT,
 } from "../../src/core/model_policy.js";
 
 describe("model_policy — complexity tiers", () => {
@@ -1121,5 +1122,77 @@ describe("routeModelWithMemoryHitRatio", () => {
     const result = routeModelWithMemoryHitRatio({}, {}, 0.75, 0.8);
     assert.ok(result.model, "must return a model even with empty options");
     assert.equal(typeof result.meetsQualityFloor, "boolean");
+  });
+});
+
+// ── QUALITY_FLOOR_DEFAULT — shared constant used by dispatch routing ──────────
+
+describe("QUALITY_FLOOR_DEFAULT — quality floor constant", () => {
+  it("is a numeric value in (0, 1)", () => {
+    assert.equal(typeof QUALITY_FLOOR_DEFAULT, "number");
+    assert.ok(QUALITY_FLOOR_DEFAULT > 0 && QUALITY_FLOOR_DEFAULT < 1,
+      "QUALITY_FLOOR_DEFAULT must be in (0, 1)");
+  });
+
+  it("matches the default parameter of routeModelUnderQualityFloor", () => {
+    // When no qualityFloor arg is supplied, the default (0.7) must be used.
+    // A Sonnet-quality (0.85) model should always meet the default floor.
+    const modelOptions = {
+      efficientModel: "Claude Haiku 4",
+      defaultModel:   "Claude Sonnet 4.6",
+      strongModel:    "Claude Opus 4.6",
+      qualityByModel: {
+        "claude haiku 4":    0.70,
+        "claude sonnet 4.6": 0.85,
+        "claude opus 4.6":   0.95,
+      },
+    };
+    // Call with explicit QUALITY_FLOOR_DEFAULT — result must be same as no-arg default.
+    const withConst  = routeModelUnderQualityFloor({ complexity: "low" }, modelOptions, {}, QUALITY_FLOOR_DEFAULT);
+    const withDefault = routeModelUnderQualityFloor({ complexity: "low" }, modelOptions, {});
+    assert.equal(withConst.model, withDefault.model,
+      "explicit QUALITY_FLOOR_DEFAULT must produce identical routing to the default parameter");
+    assert.equal(withConst.meetsQualityFloor, withDefault.meetsQualityFloor);
+  });
+
+  it("quality-floor enforcement upgrades a below-floor candidate", () => {
+    // Force haiku as the sole efficientModel; quality floor set above haiku (0.70).
+    // routeModelUnderQualityFloor must upgrade to Sonnet.
+    const modelOptions = {
+      efficientModel: "Claude Haiku 4",
+      defaultModel:   "Claude Sonnet 4.6",
+      strongModel:    "Claude Opus 4.6",
+      qualityByModel: {
+        "claude haiku 4":    0.60,
+        "claude sonnet 4.6": 0.85,
+        "claude opus 4.6":   0.95,
+      },
+    };
+    const result = routeModelUnderQualityFloor({ complexity: "low" }, modelOptions, { recentROI: 0 }, 0.75);
+    assert.notEqual(result.model, "Claude Haiku 4",
+      "below-floor candidate must be upgraded");
+    assert.equal(result.meetsQualityFloor, true,
+      "selected model must meet the floor after upgrade");
+    assert.ok(result.reason.includes("quality-floor-upgrade"),
+      "reason must explain why floor upgrade was applied");
+  });
+
+  it("negative: no model meeting floor returns strongest with meetsQualityFloor=false", () => {
+    // All models score below an impossibly high floor.
+    const modelOptions = {
+      efficientModel: "Claude Haiku 4",
+      defaultModel:   "Claude Sonnet 4.6",
+      strongModel:    "Claude Opus 4.6",
+      qualityByModel: {
+        "claude haiku 4":    0.10,
+        "claude sonnet 4.6": 0.20,
+        "claude opus 4.6":   0.30,
+      },
+    };
+    const result = routeModelUnderQualityFloor({}, modelOptions, { recentROI: 0 }, 0.99);
+    assert.equal(result.model, "Claude Opus 4.6",
+      "when nothing meets the floor, the strongest model must be returned");
+    assert.equal(result.meetsQualityFloor, false,
+      "meetsQualityFloor must be false when no model qualifies");
   });
 });
