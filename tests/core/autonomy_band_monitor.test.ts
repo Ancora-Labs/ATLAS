@@ -499,3 +499,139 @@ describe("evaluateInBandThresholds — executionAdjustedPremiumEfficiency (new f
     assert.ok(!checks.allMet, "allMet must be false");
   });
 });
+
+// ── Bootstrap-outlier eligibility filtering for completionVarianceMet ────────
+
+describe("evaluateInBandThresholds — completionVarianceMet bootstrap-outlier filtering", () => {
+  it("persists completionVarianceRaw and completionVarianceEligible", () => {
+    const history = makeHistory(35, { completionRate: 0.90 });
+    const checks = evaluateInBandThresholds(history, DEFAULT_THRESHOLDS);
+    assert.ok(
+      checks.completionVarianceRaw === null || typeof checks.completionVarianceRaw === "number",
+      "completionVarianceRaw must be number|null",
+    );
+    assert.ok(
+      checks.completionVarianceEligible === null || typeof checks.completionVarianceEligible === "number",
+      "completionVarianceEligible must be number|null",
+    );
+  });
+
+  it("completionVarianceMet uses eligibleVariance (bootstrap-filtered), not rawVariance", () => {
+    // First sample: bootstrap outlier (completionRate=0); rest: stable (1.0)
+    // Raw variance over the window will be inflated by the outlier.
+    // Eligible variance (phase-aware) over recent stable cycles should be near 0 → gate passes.
+    const history = [
+      makeSample({ cycleId: "bootstrap-0", completionRate: 0 }),
+      ...Array.from({ length: 34 }, (_, i) =>
+        makeSample({ cycleId: `stable-${i}`, completionRate: 1.0 }),
+      ),
+    ];
+    const checks = evaluateInBandThresholds(history, DEFAULT_THRESHOLDS);
+    assert.ok(
+      checks.completionVarianceMet,
+      `completionVarianceMet should be true using eligible variance; ` +
+      `raw=${checks.completionVarianceRaw}, eligible=${checks.completionVarianceEligible}`,
+    );
+    if (checks.completionVarianceRaw !== null && checks.completionVarianceEligible !== null) {
+      assert.ok(
+        checks.completionVarianceRaw >= checks.completionVarianceEligible,
+        `raw variance (${checks.completionVarianceRaw}) must be >= eligible variance (${checks.completionVarianceEligible})`,
+      );
+    }
+  });
+
+  it("completionVarianceBootstrapFiltered is true when recent stability is high", () => {
+    const history = [
+      makeSample({ cycleId: "bootstrap-0", completionRate: 0 }),
+      ...Array.from({ length: 34 }, (_, i) =>
+        makeSample({ cycleId: `stable-${i}`, completionRate: 1.0 }),
+      ),
+    ];
+    const checks = evaluateInBandThresholds(history, DEFAULT_THRESHOLDS);
+    assert.equal(
+      checks.completionVarianceBootstrapFiltered,
+      true,
+      "bootstrap filtering must activate when recent completion rates are high and stable",
+    );
+  });
+
+  it("completionVarianceBootstrapFiltered is false when recent stability is low", () => {
+    const history = makeHistory(35, { completionRate: 0.5 });
+    const checks = evaluateInBandThresholds(history, DEFAULT_THRESHOLDS);
+    assert.equal(
+      checks.completionVarianceBootstrapFiltered,
+      false,
+      "bootstrap filtering must NOT activate when recent stability is below threshold",
+    );
+  });
+
+  it("negative path: high variance history without stable recent cycles fails completionVarianceMet", () => {
+    // Mix of 0 and 0.5 — recent avg too low to trigger bootstrap filtering
+    const history = Array.from({ length: 35 }, (_, i) =>
+      makeSample({ cycleId: `c-${i}`, completionRate: i % 2 === 0 ? 0 : 0.5 }),
+    );
+    const checks = evaluateInBandThresholds(history, DEFAULT_THRESHOLDS);
+    assert.ok(
+      !checks.completionVarianceMet,
+      "completionVarianceMet must be false for highly variable history without stable recent cycles",
+    );
+  });
+});
+
+describe("computeExecutionPhase — variance metadata persistence", () => {
+  it("returns completionVarianceRaw, completionVarianceEligible, and completionVarianceBootstrapFiltered", () => {
+    const history = [
+      makeSample({ cycleId: "c0", completionRate: 0, benchmarkGain: 0.3 }),
+      ...Array.from({ length: 9 }, (_, i) =>
+        makeSample({
+          cycleId: `c${i + 1}`,
+          completionRate: 1.0,
+          benchmarkGain: 0.3,
+          phase: "completed",
+        }),
+      ),
+    ];
+    const result = computeExecutionPhase(BAND_STATE.IN_BAND, history, DEFAULT_THRESHOLDS);
+    assert.ok(
+      result.completionVarianceRaw === null || typeof result.completionVarianceRaw === "number",
+      "completionVarianceRaw must be number|null",
+    );
+    assert.ok(
+      result.completionVarianceEligible === null || typeof result.completionVarianceEligible === "number",
+      "completionVarianceEligible must be number|null",
+    );
+    assert.ok(
+      typeof result.completionVarianceBootstrapFiltered === "boolean",
+      "completionVarianceBootstrapFiltered must be boolean",
+    );
+  });
+
+  it("returns null variance metadata when band_not_reached", () => {
+    const history = makeHistory(5);
+    const result = computeExecutionPhase(BAND_STATE.STABILIZING, history, DEFAULT_THRESHOLDS);
+    assert.equal(result.completionVarianceRaw, null);
+    assert.equal(result.completionVarianceEligible, null);
+    assert.equal(result.completionVarianceBootstrapFiltered, false);
+  });
+
+  it("eligible variance is lower than raw when bootstrap outlier is present and recent stability is high", () => {
+    const history = [
+      makeSample({ cycleId: "c0", completionRate: 0, benchmarkGain: 0.3 }),
+      ...Array.from({ length: 9 }, (_, i) =>
+        makeSample({
+          cycleId: `c${i + 1}`,
+          completionRate: 1.0,
+          benchmarkGain: 0.3,
+          phase: "completed",
+        }),
+      ),
+    ];
+    const result = computeExecutionPhase(BAND_STATE.IN_BAND, history, DEFAULT_THRESHOLDS);
+    if (result.completionVarianceRaw !== null && result.completionVarianceEligible !== null) {
+      assert.ok(
+        result.completionVarianceRaw >= result.completionVarianceEligible,
+        `raw (${result.completionVarianceRaw}) must be >= eligible (${result.completionVarianceEligible}) when bootstrap outlier is present`,
+      );
+    }
+  });
+});

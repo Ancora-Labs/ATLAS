@@ -204,6 +204,12 @@ export interface BandStatus {
     completionVarianceMet: boolean;
     completedPhaseMet: boolean;
     allMet: boolean;
+    /** Raw completion variance over the stabilizing window (no bootstrap filtering). */
+    completionVarianceRaw: number | null;
+    /** Eligible completion variance after bootstrap-outlier filtering (used for the gate). */
+    completionVarianceEligible: number | null;
+    /** True when bootstrap-outlier filtering was activated (recent stability ≥ threshold). */
+    completionVarianceBootstrapFiltered: boolean;
   };
   regressionChecks: {
     crashBreach: boolean;
@@ -218,6 +224,12 @@ export interface BandStatus {
     exploitationReady: boolean;
     reason: string;
     varianceNormalizationApplied?: boolean;
+    /** Raw completion variance over the exploitation window (no bootstrap filtering). */
+    completionVarianceRaw?: number | null;
+    /** Eligible completion variance after bootstrap-outlier filtering (used for the gate). */
+    completionVarianceEligible?: number | null;
+    /** True when bootstrap-outlier filtering was activated (recent stability ≥ threshold). */
+    completionVarianceBootstrapFiltered?: boolean;
   };
   history: CycleSample[];
 }
@@ -382,9 +394,25 @@ export function evaluateInBandThresholds(
   const benchmarkGainAvg = windowAvg(window.map(s => s.benchmarkGain), thresholds.stabilizingWindow);
   const benchmarkGainMet = benchmarkGainAvg !== null && benchmarkGainAvg >= thresholds.inBandMinBenchmarkGain;
 
-  const completionVariance = windowVariance(window.map(s => s.completionRate), thresholds.stabilizingWindow);
-  const completionVarianceMet = completionVariance !== null
-    ? completionVariance <= thresholds.inBandMaxCompletionVariance
+  const completionVarianceRaw = windowVariance(window.map(s => s.completionRate), thresholds.stabilizingWindow);
+  // Apply the same bootstrap-outlier filtering as the exploitation gate for consistency.
+  const allCompletionRatesInBand = history.map(s => s.completionRate);
+  const completionVarianceEligible = computePhaseAwareVariance(
+    allCompletionRatesInBand,
+    thresholds.stabilizingWindow,
+    { stabilityThreshold: VARIANCE_NORMALIZATION_STABILITY_THRESHOLD },
+  );
+  // Detect whether bootstrap filtering was actually activated (mirrors computePhaseAwareVariance internals).
+  const halfWindowInBand = Math.max(2, Math.ceil(thresholds.stabilizingWindow / 2));
+  const recentInBandRates = allCompletionRatesInBand
+    .slice(-halfWindowInBand)
+    .filter((v): v is number => v !== null && Number.isFinite(v));
+  const recentAvgInBand = recentInBandRates.length >= 2
+    ? recentInBandRates.reduce((a, b) => a + b, 0) / recentInBandRates.length
+    : 0;
+  const completionVarianceBootstrapFiltered = recentAvgInBand >= VARIANCE_NORMALIZATION_STABILITY_THRESHOLD;
+  const completionVarianceMet = completionVarianceEligible !== null
+    ? completionVarianceEligible <= thresholds.inBandMaxCompletionVariance
     : false;
 
   const completedPhaseMet = thresholds.inBandRequireCompletedPhase
@@ -405,6 +433,9 @@ export function evaluateInBandThresholds(
     completionVarianceMet,
     completedPhaseMet,
     allMet,
+    completionVarianceRaw,
+    completionVarianceEligible,
+    completionVarianceBootstrapFiltered,
   };
 }
 
@@ -492,13 +523,24 @@ export function computeExecutionPhase(
   state: string,
   history: CycleSample[],
   thresholds: Thresholds,
-): { phase: string; exploitationReady: boolean; reason: string; varianceNormalizationApplied: boolean } {
+): {
+  phase: string;
+  exploitationReady: boolean;
+  reason: string;
+  varianceNormalizationApplied: boolean;
+  completionVarianceRaw: number | null;
+  completionVarianceEligible: number | null;
+  completionVarianceBootstrapFiltered: boolean;
+} {
   if (state !== BAND_STATE.IN_BAND) {
     return {
       phase: "PHASE_1_STABILIZATION",
       exploitationReady: false,
       reason: "band_not_reached",
       varianceNormalizationApplied: false,
+      completionVarianceRaw: null,
+      completionVarianceEligible: null,
+      completionVarianceBootstrapFiltered: false,
     };
   }
 
@@ -509,6 +551,9 @@ export function computeExecutionPhase(
       exploitationReady: false,
       reason: "insufficient_exploitation_window",
       varianceNormalizationApplied: false,
+      completionVarianceRaw: null,
+      completionVarianceEligible: null,
+      completionVarianceBootstrapFiltered: false,
     };
   }
 
@@ -522,6 +567,8 @@ export function computeExecutionPhase(
     thresholds.exploitationWindow,
     { stabilityThreshold: VARIANCE_NORMALIZATION_STABILITY_THRESHOLD },
   );
+  // Raw variance over the exploitation window (no bootstrap filtering) — persisted for observability.
+  const rawCompletionVar = windowVariance(window.map((s) => s.completionRate), thresholds.exploitationWindow);
   // Detect whether normalization was actually applied (recent avg >= threshold).
   const halfWindow = Math.max(2, Math.ceil(thresholds.exploitationWindow / 2));
   const recentRates = allCompletionRates.slice(-halfWindow).filter((v): v is number => v !== null && Number.isFinite(v));
@@ -538,6 +585,9 @@ export function computeExecutionPhase(
       exploitationReady: false,
       reason: "benchmark_gain_gate",
       varianceNormalizationApplied,
+      completionVarianceRaw: rawCompletionVar,
+      completionVarianceEligible: completionVar,
+      completionVarianceBootstrapFiltered: varianceNormalizationApplied,
     };
   }
   if (completionVar === null || completionVar > thresholds.exploitationMaxCompletionVariance) {
@@ -546,6 +596,9 @@ export function computeExecutionPhase(
       exploitationReady: false,
       reason: "completion_variance_gate",
       varianceNormalizationApplied,
+      completionVarianceRaw: rawCompletionVar,
+      completionVarianceEligible: completionVar,
+      completionVarianceBootstrapFiltered: varianceNormalizationApplied,
     };
   }
   if (thresholds.inBandRequireCompletedPhase && !phaseCompleted) {
@@ -554,6 +607,9 @@ export function computeExecutionPhase(
       exploitationReady: false,
       reason: "phase_completed_gate",
       varianceNormalizationApplied,
+      completionVarianceRaw: rawCompletionVar,
+      completionVarianceEligible: completionVar,
+      completionVarianceBootstrapFiltered: varianceNormalizationApplied,
     };
   }
 
@@ -562,6 +618,9 @@ export function computeExecutionPhase(
     exploitationReady: true,
     reason: "all_exploitation_gates_met",
     varianceNormalizationApplied,
+    completionVarianceRaw: rawCompletionVar,
+    completionVarianceEligible: completionVar,
+    completionVarianceBootstrapFiltered: varianceNormalizationApplied,
   };
 }
 
@@ -743,6 +802,9 @@ function createInitialStatus(): BandStatus {
       completionVarianceMet: false,
       completedPhaseMet: false,
       allMet: false,
+      completionVarianceRaw: null,
+      completionVarianceEligible: null,
+      completionVarianceBootstrapFiltered: false,
     },
     regressionChecks: {
       crashBreach: false,
@@ -757,6 +819,9 @@ function createInitialStatus(): BandStatus {
       exploitationReady: false,
       reason: "initial_state",
       varianceNormalizationApplied: false,
+      completionVarianceRaw: null,
+      completionVarianceEligible: null,
+      completionVarianceBootstrapFiltered: false,
     },
     history: [],
   };
@@ -823,6 +888,9 @@ export async function evaluateAutonomyBand(
     exploitationReady: executionGate.exploitationReady,
     reason: executionGate.reason,
     varianceNormalizationApplied: executionGate.varianceNormalizationApplied,
+    completionVarianceRaw: executionGate.completionVarianceRaw,
+    completionVarianceEligible: executionGate.completionVarianceEligible,
+    completionVarianceBootstrapFiltered: executionGate.completionVarianceBootstrapFiltered,
   };
 
   // Shadow mode from config
