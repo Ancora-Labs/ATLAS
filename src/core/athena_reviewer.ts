@@ -258,6 +258,8 @@ export const ATHENA_PLAN_REVIEW_REASON_CODE = Object.freeze({
   ACTIVE_GOVERNANCE_GATE_INFEASIBLE: "ACTIVE_GOVERNANCE_GATE_INFEASIBLE",
   /** One or more mandatory health-audit findings (critical/important) are not covered by the plan. */
   MANDATORY_COVERAGE_INCOMPLETE: "MANDATORY_COVERAGE_INCOMPLETE",
+  /** One or more patchedPlan dependencies carry an unresolved cross-cycle pre-condition. */
+  CROSS_CYCLE_DEPENDENCY_UNRESOLVED: "CROSS_CYCLE_DEPENDENCY_UNRESOLVED",
 });
 
 /** Set of all valid RATIONALE_CLASS values for O(1) lookup. */
@@ -2972,6 +2974,50 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
         ...result,
         approved: false,
         corrections: [...corrections, ...patchedPlanIssues],
+        reason: blockReason,
+        blocker,
+      };
+    }
+  }
+
+  // ── Cross-cycle dependency gate ──────────────────────────────────────────
+  // Block plans that carry unresolved cross-cycle pre-conditions. Such plans pass
+  // structural validation but will always block at the orchestrator dispatch gate
+  // with no machine-readable explanation, producing dispatches=[] silently.
+  if (Array.isArray(result.patchedPlans) && result.patchedPlans.length > 0) {
+    const crossCycleIssues: string[] = [];
+    for (let pi = 0; pi < result.patchedPlans.length; pi++) {
+      const plan = result.patchedPlans[pi] as any;
+      if (!Array.isArray(plan?.dependencies)) continue;
+      for (const dep of plan.dependencies) {
+        if (typeof dep !== "string") continue;
+        const match = dep.match(/^(.+?)\s*\[cross-cycle pre-condition/i);
+        if (!match) continue;
+        const gateName = match[1].trim();
+        crossCycleIssues.push(
+          `Resolve gate "${gateName}" before re-submitting — unresolved cross-cycle pre-condition blocks dispatch (plan[${pi}])`
+        );
+      }
+    }
+    if (crossCycleIssues.length > 0) {
+      const blockReason = {
+        code: ATHENA_PLAN_REVIEW_REASON_CODE.CROSS_CYCLE_DEPENDENCY_UNRESOLVED,
+        message: `Plans contain unresolved cross-cycle pre-conditions: ${crossCycleIssues.join(" | ")}`
+      };
+      const blocker = buildPlanReviewBlocker(blockReason.code);
+      await appendProgress(config, `[ATHENA] Cross-cycle dependency gate BLOCKED — ${blockReason.message}`);
+      await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
+      chatLog(stateDir, athenaName, `Cross-cycle dependency unresolved: ${crossCycleIssues.join(" | ")}`);
+      await appendAlert(config, {
+        severity: ALERT_SEVERITY.CRITICAL,
+        source: "athena_reviewer",
+        title: "Plans contain unresolved cross-cycle pre-conditions",
+        message: `code=${blockReason.code} issues=${crossCycleIssues.slice(0, 3).join(" | ")}`
+      });
+      return {
+        ...result,
+        approved: false,
+        corrections: [...corrections, ...crossCycleIssues],
         reason: blockReason,
         blocker,
       };

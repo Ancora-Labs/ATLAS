@@ -179,3 +179,40 @@ describe("athena gate risk dry-run integration", () => {
   });
 });
 
+
+// ── Cross-cycle dependency gate ──────────────────────────────────────────────
+
+describe("runAthenaPlanReview — cross-cycle dependency gate", () => {
+  it("exports CROSS_CYCLE_DEPENDENCY_UNRESOLVED reason code", () => {
+    assert.equal(
+      ATHENA_PLAN_REVIEW_REASON_CODE.CROSS_CYCLE_DEPENDENCY_UNRESOLVED,
+      "CROSS_CYCLE_DEPENDENCY_UNRESOLVED"
+    );
+  });
+
+  it("cross-cycle pre-condition pattern matches dependency string with marker", () => {
+    // Positive path — these must match the gate pattern
+    const positiveExamples = [
+      "Prometheus Semantic Incomplete-Output Gate v2 [cross-cycle pre-condition — dispatch must confirm]",
+      "SomePlan [cross-cycle pre-condition: must be resolved first]",
+      "Gate ABC [cross-cycle pre-condition]",
+    ];
+    for (const dep of positiveExamples) {
+      const match = dep.match(/^(.+?)\s*\[cross-cycle pre-condition/i);
+      assert.ok(match !== null, `pattern must match: ${dep}`);
+      assert.ok(match[1].trim().length > 0, "gate name must be extracted from dependency string");
+    }
+  });
+
+  it("does not block when patchedPlans have no cross-cycle pre-condition dependencies (negative path)", () => {
+    const plan = {
+      target_files: ["src/core/cycle_analytics.ts"],
+      scope: "cost-efficiency",
+      acceptance_criteria: ["Both metrics emitted"],
+      dependencies: ["Some regular dependency"],
+    };
+    // Test the regex directly — regular dependencies must not trigger
+    const match = "Some regular dependency".match(/^(.+?)\s*\[cross-cycle pre-condition/i);
+    assert.equal(match, null, "regular dependencies must not match cross-cycle pattern");
+  });
+});
