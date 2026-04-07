@@ -416,7 +416,57 @@ export function topicHasActionableArtifact(topic: Record<string, unknown>): bool
 export function buildQualityGateRecoverySignal(quarantinedTopicNames: string[]): string {
   const names = quarantinedTopicNames.filter(n => String(n).trim().length > 0);
   if (names.length === 0) return "";
-  return `Research completed on topics: ${names.join(", ")}. All topics failed density check — use topic names as minimal planning signal.`;
+  // NOTE: topic names are surfaced for audit only — Prometheus must NOT use them as
+  // planning evidence. Internal repository state is the authoritative planning source
+  // when all topics are quarantined.
+  return `Research was attempted on topics: ${names.join(", ")}. All failed density check — ` +
+    `do NOT use topic names as planning input. Derive tasks only from concrete repository evidence (files, failing tests, error logs).`;
+}
+
+/** Strict actionable-density thresholds used in bounded recovery synthesis scheduling. */
+export const SYNTHESIS_RECOVERY_DENSITY_THRESHOLDS = Object.freeze({
+  /** Minimum number of unique topics with at least one actionable finding. */
+  minTopicCount: 2,
+  /** Minimum number of actionable items across all topics. */
+  minActionableCount: 4,
+  /** Maximum number of re-synthesis retries before falling back to internal evidence only. */
+  maxRetries: 1,
+});
+
+/**
+ * Schedule a bounded recovery synthesis for the next cycle when synthesis density
+ * fails (degraded planning mode).  Writes a `synthesis_recovery_request.json` to
+ * the state directory so that the Research Scout/Synthesizer can pick it up on the
+ * next cycle and run a tightly constrained re-synthesis.
+ *
+ * Exported for testing and for prometheus.ts to call after entering degraded mode.
+ *
+ * @param stateDir — path to the state directory
+ * @param opts — optional metadata to embed in the request record
+ */
+export async function scheduleBoundedRecoverySynthesis(
+  stateDir: string,
+  opts: { quarantinedTopics?: string[]; retriedAlready?: boolean } = {}
+): Promise<void> {
+  const recoveryPath = path.join(stateDir, "synthesis_recovery_request.json");
+  try {
+    const record = {
+      requestedAt: new Date().toISOString(),
+      reason: "degraded_planning_mode_all_topics_quarantined",
+      densityThresholds: SYNTHESIS_RECOVERY_DENSITY_THRESHOLDS,
+      quarantinedTopics: Array.isArray(opts.quarantinedTopics) ? opts.quarantinedTopics : [],
+      retriedAlready: opts.retriedAlready === true,
+      scheduledForCycle: "next",
+      planningMode: "internal_evidence_only",
+    };
+    await fs.writeFile(recoveryPath, JSON.stringify(record, null, 2), "utf8");
+  } catch (err) {
+    // Non-fatal — failure to schedule recovery must never block the current planning cycle.
+    // Log to stderr so CI/monitoring can detect persistent write failures.
+    process.stderr.write(
+      `[RESEARCH_SYNTHESIZER][WARN] Failed to write synthesis_recovery_request.json: ${String((err as Error)?.message || err)}\n`
+    );
+  }
 }
 
 function toSingleLine(value: unknown, maxLen = 240): string {

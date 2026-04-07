@@ -28,6 +28,12 @@ export const CRITIC_DIMENSION = Object.freeze({
   IMPLEMENTATION_EVIDENCE: "IMPLEMENTATION_EVIDENCE",
   /** Hard-reject dimension: 0.0 when AC count > MAX or files > MAX; 1.0 otherwise. */
   PACKET_SIZE_COMPLIANT:  "PACKET_SIZE_COMPLIANT",
+  /**
+   * Topic-name-only drift detector: 0.0 when a plan's task/context only references
+   * quarantined research topic names without concrete file or code evidence.
+   * Catches low-signal plans that drifted from degraded-research-mode context.
+   */
+  NO_TOPIC_NAME_DRIFT:    "NO_TOPIC_NAME_DRIFT",
 });
 
 /** Minimum composite score to pass the critic gate (0-1 scale). */
@@ -205,6 +211,28 @@ export function critiquePlan(plan) {
   }
   if (fileCount > MAX_FILES_IN_SCOPE_PER_TASK) {
     issues.push(`Oversized packet: ${fileCount} files in scope exceeds max (${MAX_FILES_IN_SCOPE_PER_TASK}) — must decompose`);
+  }
+
+  // 13. Topic-name-only drift detection: catches plans that were generated from a
+  // degraded-planning-mode context and only reference quarantined research topic names
+  // without concrete file/code evidence.  A plan is flagged when its combined text
+  // heavily signals "research topic" framing without any repository-concrete anchors.
+  const driftText = `${task} ${context} ${String(plan.scope || "")}`;
+  // Evidence anchors: file extensions, src/ paths, test commands, function-call syntax
+  const hasConcreteEvidence = /\.(ts|js|json|md|yml|yaml)\b/.test(driftText)
+    || /src\/|tests\/|state\/|scripts\//.test(driftText)
+    || /npm\s+(test|run)|node\s+--|npx\s+/.test(driftText)
+    || /\b\w+\(/.test(driftText);
+  // Topic-name framing: research-mode phrases indicating topic-name sourcing
+  const topicNameFraming = (
+    (driftText.match(/\bresearch\b/gi) || []).length >= 2
+    || /research completed on|failed density|topic names? as|all topics/i.test(driftText)
+    || /degraded planning mode/i.test(driftText)
+  );
+  const hasTopicNameDrift = topicNameFraming && !hasConcreteEvidence;
+  dimensions[CRITIC_DIMENSION.NO_TOPIC_NAME_DRIFT] = hasTopicNameDrift ? 0.0 : 1.0;
+  if (hasTopicNameDrift) {
+    issues.push("Task appears to be derived from low-signal research topic names without concrete repository evidence — must anchor to specific files or tests");
   }
 
   // Composite score (equal weight)

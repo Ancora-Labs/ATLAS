@@ -686,9 +686,26 @@ export async function runJesusCycle(config) {
     await appendProgress(config, `[JESUS][AUDIT] ${healthFindings.length} finding(s) — ${criticalCount} critical`);
     chatLog(stateDir, jesusName, `Health audit: ${healthFindings.length} findings (${criticalCount} critical)`);
 
-    // Persist findings for self-improvement to consume
+    // Persist findings for self-improvement to consume.
+    // capabilityInvocationStatus provides a per-capability record distinguishing
+    // "code present in source" from "actually invoked at runtime this cycle".
+    const tracePayload = await readJson(path.join(stateDir, "capability_execution_traces.json"), { traces: [] });
+    const capabilityExecutionTraces = Array.isArray(tracePayload?.traces)
+      ? tracePayload.traces.slice(-50)
+      : [];
+    const tracedCapabilities = new Set(capabilityExecutionTraces.map((t: any) => String(t?.capability || "").trim().toLowerCase()));
+    const capabilityInvocationStatus = Object.keys(CAPABILITY_SOURCE_SIGNATURES).map(id => ({
+      capability: id,
+      status: tracedCapabilities.has(id) ? "invoked" : "absent",
+      lastInvokedAt: capabilityExecutionTraces
+        .filter((t: any) => String(t?.capability || "").trim().toLowerCase() === id)
+        .map((t: any) => t.observedAt)
+        .slice(-1)[0] ?? null,
+    }));
     await writeJson(path.join(stateDir, "health_audit_findings.json"), {
       findings: healthFindings,
+      capabilityExecutionTraces,
+      capabilityInvocationStatus,
       auditedAt: new Date().toISOString()
     });
   }

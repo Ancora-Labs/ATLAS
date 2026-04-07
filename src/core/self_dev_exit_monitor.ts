@@ -412,19 +412,53 @@ function isSuccessOutcome(value: unknown): boolean {
   return key === "done" || key === "success" || key === "merged";
 }
 
-async function readNoveltyYield(config: Record<string, unknown>): Promise<number | null> {
+function isResolvedStatus(value: unknown): boolean {
+  const key = String(value || "").toLowerCase().trim();
+  if (!key) return false;
+  return (
+    key === "done" ||
+    key === "success" ||
+    key === "merged" ||
+    key === "completed" ||
+    key === "complete" ||
+    key === "resolved" ||
+    key === "closed" ||
+    key === "retired" ||
+    key === "implemented" ||
+    key === "implemented_correctly"
+  );
+}
+
+async function readNoveltyYield(config: Record<string, unknown>, windowSize: number): Promise<number | null> {
   const data = await readJson(path.join(stateDir(config), "prometheus_topic_memory.json"), null);
   if (!data || typeof data !== "object") return null;
   const topics = (data as JsonMap).topics;
   if (!topics || typeof topics !== "object") return null;
   const rows = Object.values(topics as JsonMap)
-    .filter((v): v is JsonMap => v !== null && typeof v === "object");
+    .filter((v): v is JsonMap => v !== null && typeof v === "object")
+    .map((row) => {
+      const updatedAt = String(row.lastUpdatedAt || row.firstSeenAt || "").trim();
+      const ts = Date.parse(updatedAt);
+      return {
+        status: String(row.status || "").toLowerCase().trim(),
+        ts: Number.isFinite(ts) ? ts : null,
+      };
+    })
+    .sort((a, b) => {
+      const at = a.ts ?? -1;
+      const bt = b.ts ?? -1;
+      return bt - at;
+    });
+
+  const bounded = Number.isFinite(windowSize) && windowSize > 0
+    ? rows.slice(0, Math.floor(windowSize))
+    : rows;
+
   let active = 0;
   let completed = 0;
-  for (const row of rows) {
-    const status = String(row.status || "").toLowerCase().trim();
-    if (status === "active") active += 1;
-    if (status === "completed") completed += 1;
+  for (const row of bounded) {
+    if (row.status === "active") active += 1;
+    if (isResolvedStatus(row.status)) completed += 1;
   }
   const total = active + completed;
   if (total === 0) return null;
@@ -460,11 +494,17 @@ async function readBenchmarkPendingRatio(config: Record<string, unknown>): Promi
   if (!data || typeof data !== "object") return null;
   const entries = toArray((data as JsonMap).entries);
   if (entries.length === 0) return null;
-  const latest = entries[entries.length - 1];
+  const latest = [...entries].sort((a, b) => {
+    const at = Date.parse(String(a.evaluatedAt || a.createdAt || ""));
+    const bt = Date.parse(String(b.evaluatedAt || b.createdAt || ""));
+    const av = Number.isFinite(at) ? at : -1;
+    const bv = Number.isFinite(bt) ? bt : -1;
+    return bv - av;
+  })[0] ?? entries[0];
   const recs = toArray(latest.recommendations);
   if (recs.length === 0) return null;
-  const pending = recs.filter((r) => String(r.implementationStatus || "").toLowerCase() === "pending").length;
-  return pending / recs.length;
+  const unresolved = recs.filter((r) => !isResolvedStatus(r.implementationStatus)).length;
+  return unresolved / recs.length;
 }
 
 async function readBacklogOpenRatio(config: Record<string, unknown>): Promise<number | null> {
@@ -544,7 +584,7 @@ export async function evaluateSelfDevExit(
   }
 
   const [noveltyYield, roi, benchmarkPendingRatio, backlogOpenRatio, analyticsRegressionClean] = await Promise.all([
-    readNoveltyYield(config),
+    readNoveltyYield(config, thresholds.measurementWindow),
     readRoiSeries(config, thresholds.measurementWindow),
     readBenchmarkPendingRatio(config),
     readBacklogOpenRatio(config),
