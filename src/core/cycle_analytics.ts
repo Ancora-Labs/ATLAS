@@ -635,6 +635,10 @@ export function computeCycleAnalytics(config, {
   dropReasons = [],
   premiumUsageLog = [],
   dispatchBlockReason = null,
+  lineageLog = [],
+  memoryHitLog = [],
+  premiumEfficiencyRaw = null,
+  premiumEfficiencyAdjusted = null,
 }: any = {}) {
   const missingData = [];
   const stageTimestamps = pipelineProgress?.stageTimestamps || null;
@@ -675,6 +679,11 @@ export function computeCycleAnalytics(config, {
     systemHealthScore: null,   // populated externally if self-improvement ran
     sloBreachCount: Array.isArray(sloRecord?.sloBreaches) ? sloRecord.sloBreaches.length : 0,
     sloStatus: sloRecord?.status ?? "unknown",
+    // Premium efficiency variants — both are null when not yet evaluated (advisory path).
+    // premiumEfficiencyRaw: successfulPremiumEvents / settledPremiumEvents.
+    // premiumEfficiencyAdjusted: (leadershipSuccesses + verifiedDoneWorkers) / settledPremiumEvents.
+    premiumEfficiencyRaw: toFiniteNumberOrNull(premiumEfficiencyRaw),
+    premiumEfficiencyAdjusted: toFiniteNumberOrNull(premiumEfficiencyAdjusted),
   };
 
   if (sloRecord === null) {
@@ -930,6 +939,8 @@ export function computeCycleAnalytics(config, {
     stageTransitions: Array.isArray(stageTransitions) ? stageTransitions : [],
     dropReasons:      Array.isArray(dropReasons) ? dropReasons : [],
     modelRoutingTelemetry: buildModelRoutingTelemetry(premiumUsageLog ?? []),
+    lineageSummary: buildLineageSummary(lineageLog ?? []),
+    memoryHitTelemetry: buildMemoryHitTelemetry(memoryHitLog ?? []),
   };
 }
 
@@ -1619,5 +1630,54 @@ export function buildPolicyInterventionAttributionLedger(
     });
   }
   return { history: merged, decisions };
+}
+
+/**
+ * Summarize plan lineage provenance from a lineage event log.
+ * Returns counts grouped by source kind (gap_candidate, carry_forward, novelty_seed, etc.)
+ */
+export function buildLineageSummary(lineageLog: unknown[]): {
+  bySourceKind: Record<string, number>;
+  totalEvents: number;
+} {
+  if (!Array.isArray(lineageLog) || lineageLog.length === 0) {
+    return { bySourceKind: {}, totalEvents: 0 };
+  }
+  const bySourceKind: Record<string, number> = {};
+  let totalEvents = 0;
+  for (const entry of lineageLog) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const kind = (entry as Record<string, unknown>).sourceKind;
+    if (typeof kind !== "string" || !kind) continue;
+    bySourceKind[kind] = (bySourceKind[kind] ?? 0) + 1;
+    totalEvents++;
+  }
+  return { bySourceKind, totalEvents };
+}
+
+/**
+ * Summarize memory hit telemetry from a memory-hit event log.
+ * Returns hit/miss counts and the overall hit rate.
+ */
+export function buildMemoryHitTelemetry(memoryHitLog: unknown[]): {
+  hits: number;
+  misses: number;
+  hitRate: number;
+  sampleCount: number;
+} {
+  if (!Array.isArray(memoryHitLog) || memoryHitLog.length === 0) {
+    return { hits: 0, misses: 0, hitRate: 0, sampleCount: 0 };
+  }
+  let hits = 0;
+  let misses = 0;
+  for (const entry of memoryHitLog) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const outcome = (entry as Record<string, unknown>).outcome;
+    if (outcome === "hit") hits++;
+    else if (outcome === "miss") misses++;
+  }
+  const sampleCount = hits + misses;
+  const hitRate = sampleCount > 0 ? hits / sampleCount : 0;
+  return { hits, misses, hitRate, sampleCount };
 }
 

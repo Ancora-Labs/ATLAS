@@ -1058,3 +1058,105 @@ describe("Integration: runtime contract cycle-proof probe", () => {
     assert.equal(probe.criteria.doneWorkerWithVerificationReportEvidence.pass, false);
   });
 });
+
+// ── 7. Incomplete-output detection: no contract-fail accounting ───────────────
+
+import {
+  detectIncompletePrometheusOutput,
+  INCOMPLETE_OUTPUT_REASON,
+} from "../../src/core/prometheus.js";
+
+describe("Integration: incomplete-output detection does not conflate with contract-fail", () => {
+  it("complete output: incomplete=false, reason=null", () => {
+    const raw = "Analysis complete.\n===DECISION===\n{\"plans\":[]}\n===END===";
+    const result = detectIncompletePrometheusOutput(raw);
+    assert.equal(result.incomplete, false, "A complete output must not be flagged as incomplete");
+    assert.equal(result.reason, null, "reason must be null when not incomplete");
+  });
+
+  it("truncated DECISION block is flagged as TRUNCATED_DECISION_BLOCK, not contract-fail", () => {
+    const raw = "===DECISION===\n{\"plans\":[{\"task\":\"fix ci\"";
+    const result = detectIncompletePrometheusOutput(raw);
+    assert.equal(result.incomplete, true);
+    assert.equal(
+      result.reason,
+      INCOMPLETE_OUTPUT_REASON.TRUNCATED_DECISION_BLOCK,
+      "Truncated output must be classified as TRUNCATED_DECISION_BLOCK"
+    );
+  });
+
+  it("completely empty output is classified as EMPTY_RESPONSE", () => {
+    const result = detectIncompletePrometheusOutput("");
+    assert.equal(result.incomplete, true);
+    assert.equal(result.reason, INCOMPLETE_OUTPUT_REASON.EMPTY_RESPONSE);
+  });
+
+  it("output without any structured markers is classified as MISSING_END_MARKER", () => {
+    const raw = "I started analyzing the codebase but ran out of context window before";
+    const result = detectIncompletePrometheusOutput(raw);
+    assert.equal(result.incomplete, true);
+    assert.equal(result.reason, INCOMPLETE_OUTPUT_REASON.MISSING_END_MARKER);
+  });
+
+  it("incompleteOutputRetried metadata is orthogonal to contract-fail — distinct result shapes", () => {
+    // Verify that the incomplete-output result object shape matches the contract:
+    // { incomplete: boolean; reason: string | null }
+    const incompleteResult = detectIncompletePrometheusOutput("===DECISION===\n{\"plans\":[");
+    assert.ok("incomplete" in incompleteResult, "result must have 'incomplete' field");
+    assert.ok("reason" in incompleteResult, "result must have 'reason' field");
+    assert.equal(typeof incompleteResult.incomplete, "boolean");
+    // contract-fail results would typically throw or return a different shape
+    // this test guards that incomplete detection is a clean non-throwing detection
+  });
+});
+
+// ── 11. Premium efficiency split: raw vs execution-adjusted ──────────────────
+// Tests that cycle_analytics kpis expose both variants, and that the values
+// flow correctly from computeCycleAnalytics.  Autonomy band gate selection
+// is tested separately in autonomy_band_monitor.test.ts.
+
+describe("Integration: premium efficiency variants in cycle analytics kpis", () => {
+  it("kpis expose premiumEfficiencyRaw and premiumEfficiencyAdjusted when provided", () => {
+    const record = computeCycleAnalytics({}, {
+      sloRecord: null,
+      premiumEfficiencyRaw: 0.90,
+      premiumEfficiencyAdjusted: 0.60,
+    });
+    assert.equal(record.kpis.premiumEfficiencyRaw, 0.90, "raw variant must be preserved in kpis");
+    assert.equal(record.kpis.premiumEfficiencyAdjusted, 0.60, "adjusted variant must be preserved in kpis");
+  });
+
+  it("kpis.premiumEfficiencyRaw and premiumEfficiencyAdjusted are null when omitted", () => {
+    const record = computeCycleAnalytics({}, {});
+    assert.equal(record.kpis.premiumEfficiencyRaw, null);
+    assert.equal(record.kpis.premiumEfficiencyAdjusted, null);
+  });
+
+  it("raw=1.0 adjusted=0.25 reflects unexecuted worker slots (historical comparability preserved)", () => {
+    // Scenario: 4 premium events (3 leadership OK + 1 worker API-OK but 0 verified done)
+    // raw  = 4/4 = 1.0
+    // adj  = (3 + 0) / 4 = 0.75 (leadership successes only)
+    const record = computeCycleAnalytics({}, {
+      premiumEfficiencyRaw: 1.0,
+      premiumEfficiencyAdjusted: 0.75,
+    });
+    assert.equal(record.kpis.premiumEfficiencyRaw, 1.0);
+    assert.equal(record.kpis.premiumEfficiencyAdjusted, 0.75);
+    assert.ok(
+      record.kpis.premiumEfficiencyRaw! > record.kpis.premiumEfficiencyAdjusted!,
+      "raw must exceed adjusted when worker slots produced no verified output",
+    );
+  });
+
+  it("negative path: adjusted below raw surfaces the execution penalty signal", () => {
+    // raw=0.80 (good API success rate), adjusted=0.30 (low verified output)
+    const record = computeCycleAnalytics({}, {
+      premiumEfficiencyRaw: 0.80,
+      premiumEfficiencyAdjusted: 0.30,
+    });
+    assert.ok(
+      (record.kpis.premiumEfficiencyRaw ?? 0) > (record.kpis.premiumEfficiencyAdjusted ?? 0),
+      "execution penalty must be visible: raw should exceed adjusted",
+    );
+  });
+});

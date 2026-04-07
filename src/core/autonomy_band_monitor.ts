@@ -86,6 +86,16 @@ export interface Thresholds {
   exploitationWindow: number;
   exploitationMinBenchmarkGain: number;
   exploitationMaxCompletionVariance: number;
+  /**
+   * Which variant of premium efficiency is used for the IN_BAND gate and
+   * composite-score computation.
+   *   "raw"               — successfulPremiumEvents / settledPremiumEvents (default,
+   *                         preserves historical comparability)
+   *   "execution_adjusted" — (leadershipSuccesses + verifiedDoneWorkers) /
+   *                          settledPremiumEvents (penalises worker slots that
+   *                          did not produce verified work)
+   */
+  premiumEfficiencyGateVariant: "raw" | "execution_adjusted";
 }
 
 export const DEFAULT_THRESHOLDS: Thresholds = Object.freeze({
@@ -115,6 +125,9 @@ export const DEFAULT_THRESHOLDS: Thresholds = Object.freeze({
   exploitationWindow:          10,
   exploitationMinBenchmarkGain: 0.15,
   exploitationMaxCompletionVariance: 0.04,
+  // Gate selection: "raw" preserves backward compat; "execution_adjusted" penalises
+  // cycles where workers were dispatched but produced no verified output.
+  premiumEfficiencyGateVariant: "raw" as const,
 });
 
 // ── Composite Score Weights ──────────────────────────────────────────────────
@@ -134,7 +147,15 @@ export interface CycleSample {
   recordedAt: string;
   phase: string;
   completionRate: number | null;
+  /** Raw premium efficiency: successfulPremiumEvents / settledPremiumEvents. */
   premiumEfficiency: number | null;
+  /**
+   * Execution-adjusted premium efficiency: replaces worker-slot success signals
+   * with verified-done evidence.  Formula: (leadershipSuccesses + verifiedDoneWorkers)
+   * / settledPremiumEvents.  null for cycles recorded before this field was added
+   * (backward-compatible sentinel).
+   */
+  premiumEfficiencyAdjusted: number | null;
   athenaRejectRate: number | null;
   parserFallbackRate: number | null;
   contractFailRate: number | null;
@@ -184,6 +205,7 @@ export interface BandStatus {
   executionGate: {
     exploitationReady: boolean;
     reason: string;
+    varianceNormalizationApplied?: boolean;
   };
   history: CycleSample[];
 }
@@ -302,9 +324,11 @@ export function evaluateInBandThresholds(
   thresholds: Thresholds,
 ): BandStatus["thresholdChecks"] {
   const window = history.slice(-thresholds.stabilizingWindow);
+  // Gate variant — explicit selection preserves historical comparability for "raw" default.
+  const gateVariant = thresholds.premiumEfficiencyGateVariant ?? "raw";
 
   const compositeScores = window.map(s => {
-    const dims = sampleToDimensions(s);
+    const dims = sampleToDimensions(s, gateVariant);
     return computeCompositeScore(dims);
   });
   const avgComposite = windowAvg(compositeScores, thresholds.stabilizingWindow);
@@ -314,7 +338,15 @@ export function evaluateInBandThresholds(
   const avgCompletion = windowAvg(completionRates, thresholds.stabilizingWindow);
   const completionRateMet = avgCompletion !== null && avgCompletion >= thresholds.completionRateMin;
 
-  const efficiencies = window.map(s => s.premiumEfficiency);
+  // Use the gate-selected variant for the direct threshold check (mirrors composite score input).
+  const efficiencies = window.map(s =>
+    gateVariant === "execution_adjusted" &&
+    s.premiumEfficiencyAdjusted !== null &&
+    s.premiumEfficiencyAdjusted !== undefined &&
+    Number.isFinite(s.premiumEfficiencyAdjusted)
+      ? s.premiumEfficiencyAdjusted
+      : s.premiumEfficiency,
+  );
   const avgEfficiency = windowAvg(efficiencies, thresholds.stabilizingWindow);
   const premiumEfficiencyMet = avgEfficiency !== null && avgEfficiency >= thresholds.premiumEfficiencyMin;
 
@@ -391,29 +423,40 @@ export function evaluateRegressionTriggers(
 
 // ── Dimension extraction from sample ─────────────────────────────────────────
 
-function sampleToDimensions(sample: CycleSample) {
+function sampleToDimensions(sample: CycleSample, gateVariant: "raw" | "execution_adjusted" = "raw") {
+  // Select premium efficiency value based on the configured gate variant.
+  // Falls back to raw when adjusted is absent (legacy records or null sentinel).
+  const efficiencyValue =
+    gateVariant === "execution_adjusted" &&
+    sample.premiumEfficiencyAdjusted !== null &&
+    sample.premiumEfficiencyAdjusted !== undefined &&
+    Number.isFinite(sample.premiumEfficiencyAdjusted)
+      ? sample.premiumEfficiencyAdjusted
+      : sample.premiumEfficiency;
+
   const athenaQuality = sample.athenaRejectRate !== null ? clamp01(1 - sample.athenaRejectRate) : null;
   const parserQuality = sample.parserFallbackRate !== null ? clamp01(1 - sample.parserFallbackRate) : null;
   const contractQuality = sample.contractFailRate !== null ? clamp01(1 - sample.contractFailRate) : null;
   return {
     completion: clamp01(toFinite(sample.completionRate)),
-    premiumEfficiency: clamp01(toFinite(sample.premiumEfficiency)),
+    premiumEfficiency: clamp01(toFinite(efficiencyValue)),
     quality: mergeQualitySignals({ athenaQuality, parserQuality, contractQuality }),
     capacityTrend: capacityTrendToScore(sample.capacityTrend),
     stability: sample.crashRate !== null ? clamp01(1 - sample.crashRate) : null,
   };
 }
 
-function computeExecutionPhase(
+export function computeExecutionPhase(
   state: string,
   history: CycleSample[],
   thresholds: Thresholds,
-): { phase: string; exploitationReady: boolean; reason: string } {
+): { phase: string; exploitationReady: boolean; reason: string; varianceNormalizationApplied: boolean } {
   if (state !== BAND_STATE.IN_BAND) {
     return {
       phase: "PHASE_1_STABILIZATION",
       exploitationReady: false,
       reason: "band_not_reached",
+      varianceNormalizationApplied: false,
     };
   }
 
@@ -423,11 +466,28 @@ function computeExecutionPhase(
       phase: "PHASE_1_STABILIZATION",
       exploitationReady: false,
       reason: "insufficient_exploitation_window",
+      varianceNormalizationApplied: false,
     };
   }
 
   const benchmarkGain = windowAvg(window.map((s) => s.benchmarkGain), thresholds.exploitationWindow);
-  const completionVar = windowVariance(window.map((s) => s.completionRate), thresholds.exploitationWindow);
+
+  // Phase-aware variance: when recent execution stability is high, exclude bootstrap
+  // outliers from variance so they do not drag down exploitation readiness.
+  const allCompletionRates = history.map((s) => s.completionRate);
+  const completionVar = computePhaseAwareVariance(
+    allCompletionRates,
+    thresholds.exploitationWindow,
+    { stabilityThreshold: VARIANCE_NORMALIZATION_STABILITY_THRESHOLD },
+  );
+  // Detect whether normalization was actually applied (recent avg >= threshold).
+  const halfWindow = Math.max(2, Math.ceil(thresholds.exploitationWindow / 2));
+  const recentRates = allCompletionRates.slice(-halfWindow).filter((v): v is number => v !== null && Number.isFinite(v));
+  const recentAvg = recentRates.length >= 2
+    ? recentRates.reduce((a, b) => a + b, 0) / recentRates.length
+    : 0;
+  const varianceNormalizationApplied = recentAvg >= VARIANCE_NORMALIZATION_STABILITY_THRESHOLD;
+
   const phaseCompleted = window.every((s) => String(s.phase || "").toLowerCase() === "completed");
 
   if (benchmarkGain === null || benchmarkGain < thresholds.exploitationMinBenchmarkGain) {
@@ -435,6 +495,7 @@ function computeExecutionPhase(
       phase: "PHASE_1_STABILIZATION",
       exploitationReady: false,
       reason: "benchmark_gain_gate",
+      varianceNormalizationApplied,
     };
   }
   if (completionVar === null || completionVar > thresholds.exploitationMaxCompletionVariance) {
@@ -442,6 +503,7 @@ function computeExecutionPhase(
       phase: "PHASE_1_STABILIZATION",
       exploitationReady: false,
       reason: "completion_variance_gate",
+      varianceNormalizationApplied,
     };
   }
   if (thresholds.inBandRequireCompletedPhase && !phaseCompleted) {
@@ -449,6 +511,7 @@ function computeExecutionPhase(
       phase: "PHASE_1_STABILIZATION",
       exploitationReady: false,
       reason: "phase_completed_gate",
+      varianceNormalizationApplied,
     };
   }
 
@@ -456,7 +519,76 @@ function computeExecutionPhase(
     phase: "EXPLOITATION",
     exploitationReady: true,
     reason: "all_exploitation_gates_met",
+    varianceNormalizationApplied,
   };
+}
+
+// ── Phase-aware variance normalization ──────────────────────────────────────
+
+/**
+ * Minimum recent-window completion-rate average required to activate phase-aware
+ * variance normalization.  When the trailing stability check window exceeds this
+ * threshold, early bootstrap outliers are excluded from the variance calculation
+ * so they cannot block exploitation readiness.
+ */
+export const VARIANCE_NORMALIZATION_STABILITY_THRESHOLD = 0.85 as const;
+
+/**
+ * Compute variance for a window of values with phase-aware outlier normalization.
+ *
+ * Standard `windowVariance` includes all values in the trailing window, which
+ * means early bootstrap cycles (e.g., completionRate=0 in cycle 1) drag the
+ * variance up and can prevent the system from crossing the exploitation gate
+ * even when current execution stability is high and consistently stable.
+ *
+ * This function addresses that by:
+ *  1. Checking whether the trailing `stabilityCheckWindow` values have avg ≥ `stabilityThreshold`.
+ *  2. If yes (high stability), computing variance over only the trailing `recentWindow`
+ *     values instead of the full window — excluding early outliers.
+ *  3. If no (low stability or insufficient data), falling back to standard `windowVariance`.
+ *
+ * This is conservative: phase-aware normalization only activates when the system
+ * genuinely IS stable in recent cycles.  It does not lower the bar — it removes
+ * the statistical drag from data that is no longer representative.
+ *
+ * @param values                — full history of values (most recent last)
+ * @param windowSize            — full window size for the standard fallback
+ * @param opts.stabilityThreshold — avg needed in trailing window to activate (default: 0.85)
+ * @param opts.stabilityCheckWindow — number of trailing values checked for avg (default: ⌈windowSize/2⌉)
+ * @param opts.recentWindow     — variance window used when stability is high (default: ⌈windowSize/2⌉)
+ * @returns variance or null when insufficient data
+ */
+export function computePhaseAwareVariance(
+  values: (number | null)[],
+  windowSize: number,
+  opts: {
+    stabilityThreshold?: number;
+    stabilityCheckWindow?: number;
+    recentWindow?: number;
+  } = {},
+): number | null {
+  const threshold = typeof opts.stabilityThreshold === "number" && Number.isFinite(opts.stabilityThreshold)
+    ? Math.max(0, Math.min(1, opts.stabilityThreshold))
+    : VARIANCE_NORMALIZATION_STABILITY_THRESHOLD;
+  const halfWindow = Math.max(2, Math.ceil(windowSize / 2));
+  const stabilityCheckWindow = Math.max(2, Math.floor(opts.stabilityCheckWindow ?? halfWindow));
+  const recentWindowSize     = Math.max(2, Math.floor(opts.recentWindow     ?? halfWindow));
+
+  const recentCheck = values.slice(-stabilityCheckWindow).filter((v): v is number => v !== null && Number.isFinite(v));
+  if (recentCheck.length < 2) {
+    // Not enough data for stability check — use standard variance
+    return windowVariance(values, windowSize);
+  }
+  const recentAvg = recentCheck.reduce((a, b) => a + b, 0) / recentCheck.length;
+
+  if (recentAvg >= threshold) {
+    // High stability: compute variance only over the recent sub-window.
+    // This prevents early bootstrap outliers from inflating variance.
+    return windowVariance(values, recentWindowSize);
+  }
+
+  // Low stability or bootstrap: standard full-window variance.
+  return windowVariance(values, windowSize);
 }
 
 // ── State transition ─────────────────────────────────────────────────────────
@@ -582,6 +714,7 @@ function createInitialStatus(): BandStatus {
     executionGate: {
       exploitationReady: false,
       reason: "initial_state",
+      varianceNormalizationApplied: false,
     },
     history: [],
   };
@@ -611,8 +744,8 @@ export async function evaluateAutonomyBand(
     status.history.splice(0, status.history.length - MAX_HISTORY);
   }
 
-  // Compute dimensions from latest sample
-  const dimensions = sampleToDimensions(sample);
+  // Compute dimensions from latest sample — use the configured gate variant.
+  const dimensions = sampleToDimensions(sample, thresholds.premiumEfficiencyGateVariant ?? "raw");
   status.dimensions = dimensions;
 
   // Compute composite score
@@ -647,6 +780,7 @@ export async function evaluateAutonomyBand(
   status.executionGate = {
     exploitationReady: executionGate.exploitationReady,
     reason: executionGate.reason,
+    varianceNormalizationApplied: executionGate.varianceNormalizationApplied,
   };
 
   // Shadow mode from config
@@ -690,6 +824,10 @@ function resolveThresholds(config: Record<string, unknown>): Thresholds {
     exploitationWindow: safeInt(bandConfig.exploitationWindow, DEFAULT_THRESHOLDS.exploitationWindow),
     exploitationMinBenchmarkGain: safeFloat(bandConfig.exploitationMinBenchmarkGain, DEFAULT_THRESHOLDS.exploitationMinBenchmarkGain),
     exploitationMaxCompletionVariance: safeFloat(bandConfig.exploitationMaxCompletionVariance, DEFAULT_THRESHOLDS.exploitationMaxCompletionVariance),
+    // Gate variant: only "execution_adjusted" is accepted; anything else falls back to "raw".
+    premiumEfficiencyGateVariant: bandConfig.premiumEfficiencyGateVariant === "execution_adjusted"
+      ? "execution_adjusted" as const
+      : DEFAULT_THRESHOLDS.premiumEfficiencyGateVariant,
   };
 }
 

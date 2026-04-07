@@ -213,6 +213,45 @@ describe("computeCycleAnalytics — KPIs (AC2)", () => {
     const record = computeCycleAnalytics(config, { sloRecord: null });
     assert.equal(record.kpis.sloStatus, "unknown");
   });
+
+  it("kpis.premiumEfficiencyRaw and premiumEfficiencyAdjusted are null when not provided", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, { sloRecord: makeSloRecord() });
+    assert.equal(record.kpis.premiumEfficiencyRaw, null, "premiumEfficiencyRaw must be null when not provided");
+    assert.equal(record.kpis.premiumEfficiencyAdjusted, null, "premiumEfficiencyAdjusted must be null when not provided");
+  });
+
+  it("kpis.premiumEfficiencyRaw reflects the passed raw value", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, { sloRecord: makeSloRecord(), premiumEfficiencyRaw: 0.80 });
+    assert.equal(record.kpis.premiumEfficiencyRaw, 0.80);
+  });
+
+  it("kpis.premiumEfficiencyAdjusted reflects the passed adjusted value", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, { sloRecord: makeSloRecord(), premiumEfficiencyAdjusted: 0.55 });
+    assert.equal(record.kpis.premiumEfficiencyAdjusted, 0.55);
+  });
+
+  it("kpis.premiumEfficiencyRaw and premiumEfficiencyAdjusted can differ (execution penalty)", () => {
+    // raw=1.0 (all API calls succeeded), adjusted=0.50 (only half produced verified work)
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      sloRecord: makeSloRecord(),
+      premiumEfficiencyRaw: 1.0,
+      premiumEfficiencyAdjusted: 0.50,
+    });
+    assert.equal(record.kpis.premiumEfficiencyRaw, 1.0);
+    assert.equal(record.kpis.premiumEfficiencyAdjusted, 0.50);
+    assert.ok(record.kpis.premiumEfficiencyRaw !== record.kpis.premiumEfficiencyAdjusted,
+      "raw and adjusted can differ when workers succeed at API level but produce no verified work");
+  });
+
+  it("kpis.premiumEfficiencyRaw is null for non-finite input", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, { premiumEfficiencyRaw: NaN });
+    assert.equal(record.kpis.premiumEfficiencyRaw, null, "NaN should be sanitized to null");
+  });
 });
 
 // ── computeCycleAnalytics — canonicalEvents inventory (AC2) ──────────────────

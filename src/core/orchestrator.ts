@@ -2220,14 +2220,38 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   const stateDir = config.paths?.stateDir || "state";
   const cycleStartedAt = new Date().toISOString();
   let _cycleRequests = 0;
+  let _premiumEventSeq = 0;
+  const premiumEvents: Array<{
+    id: number;
+    agent: string;
+    reason: string;
+    success: boolean | null;
+  }> = [];
   const leadershipBudgetRaw = Number(config?.runtime?.maxLeadershipRequestsPerCycle ?? 5);
   const leadershipBudget = Number.isFinite(leadershipBudgetRaw) && leadershipBudgetRaw >= 3
     ? Math.floor(leadershipBudgetRaw)
     : 5;
-  const spendPremium = async (agentLabel: string, reason: string) => {
+  const spendPremium = async (
+    agentLabel: string,
+    reason: string,
+    options: { pendingOutcome?: boolean } = {},
+  ) => {
     _cycleRequests += 1;
+    const eventId = ++_premiumEventSeq;
+    premiumEvents.push({
+      id: eventId,
+      agent: agentLabel,
+      reason,
+      success: options.pendingOutcome === true ? null : true,
+    });
     await appendProgress(config, `[PREMIUM_USAGE] spent=${_cycleRequests} agent=${agentLabel} reason=${reason}`);
-    return _cycleRequests;
+    return { requestCount: _cycleRequests, eventId };
+  };
+  const markPremiumOutcome = (eventId: number, success: boolean) => {
+    const idx = premiumEvents.findIndex((row) => row.id === eventId);
+    if (idx >= 0) {
+      premiumEvents[idx] = { ...premiumEvents[idx], success };
+    }
   };
   const canSpendLeadership = (cost = 1) => (_cycleRequests + Math.max(1, Math.floor(cost))) <= leadershipBudget;
   await appendProgress(config, `[CYCLE] ════════════════════════════════════════`);
@@ -2298,6 +2322,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   // Step 1: Jesus analyzes state and decides what to do (1 request)
   await appendProgress(config, "[CYCLE] ── Step 1: Jesus analyzing system state ──");
   await appendProgress(config, `[AGENT] ★ ═══[ JESUS ]═══ ★  req#${_cycleRequests + 1} this cycle`);
+  const jesusPremiumEvent = await spendPremium("jesus", "cycle_directive", { pendingOutcome: true });
 
   // ── Closure SLA audit: flag stale escalations (advisory) ────────────────
   try {
@@ -2315,17 +2340,19 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     await safeUpdatePipelineProgress(config, "jesus_reading", "Jesus reading system state");
     jesusDecision = await runJesusCycle(config);
   } catch (err) {
+    markPremiumOutcome(jesusPremiumEvent.eventId, false);
     await appendProgress(config, `[CYCLE] Jesus failed: ${String(err?.message || err)}`);
     warn(`[orchestrator] Jesus cycle error: ${String(err?.message || err)}`);
     return;
   }
 
   if (!jesusDecision || jesusDecision.wait === true) {
+    markPremiumOutcome(jesusPremiumEvent.eventId, true);
     await appendProgress(config, "[CYCLE] Jesus says: wait — nothing to do");
     return;
   }
 
-  await spendPremium("jesus", "cycle_directive");
+  markPremiumOutcome(jesusPremiumEvent.eventId, true);
   await appendProgress(config, `[JESUS] ✓ Done — requests this cycle: ${_cycleRequests}`);
 
   await safeUpdatePipelineProgress(config, "jesus_decided", "Jesus decision ready", {
@@ -2418,6 +2445,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
 
     const scoutBlockedByBudget = shouldRunScout && !canSpendLeadership(1);
     if (shouldRunScout && !scoutBlockedByBudget) {
+      const scoutPremiumEvent = await spendPremium("research-scout", "consumption_triggered_refresh", { pendingOutcome: true });
       const scoutReason = synthJson === null
         ? "first-run (no synthesis exists)"
         : allSynthesisTopicsConsumed && !synthesisConsumedSinceLastScout
@@ -2434,13 +2462,18 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
             await persistBenchmarkEntry(config, String(cycleStartedAt || new Date().toISOString()), synthesisResult.topics);
             await appendProgress(config, `[RESEARCH_SCOUT] Benchmark ground-truth entry persisted - topics=${synthesisResult.topics.length}`);
           }
+          markPremiumOutcome(
+            scoutPremiumEvent.eventId,
+            Boolean(synthesisResult?.success === true && Array.isArray(synthesisResult?.topics) && synthesisResult.topics.length > 0),
+          );
           await appendProgress(config, "[RESEARCH_SCOUT] Synthesis complete — Prometheus will receive updated research context");
-          await spendPremium("research-scout", "consumption_triggered_refresh");
           await appendProgress(config, `[RESEARCH_SCOUT] ✓ Done — requests this cycle: ${_cycleRequests}`);
         } else {
+          markPremiumOutcome(scoutPremiumEvent.eventId, false);
           await appendProgress(config, `[RESEARCH_SCOUT] Scout returned no sources (success=${scoutResult.success}) — skipping synthesis`);
         }
       } catch (scoutErr) {
+        markPremiumOutcome(scoutPremiumEvent.eventId, false);
         warn(`[orchestrator] Research Scout failed (non-fatal): ${String((scoutErr as any)?.message || scoutErr)}`);
         await appendProgress(config, `[RESEARCH_SCOUT] Failed (non-fatal): ${String((scoutErr as any)?.message || scoutErr)}`);
       }
@@ -2459,6 +2492,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   // Step 2: Prometheus plans (single-prompt, no autopilot)
   await appendProgress(config, "[CYCLE] ── Step 2: Prometheus scanning & planning ──");
   await appendProgress(config, `[AGENT] ⚡⚡ PROMETHEUS ⚡⚡  req#${_cycleRequests + 1} this cycle`);
+  const primaryPrometheusPremiumEvent = await spendPremium("prometheus", "primary_planning", { pendingOutcome: true });
   await safeUpdatePipelineProgress(config, "prometheus_starting", "Prometheus starting repository scan");
 
   // ── Architecture drift check: run before Prometheus to surface stale refs ──
@@ -2488,10 +2522,13 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       driftReport: architectureDriftReport
     });
   } catch (err) {
+    markPremiumOutcome(primaryPrometheusPremiumEvent.eventId, false);
     await appendProgress(config, `[CYCLE] Prometheus failed: ${String(err?.message || err)}`);
     warn(`[orchestrator] Prometheus analysis error: ${String(err?.message || err)}`);
     return;
   }
+
+  markPremiumOutcome(primaryPrometheusPremiumEvent.eventId, true);
 
   if (!prometheusAnalysis || !Array.isArray(prometheusAnalysis.plans) || prometheusAnalysis.plans.length === 0) {
     await appendProgress(config, "[CYCLE] Prometheus produced no plans — cycle complete");
@@ -2522,6 +2559,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         `[CYCLE] Source-linkage gate detected blind planning: researchTopics=${researchTopicCount} linkedPlans=${sourceLinkedPlanCount} informationalConsumed=${informationalConsumedCount}`
       );
       if (canSpendLeadership(1)) {
+        const linkageReplanPremiumEvent = await spendPremium("prometheus", "source_linkage_replan", { pendingOutcome: true });
         try {
           const linkagePrompt = buildSourceLinkageReplanPrompt(
             jesusDecision.briefForPrometheus || jesusDecision.thinking || "Full repository analysis",
@@ -2534,7 +2572,10 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
             bypassCache: true,
             bypassReason: "missing_source_linkage",
           });
-          await spendPremium("prometheus", "source_linkage_replan");
+          markPremiumOutcome(
+            linkageReplanPremiumEvent.eventId,
+            Boolean(replannedWithLinkage && Array.isArray(replannedWithLinkage.plans) && replannedWithLinkage.plans.length > 0),
+          );
           const replannedSourceLinkedCount = (Array.isArray((replannedWithLinkage as any)?.plans) ? (replannedWithLinkage as any).plans : [])
             .filter((p: any) => Array.isArray(p?.synthesis_sources) && p.synthesis_sources.length > 0)
             .length;
@@ -2548,6 +2589,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
             prometheusAnalysis = replannedWithLinkage;
           }
         } catch (err) {
+          markPremiumOutcome(linkageReplanPremiumEvent.eventId, false);
           warn(`[orchestrator] Source-linkage re-plan failed (non-fatal): ${String((err as any)?.message || err)}`);
           await appendProgress(config,
             `[CYCLE] Source-linkage re-plan failed (non-fatal): ${String((err as any)?.message || err)}`
@@ -2690,6 +2732,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       // not only from existing stale synthesis.
       try {
         if (canSpendLeadership(1)) {
+          const noveltyScoutPremiumEvent = await spendPremium("research-scout", "novelty_gate_refresh", { pendingOutcome: true });
           await appendProgress(config, "[CYCLE] Novelty gate triggering Research Scout refresh");
           const scoutRefresh = await runResearchScout(config);
           if (scoutRefresh.success && scoutRefresh.sourceCount > 0) {
@@ -2699,9 +2742,13 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
               await persistBenchmarkEntry(config, String(cycleStartedAt || new Date().toISOString()), refreshSynthesisResult.topics);
               await appendProgress(config, `[RESEARCH_SCOUT] Benchmark ground-truth entry persisted - topics=${refreshSynthesisResult.topics.length}`);
             }
-            await spendPremium("research-scout", "novelty_gate_refresh");
+            markPremiumOutcome(
+              noveltyScoutPremiumEvent.eventId,
+              Boolean(refreshSynthesisResult?.success === true && Array.isArray(refreshSynthesisResult?.topics) && refreshSynthesisResult.topics.length > 0),
+            );
             await appendProgress(config, `[RESEARCH_SCOUT] ✓ Refresh complete — requests this cycle: ${_cycleRequests}`);
           } else {
+            markPremiumOutcome(noveltyScoutPremiumEvent.eventId, false);
             await appendProgress(config, `[RESEARCH_SCOUT] Refresh produced no sources (success=${scoutRefresh.success}) — continuing with novelty re-plan`);
           }
         } else {
@@ -2720,6 +2767,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         return;
       }
 
+      const noveltyReplanPremiumEvent = await spendPremium("prometheus", "novelty_replan", { pendingOutcome: true });
       const replanned = await runPrometheusAnalysis(config, {
         prompt: refinedPrompt,
         requestedBy: "OrchestratorNoveltyGate",
@@ -2728,7 +2776,10 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         bypassReason: "all_plans_already_implemented_or_completed"
       });
 
-      await spendPremium("prometheus", "novelty_replan");
+      markPremiumOutcome(
+        noveltyReplanPremiumEvent.eventId,
+        Boolean(replanned && Array.isArray(replanned.plans) && replanned.plans.length > 0),
+      );
       await appendProgress(config, `[PROMETHEUS] ↺ Re-plan run complete — requests this cycle: ${_cycleRequests}`);
 
       if (!replanned || !Array.isArray(replanned.plans) || replanned.plans.length === 0) {
@@ -2783,17 +2834,18 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   await safeUpdatePipelineProgress(config, "prometheus_done", `Prometheus complete — ${prometheusAnalysis.plans.length} plan(s)`, {
     planCount: prometheusAnalysis.plans.length
   });
-  await spendPremium("prometheus", "primary_planning");
   await appendProgress(config, `[PROMETHEUS] ✓ Done — ${prometheusAnalysis.plans.length} plan(s) — requests this cycle: ${_cycleRequests}`);
 
   // Step 3: Athena validates the plan (1 request)
   await appendProgress(config, "[CYCLE] ── Step 3: Athena reviewing plan ──");
   await appendProgress(config, `[AGENT] ◈◈◈ ATHENA ◈◈◈  req#${_cycleRequests + 1} this cycle`);
+  const athenaPremiumEvent = await spendPremium("athena", "plan_review", { pendingOutcome: true });
   await safeUpdatePipelineProgress(config, "athena_reviewing", "Athena reviewing Prometheus plan");
   let planReview;
   try {
     planReview = await runAthenaPlanReview(config, prometheusAnalysis);
   } catch (err) {
+    markPremiumOutcome(athenaPremiumEvent.eventId, false);
     const msg = String(err?.message || err).slice(0, 200);
     await appendProgress(config, `[CYCLE] Athena plan review threw exception: ${msg} — blocking cycle (fail-closed)`);
     warn(`[orchestrator] Athena plan review exception: ${msg}`);
@@ -2843,6 +2895,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   }
 
   if (!planReview.approved) {
+    markPremiumOutcome(athenaPremiumEvent.eventId, false);
     const rejectionReason = planReview.reason || { code: "PLAN_REJECTED", message: planReview.summary || "Rejected by Athena" };
     const correctionsList = planReview.corrections || [];
     const blocker = planReview.blocker && typeof planReview.blocker === "object"
@@ -2872,8 +2925,8 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     return;
   }
 
+  markPremiumOutcome(athenaPremiumEvent.eventId, true);
   await safeUpdatePipelineProgress(config, "athena_approved", "Athena approved the plan");
-  await spendPremium("athena", "plan_review");
   await appendProgress(config, `[ATHENA] ✓ Done — plan approved — requests this cycle: ${_cycleRequests}`);
 
   // Persist auto-approve telemetry whenever Athena's deterministic fast-path
@@ -3645,7 +3698,11 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       workersDone,
       currentWorker: batch.role
     });
-    await spendPremium(String(batch.role || "worker"), "worker_batch_dispatch");
+    const workerPremiumEvent = await spendPremium(
+      String(batch.role || "worker"),
+      "worker_batch_dispatch",
+      { pendingOutcome: true },
+    );
     await appendProgress(config, `[AGENT] » WORKER · ${batch.role} · batch=${workersDone + 1}/${workerBatches.length} · req#${_cycleRequests} this cycle`);
 
     let workerResult;
@@ -3698,6 +3755,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     }
 
     if (!isDispatchOutcomeSuccessful(workerResult)) {
+      markPremiumOutcome(workerPremiumEvent.eventId, false);
       // Classify and persist the failure for use in the next cycle's optimizer input.
       try {
         const classifyResult = classifyFailure({
@@ -3749,6 +3807,8 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       } catch { /* non-fatal — ROI logging must never block orchestration */ }
       return;
     }
+
+    markPremiumOutcome(workerPremiumEvent.eventId, isAnalyticsCompletedWorkerStatus(String(workerResult?.status || "unknown")));
 
     workersDone += 1;
     allWorkerResults.push({
@@ -3952,6 +4012,30 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     await appendProgress(config, `[SLO] SLO check failed (non-fatal): ${String(err?.message || err)}`);
   }
 
+  // ── Premium efficiency variants: computed once, shared by analytics and band monitor ──
+  // Raw variant: fraction of settled premium events that succeeded at the API level.
+  // Execution-adjusted: replaces worker-slot success signals with verified-done evidence.
+  // Both are computed here (before analytics) so both channels see identical values.
+  const _LEADERSHIP_AGENTS = new Set(["jesus", "prometheus", "athena", "research-scout"]);
+  const _premiumSettled = premiumEvents.filter((row) => row.success !== null);
+  const _premiumSuccessful = _premiumSettled.filter((row) => row.success === true).length;
+  const _premiumEfficiencyRaw: number | null = _premiumSettled.length > 0
+    ? Math.max(0, Math.min(1, _premiumSuccessful / _premiumSettled.length))
+    : null;
+  const _verifiedDoneWorkers = allWorkerResults.filter((row: any) => {
+    const status = String(row?.status || "").toLowerCase();
+    if (status !== "done" && status !== "success") return false;
+    const contractEvidence = row?.dispatchContract?.doneWorkerWithVerificationReportEvidence;
+    if (contractEvidence === true) return true;
+    return hasVerificationReportEvidence(String(row?.verificationEvidence || row?.fullOutput || ""));
+  }).length;
+  const _leadershipSuccesses = _premiumSettled.filter(
+    (row) => _LEADERSHIP_AGENTS.has(row.agent) && row.success === true,
+  ).length;
+  const _premiumEfficiencyAdjusted: number | null = _premiumSettled.length > 0
+    ? Math.max(0, Math.min(1, (_leadershipSuccesses + _verifiedDoneWorkers) / _premiumSettled.length))
+    : null;
+
   // ── Cycle analytics: compute and persist KPIs, confidence, and causal links ─
   // Advisory — never blocks orchestration. Runs after SLO so sloRecord is available.
   // Risk note (Athena AC19): per-cycle file I/O on hot path, wrapped in try/catch.
@@ -4007,6 +4091,8 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         completed:  allWorkerResults.filter(r => isAnalyticsCompletedWorkerStatus(r.status)).length,
       },
       premiumUsageLog: await readJson(path.join(stateDir, "premium_usage_log.json"), []),
+      premiumEfficiencyRaw: _premiumEfficiencyRaw,
+      premiumEfficiencyAdjusted: _premiumEfficiencyAdjusted,
     });
     await persistCycleAnalytics(config, analyticsRecord);
 
@@ -4131,7 +4217,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       const benchmarkGroundTruth = await readJson(path.join(stateDir, "benchmark_ground_truth.json"), null);
 
       const totalWorkers = allWorkerResults?.length ?? 0;
-      const completedWorkers = allWorkerResults?.filter((w: any) => isAnalyticsCompletedWorkerStatus(w.status)).length ?? 0;
+      const completedWorkers = allWorkerResults?.filter((w: any) => isDispatchOutcomeSuccessful(w)).length ?? 0;
       const completionRate = totalWorkers > 0 ? completedWorkers / totalWorkers : null;
       const crashCount = allWorkerResults?.filter((w: any) => w.status === "crashed" || w.status === "error").length ?? 0;
       const crashRate = totalWorkers > 0 ? crashCount / totalWorkers : null;
@@ -4188,16 +4274,15 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         ? Math.max(0, Math.min(1, 1 - prometheusAnalysis._planContractPassRate))
         : null;
 
-      const verifiedDoneWorkers = allWorkerResults?.filter((row: any) => {
-        const status = String(row?.status || "").toLowerCase();
-        if (status !== "done" && status !== "success") return false;
-        const contractEvidence = row?.dispatchContract?.doneWorkerWithVerificationReportEvidence;
-        if (contractEvidence === true) return true;
-        return hasVerificationReportEvidence(String(row?.verificationEvidence || row?.fullOutput || ""));
-      }).length ?? 0;
-      const premiumEfficiency = _cycleRequests > 0
-        ? Math.max(0, Math.min(1, verifiedDoneWorkers / _cycleRequests))
-        : null;
+      // Reuse pre-computed premium efficiency variants (computed before analytics call).
+      const premiumEfficiency = _premiumEfficiencyRaw;
+      const premiumEfficiencyAdjusted = _premiumEfficiencyAdjusted;
+      const verifiedDoneWorkers = _verifiedDoneWorkers;
+
+      await appendProgress(
+        config,
+        `[AUTONOMY_BAND] premium_efficiency_inputs settled=${_premiumSettled.length} success=${_premiumSuccessful} verifiedWorkerDone=${verifiedDoneWorkers} raw=${premiumEfficiency?.toFixed(3) ?? "N/A"} adjusted=${premiumEfficiencyAdjusted?.toFixed(3) ?? "N/A"}`,
+      );
 
       const hardGuardrailBreach = Array.isArray(catastropheState?.lastDetections)
         && catastropheState.lastDetections.length > 0;
@@ -4208,6 +4293,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         phase: String(analytics?.phase || CYCLE_PHASE.COMPLETED),
         completionRate,
         premiumEfficiency,
+        premiumEfficiencyAdjusted,
         athenaRejectRate,
         parserFallbackRate,
         contractFailRate,

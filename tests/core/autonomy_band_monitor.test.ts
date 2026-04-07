@@ -19,6 +19,7 @@ function makeSample(overrides: Partial<CycleSample> = {}): CycleSample {
     phase: "completed",
     completionRate: 0.85,
     premiumEfficiency: 0.70,
+    premiumEfficiencyAdjusted: null,
     athenaRejectRate: 0.10,
     parserFallbackRate: 0.05,
     contractFailRate: 0.05,
@@ -240,5 +241,175 @@ describe("computeNextState", () => {
     const { nextState } = computeNextState(BAND_STATE.REGRESSED, history, DEFAULT_THRESHOLDS);
     // No regression triggers, enough cycles, but thresholds not all met → STABILIZING
     assert.equal(nextState, BAND_STATE.STABILIZING);
+  });
+});
+
+// ── computePhaseAwareVariance ─────────────────────────────────────────────────
+
+import {
+  computePhaseAwareVariance,
+  VARIANCE_NORMALIZATION_STABILITY_THRESHOLD,
+  computeExecutionPhase,
+} from "../../src/core/autonomy_band_monitor.js";
+
+describe("VARIANCE_NORMALIZATION_STABILITY_THRESHOLD", () => {
+  it("is set to 0.85", () => {
+    assert.equal(VARIANCE_NORMALIZATION_STABILITY_THRESHOLD, 0.85);
+  });
+});
+
+describe("computePhaseAwareVariance", () => {
+  it("returns a number (variance) when recent stability is below threshold", () => {
+    // History with mixed completion rates — low stability, no normalization expected
+    const rates = [0, 0.2, 0.4, 0.3, 0.5, 0.1];
+    const result = computePhaseAwareVariance(rates, rates.length);
+    assert.ok(result === null || result >= 0, "variance must be non-negative or null");
+  });
+
+  it("returns low variance when recent cycles are stable after bootstrap outlier", () => {
+    // Bootstrap outlier (0) followed by stable recent cycles (all 1.0)
+    const rates = [0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+    const result = computePhaseAwareVariance(rates, rates.length);
+    // With high recent stability the effective window excludes the outlier → variance near 0
+    if (result !== null) {
+      assert.ok(result < 0.1, `normalized variance must be low, got ${result}`);
+    }
+  });
+
+  it("stable history returns lower variance than degraded history", () => {
+    const stableRates  = [0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+    const degradedRates = [0, 0.5, 0.6, 0.5, 0.6, 0.5, 0.6, 0.7];
+    const normalized = computePhaseAwareVariance(stableRates, stableRates.length);
+    const full       = computePhaseAwareVariance(degradedRates, degradedRates.length);
+    if (normalized !== null && full !== null) {
+      assert.ok(normalized <= full + 0.001,
+        `stable variance (${normalized}) should be <= degraded variance (${full})`);
+    }
+  });
+
+  it("returns variance ~0 when all rates in the effective window are identical", () => {
+    const rates = [0, 1.0, 1.0, 1.0, 1.0, 1.0]; // recent window = all 1.0
+    const result = computePhaseAwareVariance(rates, rates.length);
+    if (result !== null) {
+      assert.ok(result < 0.01, `variance must be near 0, got ${result}`);
+    }
+  });
+
+  it("falls back gracefully when fewer than 2 values in stability-check window", () => {
+    const result = computePhaseAwareVariance([1.0], 4);
+    // Not enough recent values for stability check — returns standard variance or null
+    assert.ok(result === null || typeof result === "number");
+  });
+
+  it("handles empty array without throwing", () => {
+    const result = computePhaseAwareVariance([], 4);
+    assert.ok(result === null || result === 0);
+  });
+});
+
+describe("computeExecutionPhase: varianceNormalizationApplied flag", () => {
+  it("sets varianceNormalizationApplied=true when recent cycles are stable after bootstrap outlier", () => {
+    // Need exactly exploitationWindow (10) cycles for the gate to not short-circuit.
+    // First cycle: bootstrap outlier (completionRate=0), rest: stable (1.0)
+    const history = [
+      makeSample({ cycleId: "c0", completionRate: 0, benchmarkGain: 0.3 }),
+      ...Array.from({ length: 9 }, (_, i) =>
+        makeSample({
+          cycleId: `c${i + 1}`,
+          completionRate: 1.0,
+          premiumEfficiency: 0.9,
+          benchmarkGain: 0.3,
+          phase: "completed",
+        }),
+      ),
+    ];
+    const result = computeExecutionPhase(BAND_STATE.IN_BAND, history, DEFAULT_THRESHOLDS);
+    // If the recent window is all 1.0, variance normalization should be applied
+    assert.equal(result.varianceNormalizationApplied, true,
+      "varianceNormalizationApplied must be true when bootstrap outlier is excluded by normalization");
+  });
+
+  it("sets varianceNormalizationApplied=false for mixed/degraded history", () => {
+    const history = makeHistory(10, { completionRate: 0.5, premiumEfficiency: 0.4 });
+    const result = computeExecutionPhase(BAND_STATE.IN_BAND, history, DEFAULT_THRESHOLDS);
+    assert.equal(result.varianceNormalizationApplied, false,
+      "varianceNormalizationApplied must be false when recent stability is below threshold");
+  });
+});
+
+// ── Premium efficiency gate variant ──────────────────────────────────────────
+
+import { type Thresholds } from "../../src/core/autonomy_band_monitor.js";
+
+describe("DEFAULT_THRESHOLDS.premiumEfficiencyGateVariant", () => {
+  it("defaults to 'raw' for backward compatibility", () => {
+    assert.equal(DEFAULT_THRESHOLDS.premiumEfficiencyGateVariant, "raw");
+  });
+});
+
+describe("evaluateInBandThresholds — gate variant selection", () => {
+  it("uses raw premiumEfficiency when variant is 'raw'", () => {
+    // raw=0.65 (above 0.60 min), adjusted=0.30 (below) — raw variant should pass
+    const history = makeHistory(35, {
+      completionRate: 0.90,
+      premiumEfficiency: 0.65,
+      premiumEfficiencyAdjusted: 0.30,
+      athenaRejectRate: 0.05,
+    });
+    const thresholds: Thresholds = { ...DEFAULT_THRESHOLDS, premiumEfficiencyGateVariant: "raw" };
+    const checks = evaluateInBandThresholds(history, thresholds);
+    assert.ok(checks.premiumEfficiencyMet, "raw variant: 0.65 should meet 0.60 threshold");
+  });
+
+  it("uses adjusted premiumEfficiency when variant is 'execution_adjusted'", () => {
+    // raw=0.65 (above 0.60 min), adjusted=0.30 (below) — adjusted variant should FAIL
+    const history = makeHistory(35, {
+      completionRate: 0.90,
+      premiumEfficiency: 0.65,
+      premiumEfficiencyAdjusted: 0.30,
+      athenaRejectRate: 0.05,
+    });
+    const thresholds: Thresholds = { ...DEFAULT_THRESHOLDS, premiumEfficiencyGateVariant: "execution_adjusted" };
+    const checks = evaluateInBandThresholds(history, thresholds);
+    assert.ok(!checks.premiumEfficiencyMet, "execution_adjusted variant: 0.30 should NOT meet 0.60 threshold");
+  });
+
+  it("falls back to raw when adjusted is null and variant is 'execution_adjusted'", () => {
+    // adjusted=null, raw=0.75 — gate should fall back to raw and pass
+    const history = makeHistory(35, {
+      completionRate: 0.90,
+      premiumEfficiency: 0.75,
+      premiumEfficiencyAdjusted: null,
+      athenaRejectRate: 0.05,
+    });
+    const thresholds: Thresholds = { ...DEFAULT_THRESHOLDS, premiumEfficiencyGateVariant: "execution_adjusted" };
+    const checks = evaluateInBandThresholds(history, thresholds);
+    assert.ok(checks.premiumEfficiencyMet, "fallback to raw: 0.75 should meet 0.60 threshold");
+  });
+
+  it("execution_adjusted passes when adjusted meets threshold even if raw is lower", () => {
+    // adjusted=0.80, raw=0.40 — execution_adjusted variant should PASS
+    const history = makeHistory(35, {
+      completionRate: 0.90,
+      premiumEfficiency: 0.40,
+      premiumEfficiencyAdjusted: 0.80,
+      athenaRejectRate: 0.05,
+    });
+    const thresholds: Thresholds = { ...DEFAULT_THRESHOLDS, premiumEfficiencyGateVariant: "execution_adjusted" };
+    const checks = evaluateInBandThresholds(history, thresholds);
+    assert.ok(checks.premiumEfficiencyMet, "execution_adjusted 0.80 should meet 0.60 threshold");
+  });
+
+  it("negative path: raw fails when premiumEfficiency is below threshold", () => {
+    const history = makeHistory(35, {
+      completionRate: 0.90,
+      premiumEfficiency: 0.50,  // below 0.60
+      premiumEfficiencyAdjusted: null,
+      athenaRejectRate: 0.05,
+    });
+    const thresholds: Thresholds = { ...DEFAULT_THRESHOLDS, premiumEfficiencyGateVariant: "raw" };
+    const checks = evaluateInBandThresholds(history, thresholds);
+    assert.ok(!checks.premiumEfficiencyMet, "raw 0.50 should NOT meet 0.60 threshold");
+    assert.ok(!checks.allMet, "allMet must be false when premiumEfficiencyMet is false");
   });
 });
