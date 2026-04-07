@@ -2090,12 +2090,14 @@ export function computeGateBlockRiskFromSignals(signals: {
   canaryBreachActive?: boolean;
   criticalDebtBlocked?: boolean;
   forceCheckpointActive?: boolean;
+  autonomyGateNotReady?: boolean;
 }): GateBlockRiskAssessment {
   const activeGateSignals: string[] = [];
   if (signals.freezeActive) activeGateSignals.push("governance_freeze_active");
   if (signals.canaryBreachActive) activeGateSignals.push("governance_canary_breach");
   if (signals.criticalDebtBlocked) activeGateSignals.push("critical_debt_overdue");
   if (signals.forceCheckpointActive) activeGateSignals.push("force_checkpoint_validation_active");
+  if (signals.autonomyGateNotReady) activeGateSignals.push("autonomy_execution_gate_not_ready");
 
   if (signals.freezeActive || signals.canaryBreachActive || signals.forceCheckpointActive) {
     return {
@@ -2115,6 +2117,15 @@ export function computeGateBlockRiskFromSignals(signals: {
     };
   }
 
+  if (signals.autonomyGateNotReady) {
+    return {
+      gateBlockRisk: GATE_BLOCK_RISK.MEDIUM,
+      reason: "Autonomy execution gate not ready (exploitationReady=false) — system may not be stable enough for full dispatch",
+      activeGateSignals,
+      requiresCorrection: false,
+    };
+  }
+
   return {
     gateBlockRisk: GATE_BLOCK_RISK.LOW,
     reason: "No active governance gate blocks detected",
@@ -2124,6 +2135,21 @@ export function computeGateBlockRiskFromSignals(signals: {
 }
 
 export async function assessGovernanceGateBlockRisk(config): Promise<GateBlockRiskAssessment> {
+  // Probe autonomy band executionGate.exploitationReady — used in both the dry-run
+  // fast-path and the fallback signal path to ensure approval confidence reflects
+  // real dispatch feasibility end-to-end.
+  let autonomyGateNotReady = false;
+  try {
+    const stateDir = (config as any)?.paths?.stateDir || "state";
+    const autonomy = await readJson(path.join(stateDir, "autonomy_band_status.json"), null);
+    const exploitationReady = autonomy?.executionGate?.exploitationReady;
+    // exploitationReady=false signals the system is in bootstrapping/stabilizing phase.
+    // We treat this as a medium-risk dispatch feasibility signal (advisory, not a hard block).
+    if (exploitationReady === false) {
+      autonomyGateNotReady = true;
+    }
+  } catch { /* autonomy_band_status.json absent or unreadable — treat as ready (fail-open) */ }
+
   try {
     const { evaluatePreDispatchGovernanceGate } = await import("./orchestrator.js");
     const dryRunDecision = await evaluatePreDispatchGovernanceGate(
@@ -2134,6 +2160,15 @@ export async function assessGovernanceGateBlockRisk(config): Promise<GateBlockRi
     );
     if (dryRunDecision && typeof dryRunDecision.blocked === "boolean") {
       if (!dryRunDecision.blocked) {
+        // Dry-run passed hard gates; still factor in autonomy band readiness.
+        if (autonomyGateNotReady) {
+          return {
+            gateBlockRisk: GATE_BLOCK_RISK.MEDIUM,
+            reason: "Governance gates clear but autonomy execution gate not ready (exploitationReady=false)",
+            activeGateSignals: ["autonomy_execution_gate_not_ready"],
+            requiresCorrection: false,
+          };
+        }
         return {
           gateBlockRisk: GATE_BLOCK_RISK.LOW,
           reason: "Dry-run governance gate passed at review-time",
@@ -2159,10 +2194,12 @@ export async function assessGovernanceGateBlockRisk(config): Promise<GateBlockRi
         : mediumRiskSignals.has(reasonSignal)
           ? GATE_BLOCK_RISK.MEDIUM
           : GATE_BLOCK_RISK.HIGH;
+      const activeSignals = [reasonSignal];
+      if (autonomyGateNotReady) activeSignals.push("autonomy_execution_gate_not_ready");
       return {
         gateBlockRisk: risk,
         reason: `Dry-run governance gate blocked dispatch: ${String(dryRunDecision.reason || "unknown")}`,
-        activeGateSignals: [reasonSignal],
+        activeGateSignals: activeSignals,
         requiresCorrection: true,
       };
     }
@@ -2175,6 +2212,7 @@ export async function assessGovernanceGateBlockRisk(config): Promise<GateBlockRi
     canaryBreachActive: false,
     criticalDebtBlocked: false,
     forceCheckpointActive: false,
+    autonomyGateNotReady,
   };
 
   try {
@@ -2473,6 +2511,8 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
             message: "All plans are low-risk and unchanged since last approval"
           },
           gateBlockRisk: gateRisk.gateBlockRisk,
+          gateBlockRiskAtApproval: gateRisk.gateBlockRisk,
+          gateBlockSignals: gateRisk.activeGateSignals,
           reviewedAt: new Date().toISOString(),
         };
       }
@@ -2518,6 +2558,8 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
             message: `All plans are low-risk and cleared the high-quality threshold (≥ ${highQualityThreshold})`,
           },
           gateBlockRisk: gateRisk.gateBlockRisk,
+          gateBlockRiskAtApproval: gateRisk.gateBlockRisk,
+          gateBlockSignals: gateRisk.activeGateSignals,
           reviewedAt: new Date().toISOString(),
         };
       }
@@ -2559,6 +2601,8 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
             message: `All plans are low-risk with changed fingerprint and cleared the delta-review threshold (≥ ${deltaThreshold})`,
           },
           gateBlockRisk: gateRisk.gateBlockRisk,
+          gateBlockRiskAtApproval: gateRisk.gateBlockRisk,
+          gateBlockSignals: gateRisk.activeGateSignals,
           reviewedAt: new Date().toISOString(),
         };
       }

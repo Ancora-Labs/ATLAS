@@ -14,6 +14,40 @@ import {
 } from "../../src/core/athena_reviewer.js";
 
 describe("athena gate risk dry-run integration", () => {
+  it("auto-approve fast path includes gateBlockRiskAtApproval metadata", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-fastpath-risk-"));
+    try {
+      const config = {
+        paths: {
+          stateDir,
+          progressFile: path.join(stateDir, "progress.log"),
+          policyFile: path.join(stateDir, "policy.json"),
+        },
+        env: { targetRepo: "CanerDoqdu/Box" },
+        governanceFreeze: { enabled: false, manualOverrideActive: false },
+      };
+      const analysis = {
+        plans: [
+          {
+            role: "evolution-worker",
+            task: "Implement deterministic gate telemetry and preserve fail-closed semantics.",
+            verification: "npm test -- tests/core/athena_gate_risk.test.ts",
+            wave: 1,
+            riskLevel: "low",
+            capacityDelta: 0.2,
+            requestROI: 1.1,
+          },
+        ],
+      };
+      const result = await runAthenaPlanReview(config, analysis);
+      assert.equal(result.approved, true);
+      assert.equal(typeof result.gateBlockRiskAtApproval, "string");
+      assert.equal(result.gateBlockRiskAtApproval, GATE_BLOCK_RISK.LOW);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns low risk when governance dry-run is passable", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-gate-risk-clear-"));
     try {
@@ -150,6 +184,59 @@ describe("athena gate risk dry-run integration", () => {
     const penalty = gateRisk.gateBlockRisk === GATE_BLOCK_RISK.HIGH ? 4 : 2;
     const adjustedScore = Math.max(1, baseScore - penalty);
     assert.equal(adjustedScore, 4);
+  });
+
+  it("returns MEDIUM risk with autonomy_execution_gate_not_ready signal when exploitationReady=false", () => {
+    const gateRisk = computeGateBlockRiskFromSignals({
+      autonomyGateNotReady: true,
+    });
+    assert.equal(gateRisk.gateBlockRisk, GATE_BLOCK_RISK.MEDIUM);
+    assert.equal(gateRisk.requiresCorrection, false);
+    assert.ok(
+      gateRisk.activeGateSignals.includes("autonomy_execution_gate_not_ready"),
+      "signal must include autonomy_execution_gate_not_ready"
+    );
+  });
+
+  it("negative path: autonomy gate not ready does NOT override HIGH risk from freeze", () => {
+    const gateRisk = computeGateBlockRiskFromSignals({
+      freezeActive: true,
+      autonomyGateNotReady: true,
+    });
+    // Freeze takes precedence — result must stay HIGH
+    assert.equal(gateRisk.gateBlockRisk, GATE_BLOCK_RISK.HIGH);
+    assert.equal(gateRisk.requiresCorrection, true);
+    assert.ok(gateRisk.activeGateSignals.includes("governance_freeze_active"));
+    assert.ok(gateRisk.activeGateSignals.includes("autonomy_execution_gate_not_ready"));
+  });
+
+  it("assessGovernanceGateBlockRisk includes MEDIUM risk when autonomy_band_status has exploitationReady=false", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-autonomy-gate-"));
+    try {
+      const config = {
+        paths: { stateDir, progressFile: path.join(stateDir, "progress.log"), policyFile: path.join(stateDir, "policy.json") },
+        env: { targetRepo: "CanerDoqdu/Box" },
+        canary: { enabled: false },
+        systemGuardian: { enabled: false },
+        governanceFreeze: { enabled: false, manualOverrideActive: false },
+      };
+      await fs.writeFile(
+        path.join(stateDir, "autonomy_band_status.json"),
+        JSON.stringify({
+          currentBand: "bootstrapping",
+          executionGate: { exploitationReady: false, reason: "insufficient cycle stability" },
+        }),
+        "utf8"
+      );
+      const result = await assessGovernanceGateBlockRisk(config);
+      assert.equal(result.gateBlockRisk, GATE_BLOCK_RISK.MEDIUM);
+      assert.ok(
+        result.activeGateSignals.includes("autonomy_execution_gate_not_ready"),
+        "autonomy_execution_gate_not_ready signal must be present"
+      );
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("flags malformed decision packet and invalid score for retry diagnostics", () => {

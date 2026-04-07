@@ -14,7 +14,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { appendFileSync } from "node:fs";
 import { readJson, writeJson, spawnAsync } from "./fs_utils.js";
-import { appendAlert, appendProgress, appendInterventionOptimizerEntry } from "./state_tracker.js";
+import { appendAlert, appendProgress, appendInterventionOptimizerEntry, recordCapabilityExecution } from "./state_tracker.js";
 import { getRoleRegistry } from "./role_registry.js";
 import { buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
 import { addSchemaVersion, STATE_FILE_TYPE } from "./schema_registry.js";
@@ -4355,17 +4355,38 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     // When ALL topics are quarantined, researchSectionText may be empty — inject the
     // recovery signal regardless so Prometheus always receives a non-empty planning context.
     if (degradedPlanningModeActive) {
-      const recoverySignal = typeof qg?.recoverySignal === "string" && qg.recoverySignal.trim()
-        ? qg.recoverySignal.trim()
-        : "";
+      const quarantinedForRecovery: string[] = Array.isArray(qg?.quarantinedTopics) ? qg.quarantinedTopics : [];
+      // Schedule bounded recovery synthesis for the next cycle so the Research Scout
+      // can re-run with strict density thresholds rather than silently skipping.
+      try {
+        const { scheduleBoundedRecoverySynthesis } = await import("./research_synthesizer.js");
+        await scheduleBoundedRecoverySynthesis(stateDir, {
+          quarantinedTopics: quarantinedForRecovery,
+          retriedAlready: qg?.retried === true,
+        });
+        await appendProgress(
+          config,
+          `[PROMETHEUS][DEGRADED_PLANNING][INTERNAL_EVIDENCE_MODE] All research topics quarantined. ` +
+          `Switching to internal repository-evidence-only planning. ` +
+          `Bounded recovery synthesis scheduled for next cycle (${quarantinedForRecovery.length} topic(s)).`
+        );
+      } catch (recoveryErr) {
+        await appendProgress(
+          config,
+          `[PROMETHEUS][DEGRADED_PLANNING][WARN] Failed to schedule recovery synthesis: ${String((recoveryErr as Error)?.message || recoveryErr)}`
+        );
+      }
+      // Override planning context: derive tasks from repo state only — NOT from topic names.
+      // The header below is injected as the sole research context so Prometheus cannot
+      // accidentally treat topic names as evidence.
       const degradedHeader =
-        `## ⚠️ DEGRADED PLANNING MODE\n` +
-        `Research synthesis quality gate failed. All research topics were quarantined due to ` +
-        `insufficient actionable density. Plans must be conservative and evidence-backed.\n` +
-        (recoverySignal
-          ? `Recovery signal: ${recoverySignal}\n\n`
-          : `No topic recovery signal available — derive tasks from repository state only.\n\n`);
-      researchSectionText = degradedHeader + (researchSectionText || "");
+        `## ⚠️ DEGRADED PLANNING MODE — INTERNAL EVIDENCE ONLY\n` +
+        `Research synthesis quality gate failed. ALL research topics were quarantined due to ` +
+        `insufficient actionable density. You MUST derive tasks exclusively from concrete ` +
+        `repository evidence (failing tests, error logs, source files, state files). ` +
+        `Do NOT reference research topic names as task justification — topic names are not evidence.\n` +
+        `A bounded recovery synthesis has been scheduled for the next cycle.\n\n`;
+      researchSectionText = degradedHeader;
     }
     researchTopicCount = researchContext.topicCount;
     researchSourceCount = researchContext.sourceCount;
@@ -5083,6 +5104,12 @@ Regenerate the full response ensuring all strategic fields (analysis, strategicN
         await appendProgress(config, "[PROMETHEUS][FIDELITY] Retry clean — process-thought markers resolved");
       }
     }
+    // Record that the output-fidelity gate was invoked this cycle (source present AND executed).
+    await recordCapabilityExecution(
+      config,
+      "output-fidelity-gate",
+      `contaminated=${fidelityContaminated.length > 0} retried=${fidelityContaminated.length > 0}`,
+    );
   }
 
   // ── Generation-boundary packet completeness gate ──────────────────────────
@@ -5233,6 +5260,11 @@ Mandatory requirements:
       excluded: mandatoryCoverageResult.excluded,
       _retryAttempted: mandatoryCoverageMode === "enforce" ? false : undefined,
     };
+    await recordCapabilityExecution(
+      config,
+      "jesus-findings-to-plan-requirements",
+      `mapped=${mandatoryCoverageResult.mapped.length} excluded=${mandatoryCoverageResult.excluded.length}`,
+    );
     await appendProgress(
       config,
       `[PROMETHEUS][MANDATORY_TASKS] Coverage gate passed — mapped=${mandatoryCoverageResult.mapped.length} excluded=${mandatoryCoverageResult.excluded.length}`
@@ -5248,6 +5280,13 @@ Mandatory requirements:
         `[PROMETHEUS][DENSITY] Thin packet detection: ${densification.thinCount}/${densification.total} packet(s) below densification floor`
       );
     }
+
+    // Record that the packet-granularity-governor was invoked this cycle.
+    await recordCapabilityExecution(
+      config,
+      "packet-granularity-governor",
+      `thinCount=${densification.thinCount} total=${densification.total}`,
+    );
 
     // Convert densification into dispatch admission behavior:
     // 1) auto-bundle thin related packets
@@ -5325,6 +5364,12 @@ Mandatory requirements:
           _thinPacketRejected: false,
         }));
       }
+      // Record that the token/density floor enforcement ran this cycle.
+      await recordCapabilityExecution(
+        config,
+        "prometheus-token-budget-floor",
+        `rejected=${rejectedThinPackets.length} remaining=${rawParsedInput.plans.length}`,
+      );
     }
 
     // ── Decomposition cap gate ────────────────────────────────────────────
@@ -5604,6 +5649,17 @@ Mandatory requirements:
       parsed.plans[r.planIndex]._contractViolations = r.violations;
     }
     parsed._planContractPassRate = contractResult.passRate;
+    // Record that the structural lint gate was invoked this cycle.
+    await recordCapabilityExecution(
+      config,
+      "prometheus-plan-structural-lint",
+      `plans=${contractResult.totalPlans} invalid=${contractResult.invalidCount} passRate=${contractResult.passRate}`,
+    );
+    await recordCapabilityExecution(
+      config,
+      "pre-athena-plan-structural-validation",
+      `plans=${contractResult.totalPlans} passRate=${contractResult.passRate}`,
+    );
 
     // ── Secondary safety net: hard-filter plans missing valid capacityDelta / requestROI ─
     // Primary rejection happens at the generation boundary (checkPacketCompleteness above).

@@ -428,7 +428,11 @@ describe("buildQualityGateRecoverySignal", () => {
   it("includes all topic names and a density-failure explanation", () => {
     const signal = buildQualityGateRecoverySignal(["Topic A", "Topic B"]);
     assert.ok(signal.includes("density check"), "must mention density check failure");
-    assert.ok(signal.includes("minimal planning signal"), "must suggest using topics as minimal signal");
+    // Signal now directs Prometheus to concrete repository evidence, not topic names as signal.
+    assert.ok(
+      /concrete repository evidence|repository evidence|evidence/i.test(signal),
+      "must instruct using repository evidence (not topic names) as planning input"
+    );
   });
 
   it("returns empty string when no quarantined topic names are provided", () => {
@@ -501,5 +505,70 @@ describe("research_synthesizer — provenance coupling invariants (Task 3)", () 
       "state/research_synthesis.json: degradedPlanningMode=true requires non-empty recoverySignal (provenance invariant)"
     );
     assert.ok(signal.includes(topicNames[0]), "scout topic name must appear in recovery signal for provenance tracing");
+  });
+});
+
+// ── scheduleBoundedRecoverySynthesis ──────────────────────────────────────────
+
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import {
+  scheduleBoundedRecoverySynthesis,
+  SYNTHESIS_RECOVERY_DENSITY_THRESHOLDS,
+} from "../../src/core/research_synthesizer.js";
+
+describe("scheduleBoundedRecoverySynthesis", () => {
+  it("writes synthesis_recovery_request.json with correct schema", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-recovery-synth-"));
+    try {
+      await scheduleBoundedRecoverySynthesis(stateDir, {
+        quarantinedTopics: ["Topic A", "Topic B"],
+        retriedAlready: false,
+      });
+      const filePath = path.join(stateDir, "synthesis_recovery_request.json");
+      const raw = await fs.readFile(filePath, "utf8");
+      const record = JSON.parse(raw);
+      assert.equal(record.reason, "degraded_planning_mode_all_topics_quarantined");
+      assert.equal(record.scheduledForCycle, "next");
+      assert.equal(record.planningMode, "internal_evidence_only");
+      assert.deepEqual(record.quarantinedTopics, ["Topic A", "Topic B"]);
+      assert.equal(record.retriedAlready, false);
+      assert.ok(typeof record.requestedAt === "string", "requestedAt must be ISO string");
+      assert.deepEqual(record.densityThresholds, SYNTHESIS_RECOVERY_DENSITY_THRESHOLDS);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses SYNTHESIS_RECOVERY_DENSITY_THRESHOLDS with correct minActionableCount and minTopicCount", () => {
+    assert.ok(
+      typeof SYNTHESIS_RECOVERY_DENSITY_THRESHOLDS.minActionableCount === "number" &&
+      SYNTHESIS_RECOVERY_DENSITY_THRESHOLDS.minActionableCount >= 1,
+      "minActionableCount must be a positive number"
+    );
+    assert.ok(
+      typeof SYNTHESIS_RECOVERY_DENSITY_THRESHOLDS.minTopicCount === "number" &&
+      SYNTHESIS_RECOVERY_DENSITY_THRESHOLDS.minTopicCount >= 1,
+      "minTopicCount must be a positive number"
+    );
+  });
+
+  it("negative path: does not throw when stateDir is non-writable path (fail-open)", async () => {
+    // A truly non-writable path in a portable way: use an obviously invalid directory.
+    await assert.doesNotReject(
+      scheduleBoundedRecoverySynthesis("/nonexistent/does/not/exist"),
+      "scheduleBoundedRecoverySynthesis must not throw on write failure (fail-open)"
+    );
+  });
+
+  it("buildQualityGateRecoverySignal instructs evidence-first planning (not topic-name planning)", () => {
+    const signal = buildQualityGateRecoverySignal(["Topic X"]);
+    assert.ok(!signal.includes("use topic names as minimal planning signal"),
+      "updated signal must NOT instruct Prometheus to use topic names as planning signal");
+    assert.ok(
+      /concrete repository evidence|repository evidence|repository state/i.test(signal),
+      "updated signal must direct Prometheus to use concrete repository evidence"
+    );
   });
 });

@@ -309,4 +309,57 @@ describe("plan_critic", () => {
       assert.equal(CRITIC_DIMENSION.PACKET_SIZE_COMPLIANT, "PACKET_SIZE_COMPLIANT");
     });
   });
+
+  describe("NO_TOPIC_NAME_DRIFT dimension", () => {
+    it("NO_TOPIC_NAME_DRIFT is exported in CRITIC_DIMENSION", () => {
+      assert.equal(typeof CRITIC_DIMENSION.NO_TOPIC_NAME_DRIFT, "string");
+      assert.equal(CRITIC_DIMENSION.NO_TOPIC_NAME_DRIFT, "NO_TOPIC_NAME_DRIFT");
+    });
+
+    it("scores 0.0 and flags drift when task only references quarantined research topics", () => {
+      const plan = {
+        task: "Implement improvements based on research completed on topics — all topics failed density check",
+        context: "All research topics failed actionable density. Degraded planning mode active.",
+        verification: "",
+      };
+      const result = critiquePlan(plan);
+      assert.equal(
+        result.dimensions[CRITIC_DIMENSION.NO_TOPIC_NAME_DRIFT],
+        0.0,
+        "topic-name-only drift must score 0.0"
+      );
+      assert.ok(
+        result.issues.some(i => /topic.*(name|drift|evidence)/i.test(i)),
+        "must flag topic-name drift in issues"
+      );
+    });
+
+    it("scores 1.0 when plan has concrete file evidence despite topic mentions", () => {
+      const plan = {
+        task: "Fix failing tests in src/core/state_tracker.ts (research flagged stale trace writes)",
+        context: "File src/core/state_tracker.ts line 923 needs updated error handling",
+        verification: "npm test -- tests/core/state_tracker.test.ts",
+      };
+      const result = critiquePlan(plan);
+      assert.equal(
+        result.dimensions[CRITIC_DIMENSION.NO_TOPIC_NAME_DRIFT],
+        1.0,
+        "plan with file references must NOT be flagged as topic-name drift"
+      );
+    });
+
+    it("negative path: plan with no topic framing and no file refs scores 1.0 (not a drift)", () => {
+      const plan = {
+        task: "Optimize loop performance",
+        context: "general optimization request",
+        verification: "",
+      };
+      const result = critiquePlan(plan);
+      assert.equal(
+        result.dimensions[CRITIC_DIMENSION.NO_TOPIC_NAME_DRIFT],
+        1.0,
+        "non-topic-framed plan must not be penalized by drift detector"
+      );
+    });
+  });
 });

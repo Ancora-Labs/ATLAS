@@ -387,3 +387,51 @@ describe("appendGovernanceBlockEvent", () => {
   });
 });
 
+// ── recordCapabilityExecution / loadCapabilityExecutionTraces ─────────────────
+
+import {
+  recordCapabilityExecution,
+  loadCapabilityExecutionTraces,
+} from "../../src/core/state_tracker.js";
+
+describe("recordCapabilityExecution", () => {
+  let stateDir: string;
+
+  beforeEach(async () => {
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-cap-trace-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("writes a trace entry and loadCapabilityExecutionTraces reads it back", async () => {
+    const config = { paths: { stateDir } };
+    await recordCapabilityExecution(config, "test-capability", "cycle-1 invocation");
+    const traces = await loadCapabilityExecutionTraces(config);
+    assert.ok(traces instanceof Set, "traces must be a Set");
+    assert.ok(traces.has("test-capability"), "recorded capability must appear in traces set");
+  });
+
+  it("distinguishes two different capabilities by name", async () => {
+    const config = { paths: { stateDir } };
+    await recordCapabilityExecution(config, "cap-alpha", "c1");
+    await recordCapabilityExecution(config, "cap-beta", "c1");
+    const traces = await loadCapabilityExecutionTraces(config);
+    assert.ok(traces.has("cap-alpha"), "cap-alpha must be in traces");
+    assert.ok(traces.has("cap-beta"), "cap-beta must be in traces");
+  });
+
+  it("negative path: returns empty Set when trace file does not exist", async () => {
+    const emptyDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-cap-empty-"));
+    try {
+      const config = { paths: { stateDir: emptyDir } };
+      const traces = await loadCapabilityExecutionTraces(config);
+      assert.ok(traces instanceof Set, "must return Set even when file missing");
+      assert.equal(traces.size, 0, "must be empty when no traces written");
+    } finally {
+      await fs.rm(emptyDir, { recursive: true, force: true });
+    }
+  });
+});
+

@@ -18,7 +18,7 @@
 
 import path from "node:path";
 import fs from "node:fs/promises";
-import { appendProgress, appendAlert, ALERT_SEVERITY, appendGovernanceBlockEvent } from "./state_tracker.js";
+import { appendProgress, appendAlert, ALERT_SEVERITY, appendGovernanceBlockEvent, recordCapabilityExecution } from "./state_tracker.js";
 import { readStopRequest, writeDaemonPid, clearDaemonPid, clearStopRequest, readReloadRequest, clearReloadRequest, createCancellationToken } from "./daemon_control.js";
 import type { CancellationToken } from "./daemon_control.js";
 import { loadConfig } from "../config.js";
@@ -944,6 +944,12 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       } else if (admissionResult.reason && admissionResult.reason.includes("bypassed_fallback")) {
         warn(`[orchestrator] specialization admission gate bypassed (bounded fallback): ${admissionResult.reason}`);
       }
+      // Record that specialization admission control was evaluated this cycle.
+      await recordCapabilityExecution(
+        config,
+        "specialization-admission-control",
+        `blocked=${admissionResult.blocked} reason=${String(admissionResult.reason || "pass").slice(0, 120)}`,
+      );
     } catch (specErr) {
       warn(`[orchestrator] specialization admission gate failed (non-fatal): ${String(specErr?.message || specErr)}`);
     }
@@ -2930,6 +2936,18 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   await safeUpdatePipelineProgress(config, "athena_approved", "Athena approved the plan");
   await appendProgress(config, `[ATHENA] ✓ Done — plan approved — requests this cycle: ${_cycleRequests}`);
 
+  // Record that Athena's gate feasibility check was invoked this cycle.
+  await recordCapabilityExecution(
+    config,
+    "athena-gate-pre-check",
+    `gateBlockRisk=${String((planReview as any)?.gateBlockRiskAtApproval ?? (planReview as any)?.gateBlockRisk ?? "unknown")} autoApproved=${String((planReview as any)?.autoApproved ?? false)}`,
+  );
+  await recordCapabilityExecution(
+    config,
+    "athena-gate-feasibility-check",
+    `gateBlockRisk=${String((planReview as any)?.gateBlockRiskAtApproval ?? (planReview as any)?.gateBlockRisk ?? "unknown")}`,
+  );
+
   // Persist auto-approve telemetry whenever Athena's deterministic fast-path
   // fires.  This was previously defined but never called, leaving the
   // auto_approve_telemetry.json empty and breaking downstream ROI analysis.
@@ -3105,6 +3123,11 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
             blockedAt: new Date().toISOString(),
             gateSource: "lane_diversity_gate",
           });
+          await recordCapabilityExecution(
+            config,
+            "dispatch-block-reason-reporting",
+            `gateSource=lane_diversity_gate reason=${diversityMsg.slice(0, 120)}`,
+          );
         } catch (analyticsErr) {
           warn(`[orchestrator] Blocked-cycle analytics write failed (non-fatal): ${String(analyticsErr?.message || analyticsErr)}`);
         }
@@ -3152,6 +3175,11 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
             blockedAt: new Date().toISOString(),
             gateSource: "pre_dispatch_gate",
           });
+          await recordCapabilityExecution(
+            config,
+            "dispatch-block-reason-reporting",
+            `gateSource=pre_dispatch_gate reason=${reasonMsg.slice(0, 120)}`,
+          );
         } catch (analyticsErr) {
           warn(`[orchestrator] Blocked-cycle analytics write failed (non-fatal): ${String(analyticsErr?.message || analyticsErr)}`);
         }
@@ -4079,10 +4107,22 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     // ── Fast-path counts: Athena auto-approve vs full AI review ──────────────
     // planReview.autoApproved=true means all plans cleared the deterministic gate.
     // Counts are plan-level: all funnelApprovedCount plans are either all auto-approved or all full-reviewed.
+    // autoApproveReasonCode and gateBlockRiskAtApproval are propagated so cycle_analytics
+    // can reflect real dispatch feasibility (gateBlockRiskAtApproval was previously always null).
     const fastPathCountsForAnalytics = typeof funnelApprovedCount === "number" && funnelApprovedCount >= 0
       ? (planReview?.autoApproved === true
-          ? { athenaAutoApproved: funnelApprovedCount, athenaFullReview: 0 }
-          : { athenaAutoApproved: 0, athenaFullReview: funnelApprovedCount })
+          ? {
+              athenaAutoApproved: funnelApprovedCount,
+              athenaFullReview: 0,
+              autoApproveReasonCode: (planReview?.autoApproveReason as any)?.code ?? null,
+              gateBlockRiskAtApproval: (planReview as any)?.gateBlockRiskAtApproval ?? null,
+            }
+          : {
+              athenaAutoApproved: 0,
+              athenaFullReview: funnelApprovedCount,
+              autoApproveReasonCode: null,
+              gateBlockRiskAtApproval: (planReview as any)?.gateBlockRiskAtApproval ?? null,
+            })
       : null;
 
     const analyticsRecord = computeCycleAnalytics(config, {
@@ -5161,7 +5201,13 @@ export async function hydrateDispatchContextWithCiEvidence(
     const ciFixHint = `${String(plan?.task || "")} ${String(plan?.title || "")}`.toLowerCase();
     const isCiFixTask = taskKind === "ci-fix" || /\bci[-_\s]?fix\b/.test(ciFixHint);
     if (!isCiFixTask) return baseContext;
-    return await appendCiFixContext(config, plan, baseContext);
+    const hydrated = await appendCiFixContext(config, plan, baseContext);
+    await recordCapabilityExecution(
+      config,
+      "ci-failure-log-injection",
+      `task=${String(plan?.task_id || plan?.task || "unknown").slice(0, 120)}`,
+    );
+    return hydrated;
   } catch (err) {
     warn(`[orchestrator] CI context hydration failed (non-fatal): ${String(err?.message || err)}`);
     return baseContext;
