@@ -1590,6 +1590,39 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
     assert.equal(result.gateIndex, 12, "gateIndex must be 12 (OVERSIZED_PACKET)");
   });
 
+  it("blocks dispatch when ordered-step complexity exceeds cap even if plan count does not", async () => {
+    const plans = [
+      {
+        role: "Evolution Worker",
+        task: "Task A",
+        verification: "tests/core/a.test.ts — test: passes",
+        verification_commands: ["npm test -- tests/core/a.test.ts"],
+        acceptance_criteria: ["step 1", "step 2"],
+        capacityDelta: 0.1,
+        requestROI: 1.0,
+      },
+      {
+        role: "Evolution Worker",
+        task: "Task B",
+        verification: "tests/core/b.test.ts — test: passes",
+        verification_commands: ["npm test -- tests/core/b.test.ts"],
+        acceptance_criteria: ["step 1", "step 2"],
+        capacityDelta: 0.1,
+        requestROI: 1.0,
+      },
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(
+      { ...config, planner: { maxActionableStepsPerPacket: 3 } },
+      plans,
+      "oversize-gate-complexity",
+    );
+    assert.equal(result.blocked, true, "dispatch must be blocked by ordered-step complexity overflow");
+    assert.ok(
+      result.reason?.startsWith(BLOCK_REASON.OVERSIZED_PACKET),
+      `reason must start with OVERSIZED_PACKET prefix; got: ${result.reason}`,
+    );
+  });
+
   it("allows dispatch when all role groups are within the cap", async () => {
     const plans = [
       { role: "Evolution Worker", task: "Task A", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },

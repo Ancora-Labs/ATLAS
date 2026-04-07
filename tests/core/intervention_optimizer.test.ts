@@ -1512,6 +1512,11 @@ describe("applyOverbundleEVPenalty", () => {
   it("negative path: returns 0 when input ev is 0", () => {
     assert.equal(applyOverbundleEVPenalty(0, OVERBUNDLE_STEPS_THRESHOLD + 5), 0);
   });
+
+  it("returns ev unchanged when stepCount is non-finite", () => {
+    const ev = 42;
+    assert.equal(applyOverbundleEVPenalty(ev, Number.NaN), ev);
+  });
 });
 
 describe("runInterventionOptimizer — overbundleStepCounts option", () => {

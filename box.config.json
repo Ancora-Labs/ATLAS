@@ -132,7 +132,7 @@
         "athenaRejectRateMax": 0.15,
         "hardGuardrailBreachMax": 2,
         "inBandMinBenchmarkGain": 0.1,
-        "inBandMaxCompletionVariance": 0.05,
+        "inBandMaxCompletionVariance": 0.08,
         "inBandRequireCompletedPhase": true,
         "regressCrashWindow": 10,
         "regressCrashThreshold": 3,
@@ -142,8 +142,21 @@
         "regressAthenaRejectMax": 0.4,
         "exploitationWindow": 10,
         "exploitationMinBenchmarkGain": 0.15,
-        "exploitationMaxCompletionVariance": 0.04
+        "exploitationMaxCompletionVariance": 0.06,
+        "premiumEfficiencyGateVariant": "execution_adjusted"
       }
+    },
+    "selfDevExit": {
+      "minBootstrapCycles": 5,
+      "measurementWindow": 10,
+      "capacityDeltaThreshold": 0.02,
+      "minExploitationCycles": 3,
+      "noveltyYieldMax": 0.25,
+      "roiDeltaThreshold": 0.1,
+      "minRoiSuccessRate": 0.55,
+      "maxPendingBenchmarkRatio": 0.4,
+      "benchmarkPendingGraceHours": 6,
+      "maxOpenBacklogRatio": 0.25
     }
   },
   "roadmap": {

@@ -48,6 +48,10 @@ import {
   filterMemoryEntriesByTrust,
   isPrivilegedMemoryRequester,
 } from "./trust_boundary.js";
+import {
+  WORKER_CYCLE_ARTIFACTS_FILE,
+  migrateWorkerCycleArtifacts,
+} from "./cycle_analytics.js";
 
 // ── Decision Quality Weights ──────────────────────────────────────────────────
 
@@ -431,11 +435,14 @@ export async function reconcileLearnedPoliciesWithImpact(stateDir: string, outco
 /**
  * Normalized outcome collector — Athena-gated architecture.
  *
- * Primary state sources (replaces stale legacy artifacts):
- *   prometheus_analysis.json  — plans, projectHealth, requestBudget, waves
- *   evolution_progress.json   — completed task IDs
- *   worker_sessions.json      — per-worker status (unchanged)
- *   worker_${role}.json       — per-worker activityLog → dispatches
+ * Primary state sources (canonical cycle-scoped artifacts first):
+ *   prometheus_analysis.json      — plans, projectHealth, requestBudget, waves
+ *   worker_cycle_artifacts.json   — cycle-scoped worker sessions/activity/completed task IDs
+ *
+ * Compatibility fallback (read-only, warning telemetry):
+ *   evolution_progress.json   — completed task IDs (legacy)
+ *   worker_sessions.json      — per-worker status (legacy)
+ *   worker_${role}.json       — per-worker activityLog (legacy)
  *
  * Return contract:
  *   { totalPlans, completedCount, projectHealth, workerOutcomes, waves, dispatches,
@@ -452,14 +459,22 @@ export async function reconcileLearnedPoliciesWithImpact(stateDir: string, outco
 export async function collectCycleOutcomes(config) {
   const stateDir = config.paths?.stateDir || "state";
 
-  // ── Primary state sources (Athena-gated architecture) ────────────────────
+  // ── Primary state sources (canonical first) ──────────────────────────────
   // Use readJsonSafe to distinguish MISSING (ENOENT) from INVALID (parse error).
-  const [prometheusResult, evolutionResult, workerSessionsResult] = await Promise.all([
+  const [prometheusResult, workerCycleArtifactsResult, evolutionResult, workerSessionsResult, pipelineProgressResult] = await Promise.all([
     readJsonSafe(path.join(stateDir, "prometheus_analysis.json")),
+    readJsonSafe(path.join(stateDir, WORKER_CYCLE_ARTIFACTS_FILE)),
     readJsonSafe(path.join(stateDir, "evolution_progress.json")),
-    readJsonSafe(path.join(stateDir, "worker_sessions.json"))
+    readJsonSafe(path.join(stateDir, "worker_sessions.json")),
+    readJsonSafe(path.join(stateDir, "pipeline_progress.json")),
   ]);
   let workerSessions: Record<string, any> = {};
+  let workerActivityByRole: Record<string, any> = {};
+  let completedTasks: string[] = [];
+  let usingCanonicalWorkerArtifacts = false;
+  const activeCycleId = String(
+    (pipelineProgressResult.ok ? (pipelineProgressResult.data as any)?.startedAt : "") || ""
+  ).trim();
 
   // ── Input validation — distinguish missing vs invalid ─────────────────────
   let degraded = false;
@@ -488,92 +503,132 @@ export async function collectCycleOutcomes(config) {
       : [];
   }
 
-  // Derive completed task IDs from evolution_progress.tasks.
-  let completedFromEvolution = [];
-  if (!evolutionResult.ok) {
-    if (!degraded) {
-      degraded = true;
-      degradedReason = evolutionResult.reason === READ_JSON_REASON.MISSING
-        ? OUTCOME_DEGRADED_REASON.EVOLUTION_ABSENT
-        : OUTCOME_DEGRADED_REASON.EVOLUTION_INVALID;
+  // Canonical worker-cycle artifact first (schema-versioned migration).
+  if (workerCycleArtifactsResult.ok) {
+    const migratedArtifacts = migrateWorkerCycleArtifacts(workerCycleArtifactsResult.data);
+    if (migratedArtifacts.ok && migratedArtifacts.data) {
+      const artifactCycles = (migratedArtifacts.data as any).cycles;
+      const latestCycleId = String((migratedArtifacts.data as any).latestCycleId || "").trim();
+      const selectedCycleId = activeCycleId || latestCycleId;
+      const selectedCycle =
+        selectedCycleId && artifactCycles && typeof artifactCycles === "object"
+          ? (artifactCycles as Record<string, any>)[selectedCycleId] || null
+          : null;
+      if (selectedCycle && typeof selectedCycle === "object") {
+        workerSessions = selectedCycle.workerSessions && typeof selectedCycle.workerSessions === "object"
+          ? selectedCycle.workerSessions
+          : {};
+        workerActivityByRole = selectedCycle.workerActivity && typeof selectedCycle.workerActivity === "object"
+          ? selectedCycle.workerActivity
+          : {};
+        completedTasks = Array.isArray(selectedCycle.completedTaskIds)
+          ? [...new Set<string>((selectedCycle.completedTaskIds as unknown[]).map((id) => String(id || "").trim()).filter(Boolean))]
+          : [];
+        usingCanonicalWorkerArtifacts = true;
+      }
+    } else {
+      warn(
+        `[self-improvement] canonical worker-cycle artifact migration failed: reason=${migratedArtifacts.reason} fromVersion=${String(migratedArtifacts.fromVersion)}`
+      );
     }
-  } else if (evolutionResult.data?.tasks !== null && typeof evolutionResult.data?.tasks !== "object") {
-    if (!degraded) {
-      degraded = true;
-      degradedReason = OUTCOME_DEGRADED_REASON.EVOLUTION_INVALID;
-    }
-  } else {
-    const taskMap = evolutionResult.data?.tasks || {};
-    completedFromEvolution = Object.entries(taskMap)
-      .filter(([, t]) => (t as any).status === "completed" || (t as any).status === "done")
-      .map(([id]) => id);
   }
 
-  // worker_sessions is required for per-worker outcome telemetry.
-  // Treat missing/invalid sessions OR stale empty sessions with worker artifacts as degraded.
+  // Compatibility fallback for legacy files when canonical cycle artifacts are absent.
+  // Read-only path with explicit warning telemetry.
   let workerSessionsStaleSignal: string | null = null;
-  if (!workerSessionsResult.ok) {
-    workerSessionsStaleSignal = workerSessionsResult.reason === READ_JSON_REASON.MISSING
-      ? "ABSENT"
-      : "INVALID";
-  } else if (
-    !workerSessionsResult.data ||
-    typeof workerSessionsResult.data !== "object" ||
-    Array.isArray(workerSessionsResult.data)
-  ) {
-    workerSessionsStaleSignal = "INVALID_STRUCTURE";
+  if (!usingCanonicalWorkerArtifacts) {
+    warn("[self-improvement] canonical worker-cycle artifact absent; falling back to evolution_progress/worker_sessions compatibility path");
+
+    if (!evolutionResult.ok) {
+      if (!degraded) {
+        degraded = true;
+        degradedReason = evolutionResult.reason === READ_JSON_REASON.MISSING
+          ? OUTCOME_DEGRADED_REASON.EVOLUTION_ABSENT
+          : OUTCOME_DEGRADED_REASON.EVOLUTION_INVALID;
+      }
+    } else if (evolutionResult.data?.tasks !== null && typeof evolutionResult.data?.tasks !== "object") {
+      if (!degraded) {
+        degraded = true;
+        degradedReason = OUTCOME_DEGRADED_REASON.EVOLUTION_INVALID;
+      }
+    } else {
+      const taskMap = evolutionResult.data?.tasks || {};
+      completedTasks = Object.entries(taskMap)
+        .filter(([, t]) => (t as any).status === "completed" || (t as any).status === "done")
+        .map(([id]) => id);
+    }
+
+    // worker_sessions is required for per-worker outcome telemetry in fallback mode.
+    // Treat missing/invalid sessions OR stale empty sessions with worker artifacts as degraded.
+    if (!workerSessionsResult.ok) {
+      workerSessionsStaleSignal = workerSessionsResult.reason === READ_JSON_REASON.MISSING
+        ? "ABSENT"
+        : "INVALID";
+    } else if (
+      !workerSessionsResult.data ||
+      typeof workerSessionsResult.data !== "object" ||
+      Array.isArray(workerSessionsResult.data)
+    ) {
+      workerSessionsStaleSignal = "INVALID_STRUCTURE";
+    } else {
+      workerSessions = workerSessionsResult.data as Record<string, any>;
+    }
+
+    let hasWorkerActivityArtifacts = false;
+    try {
+      const stateEntries = await fs.readdir(stateDir, { withFileTypes: true });
+      hasWorkerActivityArtifacts = stateEntries.some(
+        (entry) =>
+          entry.isFile() &&
+          /^worker_.+\.json$/i.test(entry.name) &&
+          entry.name.toLowerCase() !== "worker_sessions.json"
+      );
+    } catch (err: any) {
+      if (err?.code !== "ENOENT") {
+        warn(`[self-improvement] failed to inspect worker artifact staleness: ${String(err?.message || err)}`);
+      }
+    }
+    if (!workerSessionsStaleSignal && Object.keys(workerSessions).length === 0 && hasWorkerActivityArtifacts) {
+      workerSessionsStaleSignal = "EMPTY_WITH_ACTIVITY_ARTIFACTS";
+    }
+
+    if (workerSessionsStaleSignal) {
+      warn(
+        `[self-improvement] worker session artifacts stale: signal=${workerSessionsStaleSignal} stateDir=${stateDir}`
+      );
+      if (!degraded) {
+        degraded = true;
+        degradedReason = OUTCOME_DEGRADED_REASON.WORKER_SESSIONS_STALE;
+      }
+    }
   } else {
-    workerSessions = workerSessionsResult.data as Record<string, any>;
+    workerSessionsStaleSignal = null;
   }
-
-  let hasWorkerActivityArtifacts = false;
-  try {
-    const stateEntries = await fs.readdir(stateDir, { withFileTypes: true });
-    hasWorkerActivityArtifacts = stateEntries.some(
-      (entry) =>
-        entry.isFile() &&
-        /^worker_.+\.json$/i.test(entry.name) &&
-        entry.name.toLowerCase() !== "worker_sessions.json"
-    );
-  } catch (err: any) {
-    if (err?.code !== "ENOENT") {
-      warn(`[self-improvement] failed to inspect worker artifact staleness: ${String(err?.message || err)}`);
-    }
-  }
-  if (!workerSessionsStaleSignal && Object.keys(workerSessions).length === 0 && hasWorkerActivityArtifacts) {
-    workerSessionsStaleSignal = "EMPTY_WITH_ACTIVITY_ARTIFACTS";
-  }
-
-  if (workerSessionsStaleSignal) {
-    warn(
-      `[self-improvement] worker session artifacts stale: signal=${workerSessionsStaleSignal} stateDir=${stateDir}`
-    );
-    if (!degraded) {
-      degraded = true;
-      degradedReason = OUTCOME_DEGRADED_REASON.WORKER_SESSIONS_STALE;
-    }
-  }
-
-  const completedTasks = completedFromEvolution;
 
   // ── Determine metrics source ──────────────────────────────────────────────
   const sourceFiles = [];
   if (prometheusResult.ok) sourceFiles.push("prometheus_analysis");
-  sourceFiles.push(workerSessionsStaleSignal ? "worker_sessions_stale" : "worker_sessions");
-  if (evolutionResult.ok) sourceFiles.push("evolution_progress");
+  if (usingCanonicalWorkerArtifacts) {
+    sourceFiles.push("worker_cycle_artifacts");
+  } else {
+    sourceFiles.push(workerSessionsStaleSignal ? "worker_sessions_stale" : "worker_sessions");
+    if (evolutionResult.ok) sourceFiles.push("evolution_progress_fallback");
+  }
   const metricsSource = sourceFiles.join("+");
 
   // ── Per-worker outcome analysis ───────────────────────────────────────────
   const workerOutcomes = [];
-  const workerActivityByRole: Record<string, any> = {};
 
   for (const [role, session] of Object.entries(workerSessions) as any[]) {
-    const workerFile = await readJson(
-      path.join(stateDir, `worker_${role.replace(/\s+/g, "_")}.json`),
-      null
-    );
-    const activityLog = Array.isArray(workerFile?.activityLog) ? workerFile.activityLog : [];
-    workerActivityByRole[role] = activityLog;
+    let activityLog = Array.isArray(workerActivityByRole[role]) ? workerActivityByRole[role] : [];
+    if (!usingCanonicalWorkerArtifacts) {
+      const workerFile = await readJson(
+        path.join(stateDir, `worker_${role.replace(/\s+/g, "_")}.json`),
+        null
+      );
+      activityLog = Array.isArray(workerFile?.activityLog) ? workerFile.activityLog : [];
+      workerActivityByRole[role] = activityLog;
+    }
 
     const lastEntry = activityLog[activityLog.length - 1];
     const timeouts  = activityLog.filter(e => e.status === "timeout").length;

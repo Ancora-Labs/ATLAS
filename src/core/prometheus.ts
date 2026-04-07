@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Prometheus — Self-Evolution Engine & Key Planner (Simplified)
  *
  * Prometheus is activated by Jesus for deep repository analysis.
@@ -5273,6 +5273,44 @@ Mandatory requirements:
       config,
       `[PROMETHEUS][MANDATORY_TASKS] Coverage gate passed — mapped=${mandatoryCoverageResult.mapped.length} excluded=${mandatoryCoverageResult.excluded.length}`
     );
+  }
+
+  // ── CI-fix structural injection guard ────────────────────────────────────────
+  // If any mandatory finding linked to CI failures was excluded by the LLM under a
+  // passing coverage gate, inject a skeleton ci-fix plan directly. The finding's
+  // presence in health_audit_findings.json is sufficient evidence that CI was failing
+  // at audit time — Jesus only writes CI findings when CI failures are active.
+  if (
+    Array.isArray((rawParsedInput._mandatoryTaskCoverageGate as any)?.excluded) &&
+    (rawParsedInput._mandatoryTaskCoverageGate as any)?.ok === true
+  ) {
+    const excludedGateIds = new Set<string>((rawParsedInput._mandatoryTaskCoverageGate as any).excluded as string[]);
+    const excludedCiFindings = mandatoryFindings.filter(
+      (f) =>
+        excludedGateIds.has(f.id) &&
+        (f.area === "ci" || /ci[.\-_]?fix/i.test(f.capabilityNeeded) || /ci[.\-_]?fail/i.test(String(f.finding))),
+    );
+    if (excludedCiFindings.length > 0) {
+      if (!Array.isArray(rawParsedInput.plans)) rawParsedInput.plans = [];
+      rawParsedInput.plans.push({
+        role: "evolution-worker",
+        wave: 1,
+        task: `Fix CI failures — auto-injected because mandatory CI finding(s) were excluded: ${excludedCiFindings.map((f) => f.id).join(", ")}`,
+        target_files: [] as unknown as string[],
+        scope: "ci",
+        acceptance_criteria: ["CI passes on main branch"],
+        estimatedExecutionTokens: 4000,
+      });
+      await appendProgress(
+        config,
+        `[PROMETHEUS][CI_FIX_INJECTED] Injected ci-fix skeleton plan — excluded CI mandatory finding(s): ${excludedCiFindings.map((f) => f.id).join(", ")}`,
+      );
+      await recordCapabilityExecution(
+        config,
+        "ci-failure-log-injection",
+        `injected=1 excludedCiFindings=${excludedCiFindings.map((f) => f.id).join(",")}`,
+      );
+    }
   }
 
   if (Array.isArray(rawParsedInput.plans) && rawParsedInput.plans.length > 0) {

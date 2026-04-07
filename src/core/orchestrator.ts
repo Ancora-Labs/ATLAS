@@ -25,7 +25,7 @@ import { loadConfig } from "../config.js";
 import { runJesusCycle, appendJesusOutcomeLedger, buildJesusDecisionOutcome } from "./jesus_supervisor.js";
 import { runPrometheusAnalysis, loadTopicMemory, saveTopicMemory, topicKey as prometheusTopicKey, findCanonicalTopicKey } from "./prometheus.js";
 import { runAthenaPlanReview, ATHENA_PLAN_REVIEW_REASON_CODE, hasFiniteAthenaOverallScore } from "./athena_reviewer.js";
-import { runWorkerConversation, isAnalyticsCompletedWorkerStatus } from "./worker_runner.js";
+import { runWorkerConversation, isAnalyticsCompletedWorkerStatus, isTerminalWorkerStatus } from "./worker_runner.js";
 import { runSelfImprovementCycle, shouldTriggerSelfImprovement } from "./self_improvement.js";
 import { collectEvolutionMetrics } from "./evolution_metrics.js";
 import { capturePreWorkBaseline, runProjectCompletion, isProjectAlreadyCompleted } from "./project_lifecycle.js";
@@ -35,7 +35,7 @@ import { readJson, readJsonSafe, writeJson, cleanupStaleTempFiles, READ_JSON_REA
 import { updatePipelineProgress, readPipelineProgress } from "./pipeline_progress.js";
 import { loadEscalationQueue, sortEscalationQueue, processEscalationQueueClosures } from "./escalation_queue.js";
 import { computeCycleSLOs, persistSloMetrics, detectCoupledAlerts } from "./slo_checker.js";
-import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealthComposite, CYCLE_PHASE, computeRuntimeContractProbe, readCycleAnalytics, evaluateBenchmarkGroundTruth } from "./cycle_analytics.js";
+import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealthComposite, CYCLE_PHASE, computeRuntimeContractProbe, readCycleAnalytics, evaluateBenchmarkGroundTruth, WORKER_CYCLE_ARTIFACTS_FILE, migrateWorkerCycleArtifacts } from "./cycle_analytics.js";
 import { computeBaselineRecoveryState, persistBaselineMetrics, PARSER_CONFIDENCE_RECOVERY_THRESHOLD } from "./parser_baseline_recovery.js";
 import { computeDispatchStrictness, loadReplayRegressionState, DISPATCH_STRICTNESS } from "./parser_replay_harness.js";
 import {
@@ -56,7 +56,7 @@ import { evaluateRetune } from "./strategy_retuner.js";
 import { compileLessonsToPolicies } from "./learning_policy_compiler.js";
 import { assignWorkersToPlans, enforceLaneDiversity, evaluateSpecializationAdmissionGate, buildLanePerformanceFromCycleTelemetry, buildReroutePenaltyLedger, SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES } from "./capability_pool.js";
 import { runDoctor } from "./doctor.js";
-import { validateAllPlans, validatePacketBatchAdmission, applyDispatchBoundaryHardCap } from "./plan_contract_validator.js";
+import { validateAllPlans, validatePacketBatchAdmission, applyDispatchBoundaryHardCap, resolveNamedVerificationTarget } from "./plan_contract_validator.js";
 import {
   resolveDependencyGraph,
   computeReadinessGate,
@@ -968,7 +968,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
     const rawActionableCap = Number((config as any)?.planner?.maxActionableStepsPerPacket);
     const actionableCap = Number.isFinite(rawActionableCap) && rawActionableCap > 0
       ? Math.floor(rawActionableCap)
-      : 0;
+      : OVERBUNDLE_STEPS_THRESHOLD;
     if (actionableCap > 0 && plans.length > 0) {
       try {
         const oversizeCheck = validatePacketBatchAdmission(Array.isArray(plans) ? plans : [], actionableCap);
@@ -1498,6 +1498,7 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
        ? (workerBatches[startIndex - 1] as any).wave : null)
     : null;
   const resumeRetryTelemetry = await loadRetryTelemetryContext(config);
+  const resumeArtifactCycleId = normalizeCycleId((await readPipelineProgress(config).catch(() => null))?.startedAt || checkpoint?.createdAt);
 
   for (let index = startIndex; index < workerBatches.length; index += 1) {
     const stopReq = await readStopRequest(config);
@@ -1532,6 +1533,12 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
 
     let workerResult;
     let transientRetries = 0;
+    await persistWorkerDispatchArtifacts(config, {
+      cycleId: resumeArtifactCycleId,
+      role: String(batch?.role || ""),
+      phase: "start",
+      batch,
+    });
     for (;;) {
       try {
         workerResult = await dispatchWorker(config, batch);
@@ -1571,6 +1578,13 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
       }
       break;
     }
+    await persistWorkerDispatchArtifacts(config, {
+      cycleId: resumeArtifactCycleId,
+      role: String(batch?.role || ""),
+      phase: "complete",
+      batch,
+      workerResult,
+    });
 
     if (!isDispatchOutcomeSuccessful(workerResult)) {
       if (shouldFailCloseDispatchOutcome(workerResult)) {
@@ -1703,6 +1717,176 @@ function roleToWorkerStateFile(role) {
   return `worker_${slug}.json`;
 }
 
+type WorkerCycleRecord = {
+  cycleId: string;
+  status: string;
+  updatedAt: string;
+  workerSessions: Record<string, any>;
+  workerActivity: Record<string, any[]>;
+  completedTaskIds: string[];
+};
+
+function normalizeCycleId(value: unknown): string {
+  const v = String(value || "").trim();
+  return v || `cycle-${Date.now()}`;
+}
+
+function extractPlanTaskIds(planLike: any): string[] {
+  const plans = Array.isArray(planLike?.plans) ? planLike.plans : [planLike];
+  const ids: string[] = plans
+    .map((p: any) => String(p?.task_id || p?.id || "").trim())
+    .filter(Boolean);
+  return [...new Set<string>(ids)];
+}
+
+function toLegacySessionsBody(rawSessions: unknown): Record<string, any> {
+  if (!rawSessions || typeof rawSessions !== "object" || Array.isArray(rawSessions)) return {};
+  const out = { ...(rawSessions as Record<string, any>) };
+  delete (out as any).schemaVersion;
+  return out;
+}
+
+async function loadWorkerCycleArtifact(stateDir: string): Promise<{ payload: Record<string, any>; migrated: boolean }> {
+  const artifactPath = path.join(stateDir, WORKER_CYCLE_ARTIFACTS_FILE);
+  const raw = await readJsonSafe(artifactPath);
+  if (!raw.ok) {
+    return {
+      payload: {
+        schemaVersion: 1,
+        updatedAt: new Date().toISOString(),
+        latestCycleId: null,
+        cycles: {},
+      },
+      migrated: false,
+    };
+  }
+  const migrated = migrateWorkerCycleArtifacts(raw.data);
+  if (!migrated.ok || !migrated.data) {
+    warn(
+      `[orchestrator] worker cycle artifact invalid; resetting canonical file: reason=${migrated.reason} fromVersion=${String(migrated.fromVersion)}`
+    );
+    return {
+      payload: {
+        schemaVersion: 1,
+        updatedAt: new Date().toISOString(),
+        latestCycleId: null,
+        cycles: {},
+      },
+      migrated: false,
+    };
+  }
+  return { payload: migrated.data as Record<string, any>, migrated: migrated.reason === "ok" };
+}
+
+async function persistWorkerDispatchArtifacts(config, input: {
+  cycleId: string;
+  role: string;
+  phase: "start" | "complete" | "recovery";
+  batch?: any;
+  workerResult?: any;
+  recoveredSignal?: string;
+}) {
+  const stateDir = config?.paths?.stateDir || "state";
+  const nowIso = new Date().toISOString();
+  const cycleId = normalizeCycleId(input.cycleId);
+  const role = String(input.role || "").trim();
+  if (!role) return;
+
+  const loaded = await loadWorkerCycleArtifact(stateDir);
+  const payload = loaded.payload;
+  const cycles = payload.cycles && typeof payload.cycles === "object" && !Array.isArray(payload.cycles)
+    ? payload.cycles as Record<string, any>
+    : {};
+  payload.cycles = cycles;
+  payload.latestCycleId = cycleId;
+  payload.updatedAt = nowIso;
+
+  const existing = cycles[cycleId] && typeof cycles[cycleId] === "object" ? cycles[cycleId] : {};
+  const cycleRecord: WorkerCycleRecord = {
+    cycleId,
+    status: String(existing.status || "dispatching"),
+    updatedAt: nowIso,
+    workerSessions: existing.workerSessions && typeof existing.workerSessions === "object" && !Array.isArray(existing.workerSessions)
+      ? existing.workerSessions
+      : {},
+    workerActivity: existing.workerActivity && typeof existing.workerActivity === "object" && !Array.isArray(existing.workerActivity)
+      ? existing.workerActivity
+      : {},
+    completedTaskIds: Array.isArray(existing.completedTaskIds)
+      ? [...new Set<string>((existing.completedTaskIds as unknown[]).map((id) => String(id || "").trim()).filter(Boolean))]
+      : [],
+  };
+
+  if (!cycleRecord.workerActivity[role]) cycleRecord.workerActivity[role] = [];
+  if (!cycleRecord.workerSessions[role]) cycleRecord.workerSessions[role] = {};
+  const session = cycleRecord.workerSessions[role];
+  const taskIds = extractPlanTaskIds(input.batch);
+
+  if (input.phase === "start") {
+    session.status = "working";
+    session.startedAt = nowIso;
+    session.updatedAt = nowIso;
+    cycleRecord.workerActivity[role].push({
+      at: nowIso,
+      status: "working",
+      task: String(input.batch?.task || input.batch?.title || ""),
+      taskIds,
+      wave: Number.isFinite(Number(input.batch?.wave)) ? Number(input.batch.wave) : null,
+    });
+  } else if (input.phase === "complete") {
+    const status = String(input.workerResult?.status || "unknown").toLowerCase();
+    session.status = "idle";
+    session.lastStatus = status;
+    session.updatedAt = nowIso;
+    if (!session.startedAt) session.startedAt = null;
+    cycleRecord.workerActivity[role].push({
+      at: nowIso,
+      status,
+      task: String(input.batch?.task || input.batch?.title || ""),
+      taskIds,
+      pr: input.workerResult?.pr || null,
+      dispatchBlockReason: input.workerResult?.dispatchBlockReason || null,
+      wave: Number.isFinite(Number(input.batch?.wave)) ? Number(input.batch.wave) : null,
+    });
+    if (status === "done" || status === "success") {
+      cycleRecord.completedTaskIds = [...new Set([...cycleRecord.completedTaskIds, ...taskIds])];
+    }
+  } else {
+    session.status = "idle";
+    session.updatedAt = nowIso;
+    cycleRecord.workerActivity[role].push({
+      at: nowIso,
+      status: "recovered",
+      signal: String(input.recoveredSignal || "stale"),
+      taskIds: [],
+      wave: null,
+    });
+  }
+
+  cycles[cycleId] = cycleRecord;
+  await writeJson(path.join(stateDir, WORKER_CYCLE_ARTIFACTS_FILE), payload);
+
+  // Compatibility snapshots for existing consumers.
+  const sessionsPath = path.join(stateDir, "worker_sessions.json");
+  const legacySessionsRaw = await readJson(sessionsPath, {});
+  const legacySessions = toLegacySessionsBody(legacySessionsRaw);
+  legacySessions[role] = cycleRecord.workerSessions[role];
+  await writeJson(sessionsPath, addSchemaVersion(legacySessions, STATE_FILE_TYPE.WORKER_SESSIONS));
+
+  const workerPath = path.join(stateDir, roleToWorkerStateFile(role));
+  const existingWorkerState = await readJson(workerPath, {});
+  const existingActivity = Array.isArray(existingWorkerState?.activityLog) ? existingWorkerState.activityLog : [];
+  const latestEntry = cycleRecord.workerActivity[role][cycleRecord.workerActivity[role].length - 1] || null;
+  const nextActivity = latestEntry ? [...existingActivity, latestEntry] : existingActivity;
+  await writeJson(workerPath, {
+    ...(existingWorkerState && typeof existingWorkerState === "object" ? existingWorkerState : {}),
+    status: cycleRecord.workerSessions[role]?.status || "idle",
+    startedAt: cycleRecord.workerSessions[role]?.startedAt || null,
+    updatedAt: nowIso,
+    activityLog: nextActivity.slice(-200),
+  });
+}
+
 function getLastWorkerReportedStatus(session, role) {
   const history = Array.isArray(session?.history) ? session.history : [];
   for (let i = history.length - 1; i >= 0; i -= 1) {
@@ -1717,14 +1901,16 @@ function getLastWorkerReportedStatus(session, role) {
 
 async function recoverStaleWorkerSessions(config, stateDir, sessions) {
   const recoveredRoles = [];
+  const recoveredSignals = new Map<string, string>();
 
   for (const [role, session] of Object.entries(sessions || {}) as Array<[string, WorkerSessionRecord]>) {
     if (session?.status !== "working") continue;
 
     const reportedStatus = getLastWorkerReportedStatus(session, role);
-    if (["done", "partial", "blocked"].includes(reportedStatus)) {
+    if (isTerminalWorkerStatus(reportedStatus)) {
       session.status = "idle";
       recoveredRoles.push(role);
+      recoveredSignals.set(role, reportedStatus || "terminal-history");
       continue;
     }
   }
@@ -1732,6 +1918,8 @@ async function recoverStaleWorkerSessions(config, stateDir, sessions) {
   if (recoveredRoles.length === 0) return false;
 
   await writeJson(path.join(stateDir, "worker_sessions.json"), addSchemaVersion(sessions, STATE_FILE_TYPE.WORKER_SESSIONS));
+  const pipeline = await readPipelineProgress(config).catch(() => null);
+  const cycleId = normalizeCycleId(pipeline?.startedAt);
 
   for (const role of recoveredRoles) {
     const workerStatePath = path.join(stateDir, roleToWorkerStateFile(role));
@@ -1740,6 +1928,12 @@ async function recoverStaleWorkerSessions(config, stateDir, sessions) {
       workerState.status = "idle";
       await writeJson(workerStatePath, workerState);
     }
+    await persistWorkerDispatchArtifacts(config, {
+      cycleId,
+      role,
+      phase: "recovery",
+      recoveredSignal: recoveredSignals.get(role) || "stale",
+    });
   }
 
   await appendProgress(
@@ -1896,6 +2090,26 @@ function resolveWorkerRole(logicalRole, taskKind, taskText = "") {
   return IMPLEMENTATION_WORKER;
 }
 
+async function resolveRoleWithAccessFallback(config, roleName) {
+  const normalizedRole = String(roleName || "").toLowerCase().trim();
+  const canonicalRole = nameToSlug(normalizedRole) || normalizedRole;
+  if (!canonicalRole || canonicalRole === IMPLEMENTATION_WORKER) return roleName;
+
+  const stateDir = config?.paths?.stateDir || "state";
+  const queueState = await readJson(path.join(stateDir, "escalation_queue.json"), { entries: [] });
+  const entries = Array.isArray(queueState?.entries) ? queueState.entries : [];
+  const hasUnresolvedAccessBlocked = entries.some((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    if (entry.resolved === true) return false;
+    const roleRaw = String(entry.role || "").toLowerCase().trim();
+    const role = nameToSlug(roleRaw) || roleRaw;
+    const cls = String(entry.blockingReasonClass || "").toUpperCase().trim();
+    return role === canonicalRole && cls === "ACCESS_BLOCKED";
+  });
+
+  return hasUnresolvedAccessBlocked ? IMPLEMENTATION_WORKER : roleName;
+}
+
 // ── Dispatch a single worker from a Prometheus plan item ───────────────────
 
 async function dispatchWorker(config, plan) {
@@ -1925,7 +2139,14 @@ async function dispatchWorker(config, plan) {
   const task = batchPlans
     ? `Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exact blocker.\n\nOrdered steps:\n${orderedBatchLines}`
     : plan.task;
-  const roleName = resolveWorkerRole(logicalRole, taskKind, task);
+  const resolvedRoleName = resolveWorkerRole(logicalRole, taskKind, task);
+  const roleName = await resolveRoleWithAccessFallback(config, resolvedRoleName);
+  if (roleName !== resolvedRoleName) {
+    await appendProgress(
+      config,
+      `[DISPATCH] Access fallback reroute: ${resolvedRoleName} -> ${roleName} (unresolved ACCESS_BLOCKED escalation)`
+    );
+  }
   const contextBlocks: string[] = [];
   if (batchPlans) {
     for (let i = 0; i < batchPlans.length; i += 1) {
@@ -2113,6 +2334,50 @@ function hasExplicitPlanDependencies(plan: any): boolean {
   const dependencies = Array.isArray(plan?.dependencies) ? plan.dependencies : [];
   const waveDepends = Array.isArray(plan?.waveDepends) ? plan.waveDepends : [];
   return dependsOn.length > 0 || dependencies.length > 0 || waveDepends.length > 0;
+}
+
+function getPlanOrderedStepComplexity(plan: any): number {
+  const orderedSteps = Array.isArray(plan?.orderedSteps) ? plan.orderedSteps.length
+    : Array.isArray(plan?.acceptance_criteria) ? plan.acceptance_criteria.length
+    : 1;
+  return Math.max(1, Number.isFinite(Number(orderedSteps)) ? Number(orderedSteps) : 1);
+}
+
+function splitBatchByOrderedStepComplexity(batch: any, cap: number): any[] {
+  const plans = Array.isArray(batch?.plans) ? batch.plans : [];
+  if (plans.length === 0) return [batch];
+  const maxSteps = Math.max(1, Math.floor(cap));
+  const chunks: any[][] = [];
+  let current: any[] = [];
+  let currentCost = 0;
+
+  for (const plan of plans) {
+    const cost = getPlanOrderedStepComplexity(plan);
+    if (cost > maxSteps) {
+      return [];
+    }
+    if (current.length > 0 && currentCost + cost > maxSteps) {
+      chunks.push(current);
+      current = [plan];
+      currentCost = cost;
+    } else {
+      current.push(plan);
+      currentCost += cost;
+    }
+  }
+  if (current.length > 0) chunks.push(current);
+  if (chunks.length <= 1) return [batch];
+
+  return chunks.map((chunk, idx) => {
+    const orderedStepCount = chunk.reduce((sum, p) => sum + getPlanOrderedStepComplexity(p), 0);
+    return {
+      ...batch,
+      plans: chunk,
+      orderedStepCount,
+      bundleIndex: Number(batch?.bundleIndex || 1) + idx,
+      _orderedStepComplexitySplit: true,
+    };
+  });
 }
 
 function tightenRoleWaveBatches(workerBatches: any[], config: any): { batches: any[]; mergedCount: number } {
@@ -2995,6 +3260,17 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     dependencies: Array.isArray(p.dependencies) ? p.dependencies : [],
   }));
 
+  // Bind deterministic named verification targets before dispatch admission.
+  // This prevents generic verification commands from reaching worker calls when
+  // a specific target already exists in verification_commands.
+  for (const plan of plans as any[]) {
+    const boundTarget = resolveNamedVerificationTarget(plan);
+    if (boundTarget) {
+      plan.verification = boundTarget;
+      plan._boundVerificationTarget = boundTarget;
+    }
+  }
+
   // Funnel tracking: capture approved count before quality/freeze gates reduce plans.
   const funnelApprovedCount: number = plans.length;
 
@@ -3640,23 +3916,41 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     );
   }
 
-  // ── Anti-overbundle admission gate: warn on over-complex batches ─────────
-  // After batching, check if any batch exceeds the ordered-step coherence limit.
-  // This is an observable warning gate (not a hard block at this stage) — the EV
-  // penalty in the optimizer already deprioritizes such batches upstream.
-  try {
-    for (const batch of workerBatches) {
-      const stepCount = Number((batch as any).orderedStepCount ?? 0);
-      if (stepCount > OVERBUNDLE_STEPS_THRESHOLD) {
-        await appendProgress(config,
-          `[BATCH_PLANNER][OVERBUNDLE] Batch for role=${
-            (batch as any).role
-          } wave=${(batch as any).wave ?? "?"} has orderedStepCount=${stepCount} exceeding threshold=${OVERBUNDLE_STEPS_THRESHOLD} — consider splitting for coherence`
-        );
+  // ── Ordered-step complexity hard admission (split-or-reject) ─────────────
+  // Convert overbundle from advisory telemetry into an explicit dispatch guard.
+  // Any batch above OVERBUNDLE_STEPS_THRESHOLD is split deterministically by
+  // ordered-step cost. If a single plan exceeds the threshold, dispatch is blocked.
+  {
+    const complexityAdjusted: any[] = [];
+    let splitCount = 0;
+    let blockedReason = "";
+    for (const batch of workerBatches as any[]) {
+      const stepCount = Number(batch?.orderedStepCount ?? 0);
+      if (stepCount <= OVERBUNDLE_STEPS_THRESHOLD) {
+        complexityAdjusted.push(batch);
+        continue;
       }
+      const split = splitBatchByOrderedStepComplexity(batch, OVERBUNDLE_STEPS_THRESHOLD);
+      if (split.length === 0) {
+        const role = String(batch?.role || "unknown");
+        blockedReason = `ordered_step_complexity_unsplittable:${role}:${stepCount}>${OVERBUNDLE_STEPS_THRESHOLD}`;
+        break;
+      }
+      if (split.length > 1) splitCount += split.length - 1;
+      complexityAdjusted.push(...split);
     }
-  } catch {
-    // advisory — never block dispatch on overbundle check error
+    if (blockedReason) {
+      await appendProgress(config, `[BATCH_PLANNER][OVERBUNDLE] Dispatch blocked — ${blockedReason}`);
+      await safeUpdatePipelineProgress(config, "cycle_complete", `Dispatch blocked by ordered-step complexity gate: ${blockedReason}`);
+      return;
+    }
+    if (splitCount > 0) {
+      workerBatches = complexityAdjusted as typeof _rawWorkerBatches;
+      await appendProgress(
+        config,
+        `[BATCH_PLANNER][OVERBUNDLE] Complexity split applied: +${splitCount} batch(es), threshold=${OVERBUNDLE_STEPS_THRESHOLD}`
+      );
+    }
   }
 
   await safeUpdatePipelineProgress(config, "workers_dispatching", `Dispatching ${workerBatches.length} worker batch(es)`, {
@@ -3697,6 +3991,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   let waveBoundaryStartMs: number | null = null;  // ms timestamp when last wave completed
   let waveBatchCount = 0;                          // batches dispatched in current wave
   const cycleRetryTelemetry = await loadRetryTelemetryContext(config);
+  const dispatchArtifactCycleId = normalizeCycleId((await readPipelineProgress(config).catch(() => null))?.startedAt || cycleStartedAt);
 
   for (const batch of workerBatches) {
     // ── Cooperative cancellation checkpoint ─────────────────────────────────
@@ -3771,6 +4066,12 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       { pendingOutcome: true },
     );
     await appendProgress(config, `[AGENT] » WORKER · ${batch.role} · batch=${workersDone + 1}/${workerBatches.length} · req#${_cycleRequests} this cycle`);
+    await persistWorkerDispatchArtifacts(config, {
+      cycleId: dispatchArtifactCycleId,
+      role: String(batch?.role || ""),
+      phase: "start",
+      batch,
+    });
 
     let workerResult;
     let transientRetries = 0;
@@ -3820,6 +4121,14 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       }
       break;
     }
+
+    await persistWorkerDispatchArtifacts(config, {
+      cycleId: dispatchArtifactCycleId,
+      role: String(batch?.role || ""),
+      phase: "complete",
+      batch,
+      workerResult,
+    });
 
     if (!isDispatchOutcomeSuccessful(workerResult)) {
       markPremiumOutcome(workerPremiumEvent.eventId, false);

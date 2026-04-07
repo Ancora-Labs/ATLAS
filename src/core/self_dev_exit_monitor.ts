@@ -92,6 +92,8 @@ export interface ExitThresholds {
   minRoiSuccessRate: number;
   /** Maximum pending benchmark recommendation ratio. */
   maxPendingBenchmarkRatio: number;
+  /** Fresh benchmark entries younger than this are ignored in pending ratio. */
+  benchmarkPendingGraceHours: number;
   /** Maximum open carry-forward backlog ratio. */
   maxOpenBacklogRatio: number;
 }
@@ -105,6 +107,7 @@ export const DEFAULT_EXIT_THRESHOLDS: ExitThresholds = Object.freeze({
   roiDeltaThreshold:       0.10,
   minRoiSuccessRate:       0.55,
   maxPendingBenchmarkRatio: 0.40,
+  benchmarkPendingGraceHours: 6,
   maxOpenBacklogRatio:     0.25,
 });
 
@@ -367,6 +370,7 @@ function resolveExitThresholds(config: Record<string, unknown>): ExitThresholds 
     roiDeltaThreshold:         safeFloat(exitConfig.roiDeltaThreshold,       DEFAULT_EXIT_THRESHOLDS.roiDeltaThreshold),
     minRoiSuccessRate:         safeFloat(exitConfig.minRoiSuccessRate,       DEFAULT_EXIT_THRESHOLDS.minRoiSuccessRate),
     maxPendingBenchmarkRatio:  safeFloat(exitConfig.maxPendingBenchmarkRatio, DEFAULT_EXIT_THRESHOLDS.maxPendingBenchmarkRatio),
+    benchmarkPendingGraceHours: safeFloat(exitConfig.benchmarkPendingGraceHours, DEFAULT_EXIT_THRESHOLDS.benchmarkPendingGraceHours),
     maxOpenBacklogRatio:       safeFloat(exitConfig.maxOpenBacklogRatio,     DEFAULT_EXIT_THRESHOLDS.maxOpenBacklogRatio),
   };
 }
@@ -489,20 +493,33 @@ async function readRoiSeries(config: Record<string, unknown>, windowSize: number
   return { roiEarlyAvg, roiLateAvg, roiDelta, roiSuccessRate };
 }
 
-async function readBenchmarkPendingRatio(config: Record<string, unknown>): Promise<number | null> {
+async function readBenchmarkPendingRatio(
+  config: Record<string, unknown>,
+  thresholds: ExitThresholds,
+): Promise<number | null> {
   const data = await readJson(path.join(stateDir(config), "benchmark_ground_truth.json"), null);
   if (!data || typeof data !== "object") return null;
   const entries = toArray((data as JsonMap).entries);
   if (entries.length === 0) return null;
-  const latest = [...entries].sort((a, b) => {
+  const sorted = [...entries].sort((a, b) => {
     const at = Date.parse(String(a.evaluatedAt || a.createdAt || ""));
     const bt = Date.parse(String(b.evaluatedAt || b.createdAt || ""));
     const av = Number.isFinite(at) ? at : -1;
     const bv = Number.isFinite(bt) ? bt : -1;
     return bv - av;
-  })[0] ?? entries[0];
-  const recs = toArray(latest.recommendations);
-  if (recs.length === 0) return null;
+  });
+
+  const nowMs = Date.now();
+  const graceMs = Math.max(0, thresholds.benchmarkPendingGraceHours) * 60 * 60 * 1000;
+  const matureEntries = sorted.filter((entry) => {
+    const ts = Date.parse(String(entry.evaluatedAt || entry.createdAt || ""));
+    if (!Number.isFinite(ts)) return true;
+    return (nowMs - ts) >= graceMs;
+  });
+  const candidateEntries = matureEntries.length > 0 ? matureEntries : [];
+
+  const recs = candidateEntries.flatMap((entry) => toArray(entry.recommendations));
+  if (recs.length === 0) return 0;
   const unresolved = recs.filter((r) => !isResolvedStatus(r.implementationStatus)).length;
   return unresolved / recs.length;
 }
@@ -586,7 +603,7 @@ export async function evaluateSelfDevExit(
   const [noveltyYield, roi, benchmarkPendingRatio, backlogOpenRatio, analyticsRegressionClean] = await Promise.all([
     readNoveltyYield(config, thresholds.measurementWindow),
     readRoiSeries(config, thresholds.measurementWindow),
-    readBenchmarkPendingRatio(config),
+    readBenchmarkPendingRatio(config, thresholds),
     readBacklogOpenRatio(config),
     readCycleAnalyticsRegressionClean(config),
   ]);

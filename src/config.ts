@@ -139,6 +139,7 @@ export async function loadConfig(): Promise<Config> {
   };
 
   const runtime = {
+    ...(fileConfig.runtime ?? {}),
     copilotAutoCompact: env.copilotAutoCompact
       ? ["1", "true", "yes", "on"].includes(env.copilotAutoCompact.toLowerCase())
       : Boolean(fileConfig?.runtime?.copilotAutoCompact ?? true),

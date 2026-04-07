@@ -398,6 +398,25 @@ export function isNonSpecificVerification(value: string): boolean {
 }
 
 /**
+ * Resolve a deterministic, named verification target from plan fields.
+ * Preference:
+ *   1) plan.verification (if specific)
+ *   2) first specific entry in verification_commands[]
+ * Returns null when no specific target is available.
+ */
+export function resolveNamedVerificationTarget(plan: any): string | null {
+  const direct = String(plan?.verification || "").trim();
+  if (direct && !isNonSpecificVerification(direct)) return direct;
+  const commands = Array.isArray(plan?.verification_commands) ? plan.verification_commands : [];
+  for (const cmd of commands) {
+    const value = String(cmd || "").trim();
+    if (!value) continue;
+    if (!isNonSpecificVerification(value)) return value;
+  }
+  return null;
+}
+
+/**
  * Plan contract violation severity levels.
  * @enum {string}
  */
@@ -1006,13 +1025,16 @@ export function validatePacketBatchAdmission(
   const roleGroups = new Map<string, number>();
   for (const plan of plans) {
     const role = String(plan?.role || "unknown").trim().toLowerCase();
-    roleGroups.set(role, (roleGroups.get(role) ?? 0) + 1);
+    const orderedSteps = Array.isArray(plan?.orderedSteps) ? plan.orderedSteps.length
+      : Array.isArray(plan?.acceptance_criteria) ? plan.acceptance_criteria.length
+      : 1;
+    roleGroups.set(role, (roleGroups.get(role) ?? 0) + Math.max(1, orderedSteps));
   }
 
   const oversizedRoles: string[] = [];
-  for (const [role, count] of roleGroups) {
-    if (count > cap) {
-      oversizedRoles.push(`${role}(${count}>${cap})`);
+  for (const [role, complexity] of roleGroups) {
+    if (complexity > cap) {
+      oversizedRoles.push(`${role}(${complexity}>${cap})`);
     }
   }
 
@@ -1020,7 +1042,7 @@ export function validatePacketBatchAdmission(
     return { blocked: false, reason: null, oversizedRoles: [] };
   }
 
-  const reason = `${PACKET_OVERSIZE_REASON}: role group(s) [${oversizedRoles.join(", ")}] exceed per-role cap of ${cap} — decompose before dispatch`;
+  const reason = `${PACKET_OVERSIZE_REASON}: role group(s) [${oversizedRoles.join(", ")}] exceed per-role ordered-step complexity cap of ${cap} — decompose or split before dispatch`;
   return { blocked: true, reason, oversizedRoles };
 }
 
