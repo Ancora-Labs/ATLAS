@@ -39,6 +39,8 @@ import {
   CANONICAL_EVENT_NAMES,
   buildModelRoutingTelemetry,
   MIN_TELEMETRY_SAMPLE_THRESHOLD,
+  migrateLegacyEvolutionProgressToCompletedTaskIds,
+  WORKER_CYCLE_ARTIFACTS_SCHEMA,
 } from "../../src/core/cycle_analytics.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -138,6 +140,31 @@ describe("CANONICAL_EVENT_NAMES (AC2, AC13)", () => {
   it("contains exactly the 5 SLO timestamp stages", () => {
     const expected = ["jesus_awakening", "jesus_decided", "athena_approved", "workers_dispatching", "cycle_complete"];
     assert.deepEqual([...CANONICAL_EVENT_NAMES], expected);
+  });
+});
+
+describe("migrateLegacyEvolutionProgressToCompletedTaskIds", () => {
+  it("migrates legacy evolution_progress tasks map to canonical completedTaskIds", () => {
+    const migration = migrateLegacyEvolutionProgressToCompletedTaskIds({
+      cycle_id: "cycle-1",
+      tasks: {
+        "T-1": { status: "completed" },
+        "T-2": { status: "in_progress" },
+        "T-3": { status: "done" },
+      },
+    });
+    assert.equal(migration.ok, true);
+    assert.equal(migration.toVersion, WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion);
+    assert.deepEqual(migration.completedTaskIds.sort(), ["T-1", "T-3"]);
+  });
+
+  it("negative path: rejects unknown future schema versions", () => {
+    const migration = migrateLegacyEvolutionProgressToCompletedTaskIds({
+      schemaVersion: WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion + 1,
+      tasks: {},
+    });
+    assert.equal(migration.ok, false);
+    assert.equal(migration.reason, "unknown_future_version");
   });
 });
 

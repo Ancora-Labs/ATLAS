@@ -346,6 +346,91 @@ export function migrateWorkerCycleArtifacts(data: unknown): {
   };
 }
 
+/**
+ * Compatibility migration for legacy evolution_progress-style task maps.
+ * Converts legacy { tasks:{ id:{status} } } payloads into canonical
+ * completedTaskIds used by worker_cycle_artifacts v1 consumers.
+ */
+export function migrateLegacyEvolutionProgressToCompletedTaskIds(data: unknown): {
+  ok: boolean;
+  reason: string;
+  fromVersion: number | null;
+  toVersion: number;
+  completedTaskIds: string[];
+} {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return {
+      ok: false,
+      reason: WORKER_CYCLE_ARTIFACT_MIGRATION_REASON.INVALID_DATA,
+      fromVersion: null,
+      toVersion: WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion,
+      completedTaskIds: [],
+    };
+  }
+
+  const obj = data as Record<string, unknown>;
+  const rawVersion = obj.schemaVersion;
+  const hasVersion = rawVersion !== undefined;
+  const fromVersion = hasVersion && Number.isInteger(Number(rawVersion)) ? Number(rawVersion) : 0;
+  if (hasVersion && (!Number.isInteger(Number(rawVersion)) || Number(rawVersion) < 0)) {
+    return {
+      ok: false,
+      reason: WORKER_CYCLE_ARTIFACT_MIGRATION_REASON.INVALID_DATA,
+      fromVersion: null,
+      toVersion: WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion,
+      completedTaskIds: [],
+    };
+  }
+  if (fromVersion > WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion) {
+    return {
+      ok: false,
+      reason: WORKER_CYCLE_ARTIFACT_MIGRATION_REASON.UNKNOWN_FUTURE_VERSION,
+      fromVersion,
+      toVersion: WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion,
+      completedTaskIds: [],
+    };
+  }
+
+  if (Array.isArray(obj.completedTaskIds)) {
+    return {
+      ok: true,
+      reason: fromVersion === WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion
+        ? WORKER_CYCLE_ARTIFACT_MIGRATION_REASON.ALREADY_CURRENT
+        : WORKER_CYCLE_ARTIFACT_MIGRATION_REASON.OK,
+      fromVersion,
+      toVersion: WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion,
+      completedTaskIds: sanitizeCompletedTaskIds(obj.completedTaskIds),
+    };
+  }
+
+  const taskMap = obj.tasks;
+  if (!taskMap || typeof taskMap !== "object" || Array.isArray(taskMap)) {
+    return {
+      ok: false,
+      reason: WORKER_CYCLE_ARTIFACT_MIGRATION_REASON.INVALID_DATA,
+      fromVersion,
+      toVersion: WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion,
+      completedTaskIds: [],
+    };
+  }
+
+  const completedTaskIds = Object.entries(taskMap as Record<string, unknown>)
+    .filter(([, task]) => {
+      const status = String((task as Record<string, unknown>)?.status || "").toLowerCase().trim();
+      return status === "completed" || status === "done" || status === "success";
+    })
+    .map(([taskId]) => String(taskId || "").trim())
+    .filter(Boolean);
+
+  return {
+    ok: true,
+    reason: WORKER_CYCLE_ARTIFACT_MIGRATION_REASON.OK,
+    fromVersion,
+    toVersion: WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion,
+    completedTaskIds: [...new Set(completedTaskIds)],
+  };
+}
+
 function hasDoneWorkerWithVerificationEvidence(workerResults: unknown): boolean {
   if (!Array.isArray(workerResults)) return false;
   return workerResults.some((item) => {

@@ -12,6 +12,7 @@ import {
   injectCiFailureContextIfMissing,
   applyMemoryTrustFilter,
   computeMemoryHitRatio,
+  isTerminalWorkerStatus,
 } from "../../src/core/worker_runner.js";
 import { isProcessAlive } from "../../src/core/daemon_control.js";
 import { buildRoutingROISummary } from "../../src/core/cycle_analytics.js";
@@ -168,6 +169,16 @@ describe("parseWorkerResponse", () => {
     const raw = "BOX_STATUS=done\nSome text";
     const result = parseWorkerResponse(raw, "");
     assert.equal(result.fullOutput, raw);
+  });
+});
+
+describe("isTerminalWorkerStatus", () => {
+  it("treats recovery artifact status as terminal", () => {
+    assert.equal(isTerminalWorkerStatus("recovered"), true);
+  });
+
+  it("negative path: leaves active statuses non-terminal", () => {
+    assert.equal(isTerminalWorkerStatus("working"), false);
   });
 });
 

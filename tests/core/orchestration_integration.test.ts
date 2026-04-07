@@ -1134,7 +1134,7 @@ describe("canonical telemetry spine — artifact schema and terminal status cove
 
   it("all canonical workerActivity status values are recognized as terminal by isTerminalWorkerStatus", () => {
     // These are the status values written into workerActivity entries in worker_cycle_artifacts.json.
-    const canonicalStatuses = ["done", "success", "skipped", "partial", "blocked", "error", "failed"];
+    const canonicalStatuses = ["done", "success", "skipped", "partial", "blocked", "error", "failed", "recovered"];
     for (const status of canonicalStatuses) {
       assert.ok(isTerminalWorkerStatus(status),
         `Status "${status}" used in canonical artifacts must be terminal`);

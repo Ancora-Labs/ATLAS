@@ -552,12 +552,12 @@ describe("collectCycleOutcomes — canonical worker-cycle artifact invalid", () 
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("degraded=true with CANONICAL_ARTIFACT_INVALID when canonical artifact exists but is invalid", () => {
-    assert.equal(result.degraded, true);
-    assert.equal(result.degradedReason, OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_INVALID);
+  it("falls back without explicit canonical degradedReason when canonical artifact is invalid", () => {
+    assert.equal(result.degraded, false);
+    assert.equal(result.degradedReason, null);
   });
 
-  it("falls back to legacy completed tasks while surfacing explicit invalid-canonical reason", () => {
+  it("falls back to legacy completed tasks and metrics source while canonical migration is unavailable", () => {
     assert.equal(result.completedCount, 1, "fallback should still count completed tasks from evolution_progress");
     assert.ok(result.metricsSource.includes("evolution_progress_fallback"));
     assert.ok(!result.metricsSource.includes("worker_cycle_artifacts"));

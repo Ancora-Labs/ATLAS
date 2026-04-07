@@ -1951,17 +1951,12 @@ async function recoverStaleWorkerSessions(config, stateDir, sessions) {
 
   if (recoveredRoles.length === 0) return false;
 
-  await writeJson(path.join(stateDir, "worker_sessions.json"), addSchemaVersion(sessions, STATE_FILE_TYPE.WORKER_SESSIONS));
   const pipeline = await readPipelineProgress(config).catch(() => null);
   const cycleId = normalizeCycleId(pipeline?.startedAt);
 
   for (const role of recoveredRoles) {
-    const workerStatePath = path.join(stateDir, roleToWorkerStateFile(role));
-    const workerState = await readJson(workerStatePath, null);
-    if (workerState && workerState.status === "working") {
-      workerState.status = "idle";
-      await writeJson(workerStatePath, workerState);
-    }
+    // Recovery updates flow through the canonical artifact write path so
+    // session/activity state transitions stay atomic per role transition.
     await persistWorkerDispatchArtifacts(config, {
       cycleId,
       role,

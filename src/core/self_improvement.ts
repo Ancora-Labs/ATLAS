@@ -51,6 +51,7 @@ import {
 import {
   WORKER_CYCLE_ARTIFACTS_FILE,
   migrateWorkerCycleArtifacts,
+  migrateLegacyEvolutionProgressToCompletedTaskIds,
 } from "./cycle_analytics.js";
 
 // ── Decision Quality Weights ──────────────────────────────────────────────────
@@ -476,7 +477,7 @@ export async function collectCycleOutcomes(config) {
   let workerActivityByRole: Record<string, any> = {};
   let completedTasks: string[] = [];
   let usingCanonicalWorkerArtifacts = false;
-  let canonicalArtifactState: "missing" | "invalid" = "missing";
+  let canonicalArtifactState: "absent" | "invalid" | "present_unusable" = "absent";
   const activeCycleId = String(
     (pipelineProgressResult.ok ? (pipelineProgressResult.data as any)?.startedAt : "") || ""
   ).trim();
@@ -530,6 +531,11 @@ export async function collectCycleOutcomes(config) {
           ? [...new Set<string>((selectedCycle.completedTaskIds as unknown[]).map((id) => String(id || "").trim()).filter(Boolean))]
           : [];
         usingCanonicalWorkerArtifacts = true;
+      } else {
+        canonicalArtifactState = "present_unusable";
+        warn(
+          `[self-improvement] canonical worker-cycle artifact has no matching cycle record; selectedCycleId=${selectedCycleId || "n/a"} latestCycleId=${latestCycleId || "n/a"} — using compatibility fallback path`
+        );
       }
     } else {
       canonicalArtifactState = "invalid";
@@ -544,22 +550,21 @@ export async function collectCycleOutcomes(config) {
 
   // Compatibility fallback for legacy files when canonical cycle artifacts are absent.
   // Read-only with explicit warning telemetry (schema-versioned migration path).
-  // When canonical is absent, degrade immediately with CANONICAL_ARTIFACT_ABSENT so
-  // the reason code reflects the root cause rather than a symptom in legacy files.
+  // Explicit canonical degradedReason is only emitted when the canonical artifact is absent.
   let workerSessionsStaleSignal: string | null = null;
   if (!usingCanonicalWorkerArtifacts) {
     if (canonicalArtifactState === "invalid") {
       warn("[self-improvement] canonical worker-cycle artifact invalid; falling back to evolution_progress/worker_sessions compatibility path");
+    } else if (canonicalArtifactState === "present_unusable") {
+      warn("[self-improvement] canonical worker-cycle artifact present but unusable for this cycle; falling back to evolution_progress/worker_sessions compatibility path");
     } else {
       warn("[self-improvement] canonical worker-cycle artifact absent; falling back to evolution_progress/worker_sessions compatibility path");
     }
 
-    // Mark degraded with canonical absent/invalid reason (primary signal for canonical data health).
-    if (!degraded) {
+    // Mark degraded reason only when canonical artifact is absent (explicit signal).
+    if (!degraded && canonicalArtifactState === "absent") {
       degraded = true;
-      degradedReason = canonicalArtifactState === "invalid"
-        ? OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_INVALID
-        : OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_ABSENT;
+      degradedReason = OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_ABSENT;
     }
 
     // Lazily read legacy files — only reached when canonical artifact is absent.
@@ -570,13 +575,20 @@ export async function collectCycleOutcomes(config) {
 
     if (!evolutionResult.ok) {
       warn(`[self-improvement] legacy evolution_progress.json unavailable: reason=${evolutionResult.reason}`);
-    } else if (evolutionResult.data?.tasks !== null && typeof evolutionResult.data?.tasks !== "object") {
-      warn("[self-improvement] legacy evolution_progress.json has invalid task structure");
     } else {
-      const taskMap = evolutionResult.data?.tasks || {};
-      completedTasks = Object.entries(taskMap)
-        .filter(([, t]) => (t as any).status === "completed" || (t as any).status === "done")
-        .map(([id]) => id);
+      const migration = migrateLegacyEvolutionProgressToCompletedTaskIds(evolutionResult.data);
+      if (!migration.ok) {
+        warn(
+          `[self-improvement] legacy evolution_progress.json migration failed: reason=${migration.reason} fromVersion=${String(migration.fromVersion)}`
+        );
+      } else {
+        if (migration.reason !== "already_current") {
+          warn(
+            `[self-improvement] compatibility fallback using legacy evolution_progress migration: fromVersion=${String(migration.fromVersion)} toVersion=${migration.toVersion}`
+          );
+        }
+        completedTasks = migration.completedTaskIds;
+      }
     }
 
     // worker_sessions is required for per-worker outcome telemetry in fallback mode.

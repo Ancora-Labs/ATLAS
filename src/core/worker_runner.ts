@@ -187,6 +187,7 @@ const TERMINAL_WORKER_STATUSES = new Set([
   "blocked",
   "error",
   "failed",
+  "recovered",
 ]);
 
 export function isTerminalWorkerStatus(status: unknown): boolean {
