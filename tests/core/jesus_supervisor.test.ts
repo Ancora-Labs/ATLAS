@@ -26,7 +26,13 @@ import {
   QUEUE_VIABILITY_MIN_COMPLETION_RATE,
 } from "../../src/core/pipeline_progress.js";
 import { recordCapabilityExecution } from "../../src/core/state_tracker.js";
-import { buildEvent, EVENT_DOMAIN, EVENTS, VALID_EVENT_NAMES } from "../../src/core/event_schema.js";
+import {
+  buildEvent,
+  EVENT_DOMAIN,
+  EVENTS,
+  JESUS_SOFT_TIMEOUT_POLICY_CONTRACT,
+  VALID_EVENT_NAMES,
+} from "../../src/core/event_schema.js";
 
 // ── Shared fixtures ────────────────────────────────────────────────────────────
 
@@ -904,7 +910,10 @@ describe("jesus_supervisor — fallback activation event contract", () => {
 
     assert.equal(event.event, EVENTS.POLICY_JESUS_FALLBACK_ACTIVATED);
     assert.equal(event.domain, EVENT_DOMAIN.POLICY);
-    assert.equal(event.payload.softTimeoutReached, true);
+    assert.equal(
+      event.payload.softTimeoutReached,
+      JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.fallbackActivated.softTimeoutReached,
+    );
   });
 
   it("negative path: throws when fallback activation event uses an invalid domain", () => {
@@ -952,7 +961,7 @@ describe("jesus_supervisor — soft-timeout cutoff event contract", () => {
 
     assert.equal(event.event, EVENTS.POLICY_JESUS_SOFT_TIMEOUT_CUTOFF);
     assert.equal(event.domain, EVENT_DOMAIN.POLICY);
-    assert.equal(event.payload.softTimeoutReached, false,
+    assert.equal(event.payload.softTimeoutReached, JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.softTimeoutCutoff.softTimeoutReached,
       "cutoff fires because soft-timeout was NOT reached — field must be false");
     assert.equal(event.payload.tier, "T3");
     assert.equal(event.payload.elapsedMsAtCutoff, 420000);
@@ -1032,9 +1041,9 @@ describe("jesus_supervisor — soft-timeout cutoff event contract", () => {
 
     assert.notEqual(cutoffEvent.event, fallbackEvent.event,
       "cutoff and fallback activation must be distinct canonical events");
-    assert.equal(cutoffEvent.payload.softTimeoutReached, false,
+    assert.equal(cutoffEvent.payload.softTimeoutReached, JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.softTimeoutCutoff.softTimeoutReached,
       "cutoff must carry softTimeoutReached=false");
-    assert.equal(fallbackEvent.payload.softTimeoutReached, true,
+    assert.equal(fallbackEvent.payload.softTimeoutReached, JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.fallbackActivated.softTimeoutReached,
       "fallback activation must carry softTimeoutReached=true");
   });
 

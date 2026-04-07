@@ -38,6 +38,7 @@ import {
   EVENT_NAME_PATTERN,
   EVENT_DOMAIN,
   EVENTS,
+  JESUS_SOFT_TIMEOUT_POLICY_CONTRACT,
   VALID_EVENT_NAMES,
   ORCHESTRATION_LOOP_STEPS,
   SENSITIVE_FIELD_DENYLIST,
@@ -639,6 +640,51 @@ describe("Task 8 — POLICY_PROVIDER_FALLBACK_DECISION typed event", () => {
     }
     assert.ok(err, "must throw when domain is invalid");
     assert.equal((err as NodeJS.ErrnoException).code, "INVALID_DOMAIN");
+  });
+});
+
+describe("Task 8 — Jesus soft-timeout policy contract", () => {
+  it("is frozen and points to canonical policy event names", () => {
+    assert.ok(Object.isFrozen(JESUS_SOFT_TIMEOUT_POLICY_CONTRACT));
+    assert.equal(
+      JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.fallbackActivated.event,
+      EVENTS.POLICY_JESUS_FALLBACK_ACTIVATED,
+    );
+    assert.equal(
+      JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.softTimeoutCutoff.event,
+      EVENTS.POLICY_JESUS_SOFT_TIMEOUT_CUTOFF,
+    );
+  });
+
+  it("encodes deterministic softTimeoutReached semantics", () => {
+    assert.equal(JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.fallbackActivated.softTimeoutReached, true);
+    assert.equal(JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.softTimeoutCutoff.softTimeoutReached, false);
+  });
+
+  it("buildEvent can carry contract values without schema rejection", () => {
+    const fallbackEvt = buildEvent(
+      JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.fallbackActivated.event,
+      EVENT_DOMAIN.POLICY,
+      "jesus-soft-contract-fallback-001",
+      { softTimeoutReached: JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.fallbackActivated.softTimeoutReached },
+    );
+    const cutoffEvt = buildEvent(
+      JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.softTimeoutCutoff.event,
+      EVENT_DOMAIN.POLICY,
+      "jesus-soft-contract-cutoff-001",
+      { softTimeoutReached: JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.softTimeoutCutoff.softTimeoutReached },
+    );
+    assert.equal(fallbackEvt.payload.softTimeoutReached, true);
+    assert.equal(cutoffEvt.payload.softTimeoutReached, false);
+  });
+
+  it("negative: contract object is immutable", () => {
+    assert.throws(
+      () => {
+        (JESUS_SOFT_TIMEOUT_POLICY_CONTRACT as any).fallbackActivated.softTimeoutReached = false;
+      },
+      /read only|Cannot assign/i,
+    );
   });
 });
 

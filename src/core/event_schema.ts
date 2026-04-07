@@ -162,6 +162,23 @@ export const EVENTS = Object.freeze({
   POLICY_JESUS_SOFT_TIMEOUT_CUTOFF:  "box.v1.policy.jesusSoftTimeoutCutoff",
 });
 
+/**
+ * Deterministic soft-timeout semantics for Jesus fallback routing analytics.
+ *
+ * - fallbackActivated: emitted only when fallback invocation actually proceeds.
+ * - softTimeoutCutoff: emitted when fallback tier is skipped before invocation.
+ */
+export const JESUS_SOFT_TIMEOUT_POLICY_CONTRACT = Object.freeze({
+  fallbackActivated: Object.freeze({
+    event: EVENTS.POLICY_JESUS_FALLBACK_ACTIVATED,
+    softTimeoutReached: true,
+  }),
+  softTimeoutCutoff: Object.freeze({
+    event: EVENTS.POLICY_JESUS_SOFT_TIMEOUT_CUTOFF,
+    softTimeoutReached: false,
+  }),
+});
+
 /** Flat set of all valid event name strings — for O(1) lookup. */
 export const VALID_EVENT_NAMES = Object.freeze(new Set(Object.values(EVENTS)));
 

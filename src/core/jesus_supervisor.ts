@@ -32,7 +32,7 @@ import {
   computeCalibrationRecord,
   appendCalibrationHistory,
 } from "./jesus_calibration.js";
-import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
+import { buildSpanEvent, EVENTS, EVENT_DOMAIN, JESUS_SOFT_TIMEOUT_POLICY_CONTRACT, SPAN_CONTRACT } from "./event_schema.js";
 import { computeQueueViability } from "./pipeline_progress.js";
 import { resolveJesusFallbackModel, ROUTING_REASON } from "./model_policy.js";
 
@@ -921,7 +921,12 @@ ${workersList}`;
     { timeoutMs: jesusTimeoutMs, model: fallbackModel, label: "T3" },
   ];
   const tiers = ALL_TIERS.slice(0, Math.min(maxRetries + 1, ALL_TIERS.length))
-    .map((tier) => ({ ...tier, softTimeoutGated: false }));
+    .map((tier) => ({
+      ...tier,
+      // Every fallback-model tier is soft-timeout gated so activation semantics
+      // stay deterministic: no fallback call before the cutoff is reached.
+      softTimeoutGated: tier.model !== jesusModel,
+    }));
   if (!tiers.some((tier) => tier.model !== jesusModel) && fallbackModel !== jesusModel) {
     // Keep the existing T1/T2 retry profile, but guarantee a deterministic
     // fallback path once the soft-timeout threshold has been crossed.
@@ -947,10 +952,37 @@ ${workersList}`;
       const tier = tiers[ti];
       const isEscalation = ti > 0;
 
+      if (tier.softTimeoutGated) {
+        const elapsedMsBeforeFallback = Date.now() - aiCallStartedAt;
+        if (!hasReachedJesusSoftTimeout(elapsedMsBeforeFallback, jesusSoftTimeoutMs)) {
+          // Soft-timeout threshold not yet crossed — skip this fallback tier (cutoff).
+          // Emit a deterministic analytics event so the cutoff decision is observable.
+          emitEvent(EVENTS.POLICY_JESUS_SOFT_TIMEOUT_CUTOFF, EVENT_DOMAIN.POLICY, latencyWarningCorrelationId, {
+            source: "jesus_supervisor",
+            tier: tier.label,
+            softTimeoutMs: jesusSoftTimeoutMs,
+            elapsedMsAtCutoff: elapsedMsBeforeFallback,
+            softTimeoutReached: JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.softTimeoutCutoff.softTimeoutReached,
+            baseModel: jesusModel,
+            fallbackModel: tier.model,
+            hardTimeoutMs: jesusTimeoutMs,
+          });
+          chatLog(stateDir, jesusName,
+            `[LIVE] tier=${tier.label} soft-timeout cutoff: elapsed=${elapsedMsBeforeFallback}ms < softTimeoutMs=${jesusSoftTimeoutMs}ms — fallback skipped`
+          );
+          rawResult = { status: -1, stdout: "", stderr: "soft-timeout cutoff not reached", timedOut: false };
+          finalTierLabel = tier.label;
+          finalTierModel = tier.model;
+          break;
+        }
+      }
+
       if (isEscalation) {
         const prevTier = tiers[ti - 1];
         const elapsedMsAtEscalation = Date.now() - aiCallStartedAt;
-        const softTimeoutReached = hasReachedJesusSoftTimeout(elapsedMsAtEscalation, jesusSoftTimeoutMs);
+        const softTimeoutReached = tier.model !== jesusModel
+          ? true
+          : hasReachedJesusSoftTimeout(elapsedMsAtEscalation, jesusSoftTimeoutMs);
         const routingReason = tier.model !== jesusModel ? ROUTING_REASON.JESUS_LATENCY_FALLBACK : "JESUS_LATENCY_ESCALATION";
         await appendProgress(config,
           `[JESUS] ${prevTier.label} timed out after ${Math.floor(prevTier.timeoutMs / 1000)}s — escalating to ${tier.label} (timeout=${Math.floor(tier.timeoutMs / 1000)}s model=${tier.model} reason=${routingReason})`
@@ -982,38 +1014,13 @@ ${workersList}`;
             toTier: tier.label,
             softTimeoutMs: jesusSoftTimeoutMs,
             elapsedMsAtActivation: elapsedMsAtEscalation,
-            softTimeoutReached,
+            softTimeoutReached: JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.fallbackActivated.softTimeoutReached,
             hardTimeoutMs: jesusTimeoutMs,
             routingReason,
           });
           warn(
             `[jesus_supervisor] fallback model activated after latency escalation: baseModel=${jesusModel} fallbackModel=${tier.model} tier=${tier.label} softTimeoutReached=${softTimeoutReached}`
           );
-        }
-      }
-
-      if (tier.softTimeoutGated) {
-        const elapsedMsBeforeFallback = Date.now() - aiCallStartedAt;
-        if (!hasReachedJesusSoftTimeout(elapsedMsBeforeFallback, jesusSoftTimeoutMs)) {
-          // Soft-timeout threshold not yet crossed — skip this fallback tier (cutoff).
-          // Emit a deterministic analytics event so the cutoff decision is observable.
-          emitEvent(EVENTS.POLICY_JESUS_SOFT_TIMEOUT_CUTOFF, EVENT_DOMAIN.POLICY, latencyWarningCorrelationId, {
-            source: "jesus_supervisor",
-            tier: tier.label,
-            softTimeoutMs: jesusSoftTimeoutMs,
-            elapsedMsAtCutoff: elapsedMsBeforeFallback,
-            softTimeoutReached: false,
-            baseModel: jesusModel,
-            fallbackModel: tier.model,
-            hardTimeoutMs: jesusTimeoutMs,
-          });
-          chatLog(stateDir, jesusName,
-            `[LIVE] tier=${tier.label} soft-timeout cutoff: elapsed=${elapsedMsBeforeFallback}ms < softTimeoutMs=${jesusSoftTimeoutMs}ms — fallback skipped`
-          );
-          rawResult = { status: -1, stdout: "", stderr: "soft-timeout cutoff not reached", timedOut: false };
-          finalTierLabel = tier.label;
-          finalTierModel = tier.model;
-          break;
         }
       }
 
