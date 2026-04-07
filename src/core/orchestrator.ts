@@ -1782,6 +1782,23 @@ async function loadWorkerCycleArtifact(stateDir: string): Promise<{ payload: Rec
   return { payload: migrated.data as Record<string, any>, migrated: migrated.reason === "ok" };
 }
 
+let workerArtifactWriteQueue: Promise<void> = Promise.resolve();
+
+async function withWorkerArtifactWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prior = workerArtifactWriteQueue;
+  let release: (() => void) | null = null;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  workerArtifactWriteQueue = prior.then(() => gate, () => gate);
+  await prior;
+  try {
+    return await fn();
+  } finally {
+    if (release) release();
+  }
+}
+
 async function persistWorkerDispatchArtifacts(config, input: {
   cycleId: string;
   role: string;
@@ -1796,110 +1813,112 @@ async function persistWorkerDispatchArtifacts(config, input: {
   const role = String(input.role || "").trim();
   if (!role) return;
 
-  const loaded = await loadWorkerCycleArtifact(stateDir);
-  const payload = loaded.payload;
-  const cycles = payload.cycles && typeof payload.cycles === "object" && !Array.isArray(payload.cycles)
-    ? payload.cycles as Record<string, any>
-    : {};
-  payload.cycles = cycles;
-  payload.latestCycleId = cycleId;
-  payload.updatedAt = nowIso;
+  await withWorkerArtifactWriteLock(async () => {
+    const loaded = await loadWorkerCycleArtifact(stateDir);
+    const payload = loaded.payload;
+    const cycles = payload.cycles && typeof payload.cycles === "object" && !Array.isArray(payload.cycles)
+      ? payload.cycles as Record<string, any>
+      : {};
+    payload.cycles = cycles;
+    payload.latestCycleId = cycleId;
+    payload.updatedAt = nowIso;
 
-  const existing = cycles[cycleId] && typeof cycles[cycleId] === "object" ? cycles[cycleId] : {};
-  const cycleRecord: WorkerCycleRecord = {
-    cycleId,
-    status: String(existing.status || "dispatching"),
-    updatedAt: nowIso,
-    workerSessions: existing.workerSessions && typeof existing.workerSessions === "object" && !Array.isArray(existing.workerSessions)
-      ? existing.workerSessions
-      : {},
-    workerActivity: existing.workerActivity && typeof existing.workerActivity === "object" && !Array.isArray(existing.workerActivity)
-      ? existing.workerActivity
-      : {},
-    completedTaskIds: Array.isArray(existing.completedTaskIds)
-      ? [...new Set<string>((existing.completedTaskIds as unknown[]).map((id) => String(id || "").trim()).filter(Boolean))]
-      : [],
-  };
-
-  if (!cycleRecord.workerActivity[role]) cycleRecord.workerActivity[role] = [];
-  if (!cycleRecord.workerSessions[role]) cycleRecord.workerSessions[role] = {};
-  const session = cycleRecord.workerSessions[role];
-  const taskIds = extractPlanTaskIds(input.batch);
-
-  if (input.phase === "start") {
-    session.status = "working";
-    session.startedAt = nowIso;
-    session.updatedAt = nowIso;
-    cycleRecord.workerActivity[role].push({
-      at: nowIso,
-      status: "working",
-      task: String(input.batch?.task || input.batch?.title || ""),
-      taskIds,
-      wave: Number.isFinite(Number(input.batch?.wave)) ? Number(input.batch.wave) : null,
-    });
-  } else if (input.phase === "complete") {
-    const status = String(input.workerResult?.status || "unknown").toLowerCase();
-    session.status = "idle";
-    session.lastStatus = status;
-    session.updatedAt = nowIso;
-    if (!session.startedAt) session.startedAt = null;
-    cycleRecord.workerActivity[role].push({
-      at: nowIso,
-      status,
-      task: String(input.batch?.task || input.batch?.title || ""),
-      taskIds,
-      pr: input.workerResult?.pr || null,
-      dispatchBlockReason: input.workerResult?.dispatchBlockReason || null,
-      wave: Number.isFinite(Number(input.batch?.wave)) ? Number(input.batch.wave) : null,
-    });
-    if (status === "done" || status === "success") {
-      cycleRecord.completedTaskIds = [...new Set([...cycleRecord.completedTaskIds, ...taskIds])];
-    }
-  } else {
-    session.status = "idle";
-    session.updatedAt = nowIso;
-    cycleRecord.workerActivity[role].push({
-      at: nowIso,
-      status: "recovered",
-      signal: String(input.recoveredSignal || "stale"),
-      taskIds: [],
-      wave: null,
-    });
-  }
-
-  cycles[cycleId] = cycleRecord;
-  // Canonical write is the source of truth — must succeed before compatibility snapshots.
-  await writeJson(path.join(stateDir, WORKER_CYCLE_ARTIFACTS_FILE), payload);
-
-  // Compatibility snapshots for existing consumers.
-  // Each write is best-effort: a failure is logged but never propagates so the
-  // canonical artifact remains the authoritative record when compat writes fail.
-  try {
-    const sessionsPath = path.join(stateDir, "worker_sessions.json");
-    const legacySessionsRaw = await readJson(sessionsPath, {});
-    const legacySessions = toLegacySessionsBody(legacySessionsRaw);
-    legacySessions[role] = cycleRecord.workerSessions[role];
-    await writeJson(sessionsPath, addSchemaVersion(legacySessions, STATE_FILE_TYPE.WORKER_SESSIONS));
-  } catch (sessErr) {
-    warn(`[orchestrator] compat worker_sessions.json write failed (non-fatal): ${String((sessErr as any)?.message || sessErr)}`);
-  }
-
-  try {
-    const workerPath = path.join(stateDir, roleToWorkerStateFile(role));
-    const existingWorkerState = await readJson(workerPath, {});
-    const existingActivity = Array.isArray(existingWorkerState?.activityLog) ? existingWorkerState.activityLog : [];
-    const latestEntry = cycleRecord.workerActivity[role][cycleRecord.workerActivity[role].length - 1] || null;
-    const nextActivity = latestEntry ? [...existingActivity, latestEntry] : existingActivity;
-    await writeJson(workerPath, {
-      ...(existingWorkerState && typeof existingWorkerState === "object" ? existingWorkerState : {}),
-      status: cycleRecord.workerSessions[role]?.status || "idle",
-      startedAt: cycleRecord.workerSessions[role]?.startedAt || null,
+    const existing = cycles[cycleId] && typeof cycles[cycleId] === "object" ? cycles[cycleId] : {};
+    const cycleRecord: WorkerCycleRecord = {
+      cycleId,
+      status: String(existing.status || "dispatching"),
       updatedAt: nowIso,
-      activityLog: nextActivity.slice(-200),
-    });
-  } catch (workerStateErr) {
-    warn(`[orchestrator] compat worker state file write failed (non-fatal): role=${role} ${String((workerStateErr as any)?.message || workerStateErr)}`);
-  }
+      workerSessions: existing.workerSessions && typeof existing.workerSessions === "object" && !Array.isArray(existing.workerSessions)
+        ? existing.workerSessions
+        : {},
+      workerActivity: existing.workerActivity && typeof existing.workerActivity === "object" && !Array.isArray(existing.workerActivity)
+        ? existing.workerActivity
+        : {},
+      completedTaskIds: Array.isArray(existing.completedTaskIds)
+        ? [...new Set<string>((existing.completedTaskIds as unknown[]).map((id) => String(id || "").trim()).filter(Boolean))]
+        : [],
+    };
+
+    if (!cycleRecord.workerActivity[role]) cycleRecord.workerActivity[role] = [];
+    if (!cycleRecord.workerSessions[role]) cycleRecord.workerSessions[role] = {};
+    const session = cycleRecord.workerSessions[role];
+    const taskIds = extractPlanTaskIds(input.batch);
+
+    if (input.phase === "start") {
+      session.status = "working";
+      session.startedAt = nowIso;
+      session.updatedAt = nowIso;
+      cycleRecord.workerActivity[role].push({
+        at: nowIso,
+        status: "working",
+        task: String(input.batch?.task || input.batch?.title || ""),
+        taskIds,
+        wave: Number.isFinite(Number(input.batch?.wave)) ? Number(input.batch.wave) : null,
+      });
+    } else if (input.phase === "complete") {
+      const status = String(input.workerResult?.status || "unknown").toLowerCase();
+      session.status = "idle";
+      session.lastStatus = status;
+      session.updatedAt = nowIso;
+      if (!session.startedAt) session.startedAt = null;
+      cycleRecord.workerActivity[role].push({
+        at: nowIso,
+        status,
+        task: String(input.batch?.task || input.batch?.title || ""),
+        taskIds,
+        pr: input.workerResult?.pr || null,
+        dispatchBlockReason: input.workerResult?.dispatchBlockReason || null,
+        wave: Number.isFinite(Number(input.batch?.wave)) ? Number(input.batch.wave) : null,
+      });
+      if (status === "done" || status === "success") {
+        cycleRecord.completedTaskIds = [...new Set([...cycleRecord.completedTaskIds, ...taskIds])];
+      }
+    } else {
+      session.status = "idle";
+      session.updatedAt = nowIso;
+      cycleRecord.workerActivity[role].push({
+        at: nowIso,
+        status: "recovered",
+        signal: String(input.recoveredSignal || "stale"),
+        taskIds: [],
+        wave: null,
+      });
+    }
+
+    cycles[cycleId] = cycleRecord;
+    // Canonical write is the source of truth — must succeed before compatibility snapshots.
+    await writeJson(path.join(stateDir, WORKER_CYCLE_ARTIFACTS_FILE), payload);
+
+    // Compatibility snapshots for existing consumers.
+    // Each write is best-effort: a failure is logged but never propagates so the
+    // canonical artifact remains the authoritative record when compat writes fail.
+    try {
+      const sessionsPath = path.join(stateDir, "worker_sessions.json");
+      const legacySessionsRaw = await readJson(sessionsPath, {});
+      const legacySessions = toLegacySessionsBody(legacySessionsRaw);
+      legacySessions[role] = cycleRecord.workerSessions[role];
+      await writeJson(sessionsPath, addSchemaVersion(legacySessions, STATE_FILE_TYPE.WORKER_SESSIONS));
+    } catch (sessErr) {
+      warn(`[orchestrator] compat worker_sessions.json write failed (non-fatal): ${String((sessErr as any)?.message || sessErr)}`);
+    }
+
+    try {
+      const workerPath = path.join(stateDir, roleToWorkerStateFile(role));
+      const existingWorkerState = await readJson(workerPath, {});
+      const existingActivity = Array.isArray(existingWorkerState?.activityLog) ? existingWorkerState.activityLog : [];
+      const latestEntry = cycleRecord.workerActivity[role][cycleRecord.workerActivity[role].length - 1] || null;
+      const nextActivity = latestEntry ? [...existingActivity, latestEntry] : existingActivity;
+      await writeJson(workerPath, {
+        ...(existingWorkerState && typeof existingWorkerState === "object" ? existingWorkerState : {}),
+        status: cycleRecord.workerSessions[role]?.status || "idle",
+        startedAt: cycleRecord.workerSessions[role]?.startedAt || null,
+        updatedAt: nowIso,
+        activityLog: nextActivity.slice(-200),
+      });
+    } catch (workerStateErr) {
+      warn(`[orchestrator] compat worker state file write failed (non-fatal): role=${role} ${String((workerStateErr as any)?.message || workerStateErr)}`);
+    }
+  });
 }
 
 function getLastWorkerReportedStatus(session, role) {

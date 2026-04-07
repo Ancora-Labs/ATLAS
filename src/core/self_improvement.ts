@@ -123,8 +123,10 @@ export const OUTCOME_DEGRADED_REASON = Object.freeze({
   EVOLUTION_INVALID:             "EVOLUTION_INVALID",
   WORKER_SESSIONS_STALE:         "WORKER_SESSIONS_STALE",
   NO_ACTIVE_DATA:                "NO_ACTIVE_DATA",
-  /** worker_cycle_artifacts.json absent (ENOENT) or failed schema migration — fallback path used. */
+  /** worker_cycle_artifacts.json absent (ENOENT) — fallback path used. */
   CANONICAL_ARTIFACT_ABSENT:     "CANONICAL_ARTIFACT_ABSENT",
+  /** worker_cycle_artifacts.json present but invalid/unmigrateable — fallback path used. */
+  CANONICAL_ARTIFACT_INVALID:    "CANONICAL_ARTIFACT_INVALID",
 });
 
 // shouldTriggerSelfImprovement stub removed — real implementation is below
@@ -474,6 +476,7 @@ export async function collectCycleOutcomes(config) {
   let workerActivityByRole: Record<string, any> = {};
   let completedTasks: string[] = [];
   let usingCanonicalWorkerArtifacts = false;
+  let canonicalArtifactState: "missing" | "invalid" = "missing";
   const activeCycleId = String(
     (pipelineProgressResult.ok ? (pipelineProgressResult.data as any)?.startedAt : "") || ""
   ).trim();
@@ -529,10 +532,14 @@ export async function collectCycleOutcomes(config) {
         usingCanonicalWorkerArtifacts = true;
       }
     } else {
+      canonicalArtifactState = "invalid";
       warn(
         `[self-improvement] canonical worker-cycle artifact migration failed: reason=${migratedArtifacts.reason} fromVersion=${String(migratedArtifacts.fromVersion)}`
       );
     }
+  } else if (workerCycleArtifactsResult.reason === READ_JSON_REASON.INVALID) {
+    canonicalArtifactState = "invalid";
+    warn("[self-improvement] canonical worker-cycle artifact invalid; using compatibility fallback path");
   }
 
   // Compatibility fallback for legacy files when canonical cycle artifacts are absent.
@@ -541,12 +548,18 @@ export async function collectCycleOutcomes(config) {
   // the reason code reflects the root cause rather than a symptom in legacy files.
   let workerSessionsStaleSignal: string | null = null;
   if (!usingCanonicalWorkerArtifacts) {
-    warn("[self-improvement] canonical worker-cycle artifact absent; falling back to evolution_progress/worker_sessions compatibility path");
+    if (canonicalArtifactState === "invalid") {
+      warn("[self-improvement] canonical worker-cycle artifact invalid; falling back to evolution_progress/worker_sessions compatibility path");
+    } else {
+      warn("[self-improvement] canonical worker-cycle artifact absent; falling back to evolution_progress/worker_sessions compatibility path");
+    }
 
-    // Mark degraded with canonical-absent reason (primary signal for missing canonical data).
+    // Mark degraded with canonical absent/invalid reason (primary signal for canonical data health).
     if (!degraded) {
       degraded = true;
-      degradedReason = OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_ABSENT;
+      degradedReason = canonicalArtifactState === "invalid"
+        ? OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_INVALID
+        : OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_ABSENT;
     }
 
     // Lazily read legacy files — only reached when canonical artifact is absent.

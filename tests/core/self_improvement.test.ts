@@ -145,6 +145,7 @@ describe("OUTCOME_DEGRADED_REASON", () => {
     assert.equal(OUTCOME_DEGRADED_REASON.WORKER_SESSIONS_STALE, "WORKER_SESSIONS_STALE");
     assert.equal(OUTCOME_DEGRADED_REASON.NO_ACTIVE_DATA,     "NO_ACTIVE_DATA");
     assert.equal(OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_ABSENT, "CANONICAL_ARTIFACT_ABSENT");
+    assert.equal(OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_INVALID, "CANONICAL_ARTIFACT_INVALID");
   });
 });
 
@@ -531,6 +532,35 @@ describe("collectCycleOutcomes — worker_sessions stale vs worker artifacts", (
 
   it("degradedReason=CANONICAL_ARTIFACT_ABSENT for stale session artifact (no canonical artifact)", () => {
     assert.equal(result.degradedReason, OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_ABSENT);
+  });
+});
+
+describe("collectCycleOutcomes — canonical worker-cycle artifact invalid", () => {
+  let tmpDir;
+  let result;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-si-invalid-canonical-"));
+    await writeTestJson(tmpDir, "prometheus_analysis.json", PROMETHEUS_ANALYSIS);
+    await writeTestJson(tmpDir, "evolution_progress.json", EVOLUTION_PROGRESS);
+    await writeTestJson(tmpDir, "worker_sessions.json", WORKER_SESSIONS);
+    await writeRaw(tmpDir, WORKER_CYCLE_ARTIFACTS_FILE, "{ this is invalid canonical json }");
+    result = await collectCycleOutcomes(makeConfig(tmpDir));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("degraded=true with CANONICAL_ARTIFACT_INVALID when canonical artifact exists but is invalid", () => {
+    assert.equal(result.degraded, true);
+    assert.equal(result.degradedReason, OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_INVALID);
+  });
+
+  it("falls back to legacy completed tasks while surfacing explicit invalid-canonical reason", () => {
+    assert.equal(result.completedCount, 1, "fallback should still count completed tasks from evolution_progress");
+    assert.ok(result.metricsSource.includes("evolution_progress_fallback"));
+    assert.ok(!result.metricsSource.includes("worker_cycle_artifacts"));
   });
 });
 
