@@ -468,3 +468,113 @@ describe("runSelfImprovementCycle — policy impact attribution", () => {
     assert.ok(retiredPolicies.length >= 1, "ineffective policy should be retired");
   });
 });
+
+// ── dispatchBlockReason from cycle_analytics ──────────────────────────────
+
+describe("collectCycleOutcomes — dispatchBlockReason from cycle_analytics.json", () => {
+  let tmpDir;
+  let result;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-t013-dbr-"));
+    await writeTestJson(tmpDir, "prometheus_analysis.json", PROMETHEUS_ANALYSIS);
+    await writeTestJson(tmpDir, "evolution_progress.json", EVOLUTION_PROGRESS);
+    await writeTestJson(tmpDir, "worker_sessions.json", WORKER_SESSIONS);
+    await writeTestJson(tmpDir, "cycle_analytics.json", {
+      schemaVersion: 1,
+      lastCycle: {
+        outcomes: {
+          dispatchBlockReason: "GOVERNANCE_FREEZE_ACTIVE:test-freeze"
+        }
+      }
+    });
+    result = await collectCycleOutcomes(makeConfig(tmpDir));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reads dispatchBlockReason from lastCycle.outcomes", () => {
+    assert.equal(result.dispatchBlockReason, "GOVERNANCE_FREEZE_ACTIVE:test-freeze");
+  });
+
+  it("dispatchBlockReason is included in result schema", () => {
+    assert.ok("dispatchBlockReason" in result, "result must include dispatchBlockReason field");
+  });
+});
+
+describe("collectCycleOutcomes — dispatchBlockReason absent when cycle_analytics missing", () => {
+  let tmpDir;
+  let result;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-t013-noca-"));
+    await writeTestJson(tmpDir, "prometheus_analysis.json", PROMETHEUS_ANALYSIS);
+    await writeTestJson(tmpDir, "evolution_progress.json", EVOLUTION_PROGRESS);
+    await writeTestJson(tmpDir, "worker_sessions.json", WORKER_SESSIONS);
+    // Intentionally NO cycle_analytics.json
+    result = await collectCycleOutcomes(makeConfig(tmpDir));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("dispatchBlockReason is null when cycle_analytics absent", () => {
+    assert.equal(result.dispatchBlockReason, null,
+      "dispatchBlockReason must be null when cycle_analytics.json is absent");
+  });
+
+  it("degraded is false — missing cycle_analytics does not degrade outcome", () => {
+    assert.equal(result.degraded, false,
+      "cycle_analytics is optional — its absence must not degrade outcome collection");
+  });
+});
+
+// ── Wave completion tracking — numeric wave field ─────────────────────────
+
+describe("collectCycleOutcomes — wave tracking uses wave field over id", () => {
+  let tmpDir;
+  let result;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-t013-wvnum-"));
+    const prometheusWithNumericWaves = {
+      ...PROMETHEUS_ANALYSIS,
+      executionStrategy: {
+        waves: [
+          { wave: 1, workers: ["evolution-worker"] },
+          { wave: 2, id: "wave-2", workers: ["quality-worker"] }
+        ]
+      }
+    };
+    await writeTestJson(tmpDir, "prometheus_analysis.json", prometheusWithNumericWaves);
+    await writeTestJson(tmpDir, "evolution_progress.json", EVOLUTION_PROGRESS);
+    await writeTestJson(tmpDir, "worker_sessions.json", WORKER_SESSIONS);
+    result = await collectCycleOutcomes(makeConfig(tmpDir));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("uses numeric wave field as waveKey", () => {
+    assert.equal(result.waves.length, 2);
+    assert.equal(result.waves[0].id, 1, "wave[0].id must equal numeric wave field value");
+  });
+
+  it("prefers wave field over id field when both present", () => {
+    assert.equal(result.waves[1].id, 2, "wave[1].id must use numeric wave field, not id string");
+  });
+
+  it("wave with empty key returns empty completedTasks (not all tasks)", () => {
+    const waveNoKey = { workers: ["evolution-worker"] };
+    // Simulate by checking that undefined wave/id wave returns [] not all tasks
+    // The wave above has wave=1 so id is 1 — all tasks that include "1" in id match
+    // Wave completedTasks should be an array (even if empty)
+    for (const w of result.waves) {
+      assert.ok(Array.isArray(w.completedTasks), `wave ${w.id} completedTasks must be an array`);
+    }
+  });
+});

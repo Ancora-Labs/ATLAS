@@ -588,22 +588,47 @@ export async function collectCycleOutcomes(config) {
     }
   } catch { /* no plan-review data — degrade gracefully */ }
 
+  // ── dispatchBlockReason from cycle_analytics ──────────────────────────────
+  // The orchestrator writes dispatchBlockReason to cycle_analytics.json under
+  // lastCycle.outcomes when dispatch is blocked at a governance gate. Without
+  // reading it here, every zero-dispatch cycle looks identical to SI, making
+  // root-cause analysis impossible.
+  let dispatchBlockReason: string | null = null;
+  try {
+    const cycleAnalyticsRaw = await readJson(path.join(stateDir, "cycle_analytics.json"), null);
+    if (cycleAnalyticsRaw !== null && typeof cycleAnalyticsRaw === "object") {
+      dispatchBlockReason =
+        (cycleAnalyticsRaw as any).lastCycle?.outcomes?.dispatchBlockReason ||
+        (cycleAnalyticsRaw as any).dispatchBlockReason ||
+        null;
+      if (dispatchBlockReason !== null) {
+        dispatchBlockReason = String(dispatchBlockReason);
+      }
+    }
+  } catch { /* no cycle_analytics — degrade gracefully */ }
+
   return {
     totalPlans:      plans.length,
     completedCount:  completedTasks.length,
     projectHealth,
     workerOutcomes,
-    waves: waves.map(w => ({
-      id: w.id,
-      workers: w.workers,
-      completedTasks: completedTasks.filter(t =>
-        String(t).toLowerCase().includes(String(w.id).toLowerCase())
-      )
-    })),
+    waves: waves.map(w => {
+      const waveKey = (w as any).wave ?? (w as any).id ?? '';
+      return {
+        id: waveKey,
+        workers: (w as any).workers,
+        completedTasks: waveKey !== ''
+          ? completedTasks.filter(t =>
+              String(t).toLowerCase().includes(String(waveKey).toLowerCase())
+            )
+          : []
+      };
+    }),
     dispatches,
     requestBudget,
     decisionQuality,
     athenaPlanReview,
+    dispatchBlockReason,
     timestamp: new Date().toISOString(),
     // Athena-gated metadata fields
     metricsSource,
@@ -670,6 +695,8 @@ ${previousLessons}
 ## PREVIOUSLY DETECTED CAPABILITY GAPS
 ${previousGaps}
 ${healthAuditSection}
+## DISPATCH BLOCK REASON
+${outcomes.dispatchBlockReason || "none — workers were dispatched this cycle"}
 
 ## ANALYSIS REQUIREMENTS
 Analyze the cycle outcomes and produce a JSON response with these fields:
@@ -2181,3 +2208,4 @@ export async function persistReviewerMetrics(config: any, metrics: any): Promise
     warn(`[self-improvement] failed to persist reviewer metrics: ${String((err as any)?.message || err)}`);
   }
 }
+
