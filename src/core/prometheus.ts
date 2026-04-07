@@ -921,21 +921,67 @@ function isDiagnosticsRecordContractValid(
   return Number.isFinite(timestampMs);
 }
 
+/**
+ * Diagnostics source descriptors used by both freshness-prompt and admission gate.
+ * Centralised so adding a new diagnostics file updates both consumers atomically.
+ */
+const DIAGNOSTICS_SOURCE_DESCRIPTORS = [
+  {
+    label: "intervention_optimizer",
+    file: "intervention_optimizer_log.jsonl",
+    jsonlSchema: OPTIMIZER_LOG_JSONL_SCHEMA,
+    recordType: OPTIMIZER_LOG_RECORD_TYPE,
+  },
+  {
+    label: "dependency_graph",
+    file: "dependency_graph_diagnostics.json",
+    jsonlSchema: GRAPH_DIAGNOSTICS_JSONL_SCHEMA,
+    recordType: GRAPH_DIAGNOSTICS_RECORD_TYPE,
+  },
+] as const;
+
+/**
+ * Build DiagnosticsFreshnessRecord[] by reading each diagnostics artifact from
+ * stateDir.  Records have recordedAt=null when the artifact is missing or
+ * unparseable, which computeDiagnosticsFreshnessAdmission treats as stale.
+ *
+ * Exported so callers (tests, orchestrator) can invoke the admission gate
+ * independently of the prompt-section builder.
+ */
+export async function buildDiagnosticsFreshnessRecords(stateDir: string): Promise<DiagnosticsFreshnessRecord[]> {
+  const records: DiagnosticsFreshnessRecord[] = [];
+  for (const item of DIAGNOSTICS_SOURCE_DESCRIPTORS) {
+    const filePath = path.join(stateDir, item.file);
+    let normalized: any = null;
+    try {
+      const latest = await readLatestJsonlRecord(filePath);
+      normalized = normalizeDiagnosticsRecord(latest, item.jsonlSchema, item.recordType)
+        || await readLegacyDiagnosticsFallback(stateDir, item.label);
+    } catch {
+      // diagnostics files are optional — treat as missing
+    }
+    if (!normalized || !isDiagnosticsRecordContractValid(normalized, item.jsonlSchema, item.recordType)) {
+      records.push({ label: item.label, recordedAt: null });
+      continue;
+    }
+    const recordedAt = String(
+      normalized.savedAt
+      || normalized.persistedAt
+      || normalized.recordedAt
+      || normalized.generatedAt
+      || "",
+    ).trim() || null;
+    const staleAfterMsRaw = Number((normalized as any)?.freshness?.staleAfterMs);
+    const staleAfterMs = Number.isFinite(staleAfterMsRaw) && staleAfterMsRaw > 0
+      ? staleAfterMsRaw
+      : undefined;
+    records.push({ label: item.label, recordedAt, ...(staleAfterMs !== undefined && { staleAfterMs }) });
+  }
+  return records;
+}
+
 async function buildDiagnosticsFreshnessPromptSection(stateDir: string): Promise<string> {
-  const diagnostics = [
-    {
-      label: "intervention_optimizer",
-      file: "intervention_optimizer_log.jsonl",
-      jsonlSchema: OPTIMIZER_LOG_JSONL_SCHEMA,
-      recordType: OPTIMIZER_LOG_RECORD_TYPE,
-    },
-    {
-      label: "dependency_graph",
-      file: "dependency_graph_diagnostics.json",
-      jsonlSchema: GRAPH_DIAGNOSTICS_JSONL_SCHEMA,
-      recordType: GRAPH_DIAGNOSTICS_RECORD_TYPE,
-    },
-  ];
+  const diagnostics = DIAGNOSTICS_SOURCE_DESCRIPTORS;
 
   const lines: string[] = [];
   for (const item of diagnostics) {
@@ -4230,6 +4276,12 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
 
   const planningPolicy = buildPrometheusPlanningPolicy(config, prevLaneTelemetry);
   const diagnosticsFreshnessSection = await buildDiagnosticsFreshnessPromptSection(stateDir);
+  // Build machine-readable freshness records for the live admission gate.
+  // These are computed in parallel with the prompt section so the same file I/O
+  // serves both the human-readable section and the deterministic admission gate.
+  const _diagnosticsFreshnessRecords = await buildDiagnosticsFreshnessRecords(stateDir);
+  const diagnosticsFreshnessAdmission = computeDiagnosticsFreshnessAdmission(_diagnosticsFreshnessRecords);
+
   let researchSectionText = "";
   let researchTopicCount = 0;
   let researchSourceCount = 0;
@@ -5520,6 +5572,23 @@ Mandatory requirements:
     }
   }
 
+  // ── Stale-diagnostics-backed plan admission gate ─────────────────────────
+  // Tag plans that are backed by stale diagnostics and lack independent evidence.
+  // Must run BEFORE validateAllPlans so the contract validator can emit the
+  // STALE_DIAGNOSTICS_BACKED violation code for tagged plans.
+  if (Array.isArray(parsed.plans) && parsed.plans.length > 0 && !diagnosticsFreshnessAdmission.allFresh) {
+    tagStaleDiagnosticsBackedPlans(parsed.plans, diagnosticsFreshnessAdmission);
+    const staleTaggedCount = parsed.plans.filter((p: any) => p._staleDiagnosticsGated === true).length;
+    if (staleTaggedCount > 0) {
+      await appendProgress(
+        config,
+        `[PROMETHEUS][DIAG_FRESHNESS] Tagged ${staleTaggedCount}/${parsed.plans.length} plan(s) as stale-diagnostics-backed ` +
+        `(staleSources=${diagnosticsFreshnessAdmission.staleSources.join(",")})`,
+      );
+      parsed._staleTaggedPlanCount = staleTaggedCount;
+    }
+  }
+
   // ── Contract-first plan validation (Packet 2) ────────────────────────────
   // Every plan must pass schema contract before persistence.
   if (Array.isArray(parsed.plans) && parsed.plans.length > 0) {
@@ -5568,6 +5637,43 @@ Mandatory requirements:
         `[PROMETHEUS][CONTRACT] Hard-filtered ${admissionRejectIndices.length} low-quality/redundant admission packet(s) missing required evidence or capacity-first justification`
       );
       parsed._capacityRoiFilteredCount = admissionRejectIndices.length;
+    }
+
+    // ── Stale-diagnostics hard rejection gate ────────────────────────────────
+    // Reject plans that were tagged _staleDiagnosticsGated by the gate above and
+    // received a CRITICAL STALE_DIAGNOSTICS_BACKED violation from the contract
+    // validator.  Safety valve: if ALL plans are stale-backed (no fresh
+    // alternative exists), preserve them with a warning rather than killing the
+    // cycle — Athena will make the final accept/reject decision.
+    const staleBackedIndices = contractResult.results
+      .filter(r => !r.valid && r.violations.some(v =>
+        v.code === PACKET_VIOLATION_CODE.STALE_DIAGNOSTICS_BACKED &&
+        v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL
+      ))
+      .map(r => r.planIndex)
+      .sort((a, b) => b - a);
+    if (staleBackedIndices.length > 0) {
+      const nonStaleCount = parsed.plans.length - staleBackedIndices.length;
+      if (nonStaleCount > 0) {
+        // Non-stale alternatives exist — hard-reject stale-backed plans.
+        for (const idx of staleBackedIndices) {
+          parsed.plans.splice(idx, 1);
+        }
+        await appendProgress(
+          config,
+          `[PROMETHEUS][DIAG_FRESHNESS] Hard-rejected ${staleBackedIndices.length} stale-diagnostics-backed packet(s) ` +
+          `(${nonStaleCount} independently-evidenced plan(s) remain)`,
+        );
+        parsed._staleBackedRejectedCount = staleBackedIndices.length;
+      } else {
+        // All plans are stale-backed — preserve with warning to avoid deadlock.
+        await appendProgress(
+          config,
+          `[PROMETHEUS][DIAG_FRESHNESS] WARN: all ${staleBackedIndices.length} plan(s) are stale-diagnostics-backed ` +
+          `— preserving for Athena review (staleSources=${diagnosticsFreshnessAdmission.staleSources.join(",")})`,
+        );
+        parsed._allPlansStale = true;
+      }
     }
   }
 

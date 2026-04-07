@@ -4222,6 +4222,7 @@ describe("normalizeScalarContractField — parse-boundary normalization", () => 
 import {
   computeDiagnosticsFreshnessAdmission,
   tagStaleDiagnosticsBackedPlans,
+  buildDiagnosticsFreshnessRecords,
 } from "../../src/core/prometheus.js";
 
 describe("computeDiagnosticsFreshnessAdmission", () => {
@@ -4329,7 +4330,135 @@ describe("tagStaleDiagnosticsBackedPlans", () => {
   });
 });
 
-// ── Planner cycle metrics emission ─────────────────────────────────────────────
+// ── buildDiagnosticsFreshnessRecords ──────────────────────────────────────────
+
+describe("buildDiagnosticsFreshnessRecords", () => {
+  it("returns a record with recordedAt=null for each missing diagnostics file", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const tmpDir = mkdtempSync(path.join(tmpdir(), "diag-freshness-"));
+    try {
+      const records = await buildDiagnosticsFreshnessRecords(tmpDir);
+      assert.ok(Array.isArray(records), "must return an array");
+      assert.ok(records.length >= 2, "must return at least 2 records (intervention_optimizer + dependency_graph)");
+      for (const r of records) {
+        assert.equal(r.recordedAt, null, `missing file ${r.label} must produce recordedAt=null`);
+      }
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a record with recordedAt set when a valid JSONL artifact exists", async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const tmpDir = mkdtempSync(path.join(tmpdir(), "diag-freshness-"));
+    try {
+      const savedAt = new Date(Date.now() - 60_000).toISOString(); // 1 minute ago
+      const record = {
+        jsonlSchema: "box/optimizer-log/v1",
+        recordType: "optimizer-log",
+        schemaVersion: 1,
+        savedAt,
+        freshness: { status: "fresh", staleAfterMs: 21_600_000, expiresAt: new Date(Date.now() + 1000).toISOString() },
+        payload: {},
+      };
+      writeFileSync(
+        path.join(tmpDir, "intervention_optimizer_log.jsonl"),
+        JSON.stringify(record) + "\n",
+        "utf8",
+      );
+      const records = await buildDiagnosticsFreshnessRecords(tmpDir);
+      const optimizerRecord = records.find(r => r.label === "intervention_optimizer");
+      assert.ok(optimizerRecord, "intervention_optimizer record must exist");
+      assert.equal(optimizerRecord!.recordedAt, savedAt, "recordedAt must match savedAt from artifact");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("negative: returns recordedAt=null when JSONL line is unparseable", async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const tmpDir = mkdtempSync(path.join(tmpdir(), "diag-freshness-"));
+    try {
+      writeFileSync(
+        path.join(tmpDir, "intervention_optimizer_log.jsonl"),
+        "not-valid-json\n",
+        "utf8",
+      );
+      const records = await buildDiagnosticsFreshnessRecords(tmpDir);
+      const r = records.find(r => r.label === "intervention_optimizer");
+      assert.ok(r, "record must still be returned");
+      assert.equal(r!.recordedAt, null, "unparseable artifact must produce recordedAt=null");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── Stale-diagnostics admission gate — live pipeline wiring ──────────────────
+
+describe("stale-diagnostics live admission gate — tagStaleDiagnosticsBackedPlans + validatePlanContract wiring", () => {
+  it("stale-tagged plan receives STALE_DIAGNOSTICS_BACKED contract violation", () => {
+    const staleFreshness = {
+      allFresh: false,
+      staleSources: ["intervention_optimizer"],
+      freshnessReasons: ["stale_diagnostics:intervention_optimizer:ageMinutes=480:staleAfterMs=21600000"],
+    };
+    const plans = [
+      { task: "Implement generic optimization without independent evidence", role: "Evolution Worker" },
+    ];
+    tagStaleDiagnosticsBackedPlans(plans, staleFreshness);
+    assert.equal(plans[0]._staleDiagnosticsGated, true, "plan must be tagged as stale-backed");
+
+    // Contract validator must emit the STALE_DIAGNOSTICS_BACKED violation for tagged plans
+    const result = validatePlanContract(plans[0]);
+    const hasStaleViolation = result.violations.some(v => v.code === "stale_diagnostics_backed");
+    assert.ok(hasStaleViolation, "validatePlanContract must emit stale_diagnostics_backed violation for tagged plan");
+  });
+
+  it("plan with implementationEvidence bypasses stale-diagnostics tagging", () => {
+    const staleFreshness = {
+      allFresh: false,
+      staleSources: ["intervention_optimizer"],
+      freshnessReasons: ["stale_diagnostics:intervention_optimizer:ageMinutes=480:staleAfterMs=21600000"],
+    };
+    const plans = [
+      {
+        task: "Refactor canary engine decision logic",
+        role: "Evolution Worker",
+        implementationEvidence: ["src/core/canary_engine.ts line 42 has gap in decision path"],
+      },
+    ];
+    tagStaleDiagnosticsBackedPlans(plans, staleFreshness);
+    assert.equal(
+      plans[0]._staleDiagnosticsGated,
+      undefined,
+      "independently-evidenced plan must not be tagged as stale-backed",
+    );
+
+    const result = validatePlanContract(plans[0]);
+    const hasStaleViolation = result.violations.some(v => v.code === "stale_diagnostics_backed");
+    assert.equal(hasStaleViolation, false, "independently-evidenced plan must not receive stale_diagnostics_backed violation");
+  });
+
+  it("negative: when all diagnostics are fresh, no plans are tagged regardless of evidence", () => {
+    const freshAdmission = { allFresh: true, staleSources: [], freshnessReasons: [] };
+    const plans = [
+      { task: "Any task with no evidence", role: "Evolution Worker" },
+      { task: "Another task", role: "Evolution Worker" },
+    ];
+    tagStaleDiagnosticsBackedPlans(plans, freshAdmission);
+    for (const p of plans) {
+      assert.equal(
+        (p as any)._staleDiagnosticsGated,
+        undefined,
+        "fresh diagnostics must not tag any plan",
+      );
+    }
+  });
+});
 import {
   estimateTokenCost,
 } from "../../src/core/prompt_compiler.js";
