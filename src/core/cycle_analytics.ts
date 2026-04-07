@@ -209,6 +209,21 @@ export const CYCLE_ANALYTICS_SCHEMA = Object.freeze({
  */
 export const WORKER_CYCLE_ARTIFACTS_FILE = "worker_cycle_artifacts.json";
 
+/**
+ * Legacy evolution_progress file — compatibility read-only path.
+ * Used as a fallback when WORKER_CYCLE_ARTIFACTS_FILE is absent or unmigrateable.
+ * Deprecated: callers should prefer WORKER_CYCLE_ARTIFACTS_FILE.
+ *
+ * Schema versions:
+ *   v0 (implicit): legacy task-map format { cycle_id, tasks: { id: { status } } }
+ *   v1+:           canonical completedTaskIds format (see WORKER_CYCLE_ARTIFACTS_SCHEMA)
+ *
+ * LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION is the implicit version assigned when
+ * the file carries no explicit schemaVersion field.
+ */
+export const LEGACY_EVOLUTION_PROGRESS_FILE = "evolution_progress.json";
+export const LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION = 0;
+
 export const WORKER_CYCLE_ARTIFACTS_SCHEMA = Object.freeze({
   schemaVersion: 1,
   required: ["schemaVersion", "updatedAt", "latestCycleId", "cycles"],

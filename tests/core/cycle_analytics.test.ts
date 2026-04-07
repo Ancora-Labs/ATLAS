@@ -41,6 +41,8 @@ import {
   MIN_TELEMETRY_SAMPLE_THRESHOLD,
   migrateLegacyEvolutionProgressToCompletedTaskIds,
   WORKER_CYCLE_ARTIFACTS_SCHEMA,
+  LEGACY_EVOLUTION_PROGRESS_FILE,
+  LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION,
 } from "../../src/core/cycle_analytics.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -1855,5 +1857,58 @@ describe("cycle_analytics — dispatchBlockReason in outcomes (Task 2)", () => {
     });
     assert.equal(record.outcomes.dispatchBlockReason, reason);
     assert.equal(record.phase, CYCLE_PHASE.INCOMPLETE);
+  });
+});
+
+// ── Legacy evolution_progress constants ─────────────────────────────────────────
+// Verifies that the named constants for the legacy compatibility path are stable
+// and carry the correct values so callers can reference them programmatically.
+
+describe("cycle_analytics — LEGACY_EVOLUTION_PROGRESS constants", () => {
+  it("LEGACY_EVOLUTION_PROGRESS_FILE resolves to the expected legacy filename", () => {
+    assert.equal(
+      LEGACY_EVOLUTION_PROGRESS_FILE,
+      "evolution_progress.json",
+      "LEGACY_EVOLUTION_PROGRESS_FILE must match the legacy on-disk filename"
+    );
+  });
+
+  it("LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION is the implicit v0 version for files without a schemaVersion field", () => {
+    assert.equal(
+      LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION,
+      0,
+      "LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION must be 0 (legacy task-map format)"
+    );
+  });
+
+  it("migrateLegacyEvolutionProgressToCompletedTaskIds treats legacy format as fromVersion=0", () => {
+    // A legacy evolution_progress file has no explicit schemaVersion field.
+    const legacy = {
+      cycle_id: "cycle-1",
+      tasks: {
+        "task-A": { status: "done" },
+        "task-B": { status: "completed" },
+        "task-C": { status: "pending" },
+      },
+    };
+    const result = migrateLegacyEvolutionProgressToCompletedTaskIds(legacy);
+    assert.ok(result.ok, "migration must succeed for valid legacy input");
+    assert.equal(
+      result.fromVersion,
+      LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION,
+      "fromVersion must match LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION for files without an explicit version"
+    );
+    // Only completed tasks should appear in completedTaskIds
+    assert.ok(result.completedTaskIds.includes("task-A"), "task-A (done) must be in completedTaskIds");
+    assert.ok(result.completedTaskIds.includes("task-B"), "task-B (completed) must be in completedTaskIds");
+    assert.ok(!result.completedTaskIds.includes("task-C"), "task-C (pending) must NOT be in completedTaskIds");
+  });
+
+  it("LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION is less than the canonical WORKER_CYCLE_ARTIFACTS_SCHEMA version", () => {
+    // This invariant ensures the migration direction is always forward.
+    assert.ok(
+      LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION < WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion,
+      "legacy schema version must be less than the canonical schema version"
+    );
   });
 });

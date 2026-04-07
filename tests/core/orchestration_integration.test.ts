@@ -45,6 +45,7 @@ import {
   CYCLE_PHASE,
   CYCLE_OUTCOME_STATUS,
   WORKER_CYCLE_ARTIFACTS_FILE,
+  migrateWorkerCycleArtifacts,
 } from "../../src/core/cycle_analytics.js";
 import { isTerminalWorkerStatus } from "../../src/core/worker_runner.js";
 
@@ -1156,5 +1157,87 @@ describe("canonical telemetry spine — artifact schema and terminal status cove
     // The record must be a non-null object with kpis — it consumed the session data
     assert.ok(record !== null && typeof record === "object", "must return analytics record");
     assert.ok("kpis" in record, "record must include kpis");
+  });
+});
+
+// ── Canonical active-worker detection ─────────────────────────────────────────
+// Verifies that the canonical artifact structure (worker_cycle_artifacts.json)
+// correctly signals active vs. idle workers after migration and that terminal
+// activity entries are handled for stale-session recovery.
+
+describe("canonical active-worker detection — artifact structure invariants", () => {
+  const makeCycleArtifact = (workerSessions, workerActivity = {}) => ({
+    schemaVersion: 1,
+    updatedAt: new Date().toISOString(),
+    latestCycleId: "cycle-1",
+    cycles: {
+      "cycle-1": {
+        cycleId: "cycle-1",
+        updatedAt: new Date().toISOString(),
+        status: "in_progress",
+        workerSessions,
+        workerActivity,
+        completedTaskIds: [],
+      },
+    },
+  });
+
+  it("migrateWorkerCycleArtifacts accepts a valid v1 artifact and marks it already_current", () => {
+    const artifact = makeCycleArtifact({ "coder-worker": { status: "working" } });
+    const result = migrateWorkerCycleArtifacts(artifact);
+    assert.ok(result.ok, "migration must succeed for valid v1 artifact");
+    assert.equal(result.reason, "already_current", "v1 artifact must be already_current");
+  });
+
+  it("sessions with status=working are detected as active via workerSessions", () => {
+    const artifact = makeCycleArtifact({
+      "coder-worker": { status: "working", startedAt: new Date().toISOString() },
+    });
+    const result = migrateWorkerCycleArtifacts(artifact);
+    assert.ok(result.ok);
+    const cycle = (result.data as any).cycles["cycle-1"];
+    const sessions: Record<string, any> = cycle.workerSessions;
+    const activeWorkers = Object.values(sessions).filter((s: any) => s.status === "working");
+    assert.equal(activeWorkers.length, 1, "one worker must be active");
+  });
+
+  it("sessions with status=idle are not detected as active", () => {
+    const artifact = makeCycleArtifact({
+      "coder-worker": { status: "idle", startedAt: new Date().toISOString() },
+    });
+    const result = migrateWorkerCycleArtifacts(artifact);
+    assert.ok(result.ok);
+    const cycle = (result.data as any).cycles["cycle-1"];
+    const sessions: Record<string, any> = cycle.workerSessions;
+    const activeWorkers = Object.values(sessions).filter((s: any) => s.status === "working");
+    assert.equal(activeWorkers.length, 0, "idle session must not be counted as active");
+  });
+
+  it("terminal activity entries for a working session flag recovery need via isTerminalWorkerStatus", () => {
+    // A session that is 'working' in workerSessions but whose last activity entry
+    // has a terminal status indicates a stale/crashed worker that needs recovery.
+    const artifact = makeCycleArtifact(
+      { "coder-worker": { status: "working" } },
+      { "coder-worker": [{ at: new Date().toISOString(), status: "done", task: "task-1" }] }
+    );
+    const result = migrateWorkerCycleArtifacts(artifact);
+    assert.ok(result.ok);
+    const cycle = (result.data as any).cycles["cycle-1"];
+    const activityLog: any[] = (cycle.workerActivity as any)["coder-worker"] || [];
+    const lastEntry = activityLog[activityLog.length - 1];
+    // The last activity status is terminal — this is the recovery-detection signal.
+    assert.ok(
+      isTerminalWorkerStatus(lastEntry.status),
+      "last activity status must be terminal so recovery path can identify stale working sessions"
+    );
+  });
+
+  it("empty workerSessions cycle produces zero active workers", () => {
+    const artifact = makeCycleArtifact({});
+    const result = migrateWorkerCycleArtifacts(artifact);
+    assert.ok(result.ok);
+    const cycle = (result.data as any).cycles["cycle-1"];
+    const sessions: Record<string, any> = cycle.workerSessions;
+    assert.equal(Object.keys(sessions).length, 0, "no sessions must produce zero active workers");
   });
 });

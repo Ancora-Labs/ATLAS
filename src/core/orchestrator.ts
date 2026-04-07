@@ -1976,6 +1976,40 @@ async function recoverStaleWorkerSessions(config, stateDir, sessions) {
 async function hasActiveWorkersAsync(config) {
   try {
     const stateDir = config.paths?.stateDir || "state";
+
+    // Prefer canonical artifact (source of truth) over legacy worker_sessions.json.
+    // The compat write to worker_sessions.json is best-effort; if it fails the
+    // canonical file still has the authoritative session state.
+    const rawArtifact = await readJsonSafe(path.join(stateDir, WORKER_CYCLE_ARTIFACTS_FILE));
+    if (rawArtifact.ok) {
+      const migrated = migrateWorkerCycleArtifacts(rawArtifact.data);
+      if (migrated.ok && migrated.data) {
+        const latestCycleId = String((migrated.data as any).latestCycleId || "");
+        const cycles = (migrated.data as any).cycles as Record<string, any> || {};
+        const cycle = latestCycleId ? cycles[latestCycleId] : null;
+        if (cycle && typeof cycle.workerSessions === "object" && !Array.isArray(cycle.workerSessions)) {
+          const sessions = cycle.workerSessions as Record<string, WorkerSessionRecord>;
+          const workerActivity = cycle.workerActivity && typeof cycle.workerActivity === "object"
+            ? cycle.workerActivity as Record<string, any[]>
+            : {};
+          // Synthesize a history-augmented sessions map so recoverStaleWorkerSessions
+          // can detect terminal statuses recorded in the activity log.
+          const augmented: Record<string, WorkerSessionRecord> = {};
+          for (const [role, session] of Object.entries(sessions)) {
+            const log = Array.isArray(workerActivity[role]) ? workerActivity[role] : [];
+            augmented[role] = {
+              ...session,
+              // Synthesize history from the activity log for recovery detection.
+              history: log.map(e => ({ status: String(e.status || ""), from: role, at: e.at || "" })),
+            } as WorkerSessionRecord;
+          }
+          await recoverStaleWorkerSessions(config, stateDir, augmented);
+          return Object.values(augmented).some(s => s?.status === "working");
+        }
+      }
+    }
+
+    // Fallback: legacy worker_sessions.json (compat snapshot).
     const sessions = await readJson(path.join(stateDir, "worker_sessions.json"), {});
     await recoverStaleWorkerSessions(config, stateDir, sessions);
     return (Object.values(sessions) as WorkerSessionRecord[]).some(s => s?.status === "working");
