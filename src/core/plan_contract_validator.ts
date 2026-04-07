@@ -423,6 +423,36 @@ export function resolveNamedVerificationTarget(plan: any): string | null {
 }
 
 /**
+ * Bind resolved named verification targets onto plan objects in-place.
+ *
+ * This converts specific entries found in verification_commands[] into the
+ * canonical verification field before dispatch, ensuring downstream workers
+ * always receive deterministic, named verification targets when available.
+ */
+export function bindNamedVerificationTargets(
+  plans: any[],
+): { boundCount: number; unboundCount: number } {
+  if (!Array.isArray(plans) || plans.length === 0) {
+    return { boundCount: 0, unboundCount: 0 };
+  }
+
+  let boundCount = 0;
+  let unboundCount = 0;
+  for (const plan of plans) {
+    const boundTarget = resolveNamedVerificationTarget(plan);
+    if (boundTarget) {
+      plan.verification = boundTarget;
+      plan._boundVerificationTarget = boundTarget;
+      boundCount += 1;
+    } else {
+      unboundCount += 1;
+    }
+  }
+
+  return { boundCount, unboundCount };
+}
+
+/**
  * Plan contract violation severity levels.
  * @enum {string}
  */

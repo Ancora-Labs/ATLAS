@@ -56,7 +56,7 @@ import { evaluateRetune } from "./strategy_retuner.js";
 import { compileLessonsToPolicies } from "./learning_policy_compiler.js";
 import { assignWorkersToPlans, enforceLaneDiversity, evaluateSpecializationAdmissionGate, buildLanePerformanceFromCycleTelemetry, buildReroutePenaltyLedger, SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES } from "./capability_pool.js";
 import { runDoctor } from "./doctor.js";
-import { validateAllPlans, validatePacketBatchAdmission, applyDispatchBoundaryHardCap, resolveNamedVerificationTarget } from "./plan_contract_validator.js";
+import { validateAllPlans, validatePacketBatchAdmission, applyDispatchBoundaryHardCap, bindNamedVerificationTargets } from "./plan_contract_validator.js";
 import {
   resolveDependencyGraph,
   computeReadinessGate,
@@ -577,6 +577,11 @@ export interface GovernanceBlockDecision {
  */
 export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycleId = "", driftReport: ArchitectureDriftReport | null = null): Promise<GovernanceBlockDecision> {
   const stateDir = config?.paths?.stateDir || "state";
+  const normalizedPlans = Array.isArray(plans) ? plans : [];
+
+  // Bind deterministic named verification targets before any dispatch admission
+  // checks so every downstream gate evaluates the canonical verification surface.
+  bindNamedVerificationTargets(normalizedPlans);
 
   // ── Budget reconciliation — resolved upfront so every dispatch decision
   // carries a uniform BudgetEligibilityContract regardless of which gate fires.
@@ -674,8 +679,8 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
     };
   }
 
-  const graphInput = Array.isArray(plans)
-    ? plans.map((plan, index) => ({
+  const graphInput = Array.isArray(normalizedPlans)
+    ? normalizedPlans.map((plan, index) => ({
         id: String(plan?.id || plan?.task || plan?.role || `plan-${index + 1}`),
         dependsOn: Array.isArray(plan?.dependsOn) ? plan.dependsOn : [],
         filesInScope: Array.isArray(plan?.filesInScope) ? plan.filesInScope : []
@@ -800,9 +805,9 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
   // signals exist before work begins.  Plans that are missing these fields are
   // either AI output gaps or legacy plans from before the coupling requirement;
   // either way, dispatching them would produce unverifiable outcomes.
-  if (Array.isArray(plans) && plans.length > 0) {
+  if (Array.isArray(normalizedPlans) && normalizedPlans.length > 0) {
     const invalidPlans: string[] = [];
-    for (const plan of plans) {
+    for (const plan of normalizedPlans) {
       const coupling = validatePlanEvidenceCoupling(plan);
       if (!coupling.valid) {
         const planId = String((plan as any)?.task_id || (plan as any)?.id || (plan as any)?.task || "unknown");
@@ -832,7 +837,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
   //
   // Fail-open: any error during readiness evaluation is logged but never blocks.
   try {
-    const readinessResult = computeReadinessGate(Array.isArray(plans) ? plans : [], {
+    const readinessResult = computeReadinessGate(Array.isArray(normalizedPlans) ? normalizedPlans : [], {
       minConfidence: config?.runtime?.minPlanConfidence,
     });
     if (!readinessResult.ready) {
@@ -886,7 +891,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
   const configuredSpecShareTarget = Number(
     (config as any)?.workerPool?.specializationTargets?.minSpecializedShare
   );
-  const specializationGateEnabled = plans.length > 0 && Number.isFinite(configuredSpecShareTarget) && configuredSpecShareTarget > 0;
+  const specializationGateEnabled = normalizedPlans.length > 0 && Number.isFinite(configuredSpecShareTarget) && configuredSpecShareTarget > 0;
   if (specializationGateEnabled) {
     try {
       const gateStatePath = path.join(stateDir, "specialization_gate_state.json");
@@ -900,7 +905,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       }
 
       // assignWorkersToPlans is synchronous; call it with current plans to get fresh utilization.
-      const poolSample = assignWorkersToPlans(plans, config);
+      const poolSample = assignWorkersToPlans(normalizedPlans, config);
 
       // Read reroute history to bind admission threshold to reroute reason intensity.
       // Specialists rerouted for token-fill reasons lower the effective threshold;
@@ -967,30 +972,25 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
   // target or a NON_SPECIFIC_VERIFICATION marker — preventing high-latency
   // low-yield worker calls from reaching dispatch with unresolvable targets.
   //
-  // Fail-open: gate errors are non-fatal and never block dispatch.
   {
     const rawActionableCap = Number((config as any)?.planner?.maxActionableStepsPerPacket);
     const actionableCap = Number.isFinite(rawActionableCap) && rawActionableCap > 0
       ? Math.floor(rawActionableCap)
       : OVERBUNDLE_STEPS_THRESHOLD;
-    if (actionableCap > 0 && plans.length > 0) {
-      try {
-        const oversizeCheck = validatePacketBatchAdmission(Array.isArray(plans) ? plans : [], actionableCap);
-        if (oversizeCheck.blocked) {
-          const blockReason = `${BLOCK_REASON.OVERSIZED_PACKET}:${oversizeCheck.reason}`;
-          return {
-            blocked: true,
-            reason: blockReason,
-            action: undefined,
-            dispatchBlockReason: blockReason,
-            graphResult,
-            cycleId,
-            budgetEligibility,
-            gateIndex: GATE_PRECEDENCE.OVERSIZED_PACKET,
-          };
-        }
-      } catch (oversizeErr) {
-        warn(`[orchestrator] oversized packet gate failed (non-fatal): ${String(oversizeErr?.message || oversizeErr)}`);
+    if (actionableCap > 0 && normalizedPlans.length > 0) {
+      const oversizeCheck = validatePacketBatchAdmission(Array.isArray(normalizedPlans) ? normalizedPlans : [], actionableCap);
+      if (oversizeCheck.blocked) {
+        const blockReason = `${BLOCK_REASON.OVERSIZED_PACKET}:${oversizeCheck.reason}`;
+        return {
+          blocked: true,
+          reason: blockReason,
+          action: undefined,
+          dispatchBlockReason: blockReason,
+          graphResult,
+          cycleId,
+          budgetEligibility,
+          gateIndex: GATE_PRECEDENCE.OVERSIZED_PACKET,
+        };
       }
     }
   }
@@ -3292,13 +3292,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   // Bind deterministic named verification targets before dispatch admission.
   // This prevents generic verification commands from reaching worker calls when
   // a specific target already exists in verification_commands.
-  for (const plan of plans as any[]) {
-    const boundTarget = resolveNamedVerificationTarget(plan);
-    if (boundTarget) {
-      plan.verification = boundTarget;
-      plan._boundVerificationTarget = boundTarget;
-    }
-  }
+  bindNamedVerificationTargets(plans as any[]);
 
   // Funnel tracking: capture approved count before quality/freeze gates reduce plans.
   const funnelApprovedCount: number = plans.length;

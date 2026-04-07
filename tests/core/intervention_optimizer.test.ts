@@ -1597,6 +1597,13 @@ describe("checkOverbundleHardAdmission", () => {
     assert.deepEqual(r.rejectedIds, ["P-AC"]);
   });
 
+  it("uses ordered_steps length when orderedSteps is absent", () => {
+    const plans = [{ id: "P-OS", ordered_steps: ["s1", "s2", "s3", "s4"] }];
+    const r = checkOverbundleHardAdmission(plans, 3);
+    assert.equal(r.blocked, true);
+    assert.deepEqual(r.rejectedIds, ["P-OS"]);
+  });
+
   it("uses custom threshold override correctly", () => {
     const plans = [{ id: "P-BIG", orderedSteps: ["s1", "s2", "s3"] }];
     // threshold of 2 → 3 steps should block
@@ -1613,5 +1620,13 @@ describe("checkOverbundleHardAdmission", () => {
     const r = checkOverbundleHardAdmission(plans, 9);
     assert.equal(r.blocked, true);
     assert.ok(r.rejectedIds[0].startsWith("plan-idx-"), "must use plan-idx-N fallback id");
+  });
+
+  it("generates unique fallback ids for duplicate object references", () => {
+    const over = { orderedSteps: Array.from({ length: 11 }, (_, i) => `s-${i}`) };
+    const plans = [over, over];
+    const r = checkOverbundleHardAdmission(plans, 9);
+    assert.equal(r.blocked, true);
+    assert.deepEqual(r.rejectedIds, ["plan-idx-0", "plan-idx-1"]);
   });
 });

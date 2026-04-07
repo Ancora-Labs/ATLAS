@@ -1626,6 +1626,36 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
     );
   });
 
+  it("binds named verification target before admission when verification is non-specific", async () => {
+    const plans = [
+      {
+        id: "bind-v1",
+        role: "Evolution Worker",
+        task: "Bind verification command target",
+        verification: "npm test",
+        verification_commands: [
+          "npm test",
+          "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+        ],
+        acceptance_criteria: ["step 1"],
+        capacityDelta: 0.1,
+        requestROI: 1.0,
+      },
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(config, plans, "oversize-gate-bind-target");
+    assert.equal(result.blocked, false, "single valid plan must pass governance gate");
+    assert.equal(
+      plans[0].verification,
+      "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+      "gate must bind the first specific verification target before dispatch admission",
+    );
+    assert.equal(
+      plans[0]._boundVerificationTarget,
+      "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+      "bound target marker must be recorded for downstream dispatch surfaces",
+    );
+  });
+
   it("allows dispatch when all role groups are within the cap", async () => {
     const plans = [
       { role: "Evolution Worker", task: "Task A", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
@@ -1636,22 +1666,29 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
     assert.equal(result.blocked, false, "dispatch must not be blocked when all role groups are within cap");
   });
 
-  it("NEGATIVE PATH: gate does not fire when maxActionableStepsPerPacket is not configured", async () => {
+  it("NEGATIVE PATH: gate still enforces default ordered-step cap when maxActionableStepsPerPacket is not configured", async () => {
     const configNoCapLimit = {
       paths: { stateDir: tmpDir },
       env: { copilotCliCommand: "__missing__", targetRepo: "CanerDoqdu/Box" },
       systemGuardian: { enabled: false },
       canary:          { enabled: false },
-      // no planner.maxActionableStepsPerPacket
+      // no planner.maxActionableStepsPerPacket — gate must use OVERBUNDLE_STEPS_THRESHOLD fallback
     };
-    const plans = [
-      { role: "Evolution Worker", task: "Task A", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
-      { role: "Evolution Worker", task: "Task B", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
-      { role: "Evolution Worker", task: "Task C", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
-      { role: "Evolution Worker", task: "Task D", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
-    ];
+    const plans = Array.from({ length: 10 }, (_, i) => ({
+      role: "Evolution Worker",
+      task: `Task ${i + 1}`,
+      verification: `tests/core/orchestrator_pipeline_progress.test.ts — test: case ${i + 1}`,
+      verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+      acceptance_criteria: ["pass"],
+      capacityDelta: 0.1,
+      requestROI: 1.0,
+    }));
     const result = await evaluatePreDispatchGovernanceGate(configNoCapLimit, plans, "oversize-gate-no-config");
-    assert.equal(result.blocked, false, "gate must not fire when maxActionableStepsPerPacket is not configured (opt-in)");
+    assert.equal(result.blocked, true, "gate must block when default ordered-step cap is exceeded without explicit planner cap");
+    assert.ok(
+      result.reason?.startsWith(BLOCK_REASON.OVERSIZED_PACKET),
+      `reason must start with OVERSIZED_PACKET prefix; got: ${result.reason}`,
+    );
   });
 
   it("blocks with deterministic OVERSIZED_PACKET reason containing role and count", async () => {

@@ -280,17 +280,20 @@ export function checkOverbundleHardAdmission(
   const cap = Math.max(1, Math.floor(Number.isFinite(threshold) ? threshold : OVERBUNDLE_STEPS_THRESHOLD));
   const rejectedIds: string[] = [];
 
-  for (const plan of plans) {
+  for (let idx = 0; idx < plans.length; idx += 1) {
+    const plan = plans[idx];
     const id = String(plan?.id ?? plan?.task_id ?? "").trim();
     const steps = Array.isArray(plan?.orderedSteps)
       ? plan.orderedSteps.length
+      : Array.isArray(plan?.ordered_steps)
+        ? plan.ordered_steps.length
       : Array.isArray(plan?.acceptance_criteria)
         ? plan.acceptance_criteria.length
         : Array.isArray(plan?.plans)
           ? plan.plans.length
           : 1;
     if (steps > cap) {
-      rejectedIds.push(id || `plan-idx-${plans.indexOf(plan)}`);
+      rejectedIds.push(id || `plan-idx-${idx}`);
     }
   }
 
