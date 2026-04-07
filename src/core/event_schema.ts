@@ -150,6 +150,16 @@ export const EVENTS = Object.freeze({
   // Payload fields: role (string), lane (string), reasonCode (string),
   //                 fillRatio (number), penaltyFraction (number)
   POLICY_REROUTE_PENALTY_APPLIED:    "box.v1.policy.reroutePenaltyApplied",
+
+  // Policy domain — Jesus soft-timeout gated tier was evaluated but the
+  // soft-timeout threshold had NOT been reached, so the tier was skipped and
+  // no agent call was made (cutoff semantics).  This makes the cutoff decision
+  // deterministically observable for analytics and postmortem review.
+  // Payload fields: source (string), tier (string), softTimeoutMs (number),
+  //                 elapsedMsAtCutoff (number), softTimeoutReached (boolean),
+  //                 baseModel (string), fallbackModel (string),
+  //                 hardTimeoutMs (number)
+  POLICY_JESUS_SOFT_TIMEOUT_CUTOFF:  "box.v1.policy.jesusSoftTimeoutCutoff",
 });
 
 /** Flat set of all valid event name strings — for O(1) lookup. */

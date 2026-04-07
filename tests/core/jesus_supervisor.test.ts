@@ -914,3 +914,140 @@ describe("jesus_supervisor — fallback activation event contract", () => {
     );
   });
 });
+
+// ── Soft-timeout cutoff event contract ──────────────────────────────────────────
+
+describe("jesus_supervisor — soft-timeout cutoff event contract", () => {
+  it("registers POLICY_JESUS_SOFT_TIMEOUT_CUTOFF in canonical event registry", () => {
+    assert.ok(EVENTS.POLICY_JESUS_SOFT_TIMEOUT_CUTOFF,
+      "POLICY_JESUS_SOFT_TIMEOUT_CUTOFF must be defined in EVENTS");
+    assert.equal(VALID_EVENT_NAMES.has(EVENTS.POLICY_JESUS_SOFT_TIMEOUT_CUTOFF), true,
+      "POLICY_JESUS_SOFT_TIMEOUT_CUTOFF must be in VALID_EVENT_NAMES for O(1) lookup");
+  });
+
+  it("event name matches box.v1.policy.* naming convention", () => {
+    assert.match(
+      EVENTS.POLICY_JESUS_SOFT_TIMEOUT_CUTOFF,
+      /^box\.v1\.policy\.[a-zA-Z][a-zA-Z0-9_]*$/,
+      "event name must follow box.v1.policy.<action> convention",
+    );
+  });
+
+  it("builds a valid cutoff event with softTimeoutReached=false (threshold not crossed)", () => {
+    const event = buildEvent(
+      EVENTS.POLICY_JESUS_SOFT_TIMEOUT_CUTOFF,
+      EVENT_DOMAIN.POLICY,
+      "jesus-cutoff-evt-001",
+      {
+        source: "jesus_supervisor",
+        tier: "T3",
+        softTimeoutMs: 600000,
+        elapsedMsAtCutoff: 420000,
+        softTimeoutReached: false,
+        baseModel: "Claude Sonnet 4.6",
+        fallbackModel: "Claude Opus 4.5",
+        hardTimeoutMs: 1800000,
+      },
+    );
+
+    assert.equal(event.event, EVENTS.POLICY_JESUS_SOFT_TIMEOUT_CUTOFF);
+    assert.equal(event.domain, EVENT_DOMAIN.POLICY);
+    assert.equal(event.payload.softTimeoutReached, false,
+      "cutoff fires because soft-timeout was NOT reached — field must be false");
+    assert.equal(event.payload.tier, "T3");
+    assert.equal(event.payload.elapsedMsAtCutoff, 420000);
+    assert.equal(event.payload.softTimeoutMs, 600000);
+  });
+
+  it("cutoff event carries baseModel and fallbackModel for routing traceability", () => {
+    const event = buildEvent(
+      EVENTS.POLICY_JESUS_SOFT_TIMEOUT_CUTOFF,
+      EVENT_DOMAIN.POLICY,
+      "jesus-cutoff-evt-002",
+      {
+        source: "jesus_supervisor",
+        tier: "T3",
+        softTimeoutMs: 300000,
+        elapsedMsAtCutoff: 180000,
+        softTimeoutReached: false,
+        baseModel: "Claude Sonnet 4.6",
+        fallbackModel: "Claude Sonnet 4.6",
+        hardTimeoutMs: 1800000,
+      },
+    );
+    assert.equal(event.payload.baseModel, "Claude Sonnet 4.6");
+    assert.equal(event.payload.fallbackModel, "Claude Sonnet 4.6");
+    assert.equal(event.payload.hardTimeoutMs, 1800000);
+  });
+
+  it("negative path: throws when cutoff event uses an invalid domain", () => {
+    assert.throws(
+      () => buildEvent(
+        EVENTS.POLICY_JESUS_SOFT_TIMEOUT_CUTOFF,
+        "not-a-valid-domain",
+        "jesus-cutoff-evt-003",
+        { source: "test" },
+      ),
+      /not-a-valid-domain/,
+      "buildEvent must throw for an invalid domain",
+    );
+  });
+
+  it("distinguishes cutoff (softTimeoutReached=false) from fallback activation (softTimeoutReached=true)", () => {
+    // Cutoff event: threshold not reached → no agent call made
+    const cutoffEvent = buildEvent(
+      EVENTS.POLICY_JESUS_SOFT_TIMEOUT_CUTOFF,
+      EVENT_DOMAIN.POLICY,
+      "jesus-distinguish-001",
+      {
+        source: "jesus_supervisor",
+        tier: "T3",
+        softTimeoutMs: 600000,
+        elapsedMsAtCutoff: 350000,
+        softTimeoutReached: false,
+        baseModel: "Claude Sonnet 4.6",
+        fallbackModel: "Claude Opus 4.5",
+        hardTimeoutMs: 1800000,
+      },
+    );
+
+    // Fallback activation event: threshold WAS reached → agent call proceeds with fallback model
+    const fallbackEvent = buildEvent(
+      EVENTS.POLICY_JESUS_FALLBACK_ACTIVATED,
+      EVENT_DOMAIN.POLICY,
+      "jesus-distinguish-001",
+      {
+        source: "jesus_supervisor",
+        baseModel: "Claude Sonnet 4.6",
+        fallbackModel: "Claude Opus 4.5",
+        fromTier: "T2",
+        toTier: "T3",
+        softTimeoutMs: 600000,
+        elapsedMsAtActivation: 620000,
+        softTimeoutReached: true,
+        hardTimeoutMs: 1800000,
+        routingReason: "JESUS_LATENCY_FALLBACK",
+      },
+    );
+
+    assert.notEqual(cutoffEvent.event, fallbackEvent.event,
+      "cutoff and fallback activation must be distinct canonical events");
+    assert.equal(cutoffEvent.payload.softTimeoutReached, false,
+      "cutoff must carry softTimeoutReached=false");
+    assert.equal(fallbackEvent.payload.softTimeoutReached, true,
+      "fallback activation must carry softTimeoutReached=true");
+  });
+
+  it("hasReachedJesusSoftTimeout predicate is consistent with cutoff condition", () => {
+    // The cutoff fires when hasReachedJesusSoftTimeout returns false.
+    // These assertions prove the predicate boundary is deterministic.
+    const softTimeoutMs = 600_000;
+    assert.equal(hasReachedJesusSoftTimeout(599_999, softTimeoutMs), false,
+      "1ms below threshold: cutoff fires (no agent call)");
+    assert.equal(hasReachedJesusSoftTimeout(600_000, softTimeoutMs), true,
+      "at threshold: fallback proceeds (no cutoff)");
+    assert.equal(hasReachedJesusSoftTimeout(600_001, softTimeoutMs), true,
+      "1ms above threshold: fallback proceeds (no cutoff)");
+  });
+});
+

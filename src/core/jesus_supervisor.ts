@@ -995,6 +995,21 @@ ${workersList}`;
       if (tier.softTimeoutGated) {
         const elapsedMsBeforeFallback = Date.now() - aiCallStartedAt;
         if (!hasReachedJesusSoftTimeout(elapsedMsBeforeFallback, jesusSoftTimeoutMs)) {
+          // Soft-timeout threshold not yet crossed — skip this fallback tier (cutoff).
+          // Emit a deterministic analytics event so the cutoff decision is observable.
+          emitEvent(EVENTS.POLICY_JESUS_SOFT_TIMEOUT_CUTOFF, EVENT_DOMAIN.POLICY, latencyWarningCorrelationId, {
+            source: "jesus_supervisor",
+            tier: tier.label,
+            softTimeoutMs: jesusSoftTimeoutMs,
+            elapsedMsAtCutoff: elapsedMsBeforeFallback,
+            softTimeoutReached: false,
+            baseModel: jesusModel,
+            fallbackModel: tier.model,
+            hardTimeoutMs: jesusTimeoutMs,
+          });
+          chatLog(stateDir, jesusName,
+            `[LIVE] tier=${tier.label} soft-timeout cutoff: elapsed=${elapsedMsBeforeFallback}ms < softTimeoutMs=${jesusSoftTimeoutMs}ms — fallback skipped`
+          );
           rawResult = { status: -1, stdout: "", stderr: "soft-timeout cutoff not reached", timedOut: false };
           finalTierLabel = tier.label;
           finalTierModel = tier.model;
