@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Athena — Quality Gate & Postmortem Reviewer
  *
  * Athena is called at two points in every cycle:
@@ -3153,6 +3153,38 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
       `[ATHENA] AI-provided batching accepted: ${handoff.plans.length} plan(s) across ${batchCount} batch(es)`
     );
     result.patchedPlans = handoff.plans;
+
+    // Populate corrections[] with structured repair entries for patchedPlans changes.
+    // Downstream consumers (self-improvement, recurrence_detector, cycle_analytics) read
+    // corrections[] to detect recurring defect patterns — empty corrections on an approved
+    // cycle with repairs produces false signal that the plan was clean.
+    if (Array.isArray(plans) && handoff.plans.length > 0) {
+      const TRACKED_FIELDS: Array<keyof any> = [
+        "acceptance_criteria", "target_files", "scope", "verificationCommands", "dependencies"
+      ];
+      for (let pi = 0; pi < handoff.plans.length; pi++) {
+        const orig = (plans[pi] as any);
+        const patched = (handoff.plans[pi] as any);
+        if (!orig || !patched) continue;
+        const repairedFields: string[] = [];
+        for (const field of TRACKED_FIELDS) {
+          const origVal = orig[field];
+          const patchedVal = patched[field];
+          const origEmpty = !origVal || (Array.isArray(origVal) && origVal.length === 0);
+          const patchedFilled = patchedVal && !(Array.isArray(patchedVal) && patchedVal.length === 0);
+          if (origEmpty && patchedFilled) repairedFields.push(String(field));
+        }
+        if (repairedFields.length > 0) {
+          const entry = `[PATCHED] plan[${pi}]: ${repairedFields.join(", ")} repaired`;
+          if (!result.corrections.includes(entry)) result.corrections.push(entry);
+        }
+      }
+    }
+    // Populate corrections[] for fields that the reviewer payload omitted and were synthesized.
+    for (const field of normalizedReview.synthesizedFields) {
+      const entry = `[SYNTHESIZED] ${field} was absent from reviewer payload and inferred automatically`;
+      if (!result.corrections.includes(entry)) result.corrections.push(entry);
+    }
   }
 
   if (!result.approved && !(result as any).reason) {
