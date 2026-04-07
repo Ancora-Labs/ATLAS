@@ -947,6 +947,7 @@ export function computeCycleAnalytics(config, {
     modelRoutingTelemetry: buildModelRoutingTelemetry(premiumUsageLog ?? []),
     lineageSummary: buildLineageSummary(lineageLog ?? []),
     memoryHitTelemetry: buildMemoryHitTelemetry(memoryHitLog ?? []),
+    routingROISummary: buildRoutingROISummary(premiumUsageLog ?? [], lineageLog ?? []),
   };
 }
 
@@ -1659,6 +1660,72 @@ export function buildLineageSummary(lineageLog: unknown[]): {
     totalEvents++;
   }
   return { bySourceKind, totalEvents };
+}
+
+/**
+ * Join premium usage log and lineage log entries by shared lineageId to compute
+ * per-lineage-key routing ROI.
+ *
+ * ROI is defined as the fraction of "done" outcomes among all requests sharing
+ * the same lineageId.  Entries without a lineageId are tallied separately.
+ *
+ * Returns:
+ *   totalRequests    — total entries in premiumUsageLog
+ *   linkedRequests   — entries that carry a non-null lineageId
+ *   linkedRatio      — linkedRequests / totalRequests (null when totalRequests = 0)
+ *   roiByLineageId   — per-key { success, total, roi } tally
+ *   overallLinkedROI — done / total across all linked entries (null when none)
+ */
+export function buildRoutingROISummary(
+  premiumUsageLog: unknown[],
+  _lineageLog: unknown[] = [],
+): {
+  totalRequests: number;
+  linkedRequests: number;
+  linkedRatio: number | null;
+  roiByLineageId: Record<string, { success: number; total: number; roi: number }>;
+  overallLinkedROI: number | null;
+} {
+  if (!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) {
+    return { totalRequests: 0, linkedRequests: 0, linkedRatio: null, roiByLineageId: {}, overallLinkedROI: null };
+  }
+
+  const byLineageId: Record<string, { success: number; total: number }> = {};
+  let linkedRequests = 0;
+  let linkedDone = 0;
+  let linkedTotal = 0;
+
+  for (const entry of premiumUsageLog) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const row = entry as Record<string, unknown>;
+    const lid = typeof row.lineageId === "string" && row.lineageId ? row.lineageId : null;
+    const outcome = typeof row.outcome === "string" ? row.outcome : "unknown";
+    const isDone = outcome === "done";
+
+    if (lid) {
+      byLineageId[lid] ??= { success: 0, total: 0 };
+      byLineageId[lid].total++;
+      if (isDone) byLineageId[lid].success++;
+      linkedRequests++;
+      linkedTotal++;
+      if (isDone) linkedDone++;
+    }
+  }
+
+  const roiByLineageId: Record<string, { success: number; total: number; roi: number }> = {};
+  for (const [lid, acc] of Object.entries(byLineageId)) {
+    roiByLineageId[lid] = {
+      success: acc.success,
+      total: acc.total,
+      roi: acc.total > 0 ? Math.round((acc.success / acc.total) * 1000) / 1000 : 0,
+    };
+  }
+
+  const totalRequests = premiumUsageLog.filter(e => typeof e === "object" && e !== null).length;
+  const linkedRatio = totalRequests > 0 ? Math.round((linkedRequests / totalRequests) * 1000) / 1000 : null;
+  const overallLinkedROI = linkedTotal > 0 ? Math.round((linkedDone / linkedTotal) * 1000) / 1000 : null;
+
+  return { totalRequests, linkedRequests, linkedRatio, roiByLineageId, overallLinkedROI };
 }
 
 /**

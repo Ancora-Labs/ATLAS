@@ -127,7 +127,10 @@ export const EVENTS = Object.freeze({
 
   // Policy domain — model routing decision finalized for a worker dispatch.
   // Payload fields: roleName (string), resolvedModel (string), tier ("T1"|"T2"|"T3"),
-  //                 wasDowngraded (boolean), routingReasonCode (string), taskKind (string|null)
+  //                 wasDowngraded (boolean), routingReasonCode (string), taskKind (string|null),
+  //                 lineageId (string|null) — shared lineage key linking this routing decision
+  //                 to the premium_usage_log and lineage_graph entries for the same task.
+  //                 meetsQualityFloor (boolean) — whether the resolved model met the quality floor.
   POLICY_MODEL_ROUTED:               "box.v1.policy.modelRouted",
 
   // Policy domain — transient-error retry suppressed due to low expected ROI.

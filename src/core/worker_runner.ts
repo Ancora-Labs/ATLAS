@@ -25,10 +25,11 @@ import { getVerificationCommands, classifyNodeTestGlobWindowsArtifact } from "./
 import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence } from "./verification_gate.js";
 import {
   enforceModelPolicy,
-  routeModelWithUncertainty,
+  routeModelUnderQualityFloor,
   classifyComplexityTier,
   COMPLEXITY_TIER,
-  decideDeliberationPolicy
+  decideDeliberationPolicy,
+  QUALITY_FLOOR_DEFAULT,
 } from "./model_policy.js";
 import { deriveRoutingAdjustments, buildPromptHardConstraints } from "./learning_policy_compiler.js";
 import { loadPolicy, getProtectedPathMatches, getRolePathViolations } from "./policy_engine.js";
@@ -60,6 +61,8 @@ type WorkerRunnerConfig = {
 type PremiumUsageMeta = {
   outcome?: string;
   taskId?: string | number | null;
+  /** Shared lineage key linking this premium request to lineage_graph and routing events. */
+  lineageId?: string | null;
 };
 
 type WorkerRegistryEntry = {
@@ -243,7 +246,7 @@ export function emitWorkerSpanDrop(
 
 // ── Premium usage tracking ──────────────────────────────────────────────────
 
-function logPremiumUsage(config, roleName, model, taskKind, durationMs, { outcome, taskId }: PremiumUsageMeta = {}) {
+function logPremiumUsage(config, roleName, model, taskKind, durationMs, { outcome, taskId, lineageId }: PremiumUsageMeta = {}) {
   const logPath = path.join(config.paths?.stateDir || "state", "premium_usage_log.json");
   let entries = [];
   try {
@@ -260,7 +263,8 @@ function logPremiumUsage(config, roleName, model, taskKind, durationMs, { outcom
     completedAt: new Date().toISOString(),
     durationMs,
     outcome: outcome || "unknown",
-    taskId: taskId || null
+    taskId: taskId || null,
+    lineageId: lineageId || null,
   });
   // Keep last 500 entries to prevent unbounded growth
   if (entries.length > 500) entries = entries.slice(-500);
@@ -698,22 +702,24 @@ function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {}, rou
     const workerConfig = findWorkerByName(config, roleName);
     if (workerConfig?.model) candidate = workerConfig.model;
   }
-  // 4. Uncertainty-aware routing: factor in task complexity tier + historical ROI
-  //    to auto-select the right model when no explicit config override exists.
+  // 4. Quality-floor-aware routing: combines uncertainty-aware routing with a minimum
+  //    quality floor so the cheapest model that meets the floor is selected.
+  //    Falls back to the strongest model when no candidate satisfies the floor.
   if (!candidate) {
     const recentROI = computeRecentROI(config, taskKind);
     const outcomeMetrics = computeOutcomeMetrics(config, taskKind);
     const benchmarkSignal = analyzeBenchmarkReadiness(config, taskHints);
-    const uncertaintyRoute = routeModelWithUncertainty(
+    const qualityFloorRoute = routeModelUnderQualityFloor(
       taskHints,
       { defaultModel, strongModel, efficientModel },
-      { recentROI }
+      { recentROI },
+      QUALITY_FLOOR_DEFAULT,
     );
-    candidate = uncertaintyRoute.model;
+    candidate = qualityFloorRoute.model;
     if (
       benchmarkSignal.hasSignal &&
       benchmarkSignal.highUncertainty &&
-      (uncertaintyRoute.tier === COMPLEXITY_TIER.T3 || String(taskHints.complexity || "").toLowerCase() === "critical")
+      (qualityFloorRoute.tier === COMPLEXITY_TIER.T3 || String(taskHints.complexity || "").toLowerCase() === "critical")
     ) {
       candidate = strongModel;
       try {
@@ -723,10 +729,10 @@ function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {}, rou
         );
       } catch { /* non-critical */ }
     }
-    if (uncertaintyRoute.uncertainty !== "low") {
+    if (qualityFloorRoute.uncertainty !== "low" || !qualityFloorRoute.meetsQualityFloor) {
       try {
         appendProgress(config,
-          `[UNCERTAINTY_ROUTE] ${roleName}: tier=${uncertaintyRoute.tier} uncertainty=${uncertaintyRoute.uncertainty} recentROI=${recentROI.toFixed(2)} → ${candidate}`
+          `[QUALITY_FLOOR_ROUTE] ${roleName}: tier=${qualityFloorRoute.tier} uncertainty=${qualityFloorRoute.uncertainty} meetsFloor=${qualityFloorRoute.meetsQualityFloor} recentROI=${recentROI.toFixed(2)} → ${candidate}`
         );
       } catch { /* non-critical */ }
     }
@@ -1292,6 +1298,15 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // ── Typed event: model routing decision telemetry ─────────────────────────
   // Emit after model is fully resolved (including deliberation escalation)
   // so downstream consumers see the final routing decision, not an intermediate one.
+  // lineageId links this routing event to the matching premium_usage_log entry.
+  let _dispatchLineageId: string | null = null;
+  if (instruction.taskId) {
+    try {
+      const _fp = buildTaskFingerprint(instruction.taskKind || "general", instruction.task || "");
+      const _attempt = Number(instruction.reworkAttempt || 0) + 1;
+      _dispatchLineageId = buildLineageId(_fp, Number(instruction.taskId), _attempt);
+    } catch { /* non-critical */ }
+  }
   try {
     const policyResult = enforceModelPolicy(model, taskHints, config?.copilot?.defaultModel || "Claude Sonnet 4.6");
     emitEvent(EVENTS.POLICY_MODEL_ROUTED, EVENT_DOMAIN.POLICY, `model-route-${roleName}-${Date.now()}`, {
@@ -1301,6 +1316,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       wasDowngraded: policyResult.downgraded,
       routingReasonCode: deliberation.mode === "multi-attempt" ? "hard-task-escalation" : "standard",
       taskKind: instruction.taskKind || "general",
+      lineageId: _dispatchLineageId,
+      meetsQualityFloor: !policyResult.downgraded,
     });
   } catch { /* telemetry is non-critical */ }
 
@@ -1747,9 +1764,19 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   }
 
   // Track premium request usage per worker (always log, even for failed verification attempts)
+  // Derive the shared lineage key so premium_usage_log entries can be joined with lineage_graph.
+  let _premiumLineageId: string | null = null;
+  if (instruction.taskId) {
+    try {
+      const _fp = buildTaskFingerprint(instruction.taskKind || "general", instruction.task || "");
+      const _attempt = Number(instruction.reworkAttempt || 0) + 1;
+      _premiumLineageId = buildLineageId(_fp, Number(instruction.taskId), _attempt);
+    } catch { /* non-critical — lineage key is observability only */ }
+  }
   logPremiumUsage(config, roleName, model, instruction.taskKind, Date.now() - startMs, {
     outcome: parsed.status,
-    taskId: instruction.taskId || instruction.task || null
+    taskId: instruction.taskId || instruction.task || null,
+    lineageId: _premiumLineageId,
   });
 
   // ── Outcome mapping: tie memory-hit record to final worker outcome ─────────

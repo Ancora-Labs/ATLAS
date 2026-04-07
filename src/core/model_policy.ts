@@ -513,6 +513,9 @@ export async function loadRouteROILedger(config: object): Promise<RouteROIEntry[
 // supplied floor.  Falls back to the strongest available model when no candidate
 // qualifies, marking the result so the caller can log a warning.
 
+/** Default quality floor used by all quality-floor-aware routing functions (0–1). */
+export const QUALITY_FLOOR_DEFAULT = 0.7 as const;
+
 /** Heuristic default quality scores per model (case-insensitive normalized key). */
 const DEFAULT_MODEL_QUALITY: Record<string, number> = {
   "claude sonnet 4.6": 0.85,
