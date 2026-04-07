@@ -40,7 +40,11 @@ import {
   runSelfImprovementCycle,
 } from "../../src/core/self_improvement.js";
 import { DECISION_QUALITY_LABEL } from "../../src/core/athena_reviewer.js";
-import { WORKER_CYCLE_ARTIFACTS_FILE } from "../../src/core/cycle_analytics.js";
+import {
+  WORKER_CYCLE_ARTIFACTS_FILE,
+  LEGACY_EVOLUTION_PROGRESS_FILE,
+  LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION,
+} from "../../src/core/cycle_analytics.js";
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -824,5 +828,79 @@ describe("collectCycleOutcomes — wave task membership is exact, not substring"
 
   it("completedCount counts all completed tasks across waves", () => {
     assert.equal(result.completedCount, 2);
+  });
+});
+
+// ── Legacy evolution_progress fallback — schema-version telemetry ─────────────
+// Verifies that when the canonical artifact is absent the fallback path uses
+// LEGACY_EVOLUTION_PROGRESS_FILE and that LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION
+// identifies the implicit v0 format.
+
+describe("collectCycleOutcomes — legacy evolution_progress fallback uses named constants", () => {
+  let tmpDir: string;
+  let result: Awaited<ReturnType<typeof collectCycleOutcomes>>;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-si-legacy-"));
+    const config = { paths: { stateDir: tmpDir } };
+
+    // Write prometheus_analysis.json (required to avoid PROMETHEUS_ABSENT degraded)
+    // and the legacy evolution_progress file. The canonical artifact is intentionally absent.
+    await fs.writeFile(
+      path.join(tmpDir, "prometheus_analysis.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        projectHealth: "good",
+        plans: [
+          { id: "task-done", worker: "coder", context: "fix" },
+          { id: "task-pending", worker: "coder", context: "add" },
+        ],
+        executionStrategy: { waves: [] },
+        requestBudget: { estimatedPremiumRequestsTotal: 2, hardCapTotal: 10 },
+      }),
+      "utf8"
+    );
+
+    const legacyData = {
+      cycle_id: "cycle-legacy",
+      tasks: {
+        "task-done": { status: "done" },
+        "task-pending": { status: "pending" },
+      },
+    };
+    await fs.writeFile(
+      path.join(tmpDir, LEGACY_EVOLUTION_PROGRESS_FILE),
+      JSON.stringify(legacyData),
+      "utf8"
+    );
+
+    result = await collectCycleOutcomes(config as any);
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("LEGACY_EVOLUTION_PROGRESS_FILE constant value matches the file we wrote", () => {
+    // If this constant changes, the fallback read in collectCycleOutcomes will silently
+    // miss the legacy file. This test pins the constant to the expected filename.
+    assert.equal(LEGACY_EVOLUTION_PROGRESS_FILE, "evolution_progress.json");
+  });
+
+  it("LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION is 0 (implicit legacy format)", () => {
+    assert.equal(LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION, 0);
+  });
+
+  it("fallback path reads legacy evolution_progress and counts completed tasks", () => {
+    // task-done has status=done so completedCount should be 1; task-pending is not counted.
+    assert.equal(result.completedCount, 1,
+      "completedCount must reflect only done tasks from legacy evolution_progress fallback");
+  });
+
+  it("degraded is true when canonical artifact is absent and degradedReason is CANONICAL_ARTIFACT_ABSENT", () => {
+    assert.equal(result.degraded, true,
+      "must be degraded when falling back to legacy evolution_progress");
+    assert.equal(result.degradedReason, OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_ABSENT,
+      "degradedReason must be CANONICAL_ARTIFACT_ABSENT when canonical file is absent");
   });
 });

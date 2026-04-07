@@ -50,6 +50,8 @@ import {
 } from "./trust_boundary.js";
 import {
   WORKER_CYCLE_ARTIFACTS_FILE,
+  LEGACY_EVOLUTION_PROGRESS_FILE,
+  LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION,
   migrateWorkerCycleArtifacts,
   migrateLegacyEvolutionProgressToCompletedTaskIds,
 } from "./cycle_analytics.js";
@@ -568,23 +570,27 @@ export async function collectCycleOutcomes(config) {
     }
 
     // Lazily read legacy files — only reached when canonical artifact is absent.
+    // LEGACY_EVOLUTION_PROGRESS_FILE is a compatibility read-only path;
+    // the implicit schema version is LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION (v0).
     const [evolutionResult, workerSessionsResult] = await Promise.all([
-      readJsonSafe(path.join(stateDir, "evolution_progress.json")),
+      readJsonSafe(path.join(stateDir, LEGACY_EVOLUTION_PROGRESS_FILE)),
       readJsonSafe(path.join(stateDir, "worker_sessions.json")),
     ]);
 
     if (!evolutionResult.ok) {
-      warn(`[self-improvement] legacy evolution_progress.json unavailable: reason=${evolutionResult.reason}`);
+      warn(`[self-improvement] legacy ${LEGACY_EVOLUTION_PROGRESS_FILE} unavailable: reason=${evolutionResult.reason}`);
     } else {
       const migration = migrateLegacyEvolutionProgressToCompletedTaskIds(evolutionResult.data);
       if (!migration.ok) {
         warn(
-          `[self-improvement] legacy evolution_progress.json migration failed: reason=${migration.reason} fromVersion=${String(migration.fromVersion)}`
+          `[self-improvement] legacy ${LEGACY_EVOLUTION_PROGRESS_FILE} migration failed: reason=${migration.reason} fromVersion=${String(migration.fromVersion ?? LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION)}`
         );
       } else {
         if (migration.reason !== "already_current") {
+          // Explicit schema-versioned migration telemetry: fromVersion reflects the
+          // legacy format (LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION=0 when no schemaVersion field).
           warn(
-            `[self-improvement] compatibility fallback using legacy evolution_progress migration: fromVersion=${String(migration.fromVersion)} toVersion=${migration.toVersion}`
+            `[self-improvement] compatibility fallback: migrating ${LEGACY_EVOLUTION_PROGRESS_FILE} fromVersion=${String(migration.fromVersion ?? LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION)} toVersion=${migration.toVersion} format=legacy_task_map`
           );
         }
         completedTasks = migration.completedTaskIds;
