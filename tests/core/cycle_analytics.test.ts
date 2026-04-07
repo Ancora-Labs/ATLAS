@@ -252,6 +252,45 @@ describe("computeCycleAnalytics — KPIs (AC2)", () => {
     const record = computeCycleAnalytics(config, { premiumEfficiencyRaw: NaN });
     assert.equal(record.kpis.premiumEfficiencyRaw, null, "NaN should be sanitized to null");
   });
+
+  it("kpis.rawPremiumEfficiency and executionAdjustedPremiumEfficiency are null when not provided", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, { sloRecord: makeSloRecord() });
+    assert.equal(record.kpis.rawPremiumEfficiency, null, "rawPremiumEfficiency must be null when not provided");
+    assert.equal(record.kpis.executionAdjustedPremiumEfficiency, null, "executionAdjustedPremiumEfficiency must be null when not provided");
+  });
+
+  it("kpis.rawPremiumEfficiency reflects the passed value", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, { sloRecord: makeSloRecord(), rawPremiumEfficiency: 0.60 });
+    assert.equal(record.kpis.rawPremiumEfficiency, 0.60);
+  });
+
+  it("kpis.executionAdjustedPremiumEfficiency reflects the passed value", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, { sloRecord: makeSloRecord(), executionAdjustedPremiumEfficiency: 0.75 });
+    assert.equal(record.kpis.executionAdjustedPremiumEfficiency, 0.75);
+  });
+
+  it("kpis.rawPremiumEfficiency and executionAdjustedPremiumEfficiency can differ (leadership overhead exclusion)", () => {
+    // raw includes leadership in denominator → lower value; adjusted excludes leadership → higher value
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      sloRecord: makeSloRecord(),
+      rawPremiumEfficiency: 0.40,
+      executionAdjustedPremiumEfficiency: 0.80,
+    });
+    assert.equal(record.kpis.rawPremiumEfficiency, 0.40);
+    assert.equal(record.kpis.executionAdjustedPremiumEfficiency, 0.80);
+    assert.ok(record.kpis.rawPremiumEfficiency !== record.kpis.executionAdjustedPremiumEfficiency,
+      "new metrics can differ when leadership overhead is significant");
+  });
+
+  it("kpis.rawPremiumEfficiency is null for non-finite input", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, { rawPremiumEfficiency: NaN });
+    assert.equal(record.kpis.rawPremiumEfficiency, null, "NaN should be sanitized to null");
+  });
 });
 
 // ── computeCycleAnalytics — canonicalEvents inventory (AC2) ──────────────────

@@ -147,15 +147,27 @@ export interface CycleSample {
   recordedAt: string;
   phase: string;
   completionRate: number | null;
-  /** Raw premium efficiency: successfulPremiumEvents / settledPremiumEvents. */
+  /** Backward-compat: successfulPremiumEvents / settledPremiumEvents (API success rate). */
   premiumEfficiency: number | null;
   /**
-   * Execution-adjusted premium efficiency: replaces worker-slot success signals
-   * with verified-done evidence.  Formula: (leadershipSuccesses + verifiedDoneWorkers)
-   * / settledPremiumEvents.  null for cycles recorded before this field was added
-   * (backward-compatible sentinel).
+   * Backward-compat execution-adjusted: (leadershipSuccesses + verifiedDoneWorkers)
+   * / settledPremiumEvents.  null for older records.
    */
   premiumEfficiencyAdjusted: number | null;
+  /**
+   * New raw efficiency: verifiedDoneWorkers / allCyclePremiumRequests.
+   * Measures actual output quality against total cost (including leadership overhead).
+   * null for cycles recorded before this field was added.
+   */
+  rawPremiumEfficiency: number | null;
+  /**
+   * New execution-adjusted efficiency: verifiedDoneWorkers /
+   * (allCyclePremiumRequests − leadershipRequests).
+   * Excludes mandatory leadership/orchestration from the denominator so worker
+   * execution quality is measured independently of orchestration overhead.
+   * null for cycles recorded before this field was added.
+   */
+  executionAdjustedPremiumEfficiency: number | null;
   athenaRejectRate: number | null;
   parserFallbackRate: number | null;
   contractFailRate: number | null;
@@ -339,14 +351,23 @@ export function evaluateInBandThresholds(
   const completionRateMet = avgCompletion !== null && avgCompletion >= thresholds.completionRateMin;
 
   // Use the gate-selected variant for the direct threshold check (mirrors composite score input).
-  const efficiencies = window.map(s =>
-    gateVariant === "execution_adjusted" &&
-    s.premiumEfficiencyAdjusted !== null &&
-    s.premiumEfficiencyAdjusted !== undefined &&
-    Number.isFinite(s.premiumEfficiencyAdjusted)
-      ? s.premiumEfficiencyAdjusted
-      : s.premiumEfficiency,
-  );
+  // Prefer new explicit metrics when available; fall back to backward-compat fields.
+  const efficiencies = window.map(s => {
+    if (gateVariant === "execution_adjusted") {
+      if (s.executionAdjustedPremiumEfficiency !== null && s.executionAdjustedPremiumEfficiency !== undefined && Number.isFinite(s.executionAdjustedPremiumEfficiency)) {
+        return s.executionAdjustedPremiumEfficiency;
+      }
+      if (s.premiumEfficiencyAdjusted !== null && s.premiumEfficiencyAdjusted !== undefined && Number.isFinite(s.premiumEfficiencyAdjusted)) {
+        return s.premiumEfficiencyAdjusted;
+      }
+      return s.premiumEfficiency;
+    }
+    // "raw" variant: prefer new rawPremiumEfficiency over legacy premiumEfficiency
+    if (s.rawPremiumEfficiency !== null && s.rawPremiumEfficiency !== undefined && Number.isFinite(s.rawPremiumEfficiency)) {
+      return s.rawPremiumEfficiency;
+    }
+    return s.premiumEfficiency;
+  });
   const avgEfficiency = windowAvg(efficiencies, thresholds.stabilizingWindow);
   const premiumEfficiencyMet = avgEfficiency !== null && avgEfficiency >= thresholds.premiumEfficiencyMin;
 
@@ -424,15 +445,36 @@ export function evaluateRegressionTriggers(
 // ── Dimension extraction from sample ─────────────────────────────────────────
 
 function sampleToDimensions(sample: CycleSample, gateVariant: "raw" | "execution_adjusted" = "raw") {
-  // Select premium efficiency value based on the configured gate variant.
-  // Falls back to raw when adjusted is absent (legacy records or null sentinel).
-  const efficiencyValue =
-    gateVariant === "execution_adjusted" &&
-    sample.premiumEfficiencyAdjusted !== null &&
-    sample.premiumEfficiencyAdjusted !== undefined &&
-    Number.isFinite(sample.premiumEfficiencyAdjusted)
-      ? sample.premiumEfficiencyAdjusted
-      : sample.premiumEfficiency;
+  // Prefer new explicit metrics when available; fall back to backward-compat fields for old records.
+  // "raw" variant: use rawPremiumEfficiency (verifiedDone/total) when present, else premiumEfficiency.
+  // "execution_adjusted" variant: use executionAdjustedPremiumEfficiency when present, else
+  // premiumEfficiencyAdjusted, else premiumEfficiency.
+  let efficiencyValue: number | null | undefined;
+  if (gateVariant === "execution_adjusted") {
+    if (
+      sample.executionAdjustedPremiumEfficiency !== null &&
+      sample.executionAdjustedPremiumEfficiency !== undefined &&
+      Number.isFinite(sample.executionAdjustedPremiumEfficiency)
+    ) {
+      efficiencyValue = sample.executionAdjustedPremiumEfficiency;
+    } else if (
+      sample.premiumEfficiencyAdjusted !== null &&
+      sample.premiumEfficiencyAdjusted !== undefined &&
+      Number.isFinite(sample.premiumEfficiencyAdjusted)
+    ) {
+      efficiencyValue = sample.premiumEfficiencyAdjusted;
+    } else {
+      efficiencyValue = sample.premiumEfficiency;
+    }
+  } else {
+    // "raw" variant: prefer new rawPremiumEfficiency, fall back to old premiumEfficiency
+    efficiencyValue =
+      sample.rawPremiumEfficiency !== null &&
+      sample.rawPremiumEfficiency !== undefined &&
+      Number.isFinite(sample.rawPremiumEfficiency)
+        ? sample.rawPremiumEfficiency
+        : sample.premiumEfficiency;
+  }
 
   const athenaQuality = sample.athenaRejectRate !== null ? clamp01(1 - sample.athenaRejectRate) : null;
   const parserQuality = sample.parserFallbackRate !== null ? clamp01(1 - sample.parserFallbackRate) : null;

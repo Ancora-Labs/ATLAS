@@ -4014,9 +4014,11 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   }
 
   // ── Premium efficiency variants: computed once, shared by analytics and band monitor ──
-  // Raw variant: fraction of settled premium events that succeeded at the API level.
-  // Execution-adjusted: replaces worker-slot success signals with verified-done evidence.
-  // Both are computed here (before analytics) so both channels see identical values.
+  // Raw variant (backward-compat): fraction of settled premium events that succeeded at the API level.
+  // Execution-adjusted (backward-compat): replaces worker-slot success signals with verified-done evidence.
+  // rawPremiumEfficiency (new): verifiedDoneWorkers / allCyclePremiumRequests — output-quality focused.
+  // executionAdjustedPremiumEfficiency (new): same numerator, denominator excludes mandatory leadership requests.
+  // All are computed here (before analytics) so both channels see identical values.
   const _LEADERSHIP_AGENTS = new Set(["jesus", "prometheus", "athena", "research-scout"]);
   const _premiumSettled = premiumEvents.filter((row) => row.success !== null);
   const _premiumSuccessful = _premiumSettled.filter((row) => row.success === true).length;
@@ -4035,6 +4037,16 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   ).length;
   const _premiumEfficiencyAdjusted: number | null = _premiumSettled.length > 0
     ? Math.max(0, Math.min(1, (_leadershipSuccesses + _verifiedDoneWorkers) / _premiumSettled.length))
+    : null;
+  // New explicit metrics — output-quality-focused, not API-success-focused.
+  const _allCyclePremiumRequests = premiumEvents.length;
+  const _leadershipRequests = premiumEvents.filter((row) => _LEADERSHIP_AGENTS.has(row.agent)).length;
+  const _rawPremiumEfficiency: number | null = _allCyclePremiumRequests > 0
+    ? Math.max(0, Math.min(1, _verifiedDoneWorkers / _allCyclePremiumRequests))
+    : null;
+  const _workerOnlyDenominator = _allCyclePremiumRequests - _leadershipRequests;
+  const _executionAdjustedPremiumEfficiency: number | null = _workerOnlyDenominator > 0
+    ? Math.max(0, Math.min(1, _verifiedDoneWorkers / _workerOnlyDenominator))
     : null;
 
   // ── Cycle analytics: compute and persist KPIs, confidence, and causal links ─
@@ -4094,6 +4106,8 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       premiumUsageLog: await readJson(path.join(stateDir, "premium_usage_log.json"), []),
       premiumEfficiencyRaw: _premiumEfficiencyRaw,
       premiumEfficiencyAdjusted: _premiumEfficiencyAdjusted,
+      rawPremiumEfficiency: _rawPremiumEfficiency,
+      executionAdjustedPremiumEfficiency: _executionAdjustedPremiumEfficiency,
       memoryHitLog: await readJson(path.join(stateDir, "memory_hit_log.json"), []),
     });
     await persistCycleAnalytics(config, analyticsRecord);
@@ -4283,7 +4297,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
 
       await appendProgress(
         config,
-        `[AUTONOMY_BAND] premium_efficiency_inputs settled=${_premiumSettled.length} success=${_premiumSuccessful} verifiedWorkerDone=${verifiedDoneWorkers} raw=${premiumEfficiency?.toFixed(3) ?? "N/A"} adjusted=${premiumEfficiencyAdjusted?.toFixed(3) ?? "N/A"}`,
+        `[AUTONOMY_BAND] premium_efficiency_inputs settled=${_premiumSettled.length} success=${_premiumSuccessful} verifiedWorkerDone=${verifiedDoneWorkers} raw=${premiumEfficiency?.toFixed(3) ?? "N/A"} adjusted=${premiumEfficiencyAdjusted?.toFixed(3) ?? "N/A"} rawNew=${_rawPremiumEfficiency?.toFixed(3) ?? "N/A"} execAdj=${_executionAdjustedPremiumEfficiency?.toFixed(3) ?? "N/A"}`,
       );
 
       const hardGuardrailBreach = Array.isArray(catastropheState?.lastDetections)
@@ -4296,6 +4310,8 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         completionRate,
         premiumEfficiency,
         premiumEfficiencyAdjusted,
+        rawPremiumEfficiency: _rawPremiumEfficiency,
+        executionAdjustedPremiumEfficiency: _executionAdjustedPremiumEfficiency,
         athenaRejectRate,
         parserFallbackRate,
         contractFailRate,

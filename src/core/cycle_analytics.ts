@@ -639,6 +639,8 @@ export function computeCycleAnalytics(config, {
   memoryHitLog = [],
   premiumEfficiencyRaw = null,
   premiumEfficiencyAdjusted = null,
+  rawPremiumEfficiency = null,
+  executionAdjustedPremiumEfficiency = null,
 }: any = {}) {
   const missingData = [];
   const stageTimestamps = pipelineProgress?.stageTimestamps || null;
@@ -680,10 +682,14 @@ export function computeCycleAnalytics(config, {
     sloBreachCount: Array.isArray(sloRecord?.sloBreaches) ? sloRecord.sloBreaches.length : 0,
     sloStatus: sloRecord?.status ?? "unknown",
     // Premium efficiency variants — both are null when not yet evaluated (advisory path).
-    // premiumEfficiencyRaw: successfulPremiumEvents / settledPremiumEvents.
-    // premiumEfficiencyAdjusted: (leadershipSuccesses + verifiedDoneWorkers) / settledPremiumEvents.
+    // premiumEfficiencyRaw: successfulPremiumEvents / settledPremiumEvents (backward-compat API success rate).
+    // premiumEfficiencyAdjusted: (leadershipSuccesses + verifiedDoneWorkers) / settledPremiumEvents (backward-compat).
+    // rawPremiumEfficiency: verifiedDoneWorkers / allCyclePremiumRequests (new output-quality metric).
+    // executionAdjustedPremiumEfficiency: verifiedDoneWorkers / (allCyclePremiumRequests - leadershipRequests) (new).
     premiumEfficiencyRaw: toFiniteNumberOrNull(premiumEfficiencyRaw),
     premiumEfficiencyAdjusted: toFiniteNumberOrNull(premiumEfficiencyAdjusted),
+    rawPremiumEfficiency: toFiniteNumberOrNull(rawPremiumEfficiency),
+    executionAdjustedPremiumEfficiency: toFiniteNumberOrNull(executionAdjustedPremiumEfficiency),
   };
 
   if (sloRecord === null) {
