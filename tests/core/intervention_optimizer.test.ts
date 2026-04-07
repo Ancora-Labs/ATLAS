@@ -1473,3 +1473,79 @@ describe("scoreInterventionsAgainstRubric — uplift binding", () => {
     assert.equal(rows[0].outcomeScore, 1.0, "outcomeScore must be clamped to 1.0 max");
   });
 });
+
+// ── applyOverbundleEVPenalty + overbundle admission integration ───────────────
+import {
+  applyOverbundleEVPenalty,
+  OVERBUNDLE_STEPS_THRESHOLD,
+  OVERBUNDLE_EV_PENALTY_COEFFICIENT,
+} from "../../src/core/intervention_optimizer.js";
+
+describe("applyOverbundleEVPenalty", () => {
+  it("returns ev unchanged when stepCount is at or below threshold", () => {
+    const ev = 100;
+    assert.equal(applyOverbundleEVPenalty(ev, OVERBUNDLE_STEPS_THRESHOLD), ev,
+      "EV must not be penalized at exactly the threshold");
+    assert.equal(applyOverbundleEVPenalty(ev, OVERBUNDLE_STEPS_THRESHOLD - 1), ev,
+      "EV must not be penalized below threshold");
+  });
+
+  it("applies EV penalty when stepCount exceeds threshold", () => {
+    const ev = 100;
+    const overCount = OVERBUNDLE_STEPS_THRESHOLD + 1;
+    const penalized = applyOverbundleEVPenalty(ev, overCount);
+    assert.ok(penalized < ev, "penalized EV must be less than original EV");
+    // Implementation applies a flat multiplier: EV * (1 - OVERBUNDLE_EV_PENALTY_COEFFICIENT)
+    const expected = Math.round(ev * (1 - OVERBUNDLE_EV_PENALTY_COEFFICIENT) * 1000) / 1000;
+    assert.equal(penalized, expected,
+      "penalty must apply flat coefficient: EV * (1 - OVERBUNDLE_EV_PENALTY_COEFFICIENT)");
+  });
+
+  it("does not return negative EV (clamps to 0)", () => {
+    // Enormous step count — penalty would push below 0
+    const ev = 100;
+    const massiveCount = OVERBUNDLE_STEPS_THRESHOLD * 100;
+    const penalized = applyOverbundleEVPenalty(ev, massiveCount);
+    assert.ok(penalized >= 0, "penalized EV must never be negative");
+  });
+
+  it("negative path: returns 0 when input ev is 0", () => {
+    assert.equal(applyOverbundleEVPenalty(0, OVERBUNDLE_STEPS_THRESHOLD + 5), 0);
+  });
+});
+
+describe("runInterventionOptimizer — overbundleStepCounts option", () => {
+  it("applies overbundle penalty and increments overbundlePenaltiesApplied counter", () => {
+    const intervention = makeIntervention({ id: "big-bundle" });
+    const budget = makeBudget();
+    const result = runInterventionOptimizer([intervention], budget, {
+      overbundleStepCounts: {
+        "big-bundle": OVERBUNDLE_STEPS_THRESHOLD + 3
+      }
+    }) as any;
+    assert.ok(result.selected.length >= 0, "result must have selected array");
+    assert.ok(typeof result.overbundlePenaltiesApplied === "number",
+      "result must include overbundlePenaltiesApplied counter");
+    assert.ok(result.overbundlePenaltiesApplied >= 1,
+      "overbundlePenaltiesApplied must be >= 1 when an over-threshold bundle exists");
+  });
+
+  it("does not apply penalty when step count is at threshold", () => {
+    const intervention = makeIntervention({ id: "ok-bundle" });
+    const budget = makeBudget();
+    const result = runInterventionOptimizer([intervention], budget, {
+      overbundleStepCounts: {
+        "ok-bundle": OVERBUNDLE_STEPS_THRESHOLD
+      }
+    }) as any;
+    assert.equal(result.overbundlePenaltiesApplied, 0,
+      "no penalty should be applied at exactly the threshold");
+  });
+
+  it("overbundlePenaltiesApplied is 0 when overbundleStepCounts is not provided", () => {
+    const intervention = makeIntervention({ id: "normal" });
+    const budget = makeBudget();
+    const result = runInterventionOptimizer([intervention], budget, {}) as any;
+    assert.equal(result.overbundlePenaltiesApplied, 0);
+  });
+});

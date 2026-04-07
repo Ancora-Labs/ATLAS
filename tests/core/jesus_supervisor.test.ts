@@ -534,6 +534,80 @@ describe("jesus_supervisor — runSystemHealthAudit", () => {
       assert.ok(ciFailures[0].finding.includes("ci-current"));
     });
   });
+
+  // ── Wave task membership: exact Set check (no substring regression) ────────
+  it("does NOT flag a wave as incomplete when it has no explicit tasks array", async () => {
+    await withTempRepo(async ({ stateDir, repoDir }) => {
+      writeFileSync(path.join(repoDir, "src", "core", "placeholder.ts"), "export const ok = true;", "utf8");
+      writeFileSync(
+        path.join(stateDir, "knowledge_memory.json"),
+        JSON.stringify({ lessons: [], capabilityGaps: [] }),
+        "utf8",
+      );
+      // Wave with no tasks[] array — legacy format. Should NOT be flagged incomplete.
+      const athenaCoord = {
+        completedTasks: ["T-001"],
+        executionStrategy: {
+          waves: [
+            { id: "wave-1", workers: ["evolution-worker"] }
+            // Note: no tasks[] field — wave completeness cannot be determined
+          ]
+        }
+      };
+      writeFileSync(
+        path.join(stateDir, "athena_coordination.json"),
+        JSON.stringify(athenaCoord),
+        "utf8",
+      );
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        { latestMainCi: null, failedCiRuns: [], pullRequests: [] },
+        athenaCoord,
+        {},
+      );
+      const gapFindings = findings.filter((f: any) => f.area === "execution-gaps");
+      assert.equal(gapFindings.length, 0,
+        "waves without tasks[] must not be flagged incomplete (avoids false positives)");
+    });
+  });
+
+  it("flags a wave as incomplete using exact task membership, not substring matching", async () => {
+    await withTempRepo(async ({ stateDir, repoDir }) => {
+      writeFileSync(path.join(repoDir, "src", "core", "placeholder.ts"), "export const ok = true;", "utf8");
+      writeFileSync(
+        path.join(stateDir, "knowledge_memory.json"),
+        JSON.stringify({ lessons: [], capabilityGaps: [] }),
+        "utf8",
+      );
+      // Wave 1 owns T-001 (not done); wave 11 owns T-011 (done).
+      // Substring match bug: "1" matches "T-011" so wave 1 would appear complete.
+      // Exact membership fix: "T-011" is NOT in wave 1's tasks, so wave 1 is still incomplete.
+      const athenaCoord = {
+        completedTasks: ["T-011"],
+        executionStrategy: {
+          waves: [
+            { id: "wave-1", tasks: ["T-001"], workers: ["evolution-worker"] },
+            { id: "wave-11", tasks: ["T-011"], workers: ["evolution-worker"] },
+          ]
+        }
+      };
+      writeFileSync(
+        path.join(stateDir, "athena_coordination.json"),
+        JSON.stringify(athenaCoord),
+        "utf8",
+      );
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        { latestMainCi: null, failedCiRuns: [], pullRequests: [] },
+        athenaCoord,
+        {},
+      );
+      const gapFindings = findings.filter((f: any) => f.area === "execution-gaps");
+      assert.equal(gapFindings.length, 1, "wave-1 must be flagged incomplete: T-001 not in completedTasks");
+      assert.ok(gapFindings[0].finding.includes("wave-1"),
+        "incomplete wave finding must name wave-1");
+    });
+  });
 });
 
 // ── Jesus outcome ledger ───────────────────────────────────────────────────────

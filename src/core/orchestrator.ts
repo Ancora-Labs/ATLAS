@@ -93,6 +93,7 @@ import {
   persistOptimizerLog,
   OPTIMIZER_STATUS,
   buildPolicyImpactByInterventionId,
+  OVERBUNDLE_STEPS_THRESHOLD,
 } from "./intervention_optimizer.js";
 import { evaluateInterventionsForCycle } from "./intervention_judge.js";
 import { evaluateAutonomyBand, type CycleSample } from "./autonomy_band_monitor.js";
@@ -2045,7 +2046,8 @@ async function dispatchWorker(config, plan) {
         status: workerResult.status,
         summary: workerResult.summary,
         pr: workerResult.pr,
-        filesChanged: workerResult.filesChanged
+        filesChanged: workerResult.filesChanged,
+        wave: (plan as any)?.wave ?? null
       },
       null,
       2
@@ -3259,6 +3261,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     benchmarkTelemetryCount: number;
     failureClassificationsApplied: number;
     rerouteCostPenaltiesApplied: number;
+    overbundlePenaltiesApplied: number;
   } | null = null;
 
   if (config?.runtime?.disableOptimizerAdmission !== true) {
@@ -3323,6 +3326,20 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         }
       } catch { /* non-fatal — optimizer falls back to static estimates */ }
 
+      // ── Anti-overbundle step count map: pass per-plan step complexity ──────
+      // Maps intervention ID → ordered step count so the optimizer can apply
+      // an EV penalty to over-complex plans that would exceed coherence limits
+      // if dispatched as a single call.
+      const overbundleStepCounts: Record<string, number> = {};
+      for (let idx = 0; idx < plans.length; idx++) {
+        const plan = plans[idx] as any;
+        const interventionId = String(plan?.id ?? plan?.task_id ?? `plan-${idx + 1}`);
+        const steps = Array.isArray(plan?.orderedSteps) ? plan.orderedSteps.length
+          : Array.isArray(plan?.acceptance_criteria) ? plan.acceptance_criteria.length
+          : 1;
+        overbundleStepCounts[interventionId] = Math.max(1, steps);
+      }
+
       const optimizerResult = runInterventionOptimizer(interventions, budgetInput, {
         policyImpactByInterventionId,
         failureClassifications,
@@ -3331,6 +3348,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         // the active workerPool policy alongside selection decisions for alignment
         // diagnostics between scoreboard, gate, and optimizer telemetry.
         specializationContext: (capabilityPoolResult as any)?.specializationUtilization ?? null,
+        overbundleStepCounts,
         rerouteReasons: await (async () => {
           // Read reroute history from previous cycle to penalize underperforming lanes.
           try {
@@ -3356,6 +3374,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         benchmarkTelemetryCount: Number(optimizerResultAny.benchmarkTelemetryCount ?? 0),
         failureClassificationsApplied: Number(optimizerResultAny.failureClassificationsApplied ?? 0),
         rerouteCostPenaltiesApplied: Number(optimizerResultAny.rerouteCostPenaltiesApplied ?? 0),
+        overbundlePenaltiesApplied: Number(optimizerResultAny.overbundlePenaltiesApplied ?? 0),
       };
 
       // Persist for observability regardless of outcome
@@ -3619,6 +3638,25 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     await appendProgress(config,
       `[BATCH_PLANNER] WARNING: generated ${workerBatches.length} batches for ${normalizedPlansForBatching.length} plan(s) — possible over-split; check estimatedExecutionTokens`
     );
+  }
+
+  // ── Anti-overbundle admission gate: warn on over-complex batches ─────────
+  // After batching, check if any batch exceeds the ordered-step coherence limit.
+  // This is an observable warning gate (not a hard block at this stage) — the EV
+  // penalty in the optimizer already deprioritizes such batches upstream.
+  try {
+    for (const batch of workerBatches) {
+      const stepCount = Number((batch as any).orderedStepCount ?? 0);
+      if (stepCount > OVERBUNDLE_STEPS_THRESHOLD) {
+        await appendProgress(config,
+          `[BATCH_PLANNER][OVERBUNDLE] Batch for role=${
+            (batch as any).role
+          } wave=${(batch as any).wave ?? "?"} has orderedStepCount=${stepCount} exceeding threshold=${OVERBUNDLE_STEPS_THRESHOLD} — consider splitting for coherence`
+        );
+      }
+    }
+  } catch {
+    // advisory — never block dispatch on overbundle check error
   }
 
   await safeUpdatePipelineProgress(config, "workers_dispatching", `Dispatching ${workerBatches.length} worker batch(es)`, {

@@ -17,6 +17,7 @@ import {
   getUsableModelContextTokens,
   autosplitOversizedPacket,
   checkPacketSizeCap,
+  computeBatchOrderedStepCount,
 } from "../../src/core/worker_batch_planner.js";
 import { validatePacketBatchAdmission } from "../../src/core/plan_contract_validator.js";
 import {
@@ -1850,5 +1851,69 @@ describe("shouldPackAcrossWaveBoundary", () => {
   it("returns false when to-wave batches array is empty", () => {
     const fromBatches = [{ plans: [{ task: "a" }] }];
     assert.equal(shouldPackAcrossWaveBoundary(fromBatches, []), false);
+  });
+});
+
+// ── computeBatchOrderedStepCount ──────────────────────────────────────────────
+describe("computeBatchOrderedStepCount", () => {
+  it("sums orderedSteps.length across plans when present", () => {
+    const plans = [
+      { id: "T-001", orderedSteps: ["s1", "s2", "s3"] },
+      { id: "T-002", orderedSteps: ["s1", "s2"] },
+    ];
+    assert.equal(computeBatchOrderedStepCount(plans), 5);
+  });
+
+  it("falls back to acceptance_criteria.length when orderedSteps absent", () => {
+    const plans = [
+      { id: "T-001", acceptance_criteria: ["ac1", "ac2"] },
+      { id: "T-002", acceptance_criteria: ["ac1"] },
+    ];
+    assert.equal(computeBatchOrderedStepCount(plans), 3);
+  });
+
+  it("uses 1 per plan when both orderedSteps and acceptance_criteria are absent", () => {
+    const plans = [{ id: "T-001" }, { id: "T-002" }, { id: "T-003" }];
+    assert.equal(computeBatchOrderedStepCount(plans), 3);
+  });
+
+  it("returns 0 for empty plans array", () => {
+    assert.equal(computeBatchOrderedStepCount([]), 0);
+  });
+
+  it("handles mixed plans with some having orderedSteps and some having acceptance_criteria", () => {
+    const plans = [
+      { id: "T-001", orderedSteps: ["s1", "s2", "s3", "s4"] },
+      { id: "T-002", acceptance_criteria: ["ac1", "ac2"] },
+      { id: "T-003" },
+    ];
+    // T-001: 4 steps, T-002: 2 (falls back to ac), T-003: 1 (default)
+    assert.equal(computeBatchOrderedStepCount(plans), 7);
+  });
+
+  it("negative path: non-array orderedSteps treated as absent (falls back to ac)", () => {
+    const plans = [
+      { id: "T-001", orderedSteps: "not-an-array", acceptance_criteria: ["ac1", "ac2"] },
+    ];
+    assert.equal(computeBatchOrderedStepCount(plans), 2);
+  });
+});
+
+describe("buildRoleExecutionBatches — orderedStepCount on batch output", () => {
+  it("attaches orderedStepCount to each batch", () => {
+    const plans = [
+      { id: "T-001", role: "Evolution Worker", task: "task 1", orderedSteps: ["s1", "s2"] },
+      { id: "T-002", role: "Evolution Worker", task: "task 2", orderedSteps: ["s1"] },
+    ];
+    const config = {};
+    const batches = buildRoleExecutionBatches(plans, config);
+    for (const batch of batches) {
+      assert.ok("orderedStepCount" in batch,
+        "each batch must have orderedStepCount field");
+      assert.equal(typeof (batch as any).orderedStepCount, "number",
+        "orderedStepCount must be a number");
+      assert.ok((batch as any).orderedStepCount >= 0,
+        "orderedStepCount must be non-negative");
+    }
   });
 });

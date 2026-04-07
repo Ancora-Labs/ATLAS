@@ -578,3 +578,73 @@ describe("collectCycleOutcomes — wave tracking uses wave field over id", () =>
     }
   });
 });
+
+// ── Wave completion — exact Set membership (no substring matching) ─────────
+// This test guards against the regression where waveKey="1" would match "T-011"
+// via substring comparison rather than exact task-id membership.
+describe("collectCycleOutcomes — wave task membership is exact, not substring", () => {
+  let tmpDir;
+  let result;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-si-wavematch-"));
+    // Wave 1 owns only T-001; wave 11 owns T-011.
+    // Substring matching would put T-011 into wave 1 because "1" is a substring of "T-011".
+    const prometheus = {
+      schemaVersion: 1,
+      projectHealth: "good",
+      plans: [
+        { id: "T-001", task_id: "T-001", wave: 1, worker: "evolution-worker", context: "wave 1 task" },
+        { id: "T-011", task_id: "T-011", wave: 11, worker: "evolution-worker", context: "wave 11 task" },
+      ],
+      executionStrategy: {
+        waves: [
+          { wave: 1, tasks: ["T-001"], workers: ["evolution-worker"] },
+          { wave: 11, tasks: ["T-011"], workers: ["evolution-worker"] },
+        ]
+      },
+      requestBudget: { estimatedPremiumRequestsTotal: 2, hardCapTotal: 10, errorMarginPercent: 20, confidenceLevel: "medium" }
+    };
+    const progress = {
+      cycle_id: "SE-wavematch-001",
+      started_at: new Date().toISOString(),
+      current_task_index: 2,
+      tasks: {
+        "T-001": { status: "completed", attempts: 1 },
+        "T-011": { status: "completed", attempts: 1 },
+      }
+    };
+    await writeTestJson(tmpDir, "prometheus_analysis.json", prometheus);
+    await writeTestJson(tmpDir, "evolution_progress.json", progress);
+    await writeTestJson(tmpDir, "worker_sessions.json", WORKER_SESSIONS);
+    result = await collectCycleOutcomes(makeConfig(tmpDir));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("wave 1 completedTasks contains only T-001, not T-011", () => {
+    const wave1 = result.waves.find((w) => String(w.id) === "1");
+    assert.ok(wave1, "wave 1 must be present in results");
+    assert.ok(wave1.completedTasks.includes("T-001"), "T-001 must be in wave 1 completedTasks");
+    assert.ok(!wave1.completedTasks.includes("T-011"),
+      "T-011 must NOT be in wave 1 — substring match regression guard");
+  });
+
+  it("wave 11 completedTasks contains T-011 and not T-001", () => {
+    const wave11 = result.waves.find((w) => String(w.id) === "11");
+    assert.ok(wave11, "wave 11 must be present in results");
+    assert.ok(wave11.completedTasks.includes("T-011"), "T-011 must be in wave 11 completedTasks");
+    assert.ok(!wave11.completedTasks.includes("T-001"),
+      "T-001 must NOT be in wave 11");
+  });
+
+  it("totalPlans counts all plans regardless of wave", () => {
+    assert.equal(result.totalPlans, 2);
+  });
+
+  it("completedCount counts all completed tasks across waves", () => {
+    assert.equal(result.completedCount, 2);
+  });
+});

@@ -1196,3 +1196,47 @@ describe("QUALITY_FLOOR_DEFAULT — quality floor constant", () => {
       "meetsQualityFloor must be false when no model qualifies");
   });
 });
+
+// ── resolveJesusFallbackModel + JESUS_LATENCY_FALLBACK ────────────────────────
+import { resolveJesusFallbackModel } from "../../src/core/model_policy.js";
+
+describe("ROUTING_REASON — JESUS_LATENCY_FALLBACK value", () => {
+  it("JESUS_LATENCY_FALLBACK is present in ROUTING_REASON enum", () => {
+    assert.equal(ROUTING_REASON.JESUS_LATENCY_FALLBACK, "JESUS_LATENCY_FALLBACK",
+      "ROUTING_REASON.JESUS_LATENCY_FALLBACK must be set to its own string key");
+  });
+});
+
+describe("resolveJesusFallbackModel", () => {
+  it("returns jesusFallbackModel when explicitly configured", () => {
+    const cfg = { runtime: { jesusFallbackModel: "claude-opus-4" } };
+    assert.equal(resolveJesusFallbackModel(cfg), "claude-opus-4");
+  });
+
+  it("falls back to copilot.efficientModel when jesusFallbackModel is empty", () => {
+    const cfg = {
+      runtime: { jesusFallbackModel: "" },
+      copilot: { efficientModel: "claude-haiku-3" }
+    };
+    assert.equal(resolveJesusFallbackModel(cfg), "claude-haiku-3");
+  });
+
+  it("falls back to copilot.defaultModel when both jesusFallbackModel and efficientModel are absent", () => {
+    const cfg = { copilot: { defaultModel: "claude-sonnet-3" } };
+    assert.equal(resolveJesusFallbackModel(cfg), "claude-sonnet-3");
+  });
+
+  it("returns default model string when config is empty", () => {
+    const model = resolveJesusFallbackModel({});
+    assert.equal(typeof model, "string", "must always return a string");
+    assert.ok(model.length > 0, "must not return empty string");
+  });
+
+  it("negative path: whitespace-only jesusFallbackModel falls through to efficientModel", () => {
+    const cfg = {
+      runtime: { jesusFallbackModel: "   " },
+      copilot: { efficientModel: "claude-haiku-3" }
+    };
+    assert.equal(resolveJesusFallbackModel(cfg), "claude-haiku-3");
+  });
+});

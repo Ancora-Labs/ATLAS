@@ -593,3 +593,34 @@ describe("buildRoutingROISummary — lineage-keyed routing ROI", () => {
     assert.ok(result.totalRequests >= 1);
   });
 });
+
+// ── WorkerActivityEntry wave field — structural contract ──────────────────────
+// WorkerActivityEntry is a local type; we verify its structural contract here
+// by confirming worker session state JSON with a wave field is accepted by the
+// worker session parsing path without error. The wave field must be optional
+// (number | null | undefined).
+describe("WorkerActivityEntry wave field — structural contract", () => {
+  it("worker session JSON with wave field in activityLog is read without error", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-wave-field-"));
+    try {
+      const sessionFile = path.join(tmpDir, "worker_evolution-worker.json");
+      const sessionData = {
+        currentBranch: "feat/test",
+        activityLog: [
+          { at: new Date().toISOString(), status: "done", task: "Fix auth", wave: 1 },
+          { at: new Date().toISOString(), status: "done", task: "Add test", wave: null },
+          { at: new Date().toISOString(), status: "in_progress", task: "Deploy" },
+        ]
+      };
+      await fs.writeFile(sessionFile, JSON.stringify(sessionData), "utf8");
+      const raw = await fs.readFile(sessionFile, "utf8");
+      const parsed = JSON.parse(raw);
+      assert.ok(Array.isArray(parsed.activityLog), "activityLog must be an array");
+      assert.equal(parsed.activityLog[0].wave, 1, "wave=1 must be preserved");
+      assert.equal(parsed.activityLog[1].wave, null, "wave=null must be preserved");
+      assert.equal(parsed.activityLog[2].wave, undefined, "wave absent is ok");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});

@@ -34,6 +34,7 @@ import {
 } from "./jesus_calibration.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
 import { computeQueueViability } from "./pipeline_progress.js";
+import { resolveJesusFallbackModel, ROUTING_REASON } from "./model_policy.js";
 
 // ── Span contract emitter ─────────────────────────────────────────────────────
 
@@ -287,9 +288,15 @@ export async function runSystemHealthAudit(config, githubState, AthenaCoordinati
   const executionWaves = Array.isArray(AthenaCoordination?.executionStrategy?.waves)
     ? AthenaCoordination.executionStrategy.waves : [];
   if (executionWaves.length > 0) {
+    const completedTaskSet = new Set<string>(completedTasks.map(t => String(t).trim()));
     const incompleteWaves = executionWaves.filter(w => {
-      const waveId = String(w?.id || "").trim().toLowerCase();
-      return waveId && !completedTasks.some(t => String(t).toLowerCase().includes(waveId));
+      const waveTasks = Array.isArray(w?.tasks) ? w.tasks : null;
+      // Only flag a wave as incomplete when it has an explicit tasks list
+      // and at least one task in that list is not yet in completedTasks.
+      // Without an explicit tasks list, we cannot determine incompleteness
+      // from task IDs alone — skip to avoid substring-match false positives.
+      if (waveTasks === null || waveTasks.length === 0) return false;
+      return !waveTasks.every(t => completedTaskSet.has(String(t).trim()));
     });
     if (incompleteWaves.length > 0) {
       findings.push({
@@ -873,11 +880,24 @@ ${workersList}`;
   appendPromptPreviewSync(stateDir, contextPrompt);
   chatLog(stateDir, jesusName, `Calling Copilot CLI (agent=jesus, allowAll=true)...`);
 
-  const jesusTimeoutMs = Math.max(60_000, Number(config?.runtime?.jesusTimeoutMs || 180_000));
-  chatLog(stateDir, jesusName, `[LIVE] invoking agent=jesus model=${jesusModel} timeout=${Math.floor(jesusTimeoutMs / 1000)}s`);
-  chatLog(stateDir, jesusName, "Calling AI for strategic analysis...");
-  appendLiveLogSync(stateDir, `\n[copilot_stream_start] ${new Date().toISOString().replace("T", " ").slice(0, 19)}\n`);
+  const jesusTimeoutMs = Math.max(60_000, Number(config?.runtime?.jesusTimeoutMs || 1_800_000));
+  // Latency-aware tiered routing: T1 (fast) → T2 (normal) → T3 (full+fallback).
+  // maxRetries=1 means 2 attempts (T1+T2), maxRetries=2 means all 3 tiers.
+  const tier1Ms = Math.max(30_000, Math.min(Number(config?.runtime?.jesusLatencyTier1Ms ?? 60_000), jesusTimeoutMs));
+  const tier2Ms = Math.max(tier1Ms + 1, Math.min(Number(config?.runtime?.jesusLatencyTier2Ms ?? 600_000), jesusTimeoutMs));
+  const maxRetries = Math.max(0, Math.min(Number(config?.runtime?.jesusMaxRetries ?? 1), 2));
+  const fallbackModel = resolveJesusFallbackModel(config);
 
+  // Build tier list: each tier has its own timeout and model.
+  // T3 uses the fallback model (may be the same as jesusModel when no override is set).
+  const ALL_TIERS = [
+    { timeoutMs: tier1Ms, model: jesusModel, label: "T1" },
+    { timeoutMs: tier2Ms, model: jesusModel, label: "T2" },
+    { timeoutMs: jesusTimeoutMs, model: fallbackModel, label: "T3" },
+  ];
+  const tiers = ALL_TIERS.slice(0, Math.min(maxRetries + 1, ALL_TIERS.length));
+
+  let rawResult: any;
   const aiCallStartedAt = Date.now();
   const heartbeatIntervalMs = Math.max(30_000, Number(config?.runtime?.jesusHeartbeatIntervalMs || 30_000));
   const heartbeatTimer = setInterval(() => {
@@ -885,22 +905,54 @@ ${workersList}`;
     chatLog(stateDir, jesusName, `[LIVE] AI analysis in progress elapsed=${elapsedSec}s`);
   }, heartbeatIntervalMs);
 
-  const args = buildAgentArgs({ agentSlug: "jesus", prompt: contextPrompt, allowAll: true, noAskUser: true });
-  let rawResult: any;
+  chatLog(stateDir, jesusName, "Calling AI for strategic analysis...");
+  appendLiveLogSync(stateDir, `\n[copilot_stream_start] ${new Date().toISOString().replace("T", " ").slice(0, 19)}\n`);
+
   try {
-    rawResult = await spawnAsync(command, args, {
-      env: process.env,
-      timeoutMs: jesusTimeoutMs,
-      // Kill CLI immediately when output is complete — avoids hanging in
-      // interactive 'continue?' mode that Copilot CLI enters after long outputs.
-      earlyExitMarker: "===END===",
-      onStdout(chunk) {
-        appendLiveLogSync(stateDir, chunk.toString("utf8"));
-      },
-      onStderr(chunk) {
-        appendLiveLogSync(stateDir, chunk.toString("utf8"));
-      },
-    });
+    for (let ti = 0; ti < tiers.length; ti++) {
+      const tier = tiers[ti];
+      const isEscalation = ti > 0;
+
+      if (isEscalation) {
+        const prevTier = tiers[ti - 1];
+        const routingReason = tier.model !== jesusModel ? ROUTING_REASON.JESUS_LATENCY_FALLBACK : "JESUS_LATENCY_ESCALATION";
+        await appendProgress(config,
+          `[JESUS] ${prevTier.label} timed out after ${Math.floor(prevTier.timeoutMs / 1000)}s — escalating to ${tier.label} (timeout=${Math.floor(tier.timeoutMs / 1000)}s model=${tier.model} reason=${routingReason})`
+        );
+        chatLog(stateDir, jesusName, `[LIVE] tier=${prevTier.label} timed out — escalating to ${tier.label}`);
+      }
+
+      chatLog(stateDir, jesusName, `[LIVE] invoking agent=jesus tier=${tier.label} model=${tier.model} timeout=${Math.floor(tier.timeoutMs / 1000)}s`);
+      const args = buildAgentArgs({ agentSlug: "jesus", prompt: contextPrompt, allowAll: true, noAskUser: true, model: tier.model !== jesusModel ? tier.model : undefined });
+
+      let tierResult: any;
+      try {
+        tierResult = await spawnAsync(command, args, {
+          env: process.env,
+          timeoutMs: tier.timeoutMs,
+          // Kill CLI immediately when output is complete — avoids hanging in
+          // interactive 'continue?' mode that Copilot CLI enters after long outputs.
+          earlyExitMarker: "===END===",
+          onStdout(chunk) {
+            appendLiveLogSync(stateDir, chunk.toString("utf8"));
+          },
+          onStderr(chunk) {
+            appendLiveLogSync(stateDir, chunk.toString("utf8"));
+          },
+        });
+      } catch (spawnErr) {
+        // spawnAsync should not throw — treat as failure and proceed to next tier if available
+        tierResult = { status: -1, stdout: "", stderr: String((spawnErr as any)?.message || spawnErr), timedOut: false };
+      }
+
+      // If this tier timed out and there is a next tier available, escalate
+      if (tierResult?.timedOut && ti < tiers.length - 1) {
+        continue;
+      }
+
+      rawResult = tierResult;
+      break;
+    }
   } finally {
     clearInterval(heartbeatTimer);
   }

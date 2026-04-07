@@ -173,10 +173,11 @@ export function isOpusJustified(taskHints: TaskHints = {}) {
  * @enum {string}
  */
 export const ROUTING_REASON = Object.freeze({
-  ALLOWED:           "ALLOWED",
-  BANNED:            "BANNED",
-  OPUS_DOWNGRADED:   "OPUS_DOWNGRADED",
-  EMPTY_MODEL:       "EMPTY_MODEL",
+  ALLOWED:                 "ALLOWED",
+  BANNED:                  "BANNED",
+  OPUS_DOWNGRADED:         "OPUS_DOWNGRADED",
+  EMPTY_MODEL:             "EMPTY_MODEL",
+  JESUS_LATENCY_FALLBACK:  "JESUS_LATENCY_FALLBACK",
 });
 
 export const OPTIMIZATION_INTERVENTION_KIND = Object.freeze({
@@ -361,7 +362,26 @@ export function routeModelWithUncertainty(taskHints: TaskHints = {}, modelOption
   return { ...base, uncertainty };
 }
 
-// ── Route ROI Ledger — Packet 14 persistence ──────────────────────────────────
+/**
+ * Resolve the Jesus fallback model for latency-aware routing.
+ *
+ * Priority order:
+ *   1. config.runtime.jesusFallbackModel (explicit override)
+ *   2. config.copilot.efficientModel (lighter/faster model)
+ *   3. config.copilot.defaultModel (safe fallback)
+ *
+ * @param config — full BOX config object
+ * @returns model name string (never empty)
+ */
+export function resolveJesusFallbackModel(config: any): string {
+  const explicit = String(config?.runtime?.jesusFallbackModel ?? "").trim();
+  if (explicit) return explicit;
+  const efficient = String(config?.copilot?.efficientModel ?? "").trim();
+  if (efficient) return efficient;
+  return String(config?.copilot?.defaultModel ?? "Claude Sonnet 4.6");
+}
+
+
 //
 // The ledger persists expected and realized quality scores per routing decision
 // so that historical ROI deltas can inform next-cycle model selection.

@@ -607,20 +607,47 @@ export async function collectCycleOutcomes(config) {
     }
   } catch { /* no cycle_analytics — degrade gracefully */ }
 
+  // Build a wave→taskId lookup using structured plan metadata.
+  // This replaces accidental substring matching (e.g. waveKey="1" matching task "T-011")
+  // with exact Set membership derived from plans[].task_id and waves[].tasks fields.
+  const waveToTaskIds = new Map<string, Set<string>>();
+  for (const plan of plans) {
+    const waveNum = String((plan as any).wave ?? "");
+    if (!waveNum) continue;
+    const taskId = String((plan as any).task_id || (plan as any).id || "").trim();
+    if (!taskId) continue;
+    if (!waveToTaskIds.has(waveNum)) waveToTaskIds.set(waveNum, new Set());
+    waveToTaskIds.get(waveNum)!.add(taskId);
+  }
+  // Also populate from waves[].tasks arrays when present (explicit task membership per wave).
+  for (const w of waves) {
+    const waveKey = String((w as any).wave ?? (w as any).id ?? "");
+    if (!waveKey) continue;
+    const tasks = Array.isArray((w as any).tasks) ? (w as any).tasks : [];
+    for (const t of tasks) {
+      const tId = String(t).trim();
+      if (!tId) continue;
+      if (!waveToTaskIds.has(waveKey)) waveToTaskIds.set(waveKey, new Set());
+      waveToTaskIds.get(waveKey)!.add(tId);
+    }
+  }
+
   return {
     totalPlans:      plans.length,
     completedCount:  completedTasks.length,
     projectHealth,
     workerOutcomes,
     waves: waves.map(w => {
-      const waveKey = (w as any).wave ?? (w as any).id ?? '';
+      const waveKey = String((w as any).wave ?? (w as any).id ?? '');
+      // Preserve the original type of the wave identifier so callers that
+      // compare with strict equality (e.g. assert.equal(id, 1)) don't regress.
+      const waveId = (w as any).wave ?? (w as any).id ?? '';
+      const knownTaskIds = waveToTaskIds.get(waveKey) ?? new Set<string>();
       return {
-        id: waveKey,
+        id: waveId,
         workers: (w as any).workers,
         completedTasks: waveKey !== ''
-          ? completedTasks.filter(t =>
-              String(t).toLowerCase().includes(String(waveKey).toLowerCase())
-            )
+          ? completedTasks.filter(t => knownTaskIds.has(String(t).trim()))
           : []
       };
     }),

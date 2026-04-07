@@ -111,6 +111,8 @@ type WorkerActivityEntry = {
   task?: string;
   files?: string[];
   pr?: string;
+  /** Wave number this activity entry belongs to, for wave-keyed completion tracking. */
+  wave?: number | null;
 };
 
 type WorkerSessionState = {

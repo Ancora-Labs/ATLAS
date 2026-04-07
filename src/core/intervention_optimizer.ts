@@ -217,6 +217,45 @@ export const REROUTE_HISTORY_RECORD_SCHEMA = Object.freeze({
   reasonCodeExamples: Object.freeze(["fill_threshold", "performance_degraded", "below_fill_threshold"]),
 });
 
+// ── Anti-overbundle admission policy constants ────────────────────────────────
+
+/**
+ * Maximum total ordered steps across all plans in a single worker call before
+ * the overbundle EV penalty activates.
+ *
+ * A batch whose step count exceeds this threshold is considered over-bundled:
+ * the worker cannot reason coherently across all steps in a single session,
+ * increasing verification latency and premium-request waste.
+ */
+export const OVERBUNDLE_STEPS_THRESHOLD = 9;
+
+/**
+ * EV penalty coefficient applied per over-bundled intervention.
+ * Reduces the Expected Value by this fraction when totalOrderedSteps exceeds
+ * OVERBUNDLE_STEPS_THRESHOLD, making the optimizer prefer splitting into
+ * smaller coherent packets over dispatching an over-bundled batch.
+ */
+export const OVERBUNDLE_EV_PENALTY_COEFFICIENT = 0.20;
+
+/**
+ * Apply an overbundle EV penalty when the intervention's ordered-step count
+ * exceeds OVERBUNDLE_STEPS_THRESHOLD.
+ *
+ * Only positive EVs are penalized (a negative-EV intervention is already
+ * deprioritized and further penalizing it would have no scheduling impact).
+ *
+ * @param ev             - current expected value
+ * @param stepCount      - total ordered steps in this intervention's batch
+ * @returns adjusted EV (≤ original)
+ */
+export function applyOverbundleEVPenalty(ev: number, stepCount: number): number {
+  if (ev <= 0) return ev;
+  if (!Number.isFinite(stepCount) || stepCount <= OVERBUNDLE_STEPS_THRESHOLD) return ev;
+  return Math.round((ev * (1 - OVERBUNDLE_EV_PENALTY_COEFFICIENT)) * 1000) / 1000;
+}
+
+
+
 /**
  * Apply a bounded EV penalty to an intervention whose role was recently rerouted.
  *
@@ -932,6 +971,29 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
     });
   }
 
+  // ── Anti-overbundle EV penalty ───────────────────────────────────────────
+  // options.overbundleStepCounts: { [interventionId: string]: number }
+  // When an intervention's batch has too many ordered steps, reduce its EV to
+  // favour splitting over dispatching an over-bundled packet.
+  const overbundleStepCounts = options?.overbundleStepCounts;
+  let overbundlePenaltiesApplied = 0;
+  if (overbundleStepCounts && typeof overbundleStepCounts === "object" && !Array.isArray(overbundleStepCounts)) {
+    adjustedInterventions = adjustedInterventions.map((intervention) => {
+      const stepCount = Number(overbundleStepCounts[String(intervention.id || "")] ?? 0);
+      if (!stepCount) return intervention;
+      const currentEV = computeExpectedValue(intervention).ev;
+      const adjustedEV = applyOverbundleEVPenalty(currentEV, stepCount);
+      if (adjustedEV === currentEV) return intervention;
+      // Back-calculate adjusted successProbability that approximates target EV
+      const evRatio = currentEV !== 0 ? adjustedEV / currentEV : 1;
+      const adjustedSP = Math.max(0, Math.min(1,
+        Math.round((intervention.successProbability * evRatio) * 1000) / 1000,
+      ));
+      overbundlePenaltiesApplied += 1;
+      return { ...intervention, successProbability: adjustedSP, _overbundlePenaltyApplied: true };
+    });
+  }
+
   // Rank by descending EV (with confidence penalties applied)
   const ranked = rankInterventions(adjustedInterventions);
 
@@ -952,6 +1014,7 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
     benchmarkTelemetryCount: benchmarkTelemetry.length,
     benchmarkBoostsApplied,
     rerouteCostPenaltiesApplied,
+    overbundlePenaltiesApplied,
     ...(specializationContext !== null ? { specializationContext } : {}),
     ...reconciled,
   };

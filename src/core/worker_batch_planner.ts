@@ -303,6 +303,31 @@ export function estimateBatchTokens(plans = []) {
   return plans.reduce((sum, plan) => sum + estimatePlanTokens(plan), 0);
 }
 
+/**
+ * Count total ordered steps across all plans in a batch.
+ *
+ * An "ordered step" is a single actionable item from `plan.orderedSteps` or
+ * `plan.acceptanceCriteria`. Each plan also counts as at minimum 1 step.
+ * This metric drives the anti-overbundle admission policy in the intervention
+ * optimizer: batches exceeding OVERBUNDLE_STEPS_THRESHOLD get an EV penalty.
+ *
+ * @param plans — array of plan objects
+ * @returns total ordered step count (>= plans.length when plans is non-empty)
+ */
+export function computeBatchOrderedStepCount(plans: any[] = []): number {
+  if (!Array.isArray(plans) || plans.length === 0) return 0;
+  let total = 0;
+  for (const plan of plans) {
+    const steps = Array.isArray(plan?.orderedSteps) ? plan.orderedSteps.length
+      : Array.isArray(plan?.acceptance_criteria) ? plan.acceptance_criteria.length
+      : 1;
+    total += Math.max(1, steps);
+  }
+  return total;
+}
+
+
+
 export function packPlansIntoContextBatches(plans = [], usableTokens) {
   if (!Array.isArray(plans) || plans.length === 0) return [];
 
@@ -1285,6 +1310,7 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
     bundleIndex: index + 1,
     totalBundles: flattened.length,
     diversityViolation,
+    orderedStepCount: computeBatchOrderedStepCount(batch.plans as any[]),
   }));
 }
 
@@ -1625,6 +1651,7 @@ export function buildTokenFirstBatches(
     ...batch,
     bundleIndex: index + 1,
     totalBundles: mapped.length,
+    orderedStepCount: computeBatchOrderedStepCount(batch.plans as any[]),
     ...(index === 0 ? { dagParallelismBound } : {}),
   }));
 }
