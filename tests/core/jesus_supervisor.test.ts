@@ -20,6 +20,9 @@ import {
   sanitizeDirectiveFieldForPersistence,
   shouldWarnJesusDecisionLatency,
   hasReachedJesusSoftTimeout,
+  emitJesusSpanTransition,
+  JESUS_AGENT_ID,
+  JESUS_WARNING_CODE,
 } from "../../src/core/jesus_supervisor.js";
 import {
   computeQueueViability,
@@ -31,6 +34,7 @@ import {
   EVENT_DOMAIN,
   EVENTS,
   JESUS_SOFT_TIMEOUT_POLICY_CONTRACT,
+  SPAN_CONTRACT,
   VALID_EVENT_NAMES,
 } from "../../src/core/event_schema.js";
 
@@ -1057,6 +1061,79 @@ describe("jesus_supervisor — soft-timeout cutoff event contract", () => {
       "at threshold: fallback proceeds (no cutoff)");
     assert.equal(hasReachedJesusSoftTimeout(600_001, softTimeoutMs), true,
       "1ms above threshold: fallback proceeds (no cutoff)");
+  });
+});
+
+// ── emitJesusSpanTransition — analytics event wiring ─────────────────────────
+
+describe("jesus_supervisor — emitJesusSpanTransition span contract", () => {
+  it("returns a PLANNING_STAGE_TRANSITION event with correct name and domain", () => {
+    const evt = emitJesusSpanTransition("trace-001", "idle", "planning");
+    assert.equal(evt.event, EVENTS.PLANNING_STAGE_TRANSITION,
+      "event name must be PLANNING_STAGE_TRANSITION");
+    assert.equal(evt.domain, EVENT_DOMAIN.PLANNING,
+      "domain must be PLANNING");
+  });
+
+  it("stamps agentId as JESUS_AGENT_ID in the span payload", () => {
+    const evt = emitJesusSpanTransition("trace-002", "planning", "execution");
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.agentId], JESUS_AGENT_ID,
+      "span agentId must equal JESUS_AGENT_ID");
+  });
+
+  it("records stageFrom and stageTo in the span payload", () => {
+    const evt = emitJesusSpanTransition("trace-003", "execution", "review");
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.stageFrom], "execution",
+      "stageFrom must match the argument passed");
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.stageTo], "review",
+      "stageTo must match the argument passed");
+  });
+
+  it("stamps optional durationMs and parentSpanId when provided", () => {
+    const evt = emitJesusSpanTransition("trace-004", "idle", "planning", {
+      durationMs: 12345,
+      parentSpanId: "parent-span-abc",
+    });
+    assert.equal(evt.payload[SPAN_CONTRACT.stageTransition.durationMs], 12345,
+      "durationMs must be forwarded into the span payload");
+    assert.equal(evt.payload[SPAN_CONTRACT.fields.parentSpanId], "parent-span-abc",
+      "parentSpanId must be forwarded into the span payload");
+  });
+
+  it("negative path: throws when correlationId is an empty string", () => {
+    assert.throws(
+      () => emitJesusSpanTransition("", "idle", "planning"),
+      /correlationId|MISSING_CORRELATION_ID/i,
+    );
+  });
+});
+
+// ── JESUS_AGENT_ID and JESUS_WARNING_CODE ─────────────────────────────────────
+
+describe("jesus_supervisor — JESUS_AGENT_ID and JESUS_WARNING_CODE constants", () => {
+  it("JESUS_AGENT_ID is the canonical agent identifier 'jesus'", () => {
+    assert.equal(JESUS_AGENT_ID, "jesus",
+      "JESUS_AGENT_ID must be the literal string 'jesus' for span correlation");
+  });
+
+  it("JESUS_WARNING_CODE is a frozen object with deterministic code strings", () => {
+    assert.ok(Object.isFrozen(JESUS_WARNING_CODE),
+      "JESUS_WARNING_CODE must be frozen to prevent accidental mutation");
+    assert.ok(typeof JESUS_WARNING_CODE.DECISION_LATENCY_WARNING === "string"
+      && JESUS_WARNING_CODE.DECISION_LATENCY_WARNING.length > 0,
+      "DECISION_LATENCY_WARNING must be a non-empty string");
+    assert.ok(typeof JESUS_WARNING_CODE.LATENCY_ESCALATION === "string"
+      && JESUS_WARNING_CODE.LATENCY_ESCALATION.length > 0,
+      "LATENCY_ESCALATION must be a non-empty string");
+    assert.ok(typeof JESUS_WARNING_CODE.LATENCY_FALLBACK_ACTIVATED === "string"
+      && JESUS_WARNING_CODE.LATENCY_FALLBACK_ACTIVATED.length > 0,
+      "LATENCY_FALLBACK_ACTIVATED must be a non-empty string");
+  });
+
+  it("JESUS_WARNING_CODE codes are distinct from each other", () => {
+    const codes = Object.values(JESUS_WARNING_CODE);
+    const unique = new Set(codes);
+    assert.equal(unique.size, codes.length, "all JESUS_WARNING_CODE values must be unique");
   });
 });
 

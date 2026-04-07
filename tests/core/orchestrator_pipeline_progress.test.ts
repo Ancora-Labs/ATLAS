@@ -1702,6 +1702,73 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
     assert.ok(result.reason?.includes("ci worker"), `reason must contain role name; got: ${result.reason}`);
     assert.ok(result.reason?.includes("3>2"), `reason must contain count and cap; got: ${result.reason}`);
   });
+
+  it("blocks via individual-plan complexity gate when a single plan exceeds the cap", async () => {
+    // A single plan with more acceptance_criteria than actionableCap triggers
+    // the individual-plan layer of Gate 12 (checkOverbundleHardAdmission),
+    // not just the role-group aggregated layer.
+    const plans = [
+      {
+        id: "oversize-single-plan",
+        role: "Evolution Worker",
+        task: "Individual plan overbundle gate test",
+        verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+        acceptance_criteria: ["step 1", "step 2", "step 3", "step 4"],  // 4 > cap of 3
+        capacityDelta: 0.1,
+        requestROI: 1.0,
+      },
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(
+      { ...config, planner: { maxActionableStepsPerPacket: 3 } },
+      plans,
+      "oversize-individual-plan-check",
+    );
+    assert.equal(result.blocked, true,
+      "single plan exceeding the per-plan step cap must be blocked by Gate 12");
+    assert.ok(
+      result.reason?.startsWith(BLOCK_REASON.OVERSIZED_PACKET),
+      `reason must start with OVERSIZED_PACKET prefix; got: ${result.reason}`,
+    );
+    assert.ok(
+      result.reason?.includes("overbundle_hard_admission"),
+      `individual-plan layer must produce overbundle_hard_admission sub-reason; got: ${result.reason}`,
+    );
+    assert.equal(result.gateIndex, 12, "gateIndex must be 12 (OVERSIZED_PACKET)");
+  });
+
+  it("NEGATIVE PATH: individual-plan gate does not fire when no single plan exceeds the cap", async () => {
+    // Two plans each at exactly the cap: individual check passes; role-group check fires.
+    const plans = [
+      {
+        role: "Evolution Worker",
+        task: "Plan A at cap",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["step 1", "step 2"],  // 2 == cap
+        capacityDelta: 0.1,
+        requestROI: 1.0,
+      },
+      {
+        role: "Evolution Worker",
+        task: "Plan B at cap",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["step 1", "step 2"],  // 2 == cap → role group = 4 > 2
+        capacityDelta: 0.1,
+        requestROI: 1.0,
+      },
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(config, plans, "oversize-role-group-fires");
+    assert.equal(result.blocked, true,
+      "role-group layer must still block when aggregate exceeds cap even if individual plans do not");
+    assert.ok(
+      result.reason?.startsWith(BLOCK_REASON.OVERSIZED_PACKET),
+      `reason must start with OVERSIZED_PACKET prefix; got: ${result.reason}`,
+    );
+    // The role-group layer (not the individual layer) must have fired.
+    assert.ok(
+      !result.reason?.includes("overbundle_hard_admission"),
+      `role-group layer must fire; individual-plan overbundle reason must NOT appear; got: ${result.reason}`,
+    );
+  });
 });
 
 // ── Terminology drift prevention ──────────────────────────────────────────────

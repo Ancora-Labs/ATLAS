@@ -686,6 +686,17 @@ describe("Task 8 — Jesus soft-timeout policy contract", () => {
       /read only|Cannot assign/i,
     );
   });
+
+  it("both contract event names are individually registered in VALID_EVENT_NAMES", () => {
+    assert.ok(
+      VALID_EVENT_NAMES.has(JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.fallbackActivated.event),
+      "fallbackActivated.event must be in VALID_EVENT_NAMES registry for O(1) dispatch lookup",
+    );
+    assert.ok(
+      VALID_EVENT_NAMES.has(JESUS_SOFT_TIMEOUT_POLICY_CONTRACT.softTimeoutCutoff.event),
+      "softTimeoutCutoff.event must be in VALID_EVENT_NAMES registry for O(1) dispatch lookup",
+    );
+  });
 });
 
 // ── Cross-agent span contract ─────────────────────────────────────────────────

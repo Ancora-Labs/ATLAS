@@ -1629,4 +1629,42 @@ describe("checkOverbundleHardAdmission", () => {
     assert.equal(r.blocked, true);
     assert.deepEqual(r.rejectedIds, ["plan-idx-0", "plan-idx-1"]);
   });
+
+  it("orderedSteps takes precedence over acceptance_criteria when both fields are present", () => {
+    // A plan with orderedSteps (2 items, within cap=3) and acceptance_criteria (5 items, over cap=3).
+    // The step count must be derived from orderedSteps, not acceptance_criteria.
+    const plan = {
+      id: "P-DUAL",
+      orderedSteps: ["s1", "s2"],
+      acceptance_criteria: ["ac1", "ac2", "ac3", "ac4", "ac5"],
+    };
+    const r = checkOverbundleHardAdmission([plan], 3);
+    assert.equal(r.blocked, false,
+      "orderedSteps (2 ≤ 3) must take precedence over acceptance_criteria (5 > 3)");
+    assert.deepEqual(r.rejectedIds, []);
+  });
+
+  it("plans with zero measurable steps default to 1 and are never blocked by the gate alone", () => {
+    // A plan with no orderedSteps, ordered_steps, acceptance_criteria, or plans field
+    // has an inferred step count of 1 — it must not be blocked at threshold ≥ 1.
+    const plan = { id: "P-EMPTY", task: "empty" };
+    const r = checkOverbundleHardAdmission([plan], OVERBUNDLE_STEPS_THRESHOLD);
+    assert.equal(r.blocked, false,
+      "plan with no step fields must default to 1 step and not be blocked");
+  });
+
+  it("NEGATIVE PATH: returns blocked=true when a named plan id exceeds threshold", () => {
+    const plan = {
+      id: "P-NAMED-OVER",
+      orderedSteps: Array.from({ length: OVERBUNDLE_STEPS_THRESHOLD + 2 }, (_, i) => `step-${i}`),
+    };
+    const r = checkOverbundleHardAdmission([plan]);
+    assert.equal(r.blocked, true);
+    assert.deepEqual(r.rejectedIds, ["P-NAMED-OVER"],
+      "rejected plan must be identified by its id field");
+    assert.ok(
+      typeof r.reason === "string" && r.reason.includes("P-NAMED-OVER"),
+      "reason must reference the rejected plan id",
+    );
+  });
 });

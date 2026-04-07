@@ -94,6 +94,7 @@ import {
   OPTIMIZER_STATUS,
   buildPolicyImpactByInterventionId,
   OVERBUNDLE_STEPS_THRESHOLD,
+  checkOverbundleHardAdmission,
 } from "./intervention_optimizer.js";
 import { evaluateInterventionsForCycle } from "./intervention_judge.js";
 import { evaluateAutonomyBand, type CycleSample } from "./autonomy_band_monitor.js";
@@ -962,10 +963,16 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
   }
 
   // ── Gate 12: Oversized packet hard admission (always-on) ─────────────────
-  // Unconditional pre-dispatch gate: block dispatch when any per-role plan group
-  // exceeds the ordered-step complexity cap.  The cap is taken from
-  // config.planner.maxActionableStepsPerPacket when configured, or falls back to
-  // OVERBUNDLE_STEPS_THRESHOLD so the gate is always active regardless of config.
+  // Two-layer check applied sequentially:
+  //   1. Individual-plan complexity: checkOverbundleHardAdmission — blocks when any
+  //      single plan's ordered-step count exceeds the cap (overbundle heuristic
+  //      converted into a hard pre-dispatch gate per the admission architecture).
+  //   2. Role-group aggregated complexity: validatePacketBatchAdmission — blocks
+  //      when the sum of steps across all plans for a role group exceeds the cap.
+  //
+  // The cap is taken from config.planner.maxActionableStepsPerPacket when configured,
+  // or falls back to OVERBUNDLE_STEPS_THRESHOLD so the gate is always active
+  // regardless of config.
   //
   // Named verification targets are bound earlier in this function (above) so that
   // by the time this gate runs every plan already carries a resolved verification
@@ -978,6 +985,25 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       ? Math.floor(rawActionableCap)
       : OVERBUNDLE_STEPS_THRESHOLD;
     if (actionableCap > 0 && normalizedPlans.length > 0) {
+      // Layer 1: individual-plan complexity (overbundle hard admission gate).
+      const individualCheck = checkOverbundleHardAdmission(
+        Array.isArray(normalizedPlans) ? normalizedPlans : [],
+        actionableCap,
+      );
+      if (individualCheck.blocked) {
+        const blockReason = `${BLOCK_REASON.OVERSIZED_PACKET}:${individualCheck.reason}`;
+        return {
+          blocked: true,
+          reason: blockReason,
+          action: undefined,
+          dispatchBlockReason: blockReason,
+          graphResult,
+          cycleId,
+          budgetEligibility,
+          gateIndex: GATE_PRECEDENCE.OVERSIZED_PACKET,
+        };
+      }
+      // Layer 2: role-group aggregated complexity.
       const oversizeCheck = validatePacketBatchAdmission(Array.isArray(normalizedPlans) ? normalizedPlans : [], actionableCap);
       if (oversizeCheck.blocked) {
         const blockReason = `${BLOCK_REASON.OVERSIZED_PACKET}:${oversizeCheck.reason}`;
