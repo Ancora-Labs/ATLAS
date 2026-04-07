@@ -361,6 +361,61 @@ export function migrateWorkerCycleArtifacts(data: unknown): {
   };
 }
 
+function parseIsoMs(value: unknown): number {
+  const t = Date.parse(String(value || ""));
+  return Number.isFinite(t) ? t : 0;
+}
+
+/**
+ * Select a usable cycle record from migrated worker-cycle artifacts.
+ * Preference order is deterministic:
+ *   1) preferredCycleId (typically pipeline_progress.startedAt)
+ *   2) latestCycleId pointer from the artifact envelope
+ *   3) most recently updated cycle record in cycles{}
+ */
+export function selectWorkerCycleRecord(
+  artifactData: unknown,
+  preferredCycleId: unknown = "",
+): { cycleId: string | null; record: Record<string, unknown> | null; source: "preferred" | "latest" | "most_recent" | "none" } {
+  if (!artifactData || typeof artifactData !== "object" || Array.isArray(artifactData)) {
+    return { cycleId: null, record: null, source: "none" };
+  }
+  const payload = artifactData as Record<string, unknown>;
+  const cycles = payload.cycles && typeof payload.cycles === "object" && !Array.isArray(payload.cycles)
+    ? payload.cycles as Record<string, unknown>
+    : {};
+  const preferredId = String(preferredCycleId || "").trim();
+  const latestId = String(payload.latestCycleId || "").trim();
+
+  const pick = (cycleId: string): Record<string, unknown> | null => {
+    if (!cycleId) return null;
+    const rec = cycles[cycleId];
+    if (!rec || typeof rec !== "object" || Array.isArray(rec)) return null;
+    return rec as Record<string, unknown>;
+  };
+
+  const preferred = pick(preferredId);
+  if (preferred) return { cycleId: preferredId, record: preferred, source: "preferred" };
+
+  const latest = pick(latestId);
+  if (latest) return { cycleId: latestId, record: latest, source: "latest" };
+
+  let mostRecentId = "";
+  let mostRecentMs = -1;
+  for (const [cycleId, rec] of Object.entries(cycles)) {
+    if (!rec || typeof rec !== "object" || Array.isArray(rec)) continue;
+    const updatedAtMs = parseIsoMs((rec as Record<string, unknown>).updatedAt);
+    if (updatedAtMs > mostRecentMs || (updatedAtMs === mostRecentMs && cycleId > mostRecentId)) {
+      mostRecentMs = updatedAtMs;
+      mostRecentId = cycleId;
+    }
+  }
+  const mostRecent = pick(mostRecentId);
+  if (mostRecent) return { cycleId: mostRecentId, record: mostRecent, source: "most_recent" };
+
+  return { cycleId: null, record: null, source: "none" };
+}
+
 /**
  * Compatibility migration for legacy evolution_progress-style task maps.
  * Converts legacy { tasks:{ id:{status} } } payloads into canonical

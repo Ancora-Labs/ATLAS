@@ -35,7 +35,7 @@ import { readJson, readJsonSafe, writeJson, cleanupStaleTempFiles, READ_JSON_REA
 import { updatePipelineProgress, readPipelineProgress } from "./pipeline_progress.js";
 import { loadEscalationQueue, sortEscalationQueue, processEscalationQueueClosures } from "./escalation_queue.js";
 import { computeCycleSLOs, persistSloMetrics, detectCoupledAlerts } from "./slo_checker.js";
-import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealthComposite, CYCLE_PHASE, computeRuntimeContractProbe, readCycleAnalytics, evaluateBenchmarkGroundTruth, WORKER_CYCLE_ARTIFACTS_FILE, migrateWorkerCycleArtifacts } from "./cycle_analytics.js";
+import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealthComposite, CYCLE_PHASE, computeRuntimeContractProbe, readCycleAnalytics, evaluateBenchmarkGroundTruth, WORKER_CYCLE_ARTIFACTS_FILE, migrateWorkerCycleArtifacts, selectWorkerCycleRecord } from "./cycle_analytics.js";
 import { computeBaselineRecoveryState, persistBaselineMetrics, PARSER_CONFIDENCE_RECOVERY_THRESHOLD } from "./parser_baseline_recovery.js";
 import { computeDispatchStrictness, loadReplayRegressionState, DISPATCH_STRICTNESS } from "./parser_replay_harness.js";
 import {
@@ -2010,9 +2010,9 @@ async function hasActiveWorkersAsync(config) {
     if (rawArtifact.ok) {
       const migrated = migrateWorkerCycleArtifacts(rawArtifact.data);
       if (migrated.ok && migrated.data) {
-        const latestCycleId = String((migrated.data as any).latestCycleId || "");
-        const cycles = (migrated.data as any).cycles as Record<string, any> || {};
-        const cycle = latestCycleId ? cycles[latestCycleId] : null;
+        const pipeline = await readPipelineProgress(config).catch(() => null);
+        const selectedCycle = selectWorkerCycleRecord(migrated.data, pipeline?.startedAt);
+        const cycle = selectedCycle.record;
         if (cycle && typeof cycle.workerSessions === "object" && !Array.isArray(cycle.workerSessions)) {
           const sessions = cycle.workerSessions as Record<string, WorkerSessionRecord>;
           const workerActivity = cycle.workerActivity && typeof cycle.workerActivity === "object"

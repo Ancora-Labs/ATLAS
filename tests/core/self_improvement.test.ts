@@ -285,6 +285,73 @@ describe("collectCycleOutcomes — canonical worker-cycle artifacts precedence",
   });
 });
 
+describe("collectCycleOutcomes — canonical selection tolerates stale cycle pointers", () => {
+  let tmpDir;
+  let result;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-si-canonical-stale-pointer-"));
+    await writeTestJson(tmpDir, "prometheus_analysis.json", PROMETHEUS_ANALYSIS);
+    await writeTestJson(tmpDir, "evolution_progress.json", {
+      ...EVOLUTION_PROGRESS,
+      tasks: {
+        "T-001": { status: "in_progress", attempts: 1 },
+      }
+    });
+    await writeTestJson(tmpDir, WORKER_CYCLE_ARTIFACTS_FILE, {
+      schemaVersion: 1,
+      updatedAt: new Date().toISOString(),
+      latestCycleId: "missing-cycle",
+      cycles: {
+        "cycle-old": {
+          cycleId: "cycle-old",
+          status: "complete",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          workerSessions: {
+            "evolution-worker": { status: "idle", startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+          },
+          workerActivity: {
+            "evolution-worker": [{ at: new Date().toISOString(), status: "done", taskId: "T-OLD" }]
+          },
+          completedTaskIds: ["T-OLD"],
+        },
+        "cycle-new": {
+          cycleId: "cycle-new",
+          status: "complete",
+          updatedAt: "2026-01-01T00:01:00.000Z",
+          workerSessions: {
+            "evolution-worker": { status: "idle", startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+          },
+          workerActivity: {
+            "evolution-worker": [{ at: new Date().toISOString(), status: "done", taskId: "T-NEW" }]
+          },
+          completedTaskIds: ["T-NEW"],
+        },
+      },
+    });
+    await writeTestJson(tmpDir, "pipeline_progress.json", {
+      stage: "cycle_complete",
+      startedAt: "missing-cycle",
+      updatedAt: new Date().toISOString(),
+      percent: 100,
+      detail: "done",
+      steps: [],
+      stageLabel: "Cycle complete",
+    });
+    result = await collectCycleOutcomes(makeConfig(tmpDir));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("uses canonical most recent cycle instead of legacy fallback when pointers are stale", () => {
+    assert.equal(result.completedCount, 1);
+    assert.ok(result.metricsSource.includes("worker_cycle_artifacts"));
+    assert.ok(!result.metricsSource.includes("evolution_progress_fallback"));
+  });
+});
+
 // ── Scenario 2: prometheus_analysis absent (AC9, AC10) ───────────────────────
 
 describe("collectCycleOutcomes — prometheus_analysis missing (ENOENT)", () => {
