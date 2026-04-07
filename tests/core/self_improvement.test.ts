@@ -40,6 +40,7 @@ import {
   runSelfImprovementCycle,
 } from "../../src/core/self_improvement.js";
 import { DECISION_QUALITY_LABEL } from "../../src/core/athena_reviewer.js";
+import { WORKER_CYCLE_ARTIFACTS_FILE } from "../../src/core/cycle_analytics.js";
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -107,6 +108,30 @@ const ATHENA_PLAN_REVIEW = {
   ],
   reviewedAt: new Date().toISOString()
 };
+
+function makeWorkerCycleArtifacts(overrides: Record<string, unknown> = {}) {
+  const cycleId = String((overrides as any).cycleId || "cycle-test-001");
+  return {
+    schemaVersion: 1,
+    updatedAt: new Date().toISOString(),
+    latestCycleId: cycleId,
+    cycles: {
+      [cycleId]: {
+        cycleId,
+        status: "complete",
+        updatedAt: new Date().toISOString(),
+        workerSessions: {
+          "evolution-worker": { status: "idle", startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+        },
+        workerActivity: {
+          "evolution-worker": [{ at: new Date().toISOString(), status: "done", taskId: "T-001", pr: null }]
+        },
+        completedTaskIds: ["T-001"],
+      }
+    },
+    ...overrides,
+  };
+}
 
 // ── OUTCOME_DEGRADED_REASON enum ──────────────────────────────────────────────
 
@@ -188,6 +213,67 @@ describe("collectCycleOutcomes — no-Athena runtime", () => {
     assert.equal(result.athenaPlanReview?.overallScore, 8);
     assert.equal(result.athenaPlanReview?.corrections.length, 2);
     assert.match(result.athenaPlanReview?.summary || "", /follow-up corrections/i);
+  });
+});
+
+describe("collectCycleOutcomes — canonical worker-cycle artifacts precedence", () => {
+  let tmpDir;
+  let result;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-si-canonical-"));
+    await writeTestJson(tmpDir, "prometheus_analysis.json", PROMETHEUS_ANALYSIS);
+    await writeTestJson(tmpDir, "evolution_progress.json", {
+      ...EVOLUTION_PROGRESS,
+      tasks: {
+        "T-001": { status: "in_progress", attempts: 1 },
+        "T-002": { status: "in_progress", attempts: 1 },
+      }
+    });
+    await writeTestJson(tmpDir, WORKER_CYCLE_ARTIFACTS_FILE, makeWorkerCycleArtifacts({
+      cycleId: "cycle-canonical-1",
+      latestCycleId: "cycle-canonical-1",
+      cycles: {
+        "cycle-canonical-1": {
+          cycleId: "cycle-canonical-1",
+          status: "complete",
+          updatedAt: new Date().toISOString(),
+          workerSessions: {
+            "evolution-worker": { status: "idle", startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+          },
+          workerActivity: {
+            "evolution-worker": [
+              { at: new Date().toISOString(), status: "done", taskId: "T-001" },
+              { at: new Date().toISOString(), status: "success", taskId: "T-002" }
+            ]
+          },
+          completedTaskIds: ["T-001", "T-002"],
+        }
+      },
+    }));
+    await writeTestJson(tmpDir, "pipeline_progress.json", {
+      stage: "cycle_complete",
+      startedAt: "cycle-canonical-1",
+      updatedAt: new Date().toISOString(),
+      percent: 100,
+      detail: "done",
+      steps: [],
+      stageLabel: "Cycle complete",
+    });
+    result = await collectCycleOutcomes(makeConfig(tmpDir));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("prefers canonical completedTaskIds over evolution_progress fallback", () => {
+    assert.equal(result.completedCount, 2, "completedCount must come from canonical completedTaskIds");
+  });
+
+  it("metricsSource credits worker_cycle_artifacts when canonical data is used", () => {
+    assert.ok(result.metricsSource.includes("worker_cycle_artifacts"));
+    assert.ok(!result.metricsSource.includes("evolution_progress_fallback"));
   });
 });
 

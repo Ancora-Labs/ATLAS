@@ -201,6 +201,151 @@ export const CYCLE_ANALYTICS_SCHEMA = Object.freeze({
   defaultMaxHistoryEntries: 50,
 });
 
+// ── Canonical worker-cycle artifacts (dispatch/session/activity spine) ──────────
+
+/**
+ * Canonical cycle-scoped worker artifact file.
+ * Written by orchestrator dispatch transitions and consumed by self-improvement.
+ */
+export const WORKER_CYCLE_ARTIFACTS_FILE = "worker_cycle_artifacts.json";
+
+export const WORKER_CYCLE_ARTIFACTS_SCHEMA = Object.freeze({
+  schemaVersion: 1,
+  required: ["schemaVersion", "updatedAt", "latestCycleId", "cycles"],
+  cycleRecordRequired: ["cycleId", "updatedAt", "status", "workerSessions", "workerActivity", "completedTaskIds"],
+});
+
+export const WORKER_CYCLE_ARTIFACT_MIGRATION_REASON = Object.freeze({
+  OK: "ok",
+  ALREADY_CURRENT: "already_current",
+  INVALID_DATA: "invalid_data",
+  UNKNOWN_FUTURE_VERSION: "unknown_future_version",
+});
+
+function sanitizeCompletedTaskIds(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return [...new Set(input.map((id) => String(id || "").trim()).filter(Boolean))];
+}
+
+function normalizeWorkerCycleRecord(rawRecord: unknown, cycleIdHint: string): Record<string, unknown> {
+  const rec = rawRecord && typeof rawRecord === "object" ? rawRecord as Record<string, unknown> : {};
+  const cycleId = String(rec.cycleId || cycleIdHint || "unknown-cycle");
+  const status = String(rec.status || "unknown");
+  const updatedAt = String(rec.updatedAt || new Date().toISOString());
+  const workerSessions = rec.workerSessions && typeof rec.workerSessions === "object" && !Array.isArray(rec.workerSessions)
+    ? rec.workerSessions as Record<string, unknown>
+    : {};
+  const workerActivity = rec.workerActivity && typeof rec.workerActivity === "object" && !Array.isArray(rec.workerActivity)
+    ? rec.workerActivity as Record<string, unknown>
+    : {};
+  const completedTaskIds = sanitizeCompletedTaskIds(rec.completedTaskIds);
+  return {
+    ...rec,
+    cycleId,
+    status,
+    updatedAt,
+    workerSessions,
+    workerActivity,
+    completedTaskIds,
+  };
+}
+
+/**
+ * Schema-versioned migration for canonical worker-cycle dispatch artifacts.
+ * Supports:
+ *   v1 current envelope: { schemaVersion:1, latestCycleId, cycles }
+ *   legacy envelope:     { cycles } (no schemaVersion)
+ *   legacy single-cycle: { cycleId, workerSessions, workerActivity, completedTaskIds }
+ */
+export function migrateWorkerCycleArtifacts(data: unknown): {
+  ok: boolean;
+  reason: string;
+  fromVersion: number | null;
+  toVersion: number;
+  data: Record<string, unknown> | null;
+} {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return {
+      ok: false,
+      reason: WORKER_CYCLE_ARTIFACT_MIGRATION_REASON.INVALID_DATA,
+      fromVersion: null,
+      toVersion: WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion,
+      data: null,
+    };
+  }
+
+  const obj = data as Record<string, unknown>;
+  const rawVersion = obj.schemaVersion;
+  const hasVersion = rawVersion !== undefined;
+  const fromVersion = hasVersion && Number.isInteger(Number(rawVersion)) ? Number(rawVersion) : 0;
+  if (hasVersion && (!Number.isInteger(Number(rawVersion)) || Number(rawVersion) < 0)) {
+    return {
+      ok: false,
+      reason: WORKER_CYCLE_ARTIFACT_MIGRATION_REASON.INVALID_DATA,
+      fromVersion: null,
+      toVersion: WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion,
+      data: null,
+    };
+  }
+  if (fromVersion > WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion) {
+    return {
+      ok: false,
+      reason: WORKER_CYCLE_ARTIFACT_MIGRATION_REASON.UNKNOWN_FUTURE_VERSION,
+      fromVersion,
+      toVersion: WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion,
+      data: null,
+    };
+  }
+
+  const nowIso = new Date().toISOString();
+  const legacySingleCycleShape = (
+    "workerSessions" in obj
+    || "workerActivity" in obj
+    || "completedTaskIds" in obj
+  );
+  const legacyCycleId = String(obj.cycleId || obj.startedAt || "legacy-cycle");
+  const normalizedCycles: Record<string, unknown> = {};
+
+  if (obj.cycles && typeof obj.cycles === "object" && !Array.isArray(obj.cycles)) {
+    for (const [cycleId, record] of Object.entries(obj.cycles as Record<string, unknown>)) {
+      normalizedCycles[String(cycleId)] = normalizeWorkerCycleRecord(record, String(cycleId));
+    }
+  } else if (legacySingleCycleShape) {
+    normalizedCycles[legacyCycleId] = normalizeWorkerCycleRecord(obj, legacyCycleId);
+  } else if (fromVersion === WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion) {
+    // Declares current version but lacks required structure.
+    return {
+      ok: false,
+      reason: WORKER_CYCLE_ARTIFACT_MIGRATION_REASON.INVALID_DATA,
+      fromVersion,
+      toVersion: WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion,
+      data: null,
+    };
+  }
+
+  const latestCycleId = String(
+    obj.latestCycleId
+    || Object.keys(normalizedCycles).slice(-1)[0]
+    || legacyCycleId
+  );
+  const migrated = {
+    schemaVersion: WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion,
+    updatedAt: String(obj.updatedAt || nowIso),
+    latestCycleId,
+    cycles: normalizedCycles,
+  };
+
+  return {
+    ok: true,
+    reason: fromVersion === WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion
+      ? WORKER_CYCLE_ARTIFACT_MIGRATION_REASON.ALREADY_CURRENT
+      : WORKER_CYCLE_ARTIFACT_MIGRATION_REASON.OK,
+    fromVersion,
+    toVersion: WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion,
+    data: migrated,
+  };
+}
+
 function hasDoneWorkerWithVerificationEvidence(workerResults: unknown): boolean {
   if (!Array.isArray(workerResults)) return false;
   return workerResults.some((item) => {

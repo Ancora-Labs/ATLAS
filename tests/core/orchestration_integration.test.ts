@@ -45,6 +45,7 @@ import {
   CYCLE_PHASE,
   CYCLE_OUTCOME_STATUS,
 } from "../../src/core/cycle_analytics.js";
+import { isTerminalWorkerStatus } from "../../src/core/worker_runner.js";
 
 // ── 1. Dependency Wave Order ───────────────────────────────────────────────────
 
@@ -162,6 +163,15 @@ describe("Integration: dependency wave order", () => {
       result.status === "deadlocked" || result.blocked.length === 2,
       "Must be deadlocked or have 2 blocked tasks"
     );
+  });
+});
+
+describe("Integration: worker terminal status contract", () => {
+  it("treats done/partial/blocked as terminal recovery-safe statuses", () => {
+    assert.equal(isTerminalWorkerStatus("done"), true);
+    assert.equal(isTerminalWorkerStatus("partial"), true);
+    assert.equal(isTerminalWorkerStatus("blocked"), true);
+    assert.equal(isTerminalWorkerStatus("working"), false);
   });
 });
 

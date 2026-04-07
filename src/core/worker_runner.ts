@@ -179,6 +179,20 @@ export function isAnalyticsCompletedWorkerStatus(status: unknown): boolean {
   return ANALYTICS_COMPLETED_WORKER_STATUSES.has(String(status || "").toLowerCase());
 }
 
+const TERMINAL_WORKER_STATUSES = new Set([
+  "done",
+  "success",
+  "skipped",
+  "partial",
+  "blocked",
+  "error",
+  "failed",
+]);
+
+export function isTerminalWorkerStatus(status: unknown): boolean {
+  return TERMINAL_WORKER_STATUSES.has(String(status || "").toLowerCase().trim());
+}
+
 // ── Span contract emitter ─────────────────────────────────────────────────────
 
 /** Canonical agent identifier for workers in span events. */
