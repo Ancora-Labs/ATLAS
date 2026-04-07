@@ -307,10 +307,12 @@ export interface SynthesisQualityGate {
   degradedPlanningMode: boolean;
   /**
    * Minimal recovery signal used when degradedPlanningMode=true and ALL topics
-   * were quarantined.  Prometheus can use topic names as a weak planning signal
-   * instead of failing entirely.  Empty string when not applicable.
+   * were quarantined.  Topic names are provenance/audit metadata only; planning
+   * must use internal repository evidence only. Empty string when not applicable.
    */
   recoverySignal?: string;
+  /** Explicit planning contract for degraded mode consumers. */
+  planningMode?: "normal" | "internal_evidence_only";
 }
 
 /**
@@ -404,9 +406,9 @@ export function topicHasActionableArtifact(topic: Record<string, unknown>): bool
  * Build a minimal recovery signal for the qualityGate when all topics are
  * quarantined (degradedPlanningMode=true).
  *
- * Uses topic names as a weak planning signal so Prometheus can still operate
- * with minimal context rather than failing entirely.  Returns an empty string
- * when no topic names are available.
+ * Topic names are included for provenance only. Prometheus must derive tasks
+ * from internal repository evidence only in degraded mode. Returns an empty
+ * string when no topic names are available.
  *
  * Exported for testing.
  *
@@ -420,7 +422,7 @@ export function buildQualityGateRecoverySignal(quarantinedTopicNames: string[]):
   // planning evidence. Internal repository state is the authoritative planning source
   // when all topics are quarantined.
   return `Research was attempted on topics: ${names.join(", ")}. All failed density check — ` +
-    `do NOT use topic names as planning input. Derive tasks only from concrete repository evidence (files, failing tests, error logs).`;
+    `do NOT use topic names as planning input. Operate in internal-evidence-only planning mode and derive tasks only from concrete repository evidence (files, failing tests, error logs, state files).`;
 }
 
 /** Strict actionable-density thresholds used in bounded recovery synthesis scheduling. */
@@ -862,7 +864,7 @@ Follow your agent definition's output format exactly.`),
     : "";
   if (degradedPlanningMode && !recoverySignal) {
     // All topic names were empty — build a fallback signal so the invariant holds.
-    recoverySignal = `All ${quarantinedTopics.length} research topic(s) quarantined due to insufficient actionable density. No named topics available — prefer conservative, evidence-backed tasks.`;
+    recoverySignal = `All ${quarantinedTopics.length} research topic(s) quarantined due to insufficient actionable density. No named topics available — operate in internal-evidence-only planning mode and derive tasks from concrete repository evidence.`;
   }
 
   const qualityGate: SynthesisQualityGate = {
@@ -876,6 +878,7 @@ Follow your agent definition's output format exactly.`),
     degradedPlanningMode,
     // Always non-empty when degradedPlanningMode=true (invariant enforced above).
     ...(degradedPlanningMode ? { recoverySignal } : {}),
+    planningMode: degradedPlanningMode ? "internal_evidence_only" : "normal",
   };
 
   const output: ResearchSynthesisResult = {

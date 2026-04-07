@@ -4308,6 +4308,7 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     let effectiveSynthesis: unknown = researchSynthesis;
     let degradedPlanningModeActive = false;
     const qg = (researchSynthesis as any)?.qualityGate;
+    const qualityGatePlanningMode = String((qg as any)?.planningMode || "").trim();
     if (qg && qg.passed === false) {
       const allTopics: unknown[] = Array.isArray((researchSynthesis as any)?.topics)
         ? (researchSynthesis as any).topics
@@ -4323,13 +4324,15 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
       if (quarantinedTopicNames.length > 0) {
         // Always filter quarantined topics from the effective synthesis injected into the prompt.
         effectiveSynthesis = { ...(researchSynthesis as any), topics: passedTopics };
-        if (passedTopics.length === 0) {
+        const allTopicsQuarantined = passedTopics.length === 0;
+        const contractRequiresInternalEvidenceOnly = qualityGatePlanningMode === "internal_evidence_only";
+        if (allTopicsQuarantined || contractRequiresInternalEvidenceOnly) {
           // ALL topics quarantined — no valid signal remains. Enter degraded planning mode.
           degradedPlanningModeActive = true;
           await appendProgress(
             config,
             `[PROMETHEUS][DEGRADED_PLANNING] ${quarantinedTopicNames.length} low-density topic(s) quarantined from planning context ` +
-            `(retried=${qg.retried}). All topics quarantined — operating in degraded planning mode.`
+            `(retried=${qg.retried}). mode=${contractRequiresInternalEvidenceOnly ? "contract:internal_evidence_only" : "inferred:all_topics_quarantined"} — operating in degraded planning mode.`
           );
         } else {
           // PARTIAL quarantine — valid signal retained in passedTopics. NOT degraded.
@@ -4381,10 +4384,11 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
       // accidentally treat topic names as evidence.
       const degradedHeader =
         `## ⚠️ DEGRADED PLANNING MODE — INTERNAL EVIDENCE ONLY\n` +
-        `Research synthesis quality gate failed. ALL research topics were quarantined due to ` +
-        `insufficient actionable density. You MUST derive tasks exclusively from concrete ` +
+        `Research synthesis quality gate is in degraded mode due to insufficient actionable ` +
+        `research density. You MUST derive tasks exclusively from concrete ` +
         `repository evidence (failing tests, error logs, source files, state files). ` +
         `Do NOT reference research topic names as task justification — topic names are not evidence.\n` +
+        `Persisted planning contract: qualityGate.planningMode=internal_evidence_only.\n` +
         `A bounded recovery synthesis has been scheduled for the next cycle.\n\n`;
       researchSectionText = degradedHeader;
     }

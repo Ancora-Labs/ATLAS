@@ -471,7 +471,8 @@ describe("research_synthesizer — provenance coupling invariants (Task 3)", () 
         topicDensities: [],
         quarantinedTopics: ["CI Pipeline", "Auth Security"],
         degradedPlanningMode: true,
-        recoverySignal: "Research completed on topics: CI Pipeline, Auth Security. All topics failed density check — use topic names as minimal planning signal.",
+        recoverySignal: "Research was attempted on topics: CI Pipeline, Auth Security. All failed density check — do NOT use topic names as planning input. Operate in internal-evidence-only planning mode and derive tasks only from concrete repository evidence (files, failing tests, error logs, state files).",
+        planningMode: "internal_evidence_only" as const,
       },
     };
     const result = sanitizeResearchSynthesisForPersistence(payload);
@@ -479,6 +480,7 @@ describe("research_synthesizer — provenance coupling invariants (Task 3)", () 
     assert.equal((result.qualityGate as any).degradedPlanningMode, true);
     assert.ok(typeof (result.qualityGate as any).recoverySignal === "string" && (result.qualityGate as any).recoverySignal.length > 0,
       "recoverySignal must be non-empty when degradedPlanningMode=true (provenance invariant)");
+    assert.equal((result.qualityGate as any).planningMode, "internal_evidence_only");
   });
 
   it("negative: degradedPlanningMode=true with empty recoverySignal violates provenance invariant", () => {
@@ -566,6 +568,7 @@ describe("scheduleBoundedRecoverySynthesis", () => {
     const signal = buildQualityGateRecoverySignal(["Topic X"]);
     assert.ok(!signal.includes("use topic names as minimal planning signal"),
       "updated signal must NOT instruct Prometheus to use topic names as planning signal");
+    assert.ok(signal.includes("internal-evidence-only planning mode"));
     assert.ok(
       /concrete repository evidence|repository evidence|repository state/i.test(signal),
       "updated signal must direct Prometheus to use concrete repository evidence"
