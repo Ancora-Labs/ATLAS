@@ -47,6 +47,7 @@
     "dashboardEnabled": false,
     "prometheusAnalysisFreshnessMinutes": 60,
     "jesusTimeoutMs": 1800000,
+    "jesusDecisionLatencyWarningMs": 900000,
     "jesusDirectiveFreshnessMinutes": 30,
     "plannerMaxGenerations": 3,
     "maxTacticalCycles": 6,

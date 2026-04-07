@@ -83,6 +83,7 @@ export async function loadConfig(): Promise<Config> {
     securityFamilyCooldownMinutes: process.env.BOX_SECURITY_FAMILY_COOLDOWN_MINUTES?.trim() || null,
     environmentBlockerCooldownMinutes: process.env.BOX_ENVIRONMENT_BLOCKER_COOLDOWN_MINUTES?.trim() || null,
     jesusTimeoutMs: process.env.BOX_JESUS_TIMEOUT_MS?.trim() || null,
+    jesusDecisionLatencyWarningMs: process.env.BOX_JESUS_DECISION_LATENCY_WARNING_MS?.trim() || null,
     jesusLatencyTier1Ms: process.env.BOX_JESUS_LATENCY_TIER1_MS?.trim() || null,
     jesusLatencyTier2Ms: process.env.BOX_JESUS_LATENCY_TIER2_MS?.trim() || null,
     jesusFallbackModel: process.env.BOX_JESUS_FALLBACK_MODEL?.trim() || null,
@@ -220,6 +221,9 @@ export async function loadConfig(): Promise<Config> {
     jesusTimeoutMs: env.jesusTimeoutMs
       ? Number(env.jesusTimeoutMs)
       : Number(fileConfig?.runtime?.jesusTimeoutMs ?? 1800000),
+    jesusDecisionLatencyWarningMs: env.jesusDecisionLatencyWarningMs
+      ? Number(env.jesusDecisionLatencyWarningMs)
+      : Number(fileConfig?.runtime?.jesusDecisionLatencyWarningMs ?? fileConfig?.slo?.thresholds?.decisionLatencyMs ?? 900000),
     jesusLatencyTier1Ms: env.jesusLatencyTier1Ms
       ? Number(env.jesusLatencyTier1Ms)
       : Number(fileConfig?.runtime?.jesusLatencyTier1Ms ?? 60000),

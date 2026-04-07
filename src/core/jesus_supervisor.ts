@@ -20,7 +20,7 @@ import { readJson, readJsonSafe, writeJson, spawnAsync, buildIncrementalSignatur
 import { appendProgress, appendAlert, ALERT_SEVERITY, loadCapabilityExecutionTraces } from "./state_tracker.js";
 import { getRoleRegistry } from "./role_registry.js";
 import { buildAgentArgs, parseAgentOutput, logAgentThinking } from "./agent_loader.js";
-import { chatLog, warn } from "./logger.js";
+import { chatLog, emitEvent, warn } from "./logger.js";
 import {
   validateLeadershipContract,
   LEADERSHIP_CONTRACT_TYPE,
@@ -40,6 +40,17 @@ import { resolveJesusFallbackModel, ROUTING_REASON } from "./model_policy.js";
 
 /** Canonical agent identifier for Jesus in span events. */
 export const JESUS_AGENT_ID = "jesus";
+export const JESUS_WARNING_CODE = Object.freeze({
+  DECISION_LATENCY_WARNING: "JESUS_DECISION_LATENCY_WARNING",
+  LATENCY_ESCALATION: "JESUS_LATENCY_ESCALATION",
+  LATENCY_FALLBACK_ACTIVATED: "JESUS_LATENCY_FALLBACK_ACTIVATED",
+});
+
+export function shouldWarnJesusDecisionLatency(elapsedMs: number, warningThresholdMs: number): boolean {
+  const safeElapsedMs = Number.isFinite(elapsedMs) ? Number(elapsedMs) : 0;
+  const safeThresholdMs = Number.isFinite(warningThresholdMs) ? Number(warningThresholdMs) : 900_000;
+  return safeElapsedMs >= Math.max(1, safeThresholdMs);
+}
 
 /**
  * Build a PLANNING_STAGE_TRANSITION span event for Jesus.
@@ -881,6 +892,10 @@ ${workersList}`;
   chatLog(stateDir, jesusName, `Calling Copilot CLI (agent=jesus, allowAll=true)...`);
 
   const jesusTimeoutMs = Math.max(60_000, Number(config?.runtime?.jesusTimeoutMs || 1_800_000));
+  const jesusDecisionLatencyWarningMs = Math.max(
+    30_000,
+    Number(config?.runtime?.jesusDecisionLatencyWarningMs ?? config?.slo?.thresholds?.decisionLatencyMs ?? 900_000),
+  );
   // Latency-aware tiered routing: T1 (fast) → T2 (normal) → T3 (full+fallback).
   // maxRetries=1 means 2 attempts (T1+T2), maxRetries=2 means all 3 tiers.
   const tier1Ms = Math.max(30_000, Math.min(Number(config?.runtime?.jesusLatencyTier1Ms ?? 60_000), jesusTimeoutMs));
@@ -898,7 +913,10 @@ ${workersList}`;
   const tiers = ALL_TIERS.slice(0, Math.min(maxRetries + 1, ALL_TIERS.length));
 
   let rawResult: any;
+  let finalTierLabel = tiers[0]?.label || "T1";
+  let finalTierModel = tiers[0]?.model || jesusModel;
   const aiCallStartedAt = Date.now();
+  const latencyWarningCorrelationId = `jesus-latency-${aiCallStartedAt}`;
   const heartbeatIntervalMs = Math.max(30_000, Number(config?.runtime?.jesusHeartbeatIntervalMs || 30_000));
   const heartbeatTimer = setInterval(() => {
     const elapsedSec = Math.floor((Date.now() - aiCallStartedAt) / 1000);
@@ -920,6 +938,25 @@ ${workersList}`;
           `[JESUS] ${prevTier.label} timed out after ${Math.floor(prevTier.timeoutMs / 1000)}s — escalating to ${tier.label} (timeout=${Math.floor(tier.timeoutMs / 1000)}s model=${tier.model} reason=${routingReason})`
         );
         chatLog(stateDir, jesusName, `[LIVE] tier=${prevTier.label} timed out — escalating to ${tier.label}`);
+        emitEvent(EVENTS.ORCHESTRATION_ALERT_EMITTED, EVENT_DOMAIN.ORCHESTRATION, latencyWarningCorrelationId, {
+          severity: "warning",
+          source: "jesus_supervisor",
+          warningCode: tier.model !== jesusModel
+            ? JESUS_WARNING_CODE.LATENCY_FALLBACK_ACTIVATED
+            : JESUS_WARNING_CODE.LATENCY_ESCALATION,
+          fromTier: prevTier.label,
+          toTier: tier.label,
+          fromTimeoutMs: prevTier.timeoutMs,
+          toTimeoutMs: tier.timeoutMs,
+          baseModel: jesusModel,
+          selectedModel: tier.model,
+          routingReason,
+        });
+        if (tier.model !== jesusModel) {
+          warn(
+            `[jesus_supervisor] fallback model activated after latency escalation: baseModel=${jesusModel} fallbackModel=${tier.model} tier=${tier.label}`
+          );
+        }
       }
 
       chatLog(stateDir, jesusName, `[LIVE] invoking agent=jesus tier=${tier.label} model=${tier.model} timeout=${Math.floor(tier.timeoutMs / 1000)}s`);
@@ -951,6 +988,8 @@ ${workersList}`;
       }
 
       rawResult = tierResult;
+      finalTierLabel = tier.label;
+      finalTierModel = tier.model;
       break;
     }
   } finally {
@@ -960,7 +999,34 @@ ${workersList}`;
   appendLiveLogSync(stateDir, `\n[copilot_stream_end] ${new Date().toISOString().replace("T", " ").slice(0, 19)} exit=${rawResult?.status}\n`);
 
   const elapsedSec = Math.floor((Date.now() - aiCallStartedAt) / 1000);
+  const elapsedMs = Date.now() - aiCallStartedAt;
   chatLog(stateDir, jesusName, `[LIVE] AI call completed elapsed=${elapsedSec}s ok=${Boolean(rawResult?.status === 0)}`);
+  if (shouldWarnJesusDecisionLatency(elapsedMs, jesusDecisionLatencyWarningMs)) {
+    const warningMessage =
+      `[JESUS][LATENCY_WARNING] decision latency ${elapsedMs}ms exceeded warning threshold ${jesusDecisionLatencyWarningMs}ms (tier=${finalTierLabel} model=${finalTierModel})`;
+    await appendProgress(config, warningMessage);
+    warn(`[jesus_supervisor] ${warningMessage}`);
+    try {
+      await appendAlert(config, {
+        severity: ALERT_SEVERITY.MEDIUM,
+        source: "jesus_supervisor",
+        title: "Jesus decision latency warning threshold exceeded",
+        message: warningMessage,
+        correlationId: latencyWarningCorrelationId,
+      });
+    } catch { /* non-fatal */ }
+    emitEvent(EVENTS.ORCHESTRATION_ALERT_EMITTED, EVENT_DOMAIN.ORCHESTRATION, latencyWarningCorrelationId, {
+      severity: "warning",
+      source: "jesus_supervisor",
+      warningCode: JESUS_WARNING_CODE.DECISION_LATENCY_WARNING,
+      latencyMs: elapsedMs,
+      warningThresholdMs: jesusDecisionLatencyWarningMs,
+      timeoutMs: jesusTimeoutMs,
+      tier: finalTierLabel,
+      model: finalTierModel,
+      usedFallbackModel: finalTierModel !== jesusModel,
+    });
+  }
 
   const rawOut = String(rawResult?.stdout || rawResult?.stderr || "");
   const aiResult = rawResult?.status === 0

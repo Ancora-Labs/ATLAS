@@ -117,6 +117,7 @@ describe("OUTCOME_DEGRADED_REASON", () => {
     assert.equal(OUTCOME_DEGRADED_REASON.PROMETHEUS_INVALID, "PROMETHEUS_INVALID");
     assert.equal(OUTCOME_DEGRADED_REASON.EVOLUTION_ABSENT,   "EVOLUTION_ABSENT");
     assert.equal(OUTCOME_DEGRADED_REASON.EVOLUTION_INVALID,  "EVOLUTION_INVALID");
+    assert.equal(OUTCOME_DEGRADED_REASON.WORKER_SESSIONS_STALE, "WORKER_SESSIONS_STALE");
     assert.equal(OUTCOME_DEGRADED_REASON.NO_ACTIVE_DATA,     "NO_ACTIVE_DATA");
   });
 });
@@ -386,6 +387,59 @@ describe("collectCycleOutcomes — evolution_progress invalid JSON", () => {
     // prometheus_analysis was valid, so plans should be populated
     assert.equal(result.totalPlans, 2,
       "totalPlans should still be populated from prometheus when evolution is the only degraded source");
+  });
+});
+
+describe("collectCycleOutcomes — worker_sessions absent", () => {
+  let tmpDir;
+  let result;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-si-nosess-"));
+    await writeTestJson(tmpDir, "prometheus_analysis.json", PROMETHEUS_ANALYSIS);
+    await writeTestJson(tmpDir, "evolution_progress.json", EVOLUTION_PROGRESS);
+    // Intentionally NO worker_sessions.json
+    result = await collectCycleOutcomes(makeConfig(tmpDir));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("degraded=true when worker_sessions is absent", () => {
+    assert.equal(result.degraded, true);
+  });
+
+  it("degradedReason=WORKER_SESSIONS_STALE for missing worker sessions", () => {
+    assert.equal(result.degradedReason, OUTCOME_DEGRADED_REASON.WORKER_SESSIONS_STALE);
+  });
+});
+
+describe("collectCycleOutcomes — worker_sessions stale vs worker artifacts", () => {
+  let tmpDir;
+  let result;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-si-stalesess-"));
+    await writeTestJson(tmpDir, "prometheus_analysis.json", PROMETHEUS_ANALYSIS);
+    await writeTestJson(tmpDir, "evolution_progress.json", EVOLUTION_PROGRESS);
+    await writeTestJson(tmpDir, "worker_sessions.json", {});
+    await writeTestJson(tmpDir, "worker_evolution-worker.json", {
+      activityLog: [{ status: "done", taskId: "T-001", at: new Date().toISOString() }]
+    });
+    result = await collectCycleOutcomes(makeConfig(tmpDir));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("degraded=true when sessions are stale relative to worker artifacts", () => {
+    assert.equal(result.degraded, true);
+  });
+
+  it("degradedReason=WORKER_SESSIONS_STALE for stale session artifact", () => {
+    assert.equal(result.degradedReason, OUTCOME_DEGRADED_REASON.WORKER_SESSIONS_STALE);
   });
 });
 

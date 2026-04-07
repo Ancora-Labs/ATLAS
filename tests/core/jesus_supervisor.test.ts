@@ -18,6 +18,7 @@ import {
   validateDirectivePayload,
   validateExpectedOutcomeMeasurable,
   sanitizeDirectiveFieldForPersistence,
+  shouldWarnJesusDecisionLatency,
 } from "../../src/core/jesus_supervisor.js";
 import {
   computeQueueViability,
@@ -833,5 +834,24 @@ describe("sanitizeDirectiveFieldForPersistence", () => {
     const input = "The build tool must be configured correctly.";
     const result = sanitizeDirectiveFieldForPersistence(input);
     assert.ok(result.includes("build tool"), "word 'tool' in content must not be stripped");
+  });
+});
+
+describe("jesus_supervisor — shouldWarnJesusDecisionLatency", () => {
+  it("returns true when elapsed latency is equal to warning threshold", () => {
+    assert.equal(shouldWarnJesusDecisionLatency(900000, 900000), true);
+  });
+
+  it("returns true when elapsed latency exceeds warning threshold", () => {
+    assert.equal(shouldWarnJesusDecisionLatency(900001, 900000), true);
+  });
+
+  it("returns false when elapsed latency is below warning threshold", () => {
+    assert.equal(shouldWarnJesusDecisionLatency(899999, 900000), false);
+  });
+
+  it("falls back to default threshold when threshold is invalid", () => {
+    assert.equal(shouldWarnJesusDecisionLatency(900000, Number.NaN), true);
+    assert.equal(shouldWarnJesusDecisionLatency(899999, Number.NaN), false);
   });
 });

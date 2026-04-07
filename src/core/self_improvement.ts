@@ -109,6 +109,7 @@ export function computeWeightedDecisionScore(postmortems) {
  *   PROMETHEUS_INVALID  — prometheus_analysis.json found but fails structure validation
  *   EVOLUTION_ABSENT    — evolution_progress.json not found (ENOENT)
  *   EVOLUTION_INVALID   — evolution_progress.json found but fails structure validation
+ *   WORKER_SESSIONS_STALE — worker_sessions.json absent/invalid or stale vs worker artifacts
  *   NO_ACTIVE_DATA      — both prometheus plans and evolution progress are empty
  */
 export const OUTCOME_DEGRADED_REASON = Object.freeze({
@@ -116,6 +117,7 @@ export const OUTCOME_DEGRADED_REASON = Object.freeze({
   PROMETHEUS_INVALID: "PROMETHEUS_INVALID",
   EVOLUTION_ABSENT:   "EVOLUTION_ABSENT",
   EVOLUTION_INVALID:  "EVOLUTION_INVALID",
+  WORKER_SESSIONS_STALE: "WORKER_SESSIONS_STALE",
   NO_ACTIVE_DATA:     "NO_ACTIVE_DATA"
 });
 
@@ -452,11 +454,12 @@ export async function collectCycleOutcomes(config) {
 
   // ── Primary state sources (Athena-gated architecture) ────────────────────
   // Use readJsonSafe to distinguish MISSING (ENOENT) from INVALID (parse error).
-  const [prometheusResult, evolutionResult] = await Promise.all([
+  const [prometheusResult, evolutionResult, workerSessionsResult] = await Promise.all([
     readJsonSafe(path.join(stateDir, "prometheus_analysis.json")),
-    readJsonSafe(path.join(stateDir, "evolution_progress.json"))
+    readJsonSafe(path.join(stateDir, "evolution_progress.json")),
+    readJsonSafe(path.join(stateDir, "worker_sessions.json"))
   ]);
-  const workerSessions = await readJson(path.join(stateDir, "worker_sessions.json"), {});
+  let workerSessions: Record<string, any> = {};
 
   // ── Input validation — distinguish missing vs invalid ─────────────────────
   let degraded = false;
@@ -506,12 +509,58 @@ export async function collectCycleOutcomes(config) {
       .map(([id]) => id);
   }
 
+  // worker_sessions is required for per-worker outcome telemetry.
+  // Treat missing/invalid sessions OR stale empty sessions with worker artifacts as degraded.
+  let workerSessionsStaleSignal: string | null = null;
+  if (!workerSessionsResult.ok) {
+    workerSessionsStaleSignal = workerSessionsResult.reason === READ_JSON_REASON.MISSING
+      ? "ABSENT"
+      : "INVALID";
+  } else if (
+    !workerSessionsResult.data ||
+    typeof workerSessionsResult.data !== "object" ||
+    Array.isArray(workerSessionsResult.data)
+  ) {
+    workerSessionsStaleSignal = "INVALID_STRUCTURE";
+  } else {
+    workerSessions = workerSessionsResult.data as Record<string, any>;
+  }
+
+  let hasWorkerActivityArtifacts = false;
+  try {
+    const stateEntries = await fs.readdir(stateDir, { withFileTypes: true });
+    hasWorkerActivityArtifacts = stateEntries.some(
+      (entry) =>
+        entry.isFile() &&
+        /^worker_.+\.json$/i.test(entry.name) &&
+        entry.name.toLowerCase() !== "worker_sessions.json"
+    );
+  } catch (err: any) {
+    if (err?.code !== "ENOENT") {
+      warn(`[self-improvement] failed to inspect worker artifact staleness: ${String(err?.message || err)}`);
+    }
+  }
+  if (!workerSessionsStaleSignal && Object.keys(workerSessions).length === 0 && hasWorkerActivityArtifacts) {
+    workerSessionsStaleSignal = "EMPTY_WITH_ACTIVITY_ARTIFACTS";
+  }
+
+  if (workerSessionsStaleSignal) {
+    warn(
+      `[self-improvement] worker session artifacts stale: signal=${workerSessionsStaleSignal} stateDir=${stateDir}`
+    );
+    if (!degraded) {
+      degraded = true;
+      degradedReason = OUTCOME_DEGRADED_REASON.WORKER_SESSIONS_STALE;
+    }
+  }
+
   const completedTasks = completedFromEvolution;
 
   // ── Determine metrics source ──────────────────────────────────────────────
-  const sourceFiles = ["worker_sessions"];
-  if (prometheusResult.ok) sourceFiles.unshift("prometheus_analysis");
-  if (evolutionResult.ok)  sourceFiles.push("evolution_progress");
+  const sourceFiles = [];
+  if (prometheusResult.ok) sourceFiles.push("prometheus_analysis");
+  sourceFiles.push(workerSessionsStaleSignal ? "worker_sessions_stale" : "worker_sessions");
+  if (evolutionResult.ok) sourceFiles.push("evolution_progress");
   const metricsSource = sourceFiles.join("+");
 
   // ── Per-worker outcome analysis ───────────────────────────────────────────
