@@ -54,6 +54,7 @@ import {
   LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION,
   migrateWorkerCycleArtifacts,
   migrateLegacyEvolutionProgressToCompletedTaskIds,
+  selectWorkerCycleRecord,
 } from "./cycle_analytics.js";
 
 // ── Decision Quality Weights ──────────────────────────────────────────────────
@@ -515,14 +516,9 @@ export async function collectCycleOutcomes(config) {
   if (workerCycleArtifactsResult.ok) {
     const migratedArtifacts = migrateWorkerCycleArtifacts(workerCycleArtifactsResult.data);
     if (migratedArtifacts.ok && migratedArtifacts.data) {
-      const artifactCycles = (migratedArtifacts.data as any).cycles;
-      const latestCycleId = String((migratedArtifacts.data as any).latestCycleId || "").trim();
-      const selectedCycleId = activeCycleId || latestCycleId;
-      const selectedCycle =
-        selectedCycleId && artifactCycles && typeof artifactCycles === "object"
-          ? (artifactCycles as Record<string, any>)[selectedCycleId] || null
-          : null;
-      if (selectedCycle && typeof selectedCycle === "object") {
+      const selected = selectWorkerCycleRecord(migratedArtifacts.data, activeCycleId);
+      const selectedCycle = selected.record;
+      if (selectedCycle) {
         workerSessions = selectedCycle.workerSessions && typeof selectedCycle.workerSessions === "object"
           ? selectedCycle.workerSessions
           : {};
@@ -533,10 +529,15 @@ export async function collectCycleOutcomes(config) {
           ? [...new Set<string>((selectedCycle.completedTaskIds as unknown[]).map((id) => String(id || "").trim()).filter(Boolean))]
           : [];
         usingCanonicalWorkerArtifacts = true;
+        if (selected.source !== "preferred") {
+          warn(
+            `[self-improvement] canonical worker-cycle selection used ${selected.source} cycle pointer: preferred=${activeCycleId || "n/a"} selected=${selected.cycleId || "n/a"}`
+          );
+        }
       } else {
         canonicalArtifactState = "present_unusable";
         warn(
-          `[self-improvement] canonical worker-cycle artifact has no matching cycle record; selectedCycleId=${selectedCycleId || "n/a"} latestCycleId=${latestCycleId || "n/a"} — using compatibility fallback path`
+          `[self-improvement] canonical worker-cycle artifact has no usable cycle record; preferredCycleId=${activeCycleId || "n/a"} — using compatibility fallback path`
         );
       }
     } else {

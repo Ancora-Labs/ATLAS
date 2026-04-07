@@ -46,6 +46,7 @@ import {
   CYCLE_OUTCOME_STATUS,
   WORKER_CYCLE_ARTIFACTS_FILE,
   migrateWorkerCycleArtifacts,
+  selectWorkerCycleRecord,
 } from "../../src/core/cycle_analytics.js";
 import { isTerminalWorkerStatus } from "../../src/core/worker_runner.js";
 
@@ -1239,5 +1240,37 @@ describe("canonical active-worker detection — artifact structure invariants", 
     const cycle = (result.data as any).cycles["cycle-1"];
     const sessions: Record<string, any> = cycle.workerSessions;
     assert.equal(Object.keys(sessions).length, 0, "no sessions must produce zero active workers");
+  });
+
+  it("selectWorkerCycleRecord falls back to most recent cycle when pointers are stale", () => {
+    const artifact = {
+      schemaVersion: 1,
+      updatedAt: new Date().toISOString(),
+      latestCycleId: "missing-cycle",
+      cycles: {
+        "cycle-old": {
+          cycleId: "cycle-old",
+          status: "complete",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          workerSessions: { "coder-worker": { status: "idle" } },
+          workerActivity: { "coder-worker": [] },
+          completedTaskIds: [],
+        },
+        "cycle-new": {
+          cycleId: "cycle-new",
+          status: "complete",
+          updatedAt: "2026-01-01T00:01:00.000Z",
+          workerSessions: { "coder-worker": { status: "working" } },
+          workerActivity: { "coder-worker": [{ at: new Date().toISOString(), status: "working" }] },
+          completedTaskIds: ["T-001"],
+        },
+      },
+    };
+    const migrated = migrateWorkerCycleArtifacts(artifact);
+    assert.ok(migrated.ok, "artifact must migrate");
+    const selected = selectWorkerCycleRecord(migrated.data, "also-missing");
+    assert.equal(selected.source, "most_recent");
+    assert.equal(selected.cycleId, "cycle-new");
+    assert.equal((selected.record as any)?.workerSessions?.["coder-worker"]?.status, "working");
   });
 });
