@@ -22,7 +22,7 @@ import { appendProgress, appendLineageEntry, appendFailureClassification } from 
 import { buildAgentArgs, nameToSlug } from "./agent_loader.js";
 import { buildVerificationChecklist, CANONICAL_VERIFICATION_REPORT_TEMPLATE } from "./verification_profiles.js";
 import { getVerificationCommands, classifyNodeTestGlobWindowsArtifact } from "./verification_command_registry.js";
-import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence } from "./verification_gate.js";
+import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence, parseToolExecutionTelemetry } from "./verification_gate.js";
 import {
   enforceModelPolicy,
   routeModelUnderQualityFloor,
@@ -155,6 +155,7 @@ type VerificationEvidence = {
     hasExplicitTestBlock: boolean;
     mergedSha: string | null;
   } | null;
+  toolExecutionTelemetry?: unknown;
 };
 
 type ParsedWorkerResponse = ReturnType<typeof parseWorkerResponse> & {
@@ -525,6 +526,122 @@ function getLiveLogPath(config, roleName) {
   const stateDir = config.paths?.stateDir || "state";
   const safeRole = String(roleName || "worker").replace(/[^a-z0-9_-]+/gi, "_");
   return path.join(stateDir, `live_worker_${safeRole}.log`);
+}
+
+function roleToWorkerStateFile(roleName: unknown): string {
+  const slug = String(roleName || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return `worker_${slug || "worker"}.json`;
+}
+
+function toLegacySessionsBody(raw: unknown): Record<string, any> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const obj = raw as Record<string, any>;
+  if (obj.workerSessions && typeof obj.workerSessions === "object" && !Array.isArray(obj.workerSessions)) {
+    return obj.workerSessions as Record<string, any>;
+  }
+  if (obj.data && typeof obj.data === "object" && !Array.isArray(obj.data)) {
+    return obj.data as Record<string, any>;
+  }
+  const clone = { ...obj };
+  delete clone.schemaVersion;
+  delete clone.updatedAt;
+  delete clone.latestCycleId;
+  delete clone.cycles;
+  return clone;
+}
+
+async function persistLegacyWorkerSessionArtifacts(
+  config: WorkerRunnerConfig,
+  roleName: string,
+  input: {
+    phase: "start" | "complete";
+    task?: string;
+    status?: string;
+    pr?: string | null;
+    dispatchBlockReason?: string | null;
+  }
+): Promise<void> {
+  try {
+    const stateDir = config.paths?.stateDir || "state";
+    const nowIso = new Date().toISOString();
+
+    const sessionsPath = path.join(stateDir, "worker_sessions.json");
+    let sessions: Record<string, any> = {};
+    try {
+      if (existsSync(sessionsPath)) {
+        sessions = toLegacySessionsBody(JSON.parse(readFileSync(sessionsPath, "utf8")));
+      }
+    } catch {
+      sessions = {};
+    }
+
+    const existingSession = sessions[roleName] && typeof sessions[roleName] === "object"
+      ? sessions[roleName]
+      : {};
+
+    if (input.phase === "start") {
+      sessions[roleName] = {
+        ...existingSession,
+        status: "working",
+        startedAt: nowIso,
+        updatedAt: nowIso,
+      };
+    } else {
+      sessions[roleName] = {
+        ...existingSession,
+        status: "idle",
+        lastStatus: String(input.status || "unknown").toLowerCase(),
+        updatedAt: nowIso,
+      };
+    }
+
+    writeFileSync(sessionsPath, JSON.stringify(sessions, null, 2), "utf8");
+
+    const workerPath = path.join(stateDir, roleToWorkerStateFile(roleName));
+    let workerState: Record<string, any> = {};
+    try {
+      if (existsSync(workerPath)) {
+        const parsed = JSON.parse(readFileSync(workerPath, "utf8"));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          workerState = parsed as Record<string, any>;
+        }
+      }
+    } catch {
+      workerState = {};
+    }
+
+    const previousLog = Array.isArray(workerState.activityLog) ? workerState.activityLog : [];
+    const entry = input.phase === "start"
+      ? {
+          at: nowIso,
+          status: "working",
+          task: String(input.task || ""),
+        }
+      : {
+          at: nowIso,
+          status: String(input.status || "unknown").toLowerCase(),
+          task: String(input.task || ""),
+          pr: input.pr || null,
+          dispatchBlockReason: input.dispatchBlockReason || null,
+        };
+
+    writeFileSync(
+      workerPath,
+      JSON.stringify({
+        ...workerState,
+        status: input.phase === "start" ? "working" : "idle",
+        startedAt: input.phase === "start" ? nowIso : (workerState.startedAt || null),
+        updatedAt: nowIso,
+        activityLog: [...previousLog, entry].slice(-200),
+      }, null, 2),
+      "utf8",
+    );
+  } catch {
+    // Session artifact persistence is observability-only and must never block worker execution.
+  }
 }
 
 async function appendLiveWorkerLog(logPath, text) {
@@ -968,6 +1085,13 @@ function buildConversationContext(history, instruction, sessionState: WorkerSess
   parts.push("- Complete your ENTIRE assigned task in one shot — do not leave partial work for a follow-up request.");
   parts.push("- If your task involves multiple files, fix ALL of them before reporting done.");
   parts.push("- Senior production standard: correct logic, proper error handling, edge cases handled, tests where relevant.");
+  parts.push("\n## TOOL EXECUTION GOVERNANCE (MANDATORY)");
+  parts.push("Before every execute tool call, emit one explicit tool-intent envelope:");
+  parts.push("[TOOL_INTENT] scope=<repo-path-or-subsystem> intent=<goal> impact=<low|medium|high|critical> clearance=<read|write|admin>");
+  parts.push("Then emit one deterministic hook decision line:");
+  parts.push("[HOOK_DECISION] tool=execute decision=<allow|deny> reason_code=<code> rule_id=<id|none> envelope_scope=<scope> envelope_intent=<intent> envelope_impact=<impact> envelope_clearance=<clearance>");
+  parts.push("If decision=deny, do NOT execute the tool call.");
+  parts.push("Allowed decisions must be deterministic and policy-based; never guess.");
 
   // Canonical verification commands from the central registry
   const verifCmds = getVerificationCommands(config);
@@ -1233,6 +1357,19 @@ export function parseWorkerResponse(stdout, stderr) {
   // Extract explicit merged SHA marker (BOX_MERGED_SHA=<sha>).
   // Stored for audit and lineage — also surfaced in the done-path artifact check.
   const mergedSha = extractMergedSha(output);
+  const toolExecutionTelemetry = parseToolExecutionTelemetry(combined);
+
+  if (
+    toolExecutionTelemetry.deniedDecisions.length > 0
+    && normalizedStatus !== "blocked"
+    && normalizedStatus !== "skipped"
+  ) {
+    normalizedStatus = "blocked";
+    if (!dispatchBlockReason) {
+      const firstDenied = toolExecutionTelemetry.deniedDecisions[0];
+      dispatchBlockReason = `tool_policy_denied:${String(firstDenied?.reasonCode || "unknown")}`;
+    }
+  }
 
   return {
     status: normalizedStatus,
@@ -1248,6 +1385,7 @@ export function parseWorkerResponse(stdout, stderr) {
     responsiveMatrix,
     cleanTreeStatus,
     mergedSha,
+    toolExecutionTelemetry,
   };
 }
 
@@ -1423,6 +1561,11 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     `[WORKER:${roleName}] [${instruction.taskKind || "general"}→${model}] deliberation=${deliberation.mode} ${truncate(instruction.task, 70)}`
   );
 
+  await persistLegacyWorkerSessionArtifacts(config, String(roleName || "worker"), {
+    phase: "start",
+    task: String(instruction?.task || ""),
+  });
+
   const updatedHistory = [
     ...history,
     { from: "prometheus", content: instruction.task, timestamp: new Date().toISOString() }
@@ -1444,6 +1587,13 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       },
     };
     await appendProgress(config, `[WORKER:${roleName}] ${summary}`);
+    await persistLegacyWorkerSessionArtifacts(config, String(roleName || "worker"), {
+      phase: "complete",
+      task: String(instruction?.task || ""),
+      status: "blocked",
+      pr: null,
+      dispatchBlockReason: dispatchContract.dispatchBlockReason,
+    });
     updatedHistory.push({
       from: roleName,
       content: summary,
@@ -1624,6 +1774,13 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       content: `ERROR: ${errorMsg}`,
       timestamp: new Date().toISOString(),
       status: "error"
+    });
+    await persistLegacyWorkerSessionArtifacts(config, String(roleName || "worker"), {
+      phase: "complete",
+      task: String(instruction?.task || ""),
+      status: isTransient ? "transient_error" : "error",
+      pr: null,
+      dispatchBlockReason: null,
     });
     return {
       status: isTransient ? "transient_error" : "error",
@@ -1938,6 +2095,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       optionalFieldFailures: Array.isArray(validationResult.evidence?.optionalFieldFailures)
         ? (validationResult.evidence.optionalFieldFailures as string[])
         : [],
+      toolExecutionTelemetry: validationResult.evidence?.toolExecutionTelemetry ?? null,
       artifactDetail: postMergeArtifact ? {
         hasSha: postMergeArtifact.hasSha,
         hasTestOutput: postMergeArtifact.hasTestOutput,
@@ -2011,6 +2169,14 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   await appendProgress(config,
     `[WORKER:${roleName}] Completed status=${parsed.status}${parsed.prUrl ? ` PR=${parsed.prUrl}` : ""}`
   );
+
+  await persistLegacyWorkerSessionArtifacts(config, String(roleName || "worker"), {
+    phase: "complete",
+    task: String(instruction?.task || ""),
+    status: String(parsed.status || "unknown"),
+    pr: parsed.prUrl || null,
+    dispatchBlockReason: dispatchContract.dispatchBlockReason,
+  });
 
   // ── Optional lineage graph recording (non-blocking; rollback via config.runtime.lineageGraphEnabled=false) ──
   // Only records when instruction.taskId is provided. Safe to skip — lineage is observability,

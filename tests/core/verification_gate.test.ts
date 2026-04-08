@@ -25,6 +25,7 @@ import {
   hasCleanTreeStatusEvidence,
   VERIFICATION_REPORT_TEMPLATE_GAP,
   VERIFICATION_REPORT_MALFORMED_GAP,
+  parseToolExecutionTelemetry,
 } from "../../src/core/verification_gate.js";
 
 describe("verification_gate parse helpers", () => {
@@ -67,6 +68,47 @@ describe("verification_gate parse helpers", () => {
       "360x640": "fail",
       "768x1024": "pass"
     });
+  });
+});
+
+describe("verification_gate tool execution telemetry", () => {
+  it("parses deterministic intent envelopes and hook decisions", () => {
+    const telemetry = parseToolExecutionTelemetry([
+      "[TOOL_INTENT] scope=src/core intent=update-gate impact=medium clearance=write",
+      "[HOOK_DECISION] tool=execute decision=allow reason_code=HOOK_ALLOW_NONE rule_id=none envelope_scope=src/core envelope_intent=update-gate envelope_impact=medium envelope_clearance=write",
+    ].join("\n"));
+    assert.equal(telemetry.envelopes.length, 1);
+    assert.equal(telemetry.hookDecisions.length, 1);
+    assert.equal(telemetry.deniedDecisions.length, 0);
+    assert.equal(telemetry.gaps.length, 0);
+    assert.equal(telemetry.hasDeterministicCoverage, true);
+  });
+
+  it("reports malformed hook decision telemetry when envelope fields are missing", () => {
+    const telemetry = parseToolExecutionTelemetry(
+      "[HOOK_DECISION] tool=execute decision=allow reason_code=HOOK_ALLOW_NONE rule_id=none"
+    );
+    assert.ok(telemetry.gaps.some((g) => g.includes("HOOK_DECISION malformed")));
+    assert.equal(telemetry.hasDeterministicCoverage, false);
+  });
+
+  it("validateWorkerContract rejects done outputs containing denied execute decisions", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
+        "===NPM TEST OUTPUT START===",
+        "# tests 3 pass 3 fail 0",
+        "===NPM TEST OUTPUT END===",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass; API=n/a; RESPONSIVE=n/a",
+        "BOX_PR_URL=https://github.com/org/repo/pull/88",
+        "[TOOL_INTENT] scope=src/core intent=drop-schema impact=critical clearance=admin",
+        "[HOOK_DECISION] tool=execute decision=deny reason_code=HOOK_DENY_SCHEMA_DROP rule_id=deny-schema-drop envelope_scope=src/core envelope_intent=drop-schema envelope_impact=critical envelope_clearance=admin",
+      ].join("\n"),
+    });
+    assert.equal(result.passed, false);
+    assert.ok(result.gaps.some((g) => g.includes("TOOL_POLICY denied execute call")));
   });
 });
 

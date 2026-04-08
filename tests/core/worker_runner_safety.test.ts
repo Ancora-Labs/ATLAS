@@ -32,6 +32,27 @@ describe("worker_runner safety seam", () => {
     const parsed = parseWorkerResponse(output, "");
     assert.equal(parsed.status, "blocked");
   });
+
+  it("forces blocked status when hook telemetry reports execute deny", () => {
+    const output = [
+      "BOX_STATUS=done",
+      "[TOOL_INTENT] scope=src/core intent=patch-policy impact=high clearance=admin",
+      "[HOOK_DECISION] tool=execute decision=deny reason_code=HOOK_DENY_SCHEMA_DROP rule_id=deny-schema-drop envelope_scope=src/core envelope_intent=patch-policy envelope_impact=high envelope_clearance=admin",
+    ].join("\n");
+    const parsed = parseWorkerResponse(output, "");
+    assert.equal(parsed.status, "blocked");
+    assert.ok(String(parsed.dispatchBlockReason || "").includes("tool_policy_denied"));
+  });
+
+  it("keeps done status when hook telemetry reports execute allow", () => {
+    const output = [
+      "BOX_STATUS=done",
+      "[TOOL_INTENT] scope=tests/core intent=run-targeted-tests impact=low clearance=read",
+      "[HOOK_DECISION] tool=execute decision=allow reason_code=HOOK_ALLOW_NONE rule_id=none envelope_scope=tests/core envelope_intent=run-targeted-tests envelope_impact=low envelope_clearance=read",
+    ].join("\n");
+    const parsed = parseWorkerResponse(output, "");
+    assert.equal(parsed.status, "done");
+  });
 });
 
 // ── Artifact hard-block gate — enforced on all done-capable completion paths ──

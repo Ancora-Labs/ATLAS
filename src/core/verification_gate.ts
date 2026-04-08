@@ -310,6 +310,119 @@ export function hasCleanTreeStatusEvidence(output: unknown): boolean {
   return /CLEAN_TREE_STATUS\s*=\s*clean\b/i.test(String(output || ""));
 }
 
+export interface ToolIntentEnvelopeEvidence {
+  scope: string;
+  intent: string;
+  impact: string;
+  clearance: string;
+  raw: string;
+}
+
+export interface ToolHookDecisionEvidence {
+  tool: string;
+  decision: string;
+  reasonCode: string;
+  ruleId: string;
+  envelopeScope: string;
+  envelopeIntent: string;
+  envelopeImpact: string;
+  envelopeClearance: string;
+  raw: string;
+}
+
+export interface ToolExecutionTelemetryEvidence {
+  envelopes: ToolIntentEnvelopeEvidence[];
+  hookDecisions: ToolHookDecisionEvidence[];
+  deniedDecisions: ToolHookDecisionEvidence[];
+  gaps: string[];
+  hasDeterministicCoverage: boolean;
+}
+
+function parseKvFields(rawLine: string): Record<string, string> {
+  const fields: Record<string, string> = {};
+  const re = /([a-zA-Z_]+)\s*=\s*([^\s]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(rawLine)) !== null) {
+    fields[String(match[1] || "").toLowerCase()] = String(match[2] || "").trim();
+  }
+  return fields;
+}
+
+/**
+ * Parse tool-execution intent + hook decision telemetry emitted by workers.
+ */
+export function parseToolExecutionTelemetry(output: unknown): ToolExecutionTelemetryEvidence {
+  const text = String(output || "");
+  const lines = text.split(/\r?\n/);
+  const envelopes: ToolIntentEnvelopeEvidence[] = [];
+  const hookDecisions: ToolHookDecisionEvidence[] = [];
+  const gaps: string[] = [];
+
+  for (const rawLine of lines) {
+    const line = String(rawLine || "").trim();
+    if (!line) continue;
+
+    if (line.startsWith("[TOOL_INTENT]")) {
+      const fields = parseKvFields(line);
+      const envelope = {
+        scope: String(fields.scope || "").trim(),
+        intent: String(fields.intent || "").trim(),
+        impact: String(fields.impact || "").trim().toLowerCase(),
+        clearance: String(fields.clearance || "").trim().toLowerCase(),
+        raw: line,
+      };
+      envelopes.push(envelope);
+      if (!envelope.scope || !envelope.intent || !envelope.impact || !envelope.clearance) {
+        gaps.push("TOOL_INTENT envelope malformed — required fields: scope, intent, impact, clearance");
+      }
+      continue;
+    }
+
+    if (line.startsWith("[HOOK_DECISION]")) {
+      const fields = parseKvFields(line);
+      const decision = {
+        tool: String(fields.tool || "").trim().toLowerCase(),
+        decision: String(fields.decision || "").trim().toLowerCase(),
+        reasonCode: String(fields.reason_code || "").trim(),
+        ruleId: String(fields.rule_id || "").trim(),
+        envelopeScope: String(fields.envelope_scope || "").trim(),
+        envelopeIntent: String(fields.envelope_intent || "").trim(),
+        envelopeImpact: String(fields.envelope_impact || "").trim().toLowerCase(),
+        envelopeClearance: String(fields.envelope_clearance || "").trim().toLowerCase(),
+        raw: line,
+      };
+      hookDecisions.push(decision);
+      if (decision.tool !== "execute") {
+        gaps.push("HOOK_DECISION malformed — tool must be execute");
+      }
+      if (decision.decision !== "allow" && decision.decision !== "deny") {
+        gaps.push("HOOK_DECISION malformed — decision must be allow or deny");
+      }
+      if (!decision.reasonCode) {
+        gaps.push("HOOK_DECISION malformed — reason_code is required");
+      }
+      if (!decision.ruleId) {
+        gaps.push("HOOK_DECISION malformed — rule_id is required (use none when no rule matches)");
+      }
+      if (!decision.envelopeScope || !decision.envelopeIntent || !decision.envelopeImpact || !decision.envelopeClearance) {
+        gaps.push("HOOK_DECISION malformed — envelope_scope, envelope_intent, envelope_impact, envelope_clearance are required");
+      }
+      continue;
+    }
+  }
+
+  const deniedDecisions = hookDecisions.filter((item) => item.decision === "deny");
+  const hasDeterministicCoverage = hookDecisions.length > 0 && gaps.length === 0;
+
+  return {
+    envelopes,
+    hookDecisions,
+    deniedDecisions,
+    gaps,
+    hasDeterministicCoverage,
+  };
+}
+
 /**
  * Extract the merged commit SHA from worker output.
  *
@@ -747,6 +860,7 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
   const responsiveMatrix = parseResponsiveMatrix(output);
   const prUrl = parsePrUrl(output);
   const windowsNodeTestArtifact = classifyNodeTestGlobWindowsArtifact(String(output));
+  const toolTelemetry = parseToolExecutionTelemetry(output);
 
   const gaps: string[] = [];
   const evidence: Record<string, unknown> = {
@@ -755,7 +869,8 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
     responsiveMatrix: responsiveMatrix || {},
     prUrl: prUrl || null,
     profile: profile.kind,
-    optionalFieldFailures: [] as string[]
+    optionalFieldFailures: [] as string[],
+    toolExecutionTelemetry: toolTelemetry,
   };
 
   // If worker reported skipped (already-merged), pass immediately
@@ -805,6 +920,16 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
       gaps.push(namedProof.gap);
     }
     evidence.namedTestProof = namedProof;
+  }
+
+  if (toolTelemetry.gaps.length > 0) {
+    for (const gap of toolTelemetry.gaps) gaps.push(gap);
+  }
+  if (toolTelemetry.deniedDecisions.length > 0) {
+    const firstDenied = toolTelemetry.deniedDecisions[0];
+    gaps.push(
+      `TOOL_POLICY denied execute call (${firstDenied.reasonCode || "unknown-reason"}) — denied tool actions cannot be reported as done`
+    );
   }
 
   // No verification report at all — gap for any role with required fields

@@ -123,6 +123,114 @@ export function validateShellCommand(policy, command) {
   return { ok: true };
 }
 
+export interface ToolIntentEnvelope {
+  scope: string;
+  intent: string;
+  impact: "low" | "medium" | "high" | "critical";
+  clearance: "read" | "write" | "admin";
+  command?: string;
+}
+
+export interface ToolIntentDecision {
+  allowed: boolean;
+  decision: "allow" | "deny";
+  reasonCode: string;
+  ruleId: string;
+}
+
+const CLEARANCE_LEVEL: Record<ToolIntentEnvelope["clearance"], number> = {
+  read: 1,
+  write: 2,
+  admin: 3,
+};
+
+const IMPACT_MIN_CLEARANCE: Record<ToolIntentEnvelope["impact"], ToolIntentEnvelope["clearance"]> = {
+  low: "read",
+  medium: "write",
+  high: "admin",
+  critical: "admin",
+};
+
+function normalizeImpact(value: unknown): ToolIntentEnvelope["impact"] | null {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "low" || normalized === "medium" || normalized === "high" || normalized === "critical") {
+    return normalized;
+  }
+  return null;
+}
+
+function normalizeClearance(value: unknown): ToolIntentEnvelope["clearance"] | null {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "read" || normalized === "write" || normalized === "admin") {
+    return normalized;
+  }
+  return null;
+}
+
+/**
+ * Deterministic tool execution policy decision from an explicit intent envelope.
+ *
+ * Returns structured allow/deny output for pre-tool hooks so workers can emit
+ * machine-readable verification telemetry before each execute call.
+ */
+export function evaluateToolIntentEnvelope(policy, roleName, envelope: Partial<ToolIntentEnvelope>): ToolIntentDecision {
+  const scope = String(envelope?.scope || "").trim();
+  const intent = String(envelope?.intent || "").trim();
+  const impact = normalizeImpact(envelope?.impact);
+  const clearance = normalizeClearance(envelope?.clearance);
+
+  if (!scope || !intent || !impact || !clearance) {
+    return {
+      allowed: false,
+      decision: "deny",
+      reasonCode: "TOOL_INTENT_INVALID_ENVELOPE",
+      ruleId: "deny-invalid-tool-intent-envelope",
+    };
+  }
+
+  const minClearance = IMPACT_MIN_CLEARANCE[impact];
+  if (CLEARANCE_LEVEL[clearance] < CLEARANCE_LEVEL[minClearance]) {
+    return {
+      allowed: false,
+      decision: "deny",
+      reasonCode: "TOOL_INTENT_INSUFFICIENT_CLEARANCE",
+      ruleId: "deny-insufficient-clearance-for-impact",
+    };
+  }
+
+  const rolePolicy = getRolePolicy(policy, roleName);
+  const allowedClearances = Array.isArray(rolePolicy?.allowedToolClearances)
+    ? rolePolicy.allowedToolClearances.map((item) => String(item || "").trim().toLowerCase())
+    : [];
+  if (allowedClearances.length > 0 && !allowedClearances.includes(clearance)) {
+    return {
+      allowed: false,
+      decision: "deny",
+      reasonCode: "TOOL_INTENT_CLEARANCE_NOT_ALLOWED_FOR_ROLE",
+      ruleId: "deny-role-tool-clearance",
+    };
+  }
+
+  if (envelope?.command) {
+    const shellCheck = validateShellCommand(policy, envelope.command);
+    if (!shellCheck.ok) {
+      return {
+        allowed: false,
+        decision: "deny",
+        reasonCode: "TOOL_INTENT_BLOCKED_COMMAND",
+        ruleId: "deny-blocked-shell-command",
+      };
+    }
+  }
+
+  return {
+    allowed: true,
+    decision: "allow",
+    reasonCode: "TOOL_INTENT_ALLOWED",
+    ruleId: "allow-tool-intent-envelope",
+  };
+}
+
 function normalizeRoleName(roleName) {
   return String(roleName || "")
     .trim()
