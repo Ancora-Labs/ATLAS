@@ -1060,9 +1060,13 @@ export function applyTokenFloorToEstimate(
  * Hard admission check: validate that per-role plan groups do not exceed the
  * actionable-steps cap before dispatch.
  *
- * Plans are grouped by role. If any role group contains more plans than the
- * configured cap, dispatch must be blocked with a deterministic reason — the
- * caller must decompose the work rather than relying on silent auto-splitting.
+ * Plans are grouped by role. When Athena deterministic batch metadata is
+ * present (`_batchIndex`), grouping becomes role+batch so independently
+ * bounded batches are not rejected as one oversized role bucket.
+ *
+ * If any role(-batch) group exceeds the configured cap, dispatch must be
+ * blocked with a deterministic reason — the caller must decompose or re-batch
+ * before dispatch.
  *
  * @param plans            — all plans queued for dispatch
  * @param maxStepsPerGroup — per-role cap (default: MAX_ACTIONABLE_STEPS_PER_PACKET)
@@ -1079,18 +1083,28 @@ export function validatePacketBatchAdmission(
   const cap = Math.max(1, Math.floor(maxStepsPerGroup));
 
   const roleGroups = new Map<string, number>();
+  const groupLabels = new Map<string, string>();
   for (const plan of plans) {
-    const role = String(plan?.role || "unknown").trim().toLowerCase();
+    const role = String(plan?._batchWorkerRole || plan?.role || "unknown").trim().toLowerCase();
+    const rawBatchIndex = Number(plan?._batchIndex);
+    const hasBatchIndex = Number.isFinite(rawBatchIndex) && rawBatchIndex > 0;
+    const batchIndex = hasBatchIndex ? Math.floor(rawBatchIndex) : null;
+    const groupKey = hasBatchIndex ? `${role}#batch:${batchIndex}` : role;
+    const label = hasBatchIndex ? `${role}[batch ${batchIndex}]` : role;
     const orderedSteps = Array.isArray(plan?.orderedSteps) ? plan.orderedSteps.length
       : Array.isArray(plan?.acceptance_criteria) ? plan.acceptance_criteria.length
       : 1;
-    roleGroups.set(role, (roleGroups.get(role) ?? 0) + Math.max(1, orderedSteps));
+    roleGroups.set(groupKey, (roleGroups.get(groupKey) ?? 0) + Math.max(1, orderedSteps));
+    if (!groupLabels.has(groupKey)) {
+      groupLabels.set(groupKey, label);
+    }
   }
 
   const oversizedRoles: string[] = [];
-  for (const [role, complexity] of roleGroups) {
+  for (const [groupKey, complexity] of roleGroups) {
     if (complexity > cap) {
-      oversizedRoles.push(`${role}(${complexity}>${cap})`);
+      const label = groupLabels.get(groupKey) || groupKey;
+      oversizedRoles.push(`${label}(${complexity}>${cap})`);
     }
   }
 
@@ -1137,4 +1151,179 @@ export function applyDispatchBoundaryHardCap<T extends { plans: unknown[] }>(
     }
   }
   return result;
+}
+
+export interface RolePlanCoverageValidationResult {
+  ok: boolean;
+  requiredRoles: string[];
+  missingRoles: string[];
+  initialMissingRoles: string[];
+  injectedRoles: string[];
+  invalidRolePlans: string[];
+  output: any;
+}
+
+function normalizeRoleValue(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function normalizeWaveNumber(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : fallback;
+}
+
+function roleSlug(value: string): string {
+  const slug = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "worker";
+}
+
+function collectExecutionStrategyTaskRoles(payload: any): Array<{ role: string; wave: number }> {
+  const executionStrategy = payload?.executionStrategy;
+  const waves = Array.isArray(executionStrategy?.waves) ? executionStrategy.waves : [];
+  if (waves.length === 0) return [];
+
+  const firstWaveByRole = new Map<string, number>();
+  for (let i = 0; i < waves.length; i++) {
+    const waveObj = (waves[i] && typeof waves[i] === "object") ? waves[i] : {};
+    const wave = normalizeWaveNumber((waveObj as any).wave, i + 1);
+    const tasks = Array.isArray((waveObj as any).tasks) ? (waveObj as any).tasks : [];
+
+    for (const task of tasks) {
+      if (!task || typeof task !== "object") continue;
+      const role = normalizeRoleValue(
+        (task as any).role
+        ?? (task as any).workerRole
+        ?? (task as any).owner
+        ?? (task as any)._batchWorkerRole,
+      );
+      if (!role) continue;
+      const currentWave = firstWaveByRole.get(role);
+      if (currentWave == null || wave < currentWave) {
+        firstWaveByRole.set(role, wave);
+      }
+    }
+  }
+
+  return [...firstWaveByRole.entries()]
+    .map(([role, wave]) => ({ role, wave }))
+    .sort((a, b) => a.wave - b.wave || a.role.localeCompare(b.role));
+}
+
+function toRoleCoverageContractCandidate(plan: any, role: string, wave: number): any {
+  const hasTaskIdentity = String(plan?.task || plan?.title || plan?.task_id || plan?.id || "").trim().length > 0;
+  const candidateTask = hasTaskIdentity
+    ? String(plan?.task || plan?.title || plan?.task_id || plan?.id || "").trim()
+    : `Role coverage task for ${role}`;
+  const acceptanceCriteria = Array.isArray(plan?.acceptance_criteria) && plan.acceptance_criteria.length > 0
+    ? plan.acceptance_criteria
+    : [
+      `Role "${role}" has a contract-valid plans[] entry.`,
+      "Execution strategy role coverage validation passes without missing roles.",
+    ];
+
+  const capacityDelta = Number(plan?.capacityDelta);
+  const requestROI = Number(plan?.requestROI);
+
+  return {
+    ...plan,
+    task: candidateTask,
+    role,
+    wave: normalizeWaveNumber(plan?.wave, wave),
+    verification: String(plan?.verification || "").trim()
+      || "tests/core/prometheus_parse.test.ts — test: validates executionStrategy role coverage",
+    dependencies: Array.isArray(plan?.dependencies) ? plan.dependencies : [],
+    acceptance_criteria: acceptanceCriteria,
+    capacityDelta: Number.isFinite(capacityDelta) ? capacityDelta : 0.01,
+    requestROI: Number.isFinite(requestROI) && requestROI > 0 ? requestROI : 1.05,
+  };
+}
+
+function buildRoleCoverageSkeleton(role: string, wave: number): any {
+  const slug = roleSlug(role);
+  return {
+    task_id: `role-coverage-${slug}-wave-${wave}`,
+    title: `Role coverage skeleton for ${role} (wave ${wave})`,
+    task: `Inject contract-valid fallback plan coverage for role "${role}" in wave ${wave}`,
+    role,
+    wave,
+    scope: `executionStrategy role coverage fallback for role "${role}"`,
+    target_files: ["src/core/prometheus.ts", "src/core/plan_contract_validator.ts"],
+    dependencies: [],
+    acceptance_criteria: [
+      `Role "${role}" is represented by a contract-valid plan entry.`,
+      `Pre-Athena role-plan coverage validation reports role "${role}" as covered.`,
+    ],
+    verification: "tests/core/prometheus_parse.test.ts — test: validates role-plan skeleton fallback injection",
+    capacityDelta: 0.01,
+    requestROI: 1.05,
+    estimatedExecutionTokens: 2000,
+    riskLevel: "medium",
+    _rolePlanSkeletonInjected: true,
+  };
+}
+
+export function validateAndInjectRolePlans(
+  payload: any,
+  opts: { injectMissing?: boolean } = {},
+): RolePlanCoverageValidationResult {
+  const source = (payload && typeof payload === "object") ? payload : {};
+  const plans = Array.isArray(source.plans) ? source.plans.slice() : [];
+  const requiredRoleRefs = collectExecutionStrategyTaskRoles(source);
+  const requiredRoles = requiredRoleRefs.map((ref) => ref.role);
+  if (requiredRoles.length === 0) {
+    return {
+      ok: true,
+      requiredRoles: [],
+      missingRoles: [],
+      initialMissingRoles: [],
+      injectedRoles: [],
+      invalidRolePlans: [],
+      output: { ...source, plans },
+    };
+  }
+
+  const firstWaveByRole = new Map(requiredRoleRefs.map((ref) => [ref.role, ref.wave]));
+  const validRoles = new Set<string>();
+  const invalidRolePlans = new Set<string>();
+
+  for (const plan of plans) {
+    const role = normalizeRoleValue(plan?.role);
+    if (!role || !firstWaveByRole.has(role)) continue;
+    const candidate = toRoleCoverageContractCandidate(plan, role, firstWaveByRole.get(role) || 1);
+    if (validatePlanContract(candidate).valid) {
+      validRoles.add(role);
+    } else {
+      invalidRolePlans.add(role);
+    }
+  }
+
+  const initialMissingRoles = requiredRoles.filter((role) => !validRoles.has(role));
+  const injectMissing = opts?.injectMissing === true;
+  const injectedRoles: string[] = [];
+
+  if (injectMissing && initialMissingRoles.length > 0) {
+    for (const role of initialMissingRoles) {
+      const wave = firstWaveByRole.get(role) || 1;
+      const skeleton = buildRoleCoverageSkeleton(role, wave);
+      if (validatePlanContract(skeleton).valid) {
+        plans.push(skeleton);
+        validRoles.add(role);
+        injectedRoles.push(role);
+      }
+    }
+  }
+
+  const missingRoles = requiredRoles.filter((role) => !validRoles.has(role));
+  return {
+    ok: missingRoles.length === 0,
+    requiredRoles,
+    missingRoles,
+    initialMissingRoles,
+    injectedRoles,
+    invalidRolePlans: [...invalidRolePlans].sort(),
+    output: { ...source, plans },
+  };
 }

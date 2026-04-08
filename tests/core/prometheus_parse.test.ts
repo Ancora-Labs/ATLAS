@@ -68,6 +68,7 @@ import { compilePrompt, markCacheableSegments } from "../../src/core/prompt_comp
 import {
   isNonSpecificVerification,
   validatePlanContract,
+  validateAndInjectRolePlans,
   detectProcessThoughtMarkers,
   scanParsedOutputForProcessThought,
   OUTPUT_FIDELITY_GATE_FAIL_REASON,
@@ -2490,6 +2491,85 @@ describe("buildDeterministicRequestBudget", () => {
 
     assert.equal(budget.byWave[0].estimatedRequests, 1);
     assert.equal(budget.byRole[0].estimatedRequests, 1);
+  });
+});
+
+describe("validateAndInjectRolePlans", () => {
+  function makeContractValidPlan(overrides: Record<string, unknown> = {}) {
+    return {
+      task: "Implement deterministic role coverage validation",
+      role: "evolution-worker",
+      wave: 1,
+      verification: "tests/core/prometheus_parse.test.ts — test: validates role coverage",
+      dependencies: [],
+      acceptance_criteria: [
+        "Validation runs before Athena review.",
+        "Role coverage metadata is recorded deterministically.",
+      ],
+      capacityDelta: 0.1,
+      requestROI: 1.2,
+      ...overrides,
+    };
+  }
+
+  it("passes when each executionStrategy task role has a contract-valid plan", () => {
+    const payload = {
+      executionStrategy: {
+        waves: [
+          {
+            wave: 1,
+            tasks: [
+              { task: "Quality gate fix", role: "quality-worker" },
+              { task: "Infra gate fix", role: "infrastructure-worker" },
+            ],
+          },
+        ],
+      },
+      plans: [
+        makeContractValidPlan({ role: "quality-worker", wave: 1 }),
+        makeContractValidPlan({ role: "infrastructure-worker", wave: 1 }),
+      ],
+    };
+
+    const result = validateAndInjectRolePlans(payload);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.missingRoles, []);
+    assert.deepEqual(result.injectedRoles, []);
+    assert.equal(result.output.plans.length, 2);
+  });
+
+  it("injects deterministic skeleton plans for uncovered roles (negative path)", () => {
+    const payload = {
+      executionStrategy: {
+        waves: [
+          {
+            wave: 2,
+            tasks: [
+              { task: "Quality gate fix", role: "quality-worker" },
+              { task: "API gate fix", role: "api-worker" },
+            ],
+          },
+        ],
+      },
+      plans: [
+        makeContractValidPlan({ role: "quality-worker", wave: 2 }),
+        // Invalid for role coverage: non-specific verification keeps this role uncovered.
+        makeContractValidPlan({ role: "api-worker", wave: 2, verification: "npm test" }),
+      ],
+    };
+
+    const initial = validateAndInjectRolePlans(payload, { injectMissing: false });
+    assert.equal(initial.ok, false);
+    assert.deepEqual(initial.initialMissingRoles, ["api-worker"]);
+
+    const injected = validateAndInjectRolePlans(payload, { injectMissing: true });
+    assert.equal(injected.ok, true);
+    assert.ok(injected.injectedRoles.includes("api-worker"));
+    const injectedSkeleton = injected.output.plans.find((plan: any) =>
+      plan.role === "api-worker" && plan._rolePlanSkeletonInjected === true
+    );
+    assert.ok(injectedSkeleton, "expected a deterministic injected skeleton for api-worker");
+    assert.equal(validatePlanContract(injectedSkeleton).valid, true);
   });
 });
 

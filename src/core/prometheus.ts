@@ -47,6 +47,7 @@ import {
 } from "./trust_boundary.js";
 import {
   validateAllPlans,
+  validateAndInjectRolePlans,
   PLAN_VIOLATION_SEVERITY,
   PACKET_VIOLATION_CODE,
   isCycleSpecificExclusionJustification,
@@ -452,6 +453,18 @@ export function buildMandatoryCoverageRetryDiff(result: MandatoryTaskCoverageVal
   const invalidText = invalid.length > 0 ? invalid.join(", ") : "none";
   return `missing=[${sanitizePromptLine(missingText, 600)}]
 invalid=[${sanitizePromptLine(invalidText, 1200)}]`;
+}
+
+function buildRolePlanCoverageRetryDiff(result: any): string {
+  const required = Array.isArray(result?.requiredRoles) ? result.requiredRoles : [];
+  const missing = Array.isArray(result?.initialMissingRoles) ? result.initialMissingRoles : [];
+  const invalid = Array.isArray(result?.invalidRolePlans) ? result.invalidRolePlans : [];
+  const requiredText = required.length > 0 ? required.join(", ") : "none";
+  const missingText = missing.length > 0 ? missing.join(", ") : "none";
+  const invalidText = invalid.length > 0 ? invalid.join(", ") : "none";
+  return `required_roles=[${sanitizePromptLine(requiredText, 600)}]
+missing_roles=[${sanitizePromptLine(missingText, 600)}]
+invalid_role_plans=[${sanitizePromptLine(invalidText, 600)}]`;
 }
 
 export const MANDATORY_COVERAGE_ENFORCE_REJECT_TOKEN = "ENFORCE_REJECT";
@@ -5311,6 +5324,144 @@ Mandatory requirements:
         `injected=1 excludedCiFindings=${excludedCiFindings.map((f) => f.id).join(",")}`,
       );
     }
+  }
+
+  // ── Execution-strategy role coverage gate (post-LLM, pre-Athena) ─────────────
+  // Ensure every role declared by executionStrategy.waves[*].tasks has at least one
+  // contract-valid plans[] entry. Retry once with an explicit diff; on repeated
+  // failure deterministically inject role skeleton plans (fail-open with traceable metadata).
+  {
+    const roleCoverageResult = validateAndInjectRolePlans(rawParsedInput, { injectMissing: false });
+    if (!roleCoverageResult.ok && roleCoverageResult.initialMissingRoles.length > 0) {
+      const roleDiff = buildRolePlanCoverageRetryDiff(roleCoverageResult);
+      await appendProgress(
+        config,
+        `[PROMETHEUS][ROLE_PLAN_COVERAGE] Missing executionStrategy role coverage — retrying once with diff: ${roleDiff}`
+      );
+
+      let retryRoleParsedInput: unknown = null;
+      try {
+        const retryPrompt = `${contextPrompt}
+
+## EXECUTION_STRATEGY_ROLE_PLAN_RETRY
+The previous response failed execution-strategy role coverage validation.
+Regenerate the full response and companion JSON, then satisfy this contract exactly.
+
+Role coverage diff:
+${roleDiff}
+
+Mandatory requirements:
+- Every role declared in executionStrategy.waves[*].tasks objects must have at least one contract-valid plans[] entry.
+- Keep role names deterministic and consistent between executionStrategy and plans[].
+- Do not remove existing valid plans unless required to repair invalid role coverage.`;
+
+        const retryArgs = buildAgentArgs({
+          agentSlug: "prometheus",
+          prompt: retryPrompt,
+          model: prometheusModel,
+          allowAll: true,
+          noAskUser: true,
+          maxContinues: undefined,
+        });
+        appendLiveLogSync(stateDir, `\n[copilot_stream_retry_start] ${ts()}\n`);
+        const retryResult = await spawnAsync(command, retryArgs, {
+          env: process.env,
+          timeoutMs: prometheusTimeoutMs,
+          earlyExitMarker: "===END===",
+          onStdout(chunk) {
+            appendLiveLogSync(stateDir, chunk.toString("utf8"));
+          },
+          onStderr(chunk) {
+            appendLiveLogSync(stateDir, chunk.toString("utf8"));
+          },
+        }) as { status?: number; stdout?: string; stderr?: string };
+        appendLiveLogSync(stateDir, `\n[copilot_stream_retry_end] ${ts()} exit=${retryResult.status}\n`);
+        if (retryResult.status === 0) {
+          const retryRaw = `${String(retryResult.stdout || "")}\n${String(retryResult.stderr || "")}`.trim();
+          const retryAiResult = parseAgentOutput(retryRaw);
+          retryRoleParsedInput = retryAiResult?.parsed || buildNarrativeFallbackParsed({ ...retryAiResult, raw: retryRaw });
+        } else {
+          await appendProgress(
+            config,
+            `[PROMETHEUS][ROLE_PLAN_COVERAGE][WARN] Retry process failed — exited ${retryResult.status}`
+          );
+        }
+      } catch (retryError) {
+        const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+        await appendProgress(
+          config,
+          `[PROMETHEUS][ROLE_PLAN_COVERAGE][WARN] Retry execution error: ${retryMessage}`
+        );
+      }
+
+      if (retryRoleParsedInput) {
+        const retryCoverage = validateAndInjectRolePlans(retryRoleParsedInput, { injectMissing: false });
+        if (retryCoverage.ok) {
+          rawParsedInput = retryCoverage.output;
+          rawParsedInput._executionStrategyRolePlanGate = {
+            ok: true,
+            requiredRoles: retryCoverage.requiredRoles,
+            missingRoles: [],
+            injectedRoles: [],
+            invalidRolePlans: retryCoverage.invalidRolePlans,
+            _retryAttempted: true,
+          };
+          await appendProgress(
+            config,
+            `[PROMETHEUS][ROLE_PLAN_COVERAGE] Retry succeeded — roles=${retryCoverage.requiredRoles.length}`
+          );
+        } else {
+          const injectedCoverage = validateAndInjectRolePlans(retryCoverage.output, { injectMissing: true });
+          rawParsedInput = injectedCoverage.output;
+          rawParsedInput._executionStrategyRolePlanGate = {
+            ok: injectedCoverage.ok,
+            requiredRoles: injectedCoverage.requiredRoles,
+            missingRoles: injectedCoverage.missingRoles,
+            injectedRoles: injectedCoverage.injectedRoles,
+            invalidRolePlans: injectedCoverage.invalidRolePlans,
+            _retryAttempted: true,
+            _fallbackInjected: true,
+          };
+          await appendProgress(
+            config,
+            `[PROMETHEUS][ROLE_PLAN_COVERAGE] Retry incomplete — injected deterministic role skeletons: ${injectedCoverage.injectedRoles.join(", ") || "none"}`
+          );
+        }
+      } else {
+        const injectedCoverage = validateAndInjectRolePlans(rawParsedInput, { injectMissing: true });
+        rawParsedInput = injectedCoverage.output;
+        rawParsedInput._executionStrategyRolePlanGate = {
+          ok: injectedCoverage.ok,
+          requiredRoles: injectedCoverage.requiredRoles,
+          missingRoles: injectedCoverage.missingRoles,
+          injectedRoles: injectedCoverage.injectedRoles,
+          invalidRolePlans: injectedCoverage.invalidRolePlans,
+          _retryAttempted: true,
+          _fallbackInjected: true,
+        };
+        await appendProgress(
+          config,
+          `[PROMETHEUS][ROLE_PLAN_COVERAGE] Retry produced no parsable payload — injected deterministic role skeletons: ${injectedCoverage.injectedRoles.join(", ") || "none"}`
+        );
+      }
+    } else {
+      rawParsedInput = roleCoverageResult.output;
+      rawParsedInput._executionStrategyRolePlanGate = {
+        ok: true,
+        requiredRoles: roleCoverageResult.requiredRoles,
+        missingRoles: [],
+        injectedRoles: [],
+        invalidRolePlans: roleCoverageResult.invalidRolePlans,
+        _retryAttempted: false,
+      };
+    }
+
+    const roleGateMeta = (rawParsedInput as any)._executionStrategyRolePlanGate || {};
+    await recordCapabilityExecution(
+      config,
+      "execution-strategy-role-plan-validation",
+      `required=${Array.isArray(roleGateMeta.requiredRoles) ? roleGateMeta.requiredRoles.length : 0} missing=${Array.isArray(roleGateMeta.missingRoles) ? roleGateMeta.missingRoles.length : 0} injected=${Array.isArray(roleGateMeta.injectedRoles) ? roleGateMeta.injectedRoles.length : 0} retried=${roleGateMeta._retryAttempted === true}`,
+    );
   }
 
   if (Array.isArray(rawParsedInput.plans) && rawParsedInput.plans.length > 0) {
