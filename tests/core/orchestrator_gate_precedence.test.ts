@@ -252,6 +252,7 @@ describe("GovernanceBlockDecision envelope contract", () => {
     assert.ok("graphResult" in result, "graphResult must always be present");
     assert.ok("action" in result, "action must always be present");
     assert.equal(typeof result.gateIndex, "number", "gateIndex must be a number on blocked result");
+    assert.equal(typeof result.gateKey, "string", "gateKey must be a string on blocked result");
   });
 
   it("non-blocked result has gateIndex=undefined, reason=null, and action=undefined", async () => {
@@ -259,6 +260,7 @@ describe("GovernanceBlockDecision envelope contract", () => {
     assert.equal(result.blocked, false);
     assert.equal(result.reason, null, "reason must be null on non-blocked result");
     assert.equal(result.gateIndex, undefined, "gateIndex must be absent on non-blocked result");
+    assert.equal(result.gateKey, undefined, "gateKey must be absent on non-blocked result");
     assert.equal(result.action, undefined, "action must be undefined on non-blocked result");
     assert.ok("budgetEligibility" in result, "budgetEligibility must always be present");
     assert.ok("graphResult" in result, "graphResult must always be present");
@@ -271,6 +273,7 @@ describe("GovernanceBlockDecision envelope contract", () => {
     assert.equal(result.blocked, true);
     assert.ok(Array.isArray(result.mandatoryDriftPaths), "mandatoryDriftPaths must be an array on drift block");
     assert.ok(result.mandatoryDriftPaths!.length > 0, "mandatoryDriftPaths must be non-empty on drift block");
+    assert.equal(result.gateKey, "MANDATORY_DRIFT_DEBT");
     assert.equal(result.gateIndex, GATE_PRECEDENCE.MANDATORY_DRIFT_DEBT);
   });
 
@@ -525,8 +528,8 @@ describe("evaluatePreDispatchGovernanceGate — ROLLING_COMPLETION_YIELD gate", 
     assert.ok(BLOCK_REASON.ROLLING_YIELD_THROTTLE.length > 0);
   });
 
-  it("GATE_PRECEDENCE.ROLLING_COMPLETION_YIELD is 10 (fires last)", () => {
-    assert.equal(GATE_PRECEDENCE.ROLLING_COMPLETION_YIELD, 10);
+  it("GATE_PRECEDENCE.ROLLING_COMPLETION_YIELD is 11", () => {
+    assert.equal(GATE_PRECEDENCE.ROLLING_COMPLETION_YIELD, 11);
   });
 
   it("rolling yield gate does not fire when no usage log exists (fail-open)", async () => {

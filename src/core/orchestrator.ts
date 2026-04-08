@@ -201,7 +201,7 @@ export const BLOCK_REASON = Object.freeze({
   MANDATORY_DRIFT_DEBT_UNRESOLVED:"mandatory_drift_debt_unresolved",
   PLAN_EVIDENCE_COUPLING_INVALID: "plan_evidence_coupling_invalid",
   /** One or more plans require cross-cycle confirmation but no token was provided. */
-  CROSS_CYCLE_PREREQUISITE_UNMET: "CROSS_CYCLE_PREREQUISITE_UNMET",
+  CROSS_CYCLE_PREREQUISITE_UNMET: "cross_cycle_prerequisite_unmet",
   /** One or more plans carry confidence metadata below the minimum dispatch threshold. */
   DEPENDENCY_READINESS_INCOMPLETE:"dependency_readiness_incomplete",
   /** Rolling completion yield fell at or below the throttle threshold. */
@@ -715,6 +715,11 @@ export interface GovernanceBlockDecision {
    * Absent (undefined) on non-blocked results.
    */
   gateIndex?: number;
+  /**
+   * Stable blocking gate identifier (GATE_PRECEDENCE key).
+   * Consumers should prefer this over numeric gateIndex for long-term contracts.
+   */
+  gateKey?: keyof typeof GATE_PRECEDENCE;
   /** Rollback execution result. Present only on GOVERNANCE_CANARY_BREACH blocks. */
   rollbackResult?: Record<string, unknown>;
   /**
@@ -767,6 +772,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       graphResult: null,
       cycleId,
       budgetEligibility,
+      gateKey: "BUDGET_ELIGIBILITY",
       gateIndex: GATE_PRECEDENCE.BUDGET_ELIGIBILITY,
     };
   }
@@ -783,6 +789,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
           graphResult: null,
           cycleId,
           budgetEligibility,
+          gateKey: "GUARDRAIL_PAUSE",
           gateIndex: GATE_PRECEDENCE.GUARDRAIL_PAUSE,
         };
       }
@@ -821,6 +828,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
           graphResult: null,
           cycleId,
           budgetEligibility,
+          gateKey: "FORCE_CHECKPOINT",
           gateIndex: GATE_PRECEDENCE.FORCE_CHECKPOINT,
         };
       }
@@ -839,6 +847,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       graphResult: null,
       cycleId,
       budgetEligibility,
+      gateKey: "GOVERNANCE_FREEZE",
       gateIndex: GATE_PRECEDENCE.GOVERNANCE_FREEZE,
     };
   }
@@ -861,6 +870,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       graphResult,
       cycleId,
       budgetEligibility,
+      gateKey: "LINEAGE_CYCLE",
       gateIndex: GATE_PRECEDENCE.LINEAGE_CYCLE,
     };
   }
@@ -897,6 +907,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       rollbackResult,
       cycleId,
       budgetEligibility,
+      gateKey: "GOVERNANCE_CANARY",
       gateIndex: GATE_PRECEDENCE.GOVERNANCE_CANARY,
     };
   }
@@ -919,6 +930,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
           graphResult,
           cycleId,
           budgetEligibility,
+        gateKey: "CARRY_FORWARD_DEBT",
         gateIndex: GATE_PRECEDENCE.CARRY_FORWARD_DEBT,
       };
     }
@@ -955,6 +967,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
           cycleId,
           budgetEligibility,
           mandatoryDriftPaths,
+          gateKey: "MANDATORY_DRIFT_DEBT",
           gateIndex: GATE_PRECEDENCE.MANDATORY_DRIFT_DEBT,
         };
       }
@@ -987,6 +1000,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
         graphResult,
         cycleId,
         budgetEligibility,
+        gateKey: "PLAN_EVIDENCE_COUPLING",
         gateIndex: GATE_PRECEDENCE.PLAN_EVIDENCE_COUPLING,
       };
     }
@@ -1011,6 +1025,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
         graphResult,
         cycleId,
         budgetEligibility,
+        gateKey: "CROSS_CYCLE_PREREQUISITE",
         gateIndex: GATE_PRECEDENCE.CROSS_CYCLE_PREREQUISITE,
       };
     }
@@ -1037,6 +1052,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
         graphResult,
         cycleId,
         budgetEligibility,
+        gateKey: "DEPENDENCY_READINESS",
         gateIndex: GATE_PRECEDENCE.DEPENDENCY_READINESS,
         readinessResult,
       };
@@ -1059,6 +1075,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
         graphResult,
         cycleId,
         budgetEligibility,
+        gateKey: "ROLLING_COMPLETION_YIELD",
         gateIndex: GATE_PRECEDENCE.ROLLING_COMPLETION_YIELD,
         rollingYieldContract: yieldContract,
       };
@@ -1133,6 +1150,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
           graphResult,
           cycleId,
           budgetEligibility,
+          gateKey: "SPECIALIZATION_ADMISSION",
           gateIndex: GATE_PRECEDENCE.SPECIALIZATION_ADMISSION,
         };
       } else if (admissionResult.reason && admissionResult.reason.includes("bypassed_fallback")) {
@@ -1187,6 +1205,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
           graphResult,
           cycleId,
           budgetEligibility,
+          gateKey: "OVERSIZED_PACKET",
           gateIndex: GATE_PRECEDENCE.OVERSIZED_PACKET,
         };
       }
@@ -1202,6 +1221,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
           graphResult,
           cycleId,
           budgetEligibility,
+          gateKey: "OVERSIZED_PACKET",
           gateIndex: GATE_PRECEDENCE.OVERSIZED_PACKET,
         };
       }

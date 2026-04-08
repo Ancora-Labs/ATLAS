@@ -1468,7 +1468,8 @@ describe("dependency readiness gate — pre-dispatch governance gate integration
       result.reason?.startsWith(BLOCK_REASON.DEPENDENCY_READINESS_INCOMPLETE),
       `reason must start with dependency_readiness_incomplete; got: ${result.reason}`
     );
-    assert.equal(result.gateIndex, 9, "gateIndex must be 9 for DEPENDENCY_READINESS");
+    assert.equal((result as any).gateKey, "DEPENDENCY_READINESS", "gateKey must identify dependency readiness gate");
+    assert.equal(result.gateIndex, 10, "gateIndex must be 10 for DEPENDENCY_READINESS");
   });
 
   it("NEGATIVE PATH: blocks dispatch when budgetConfidence is below threshold", async () => {
@@ -1530,7 +1531,7 @@ describe("dependency readiness gate — pre-dispatch governance gate integration
       "plan with shapeConfidence=0.4 must pass when minPlanConfidence is set to 0.3");
   });
 
-  it("readiness gate fires after plan evidence coupling gate (gate precedence 9 > 8)", async () => {
+  it("readiness gate fires after plan evidence coupling gate (gate precedence 10 > 8)", async () => {
     // Plan has low confidence AND missing acceptance_criteria:
     // evidence coupling (gate 8) must block BEFORE readiness (gate 9)
     const plans = [
@@ -1554,7 +1555,7 @@ describe("dependency readiness gate — pre-dispatch governance gate integration
 
 // ── Oversized packet hard admission gate ──────────────────────────────────────
 
-describe("oversized packet hard admission gate — evaluatePreDispatchGovernanceGate (Gate 12)", () => {
+describe("oversized packet hard admission gate — evaluatePreDispatchGovernanceGate (Gate 13)", () => {
   let tmpDir;
   let config;
 
@@ -1590,7 +1591,8 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
       result.reason?.startsWith(BLOCK_REASON.OVERSIZED_PACKET),
       `reason must start with OVERSIZED_PACKET prefix; got: ${result.reason}`
     );
-    assert.equal(result.gateIndex, 12, "gateIndex must be 12 (OVERSIZED_PACKET)");
+    assert.equal((result as any).gateKey, "OVERSIZED_PACKET", "gateKey must identify oversized packet gate");
+    assert.equal(result.gateIndex, 13, "gateIndex must be 13 (OVERSIZED_PACKET)");
   });
 
   it("blocks dispatch when ordered-step complexity exceeds cap even if plan count does not", async () => {
@@ -1705,7 +1707,7 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
 
   it("blocks via individual-plan complexity gate when a single plan exceeds the cap", async () => {
     // A single plan with more acceptance_criteria than actionableCap triggers
-    // the individual-plan layer of Gate 12 (checkOverbundleHardAdmission),
+    // the individual-plan layer of Gate 13 (checkOverbundleHardAdmission),
     // not just the role-group aggregated layer.
     const plans = [
       {
@@ -1724,7 +1726,7 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
       "oversize-individual-plan-check",
     );
     assert.equal(result.blocked, true,
-      "single plan exceeding the per-plan step cap must be blocked by Gate 12");
+      "single plan exceeding the per-plan step cap must be blocked by Gate 13");
     assert.ok(
       result.reason?.startsWith(BLOCK_REASON.OVERSIZED_PACKET),
       `reason must start with OVERSIZED_PACKET prefix; got: ${result.reason}`,
@@ -1733,7 +1735,7 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
       result.reason?.includes("overbundle_hard_admission"),
       `individual-plan layer must produce overbundle_hard_admission sub-reason; got: ${result.reason}`,
     );
-    assert.equal(result.gateIndex, 12, "gateIndex must be 12 (OVERSIZED_PACKET)");
+    assert.equal(result.gateIndex, 13, "gateIndex must be 13 (OVERSIZED_PACKET)");
   });
 
   it("NEGATIVE PATH: individual-plan gate does not fire when no single plan exceeds the cap", async () => {
@@ -1864,6 +1866,7 @@ describe("pipeline progress — terminology drift prevention (stage IDs)", () =>
       CRITICAL_DEBT_OVERDUE:          "critical_debt_overdue",
       MANDATORY_DRIFT_DEBT_UNRESOLVED:"mandatory_drift_debt_unresolved",
       PLAN_EVIDENCE_COUPLING_INVALID: "plan_evidence_coupling_invalid",
+      CROSS_CYCLE_PREREQUISITE_UNMET: "cross_cycle_prerequisite_unmet",
       DEPENDENCY_READINESS_INCOMPLETE:"dependency_readiness_incomplete",
       ROLLING_YIELD_THROTTLE:         "rolling_yield_throttle",
       SPECIALIZATION_ADMISSION_GATE:  "specialization_admission_gate_failed",

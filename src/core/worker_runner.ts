@@ -16,7 +16,8 @@
 import path from "node:path";
 import fs from "node:fs/promises";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
-import { spawnAsync } from "./fs_utils.js";
+import { spawnAsync, writeJson } from "./fs_utils.js";
+import { addSchemaVersion, STATE_FILE_TYPE } from "./schema_registry.js";
 import { getRoleRegistry, assertRoleCapabilityForTask, isAthenaReviewOrPostmortemTask, normalizeTaskKindLabel } from "./role_registry.js";
 import { appendProgress, appendLineageEntry, appendFailureClassification } from "./state_tracker.js";
 import { buildAgentArgs, nameToSlug } from "./agent_loader.js";
@@ -598,7 +599,10 @@ async function persistLegacyWorkerSessionArtifacts(
       };
     }
 
-    writeFileSync(sessionsPath, JSON.stringify(sessions, null, 2), "utf8");
+    await writeJson(
+      sessionsPath,
+      addSchemaVersion(sessions, STATE_FILE_TYPE.WORKER_SESSIONS),
+    );
 
     const workerPath = path.join(stateDir, roleToWorkerStateFile(roleName));
     let workerState: Record<string, any> = {};
@@ -628,17 +632,13 @@ async function persistLegacyWorkerSessionArtifacts(
           dispatchBlockReason: input.dispatchBlockReason || null,
         };
 
-    writeFileSync(
-      workerPath,
-      JSON.stringify({
-        ...workerState,
-        status: input.phase === "start" ? "working" : "idle",
-        startedAt: input.phase === "start" ? nowIso : (workerState.startedAt || null),
-        updatedAt: nowIso,
-        activityLog: [...previousLog, entry].slice(-200),
-      }, null, 2),
-      "utf8",
-    );
+    await writeJson(workerPath, {
+      ...workerState,
+      status: input.phase === "start" ? "working" : "idle",
+      startedAt: input.phase === "start" ? nowIso : (workerState.startedAt || null),
+      updatedAt: nowIso,
+      activityLog: [...previousLog, entry].slice(-200),
+    });
   } catch {
     // Session artifact persistence is observability-only and must never block worker execution.
   }
