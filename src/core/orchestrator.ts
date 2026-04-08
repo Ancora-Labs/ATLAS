@@ -252,14 +252,17 @@ export const PIPELINE_HEALTH_STATUS = Object.freeze({
  *
  * @param {string} operationalStatus — "operational" | "degraded" | unknown string
  * @param {string} plannerHealth     — "good" | "needs-work" | "critical" | unknown string
- * @returns {{ divergenceState, pipelineStatus, operationalStatus, plannerHealth, isWarning }}
+ * @param {string} plannerTruthStatus — "live" | "historical" | unknown
+ * @returns {{ divergenceState, pipelineStatus, operationalStatus, plannerHealth, plannerTruthStatus, isWarning }}
  */
-export function computeHealthDivergence(operationalStatus, plannerHealth) {
+export function computeHealthDivergence(operationalStatus, plannerHealth, plannerTruthStatus: string = "live") {
   const opStatus = String(operationalStatus || "").toLowerCase().trim();
   // Normalize aliases: "healthy" → "good", "warning" → "needs-work"
   // so planner outputs using the prompt schema form are handled correctly.
   const phRaw = String(plannerHealth || "").toLowerCase().trim();
   const phStatus = phRaw === "healthy" ? "good" : phRaw === "warning" ? "needs-work" : phRaw;
+  const truthStatusRaw = String(plannerTruthStatus || "").toLowerCase().trim();
+  const truthStatus = truthStatusRaw === "live" || truthStatusRaw === "historical" ? truthStatusRaw : "unknown";
 
   const isOperational = opStatus === ORCHESTRATOR_STATUS.OPERATIONAL;
   const isDegraded    = opStatus === ORCHESTRATOR_STATUS.DEGRADED;
@@ -267,12 +270,24 @@ export function computeHealthDivergence(operationalStatus, plannerHealth) {
   const isNeedsWork   = phStatus === "needs-work";
   const isCritical    = phStatus === "critical";
 
+  if (truthStatus !== "live") {
+    return {
+      divergenceState: HEALTH_DIVERGENCE_STATE.UNKNOWN,
+      pipelineStatus: PIPELINE_HEALTH_STATUS.UNKNOWN,
+      operationalStatus: opStatus || "unknown",
+      plannerHealth: phStatus || "unknown",
+      plannerTruthStatus: truthStatus,
+      isWarning: false,
+    };
+  }
+
   if (!opStatus || !phStatus || (!isOperational && !isDegraded) || (!isGood && !isNeedsWork && !isCritical)) {
     return {
       divergenceState: HEALTH_DIVERGENCE_STATE.UNKNOWN,
       pipelineStatus:  PIPELINE_HEALTH_STATUS.UNKNOWN,
       operationalStatus: opStatus || "unknown",
       plannerHealth:     phStatus || "unknown",
+      plannerTruthStatus: truthStatus,
       isWarning: false,
     };
   }
@@ -283,6 +298,7 @@ export function computeHealthDivergence(operationalStatus, plannerHealth) {
       pipelineStatus:  PIPELINE_HEALTH_STATUS.CRITICAL,
       operationalStatus: opStatus,
       plannerHealth:     phStatus,
+      plannerTruthStatus: truthStatus,
       isWarning: true,
     };
   }
@@ -293,6 +309,7 @@ export function computeHealthDivergence(operationalStatus, plannerHealth) {
       pipelineStatus:  PIPELINE_HEALTH_STATUS.WARNING,
       operationalStatus: opStatus,
       plannerHealth:     phStatus,
+      plannerTruthStatus: truthStatus,
       isWarning: true,
     };
   }
@@ -303,6 +320,7 @@ export function computeHealthDivergence(operationalStatus, plannerHealth) {
       pipelineStatus:  PIPELINE_HEALTH_STATUS.CRITICAL,
       operationalStatus: opStatus,
       plannerHealth:     phStatus,
+      plannerTruthStatus: truthStatus,
       isWarning: true,
     };
   }
@@ -313,6 +331,7 @@ export function computeHealthDivergence(operationalStatus, plannerHealth) {
       pipelineStatus:  PIPELINE_HEALTH_STATUS.WARNING,
       operationalStatus: opStatus,
       plannerHealth:     phStatus,
+      plannerTruthStatus: truthStatus,
       isWarning: true,
     };
   }
@@ -323,6 +342,7 @@ export function computeHealthDivergence(operationalStatus, plannerHealth) {
     pipelineStatus:  PIPELINE_HEALTH_STATUS.HEALTHY,
     operationalStatus: opStatus,
     plannerHealth:     phStatus,
+    plannerTruthStatus: truthStatus,
     isWarning: false,
   };
 }
@@ -5511,9 +5531,13 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   // Advisory — never blocks orchestration.
   try {
     const plannerHealth = prometheusAnalysis?.projectHealth ?? "unknown";
+    const plannerTruthStatusRaw = String(prometheusAnalysis?.planningTruthStatus || "").toLowerCase().trim();
+    const plannerTruthStatus = plannerTruthStatusRaw === "live" || plannerTruthStatusRaw === "historical"
+      ? plannerTruthStatusRaw
+      : "unknown";
     const healthFile = await readJson(path.join(stateDir, "orchestrator_health.json"), null);
     const operationalStatus = healthFile?.orchestratorStatus ?? ORCHESTRATOR_STATUS.OPERATIONAL;
-    const divergence = computeHealthDivergence(operationalStatus, plannerHealth);
+    const divergence = computeHealthDivergence(operationalStatus, plannerHealth, plannerTruthStatus);
     await persistCycleHealthComposite(config, {
       healthRecord: pendingCycleHealthRecord,
       divergenceSnapshot: {
@@ -5523,13 +5547,13 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     });
     if (divergence.isWarning) {
       await appendProgress(config,
-        `[HEALTH] Divergence detected — divergenceState=${divergence.divergenceState} pipelineStatus=${divergence.pipelineStatus} operationalStatus=${operationalStatus} plannerHealth=${plannerHealth}`
+        `[HEALTH] Divergence detected — divergenceState=${divergence.divergenceState} pipelineStatus=${divergence.pipelineStatus} operationalStatus=${operationalStatus} plannerHealth=${plannerHealth} plannerTruthStatus=${plannerTruthStatus}`
       );
       await appendAlert(config, {
         severity: divergence.pipelineStatus === PIPELINE_HEALTH_STATUS.CRITICAL ? ALERT_SEVERITY.CRITICAL : ALERT_SEVERITY.HIGH,
         source: "orchestrator",
         title: `Health divergence: ${divergence.divergenceState}`,
-        message: `pipelineStatus=${divergence.pipelineStatus} operationalStatus=${operationalStatus} plannerHealth=${plannerHealth}`,
+        message: `pipelineStatus=${divergence.pipelineStatus} operationalStatus=${operationalStatus} plannerHealth=${plannerHealth} plannerTruthStatus=${plannerTruthStatus}`,
       });
     } else {
       await appendProgress(config,

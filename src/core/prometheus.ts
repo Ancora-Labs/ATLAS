@@ -730,6 +730,17 @@ export interface DiagnosticsFreshnessAdmission {
   freshnessReasons: string[];
 }
 
+export const DIAGNOSTICS_PLANNING_TRUTH_STATUS = Object.freeze({
+  LIVE: "live",
+  HISTORICAL: "historical",
+});
+
+export interface DiagnosticsTruthPropagationResult {
+  planningTruthStatus: string;
+  diagnosticsFreshnessScore: number;
+  penaltyApplied: number;
+}
+
 /**
  * Deterministic freshness gate for diagnostics records.
  *
@@ -782,6 +793,75 @@ export function computeDiagnosticsFreshnessAdmission(
     staleSources,
     freshnessReasons,
   };
+}
+
+/**
+ * Bind diagnostics freshness admission into planner confidence/truth channels.
+ * Stale diagnostics are treated as historical context and reduce context confidence.
+ */
+export function applyDiagnosticsFreshnessTruthToPlanning(
+  parsed: any,
+  freshnessResult: DiagnosticsFreshnessAdmission,
+): DiagnosticsTruthPropagationResult {
+  const safeFreshness = freshnessResult && typeof freshnessResult === "object"
+    ? freshnessResult
+    : { allFresh: true, staleSources: [], freshnessReasons: [] };
+  const staleSources = Array.isArray(safeFreshness.staleSources)
+    ? safeFreshness.staleSources.map((s) => String(s || "").trim()).filter(Boolean)
+    : [];
+  const freshnessReasons = Array.isArray(safeFreshness.freshnessReasons)
+    ? safeFreshness.freshnessReasons.map((s) => String(s || "").trim()).filter(Boolean)
+    : [];
+  const allFresh = safeFreshness.allFresh === true && staleSources.length === 0 && freshnessReasons.length === 0;
+  const planningTruthStatus = allFresh
+    ? DIAGNOSTICS_PLANNING_TRUTH_STATUS.LIVE
+    : DIAGNOSTICS_PLANNING_TRUTH_STATUS.HISTORICAL;
+  const staleCount = staleSources.length;
+  const diagnosticsFreshnessScore = allFresh
+    ? 1.0
+    : Math.max(0.6, Math.round((1 - Math.min(0.4, staleCount * 0.2)) * 100) / 100);
+  const penaltyApplied = allFresh ? 0 : Math.round((1 - diagnosticsFreshnessScore) * 100) / 100;
+
+  if (!parsed || typeof parsed !== "object") {
+    return { planningTruthStatus, diagnosticsFreshnessScore, penaltyApplied };
+  }
+
+  if (!parsed.parserConfidenceComponents || typeof parsed.parserConfidenceComponents !== "object") {
+    parsed.parserConfidenceComponents = {};
+  }
+  parsed.parserConfidenceComponents.diagnosticsFreshness = diagnosticsFreshnessScore;
+  parsed.diagnosticsFreshnessAdmission = {
+    allFresh,
+    staleSources,
+    freshnessReasons,
+  };
+  parsed.planningTruthStatus = planningTruthStatus;
+
+  if (penaltyApplied > 0) {
+    if (!Array.isArray(parsed.parserConfidencePenalties)) parsed.parserConfidencePenalties = [];
+    const reason = `diagnostics_freshness_stale_${Math.max(1, staleCount)}`;
+    const existingPenaltyIdx = parsed.parserConfidencePenalties.findIndex(
+      (p: any) => p?.component === "diagnosticsFreshness",
+    );
+    const penaltyEntry = {
+      reason,
+      component: "diagnosticsFreshness",
+      delta: -penaltyApplied,
+    };
+    if (existingPenaltyIdx >= 0) parsed.parserConfidencePenalties[existingPenaltyIdx] = penaltyEntry;
+    else parsed.parserConfidencePenalties.push(penaltyEntry);
+
+    const currentContextPenalty = typeof parsed.parserContextPenalty === "number"
+      ? parsed.parserContextPenalty
+      : 0;
+    parsed.parserContextPenalty = Math.round((currentContextPenalty + penaltyApplied) * 100) / 100;
+    const coreConfidence = typeof parsed.parserCoreConfidence === "number"
+      ? parsed.parserCoreConfidence
+      : (typeof parsed.parserConfidence === "number" ? parsed.parserConfidence : 1.0);
+    parsed.parserConfidence = Math.round(Math.max(0.1, coreConfidence - parsed.parserContextPenalty) * 100) / 100;
+  }
+
+  return { planningTruthStatus, diagnosticsFreshnessScore, penaltyApplied };
 }
 
 /**
@@ -2646,6 +2726,10 @@ const REQUIRED_PROMETHEUS_HEALTH_VALUES = new Set(["healthy", "degraded", "criti
 export function hasPrometheusRuntimeContractSignals(parsed: unknown): boolean {
   if (!parsed || typeof parsed !== "object") return false;
   const payload = parsed as Record<string, unknown>;
+  const planningTruthStatus = String(payload.planningTruthStatus ?? DIAGNOSTICS_PLANNING_TRUTH_STATUS.LIVE)
+    .trim()
+    .toLowerCase();
+  if (planningTruthStatus !== DIAGNOSTICS_PLANNING_TRUTH_STATUS.LIVE) return false;
   const generatedAt = String(payload.generatedAt ?? "").trim();
   const keyFindings = String(payload.keyFindings ?? "").trim();
   return (
@@ -3062,7 +3146,7 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
   // context-penalty channel: external/contextual signals (bottleneckCoverage,
   //   architectureDrift) applied on top of the core score.
   // parserConfidence remains the aggregate (core − context) for backward compat.
-  const CONTEXT_PENALTY_COMPONENTS = new Set(["bottleneckCoverage", "architectureDrift"]);
+  const CONTEXT_PENALTY_COMPONENTS = new Set(["bottleneckCoverage", "architectureDrift", "diagnosticsFreshness"]);
   const coreBase = rawPlans.length > 0 ? 1.0 : plans.length > 0 ? 0.5 : 0.1;
   let parserCoreConfidence = coreBase;
   let parserContextPenalty = 0;
@@ -5826,6 +5910,8 @@ Mandatory requirements:
       parsed._staleTaggedPlanCount = staleTaggedCount;
     }
   }
+
+  applyDiagnosticsFreshnessTruthToPlanning(parsed, diagnosticsFreshnessAdmission);
 
   // ── Contract-first plan validation (Packet 2) ────────────────────────────
   // Every plan must pass schema contract before persistence.

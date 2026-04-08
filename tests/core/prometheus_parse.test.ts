@@ -63,6 +63,7 @@ import {
   PROCESS_NARRATION_LEXICAL_PATTERNS,
   SEMANTIC_TOOL_TRACE_PATTERNS,
   hasPrometheusRuntimeContractSignals,
+  applyDiagnosticsFreshnessTruthToPlanning,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments } from "../../src/core/prompt_compiler.js";
 import {
@@ -4357,6 +4358,53 @@ describe("computeDiagnosticsFreshnessAdmission", () => {
   });
 });
 
+describe("applyDiagnosticsFreshnessTruthToPlanning", () => {
+  it("keeps planningTruthStatus=live and no confidence penalty when all diagnostics are fresh", () => {
+    const parsed = {
+      parserCoreConfidence: 1.0,
+      parserContextPenalty: 0,
+      parserConfidence: 1.0,
+      parserConfidenceComponents: {},
+      parserConfidencePenalties: [],
+    };
+    const result = applyDiagnosticsFreshnessTruthToPlanning(parsed, {
+      allFresh: true,
+      staleSources: [],
+      freshnessReasons: [],
+    });
+
+    assert.equal(result.planningTruthStatus, "live");
+    assert.equal(result.penaltyApplied, 0);
+    assert.equal(parsed.planningTruthStatus, "live");
+    assert.equal(parsed.parserConfidenceComponents.diagnosticsFreshness, 1.0);
+    assert.equal(parsed.parserConfidence, 1.0);
+  });
+
+  it("marks planningTruthStatus=historical and reduces parser confidence when diagnostics are stale", () => {
+    const parsed = {
+      parserCoreConfidence: 1.0,
+      parserContextPenalty: 0,
+      parserConfidence: 1.0,
+      parserConfidenceComponents: {},
+      parserConfidencePenalties: [],
+    };
+    const result = applyDiagnosticsFreshnessTruthToPlanning(parsed, {
+      allFresh: false,
+      staleSources: ["dependency_graph"],
+      freshnessReasons: ["stale_diagnostics:dependency_graph:ageMinutes=480:staleAfterMs=21600000"],
+    });
+
+    assert.equal(result.planningTruthStatus, "historical");
+    assert.ok(result.penaltyApplied > 0);
+    assert.equal(parsed.planningTruthStatus, "historical");
+    assert.ok(parsed.parserConfidence < 1.0, "stale diagnostics must reduce aggregate parser confidence");
+    assert.ok(
+      parsed.parserConfidencePenalties.some((p: any) => p.component === "diagnosticsFreshness"),
+      "diagnosticsFreshness penalty must be emitted",
+    );
+  });
+});
+
 describe("tagStaleDiagnosticsBackedPlans", () => {
   const staleFreshness = {
     allFresh: false,
@@ -4771,6 +4819,15 @@ describe("hasPrometheusRuntimeContractSignals — semantic validation", () => {
     const payload = {
       generatedAt: "",
       keyFindings: "CI is failing on main branch and blocking all workers from being dispatched.",
+    };
+    assert.equal(hasPrometheusRuntimeContractSignals(payload), false);
+  });
+
+  it("returns false when planningTruthStatus is historical even with valid keyFindings", () => {
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      keyFindings: "Planner output references stale diagnostics and must not be treated as live truth.",
+      planningTruthStatus: "historical",
     };
     assert.equal(hasPrometheusRuntimeContractSignals(payload), false);
   });

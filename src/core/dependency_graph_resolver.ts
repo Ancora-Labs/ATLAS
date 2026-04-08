@@ -836,6 +836,8 @@ export async function persistGraphDiagnostics(stateDir, resolution, meta: any = 
     persistedAt,
     freshness: {
       status: "fresh",
+      truthStatus: "point_in_time",
+      evaluatedAt: persistedAt,
       staleAfterMs: GRAPH_DIAGNOSTICS_FRESHNESS_MS,
       expiresAt,
     },

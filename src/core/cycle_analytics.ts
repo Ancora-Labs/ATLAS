@@ -1536,6 +1536,7 @@ export interface CycleHealthDivergenceSnapshot {
   pipelineStatus: string;
   operationalStatus: string;
   plannerHealth: string;
+  plannerTruthStatus?: string;
   isWarning: boolean;
   recordedAt: string;
 }
@@ -1673,6 +1674,7 @@ export async function persistCycleHealthComposite(
     pipelineStatus: "unknown",
     operationalStatus: "unknown",
     plannerHealth: "unknown",
+    plannerTruthStatus: "unknown",
     isWarning: false,
     recordedAt: null,
     updatedAt: null,
@@ -1695,6 +1697,7 @@ export async function persistCycleHealthComposite(
       pipelineStatus: String(divergenceSnapshot?.pipelineStatus || "unknown"),
       operationalStatus: String(divergenceSnapshot?.operationalStatus || "unknown"),
       plannerHealth: String(divergenceSnapshot?.plannerHealth || "unknown"),
+      plannerTruthStatus: String(divergenceSnapshot?.plannerTruthStatus || "unknown"),
       isWarning: divergenceSnapshot?.isWarning === true,
       recordedAt: String(divergenceSnapshot?.recordedAt || new Date().toISOString()),
     }
@@ -1709,6 +1712,7 @@ export async function persistCycleHealthComposite(
     pipelineStatus: String(nextDivergence?.pipelineStatus || existing?.pipelineStatus || "unknown"),
     operationalStatus: String(nextDivergence?.operationalStatus || existing?.operationalStatus || "unknown"),
     plannerHealth: String(nextDivergence?.plannerHealth || existing?.plannerHealth || "unknown"),
+    plannerTruthStatus: String(nextDivergence?.plannerTruthStatus || existing?.plannerTruthStatus || "unknown"),
     isWarning: nextDivergence?.isWarning === true,
     recordedAt: nextDivergence?.recordedAt || existing?.recordedAt || null,
     updatedAt:     new Date().toISOString(),

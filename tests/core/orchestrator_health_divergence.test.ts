@@ -187,4 +187,19 @@ describe("computeHealthDivergence — planner health alias normalization", () =>
     assert.equal(result.pipelineStatus, PIPELINE_HEALTH_STATUS.UNKNOWN);
     assert.equal(result.isWarning, false);
   });
+
+  it("historical planner truth forces unknown divergence to prevent stale diagnostics from appearing live", () => {
+    const result = computeHealthDivergence(ORCHESTRATOR_STATUS.OPERATIONAL, "critical", "historical");
+    assert.equal(result.divergenceState, HEALTH_DIVERGENCE_STATE.UNKNOWN);
+    assert.equal(result.pipelineStatus, PIPELINE_HEALTH_STATUS.UNKNOWN);
+    assert.equal(result.isWarning, false);
+    assert.equal(result.plannerTruthStatus, "historical");
+  });
+
+  it("unknown planner truth status also resolves to unknown divergence (negative path)", () => {
+    const result = computeHealthDivergence(ORCHESTRATOR_STATUS.OPERATIONAL, "critical", "stale-ish");
+    assert.equal(result.divergenceState, HEALTH_DIVERGENCE_STATE.UNKNOWN);
+    assert.equal(result.pipelineStatus, PIPELINE_HEALTH_STATUS.UNKNOWN);
+    assert.equal(result.plannerTruthStatus, "unknown");
+  });
 });
