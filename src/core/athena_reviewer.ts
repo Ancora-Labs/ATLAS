@@ -1589,6 +1589,53 @@ export function validatePatchedPlan(plan: unknown): { valid: boolean; issues: st
 
 // ── Patched-plan normalization at handoff (Task 2) ───────────────────────────
 
+const CROSS_CYCLE_DEPENDENCY_PATTERN = /^(.+?)\s*\[cross-cycle pre-condition([^\]]*)\]/i;
+const CROSS_CYCLE_CONFIRMATION_TOKEN_PATTERN = /(?:confirmation\s+token|token)\s*[:=]\s*([A-Za-z0-9._:-]+)/i;
+
+export function extractCrossCycleDispatchPrerequisiteFromDependency(
+  dependency: unknown
+): { gateName: string; confirmationToken: string; sourceDependency: string } | null {
+  if (typeof dependency !== "string") return null;
+  const sourceDependency = dependency.trim();
+  if (!sourceDependency) return null;
+  const match = sourceDependency.match(CROSS_CYCLE_DEPENDENCY_PATTERN);
+  if (!match) return null;
+  const gateName = String(match[1] || "").trim();
+  if (!gateName) return null;
+  const tokenMatch = String(match[2] || "").match(CROSS_CYCLE_CONFIRMATION_TOKEN_PATTERN);
+  return {
+    gateName,
+    confirmationToken: tokenMatch ? String(tokenMatch[1] || "").trim() : "",
+    sourceDependency,
+  };
+}
+
+function normalizeDispatchPrerequisiteMetadata(
+  rawPrerequisite: unknown,
+  dependencies: unknown[]
+): Record<string, unknown> | null {
+  const base = rawPrerequisite && typeof rawPrerequisite === "object"
+    ? { ...(rawPrerequisite as Record<string, unknown>) }
+    : {};
+  const fromDependency = dependencies
+    .map((dep) => extractCrossCycleDispatchPrerequisiteFromDependency(dep))
+    .find(Boolean) || null;
+  const gateName = String(base.gateName || base.gate || fromDependency?.gateName || "").trim();
+  const confirmationToken = String(
+    base.confirmationToken || base.confirmation_token || fromDependency?.confirmationToken || ""
+  ).trim();
+  const sourceDependency = String(base.sourceDependency || fromDependency?.sourceDependency || "").trim();
+
+  if (!gateName && !sourceDependency) return null;
+
+  return {
+    type: String(base.type || "cross_cycle_prerequisite").trim() || "cross_cycle_prerequisite",
+    gateName,
+    confirmationToken,
+    sourceDependency,
+  };
+}
+
 /**
  * Idempotent normalization of patched plans at the Athena → dispatch handoff seam.
  *
@@ -1607,13 +1654,16 @@ export function normalizePatchedPlansForDispatch(plans: unknown[]): Record<strin
   return plans.map((plan) => {
     if (!plan || typeof plan !== "object") return plan as Record<string, unknown>;
     const p = plan as Record<string, unknown>;
+    const dependencies = Array.isArray(p.dependencies) ? p.dependencies : [];
+    const dispatchPrerequisite = normalizeDispatchPrerequisiteMetadata(p.dispatchPrerequisite, dependencies);
+
     return {
       ...p,
       // Normalise target_files alias so dispatch always finds the canonical field.
       target_files: Array.isArray(p.target_files) ? p.target_files
         : Array.isArray(p.targetFiles) ? p.targetFiles : [],
       // dependencies must be an array for the dependency-graph resolver.
-      dependencies: Array.isArray(p.dependencies) ? p.dependencies : [],
+      dependencies,
       // role must be a non-empty string for worker dispatch routing.
       role: p.role && String(p.role).trim() ? String(p.role).trim() : "evolution-worker",
       // wave must be a positive integer; malformed values fall back to 1.
@@ -1624,6 +1674,7 @@ export function normalizePatchedPlansForDispatch(plans: unknown[]): Record<strin
       // requestROI must be a positive finite number; Athena may omit it.
       requestROI: Number.isFinite(Number(p.requestROI)) && Number(p.requestROI) > 0
         ? Number(p.requestROI) : 1.0,
+      ...(dispatchPrerequisite ? { dispatchPrerequisite } : {}),
     };
   });
 }
@@ -3139,49 +3190,10 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
     }
   }
 
-  // ── Cross-cycle dependency gate ──────────────────────────────────────────
-  // Block plans that carry unresolved cross-cycle pre-conditions. Such plans pass
-  // structural validation but will always block at the orchestrator dispatch gate
-  // with no machine-readable explanation, producing dispatches=[] silently.
-  if (Array.isArray(result.patchedPlans) && result.patchedPlans.length > 0) {
-    const crossCycleIssues: string[] = [];
-    for (let pi = 0; pi < result.patchedPlans.length; pi++) {
-      const plan = result.patchedPlans[pi] as any;
-      if (!Array.isArray(plan?.dependencies)) continue;
-      for (const dep of plan.dependencies) {
-        if (typeof dep !== "string") continue;
-        const match = dep.match(/^(.+?)\s*\[cross-cycle pre-condition/i);
-        if (!match) continue;
-        const gateName = match[1].trim();
-        crossCycleIssues.push(
-          `Resolve gate "${gateName}" before re-submitting — unresolved cross-cycle pre-condition blocks dispatch (plan[${pi}])`
-        );
-      }
-    }
-    if (crossCycleIssues.length > 0) {
-      const blockReason = {
-        code: ATHENA_PLAN_REVIEW_REASON_CODE.CROSS_CYCLE_DEPENDENCY_UNRESOLVED,
-        message: `Plans contain unresolved cross-cycle pre-conditions: ${crossCycleIssues.join(" | ")}`
-      };
-      const blocker = buildPlanReviewBlocker(blockReason.code);
-      await appendProgress(config, `[ATHENA] Cross-cycle dependency gate BLOCKED — ${blockReason.message}`);
-      await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
-      chatLog(stateDir, athenaName, `Cross-cycle dependency unresolved: ${crossCycleIssues.join(" | ")}`);
-      await appendAlert(config, {
-        severity: ALERT_SEVERITY.CRITICAL,
-        source: "athena_reviewer",
-        title: "Plans contain unresolved cross-cycle pre-conditions",
-        message: `code=${blockReason.code} issues=${crossCycleIssues.slice(0, 3).join(" | ")}`
-      });
-      return {
-        ...result,
-        approved: false,
-        corrections: [...corrections, ...crossCycleIssues],
-        reason: blockReason,
-        blocker,
-      };
-    }
-  }
+  // ── Cross-cycle dependency normalization ──────────────────────────────────
+  // Convert cross-cycle prose markers in dependencies into explicit
+  // dispatchPrerequisite metadata during handoff normalization. Dispatch
+  // enforcement happens in orchestrator evaluatePreDispatchGovernanceGate.
 
   // ── Patched-plan normalization + contract re-validation at handoff ────────
   // Required for EVERY patchedPlans array (including empty) before dispatch handoff.

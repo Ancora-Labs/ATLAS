@@ -21,6 +21,7 @@ import {
   buildPatchedPlanCorrectionTracking,
   PATCHED_PLAN_MUTATION_KIND,
 } from "../../src/core/athena_reviewer.js";
+import { evaluatePreDispatchGovernanceGate, BLOCK_REASON } from "../../src/core/orchestrator.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -427,6 +428,45 @@ describe("normalizePatchedPlansForDispatch", () => {
     assert.deepEqual(result[0].target_files, ["src/y.ts"]);
   });
 
+  it("converts cross-cycle dependency prose into dispatchPrerequisite metadata", () => {
+    const result = normalizePatchedPlansForDispatch([
+      {
+        task: "x",
+        role: "evolution-worker",
+        wave: 1,
+        dependencies: ["Athena mutation-aware correction ledger [cross-cycle pre-condition — dispatch must confirm prior fulfillment]"],
+        target_files: ["src/y.ts"],
+        scope: "src/",
+        acceptance_criteria: ["done"]
+      }
+    ]);
+    assert.deepEqual(result[0].dispatchPrerequisite, {
+      type: "cross_cycle_prerequisite",
+      gateName: "Athena mutation-aware correction ledger",
+      confirmationToken: "",
+      sourceDependency: "Athena mutation-aware correction ledger [cross-cycle pre-condition — dispatch must confirm prior fulfillment]",
+    });
+  });
+
+  it("preserves explicit dispatchPrerequisite confirmation token when provided", () => {
+    const result = normalizePatchedPlansForDispatch([
+      {
+        task: "x",
+        role: "evolution-worker",
+        wave: 1,
+        dependencies: ["Athena mutation-aware correction ledger [cross-cycle pre-condition — dispatch must confirm prior fulfillment]"],
+        dispatchPrerequisite: {
+          gateName: "Athena mutation-aware correction ledger",
+          confirmationToken: "cycle-12-fulfilled",
+        },
+        target_files: ["src/y.ts"],
+        scope: "src/",
+        acceptance_criteria: ["done"]
+      }
+    ]);
+    assert.equal((result[0].dispatchPrerequisite as any).confirmationToken, "cycle-12-fulfilled");
+  });
+
   it("is idempotent — applying twice produces the same result", () => {
     const input = [
       { task: "fix", role: "evolution-worker", wave: 2, target_files: ["src/a.ts"], scope: "src/", acceptance_criteria: ["done"], dependencies: ["T-1"] }
@@ -443,6 +483,69 @@ describe("normalizePatchedPlansForDispatch", () => {
       const result = normalizePatchedPlansForDispatch([null, undefined, "string"] as any[]);
       assert.ok(Array.isArray(result));
     });
+  });
+});
+
+describe("evaluatePreDispatchGovernanceGate — cross-cycle prerequisite token gate", () => {
+  it("blocks with CROSS_CYCLE_PREREQUISITE_UNMET when confirmation token is absent", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-cross-cycle-gate-"));
+    const config = {
+      paths: { stateDir },
+      systemGuardian: { enabled: false },
+      runtime: { disableDriftDebtGate: true },
+    };
+    const decision = await evaluatePreDispatchGovernanceGate(config, [
+      {
+        task_id: "T-001",
+        task: "Wire prerequisite gate",
+        role: "evolution-worker",
+        verification: "npm test",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["dispatch blocks when missing token"],
+        target_files: ["src/core/orchestrator.ts"],
+        scope: "src/core/",
+        dispatchPrerequisite: {
+          gateName: "Athena mutation-aware correction ledger",
+          type: "cross_cycle_prerequisite",
+          confirmationToken: "",
+        }
+      }
+    ], "cycle-1");
+    assert.equal(decision.blocked, true);
+    assert.ok(
+      String(decision.reason || "").startsWith(BLOCK_REASON.CROSS_CYCLE_PREREQUISITE_UNMET),
+      `unexpected reason=${String(decision.reason || "null")}`
+    );
+  });
+
+  it("does not block on cross-cycle prerequisite when confirmation token is present", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-cross-cycle-pass-"));
+    const config = {
+      paths: { stateDir },
+      systemGuardian: { enabled: false },
+      runtime: { disableDriftDebtGate: true },
+    };
+    const decision = await evaluatePreDispatchGovernanceGate(config, [
+      {
+        task_id: "T-002",
+        task: "Wire prerequisite gate with token",
+        role: "evolution-worker",
+        verification: "npm test",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["dispatch passes token check"],
+        target_files: ["src/core/orchestrator.ts"],
+        scope: "src/core/",
+        dispatchPrerequisite: {
+          gateName: "Athena mutation-aware correction ledger",
+          type: "cross_cycle_prerequisite",
+          confirmationToken: "cycle-0:fulfilled",
+        }
+      }
+    ], "cycle-2");
+    assert.equal(
+      String(decision.reason || "").startsWith(BLOCK_REASON.CROSS_CYCLE_PREREQUISITE_UNMET),
+      false
+    );
   });
 });
 

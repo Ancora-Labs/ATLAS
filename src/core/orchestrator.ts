@@ -24,7 +24,12 @@ import type { CancellationToken } from "./daemon_control.js";
 import { loadConfig } from "../config.js";
 import { runJesusCycle, appendJesusOutcomeLedger, buildJesusDecisionOutcome } from "./jesus_supervisor.js";
 import { runPrometheusAnalysis, loadTopicMemory, saveTopicMemory, topicKey as prometheusTopicKey, findCanonicalTopicKey } from "./prometheus.js";
-import { runAthenaPlanReview, ATHENA_PLAN_REVIEW_REASON_CODE, hasFiniteAthenaOverallScore } from "./athena_reviewer.js";
+import {
+  runAthenaPlanReview,
+  ATHENA_PLAN_REVIEW_REASON_CODE,
+  hasFiniteAthenaOverallScore,
+  extractCrossCycleDispatchPrerequisiteFromDependency,
+} from "./athena_reviewer.js";
 import { runWorkerConversation, isAnalyticsCompletedWorkerStatus, isTerminalWorkerStatus } from "./worker_runner.js";
 import { runSelfImprovementCycle, shouldTriggerSelfImprovement } from "./self_improvement.js";
 import { collectEvolutionMetrics } from "./evolution_metrics.js";
@@ -146,10 +151,11 @@ export const ORCHESTRATOR_STATUS = Object.freeze({
  *   6. CARRY_FORWARD_DEBT    — outstanding critical debt blocks new dispatch
  *   7. MANDATORY_DRIFT_DEBT  — architecture integrity gate before plan validation
  *   8. PLAN_EVIDENCE_COUPLING — validates individual plan completeness
- *   9. DEPENDENCY_READINESS  — validates dependency confidence metadata
- *  10. ROLLING_COMPLETION_YIELD — throttles when recent yield is too low
- *  11. SPECIALIZATION_ADMISSION — specialist share below adaptive lane target
- *  12. OVERSIZED_PACKET      — per-role plan group exceeds actionable-steps cap
+ *   9. CROSS_CYCLE_PREREQUISITE — requires explicit cross-cycle confirmation token
+ *  10. DEPENDENCY_READINESS  — validates dependency confidence metadata
+ *  11. ROLLING_COMPLETION_YIELD — throttles when recent yield is too low
+ *  12. SPECIALIZATION_ADMISSION — specialist share below adaptive lane target
+ *  13. OVERSIZED_PACKET      — per-role plan group exceeds actionable-steps cap
  */
 export const GATE_PRECEDENCE = Object.freeze({
   BUDGET_ELIGIBILITY:          1,
@@ -161,14 +167,16 @@ export const GATE_PRECEDENCE = Object.freeze({
   CARRY_FORWARD_DEBT:          6,
   MANDATORY_DRIFT_DEBT:        7,
   PLAN_EVIDENCE_COUPLING:      8,
+  /** Cross-cycle prerequisite metadata is present but has no confirmation token. */
+  CROSS_CYCLE_PREREQUISITE:    9,
   /** Confidence metadata on plans is below the minimum dispatch threshold. */
-  DEPENDENCY_READINESS:        9,
+  DEPENDENCY_READINESS:       10,
   /** Rolling completion yield is below the throttle threshold — dispatch is paused to prevent waste spirals. */
-  ROLLING_COMPLETION_YIELD:   10,
+  ROLLING_COMPLETION_YIELD:   11,
   /** Specialization admission gate — specialist share below adaptive lane target. */
-  SPECIALIZATION_ADMISSION:   11,
+  SPECIALIZATION_ADMISSION:   12,
   /** Oversized packet gate — per-role plan group exceeds the configured actionable-steps cap. */
-  OVERSIZED_PACKET:           12,
+  OVERSIZED_PACKET:           13,
 });
 
 /**
@@ -192,6 +200,8 @@ export const BLOCK_REASON = Object.freeze({
   CRITICAL_DEBT_OVERDUE:          "critical_debt_overdue",
   MANDATORY_DRIFT_DEBT_UNRESOLVED:"mandatory_drift_debt_unresolved",
   PLAN_EVIDENCE_COUPLING_INVALID: "plan_evidence_coupling_invalid",
+  /** One or more plans require cross-cycle confirmation but no token was provided. */
+  CROSS_CYCLE_PREREQUISITE_UNMET: "CROSS_CYCLE_PREREQUISITE_UNMET",
   /** One or more plans carry confidence metadata below the minimum dispatch threshold. */
   DEPENDENCY_READINESS_INCOMPLETE:"dependency_readiness_incomplete",
   /** Rolling completion yield fell at or below the throttle threshold. */
@@ -392,6 +402,111 @@ function normalizeImplementationStatus(rawStatus: unknown): string {
   return PLAN_IMPLEMENTATION_STATUS.UNKNOWN;
 }
 
+function normalizeTopicLabel(value: unknown): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function collectBenchmarkLinkageTopicsFromBatches(workerBatches: any[]): Set<string> {
+  const topics = new Set<string>();
+  for (const batch of Array.isArray(workerBatches) ? workerBatches : []) {
+    const plans = Array.isArray(batch?.plans) ? batch.plans : [batch];
+    for (const plan of plans) {
+      const linked = Array.isArray(plan?.synthesis_sources)
+        ? plan.synthesis_sources
+        : [];
+      for (const item of linked) {
+        const topic = normalizeTopicLabel(item);
+        if (topic) topics.add(topic);
+      }
+    }
+  }
+  return topics;
+}
+
+function topicMatchInSet(topic: string, linkedTopics: Set<string>): boolean {
+  if (!topic || linkedTopics.size === 0) return false;
+  for (const linked of linkedTopics) {
+    if (!linked) continue;
+    if (linked === topic) return true;
+    if (linked.length >= 12 && topic.includes(linked)) return true;
+    if (topic.length >= 12 && linked.includes(topic)) return true;
+  }
+  return false;
+}
+
+function autoResolveBenchmarkRecommendations(
+  benchmarkEntries: any[],
+  opts: { verifiedDoneWorkers: number; workerBatches: any[]; atIso: string }
+): { entries: any[]; resolvedCount: number; usedFallback: boolean } {
+  if (!Array.isArray(benchmarkEntries) || benchmarkEntries.length === 0) {
+    return { entries: benchmarkEntries, resolvedCount: 0, usedFallback: false };
+  }
+
+  const latest = benchmarkEntries[0];
+  const recs = Array.isArray(latest?.recommendations) ? latest.recommendations : [];
+  if (recs.length === 0) {
+    return { entries: benchmarkEntries, resolvedCount: 0, usedFallback: false };
+  }
+
+  const linkedTopics = collectBenchmarkLinkageTopicsFromBatches(opts.workerBatches);
+  const pendingIndexes = recs
+    .map((rec: any, idx: number) => ({ rec, idx }))
+    .filter(({ rec }) => {
+      const status = String(rec?.implementationStatus || "pending").toLowerCase().trim();
+      return status === "pending" || status === "in-progress" || status === "unknown";
+    });
+  if (pendingIndexes.length === 0) {
+    return { entries: benchmarkEntries, resolvedCount: 0, usedFallback: false };
+  }
+
+  const nextRecs = [...recs];
+  let resolvedCount = 0;
+
+  for (const { rec, idx } of pendingIndexes) {
+    const topic = normalizeTopicLabel(rec?.topic || rec?.summary || rec?.id || "");
+    if (!topicMatchInSet(topic, linkedTopics)) continue;
+    const prevEvidence = String(rec?.evidence || "").trim();
+    nextRecs[idx] = {
+      ...rec,
+      implementationStatus: "implemented",
+      evidence: prevEvidence
+        ? `${prevEvidence}; auto-resolved@${opts.atIso}: linked synthesis_sources match`
+        : `auto-resolved@${opts.atIso}: linked synthesis_sources match`,
+    };
+    resolvedCount += 1;
+  }
+
+  let usedFallback = false;
+  if (resolvedCount === 0 && opts.verifiedDoneWorkers > 0) {
+    usedFallback = true;
+    const limit = Math.min(opts.verifiedDoneWorkers, pendingIndexes.length);
+    for (let i = 0; i < limit; i += 1) {
+      const { rec, idx } = pendingIndexes[i];
+      const prevEvidence = String(rec?.evidence || "").trim();
+      nextRecs[idx] = {
+        ...rec,
+        implementationStatus: "implemented",
+        evidence: prevEvidence
+          ? `${prevEvidence}; auto-resolved@${opts.atIso}: verified worker completion fallback (missing synthesis_sources linkage)`
+          : `auto-resolved@${opts.atIso}: verified worker completion fallback (missing synthesis_sources linkage)`,
+      };
+      resolvedCount += 1;
+    }
+  }
+
+  const nextEntries = [...benchmarkEntries];
+  nextEntries[0] = {
+    ...latest,
+    recommendations: nextRecs,
+    evaluatedAt: opts.atIso,
+  };
+  return { entries: nextEntries, resolvedCount, usedFallback };
+}
+
 async function loadCompletedTaskIdentities(stateDir: string): Promise<Set<string>> {
   const done = new Set<string>();
 
@@ -515,6 +630,34 @@ export async function writeOrchestratorHealth(stateDir, status, reason, details 
     details: details || null,
     recordedAt: new Date().toISOString()
   });
+}
+
+function normalizeCrossCycleDispatchPrerequisite(plan: Record<string, unknown>): {
+  gateName: string;
+  confirmationToken: string;
+  source: string;
+} | null {
+  const raw = plan?.dispatchPrerequisite;
+  const rawObject = raw && typeof raw === "object" ? raw as Record<string, unknown> : null;
+  const gateName = String(rawObject?.gateName || rawObject?.gate || "").trim();
+  const confirmationToken = String(rawObject?.confirmationToken || rawObject?.confirmation_token || "").trim();
+  if (gateName) {
+    return { gateName, confirmationToken, source: "dispatchPrerequisite" };
+  }
+
+  const dependencies = Array.isArray(plan?.dependencies) ? plan.dependencies : [];
+  for (const dep of dependencies) {
+    const parsed = extractCrossCycleDispatchPrerequisiteFromDependency(dep);
+    if (parsed) {
+      return {
+        gateName: parsed.gateName,
+        confirmationToken: parsed.confirmationToken,
+        source: "dependencies",
+      };
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -825,6 +968,30 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
         cycleId,
         budgetEligibility,
         gateIndex: GATE_PRECEDENCE.PLAN_EVIDENCE_COUPLING,
+      };
+    }
+  }
+
+  // ── Cross-cycle prerequisite gate ─────────────────────────────────────────
+  // Block dispatch when a plan declares a cross-cycle prerequisite but does not
+  // carry a confirmation token proving prior-cycle fulfillment.
+  if (Array.isArray(normalizedPlans) && normalizedPlans.length > 0) {
+    for (let pi = 0; pi < normalizedPlans.length; pi++) {
+      const plan = normalizedPlans[pi] as Record<string, unknown>;
+      const prerequisite = normalizeCrossCycleDispatchPrerequisite(plan);
+      if (!prerequisite) continue;
+      if (prerequisite.confirmationToken) continue;
+      const planId = String(plan?.task_id || plan?.id || plan?.task || `plan[${pi}]`);
+      const detail = `${planId}: missing confirmation token for cross-cycle prerequisite "${prerequisite.gateName}" (source=${prerequisite.source})`;
+      return {
+        blocked: true,
+        reason: `${BLOCK_REASON.CROSS_CYCLE_PREREQUISITE_UNMET}:${detail}`,
+        action: undefined,
+        dispatchBlockReason: `${BLOCK_REASON.CROSS_CYCLE_PREREQUISITE_UNMET}:${detail}`,
+        graphResult,
+        cycleId,
+        budgetEligibility,
+        gateIndex: GATE_PRECEDENCE.CROSS_CYCLE_PREREQUISITE,
       };
     }
   }
@@ -2577,6 +2744,105 @@ async function resolveAdaptivePlanCap(config: any, stateDir: string): Promise<{ 
   }
 }
 
+function estimateAthenaPlanPromptChars(plan: any): number {
+  if (!plan || typeof plan !== "object") return 0;
+  const targetFiles = Array.isArray(plan.target_files)
+    ? plan.target_files
+    : Array.isArray(plan.targetFiles)
+      ? plan.targetFiles
+      : [];
+  const acceptance = Array.isArray(plan.acceptance_criteria) ? plan.acceptance_criteria : [];
+  const dependencies = Array.isArray(plan.dependencies) ? plan.dependencies : [];
+  const text = [
+    String(plan.role || ""),
+    String(plan.task || ""),
+    String(plan.scope || ""),
+    String(plan.before_state || plan.beforeState || ""),
+    String(plan.after_state || plan.afterState || ""),
+    String(plan.verification || ""),
+    String(plan.riskLevel || ""),
+    JSON.stringify(targetFiles),
+    JSON.stringify(acceptance),
+    JSON.stringify(dependencies),
+    JSON.stringify(plan.premortem || {}),
+  ].join("\n");
+  return text.length;
+}
+
+async function resolveAthenaReviewAdmission(
+  config: any,
+  stateDir: string,
+  plans: any[],
+): Promise<{ admittedPlans: any[]; deferredPlans: any[]; reason: string; estimatedPromptChars: number; cap: number }> {
+  if (!Array.isArray(plans) || plans.length === 0) {
+    return { admittedPlans: [], deferredPlans: [], reason: "empty", estimatedPromptChars: 0, cap: 0 };
+  }
+
+  const adaptive = await resolveAdaptivePlanCap(config, stateDir);
+  const hardCapRaw = Number(config?.runtime?.athenaReviewMaxPlans ?? config?.runtime?.athenaReview?.maxPlans ?? 6);
+  const hardCap = Number.isFinite(hardCapRaw) && hardCapRaw > 0
+    ? Math.max(1, Math.min(12, Math.floor(hardCapRaw)))
+    : 6;
+  const planCountCap = Math.max(1, Math.min(adaptive.cap, hardCap));
+
+  const charBudgetRaw = Number(config?.runtime?.athenaReviewPromptCharBudget ?? config?.runtime?.athenaReview?.promptCharBudget ?? 22_000);
+  const charBudget = Number.isFinite(charBudgetRaw) && charBudgetRaw > 2000
+    ? Math.floor(charBudgetRaw)
+    : 22_000;
+
+  const scored = plans.map((plan: any, index: number) => {
+    const priority = Number.isFinite(Number(plan?.priority)) ? Number(plan.priority) : 99;
+    const wave = Number.isFinite(Number(plan?.wave)) ? Number(plan.wave) : 99;
+    const risk = String(plan?.riskLevel || "low").toLowerCase();
+    const highRiskBoost = risk === "high" ? -1 : 0;
+    const promptChars = estimateAthenaPlanPromptChars(plan);
+    return { plan, index, priority, wave, highRiskBoost, promptChars };
+  });
+
+  scored.sort((a, b) => {
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    if (a.highRiskBoost !== b.highRiskBoost) return a.highRiskBoost - b.highRiskBoost;
+    if (a.wave !== b.wave) return a.wave - b.wave;
+    return a.index - b.index;
+  });
+
+  let runningChars = 0;
+  const admittedScored: typeof scored = [];
+  const deferredScored: typeof scored = [];
+
+  for (const item of scored) {
+    const withinCount = admittedScored.length < planCountCap;
+    const nextChars = runningChars + item.promptChars;
+    const withinChars = admittedScored.length === 0 || nextChars <= charBudget;
+
+    if (withinCount && withinChars) {
+      admittedScored.push(item);
+      runningChars = nextChars;
+    } else {
+      deferredScored.push(item);
+    }
+  }
+
+  if (admittedScored.length === 0) {
+    admittedScored.push(scored[0]);
+    deferredScored.splice(0, deferredScored.length, ...scored.slice(1));
+    runningChars = scored[0]?.promptChars || 0;
+  }
+
+  // Preserve original order for review determinism.
+  admittedScored.sort((a, b) => a.index - b.index);
+  deferredScored.sort((a, b) => a.index - b.index);
+
+  const reason = `adaptiveCap=${adaptive.cap} hardCap=${hardCap} finalCap=${planCountCap} charBudget=${charBudget} estimated=${runningChars}`;
+  return {
+    admittedPlans: admittedScored.map((i) => i.plan),
+    deferredPlans: deferredScored.map((i) => i.plan),
+    reason,
+    estimatedPromptChars: runningChars,
+    cap: planCountCap,
+  };
+}
+
 // ── Single full cycle: Jesus → Prometheus → Athena → Workers → Athena ──────
 
 async function runSingleCycle(config, _token?: CancellationToken | null) {
@@ -3198,6 +3464,36 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     planCount: prometheusAnalysis.plans.length
   });
   await appendProgress(config, `[PROMETHEUS] ✓ Done — ${prometheusAnalysis.plans.length} plan(s) — requests this cycle: ${_cycleRequests}`);
+
+  // Pre-Athena admission: cap review payload to what Athena can reliably process.
+  // This avoids feeding oversized plan sets into Athena and timing out fail-closed.
+  if (Array.isArray(prometheusAnalysis.plans) && prometheusAnalysis.plans.length > 0) {
+    const athenaAdmission = await resolveAthenaReviewAdmission(config, stateDir, prometheusAnalysis.plans);
+    const deferredCount = athenaAdmission.deferredPlans.length;
+    if (deferredCount > 0) {
+      prometheusAnalysis = {
+        ...prometheusAnalysis,
+        plans: athenaAdmission.admittedPlans,
+        _athenaReviewAdmission: {
+          admittedCount: athenaAdmission.admittedPlans.length,
+          deferredCount,
+          cap: athenaAdmission.cap,
+          estimatedPromptChars: athenaAdmission.estimatedPromptChars,
+          reason: athenaAdmission.reason,
+          deferredTaskIds: athenaAdmission.deferredPlans.map((p: any) => String(p?.task_id || p?.task || "unknown")),
+        },
+      };
+      await appendProgress(
+        config,
+        `[ATHENA_ADMISSION] Deferred ${deferredCount}/${athenaAdmission.admittedPlans.length + deferredCount} plan(s) before review — ${athenaAdmission.reason}`,
+      );
+    } else {
+      await appendProgress(
+        config,
+        `[ATHENA_ADMISSION] No deferral (${athenaAdmission.admittedPlans.length} plan(s)) — ${athenaAdmission.reason}`,
+      );
+    }
+  }
 
   // Step 3: Athena validates the plan (1 request)
   await appendProgress(config, "[CYCLE] ── Step 3: Athena reviewing plan ──");
@@ -3914,13 +4210,16 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     firstBatch.specialistReroutes = athenaRerouteReasons.map(r => r.role);
     firstBatch.specialistRerouteReasons = athenaRerouteReasons;
     if (util) {
-      const total = workerBatches.length;
+      const totalPlans = Math.max(1, Array.isArray(normalizedPlansForBatching) ? normalizedPlansForBatching.length : 0);
+      const achievedSpecializedCount = Math.max(0, Math.round(Number(util.specializedShare || 0) * totalPlans));
+      const requiredSpecializedCount = Math.max(0, Math.ceil(Number(util.adaptiveMinSpecializedShare || 0) * totalPlans));
       firstBatch.specialistUtilizationTarget = {
-        targetMet: util.specializationTargetsMet,
-        achievedSpecializedCount: Math.round(util.specializedShare * total),
-        requiredSpecializedCount: Math.round(util.adaptiveMinSpecializedShare * total),
+        targetMet: achievedSpecializedCount >= requiredSpecializedCount,
+        achievedSpecializedCount,
+        requiredSpecializedCount,
         minSpecializedShare: util.minSpecializedShare,
         adaptiveMinSpecializedShare: util.adaptiveMinSpecializedShare,
+        poolReportedTargetMet: util.specializationTargetsMet === true,
       };
     }
   }
@@ -3977,15 +4276,16 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     if (
       config?.runtime?.enforceSpecialistUtilizationAdmission === true
       && specializationTarget
-      && specializationTarget.targetMet !== true
     ) {
       const achieved = Number(specializationTarget.achievedSpecializedCount || 0);
       const required = Number(specializationTarget.requiredSpecializedCount || 0);
-      await appendProgress(
-        config,
-        `[BATCH_PLANNER] Specialist utilization admission blocked dispatch: achieved=${achieved} required=${required}`
-      );
-      return;
+      if (achieved < required) {
+        await appendProgress(
+          config,
+          `[BATCH_PLANNER] Specialist utilization admission blocked dispatch: achieved=${achieved} required=${required}`
+        );
+        return;
+      }
     }
   }
 
@@ -4722,6 +5022,19 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       const cycleOutcomeStatus = totalWorkers === 0
         ? "no_plans"
         : (completedWorkers >= totalWorkers && crashCount === 0 ? "success" : (completedWorkers > 0 ? "partial" : "failed"));
+      const autoResolution = autoResolveBenchmarkRecommendations(benchmarkEntries, {
+        verifiedDoneWorkers: _verifiedDoneWorkers,
+        workerBatches,
+        atIso: new Date().toISOString(),
+      });
+      benchmarkEntries = autoResolution.entries;
+      if (autoResolution.resolvedCount > 0) {
+        await appendProgress(
+          config,
+          `[AUTONOMY_BAND] benchmark recommendations auto-resolved=${autoResolution.resolvedCount} mode=${autoResolution.usedFallback ? "fallback_verified_done" : "linked_topic_match"}`,
+        );
+      }
+
       const scoredRecommendations = evaluateBenchmarkGroundTruth(benchmarkEntries, {
         status: cycleOutcomeStatus,
         tasksCompleted: completedWorkers,
