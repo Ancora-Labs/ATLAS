@@ -261,3 +261,28 @@ No length limit. No bullet limit. Write as much as needed. Do NOT summarize — 
 Spend your capacity on depth, not breadth. Find 2-3 promising sources per topic area, pick the best one, and extract it completely. The system depends on the depth of what you bring back — a single fully extracted technical source is worth ten URL lists.
 
 Write your entire output in English.
+
+## Hook-driven tool policy wiring (additive)
+
+Apply the following deterministic `preToolUse` policy before every `execute` tool call:
+
+```yaml
+preToolUse:
+  - id: deny-force-push
+    match: '(?i)\bgit\s+push\b.*\s(--force|--force-with-lease)\b'
+    decision: deny
+    reason_code: HOOK_DENY_FORCE_PUSH
+  - id: deny-secret-write
+    match: '(?i)\b(echo|printf|cat)\b.*(ghp_|github_pat_|AKIA[0-9A-Z]{16}|-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----)'
+    decision: deny
+    reason_code: HOOK_DENY_SECRET_WRITE
+  - id: deny-schema-drop
+    match: '(?i)\b(drop\s+table|drop\s+database|truncate\s+table)\b'
+    decision: deny
+    reason_code: HOOK_DENY_SCHEMA_DROP
+```
+
+Telemetry contract for every tool-executing session:
+- Emit one machine-readable line before each `execute` call:
+  `[HOOK_DECISION] tool=execute decision=<allow|deny> reason_code=<code> rule_id=<id|none>`
+- If decision is `deny`, do not issue the tool call.
