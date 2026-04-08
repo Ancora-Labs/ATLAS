@@ -1958,6 +1958,120 @@ export function normalizeAthenaReviewPayload(raw, plans = []) {
   };
 }
 
+export const PATCHED_PLAN_MUTATION_KIND = Object.freeze({
+  ABSENT_PLAN_RECONSTRUCTED: "ABSENT_PLAN_RECONSTRUCTED",
+  VERIFICATION_PROSE_REWRITTEN: "VERIFICATION_PROSE_REWRITTEN",
+  FORWARD_LOOKING_CRITERION_DEFERRED: "FORWARD_LOOKING_CRITERION_DEFERRED",
+} as const);
+
+const FORWARD_LOOKING_CRITERION_PATTERN = /\b(next cycle|future cycle|follow[- ]?up|later|after merge|after release|after deploy|defer(?:red|ral)?|eventual(?:ly)?|subsequent)\b/i;
+const VERIFICATION_COMMAND_PREFIX = /^(npm|pnpm|yarn|node|npx|bun|go|python|pytest|vitest|jest|cargo|dotnet|mvn|gradle|bash|sh)\b/i;
+
+function toNormalizedStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item || "").trim()).filter(Boolean);
+}
+
+function isExecutableVerificationCommand(value: unknown): boolean {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (VERIFICATION_COMMAND_PREFIX.test(text)) return true;
+  if (/\b(--test|--run|--spec|--file)\b/i.test(text)) return true;
+  return false;
+}
+
+/**
+ * Build legacy correction strings and structured mutation events for patched-plan repairs.
+ * Legacy corrections remain stable for downstream consumers while mutationEvents
+ * provide machine-readable telemetry.
+ */
+export function buildPatchedPlanCorrectionTracking(
+  originalPlans: unknown[],
+  patchedPlans: Record<string, unknown>[],
+): {
+  legacyCorrections: string[];
+  mutationEvents: Array<Record<string, unknown>>;
+} {
+  const legacyCorrections: string[] = [];
+  const mutationEvents: Array<Record<string, unknown>> = [];
+  const TRACKED_FIELDS = [
+    "acceptance_criteria",
+    "target_files",
+    "scope",
+    "verification",
+    "verification_commands",
+    "verificationCommands",
+    "dependencies"
+  ];
+
+  for (let pi = 0; pi < patchedPlans.length; pi++) {
+    const orig = originalPlans?.[pi] as Record<string, unknown> | undefined;
+    const patched = patchedPlans[pi] as Record<string, unknown> | undefined;
+    if (!patched || typeof patched !== "object") continue;
+
+    if (!orig || typeof orig !== "object") {
+      legacyCorrections.push(`[PATCHED] plan[${pi}]: reconstructed from absent original plan`);
+      mutationEvents.push({
+        kind: PATCHED_PLAN_MUTATION_KIND.ABSENT_PLAN_RECONSTRUCTED,
+        planIndex: pi,
+        reason: "patchedPlans included a plan entry where the original index was absent",
+      });
+      continue;
+    }
+
+    const repairedFields: string[] = [];
+    for (const field of TRACKED_FIELDS) {
+      const origVal = orig[field];
+      const patchedVal = patched[field];
+      const origEmpty = !origVal || (Array.isArray(origVal) && origVal.length === 0);
+      const patchedFilled = patchedVal && !(Array.isArray(patchedVal) && patchedVal.length === 0);
+      if (origEmpty && patchedFilled) repairedFields.push(String(field));
+    }
+    if (repairedFields.length > 0) {
+      legacyCorrections.push(`[PATCHED] plan[${pi}]: ${repairedFields.join(", ")} repaired`);
+    }
+
+    const originalVerification = String(orig.verification || "").trim();
+    const patchedVerification = String(patched.verification || "").trim();
+    const verificationChanged = originalVerification.length > 0
+      && patchedVerification.length > 0
+      && originalVerification !== patchedVerification;
+    if (
+      verificationChanged
+      && !isExecutableVerificationCommand(originalVerification)
+      && isExecutableVerificationCommand(patchedVerification)
+    ) {
+      legacyCorrections.push(`[PATCHED] plan[${pi}]: verification rewritten from prose to executable command`);
+      mutationEvents.push({
+        kind: PATCHED_PLAN_MUTATION_KIND.VERIFICATION_PROSE_REWRITTEN,
+        planIndex: pi,
+        field: "verification",
+        before: originalVerification,
+        after: patchedVerification,
+      });
+    }
+
+    const originalCriteria = toNormalizedStringArray(orig.acceptance_criteria);
+    const patchedCriteria = toNormalizedStringArray(patched.acceptance_criteria);
+    const criteriaChanged = JSON.stringify(originalCriteria) !== JSON.stringify(patchedCriteria);
+    const deferredCriteria = patchedCriteria.filter((criterion) => FORWARD_LOOKING_CRITERION_PATTERN.test(criterion));
+    if (criteriaChanged && deferredCriteria.length > 0) {
+      legacyCorrections.push(`[PATCHED] plan[${pi}]: acceptance criteria include forward-looking deferral`);
+      mutationEvents.push({
+        kind: PATCHED_PLAN_MUTATION_KIND.FORWARD_LOOKING_CRITERION_DEFERRED,
+        planIndex: pi,
+        field: "acceptance_criteria",
+        deferredCriteria,
+      });
+    }
+  }
+
+  return {
+    legacyCorrections: [...new Set(legacyCorrections)],
+    mutationEvents,
+  };
+}
+
 function truncatePromptText(value, maxLength = 180) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (text.length <= maxLength) return text;
@@ -2960,6 +3074,7 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
     patchedPlans: Array.isArray(d.patchedPlans) ? d.patchedPlans : null,
     appliedFixes: Array.isArray(d.appliedFixes) ? d.appliedFixes : [],
     unresolvedIssues: Array.isArray(d.unresolvedIssues) ? d.unresolvedIssues : [],
+    correctionMutations: [] as Array<Record<string, unknown>>,
     gateBlockRisk: gateRisk.gateBlockRisk,
     gateBlockRiskReason: gateRisk.reason,
     gateBlockSignals: gateRisk.activeGateSignals,
@@ -3159,25 +3274,12 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
     // corrections[] to detect recurring defect patterns — empty corrections on an approved
     // cycle with repairs produces false signal that the plan was clean.
     if (Array.isArray(plans) && handoff.plans.length > 0) {
-      const TRACKED_FIELDS: Array<keyof any> = [
-        "acceptance_criteria", "target_files", "scope", "verificationCommands", "dependencies"
-      ];
-      for (let pi = 0; pi < handoff.plans.length; pi++) {
-        const orig = (plans[pi] as any);
-        const patched = (handoff.plans[pi] as any);
-        if (!orig || !patched) continue;
-        const repairedFields: string[] = [];
-        for (const field of TRACKED_FIELDS) {
-          const origVal = orig[field];
-          const patchedVal = patched[field];
-          const origEmpty = !origVal || (Array.isArray(origVal) && origVal.length === 0);
-          const patchedFilled = patchedVal && !(Array.isArray(patchedVal) && patchedVal.length === 0);
-          if (origEmpty && patchedFilled) repairedFields.push(String(field));
-        }
-        if (repairedFields.length > 0) {
-          const entry = `[PATCHED] plan[${pi}]: ${repairedFields.join(", ")} repaired`;
-          if (!result.corrections.includes(entry)) result.corrections.push(entry);
-        }
+      const tracking = buildPatchedPlanCorrectionTracking(plans, handoff.plans);
+      for (const entry of tracking.legacyCorrections) {
+        if (!result.corrections.includes(entry)) result.corrections.push(entry);
+      }
+      if (tracking.mutationEvents.length > 0) {
+        result.correctionMutations.push(...tracking.mutationEvents);
       }
     }
     // Populate corrections[] for fields that the reviewer payload omitted and were synthesized.

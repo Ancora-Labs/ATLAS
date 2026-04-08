@@ -18,6 +18,8 @@ import {
   computeGateBlockRiskFromSignals,
   GATE_BLOCK_RISK,
   runAthenaPostmortem,
+  buildPatchedPlanCorrectionTracking,
+  PATCHED_PLAN_MUTATION_KIND,
 } from "../../src/core/athena_reviewer.js";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -748,6 +750,70 @@ describe("correctBoundedPacketDefects", () => {
           `corrected field '${f}' must not remain in updatedMissingFields`);
       }
     }
+  });
+});
+
+describe("buildPatchedPlanCorrectionTracking", () => {
+  it("emits ABSENT_PLAN_RECONSTRUCTED mutation and preserves legacy correction string", () => {
+    const tracking = buildPatchedPlanCorrectionTracking(
+      [],
+      [{
+        role: "quality-worker",
+        task: "Reconstructed plan",
+        acceptance_criteria: ["build passes"],
+      }] as any[]
+    );
+
+    assert.equal(tracking.mutationEvents.length, 1);
+    assert.equal(tracking.mutationEvents[0].kind, PATCHED_PLAN_MUTATION_KIND.ABSENT_PLAN_RECONSTRUCTED);
+    assert.ok(
+      tracking.legacyCorrections.some((entry) => entry.includes("reconstructed from absent original plan")),
+      "legacy correction string must still be emitted for absent-plan reconstruction",
+    );
+  });
+
+  it("emits VERIFICATION_PROSE_REWRITTEN mutation when prose verification becomes executable command", () => {
+    const tracking = buildPatchedPlanCorrectionTracking(
+      [{
+        verification: "verify behavior manually in local run",
+        acceptance_criteria: ["tests pass"],
+      }] as any[],
+      [{
+        verification: "npm test -- tests/core/athena_failclosed.test.ts",
+        acceptance_criteria: ["tests pass"],
+      }] as any[]
+    );
+
+    assert.ok(
+      tracking.mutationEvents.some((event) => event.kind === PATCHED_PLAN_MUTATION_KIND.VERIFICATION_PROSE_REWRITTEN),
+      "verification prose rewrite must emit structured mutation event",
+    );
+    assert.ok(
+      tracking.legacyCorrections.some((entry) => entry.includes("verification rewritten from prose")),
+      "legacy string correction must be preserved for verification rewrite",
+    );
+  });
+
+  it("emits FORWARD_LOOKING_CRITERION_DEFERRED mutation when criteria are deferred to a future cycle", () => {
+    const tracking = buildPatchedPlanCorrectionTracking(
+      [{
+        verification: "npm test -- tests/core/athena_review_normalization.test.ts",
+        acceptance_criteria: ["All fixes are shipped in this cycle"],
+      }] as any[],
+      [{
+        verification: "npm test -- tests/core/athena_review_normalization.test.ts",
+        acceptance_criteria: ["Follow-up validation deferred to next cycle after release"],
+      }] as any[]
+    );
+
+    assert.ok(
+      tracking.mutationEvents.some((event) => event.kind === PATCHED_PLAN_MUTATION_KIND.FORWARD_LOOKING_CRITERION_DEFERRED),
+      "forward-looking criterion deferrals must emit structured mutation events",
+    );
+    assert.ok(
+      tracking.legacyCorrections.some((entry) => entry.includes("forward-looking deferral")),
+      "legacy correction string must remain present for deferred criteria",
+    );
   });
 });
 

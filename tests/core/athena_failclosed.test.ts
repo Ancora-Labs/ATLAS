@@ -30,6 +30,8 @@ import {
   runDualLanePlanReview,
   resolveEffectiveLaneMergePolicy,
   ATHENA_PLAN_REVIEW_REASON_CODE,
+  buildPatchedPlanCorrectionTracking,
+  PATCHED_PLAN_MUTATION_KIND,
 } from "../../src/core/athena_reviewer.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -178,6 +180,52 @@ describe("runAthenaPlanReview — fail-closed on AI failure", () => {
     const reviewExists = await fs.access(reviewFile).then(() => true).catch(() => false);
     assert.equal(reviewExists, false,
       "athena_plan_review.json must not be written when AI call fails");
+  });
+});
+
+describe("patched-plan correction tracking mutation telemetry", () => {
+  it("tracks structured mutation events and legacy string corrections together", () => {
+    const tracking = buildPatchedPlanCorrectionTracking(
+      [
+        {
+          verification: "verify manually after patch",
+          acceptance_criteria: ["All checks complete now"],
+          target_files: ["src/core/athena_reviewer.ts"],
+          scope: "src/core/athena_reviewer.ts",
+        },
+      ] as any[],
+      [
+        {
+          verification: "npm test -- tests/core/athena_failclosed.test.ts",
+          acceptance_criteria: ["Follow-up validation deferred to next cycle after release"],
+          target_files: ["src/core/athena_reviewer.ts"],
+          scope: "src/core/athena_reviewer.ts",
+        },
+        {
+          verification: "npm test -- tests/core/athena_review_normalization.test.ts",
+          acceptance_criteria: ["test case captures reconstructed plan telemetry"],
+          target_files: ["tests/core/athena_review_normalization.test.ts"],
+          scope: "tests/core/athena_review_normalization.test.ts",
+        },
+      ] as any[]
+    );
+
+    const kinds = tracking.mutationEvents.map((event) => event.kind);
+    assert.ok(kinds.includes(PATCHED_PLAN_MUTATION_KIND.ABSENT_PLAN_RECONSTRUCTED));
+    assert.ok(kinds.includes(PATCHED_PLAN_MUTATION_KIND.VERIFICATION_PROSE_REWRITTEN));
+    assert.ok(kinds.includes(PATCHED_PLAN_MUTATION_KIND.FORWARD_LOOKING_CRITERION_DEFERRED));
+    assert.ok(
+      tracking.legacyCorrections.some((entry) => entry.includes("reconstructed from absent original plan")),
+      "legacy string correction for absent reconstruction must be preserved",
+    );
+    assert.ok(
+      tracking.legacyCorrections.some((entry) => entry.includes("verification rewritten from prose")),
+      "legacy string correction for verification rewrite must be preserved",
+    );
+    assert.ok(
+      tracking.legacyCorrections.some((entry) => entry.includes("forward-looking deferral")),
+      "legacy string correction for deferred criteria must be preserved",
+    );
   });
 });
 
