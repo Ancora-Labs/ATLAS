@@ -2346,7 +2346,8 @@ describe("buildModelRoutingTelemetry — producer pipeline", () => {
 
   it("computes correct successProbability for ci-fix/claude-sonnet-4 (2/3 done)", () => {
     const result = buildModelRoutingTelemetry(sampleLog)!;
-    const sonnet = result.byTaskKind["ci-fix"].models["claude-sonnet-4"];
+    // normalizeModelLabel("claude-sonnet-4") → "claude sonnet 4"
+    const sonnet = result.byTaskKind["ci-fix"].models["claude sonnet 4"];
     // 2 done out of 3 total
     assert.strictEqual(Math.round(sonnet.successProbability * 100), 67);
   });

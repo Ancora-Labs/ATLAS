@@ -55,6 +55,7 @@ import { hasPrometheusRuntimeContractSignals, isStrategicFieldToolTraceContamina
 import { getLaneForWorkerName, isSpecialistLane } from "./role_registry.js";
 import { isAnalyticsCompletedWorkerStatus } from "./worker_runner.js";
 import { loadCapabilityExecutionSummary } from "./state_tracker.js";
+import { normalizeModelLabel } from "./model_policy.js";
 
 // ── Funnel helpers ─────────────────────────────────────────────────────────────
 
@@ -1380,12 +1381,13 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
     ) continue;
 
     const { taskKind, model, outcome } = entry as Record<string, string>;
-    if (!taskKind || !model) continue;
+    const normalizedModel = normalizeModelLabel(model);
+    if (!taskKind || !normalizedModel) continue;
 
     byTaskKindModel[taskKind] ??= {};
-    byTaskKindModel[taskKind][model] ??= { done: 0, total: 0 };
-    byTaskKindModel[taskKind][model].total++;
-    if (outcome === "done") byTaskKindModel[taskKind][model].done++;
+    byTaskKindModel[taskKind][normalizedModel] ??= { done: 0, total: 0 };
+    byTaskKindModel[taskKind][normalizedModel].total++;
+    if (outcome === "done") byTaskKindModel[taskKind][normalizedModel].done++;
     usableEntries++;
   }
 

@@ -115,7 +115,7 @@ function aggregateTaskHints(plans = []) {
 
   return {
     estimatedLines: Math.ceil(estimateBatchTokens(plans) * 2.5),
-    estimatedDurationMinutes: Math.max(20, plans.length * 20),
+    estimatedDurationMinutes: computeBatchEstimatedDurationMinutes(plans),
     complexity: hasCritical ? "critical" : hasHigh ? "high" : "medium"
   };
 }
@@ -324,6 +324,44 @@ export function computeBatchOrderedStepCount(plans: any[] = []): number {
     total += Math.max(1, steps);
   }
   return total;
+}
+
+export function computePlanEstimatedDurationMinutes(plan: any): number {
+  const explicit = Number(plan?.estimatedDurationMinutes);
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return Math.max(5, Math.ceil(explicit));
+  }
+
+  const tokenEstimate = Number(plan?.estimatedExecutionTokens);
+  const orderedSteps = Array.isArray(plan?.orderedSteps)
+    ? plan.orderedSteps.length
+    : Array.isArray(plan?.acceptance_criteria)
+      ? plan.acceptance_criteria.length
+      : 1;
+  const fileCount = Array.isArray(plan?.target_files)
+    ? plan.target_files.filter(Boolean).length
+    : Array.isArray(plan?.filesInScope)
+      ? plan.filesInScope.filter(Boolean).length
+      : 0;
+  const riskLevel = String(plan?.riskLevel || plan?.complexity || "").toLowerCase();
+  const riskFloor = riskLevel === "critical"
+    ? 45
+    : riskLevel === "high"
+      ? 35
+      : riskLevel === "medium"
+        ? 25
+        : 15;
+  const tokenMinutes = Number.isFinite(tokenEstimate) && tokenEstimate > 0
+    ? Math.ceil(tokenEstimate / 4000) * 10
+    : 0;
+  const stepMinutes = Math.max(1, orderedSteps) * 8;
+  const fileMinutes = Math.max(0, fileCount) * 5;
+  return Math.max(10, riskFloor, tokenMinutes, stepMinutes + fileMinutes);
+}
+
+export function computeBatchEstimatedDurationMinutes(plans: any[] = []): number {
+  if (!Array.isArray(plans) || plans.length === 0) return 0;
+  return plans.reduce((sum, plan) => sum + computePlanEstimatedDurationMinutes(plan), 0);
 }
 
 
@@ -1311,6 +1349,7 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
     totalBundles: flattened.length,
     diversityViolation,
     orderedStepCount: computeBatchOrderedStepCount(batch.plans as any[]),
+    estimatedDurationMinutes: computeBatchEstimatedDurationMinutes(batch.plans as any[]),
   }));
 }
 
@@ -1652,6 +1691,7 @@ export function buildTokenFirstBatches(
     bundleIndex: index + 1,
     totalBundles: mapped.length,
     orderedStepCount: computeBatchOrderedStepCount(batch.plans as any[]),
+    estimatedDurationMinutes: computeBatchEstimatedDurationMinutes(batch.plans as any[]),
     ...(index === 0 ? { dagParallelismBound } : {}),
   }));
 }

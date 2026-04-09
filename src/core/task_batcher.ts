@@ -33,12 +33,11 @@ export function estimateTokens(plan) {
 
 /**
  * Estimate total token count for an array of plans.
- * @param {Array} plans
- * @returns {number}
+ * Re-exported from worker_batch_planner — that module is the canonical batching
+ * implementation and uses the richer per-plan estimator (includes overhead,
+ * file-read cost, risk multiplier, and reasoning overhead).
  */
-export function estimateBatchTokens(plans) {
-  return plans.reduce((sum, p) => sum + estimateTokens(p), 0);
-}
+export { estimateBatchTokens } from "./worker_batch_planner.js";
 
 /**
  * Pack plans into the fewest possible batches that each fit within the token limit.
