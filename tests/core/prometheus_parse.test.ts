@@ -66,6 +66,8 @@ import {
   SEMANTIC_TOOL_TRACE_PATTERNS,
   hasPrometheusRuntimeContractSignals,
   applyDiagnosticsFreshnessTruthToPlanning,
+  ROLE_PLAN_COMPLETENESS_ERROR_CODE,
+  RolePlanCompletenessError,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments } from "../../src/core/prompt_compiler.js";
 import {
@@ -5607,5 +5609,69 @@ describe("sanitizePlanningFieldForPersistence", () => {
   it("preserves clean text unchanged", () => {
     const clean = "Implement feature X with proper error handling.";
     assert.equal(sanitizePlanningFieldForPersistence(clean), clean);
+  });
+});
+
+// ── RolePlanCompletenessError — fail-closed completeness gate ─────────────────
+
+describe("RolePlanCompletenessError", () => {
+  it("is an instance of Error", () => {
+    const err = new RolePlanCompletenessError(["api-worker"], ["api-worker", "backend"], true);
+    assert.ok(err instanceof Error);
+    assert.ok(err instanceof RolePlanCompletenessError);
+  });
+
+  it("carries correct errorCode constant", () => {
+    const err = new RolePlanCompletenessError([], [], false);
+    assert.equal(err.errorCode, ROLE_PLAN_COMPLETENESS_ERROR_CODE);
+    assert.equal(ROLE_PLAN_COMPLETENESS_ERROR_CODE, "ROLE_PLAN_COVERAGE_INCOMPLETE");
+  });
+
+  it("stores missingRoles and requiredRoles correctly", () => {
+    const err = new RolePlanCompletenessError(["api-worker", "backend"], ["api-worker", "backend", "test"], true);
+    assert.deepEqual(err.missingRoles, ["api-worker", "backend"]);
+    assert.deepEqual(err.requiredRoles, ["api-worker", "backend", "test"]);
+    assert.equal(err.retried, true);
+  });
+
+  it("name is RolePlanCompletenessError", () => {
+    const err = new RolePlanCompletenessError([], [], false);
+    assert.equal(err.name, "RolePlanCompletenessError");
+  });
+
+  it("message includes errorCode and missing role info", () => {
+    const err = new RolePlanCompletenessError(["missing-role"], ["missing-role", "ok-role"], true);
+    assert.ok(err.message.includes(ROLE_PLAN_COMPLETENESS_ERROR_CODE));
+    assert.ok(err.message.includes("missing-role"));
+    assert.ok(err.message.includes("retried=true"));
+  });
+
+  it("negative path: works with empty arrays (no missing roles edge case)", () => {
+    const err = new RolePlanCompletenessError([], [], false);
+    assert.deepEqual(err.missingRoles, []);
+    assert.deepEqual(err.requiredRoles, []);
+    assert.equal(err.retried, false);
+  });
+
+  it("negative path: validateAndInjectRolePlans with injectMissing:false does not inject skeletons on missing role", () => {
+    const payload = {
+      executionStrategy: {
+        waves: [
+          { wave: 1, tasks: [{ role: "backend", task_id: "T-1", title: "Backend task" }] }
+        ]
+      },
+      plans: [],
+    };
+    const result = validateAndInjectRolePlans(payload, { injectMissing: false });
+    assert.equal(result.ok, false);
+    assert.ok(result.initialMissingRoles.includes("backend"),
+      "must report backend as missing when no plan covers it");
+    assert.deepEqual(result.injectedRoles, [],
+      "injectMissing:false must produce zero injected roles");
+    assert.equal(
+      result.output.plans.filter((p: any) => p._rolePlanSkeletonInjected === true).length,
+      0,
+      "no skeleton plans should exist in output when injectMissing=false"
+    );
   });
 });

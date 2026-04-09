@@ -23,7 +23,8 @@ import { appendProgress, appendLineageEntry, appendFailureClassification } from 
 import { buildAgentArgs, nameToSlug } from "./agent_loader.js";
 import { buildVerificationChecklist, CANONICAL_VERIFICATION_REPORT_TEMPLATE } from "./verification_profiles.js";
 import { getVerificationCommands, classifyNodeTestGlobWindowsArtifact } from "./verification_command_registry.js";
-import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence, parseToolExecutionTelemetry, checkCancellationAtVerification } from "./verification_gate.js";
+import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence, parseToolExecutionTelemetry, checkCancellationAtVerification, auditRuntimeHookEnforcement } from "./verification_gate.js";
+import { writeBoundaryCheckpoint, CHECKPOINT_NS } from "./checkpoint_engine.js";
 import {
   enforceModelPolicy,
   routeModelWithRealizedROI,
@@ -35,7 +36,7 @@ import {
   QUALITY_FLOOR_DEFAULT,
 } from "./model_policy.js";
 import { deriveRoutingAdjustments, buildPromptHardConstraints } from "./learning_policy_compiler.js";
-import { loadPolicy, getProtectedPathMatches, getRolePathViolations } from "./policy_engine.js";
+import { loadPolicy, getProtectedPathMatches, getRolePathViolations, generateRuntimeHookDecisions } from "./policy_engine.js";
 import { compileRankedContextSection } from "./prompt_compiler.js";
 import {
   scanProject,
@@ -1243,10 +1244,8 @@ function buildConversationContext(history, instruction: WorkerInstruction, sessi
   parts.push("\n## TOOL EXECUTION GOVERNANCE (MANDATORY)");
   parts.push("Before every execute tool call, emit one explicit tool-intent envelope:");
   parts.push("[TOOL_INTENT] scope=<repo-path-or-subsystem> intent=<goal> impact=<low|medium|high|critical> clearance=<read|write|admin>");
-  parts.push("Then emit one deterministic hook decision line:");
-  parts.push("[HOOK_DECISION] tool=execute decision=<allow|deny> reason_code=<code> rule_id=<id|none> envelope_scope=<scope> envelope_intent=<intent> envelope_impact=<impact> envelope_clearance=<clearance>");
-  parts.push("If decision=deny, do NOT execute the tool call.");
-  parts.push("Allowed decisions must be deterministic and policy-based; never guess.");
+  parts.push("Hook decisions are enforced by the worker runtime against the loaded policy.");
+  parts.push("If a tool call would violate policy, the runtime will block it — do not self-generate HOOK_DECISION lines.");
 
   // Canonical verification commands from the central registry
   const verifCmds = getVerificationCommands(config);
@@ -2159,6 +2158,31 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         prUrl: parsed.prUrl
       }).catch(() => { /* non-fatal */ });
     }
+
+    // Runtime hook enforcement: evaluate TOOL_INTENT envelopes from worker output
+    // against the loaded policy. This is authoritative — workers are NOT required
+    // to self-report HOOK_DECISION lines. auditRuntimeHookEnforcement() is the
+    // consistency auditor comparing runtime decisions with worker-emitted lines.
+    if (parsed.toolExecutionTelemetry && Array.isArray(parsed.toolExecutionTelemetry.envelopes)) {
+      const runtimeDecisions = generateRuntimeHookDecisions(policy, roleName, parsed.toolExecutionTelemetry.envelopes);
+      const runtimeDenied = runtimeDecisions.filter((r) => r.decision.decision === "deny");
+      if (runtimeDenied.length > 0 && parsed.status !== "blocked" && parsed.status !== "skipped") {
+        parsed.status = "blocked";
+        const firstDenied = runtimeDenied[0];
+        if (!parsed.dispatchBlockReason) {
+          parsed.dispatchBlockReason = `runtime_hook_denied:${String(firstDenied.decision.reasonCode || "unknown")}`;
+        }
+      }
+      // Consistency audit (observability only — not a blocking gate)
+      const hookAudit = auditRuntimeHookEnforcement(runtimeDecisions, parsed.toolExecutionTelemetry.hookDecisions);
+      if (!hookAudit.consistent) {
+        // Surface audit gaps in dispatchBlockReason metadata only when not already blocked
+        const auditNote = `runtime_hook_audit_gaps:${hookAudit.gaps.length}`;
+        if (!parsed.dispatchBlockReason && parsed.status !== "skipped") {
+          parsed.dispatchBlockReason = auditNote;
+        }
+      }
+    }
   } catch {
     // Non-fatal: if policy cannot be read, keep existing worker result.
   }
@@ -2580,6 +2604,19 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       reason: parsed.summary,
       failureClass: failureClassification?.primaryClass || retryDecision?.failureClass || null,
     }).catch(() => {});
+  }
+
+  // Verification boundary checkpoint: persist stable snapshot after worker completes.
+  {
+    const verificationThreadId = String(instruction.taskId || instruction.task || Date.now()).slice(0, 48).replace(/[^a-zA-Z0-9_-]/g, "-");
+    await writeBoundaryCheckpoint(config, {
+      roleName,
+      status: parsed.status,
+      prUrl: parsed.prUrl || null,
+      filesTouched: parsed.filesTouched || [],
+      reworkAttempt: Number(instruction.reworkAttempt || 0),
+      workerCompletedAt: new Date().toISOString(),
+    }, { thread_id: verificationThreadId, checkpoint_ns: CHECKPOINT_NS.VERIFICATION }).catch(() => { /* non-fatal */ });
   }
 
   return {

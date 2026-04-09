@@ -9,6 +9,16 @@ export const CHECKPOINT_INTEGRITY_ALGORITHM = "sha256";
 export const RUN_SEGMENT_BATCH_SPAN_DEFAULT = 5;
 export const RUN_SEGMENT_HISTORY_MAX_DEFAULT = 20;
 
+/** Stable namespace identifiers for pipeline boundary checkpoints. */
+export const CHECKPOINT_NS = {
+  PLANNER: "planner",
+  REVIEWER: "reviewer",
+  DISPATCH: "dispatch",
+  VERIFICATION: "verification",
+} as const;
+
+export type CheckpointNs = typeof CHECKPOINT_NS[keyof typeof CHECKPOINT_NS];
+
 const CHECKPOINT_META_KEYS = new Set([
   "schemaVersion",
   "checkpointFormat",
@@ -123,7 +133,7 @@ export function applyRunSegmentRollover(
   return { checkpoint: next, rolledOver: true, previousSegment, activeSegment };
 }
 
-export function createVersionedCheckpointEnvelope(checkpoint, previousCheckpoint = null, checkpointKind = "dispatch") {
+export function createVersionedCheckpointEnvelope(checkpoint, previousCheckpoint = null, checkpointKind = "dispatch", logicalIds: { thread_id?: string; checkpoint_ns?: string; checkpoint_id?: string } = {}) {
   const payload = extractPayloadFields(checkpoint);
   const previous = previousCheckpoint && typeof previousCheckpoint === "object" ? previousCheckpoint : null;
   const nowIso = new Date().toISOString();
@@ -137,6 +147,10 @@ export function createVersionedCheckpointEnvelope(checkpoint, previousCheckpoint
     createdAt,
     updatedAt: nowIso,
   };
+  // Include stable logical identifiers when provided; they participate in the integrity hash.
+  if (logicalIds.thread_id) (normalizedPayload as any).thread_id = String(logicalIds.thread_id);
+  if (logicalIds.checkpoint_ns) (normalizedPayload as any).checkpoint_ns = String(logicalIds.checkpoint_ns);
+  if (logicalIds.checkpoint_id) (normalizedPayload as any).checkpoint_id = String(logicalIds.checkpoint_id);
   const integrityHash = computeCheckpointIntegrity(normalizedPayload);
   return {
     ...normalizedPayload,
@@ -227,4 +241,54 @@ export async function writeCheckpoint(config, checkpoint, opts = {}) {
  */
 export function checkCancellationAtCheckpoint(token?: CancellationToken | null): void {
   token?.throwIfCancelled();
+}
+
+/**
+ * Write a boundary checkpoint for a specific pipeline transition.
+ *
+ * Boundary checkpoints use stable logical identifiers (thread_id, checkpoint_ns,
+ * checkpoint_id) so that each transition in the planner→reviewer→dispatch→verification
+ * pipeline produces a uniquely addressable, replayable snapshot.
+ *
+ * @param config           - runtime config with paths.stateDir
+ * @param payload          - the checkpoint data to persist
+ * @param opts.thread_id   - stable cycle identifier (e.g. plan cycleId or timestamp)
+ * @param opts.checkpoint_ns - pipeline namespace (use CHECKPOINT_NS constants)
+ * @param opts.sequence    - monotonic sequence within the namespace (default: 1)
+ * @param opts.token       - optional cancellation token
+ * @returns file path where the checkpoint was written
+ */
+export async function writeBoundaryCheckpoint(
+  config: unknown,
+  payload: Record<string, unknown>,
+  opts: {
+    thread_id: string;
+    checkpoint_ns: CheckpointNs | string;
+    sequence?: number;
+    token?: CancellationToken | null;
+  },
+): Promise<string> {
+  const stateDir = (config as any)?.paths?.stateDir || "state";
+  const ns = String(opts.checkpoint_ns || CHECKPOINT_NS.DISPATCH);
+  const seq = Math.max(1, Math.floor(Number(opts.sequence || 1)));
+  const thread_id = String(opts.thread_id || "");
+  const checkpoint_id = thread_id ? `${thread_id}/${ns}/${seq}` : `${ns}/${seq}`;
+  const safeNs = ns.replace(/[^a-zA-Z0-9_-]/g, "-");
+  const safeThread = thread_id.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 32);
+  const fileName = safeThread
+    ? `boundary_checkpoint_${safeNs}_${safeThread}.json`
+    : `boundary_checkpoint_${safeNs}.json`;
+  const filePath = path.join(stateDir, fileName);
+
+  checkCancellationAtCheckpoint(opts.token);
+
+  const previousCheckpoint = await readCheckpoint(config, { fileName }).catch(() => null);
+  const envelope = createVersionedCheckpointEnvelope(
+    payload,
+    previousCheckpoint,
+    `boundary:${ns}`,
+    { thread_id, checkpoint_ns: ns, checkpoint_id },
+  );
+  await writeJsonAtomic(filePath, envelope);
+  return filePath;
 }

@@ -2675,3 +2675,56 @@ describe("verification_gate — checkCancellationAtVerification", () => {
     assert.equal(threw, false, "fresh token must not trigger CancelledError");
   });
 });
+
+// ── auditRuntimeHookEnforcement ───────────────────────────────────────────────
+
+import { auditRuntimeHookEnforcement } from "../../src/core/verification_gate.js";
+
+describe("auditRuntimeHookEnforcement", () => {
+  it("reports consistent=true when runtime and worker decisions all agree", () => {
+    const runtimeDecisions = [
+      { envelope: { scope: "src", intent: "read", impact: "low", clearance: "read" }, decision: { allowed: true, decision: "allow", reasonCode: "TOOL_INTENT_ALLOWED", ruleId: "allow-tool-intent-envelope" } },
+    ];
+    const workerDecisions = [
+      { tool: "execute", decision: "allow", reasonCode: "TOOL_INTENT_ALLOWED", ruleId: "allow-tool-intent-envelope", envelopeScope: "src", envelopeIntent: "read", envelopeImpact: "low", envelopeClearance: "read", raw: "" },
+    ];
+    const audit = auditRuntimeHookEnforcement(runtimeDecisions, workerDecisions);
+    assert.equal(audit.consistent, true);
+    assert.deepEqual(audit.gaps, []);
+    assert.equal(audit.runtimeDenied, 0);
+    assert.equal(audit.workerDenied, 0);
+  });
+
+  it("detects count mismatch between runtime and worker decisions", () => {
+    const runtimeDecisions = [
+      { envelope: { scope: "src", intent: "read", impact: "low", clearance: "read" }, decision: { allowed: true, decision: "allow", reasonCode: "TOOL_INTENT_ALLOWED", ruleId: "r1" } },
+      { envelope: { scope: "src", intent: "write", impact: "medium", clearance: "write" }, decision: { allowed: true, decision: "allow", reasonCode: "TOOL_INTENT_ALLOWED", ruleId: "r1" } },
+    ];
+    const workerDecisions = [
+      { tool: "execute", decision: "allow", reasonCode: "TOOL_INTENT_ALLOWED", ruleId: "r1", envelopeScope: "src", envelopeIntent: "read", envelopeImpact: "low", envelopeClearance: "read", raw: "" },
+    ];
+    const audit = auditRuntimeHookEnforcement(runtimeDecisions, workerDecisions);
+    assert.equal(audit.consistent, false);
+    assert.ok(audit.gaps.some((g) => g.includes("RUNTIME_HOOK_COUNT_MISMATCH")));
+  });
+
+  it("detects decision mismatch at same index", () => {
+    const runtimeDecisions = [
+      { envelope: { scope: "src", intent: "delete", impact: "high", clearance: "read" }, decision: { allowed: false, decision: "deny", reasonCode: "TOOL_INTENT_INSUFFICIENT_CLEARANCE", ruleId: "deny-r" } },
+    ];
+    const workerDecisions = [
+      { tool: "execute", decision: "allow", reasonCode: "TOOL_INTENT_ALLOWED", ruleId: "r1", envelopeScope: "src", envelopeIntent: "delete", envelopeImpact: "high", envelopeClearance: "read", raw: "" },
+    ];
+    const audit = auditRuntimeHookEnforcement(runtimeDecisions, workerDecisions);
+    assert.equal(audit.consistent, false);
+    assert.ok(audit.gaps.some((g) => g.includes("RUNTIME_HOOK_DECISION_MISMATCH")));
+    assert.equal(audit.runtimeDenied, 1);
+    assert.equal(audit.workerDenied, 0);
+  });
+
+  it("negative path: returns consistent=true for empty input", () => {
+    const audit = auditRuntimeHookEnforcement([], []);
+    assert.equal(audit.consistent, true);
+    assert.deepEqual(audit.gaps, []);
+  });
+});

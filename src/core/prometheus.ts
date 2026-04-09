@@ -475,6 +475,35 @@ invalid_role_plans=[${sanitizePromptLine(invalidText, 600)}]`;
 export const MANDATORY_COVERAGE_ENFORCE_REJECT_TOKEN = "ENFORCE_REJECT";
 export const MANDATORY_COVERAGE_ENFORCE_EXIT_CODE = 2;
 
+/** Error code emitted when role-plan coverage is incomplete after retry. */
+export const ROLE_PLAN_COMPLETENESS_ERROR_CODE = "ROLE_PLAN_COVERAGE_INCOMPLETE";
+
+/**
+ * Thrown by the execution-strategy role coverage gate when required roles have no
+ * contract-valid plans[] entry after one retry attempt (fail-closed path).
+ *
+ * This error prevents Athena submission of plans that are structurally incomplete,
+ * giving the orchestrator a typed signal to emit a cycle-level rejection event.
+ */
+export class RolePlanCompletenessError extends Error {
+  readonly errorCode = ROLE_PLAN_COMPLETENESS_ERROR_CODE;
+  readonly missingRoles: string[];
+  readonly requiredRoles: string[];
+  readonly retried: boolean;
+
+  constructor(missingRoles: string[], requiredRoles: string[], retried: boolean) {
+    const preview = Array.isArray(missingRoles) ? missingRoles.slice(0, 5).join(", ") : "";
+    super(
+      `[${ROLE_PLAN_COMPLETENESS_ERROR_CODE}] Role plan coverage incomplete after retry: ` +
+      `missing=[${preview}] required=${Array.isArray(requiredRoles) ? requiredRoles.length : 0} retried=${retried}`
+    );
+    this.name = "RolePlanCompletenessError";
+    this.missingRoles = Array.isArray(missingRoles) ? [...missingRoles] : [];
+    this.requiredRoles = Array.isArray(requiredRoles) ? [...requiredRoles] : [];
+    this.retried = Boolean(retried);
+  }
+}
+
 export function applyMandatoryCoverageEnforceReject(
   payload: any,
   result: MandatoryTaskCoverageValidationResult,
@@ -5532,7 +5561,8 @@ Mandatory requirements:
   // ── Execution-strategy role coverage gate (post-LLM, pre-Athena) ─────────────
   // Ensure every role declared by executionStrategy.waves[*].tasks has at least one
   // contract-valid plans[] entry. Retry once with an explicit diff; on repeated
-  // failure deterministically inject role skeleton plans (fail-open with traceable metadata).
+  // failure throw RolePlanCompletenessError (fail-closed) — never silently inject
+  // skeleton plans, as that would give downstream postmortems a false clean-pass signal.
   {
     const roleCoverageResult = validateAndInjectRolePlans(rawParsedInput, { injectMissing: false });
     if (!roleCoverageResult.ok && roleCoverageResult.initialMissingRoles.length > 0) {
@@ -5617,44 +5647,38 @@ Mandatory requirements:
             `[PROMETHEUS][ROLE_PLAN_COVERAGE] Retry succeeded — roles=${retryCoverage.requiredRoles.length}`
           );
         } else {
-          const injectedCoverage = validateAndInjectRolePlans(retryCoverage.output, { injectMissing: true });
-          rawParsedInput = injectedCoverage.output;
-          rawParsedInput._executionStrategyRolePlanGate = {
-            ok: injectedCoverage.ok,
-            requiredRoles: injectedCoverage.requiredRoles,
-            missingRoles: injectedCoverage.missingRoles,
-            initialMissingRoles: injectedCoverage.initialMissingRoles,
-            initialMissingRoleMarkers: injectedCoverage.initialMissingRoleMarkers,
-            injectedRoles: injectedCoverage.injectedRoles,
-            injectedSkeletonMetadata: injectedCoverage.injectedSkeletonMetadata,
-            invalidRolePlans: injectedCoverage.invalidRolePlans,
-            _retryAttempted: true,
-            _fallbackInjected: true,
-          };
+          // Fail-closed: retry produced output but still missing roles.
+          // Emit per-missing-role telemetry, then block Athena submission.
+          const failedMissingRoles = Array.isArray(retryCoverage.initialMissingRoles) ? retryCoverage.initialMissingRoles : [];
+          const failedRequiredRoles = Array.isArray(retryCoverage.requiredRoles) ? retryCoverage.requiredRoles : [];
+          for (const missingRole of failedMissingRoles) {
+            await appendProgress(
+              config,
+              `[PROMETHEUS][ROLE_PLAN_COVERAGE][FAIL_CLOSED] missing_role=${missingRole} required_roles=${failedRequiredRoles.length} retry_attempted=true`
+            );
+          }
           await appendProgress(
             config,
-            `[PROMETHEUS][ROLE_PLAN_COVERAGE] Retry incomplete — injected deterministic role skeletons: ${injectedCoverage.injectedRoles.join(", ") || "none"}`
+            `[PROMETHEUS][ROLE_PLAN_COVERAGE][${ROLE_PLAN_COMPLETENESS_ERROR_CODE}] Blocking plan submission: missing=${failedMissingRoles.length} required=${failedRequiredRoles.length}`
           );
+          throw new RolePlanCompletenessError(failedMissingRoles, failedRequiredRoles, true);
         }
       } else {
-        const injectedCoverage = validateAndInjectRolePlans(rawParsedInput, { injectMissing: true });
-        rawParsedInput = injectedCoverage.output;
-        rawParsedInput._executionStrategyRolePlanGate = {
-          ok: injectedCoverage.ok,
-          requiredRoles: injectedCoverage.requiredRoles,
-          missingRoles: injectedCoverage.missingRoles,
-          initialMissingRoles: injectedCoverage.initialMissingRoles,
-          initialMissingRoleMarkers: injectedCoverage.initialMissingRoleMarkers,
-          injectedRoles: injectedCoverage.injectedRoles,
-          injectedSkeletonMetadata: injectedCoverage.injectedSkeletonMetadata,
-          invalidRolePlans: injectedCoverage.invalidRolePlans,
-          _retryAttempted: true,
-          _fallbackInjected: true,
-        };
+        // Fail-closed: retry produced no parsable output; original missing roles remain.
+        // Emit per-missing-role telemetry, then block Athena submission.
+        const failedMissingRoles = Array.isArray(roleCoverageResult.initialMissingRoles) ? roleCoverageResult.initialMissingRoles : [];
+        const failedRequiredRoles = Array.isArray(roleCoverageResult.requiredRoles) ? roleCoverageResult.requiredRoles : [];
+        for (const missingRole of failedMissingRoles) {
+          await appendProgress(
+            config,
+            `[PROMETHEUS][ROLE_PLAN_COVERAGE][FAIL_CLOSED] missing_role=${missingRole} required_roles=${failedRequiredRoles.length} retry_attempted=true`
+          );
+        }
         await appendProgress(
           config,
-          `[PROMETHEUS][ROLE_PLAN_COVERAGE] Retry produced no parsable payload — injected deterministic role skeletons: ${injectedCoverage.injectedRoles.join(", ") || "none"}`
+          `[PROMETHEUS][ROLE_PLAN_COVERAGE][${ROLE_PLAN_COMPLETENESS_ERROR_CODE}] Blocking plan submission: missing=${failedMissingRoles.length} required=${failedRequiredRoles.length}`
         );
+        throw new RolePlanCompletenessError(failedMissingRoles, failedRequiredRoles, true);
       }
     } else {
       rawParsedInput = roleCoverageResult.output;

@@ -2924,3 +2924,89 @@ describe("validatePlanContract — UNBOUND_VERIFICATION_TARGET", () => {
     assert.ok(missing.length > 0, "MISSING_VERIFICATION must fire when verification is absent");
   });
 });
+
+// ── Boundary checkpoint — pipeline transition snapshots ──────────────────────
+
+import { createVersionedCheckpointEnvelope, writeBoundaryCheckpoint, CHECKPOINT_NS } from "../../src/core/checkpoint_engine.js";
+
+describe("boundary checkpoints", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-boundary-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("planner boundary checkpoint persists plan metadata with stable ids", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const filePath = await writeBoundaryCheckpoint(config, {
+      planCount: 5,
+      prometheusCompletedAt: new Date().toISOString(),
+    }, { thread_id: "cycle-001", checkpoint_ns: CHECKPOINT_NS.PLANNER });
+    const parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
+    assert.equal(parsed.planCount, 5);
+    assert.equal(parsed.thread_id, "cycle-001");
+    assert.equal(parsed.checkpoint_ns, "planner");
+    assert.ok(parsed.checkpoint_id.startsWith("cycle-001/planner/"));
+    assert.equal(parsed.checkpointKind, "boundary:planner");
+    assert.equal(parsed.schemaVersion, 2);
+  });
+
+  it("reviewer boundary checkpoint persists athena approval with stable ids", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const filePath = await writeBoundaryCheckpoint(config, {
+      athenaApproved: true,
+      overallScore: 8,
+    }, { thread_id: "cycle-001", checkpoint_ns: CHECKPOINT_NS.REVIEWER });
+    const parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
+    assert.equal(parsed.athenaApproved, true);
+    assert.equal(parsed.checkpoint_ns, "reviewer");
+    assert.equal(parsed.checkpointKind, "boundary:reviewer");
+  });
+
+  it("verification boundary checkpoint persists worker result with stable ids", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const filePath = await writeBoundaryCheckpoint(config, {
+      roleName: "backend-worker",
+      status: "done",
+    }, { thread_id: "task-42", checkpoint_ns: CHECKPOINT_NS.VERIFICATION });
+    const parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
+    assert.equal(parsed.roleName, "backend-worker");
+    assert.equal(parsed.status, "done");
+    assert.equal(parsed.checkpoint_ns, "verification");
+  });
+
+  it("checkpoint_id is composite thread_id/ns/seq", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const filePath = await writeBoundaryCheckpoint(config, {}, {
+      thread_id: "test-thread",
+      checkpoint_ns: CHECKPOINT_NS.DISPATCH,
+      sequence: 3,
+    });
+    const parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
+    assert.equal(parsed.checkpoint_id, "test-thread/dispatch/3");
+  });
+
+  it("createVersionedCheckpointEnvelope includes logical ids in integrity hash", () => {
+    const base = { data: "test" };
+    const withIds = createVersionedCheckpointEnvelope(base, null, "boundary:dispatch", {
+      thread_id: "t1", checkpoint_ns: "dispatch", checkpoint_id: "t1/dispatch/1",
+    });
+    const withoutIds = createVersionedCheckpointEnvelope(base);
+    // Different logical IDs must produce different integrity hashes
+    assert.notEqual(withIds.integrity.hash, withoutIds.integrity.hash);
+  });
+
+  it("negative path: boundary checkpoint with empty namespace falls back to dispatch", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const filePath = await writeBoundaryCheckpoint(config, { test: true }, {
+      thread_id: "t-fallback",
+      checkpoint_ns: "" as any,
+    });
+    const parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
+    assert.equal(parsed.checkpoint_ns, "dispatch");
+  });
+});

@@ -232,6 +232,31 @@ export function evaluateToolIntentEnvelope(policy, roleName, envelope: Partial<T
   };
 }
 
+/**
+ * Batch-evaluate TOOL_INTENT envelopes against the loaded policy at runtime.
+ *
+ * This is the authoritative hook decision generator used by the worker runner.
+ * Workers are no longer required to self-report HOOK_DECISION lines; the runner
+ * evaluates each emitted TOOL_INTENT independently and produces deterministic
+ * enforcement records.
+ *
+ * @param policy   - loaded policy from loadPolicy/loadPolicyWithGovernance
+ * @param roleName - the worker role being evaluated
+ * @param envelopes - TOOL_INTENT envelopes parsed from worker output
+ * @returns array of { envelope, decision } pairs
+ */
+export function generateRuntimeHookDecisions(
+  policy: unknown,
+  roleName: string,
+  envelopes: unknown[],
+): Array<{ envelope: Partial<ToolIntentEnvelope>; decision: ToolIntentDecision }> {
+  if (!Array.isArray(envelopes)) return [];
+  return envelopes.map((envelope) => ({
+    envelope: envelope as Partial<ToolIntentEnvelope>,
+    decision: evaluateToolIntentEnvelope(policy, roleName, envelope as Partial<ToolIntentEnvelope>),
+  }));
+}
+
 function normalizeRoleName(roleName) {
   return String(roleName || "")
     .trim()

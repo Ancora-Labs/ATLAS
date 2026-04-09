@@ -452,3 +452,52 @@ describe("worker_runner — non-retryable policy block classification", () => {
     );
   });
 });
+
+// ── Runtime hook enforcement via generateRuntimeHookDecisions ────────────────
+
+describe("generateRuntimeHookDecisions", () => {
+  it("generates allow decisions for valid low-impact read envelopes", async () => {
+    const { generateRuntimeHookDecisions } = await import("../../src/core/policy_engine.js");
+    const policy = { blockedCommands: [], rolePolicies: {} };
+    const envelopes = [{ scope: "src/core", intent: "read config", impact: "low" as const, clearance: "read" as const }];
+    const decisions = generateRuntimeHookDecisions(policy, "worker", envelopes);
+    assert.equal(decisions.length, 1);
+    assert.equal(decisions[0].decision.decision, "allow");
+    assert.equal(decisions[0].decision.allowed, true);
+  });
+
+  it("generates deny decision when clearance is insufficient for impact", async () => {
+    const { generateRuntimeHookDecisions } = await import("../../src/core/policy_engine.js");
+    const policy = { blockedCommands: [], rolePolicies: {} };
+    const envelopes = [{ scope: "src/core", intent: "delete files", impact: "high" as const, clearance: "read" as const }];
+    const decisions = generateRuntimeHookDecisions(policy, "worker", envelopes);
+    assert.equal(decisions.length, 1);
+    assert.equal(decisions[0].decision.decision, "deny");
+    assert.equal(decisions[0].decision.reasonCode, "TOOL_INTENT_INSUFFICIENT_CLEARANCE");
+  });
+
+  it("generates deny when envelope is missing required fields", async () => {
+    const { generateRuntimeHookDecisions } = await import("../../src/core/policy_engine.js");
+    const policy = { blockedCommands: [], rolePolicies: {} };
+    const envelopes = [{ scope: "", intent: "", impact: "low" as const, clearance: "read" as const }];
+    const decisions = generateRuntimeHookDecisions(policy, "worker", envelopes);
+    assert.equal(decisions[0].decision.decision, "deny");
+    assert.equal(decisions[0].decision.reasonCode, "TOOL_INTENT_INVALID_ENVELOPE");
+  });
+
+  it("returns empty array when envelopes is not an array", async () => {
+    const { generateRuntimeHookDecisions } = await import("../../src/core/policy_engine.js");
+    const policy = { blockedCommands: [], rolePolicies: {} };
+    const decisions = generateRuntimeHookDecisions(policy, "worker", null as any);
+    assert.deepEqual(decisions, []);
+  });
+
+  it("negative path: generates deny when command is blocked", async () => {
+    const { generateRuntimeHookDecisions } = await import("../../src/core/policy_engine.js");
+    const policy = { blockedCommands: ["rm -rf"], rolePolicies: {} };
+    const envelopes = [{ scope: "src", intent: "delete", impact: "high" as const, clearance: "admin" as const, command: "rm -rf /" }];
+    const decisions = generateRuntimeHookDecisions(policy, "worker", envelopes);
+    assert.equal(decisions[0].decision.decision, "deny");
+    assert.equal(decisions[0].decision.reasonCode, "TOOL_INTENT_BLOCKED_COMMAND");
+  });
+});

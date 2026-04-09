@@ -123,6 +123,8 @@ import {
   RUN_SEGMENT_BATCH_SPAN_DEFAULT,
   RUN_SEGMENT_HISTORY_MAX_DEFAULT,
   checkCancellationAtCheckpoint,
+  writeBoundaryCheckpoint,
+  CHECKPOINT_NS,
 } from "./checkpoint_engine.js";
 import { assessRetryExpectedROI, rankModelsByTaskKindExpectedValue } from "./model_policy.js";
 import { loadHookPolicy, DEFAULT_HOOK_POLICY_PATH } from "./policy_engine.js";
@@ -3534,6 +3536,16 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     return;
   }
 
+  // Planner boundary checkpoint: persist stable snapshot after successful Prometheus analysis.
+  {
+    const plannerThreadId = String((config as any)?.cycleId || (prometheusAnalysis as any)?.cycleId || Date.now());
+    await writeBoundaryCheckpoint(config, {
+      planCount: Array.isArray(prometheusAnalysis.plans) ? prometheusAnalysis.plans.length : 0,
+      planTitles: Array.isArray(prometheusAnalysis.plans) ? prometheusAnalysis.plans.map((p: any) => String(p?.title || "")) : [],
+      prometheusCompletedAt: new Date().toISOString(),
+    }, { thread_id: plannerThreadId, checkpoint_ns: CHECKPOINT_NS.PLANNER }).catch(() => { /* non-fatal */ });
+  }
+
   // ── Source-linkage quality gate (research-context blindness) ─────────────
   // When research context is injected but neither plan synthesis_sources nor
   // informational_topics_consumed are present, force one corrective Prometheus
@@ -4008,6 +4020,17 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     "athena-review-exit",
     `approved=true autoApproved=${String((planReview as any)?.autoApproved ?? false)} overallScore=${String((planReview as any)?.overallScore ?? "n/a")}`,
   );
+
+  // Reviewer boundary checkpoint: persist stable snapshot after Athena approval.
+  {
+    const reviewerThreadId = String((config as any)?.cycleId || (prometheusAnalysis as any)?.cycleId || Date.now());
+    await writeBoundaryCheckpoint(config, {
+      athenaApproved: true,
+      overallScore: (planReview as any)?.overallScore ?? null,
+      autoApproved: (planReview as any)?.autoApproved ?? false,
+      athenaCompletedAt: new Date().toISOString(),
+    }, { thread_id: reviewerThreadId, checkpoint_ns: CHECKPOINT_NS.REVIEWER }).catch(() => { /* non-fatal */ });
+  }
 
   // Record that Athena's gate feasibility check was invoked this cycle.
   await recordCapabilityExecution(

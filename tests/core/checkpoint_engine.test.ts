@@ -8,6 +8,9 @@ import {
   initializeRunSegmentState,
   applyRunSegmentRollover,
   checkCancellationAtCheckpoint,
+  writeBoundaryCheckpoint,
+  createVersionedCheckpointEnvelope,
+  CHECKPOINT_NS,
 } from "../../src/core/checkpoint_engine.js";
 import { createCancellationToken, CancelledError } from "../../src/core/daemon_control.js";
 
@@ -185,6 +188,78 @@ describe("writeCheckpoint — cancellation-scope", () => {
     const filePath = await writeCheckpoint(config, { cycle: 3 }, { fileName: "no-token.json" });
     const raw = await fs.readFile(filePath, "utf8");
     assert.equal(JSON.parse(raw).cycle, 3);
+  });
+
+  // ── CHECKPOINT_NS constants ──────────────────────────────────────────────────
+
+  it("CHECKPOINT_NS contains all pipeline namespaces", () => {
+    assert.equal(CHECKPOINT_NS.PLANNER, "planner");
+    assert.equal(CHECKPOINT_NS.REVIEWER, "reviewer");
+    assert.equal(CHECKPOINT_NS.DISPATCH, "dispatch");
+    assert.equal(CHECKPOINT_NS.VERIFICATION, "verification");
+  });
+
+  // ── createVersionedCheckpointEnvelope with logical identifiers ───────────────
+
+  it("includes thread_id, checkpoint_ns, checkpoint_id when provided", () => {
+    const payload = { cycleInfo: "test" };
+    const envelope = createVersionedCheckpointEnvelope(
+      payload, null, "boundary:planner",
+      { thread_id: "cycle-123", checkpoint_ns: "planner", checkpoint_id: "cycle-123/planner/1" }
+    );
+    assert.equal(envelope.thread_id, "cycle-123");
+    assert.equal(envelope.checkpoint_ns, "planner");
+    assert.equal(envelope.checkpoint_id, "cycle-123/planner/1");
+    assert.equal(envelope.checkpointKind, "boundary:planner");
+    assert.ok(typeof envelope.integrity?.hash === "string" && envelope.integrity.hash.length > 0);
+  });
+
+  it("omits thread_id/checkpoint_ns/checkpoint_id when not provided (backward-compatible)", () => {
+    const payload = { cycle: 5 };
+    const envelope = createVersionedCheckpointEnvelope(payload);
+    assert.equal(envelope.thread_id, undefined);
+    assert.equal(envelope.checkpoint_ns, undefined);
+    assert.equal(envelope.checkpoint_id, undefined);
+  });
+
+  // ── writeBoundaryCheckpoint ───────────────────────────────────────────────────
+
+  it("writeBoundaryCheckpoint writes a file with logical identifiers", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const filePath = await writeBoundaryCheckpoint(config, { planCount: 3 }, {
+      thread_id: "cycle-abc",
+      checkpoint_ns: CHECKPOINT_NS.PLANNER,
+    });
+    assert.ok(typeof filePath === "string" && filePath.length > 0);
+    const raw = await fs.readFile(filePath, "utf8");
+    const parsed = JSON.parse(raw);
+    assert.equal(parsed.planCount, 3);
+    assert.equal(parsed.thread_id, "cycle-abc");
+    assert.equal(parsed.checkpoint_ns, "planner");
+    assert.ok(typeof parsed.checkpoint_id === "string" && parsed.checkpoint_id.includes("planner"));
+    assert.equal(parsed.schemaVersion, 2);
+    assert.ok(typeof parsed.integrity?.hash === "string");
+  });
+
+  it("writeBoundaryCheckpoint uses checkpoint_ns in the filename", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const filePath = await writeBoundaryCheckpoint(config, {}, {
+      thread_id: "t1",
+      checkpoint_ns: CHECKPOINT_NS.REVIEWER,
+    });
+    assert.ok(path.basename(filePath).includes("reviewer"));
+  });
+
+  it("negative path: writeBoundaryCheckpoint handles missing thread_id gracefully", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const filePath = await writeBoundaryCheckpoint(config, { data: true }, {
+      thread_id: "",
+      checkpoint_ns: CHECKPOINT_NS.VERIFICATION,
+    });
+    const parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
+    assert.equal(parsed.data, true);
+    assert.equal(parsed.thread_id, undefined);
+    assert.ok(typeof parsed.checkpoint_id === "string" && parsed.checkpoint_id.includes("verification"));
   });
 });
 
