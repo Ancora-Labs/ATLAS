@@ -2023,6 +2023,31 @@ function toNormalizedStringArray(value: unknown): string[] {
   return value.map((item) => String(item || "").trim()).filter(Boolean);
 }
 
+function areTrackedFieldValuesEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!areTrackedFieldValuesEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  if (a && b && typeof a === "object" && typeof b === "object") {
+    const aObj = a as Record<string, unknown>;
+    const bObj = b as Record<string, unknown>;
+    const aKeys = Object.keys(aObj).sort();
+    const bKeys = Object.keys(bObj).sort();
+    if (aKeys.length !== bKeys.length) return false;
+    for (let i = 0; i < aKeys.length; i++) {
+      const key = aKeys[i];
+      if (key !== bKeys[i]) return false;
+      if (!areTrackedFieldValuesEqual(aObj[key], bObj[key])) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
 function isExecutableVerificationCommand(value: unknown): boolean {
   const text = String(value || "").trim();
   if (!text) return false;
@@ -2074,9 +2099,7 @@ export function buildPatchedPlanCorrectionTracking(
     for (const field of TRACKED_FIELDS) {
       const origVal = orig[field];
       const patchedVal = patched[field];
-      const origEmpty = !origVal || (Array.isArray(origVal) && origVal.length === 0);
-      const patchedFilled = patchedVal && !(Array.isArray(patchedVal) && patchedVal.length === 0);
-      if (origEmpty && patchedFilled) repairedFields.push(String(field));
+      if (!areTrackedFieldValuesEqual(origVal, patchedVal)) repairedFields.push(String(field));
     }
     if (repairedFields.length > 0) {
       legacyCorrections.push(`[PATCHED] plan[${pi}]: ${repairedFields.join(", ")} repaired`);

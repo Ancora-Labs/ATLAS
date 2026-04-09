@@ -918,6 +918,41 @@ describe("buildPatchedPlanCorrectionTracking", () => {
       "legacy correction string must remain present for deferred criteria",
     );
   });
+
+  it("tracks non-empty to non-empty tracked-field mutations as legacy corrections", () => {
+    const tracking = buildPatchedPlanCorrectionTracking(
+      [{
+        dependencies: ["Plan 1"],
+        verification_commands: ["npm test -- tests/core/old.test.ts"],
+      }] as any[],
+      [{
+        dependencies: ["Plan 2"],
+        verification_commands: ["npm test -- tests/core/new.test.ts"],
+      }] as any[]
+    );
+
+    assert.ok(
+      tracking.legacyCorrections.some((entry) =>
+        entry.includes("dependencies") && entry.includes("verification_commands")),
+      "non-empty tracked-field mutations must emit legacy repair corrections"
+    );
+  });
+
+  it("does not emit tracked-field repair correction when tracked values are deeply equal", () => {
+    const tracking = buildPatchedPlanCorrectionTracking(
+      [{
+        verification_commands: ["npm test -- tests/core/athena_review_normalization.test.ts"],
+      }] as any[],
+      [{
+        verification_commands: ["npm test -- tests/core/athena_review_normalization.test.ts"],
+      }] as any[]
+    );
+
+    assert.equal(
+      tracking.legacyCorrections.some((entry) => entry.includes("verification_commands repaired")),
+      false
+    );
+  });
 });
 
 // ── Dual-lane verdict normalization contract ──────────────────────────────────
