@@ -1852,7 +1852,7 @@ describe("modelRoutingTelemetry schema contract", () => {
     assert.ok("ci-fix" in result.byTaskKind, "ci-fix taskKind must be present");
     const implEntry = result.byTaskKind["implementation"];
     assert.equal(implEntry.sampleCount, 3);
-    assert.ok("Claude Sonnet 4.6" in implEntry.models, "Claude model must be tracked");
+    assert.ok("claude sonnet 4.6" in implEntry.models, "Claude model must be tracked under canonical key");
   });
 
   it("MIN_TELEMETRY_SAMPLE_THRESHOLD is exported and is a positive integer", () => {
