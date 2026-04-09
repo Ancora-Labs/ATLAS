@@ -70,6 +70,8 @@ import {
   isNonSpecificVerification,
   validatePlanContract,
   validateAndInjectRolePlans,
+  ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX,
+  ROLE_PLAN_SKELETON_METADATA_SOURCE,
   detectProcessThoughtMarkers,
   scanParsedOutputForProcessThought,
   OUTPUT_FIDELITY_GATE_FAIL_REASON,
@@ -2562,14 +2564,31 @@ describe("validateAndInjectRolePlans", () => {
     const initial = validateAndInjectRolePlans(payload, { injectMissing: false });
     assert.equal(initial.ok, false);
     assert.deepEqual(initial.initialMissingRoles, ["api-worker"]);
+    assert.deepEqual(
+      initial.initialMissingRoleMarkers,
+      [`${ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX}:api-worker:wave:2`]
+    );
 
     const injected = validateAndInjectRolePlans(payload, { injectMissing: true });
     assert.equal(injected.ok, true);
     assert.ok(injected.injectedRoles.includes("api-worker"));
+    assert.equal(injected.injectedSkeletonMetadata.length, 1);
+    assert.deepEqual(injected.injectedSkeletonMetadata[0], {
+      role: "api-worker",
+      wave: 2,
+      marker: `${ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX}:api-worker:wave:2`,
+      source: ROLE_PLAN_SKELETON_METADATA_SOURCE,
+      task_id: "role-coverage-api-worker-wave-2",
+    });
     const injectedSkeleton = injected.output.plans.find((plan: any) =>
       plan.role === "api-worker" && plan._rolePlanSkeletonInjected === true
     );
     assert.ok(injectedSkeleton, "expected a deterministic injected skeleton for api-worker");
+    assert.equal(
+      injectedSkeleton._missingRoleMarker,
+      `${ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX}:api-worker:wave:2`
+    );
+    assert.equal(injectedSkeleton._rolePlanSkeletonSource, ROLE_PLAN_SKELETON_METADATA_SOURCE);
     assert.equal(validatePlanContract(injectedSkeleton).valid, true);
   });
 });
