@@ -27,6 +27,7 @@ import {
   GATE_PRECEDENCE,
   BLOCK_REASON,
   evaluatePreDispatchGovernanceGate,
+  resolveAthenaCorrectionDispatchBlockReason,
   type GovernanceBlockDecision,
 } from "../../src/core/orchestrator.js";
 import type { ArchitectureDriftReport } from "../../src/core/architecture_drift.js";
@@ -481,6 +482,26 @@ describe("evaluatePreDispatchGovernanceGate — end-to-end block flow assertions
     assert.equal(result.cycleId, "clean-pass-e2e");
     assert.ok("graphResult" in result);
     assert.ok("budgetEligibility" in result);
+  });
+});
+
+describe("resolveAthenaCorrectionDispatchBlockReason precedence", () => {
+  it("selects the highest-precedence canonical block reason when multiple governance tokens are present", () => {
+    const reason = resolveAthenaCorrectionDispatchBlockReason([
+      "Pre-dispatch governance state infeasible (critical_debt_overdue, force_checkpoint_validation_active) — resolve active gate before dispatch",
+    ]);
+    assert.equal(
+      reason,
+      `${BLOCK_REASON.GUARDRAIL_FORCE_CHECKPOINT_ACTIVE}:athena_correction_token=${BLOCK_REASON.GUARDRAIL_FORCE_CHECKPOINT_ACTIVE}`,
+    );
+  });
+
+  it("negative path: ignores non-governance tokens", () => {
+    const reason = resolveAthenaCorrectionDispatchBlockReason([
+      "autonomy_execution_gate_not_ready",
+      "verification command rewrite requested",
+    ]);
+    assert.equal(reason, null);
   });
 });
 

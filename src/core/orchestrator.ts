@@ -18,6 +18,7 @@
 
 import path from "node:path";
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { appendProgress, appendAlert, ALERT_SEVERITY, appendGovernanceBlockEvent, recordCapabilityExecution } from "./state_tracker.js";
 import { readStopRequest, writeDaemonPid, clearDaemonPid, clearStopRequest, readReloadRequest, clearReloadRequest, createCancellationToken } from "./daemon_control.js";
 import type { CancellationToken } from "./daemon_control.js";
@@ -211,6 +212,56 @@ export const BLOCK_REASON = Object.freeze({
   /** Per-role plan group exceeds the configured actionable-steps cap — decompose before dispatch. */
   OVERSIZED_PACKET:               "packet_exceeds_actionable_steps_cap",
 });
+
+const ATHENA_GOVERNANCE_CORRECTION_TOKEN_MAP = Object.freeze({
+  [BLOCK_REASON.GUARDRAIL_PAUSE_WORKERS_ACTIVE]: {
+    blockReason: BLOCK_REASON.GUARDRAIL_PAUSE_WORKERS_ACTIVE,
+    gateKey: "GUARDRAIL_PAUSE",
+  },
+  [BLOCK_REASON.GUARDRAIL_FORCE_CHECKPOINT_ACTIVE]: {
+    blockReason: BLOCK_REASON.GUARDRAIL_FORCE_CHECKPOINT_ACTIVE,
+    gateKey: "FORCE_CHECKPOINT",
+  },
+  [BLOCK_REASON.GOVERNANCE_FREEZE_ACTIVE]: {
+    blockReason: BLOCK_REASON.GOVERNANCE_FREEZE_ACTIVE,
+    gateKey: "GOVERNANCE_FREEZE",
+  },
+  [BLOCK_REASON.GOVERNANCE_CANARY_BREACH]: {
+    blockReason: BLOCK_REASON.GOVERNANCE_CANARY_BREACH,
+    gateKey: "GOVERNANCE_CANARY",
+  },
+  [BLOCK_REASON.CRITICAL_DEBT_OVERDUE]: {
+    blockReason: BLOCK_REASON.CRITICAL_DEBT_OVERDUE,
+    gateKey: "CARRY_FORWARD_DEBT",
+  },
+} as const);
+
+/**
+ * Parse Athena correction text and map governance correction tokens to a
+ * canonical dispatch block reason prefix.
+ */
+export function resolveAthenaCorrectionDispatchBlockReason(corrections: unknown): string | null {
+  const correctionStrings = Array.isArray(corrections)
+    ? corrections.map((entry) => String(entry || "").toLowerCase())
+    : [String(corrections || "").toLowerCase()];
+  let selected: { token: string; blockReason: string; gateKey: keyof typeof GATE_PRECEDENCE; gateIndex: number } | null = null;
+  for (const [token, mapped] of Object.entries(ATHENA_GOVERNANCE_CORRECTION_TOKEN_MAP)) {
+    const tokenPattern = new RegExp(`(^|[^a-z0-9_])${token}(?=$|[^a-z0-9_])`, "i");
+    const found = correctionStrings.some((line) => tokenPattern.test(line));
+    if (!found) continue;
+    const gateIndex = GATE_PRECEDENCE[mapped.gateKey];
+    if (!selected || gateIndex < selected.gateIndex) {
+      selected = {
+        token,
+        blockReason: mapped.blockReason,
+        gateKey: mapped.gateKey,
+        gateIndex,
+      };
+    }
+  }
+  if (!selected) return null;
+  return `${selected.blockReason}:athena_correction_token=${selected.token}`;
+}
 
 /**
  * Health divergence state enum.
@@ -1556,8 +1607,49 @@ function isDispatchCheckpointCompleteForTotal(checkpoint, totalPlans) {
   return Number(checkpoint.completedPlans || 0) >= Number(totalPlans || 0);
 }
 
-async function beginDispatchCheckpoint(config, plans, actualPlanCount?: number) {
+function computePlanSetSignature(plans: any[]): string {
+  const normalized = (Array.isArray(plans) ? plans : []).map((p: any) => ({
+    task: String(p?.task || "").trim(),
+    role: String(p?.role || "").trim(),
+    taskId: String(p?.task_id || p?.id || "").trim(),
+    wave: Number.isFinite(Number(p?.wave)) ? Number(p.wave) : null,
+  }));
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
+}
+
+function checkpointMatchesPlanSet(
+  checkpoint: any,
+  plans: any[],
+  planAnalyzedAtIso?: string,
+): boolean {
+  if (!checkpoint || typeof checkpoint !== "object") return false;
+  const checkpointPlanCount = Number(checkpoint?.planCount ?? checkpoint?.totalPlans ?? 0);
+  if (checkpointPlanCount !== (Array.isArray(plans) ? plans.length : 0)) return false;
+
+  const currentSignature = computePlanSetSignature(plans);
+  const checkpointSignature = String(checkpoint?.planSetSignature || "").trim();
+  if (checkpointSignature) {
+    return checkpointSignature === currentSignature;
+  }
+
+  // Legacy fallback for old checkpoints without signature: trust only if the
+  // checkpoint is at least as new as the currently analyzed plan set.
+  const checkpointUpdatedAtMs = Date.parse(String(checkpoint?.updatedAt || checkpoint?.createdAt || ""));
+  const analyzedAtMs = Date.parse(String(planAnalyzedAtIso || ""));
+  if (!Number.isFinite(checkpointUpdatedAtMs) || !Number.isFinite(analyzedAtMs)) {
+    return false;
+  }
+  return checkpointUpdatedAtMs >= analyzedAtMs;
+}
+
+async function beginDispatchCheckpoint(
+  config,
+  plans,
+  actualPlanCount?: number,
+  opts: { planAnalyzedAt?: string } = {},
+) {
   const nowIso = new Date().toISOString();
+  const planSetSignature = computePlanSetSignature(plans);
   const checkpoint = initializeRunSegmentState({
     schemaVersion: 2,
     status: "dispatching",
@@ -1566,7 +1658,9 @@ async function beginDispatchCheckpoint(config, plans, actualPlanCount?: number) 
     totalPlans: Array.isArray(plans) ? plans.length : 0,
     // planCount stores actual Prometheus plan count (totalPlans stores batch count)
     planCount: Number.isFinite(actualPlanCount) ? actualPlanCount : (Array.isArray(plans) ? plans.length : 0),
-    completedPlans: 0
+    completedPlans: 0,
+    planSetSignature,
+    planAnalyzedAt: opts?.planAnalyzedAt || null,
   }, {
     spanBatches: Number(config?.runtime?.runSegmentBatchSpan || RUN_SEGMENT_BATCH_SPAN_DEFAULT),
     historyMax: Number(config?.runtime?.runSegmentHistoryMax || RUN_SEGMENT_HISTORY_MAX_DEFAULT),
@@ -1660,17 +1754,23 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
   if (workerBatches.length === 0) return false;
 
   let checkpoint = await readDispatchCheckpoint(config);
-  const checkpointMatchesTotal = Number(checkpoint?.totalPlans || 0) === workerBatches.length;
+  const checkpointMatchesPlanIdentity = checkpointMatchesPlanSet(
+    checkpoint,
+    plans,
+    String(prometheusAnalysis?.analyzedAt || athenaReview?.reviewedAt || ""),
+  );
 
-  if (!force && isDispatchCheckpointCompleteForTotal(checkpoint, workerBatches.length)) {
+  if (!force && checkpointMatchesPlanIdentity && isDispatchCheckpointCompleteForTotal(checkpoint, workerBatches.length)) {
     return false;
   }
 
   if (!isDispatchCheckpointResumable(checkpoint)) {
-    if (!force && checkpoint && checkpoint.status === "complete" && checkpointMatchesTotal) {
+    if (!force && checkpoint && checkpoint.status === "complete" && checkpointMatchesPlanIdentity) {
       return false;
     }
-    checkpoint = await beginDispatchCheckpoint(config, workerBatches, plans.length);
+    checkpoint = await beginDispatchCheckpoint(config, workerBatches, plans.length, {
+      planAnalyzedAt: String(prometheusAnalysis?.analyzedAt || athenaReview?.reviewedAt || ""),
+    });
   }
 
   const startIndex = Math.max(0, Math.min(Number(checkpoint.completedPlans || 0), workerBatches.length));
@@ -1714,7 +1814,7 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
   await appendProgress(config,
     force
       ? `[RESUME] Force-resuming dispatch checkpoint: batch ${startIndex + 1}/${workerBatches.length}`
-      : checkpointMatchesTotal
+      : checkpointMatchesPlanIdentity
         ? `[RESUME] Resuming dispatch checkpoint: batch ${startIndex + 1}/${workerBatches.length}`
         : `[RESUME] Existing approved plan detected — dispatching from batch ${startIndex + 1}/${workerBatches.length} without replanning`
   );
@@ -2580,9 +2680,15 @@ async function countCompletedPlans(config, plans) {
   const stateDir = config.paths?.stateDir || "state";
 
   const checkpoint = await readDispatchCheckpoint(config);
+  const prometheusAnalysis = await readJson(path.join(stateDir, "prometheus_analysis.json"), null);
+  const checkpointMatchesIdentity = checkpointMatchesPlanSet(
+    checkpoint,
+    plans,
+    String(prometheusAnalysis?.analyzedAt || ""),
+  );
   // Match on planCount (actual plan count) if present, fall back to legacy totalPlans comparison
   const checkpointPlanCount = Number(checkpoint?.planCount ?? checkpoint?.totalPlans ?? 0);
-  if (checkpoint && checkpointPlanCount === plans.length) {
+  if (checkpoint && checkpointPlanCount === plans.length && checkpointMatchesIdentity) {
     // When all batches have completed the checkpoint status is set to "complete"
     // and completedPlans is set to totalPlans (batch count). Treat that as all plans done.
     if (checkpoint.status === "complete") {
@@ -3593,6 +3699,8 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     planReview = { ...planReview, approved: false, reason, blocker, corrections: planReview?.corrections || [] };
   }
 
+  const athenaCorrectionDispatchBlockReason = resolveAthenaCorrectionDispatchBlockReason(planReview?.corrections || []);
+
   if (!planReview.approved) {
     markPremiumOutcome(athenaPremiumEvent.eventId, false);
     const rejectionReason = planReview.reason || { code: "PLAN_REJECTED", message: planReview.summary || "Rejected by Athena" };
@@ -3619,8 +3727,46 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       reason: rejectionReason,
       blocker,
       corrections: correctionsList,
+      dispatchBlockReason: athenaCorrectionDispatchBlockReason,
       summary: planReview.summary || ""
     });
+    return;
+  }
+
+  if (athenaCorrectionDispatchBlockReason) {
+    markPremiumOutcome(athenaPremiumEvent.eventId, false);
+    await appendProgress(
+      config,
+      `[CYCLE] Athena corrections indicate active governance block — reason=${athenaCorrectionDispatchBlockReason}`
+    );
+    await appendAlert(config, {
+      severity: ALERT_SEVERITY.HIGH,
+      source: "orchestrator",
+      title: "Worker dispatch blocked by Athena governance correction token",
+      message: `reason=${athenaCorrectionDispatchBlockReason}`,
+    });
+    try {
+      const blockedAnalytics = computeCycleAnalytics(config, {
+        phase: CYCLE_PHASE.INCOMPLETE,
+        dispatchBlockReason: athenaCorrectionDispatchBlockReason,
+        pipelineProgress: null,
+        workerResults: null,
+      });
+      await persistCycleAnalytics(config, blockedAnalytics);
+      await appendGovernanceBlockEvent(config, {
+        cycleId: `cycle-${cycleStartedAt || Date.now()}`,
+        blockReason: athenaCorrectionDispatchBlockReason,
+        blockedAt: new Date().toISOString(),
+        gateSource: "athena_correction_token",
+      });
+      await recordCapabilityExecution(
+        config,
+        "dispatch-block-reason-reporting",
+        `gateSource=athena_correction_token reason=${athenaCorrectionDispatchBlockReason.slice(0, 120)}`,
+      );
+    } catch (analyticsErr) {
+      warn(`[orchestrator] Athena correction block analytics write failed (non-fatal): ${String(analyticsErr?.message || analyticsErr)}`);
+    }
     return;
   }
 
@@ -4381,7 +4527,9 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     workersDone: 0
   });
 
-  const dispatchCheckpoint = await beginDispatchCheckpoint(config, workerBatches, plans.length);
+  const dispatchCheckpoint = await beginDispatchCheckpoint(config, workerBatches, plans.length, {
+    planAnalyzedAt: String(prometheusAnalysis?.analyzedAt || ""),
+  });
   let workersDone = 0;
   let pendingCycleHealthRecord: Record<string, unknown> | null = null;
   const allWorkerResults: Array<{

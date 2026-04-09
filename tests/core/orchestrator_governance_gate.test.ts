@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { evaluatePreDispatchGovernanceGate, BLOCK_REASON, GATE_PRECEDENCE } from "../../src/core/orchestrator.js";
+import {
+  evaluatePreDispatchGovernanceGate,
+  BLOCK_REASON,
+  GATE_PRECEDENCE,
+  resolveAthenaCorrectionDispatchBlockReason,
+} from "../../src/core/orchestrator.js";
 
 describe("orchestrator governance gate dry-run parity", () => {
   it("returns non-blocked gate decision in clear-state dry-run", async () => {
@@ -177,6 +182,25 @@ describe("orchestrator governance gate — specialization admission", () => {
 
   it("GATE_PRECEDENCE.SPECIALIZATION_ADMISSION is greater than ROLLING_COMPLETION_YIELD", () => {
     assert.ok(GATE_PRECEDENCE.SPECIALIZATION_ADMISSION > GATE_PRECEDENCE.ROLLING_COMPLETION_YIELD);
+  });
+});
+
+describe("orchestrator governance correction token mapping", () => {
+  it("maps Athena governance correction token to canonical dispatchBlockReason", () => {
+    const reason = resolveAthenaCorrectionDispatchBlockReason([
+      "Pre-dispatch governance state infeasible (governance_freeze_active, critical_debt_overdue) — resolve active gate before dispatch",
+    ]);
+    assert.equal(
+      reason,
+      `${BLOCK_REASON.GOVERNANCE_FREEZE_ACTIVE}:athena_correction_token=${BLOCK_REASON.GOVERNANCE_FREEZE_ACTIVE}`,
+    );
+  });
+
+  it("negative path: returns null when correction text has no governance token", () => {
+    const reason = resolveAthenaCorrectionDispatchBlockReason([
+      "verification command should be more specific",
+    ]);
+    assert.equal(reason, null);
   });
 });
 
