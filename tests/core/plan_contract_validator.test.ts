@@ -23,6 +23,9 @@ import {
   LANE_PACKET_SIZE_DEFAULTS,
   classifyPacketLane,
   getPacketThresholdsForLane,
+  validateAndInjectRolePlans,
+  ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX,
+  ROLE_PLAN_SKELETON_METADATA_SOURCE,
 } from "../../src/core/plan_contract_validator.js";
 import { checkForbiddenCommands } from "../../src/core/verification_command_registry.js";
 
@@ -679,6 +682,64 @@ describe("PACKET_VIOLATION_CODE — deterministic violation taxonomy", () => {
         ))
         .map(r => r.planIndex);
       assert.deepEqual(byCode, byField, "code-based and field-based filters must identify the same plans");
+    });
+  });
+
+  describe("validateAndInjectRolePlans fallback metadata", () => {
+    it("returns explicit missing-role markers before fallback injection", () => {
+      const payload = {
+        executionStrategy: {
+          waves: [
+            {
+              wave: 3,
+              tasks: [{ task: "Repair planner gate", role: "quality-worker" }],
+            },
+          ],
+        },
+        plans: [],
+      };
+
+      const result = validateAndInjectRolePlans(payload, { injectMissing: false });
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.initialMissingRoles, ["quality-worker"]);
+      assert.deepEqual(
+        result.initialMissingRoleMarkers,
+        [`${ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX}:quality-worker:wave:3`]
+      );
+      assert.deepEqual(result.injectedSkeletonMetadata, []);
+    });
+
+    it("attaches canonical skeleton metadata to fallback-injected plans", () => {
+      const payload = {
+        executionStrategy: {
+          waves: [
+            {
+              wave: 2,
+              tasks: [{ task: "Repair api gate", role: "api-worker" }],
+            },
+          ],
+        },
+        plans: [],
+      };
+
+      const result = validateAndInjectRolePlans(payload, { injectMissing: true });
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.injectedRoles, ["api-worker"]);
+      assert.deepEqual(result.injectedSkeletonMetadata, [
+        {
+          role: "api-worker",
+          wave: 2,
+          marker: `${ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX}:api-worker:wave:2`,
+          source: ROLE_PLAN_SKELETON_METADATA_SOURCE,
+          task_id: "role-coverage-api-worker-wave-2",
+        },
+      ]);
+
+      const plan = result.output.plans.find((entry: any) => entry.role === "api-worker");
+      assert.ok(plan, "expected fallback skeleton for api-worker");
+      assert.equal(plan._rolePlanSkeletonInjected, true);
+      assert.equal(plan._missingRoleMarker, `${ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX}:api-worker:wave:2`);
+      assert.equal(plan._rolePlanSkeletonSource, ROLE_PLAN_SKELETON_METADATA_SOURCE);
     });
   });
 });

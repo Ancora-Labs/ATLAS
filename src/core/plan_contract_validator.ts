@@ -1158,10 +1158,21 @@ export interface RolePlanCoverageValidationResult {
   requiredRoles: string[];
   missingRoles: string[];
   initialMissingRoles: string[];
+  initialMissingRoleMarkers: string[];
   injectedRoles: string[];
+  injectedSkeletonMetadata: Array<{
+    role: string;
+    wave: number;
+    marker: string;
+    source: string;
+    task_id: string;
+  }>;
   invalidRolePlans: string[];
   output: any;
 }
+
+export const ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX = "missing_execution_strategy_role";
+export const ROLE_PLAN_SKELETON_METADATA_SOURCE = "execution_strategy_role_coverage_fallback_v1";
 
 function normalizeRoleValue(value: unknown): string {
   return String(value ?? "").trim().toLowerCase();
@@ -1178,6 +1189,10 @@ function roleSlug(value: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return slug || "worker";
+}
+
+function buildMissingRoleMarker(role: string, wave: number): string {
+  return `${ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX}:${role}:wave:${wave}`;
 }
 
 function collectExecutionStrategyTaskRoles(payload: any): Array<{ role: string; wave: number }> {
@@ -1243,8 +1258,10 @@ function toRoleCoverageContractCandidate(plan: any, role: string, wave: number):
 
 function buildRoleCoverageSkeleton(role: string, wave: number): any {
   const slug = roleSlug(role);
+  const marker = buildMissingRoleMarker(role, wave);
+  const taskId = `role-coverage-${slug}-wave-${wave}`;
   return {
-    task_id: `role-coverage-${slug}-wave-${wave}`,
+    task_id: taskId,
     title: `Role coverage skeleton for ${role} (wave ${wave})`,
     task: `Inject contract-valid fallback plan coverage for role "${role}" in wave ${wave}`,
     role,
@@ -1261,6 +1278,15 @@ function buildRoleCoverageSkeleton(role: string, wave: number): any {
     requestROI: 1.05,
     estimatedExecutionTokens: 2000,
     riskLevel: "medium",
+    _missingRoleMarker: marker,
+    _rolePlanSkeletonSource: ROLE_PLAN_SKELETON_METADATA_SOURCE,
+    _rolePlanSkeletonMetadata: {
+      role,
+      wave,
+      marker,
+      source: ROLE_PLAN_SKELETON_METADATA_SOURCE,
+      task_id: taskId,
+    },
     _rolePlanSkeletonInjected: true,
   };
 }
@@ -1279,7 +1305,9 @@ export function validateAndInjectRolePlans(
       requiredRoles: [],
       missingRoles: [],
       initialMissingRoles: [],
+      initialMissingRoleMarkers: [],
       injectedRoles: [],
+      injectedSkeletonMetadata: [],
       invalidRolePlans: [],
       output: { ...source, plans },
     };
@@ -1301,8 +1329,18 @@ export function validateAndInjectRolePlans(
   }
 
   const initialMissingRoles = requiredRoles.filter((role) => !validRoles.has(role));
+  const initialMissingRoleMarkers = initialMissingRoles.map((role) =>
+    buildMissingRoleMarker(role, firstWaveByRole.get(role) || 1)
+  );
   const injectMissing = opts?.injectMissing === true;
   const injectedRoles: string[] = [];
+  const injectedSkeletonMetadata: Array<{
+    role: string;
+    wave: number;
+    marker: string;
+    source: string;
+    task_id: string;
+  }> = [];
 
   if (injectMissing && initialMissingRoles.length > 0) {
     for (const role of initialMissingRoles) {
@@ -1312,6 +1350,24 @@ export function validateAndInjectRolePlans(
         plans.push(skeleton);
         validRoles.add(role);
         injectedRoles.push(role);
+        const skeletonMeta = skeleton?._rolePlanSkeletonMetadata;
+        if (skeletonMeta && typeof skeletonMeta === "object") {
+          injectedSkeletonMetadata.push({
+            role: String(skeletonMeta.role || role),
+            wave: normalizeWaveNumber(skeletonMeta.wave, wave),
+            marker: String(skeletonMeta.marker || buildMissingRoleMarker(role, wave)),
+            source: String(skeletonMeta.source || ROLE_PLAN_SKELETON_METADATA_SOURCE),
+            task_id: String(skeletonMeta.task_id || skeleton.task_id || ""),
+          });
+        } else {
+          injectedSkeletonMetadata.push({
+            role,
+            wave,
+            marker: buildMissingRoleMarker(role, wave),
+            source: ROLE_PLAN_SKELETON_METADATA_SOURCE,
+            task_id: String(skeleton.task_id || ""),
+          });
+        }
       }
     }
   }
@@ -1322,7 +1378,9 @@ export function validateAndInjectRolePlans(
     requiredRoles,
     missingRoles,
     initialMissingRoles,
+    initialMissingRoleMarkers,
     injectedRoles,
+    injectedSkeletonMetadata,
     invalidRolePlans: [...invalidRolePlans].sort(),
     output: { ...source, plans },
   };
