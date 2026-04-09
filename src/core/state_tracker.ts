@@ -909,6 +909,18 @@ export interface CapabilityExecutionTrace {
   context: string;
 }
 
+export interface CapabilityExecutionSummary {
+  freshnessWindowMs: number;
+  traceCount: number;
+  recentTraceCount: number;
+  staleTraceCount: number;
+  observedCapabilityCount: number;
+  observedCapabilities: string[];
+  lastObservedAt: string | null;
+  lastInvokedAtByCapability: Record<string, string>;
+  recentTraces: CapabilityExecutionTrace[];
+}
+
 /**
  * Record that a capability was observed executing in the active runtime path.
  *
@@ -959,6 +971,25 @@ export async function loadCapabilityExecutionTraces(
   config: { paths?: { stateDir?: string } },
   freshnessMs: number = CAPABILITY_TRACE_FRESHNESS_MS,
 ): Promise<Set<string>> {
+  const summary = await loadCapabilityExecutionSummary(config, freshnessMs);
+  return new Set(summary.observedCapabilities);
+}
+
+export async function loadCapabilityExecutionSummary(
+  config: { paths?: { stateDir?: string } },
+  freshnessMs: number = CAPABILITY_TRACE_FRESHNESS_MS,
+): Promise<CapabilityExecutionSummary> {
+  const fallback: CapabilityExecutionSummary = {
+    freshnessWindowMs: freshnessMs,
+    traceCount: 0,
+    recentTraceCount: 0,
+    staleTraceCount: 0,
+    observedCapabilityCount: 0,
+    observedCapabilities: [],
+    lastObservedAt: null,
+    lastInvokedAtByCapability: {},
+    recentTraces: [],
+  };
   const stateDir = config?.paths?.stateDir || "state";
   const filePath = path.join(stateDir, "capability_execution_traces.json");
   try {
@@ -969,9 +1000,53 @@ export async function loadCapabilityExecutionTraces(
       const ts = Date.parse(String(t?.observedAt || ""));
       return Number.isFinite(ts) && ts > cutoff;
     });
-    return new Set(recent.map((t) => String(t.capability || "").trim().toLowerCase()));
+
+    if (recent.length === 0) {
+      return {
+        ...fallback,
+        freshnessWindowMs: freshnessMs,
+        traceCount: traces.length,
+        staleTraceCount: traces.length,
+      };
+    }
+
+    const normalizedRecent = recent.map((t) => ({
+      capability: String(t?.capability || "").trim().toLowerCase(),
+      observedAt: String(t?.observedAt || ""),
+      context: String(t?.context || ""),
+    }));
+    const observedCapabilities = [...new Set(
+      normalizedRecent
+        .map((t) => t.capability)
+        .filter(Boolean),
+    )];
+    const lastObservedAt = normalizedRecent
+      .map((t) => Date.parse(t.observedAt))
+      .filter((ts) => Number.isFinite(ts))
+      .sort((a, b) => b - a)
+      .map((ts) => new Date(ts).toISOString())[0] ?? null;
+    const lastInvokedAtByCapability = normalizedRecent.reduce<Record<string, string>>((acc, trace) => {
+      if (!trace.capability) return acc;
+      const previous = acc[trace.capability];
+      if (!previous || Date.parse(trace.observedAt) > Date.parse(previous)) {
+        acc[trace.capability] = trace.observedAt;
+      }
+      return acc;
+    }, {});
+
+    return {
+      freshnessWindowMs: freshnessMs,
+      traceCount: traces.length,
+      recentTraceCount: normalizedRecent.length,
+      staleTraceCount: Math.max(0, traces.length - normalizedRecent.length),
+      observedCapabilityCount: observedCapabilities.length,
+      observedCapabilities,
+      lastObservedAt,
+      lastInvokedAtByCapability,
+      recentTraces: normalizedRecent,
+    };
   } catch {
-    return new Set<string>();
+    return fallback;
   }
 }
 

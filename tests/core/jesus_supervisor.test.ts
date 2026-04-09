@@ -431,6 +431,55 @@ describe("jesus_supervisor — runSystemHealthAudit", () => {
     });
   });
 
+  it("does NOT downgrade gap when only stale execution traces exist", async () => {
+    await withTempRepo(async ({ stateDir, repoDir }) => {
+      writeFileSync(
+        path.join(repoDir, "src", "core", "prometheus.ts"),
+        "const a='MANDATORY_TASKS'; function buildMandatoryTasksPromptSection(){} function extractMandatoryHealthAuditFindings(){}",
+        "utf8",
+      );
+      writeFileSync(
+        path.join(stateDir, "capability_execution_traces.json"),
+        JSON.stringify({
+          traces: [
+            {
+              capability: "jesus-findings-to-plan-requirements",
+              observedAt: new Date(Date.now() - (3 * 24 * 60 * 60 * 1000)).toISOString(),
+              context: "stale historical invocation",
+            },
+          ],
+        }),
+        "utf8",
+      );
+      writeFileSync(
+        path.join(stateDir, "knowledge_memory.json"),
+        JSON.stringify({
+          lessons: [],
+          capabilityGaps: [
+            {
+              gap: "Missing capability: Jesus findings were not fed as mandatory plan tasks",
+              severity: "critical",
+              capability: "jesus-findings-to-plan-requirements",
+              proposedFix: "Inject findings as mandatory tasks",
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        { latestMainCi: null, failedCiRuns: [], pullRequests: [] },
+        {},
+        {},
+      );
+      const capGap = findings.find((f: any) => f.area === "capability-gap");
+      assert.ok(capGap, "capability-gap finding should exist");
+      assert.equal(capGap.severity, "critical");
+      assert.equal(capGap.note, undefined);
+    });
+  });
+
   it("keeps unverified capability gaps at original severity", async () => {
     await withTempRepo(async ({ stateDir, repoDir }) => {
       writeFileSync(path.join(repoDir, "src", "core", "placeholder.ts"), "export const ok = true;", "utf8");

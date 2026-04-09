@@ -54,6 +54,7 @@ import { hasFiniteAthenaOverallScore } from "./athena_reviewer.js";
 import { hasPrometheusRuntimeContractSignals, isStrategicFieldToolTraceContaminated, STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH } from "./prometheus.js";
 import { getLaneForWorkerName, isSpecialistLane } from "./role_registry.js";
 import { isAnalyticsCompletedWorkerStatus } from "./worker_runner.js";
+import { loadCapabilityExecutionSummary } from "./state_tracker.js";
 
 // ── Funnel helpers ─────────────────────────────────────────────────────────────
 
@@ -189,6 +190,7 @@ export const CYCLE_ANALYTICS_SCHEMA = Object.freeze({
       "stageTransitions",
       "dropReasons",
       "modelRoutingTelemetry",
+      "capabilityExecutionSummary",
     ],
     cycleIdSource: "pipeline_progress.startedAt",
     phaseEnum: Object.freeze([...Object.values(CYCLE_PHASE)]),
@@ -819,6 +821,59 @@ function computeConfidence(canonicalEvents, sloRecord, pipelineProgress) {
   };
 }
 
+function normalizeCapabilityExecutionSummary(summary: unknown) {
+  const src = summary && typeof summary === "object" ? summary as Record<string, unknown> : {};
+  const observedCapabilities = Array.isArray(src.observedCapabilities)
+    ? [...new Set(src.observedCapabilities.map((id) => String(id || "").trim().toLowerCase()).filter(Boolean))]
+    : [];
+  const observedCapabilityCountRaw = Number(src.observedCapabilityCount);
+  const observedCapabilityCount = Number.isFinite(observedCapabilityCountRaw) && observedCapabilityCountRaw >= 0
+    ? Math.floor(observedCapabilityCountRaw)
+    : observedCapabilities.length;
+  const freshnessWindowMsRaw = Number(src.freshnessWindowMs);
+  const freshnessWindowMs = Number.isFinite(freshnessWindowMsRaw) && freshnessWindowMsRaw > 0
+    ? Math.floor(freshnessWindowMsRaw)
+    : null;
+  return {
+    freshnessWindowMs,
+    observedCapabilityCount,
+    observedCapabilities,
+    lastObservedAt: typeof src.lastObservedAt === "string" ? src.lastObservedAt : null,
+  };
+}
+
+function applyCapabilityExecutionConfidenceGate(
+  confidence: any,
+  capabilityExecutionSummary: any,
+  enforceRuntimeEvidence: boolean,
+) {
+  const base = confidence && typeof confidence === "object"
+    ? {
+      level: String(confidence.level || CONFIDENCE_LEVEL.LOW),
+      reason: String(confidence.reason || ""),
+      missingFields: Array.isArray(confidence.missingFields) ? [...confidence.missingFields] : [],
+    }
+    : {
+      level: CONFIDENCE_LEVEL.LOW,
+      reason: "confidence unavailable",
+      missingFields: [],
+    };
+  if (!enforceRuntimeEvidence) return base;
+  const observedCount = Number(capabilityExecutionSummary?.observedCapabilityCount || 0);
+  if (observedCount > 0) return base;
+  if (!base.missingFields.includes("capabilityExecutionSummary.observedCapabilityCount")) {
+    base.missingFields.push("capabilityExecutionSummary.observedCapabilityCount");
+  }
+  if (base.level === CONFIDENCE_LEVEL.HIGH) {
+    return {
+      ...base,
+      level: CONFIDENCE_LEVEL.MEDIUM,
+      reason: `${base.reason}; runtime capability evidence absent`,
+    };
+  }
+  return base;
+}
+
 /**
  * Derive outcome status from workerResults and planCount.
  * Handles null inputs explicitly (missing data sentinel = null, not 0).
@@ -941,6 +996,7 @@ export function computeCycleAnalytics(config, {
   premiumEfficiencyAdjusted = null,
   rawPremiumEfficiency = null,
   executionAdjustedPremiumEfficiency = null,
+  capabilityExecutionSummary = null,
 }: any = {}) {
   const missingData = [];
   const stageTimestamps = pipelineProgress?.stageTimestamps || null;
@@ -1028,7 +1084,15 @@ export function computeCycleAnalytics(config, {
   const outcomeStatus = computeOutcomeStatus(phase, safeWorkerResults, planCount);
 
   // Confidence (deterministic, not statistical)
-  const confidence = computeConfidence(canonicalEvents, sloRecord, pipelineProgress);
+  const normalizedCapabilityExecutionSummary =
+    capabilityExecutionSummary === null || capabilityExecutionSummary === undefined
+      ? null
+      : normalizeCapabilityExecutionSummary(capabilityExecutionSummary);
+  const confidence = applyCapabilityExecutionConfidenceGate(
+    computeConfidence(canonicalEvents, sloRecord, pipelineProgress),
+    normalizedCapabilityExecutionSummary,
+    normalizedCapabilityExecutionSummary !== null,
+  );
   const runtimeContractProbe = computeRuntimeContractProbe({
     prometheusAnalysis,
     athenaPlanReview,
@@ -1245,6 +1309,7 @@ export function computeCycleAnalytics(config, {
     stageTransitions: Array.isArray(stageTransitions) ? stageTransitions : [],
     dropReasons:      Array.isArray(dropReasons) ? dropReasons : [],
     modelRoutingTelemetry: buildModelRoutingTelemetry(premiumUsageLog ?? []),
+    capabilityExecutionSummary: normalizedCapabilityExecutionSummary,
     lineageSummary: buildLineageSummary(lineageLog ?? []),
     memoryHitTelemetry: buildMemoryHitTelemetry(memoryHitLog ?? []),
     routingROISummary: buildRoutingROISummary(premiumUsageLog ?? [], lineageLog ?? []),
@@ -1377,8 +1442,19 @@ export async function persistCycleAnalytics(config, record) {
     updatedAt: null,
   });
 
+  const stateDir = config?.paths?.stateDir || "state";
+  const runtimeCapabilityExecutionSummary = await loadCapabilityExecutionSummary({ paths: { stateDir } });
+  const normalizedCapabilityExecutionSummary = normalizeCapabilityExecutionSummary(
+    record?.capabilityExecutionSummary ?? runtimeCapabilityExecutionSummary,
+  );
+  const normalizedRecord = {
+    ...record,
+    capabilityExecutionSummary: normalizedCapabilityExecutionSummary,
+    confidence: applyCapabilityExecutionConfidenceGate(record?.confidence, normalizedCapabilityExecutionSummary, true),
+  };
+
   const history = Array.isArray(existing.history) ? existing.history : [];
-  history.unshift(record);
+  history.unshift(normalizedRecord);
   if (history.length > maxEntries) {
     history.length = maxEntries;
   }
@@ -1386,7 +1462,7 @@ export async function persistCycleAnalytics(config, record) {
   try {
     await writeJson(filePath, {
       schemaVersion: CYCLE_ANALYTICS_SCHEMA.schemaVersion,
-      lastCycle: record,
+      lastCycle: normalizedRecord,
       history,
       updatedAt: new Date().toISOString(),
     });

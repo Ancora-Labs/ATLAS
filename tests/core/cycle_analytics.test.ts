@@ -44,6 +44,7 @@ import {
   LEGACY_EVOLUTION_PROGRESS_FILE,
   LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION,
 } from "../../src/core/cycle_analytics.js";
+import { recordCapabilityExecution } from "../../src/core/state_tracker.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -110,7 +111,7 @@ describe("CYCLE_ANALYTICS_SCHEMA (AC8)", () => {
 
   it("required fields list is complete", () => {
     const req = CYCLE_ANALYTICS_SCHEMA.cycleRecord.required;
-    for (const f of ["cycleId", "generatedAt", "phase", "outcomes", "kpis", "confidence", "causalLinks", "canonicalEvents", "missingData"]) {
+    for (const f of ["cycleId", "generatedAt", "phase", "outcomes", "kpis", "confidence", "causalLinks", "canonicalEvents", "missingData", "capabilityExecutionSummary"]) {
       assert.ok(req.includes(f), `required field missing: ${f}`);
     }
   });
@@ -467,6 +468,33 @@ describe("computeCycleAnalytics — confidence levels (AC1, AC11)", () => {
     const record = computeCycleAnalytics(config);
     assert.ok(Array.isArray(record.confidence.missingFields));
   });
+
+  it("degrades high confidence to medium when capability execution evidence is absent", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      sloRecord: makeSloRecord(),
+      pipelineProgress: makePipelineProgress(),
+      capabilityExecutionSummary: {
+        observedCapabilityCount: 0,
+        observedCapabilities: [],
+      },
+    });
+    assert.equal(record.confidence.level, CONFIDENCE_LEVEL.MEDIUM);
+    assert.ok(record.confidence.missingFields.includes("capabilityExecutionSummary.observedCapabilityCount"));
+  });
+
+  it("keeps high confidence when capability execution evidence is present", () => {
+    const config = makeConfig("state");
+    const record = computeCycleAnalytics(config, {
+      sloRecord: makeSloRecord(),
+      pipelineProgress: makePipelineProgress(),
+      capabilityExecutionSummary: {
+        observedCapabilityCount: 1,
+        observedCapabilities: ["ci-failure-log-injection"],
+      },
+    });
+    assert.equal(record.confidence.level, CONFIDENCE_LEVEL.HIGH);
+  });
 });
 
 // ── computeCycleAnalytics — causal links (AC12) ───────────────────────────────
@@ -688,6 +716,28 @@ describe("persistCycleAnalytics and readCycleAnalytics (AC4)", () => {
     assert.ok("lastCycle" in data);
     assert.ok(Array.isArray(data.history));
     assert.ok("updatedAt" in data);
+  });
+
+  it("persists runtime capabilityExecutionSummary even when compute input omits it", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "box-analytics-cap-summary-"));
+    try {
+      const config = makeConfig(dir);
+      await recordCapabilityExecution(
+        { paths: { stateDir: dir } } as any,
+        "runtime-contract-probe",
+        "test cycle",
+      );
+      const record = computeCycleAnalytics(config, {
+        sloRecord: makeSloRecord(),
+        pipelineProgress: makePipelineProgress(),
+      });
+      await persistCycleAnalytics(config, record);
+      const data = await readCycleAnalytics(config);
+      assert.equal(data.lastCycle.capabilityExecutionSummary.observedCapabilityCount, 1);
+      assert.ok(data.lastCycle.capabilityExecutionSummary.observedCapabilities.includes("runtime-contract-probe"));
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("append-only: second write prepends to history", async () => {

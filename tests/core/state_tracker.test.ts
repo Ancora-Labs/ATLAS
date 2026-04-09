@@ -392,6 +392,7 @@ describe("appendGovernanceBlockEvent", () => {
 import {
   recordCapabilityExecution,
   loadCapabilityExecutionTraces,
+  loadCapabilityExecutionSummary,
 } from "../../src/core/state_tracker.js";
 
 describe("recordCapabilityExecution", () => {
@@ -432,6 +433,37 @@ describe("recordCapabilityExecution", () => {
     } finally {
       await fs.rm(emptyDir, { recursive: true, force: true });
     }
+  });
+
+  it("builds a capability execution summary with observed capability counts", async () => {
+    const config = { paths: { stateDir } };
+    await recordCapabilityExecution(config, "cap-alpha", "c1");
+    await recordCapabilityExecution(config, "cap-beta", "c1");
+    const summary = await loadCapabilityExecutionSummary(config);
+    assert.equal(summary.observedCapabilityCount, 2);
+    assert.equal(summary.recentTraceCount, 2);
+    assert.ok(summary.observedCapabilities.includes("cap-alpha"));
+    assert.ok(summary.observedCapabilities.includes("cap-beta"));
+    assert.equal(typeof summary.lastObservedAt, "string");
+  });
+
+  it("summary marks stale traces outside freshness window (negative path)", async () => {
+    const config = { paths: { stateDir } };
+    const staleAt = new Date(Date.now() - (2 * 24 * 60 * 60 * 1000)).toISOString();
+    await fs.writeFile(
+      path.join(stateDir, "capability_execution_traces.json"),
+      JSON.stringify({
+        traces: [
+          { capability: "cap-stale", observedAt: staleAt, context: "old run" },
+        ],
+      }),
+      "utf8",
+    );
+    const summary = await loadCapabilityExecutionSummary(config);
+    assert.equal(summary.observedCapabilityCount, 0);
+    assert.equal(summary.recentTraceCount, 0);
+    assert.equal(summary.staleTraceCount, 1);
+    assert.equal(summary.lastObservedAt, null);
   });
 });
 

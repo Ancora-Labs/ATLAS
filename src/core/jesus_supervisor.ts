@@ -17,7 +17,7 @@
 import path from "node:path";
 import { appendFileSync } from "node:fs";
 import { readJson, readJsonSafe, writeJson, spawnAsync, buildIncrementalSignatureIndex } from "./fs_utils.js";
-import { appendProgress, appendAlert, ALERT_SEVERITY, loadCapabilityExecutionTraces } from "./state_tracker.js";
+import { appendProgress, appendAlert, ALERT_SEVERITY, loadCapabilityExecutionSummary } from "./state_tracker.js";
 import { getRoleRegistry } from "./role_registry.js";
 import { buildAgentArgs, parseAgentOutput, logAgentThinking } from "./agent_loader.js";
 import { chatLog, emitEvent, warn } from "./logger.js";
@@ -333,7 +333,8 @@ export async function runSystemHealthAudit(config, githubState, AthenaCoordinati
     const criticalLessons = (km.lessons || []).filter(l => l.severity === "critical").slice(-3);
     const capGaps = Array.isArray(km.capabilityGaps) ? km.capabilityGaps.slice(-5) : [];
     const sourceIndex = await loadSourceEvidenceIndex(process.cwd());
-    const executionTraces = await loadCapabilityExecutionTraces(config);
+    const capabilityExecutionSummary = await loadCapabilityExecutionSummary(config);
+    const executionTraces = new Set(capabilityExecutionSummary.observedCapabilities);
 
     if (criticalLessons.length > 0) {
       findings.push({
@@ -713,22 +714,17 @@ export async function runJesusCycle(config) {
     // Persist findings for self-improvement to consume.
     // capabilityInvocationStatus provides a per-capability record distinguishing
     // "code present in source" from "actually invoked at runtime this cycle".
-    const tracePayload = await readJson(path.join(stateDir, "capability_execution_traces.json"), { traces: [] });
-    const capabilityExecutionTraces = Array.isArray(tracePayload?.traces)
-      ? tracePayload.traces.slice(-50)
-      : [];
-    const tracedCapabilities = new Set(capabilityExecutionTraces.map((t: any) => String(t?.capability || "").trim().toLowerCase()));
+    const capabilityExecutionSummary = await loadCapabilityExecutionSummary(config);
+    const tracedCapabilities = new Set(capabilityExecutionSummary.observedCapabilities);
     const capabilityInvocationStatus = Object.keys(CAPABILITY_SOURCE_SIGNATURES).map(id => ({
       capability: id,
       status: tracedCapabilities.has(id) ? "invoked" : "absent",
-      lastInvokedAt: capabilityExecutionTraces
-        .filter((t: any) => String(t?.capability || "").trim().toLowerCase() === id)
-        .map((t: any) => t.observedAt)
-        .slice(-1)[0] ?? null,
+      lastInvokedAt: capabilityExecutionSummary.lastInvokedAtByCapability[id] ?? null,
     }));
     await writeJson(path.join(stateDir, "health_audit_findings.json"), {
       findings: healthFindings,
-      capabilityExecutionTraces,
+      capabilityExecutionSummary,
+      capabilityExecutionTraces: capabilityExecutionSummary.recentTraces,
       capabilityInvocationStatus,
       auditedAt: new Date().toISOString()
     });
@@ -903,11 +899,12 @@ ${workersList}`;
     Number(config?.runtime?.jesusDecisionLatencyWarningMs ?? config?.slo?.thresholds?.decisionLatencyMs ?? 900_000),
   );
   // Latency-aware tiered routing: T1 (fast) → T2 (normal) → T3 (full+fallback).
-  // maxRetries=1 means 2 attempts (T1+T2), maxRetries=2 means all 3 tiers.
+  // maxRetries=1 means 2 attempts, maxRetries=2 means all 3 tiers.
   const tier1Ms = Math.max(30_000, Math.min(Number(config?.runtime?.jesusLatencyTier1Ms ?? 60_000), jesusTimeoutMs));
   const tier2Ms = Math.max(tier1Ms + 1, Math.min(Number(config?.runtime?.jesusLatencyTier2Ms ?? 600_000), jesusTimeoutMs));
+  const disableTier1 = config?.runtime?.jesusDisableTier1 === true;
   const jesusSoftTimeoutMs = Math.max(
-    tier1Ms,
+    disableTier1 ? tier2Ms : tier1Ms,
     Math.min(Number(config?.runtime?.jesusSoftTimeoutMs ?? tier2Ms), jesusTimeoutMs),
   );
   const maxRetries = Math.max(0, Math.min(Number(config?.runtime?.jesusMaxRetries ?? 1), 2));
@@ -915,12 +912,13 @@ ${workersList}`;
 
   // Build tier list: each tier has its own timeout and model.
   // T3 uses the fallback model (may be the same as jesusModel when no override is set).
-  const ALL_TIERS = [
+  const allTiers = [
     { timeoutMs: tier1Ms, model: jesusModel, label: "T1" },
     { timeoutMs: tier2Ms, model: jesusModel, label: "T2" },
     { timeoutMs: jesusTimeoutMs, model: fallbackModel, label: "T3" },
   ];
-  const tiers = ALL_TIERS.slice(0, Math.min(maxRetries + 1, ALL_TIERS.length))
+  const candidateTiers = disableTier1 ? allTiers.filter((tier) => tier.label !== "T1") : allTiers;
+  const tiers = candidateTiers.slice(0, Math.min(maxRetries + 1, candidateTiers.length))
     .map((tier) => ({
       ...tier,
       // Every fallback-model tier is soft-timeout gated so activation semantics
@@ -934,7 +932,7 @@ ${workersList}`;
   }
 
   let rawResult: any;
-  let finalTierLabel = tiers[0]?.label || "T1";
+  let finalTierLabel = tiers[0]?.label || (disableTier1 ? "T2" : "T1");
   let finalTierModel = tiers[0]?.model || jesusModel;
   const aiCallStartedAt = Date.now();
   const latencyWarningCorrelationId = `jesus-latency-${aiCallStartedAt}`;
