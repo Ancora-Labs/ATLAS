@@ -178,6 +178,22 @@ describe("computeRollingCompletionYield — rolling dispatch throttle", () => {
     assert.equal(contract.reason, null);
   });
 
+  it("treats partial outcomes as productive completions for rolling yield", async () => {
+    // 5 dispatches, 2 partial + 1 done = 3 productive completions => yield = 0.6
+    const entries = [
+      { role: "w", outcome: "partial", timestamp: new Date().toISOString() },
+      { role: "w", outcome: "partial", timestamp: new Date().toISOString() },
+      { role: "w", outcome: "done", timestamp: new Date().toISOString() },
+      { role: "w", outcome: "failed", timestamp: new Date().toISOString() },
+      { role: "w", outcome: "blocked", timestamp: new Date().toISOString() },
+    ];
+    await fs.writeFile(path.join(tmpDir, "premium_usage_log.json"), JSON.stringify(entries), "utf8");
+    const contract = await computeRollingCompletionYield(config, { minDispatches: 3 });
+    assert.equal(contract.dispatches, 5);
+    assert.equal(contract.completions, 3, "partial outcomes must contribute to productive completion yield");
+    assert.equal(contract.throttled, false, "yield=0.6 must not trigger throttle");
+  });
+
   it("uses only the last ROLLING_YIELD_WINDOW_SIZE entries from the log", async () => {
     // 15 entries: first 5 all "done", last 10 all "failed" → window (last 10) has yield=0
     const entries = [

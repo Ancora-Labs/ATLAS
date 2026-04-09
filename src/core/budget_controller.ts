@@ -133,6 +133,11 @@ export async function computeRollingCompletionYield(config, opts: {
   const stateDir = config?.paths?.stateDir || "state";
   const logPath  = path.join(stateDir, "premium_usage_log.json");
 
+  const isProductiveOutcome = (outcome: unknown): boolean => {
+    const normalized = String(outcome || "").trim().toLowerCase();
+    return normalized === "done" || normalized === "success" || normalized === "partial";
+  };
+
   try {
     const raw = await readJson(logPath, null);
     if (!Array.isArray(raw)) {
@@ -141,7 +146,7 @@ export async function computeRollingCompletionYield(config, opts: {
 
     const window = raw.slice(-windowSize);
     const dispatches   = window.length;
-    const completions  = window.filter((e: any) => e?.outcome === "done").length;
+    const completions  = window.filter((e: any) => isProductiveOutcome(e?.outcome)).length;
     const yieldRatio   = dispatches > 0 ? completions / dispatches : 0;
 
     if (dispatches < minDispatch) {
