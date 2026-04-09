@@ -6,7 +6,10 @@ import {
   getProtectedPathMatches,
   validateRoleInstruction,
   getRolePathViolations,
-  applyGovernanceDecision
+  applyGovernanceDecision,
+  loadHookPolicy,
+  validateHookTelemetryConsistency,
+  type HookPolicy,
 } from "../../src/core/policy_engine.js";
 
 describe("policy_engine", () => {
@@ -428,5 +431,123 @@ describe("applyGovernanceDecision — guardrail > freeze > canary precedence", (
     const r = applyGovernanceDecision({ freezeActive: true });
     assert.equal(r.blocked, true);
     assert.equal(r.precedenceLevel, 2);
+  });
+});
+
+// ── Hook policy: loadHookPolicy and validateHookTelemetryConsistency ─────────
+
+const STUB_HOOK_POLICY: HookPolicy = {
+  schemaVersion: "1.0.0",
+  preToolUse: {
+    required: true,
+    mandatoryFields: ["scope", "intent", "impact", "clearance"],
+    validImpactValues: ["low", "medium", "high", "critical"],
+    validClearanceValues: ["read", "write", "admin"],
+    impactMinClearance: { low: "read", medium: "write", high: "admin", critical: "admin" },
+  },
+  hookDecision: {
+    required: true,
+    validDecisions: ["allow", "deny"],
+    mandatoryFields: ["tool", "decision", "reason_code", "rule_id", "envelope_scope", "envelope_intent", "envelope_impact", "envelope_clearance"],
+  },
+  enforcement: {
+    requirePairedEnvelopeDecision: true,
+    denyOnMissingEnvelope: true,
+    denyOnMalformedEnvelope: true,
+    denyOnDeniedDecision: true,
+    requireEnvelopeBeforeDecision: true,
+  },
+};
+
+describe("loadHookPolicy", () => {
+  it("returns null for a non-existent policy path (fail-open)", async () => {
+    const result = await loadHookPolicy("/nonexistent-path-that-cannot-exist-12345");
+    assert.equal(result, null);
+  });
+});
+
+describe("validateHookTelemetryConsistency", () => {
+  it("returns consistent=true when envelopes and decisions are empty", () => {
+    const result = validateHookTelemetryConsistency(
+      { envelopes: [], hookDecisions: [], gaps: [] },
+      STUB_HOOK_POLICY,
+    );
+    assert.equal(result.consistent, true);
+    assert.equal(result.gaps.length, 0);
+  });
+
+  it("returns consistent=true for perfectly paired and matching envelope/decision", () => {
+    const result = validateHookTelemetryConsistency(
+      {
+        envelopes: [{ scope: "src/core", intent: "update-gate", impact: "medium", clearance: "write" }],
+        hookDecisions: [{ envelopeScope: "src/core", envelopeIntent: "update-gate", envelopeImpact: "medium", envelopeClearance: "write" }],
+        gaps: [],
+      },
+      STUB_HOOK_POLICY,
+    );
+    assert.equal(result.consistent, true);
+    assert.equal(result.gaps.length, 0);
+  });
+
+  it("produces HOOK_TELEMETRY_UNPAIRED gap when envelope count exceeds decision count", () => {
+    const result = validateHookTelemetryConsistency(
+      {
+        envelopes: [
+          { scope: "src/core", intent: "op-a", impact: "low", clearance: "read" },
+          { scope: "src/core", intent: "op-b", impact: "medium", clearance: "write" },
+        ],
+        hookDecisions: [
+          { envelopeScope: "src/core", envelopeIntent: "op-a", envelopeImpact: "low", envelopeClearance: "read" },
+        ],
+        gaps: [],
+      },
+      STUB_HOOK_POLICY,
+    );
+    assert.equal(result.consistent, false);
+    assert.ok(result.gaps.some((g) => g.startsWith("HOOK_TELEMETRY_UNPAIRED")));
+  });
+
+  it("produces HOOK_TELEMETRY_UNPAIRED gap when decision count exceeds envelope count", () => {
+    const result = validateHookTelemetryConsistency(
+      {
+        envelopes: [],
+        hookDecisions: [{ envelopeScope: "src/core", envelopeIntent: "op-a", envelopeImpact: "low", envelopeClearance: "read" }],
+        gaps: [],
+      },
+      STUB_HOOK_POLICY,
+    );
+    assert.equal(result.consistent, false);
+    assert.ok(result.gaps.some((g) => g.startsWith("HOOK_TELEMETRY_UNPAIRED")));
+  });
+
+  it("produces HOOK_TELEMETRY_MISMATCH gap when envelope_scope does not match TOOL_INTENT scope", () => {
+    const result = validateHookTelemetryConsistency(
+      {
+        envelopes: [{ scope: "src/core", intent: "update-gate", impact: "medium", clearance: "write" }],
+        hookDecisions: [{ envelopeScope: "src/OTHER", envelopeIntent: "update-gate", envelopeImpact: "medium", envelopeClearance: "write" }],
+        gaps: [],
+      },
+      STUB_HOOK_POLICY,
+    );
+    assert.equal(result.consistent, false);
+    assert.ok(result.gaps.some((g) => g.startsWith("HOOK_TELEMETRY_MISMATCH")));
+    assert.ok(result.gaps.some((g) => g.includes("envelope_scope")));
+  });
+
+  it("returns consistent=true when requirePairedEnvelopeDecision is false regardless of pairing state", () => {
+    const relaxedPolicy = {
+      ...STUB_HOOK_POLICY,
+      enforcement: { ...STUB_HOOK_POLICY.enforcement, requirePairedEnvelopeDecision: false },
+    };
+    const result = validateHookTelemetryConsistency(
+      {
+        envelopes: [{ scope: "src/core", intent: "op", impact: "high", clearance: "admin" }],
+        hookDecisions: [],
+        gaps: [],
+      },
+      relaxedPolicy,
+    );
+    assert.equal(result.consistent, true);
+    assert.equal(result.gaps.length, 0);
   });
 });

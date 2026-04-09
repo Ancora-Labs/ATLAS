@@ -166,8 +166,57 @@ export const ARTIFACT_GAP = Object.freeze({
   UNFILLED_PLACEHOLDER: "Post-merge artifact block contains unfilled template placeholders — replace every placeholder with actual output (BOX_MERGED_SHA=<sha>, CLEAN_TREE_STATUS=clean, and the ===NPM TEST OUTPUT START=== block with real test output)",
   MISSING_SHA:          "Post-merge explicit BOX_MERGED_SHA marker missing — run 'git rev-parse HEAD' after merge and include 'BOX_MERGED_SHA=<sha>' in your output (loose hex strings are not accepted)",
   MISSING_TEST_OUTPUT:  "Post-merge raw npm test output missing — run 'npm test' on merged state and paste raw stdout",
-  DIRTY_TREE:           "Post-merge clean-tree evidence missing — include explicit CLEAN_TREE_STATUS=clean from 'git status --porcelain'",
+  DIRTY_TREE:           "Post-merge clean-tree evidence missing — include CLEAN_TREE_STATUS=clean from 'git status --porcelain', or for shared dirty worktrees include CLEAN_TREE_STATUS=dirty-other-tasks-only plus TASK_SCOPED_CLEAN_STATUS=clean and TASK_SCOPED_CLEAN_TARGETS=<files>",
 });
+
+const CLEAN_TREE_STATUS_PATTERN = /CLEAN_TREE_STATUS\s*=\s*clean\b/i;
+const SHARED_DIRTY_TREE_STATUS_PATTERN = /CLEAN_TREE_STATUS\s*=\s*dirty-other-tasks-only\b/i;
+const TASK_SCOPED_CLEAN_STATUS_PATTERN = /TASK_SCOPED_CLEAN_STATUS\s*=\s*clean\b/i;
+const TASK_SCOPED_CLEAN_TARGETS_PATTERN = /TASK_SCOPED_CLEAN_TARGETS\s*=\s*([^\n\r]+)/i;
+
+function normalizeTargetFileList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .map((item) => item.replace(/\\/g, "/"));
+}
+
+function parseTaskScopedCleanTargets(text: string): string[] {
+  const match = TASK_SCOPED_CLEAN_TARGETS_PATTERN.exec(String(text || ""));
+  if (!match) return [];
+  return String(match[1] || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => item.replace(/\\/g, "/"));
+}
+
+function buildCleanTreeEvidence(text: string, expectedTargetFiles?: unknown) {
+  const normalizedExpectedTargets = normalizeTargetFileList(expectedTargetFiles);
+  const hasGlobalCleanTreeEvidence = CLEAN_TREE_STATUS_PATTERN.test(text);
+  const taskScopedCleanTargets = parseTaskScopedCleanTargets(text);
+  const hasTaskScopedMarker = SHARED_DIRTY_TREE_STATUS_PATTERN.test(text)
+    && TASK_SCOPED_CLEAN_STATUS_PATTERN.test(text);
+  const coversExpectedTargets = normalizedExpectedTargets.length === 0
+    ? taskScopedCleanTargets.length > 0
+    : normalizedExpectedTargets.every((target) => taskScopedCleanTargets.includes(target));
+  const hasTaskScopedCleanTreeEvidence = hasTaskScopedMarker && coversExpectedTargets;
+  const hasCleanTreeEvidence = hasGlobalCleanTreeEvidence || hasTaskScopedCleanTreeEvidence;
+  const cleanTreeMode = hasGlobalCleanTreeEvidence
+    ? "global"
+    : hasTaskScopedCleanTreeEvidence
+      ? "task-scoped"
+      : "missing";
+
+  return {
+    hasCleanTreeEvidence,
+    hasGlobalCleanTreeEvidence,
+    hasTaskScopedCleanTreeEvidence,
+    cleanTreeMode,
+    taskScopedCleanTargets,
+  };
+}
 
 /** Prefix used in taskState.error when the artifact gate fails. */
 export const ARTIFACT_GATE_ERROR_PREFIX = "artifact-gate";
@@ -196,9 +245,10 @@ export const ARTIFACT_GAP_CODE = Object.freeze({
  * SHA requirement and creating ambiguous completion evidence.
  *
  * @param {string} output — full worker output text
+ * @param {{ expectedTargetFiles?: string[] }} [options] — optional expected targets for task-scoped clean-tree evidence
  * @returns {{ hasArtifact: boolean, hasSha: boolean, hasTestOutput: boolean, hasUnfilledPlaceholder: boolean, mergedSha: string | null, hasExplicitShaMarker: boolean, hasExplicitTestBlock: boolean }}
  */
-export function checkPostMergeArtifact(output) {
+export function checkPostMergeArtifact(output, options: { expectedTargetFiles?: string[] } = {}) {
   const text = String(output || "");
 
   // SHA evidence requires an explicit BOX_MERGED_SHA=<sha> marker.
@@ -211,7 +261,8 @@ export function checkPostMergeArtifact(output) {
   // Post-merge test evidence is structural: explicit raw block markers are required.
   const hasExplicitTestBlock = NPM_TEST_BLOCK_PATTERN.test(text);
   const hasTestOutput = hasExplicitTestBlock;
-  const hasCleanTreeEvidence = /CLEAN_TREE_STATUS\s*=\s*clean\b/i.test(text);
+  const cleanTreeEvidence = buildCleanTreeEvidence(text, options?.expectedTargetFiles);
+  const hasCleanTreeEvidence = cleanTreeEvidence.hasCleanTreeEvidence;
   // Replay-and-attach completion is represented by the explicit raw npm test output block.
   const hasReplayAttachEvidence = hasExplicitTestBlock;
 
@@ -224,6 +275,10 @@ export function checkPostMergeArtifact(output) {
     hasSha,
     hasTestOutput,
     hasCleanTreeEvidence,
+    hasGlobalCleanTreeEvidence: cleanTreeEvidence.hasGlobalCleanTreeEvidence,
+    hasTaskScopedCleanTreeEvidence: cleanTreeEvidence.hasTaskScopedCleanTreeEvidence,
+    cleanTreeMode: cleanTreeEvidence.cleanTreeMode,
+    taskScopedCleanTargets: cleanTreeEvidence.taskScopedCleanTargets,
     hasReplayAttachEvidence,
     hasUnfilledPlaceholder,
     mergedSha,
@@ -286,7 +341,11 @@ export function buildReplayClosureEvidence(
     pushUniqueLink(`inline://post-merge-sha/${sha}`);
   }
   if (artifact.hasCleanTreeEvidence) {
-    pushUniqueLink("inline://clean-tree-status");
+    pushUniqueLink(
+      artifact.hasTaskScopedCleanTreeEvidence
+        ? "inline://clean-tree-status/task-scoped"
+        : "inline://clean-tree-status"
+    );
   }
   if (artifact.hasExplicitTestBlock || artifact.hasTestOutput) {
     pushUniqueLink("inline://npm-test-output-block");
@@ -325,7 +384,7 @@ export function hasReplayClosureEvidence(value: unknown): boolean {
  * True when output includes explicit clean-tree evidence marker.
  */
 export function hasCleanTreeStatusEvidence(output: unknown): boolean {
-  return /CLEAN_TREE_STATUS\s*=\s*clean\b/i.test(String(output || ""));
+  return buildCleanTreeEvidence(String(output || "")).hasCleanTreeEvidence;
 }
 
 export interface ToolIntentEnvelopeEvidence {
@@ -364,6 +423,56 @@ function parseKvFields(rawLine: string): Record<string, string> {
     fields[String(match[1] || "").toLowerCase()] = String(match[2] || "").trim();
   }
   return fields;
+}
+
+/**
+ * Check that each TOOL_INTENT envelope has a paired HOOK_DECISION and that
+ * the decision's envelope-echo fields match the originating envelope.
+ *
+ * Called inside parseToolExecutionTelemetry after all lines are parsed.
+ * Returns gap strings (empty when pairing is consistent).
+ */
+export function checkHookEnvelopeDecisionPairing(
+  envelopes: ToolIntentEnvelopeEvidence[],
+  hookDecisions: ToolHookDecisionEvidence[],
+): string[] {
+  const gaps: string[] = [];
+
+  if (envelopes.length === 0 && hookDecisions.length === 0) {
+    return gaps;
+  }
+
+  if (envelopes.length !== hookDecisions.length) {
+    if (envelopes.length > hookDecisions.length) {
+      gaps.push(
+        `HOOK_TELEMETRY_UNPAIRED: ${envelopes.length - hookDecisions.length} TOOL_INTENT envelope(s) missing a paired HOOK_DECISION`,
+      );
+    } else {
+      gaps.push(
+        `HOOK_TELEMETRY_UNPAIRED: ${hookDecisions.length - envelopes.length} HOOK_DECISION(s) missing a preceding TOOL_INTENT envelope`,
+      );
+    }
+  }
+
+  const pairCount = Math.min(envelopes.length, hookDecisions.length);
+  for (let i = 0; i < pairCount; i++) {
+    const env = envelopes[i];
+    const dec = hookDecisions[i];
+    if (dec.envelopeScope !== env.scope) {
+      gaps.push(`HOOK_TELEMETRY_MISMATCH[${i}]: envelope_scope="${dec.envelopeScope}" does not match TOOL_INTENT scope="${env.scope}"`);
+    }
+    if (dec.envelopeIntent !== env.intent) {
+      gaps.push(`HOOK_TELEMETRY_MISMATCH[${i}]: envelope_intent="${dec.envelopeIntent}" does not match TOOL_INTENT intent="${env.intent}"`);
+    }
+    if (dec.envelopeImpact !== env.impact) {
+      gaps.push(`HOOK_TELEMETRY_MISMATCH[${i}]: envelope_impact="${dec.envelopeImpact}" does not match TOOL_INTENT impact="${env.impact}"`);
+    }
+    if (dec.envelopeClearance !== env.clearance) {
+      gaps.push(`HOOK_TELEMETRY_MISMATCH[${i}]: envelope_clearance="${dec.envelopeClearance}" does not match TOOL_INTENT clearance="${env.clearance}"`);
+    }
+  }
+
+  return gaps;
 }
 
 /**
@@ -429,6 +538,9 @@ export function parseToolExecutionTelemetry(output: unknown): ToolExecutionTelem
     }
   }
 
+  const pairingGaps = checkHookEnvelopeDecisionPairing(envelopes, hookDecisions);
+  for (const pairingGap of pairingGaps) gaps.push(pairingGap);
+
   const deniedDecisions = hookDecisions.filter((item) => item.decision === "deny");
   const hasDeterministicCoverage = hookDecisions.length > 0 && gaps.length === 0;
 
@@ -488,6 +600,9 @@ export interface ArtifactAuditEntry {
     hasSha: boolean;
     hasTestOutput: boolean;
     hasCleanTreeEvidence: boolean;
+    hasTaskScopedCleanTreeEvidence?: boolean;
+    cleanTreeMode?: string;
+    taskScopedCleanTargets?: string[];
     hasReplayAttachEvidence?: boolean;
     hasUnfilledPlaceholder: boolean;
     hasExplicitShaMarker: boolean;
@@ -541,6 +656,11 @@ export function buildArtifactAuditEntry(
       hasSha: artifact.hasSha,
       hasTestOutput: artifact.hasTestOutput,
       hasCleanTreeEvidence: artifact.hasCleanTreeEvidence,
+      hasTaskScopedCleanTreeEvidence: (artifact as any).hasTaskScopedCleanTreeEvidence === true,
+      cleanTreeMode: String((artifact as any).cleanTreeMode || "missing"),
+      taskScopedCleanTargets: Array.isArray((artifact as any).taskScopedCleanTargets)
+        ? (artifact as any).taskScopedCleanTargets as string[]
+        : [],
       hasReplayAttachEvidence: (artifact as any).hasReplayAttachEvidence === true,
       hasUnfilledPlaceholder: artifact.hasUnfilledPlaceholder,
       hasExplicitShaMarker: artifact.hasExplicitShaMarker,
@@ -858,6 +978,7 @@ export interface ValidateWorkerContractOptions {
    * the output, avoiding a duplicate computation on the same string.
    */
   precomputedArtifact?: ReturnType<typeof checkPostMergeArtifact>;
+  taskTargets?: string[];
 }
 
 /**
@@ -923,7 +1044,9 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
     // Reuse a pre-computed artifact object when the caller already evaluated
     // the same output (e.g., the hard-block gate in worker_runner), avoiding
     // a redundant call to checkPostMergeArtifact on the same string.
-    const artifact = options.precomputedArtifact ?? checkPostMergeArtifact(output);
+    const artifact = options.precomputedArtifact ?? checkPostMergeArtifact(output, {
+      expectedTargetFiles: options.taskTargets,
+    });
     evidence.postMergeArtifact = artifact;
     for (const gap of collectArtifactGaps(artifact)) gaps.push(gap);
   }

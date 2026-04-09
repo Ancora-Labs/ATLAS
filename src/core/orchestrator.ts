@@ -125,6 +125,7 @@ import {
   checkCancellationAtCheckpoint,
 } from "./checkpoint_engine.js";
 import { assessRetryExpectedROI, rankModelsByTaskKindExpectedValue } from "./model_policy.js";
+import { loadHookPolicy, DEFAULT_HOOK_POLICY_PATH } from "./policy_engine.js";
 
 /**
  * Orchestrator health status enum.
@@ -1664,6 +1665,26 @@ export async function runDaemon(config) {
     }
     if (!cleanupResult.ok) {
       warn(`[orchestrator] stale-temp cleanup failed (non-fatal): ${String(cleanupResult.error?.message || cleanupResult.error)}`);
+    }
+  }
+
+  // ── Validate preToolUse hook governance policy (runtime contract) ─────────
+  {
+    try {
+      const hookPolicyData = await loadHookPolicy(String(liveConfig?.rootDir || process.cwd()));
+      if (hookPolicyData) {
+        await appendProgress(
+          liveConfig,
+          `[STARTUP] Hook governance policy loaded (schemaVersion=${hookPolicyData.schemaVersion ?? "unknown"}): ${DEFAULT_HOOK_POLICY_PATH}`,
+        );
+      } else {
+        await appendProgress(
+          liveConfig,
+          `[STARTUP] WARNING: Hook governance policy absent — ${DEFAULT_HOOK_POLICY_PATH} not found. Tool-execution telemetry enforcement will use defaults.`,
+        );
+      }
+    } catch (hookErr: unknown) {
+      warn(`[orchestrator] hook policy load failed (non-fatal): ${String((hookErr as Error)?.message ?? hookErr)}`);
     }
   }
 

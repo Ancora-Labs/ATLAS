@@ -26,6 +26,7 @@ import {
   VERIFICATION_REPORT_TEMPLATE_GAP,
   VERIFICATION_REPORT_MALFORMED_GAP,
   parseToolExecutionTelemetry,
+  checkHookEnvelopeDecisionPairing,
 } from "../../src/core/verification_gate.js";
 
 describe("verification_gate parse helpers", () => {
@@ -112,6 +113,67 @@ describe("verification_gate tool execution telemetry", () => {
   });
 });
 
+describe("verification_gate checkHookEnvelopeDecisionPairing", () => {
+  it("returns empty gaps for perfectly paired and matching envelope/decision", () => {
+    const gaps = checkHookEnvelopeDecisionPairing(
+      [{ scope: "src/core", intent: "update-gate", impact: "medium", clearance: "write", raw: "" }],
+      [{ tool: "execute", decision: "allow", reasonCode: "HOOK_ALLOW_NONE", ruleId: "none", envelopeScope: "src/core", envelopeIntent: "update-gate", envelopeImpact: "medium", envelopeClearance: "write", raw: "" }],
+    );
+    assert.equal(gaps.length, 0);
+  });
+
+  it("returns empty gaps when both arrays are empty", () => {
+    const gaps = checkHookEnvelopeDecisionPairing([], []);
+    assert.equal(gaps.length, 0);
+  });
+
+  it("produces HOOK_TELEMETRY_UNPAIRED when envelope has no paired decision", () => {
+    const gaps = checkHookEnvelopeDecisionPairing(
+      [{ scope: "src/core", intent: "op-a", impact: "low", clearance: "read", raw: "" }],
+      [],
+    );
+    assert.ok(gaps.some((g) => g.startsWith("HOOK_TELEMETRY_UNPAIRED")));
+    assert.ok(gaps.some((g) => g.includes("TOOL_INTENT envelope(s) missing a paired HOOK_DECISION")));
+  });
+
+  it("produces HOOK_TELEMETRY_UNPAIRED when decision has no preceding envelope", () => {
+    const gaps = checkHookEnvelopeDecisionPairing(
+      [],
+      [{ tool: "execute", decision: "allow", reasonCode: "HOOK_ALLOW_NONE", ruleId: "none", envelopeScope: "src/core", envelopeIntent: "op", envelopeImpact: "low", envelopeClearance: "read", raw: "" }],
+    );
+    assert.ok(gaps.some((g) => g.startsWith("HOOK_TELEMETRY_UNPAIRED")));
+    assert.ok(gaps.some((g) => g.includes("HOOK_DECISION(s) missing a preceding TOOL_INTENT envelope")));
+  });
+
+  it("produces HOOK_TELEMETRY_MISMATCH when envelope_scope does not match TOOL_INTENT scope", () => {
+    const gaps = checkHookEnvelopeDecisionPairing(
+      [{ scope: "src/core", intent: "op", impact: "medium", clearance: "write", raw: "" }],
+      [{ tool: "execute", decision: "allow", reasonCode: "HOOK_ALLOW_NONE", ruleId: "none", envelopeScope: "src/OTHER", envelopeIntent: "op", envelopeImpact: "medium", envelopeClearance: "write", raw: "" }],
+    );
+    assert.ok(gaps.some((g) => g.startsWith("HOOK_TELEMETRY_MISMATCH")));
+    assert.ok(gaps.some((g) => g.includes("envelope_scope")));
+  });
+
+  it("produces HOOK_TELEMETRY_MISMATCH when multiple echo fields are wrong", () => {
+    const gaps = checkHookEnvelopeDecisionPairing(
+      [{ scope: "src/core", intent: "op-x", impact: "high", clearance: "admin", raw: "" }],
+      [{ tool: "execute", decision: "allow", reasonCode: "R", ruleId: "r1", envelopeScope: "src/OTHER", envelopeIntent: "op-y", envelopeImpact: "low", envelopeClearance: "read", raw: "" }],
+    );
+    assert.ok(gaps.length >= 4, `expected at least 4 mismatch gaps, got ${gaps.length}`);
+  });
+
+  it("parseToolExecutionTelemetry reports HOOK_TELEMETRY_UNPAIRED when TOOL_INTENT has no HOOK_DECISION", () => {
+    const telemetry = parseToolExecutionTelemetry(
+      "[TOOL_INTENT] scope=src/core intent=update-gate impact=medium clearance=write",
+    );
+    assert.ok(
+      telemetry.gaps.some((g) => g.startsWith("HOOK_TELEMETRY_UNPAIRED")),
+      `expected HOOK_TELEMETRY_UNPAIRED in gaps, got: ${JSON.stringify(telemetry.gaps)}`,
+    );
+    assert.equal(telemetry.hasDeterministicCoverage, false);
+  });
+});
+
 describe("verification_gate replay closure evidence helper", () => {
   it("detects replay-closure evidence only when canonical replay commands are present", () => {
     const evidence = "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://npm-test-output-block]";
@@ -125,6 +187,17 @@ describe("verification_gate replay closure evidence helper", () => {
 
   it("detects explicit CLEAN_TREE_STATUS evidence marker", () => {
     assert.equal(hasCleanTreeStatusEvidence("CLEAN_TREE_STATUS=clean"), true);
+  });
+
+  it("detects task-scoped clean-tree evidence marker", () => {
+    assert.equal(
+      hasCleanTreeStatusEvidence([
+        "CLEAN_TREE_STATUS=dirty-other-tasks-only",
+        "TASK_SCOPED_CLEAN_STATUS=clean",
+        "TASK_SCOPED_CLEAN_TARGETS=src/core/slo_checker.ts, src/core/orchestrator.ts",
+      ].join("\n")),
+      true,
+    );
   });
 
   it("negative path: does not detect clean-tree evidence when marker is absent", () => {
@@ -402,6 +475,39 @@ describe("verification_gate — post-merge artifact (Packet 1/3)", () => {
     const result = checkPostMergeArtifact("BOX_MERGED_SHA=abc123d\nCLEAN_TREE_STATUS=clean\n===NPM TEST OUTPUT START===\n# tests 5 pass 5 fail 0\n===NPM TEST OUTPUT END===");
     assert.equal(result.hasSha, true);
     assert.equal(result.hasTestOutput, true);
+  });
+
+  it("checkPostMergeArtifact accepts task-scoped clean-tree evidence when expected targets are covered", () => {
+    const result = checkPostMergeArtifact([
+      "BOX_MERGED_SHA=abc123d",
+      "CLEAN_TREE_STATUS=dirty-other-tasks-only",
+      "TASK_SCOPED_CLEAN_STATUS=clean",
+      "TASK_SCOPED_CLEAN_TARGETS=src/core/slo_checker.ts, src/core/orchestrator.ts",
+      "===NPM TEST OUTPUT START===",
+      "# tests 5 pass 5 fail 0",
+      "===NPM TEST OUTPUT END===",
+    ].join("\n"), {
+      expectedTargetFiles: ["src/core/slo_checker.ts", "src/core/orchestrator.ts"],
+    });
+    assert.equal(result.hasArtifact, true);
+    assert.equal(result.hasTaskScopedCleanTreeEvidence, true);
+    assert.equal(result.cleanTreeMode, "task-scoped");
+  });
+
+  it("checkPostMergeArtifact rejects task-scoped clean-tree evidence when expected targets are missing", () => {
+    const result = checkPostMergeArtifact([
+      "BOX_MERGED_SHA=abc123d",
+      "CLEAN_TREE_STATUS=dirty-other-tasks-only",
+      "TASK_SCOPED_CLEAN_STATUS=clean",
+      "TASK_SCOPED_CLEAN_TARGETS=src/core/slo_checker.ts",
+      "===NPM TEST OUTPUT START===",
+      "# tests 5 pass 5 fail 0",
+      "===NPM TEST OUTPUT END===",
+    ].join("\n"), {
+      expectedTargetFiles: ["src/core/slo_checker.ts", "src/core/orchestrator.ts"],
+    });
+    assert.equal(result.hasArtifact, false);
+    assert.equal(result.hasCleanTreeEvidence, false);
   });
 
   it("checkPostMergeArtifact detects unfilled placeholder", () => {

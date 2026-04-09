@@ -26,7 +26,9 @@ import { getVerificationCommands, classifyNodeTestGlobWindowsArtifact } from "./
 import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence, parseToolExecutionTelemetry, checkCancellationAtVerification } from "./verification_gate.js";
 import {
   enforceModelPolicy,
-  routeModelUnderQualityFloor,
+  routeModelWithRealizedROI,
+  appendRouteROIEntry,
+  realizeRouteROIEntry,
   classifyComplexityTier,
   COMPLEXITY_TIER,
   decideDeliberationPolicy,
@@ -79,6 +81,15 @@ type TaskHints = {
   complexity?: string;
 };
 
+type WorkerInstruction = {
+  task?: string;
+  context?: string;
+  verification?: string;
+  taskKind?: string;
+  targetFiles?: string[];
+  [key: string]: unknown;
+};
+
 type BenchmarkRecommendation = {
   implementationStatus?: string;
   benchmarkScore?: number | null;
@@ -124,6 +135,140 @@ type WorkerSessionState = {
   [key: string]: unknown;
 };
 
+const REFLECTION_MEMORY_FILE = "reflection_memory.json";
+const MAX_REFLECTION_ENTRIES = 200;
+
+function loadReflectionMemoryContext(config, roleName, taskKind, taskText) {
+  const stateDir = config?.paths?.stateDir || "state";
+  const filePath = path.join(stateDir, REFLECTION_MEMORY_FILE);
+  if (!existsSync(filePath)) return "";
+  try {
+    const raw = JSON.parse(readFileSync(filePath, "utf8"));
+    const entries = Array.isArray(raw?.entries) ? raw.entries : [];
+    const normalizedRole = String(roleName || "").toLowerCase().trim();
+    const normalizedKind = String(taskKind || "").toLowerCase().trim();
+    const taskNeedle = String(taskText || "").toLowerCase().trim();
+    const relevant = entries.filter((entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      if (String(entry?.roleName || "").toLowerCase().trim() !== normalizedRole) return false;
+      if (normalizedKind && String(entry?.taskKind || "").toLowerCase().trim() !== normalizedKind) return false;
+      if (!taskNeedle) return true;
+      const task = String(entry?.task || "").toLowerCase();
+      return task.includes(taskNeedle.slice(0, Math.min(40, taskNeedle.length))) || taskNeedle.includes(task.slice(0, Math.min(40, task.length)));
+    }).slice(-3);
+    if (relevant.length === 0) return "";
+    const bullets = relevant.map((entry, index) => {
+      const status = String(entry?.status || "unknown");
+      const retryAction = String(entry?.retryAction || "none");
+      const reason = String(entry?.reason || entry?.summary || "").slice(0, 180);
+      return `${index + 1}. status=${status} retryAction=${retryAction} reason=${reason}`;
+    }).join("\n");
+    return `## REFLECTION MEMORY\nRecent same-lane outcomes to avoid repeating failed approaches:\n${bullets}`;
+  } catch {
+    return "";
+  }
+}
+
+async function persistReflectionMemory(config, input: {
+  roleName: string;
+  taskKind?: string;
+  task: string;
+  status: string;
+  retryAction?: string | null;
+  reason?: string | null;
+  failureClass?: string | null;
+}) {
+  const stateDir = config?.paths?.stateDir || "state";
+  const filePath = path.join(stateDir, REFLECTION_MEMORY_FILE);
+  let payload: any = { schemaVersion: 1, updatedAt: null, entries: [] };
+  try {
+    if (existsSync(filePath)) {
+      const raw = JSON.parse(readFileSync(filePath, "utf8"));
+      if (raw && typeof raw === "object") payload = raw;
+    }
+  } catch {
+    payload = { schemaVersion: 1, updatedAt: null, entries: [] };
+  }
+  const nextEntries = Array.isArray(payload?.entries) ? payload.entries : [];
+  nextEntries.push({
+    roleName: String(input.roleName || ""),
+    taskKind: String(input.taskKind || "general"),
+    task: String(input.task || "").slice(0, 240),
+    status: String(input.status || "unknown"),
+    retryAction: input.retryAction ? String(input.retryAction) : null,
+    failureClass: input.failureClass ? String(input.failureClass) : null,
+    reason: input.reason ? String(input.reason).slice(0, 240) : null,
+    recordedAt: new Date().toISOString(),
+  });
+  payload = {
+    schemaVersion: 1,
+    updatedAt: new Date().toISOString(),
+    entries: nextEntries.slice(-MAX_REFLECTION_ENTRIES),
+  };
+  await writeJson(filePath, payload);
+}
+
+function computeDynamicQualityFloor(config, taskHints: TaskHints = {}) {
+  let floor = QUALITY_FLOOR_DEFAULT;
+  const stateDir = config?.paths?.stateDir || "state";
+  try {
+    const analyticsPath = path.join(stateDir, "cycle_analytics.json");
+    if (existsSync(analyticsPath)) {
+      const raw = JSON.parse(readFileSync(analyticsPath, "utf8"));
+      const latest = raw?.lastCycle || raw;
+      const premiumEfficiency = Number(
+        latest?.kpis?.executionAdjustedPremiumEfficiency
+        ?? latest?.kpis?.rawPremiumEfficiency
+        ?? latest?.executionAdjustedPremiumEfficiency
+        ?? latest?.rawPremiumEfficiency
+      );
+      if (Number.isFinite(premiumEfficiency)) {
+        if (premiumEfficiency < 0.35) floor += 0.08;
+        else if (premiumEfficiency > 0.70) floor -= 0.05;
+      }
+    }
+    const healthPath = path.join(stateDir, "cycle_health.json");
+    if (existsSync(healthPath)) {
+      const health = JSON.parse(readFileSync(healthPath, "utf8"));
+      const anomalies = Array.isArray(health?.lastCycle?.anomalies) ? health.lastCycle.anomalies : [];
+      const hasVerificationBreach = anomalies.some((item) => String(item?.metric || "") === "verificationCompletionMs");
+      if (hasVerificationBreach) floor += 0.04;
+    }
+  } catch {
+    // fail-open
+  }
+  if (String(taskHints?.complexity || "").toLowerCase() === "critical") floor += 0.03;
+  return Math.max(0.5, Math.min(0.95, Math.round(floor * 1000) / 1000));
+}
+
+function estimateModelExpectedQuality(config, model) {
+  const configured = config?.copilot?.qualityByModel;
+  const key = String(model || "").toLowerCase();
+  const fallback = {
+    "claude haiku 4": 0.7,
+    "claude haiku 4.5": 0.72,
+    "claude sonnet 4.6": 0.85,
+    "claude opus 4.6": 0.95,
+    "gpt-5.4": 0.88,
+  } as Record<string, number>;
+  if (configured && typeof configured === "object") {
+    const direct = Number(configured[model]);
+    const normalized = Number(configured[key]);
+    if (Number.isFinite(direct)) return Math.max(0, Math.min(1, direct));
+    if (Number.isFinite(normalized)) return Math.max(0, Math.min(1, normalized));
+  }
+  return fallback[key] ?? 0.8;
+}
+
+function deriveOutcomeQualityScore(status: string, verificationEvidence: unknown, dispatchContract: any): number {
+  const normalized = String(status || "unknown").toLowerCase();
+  const hasEvidence = Boolean(verificationEvidence) || dispatchContract?.doneWorkerWithVerificationReportEvidence === true;
+  if (normalized === "done" || normalized === "success") return hasEvidence ? 1 : 0.82;
+  if (normalized === "partial") return hasEvidence ? 0.68 : 0.52;
+  if (normalized === "blocked") return 0.18;
+  return 0;
+}
+
 type SpawnAsyncResult = {
   status: number;
   stdout: string;
@@ -149,6 +294,10 @@ type VerificationEvidence = {
   artifactDetail?: {
     hasSha: boolean;
     hasTestOutput: boolean;
+    hasCleanTreeEvidence?: boolean;
+    hasTaskScopedCleanTreeEvidence?: boolean;
+    cleanTreeMode?: string;
+    taskScopedCleanTargets?: string[];
     hasReplayAttachEvidence?: boolean;
     hasExplicitTestOutputBlock?: boolean;
     hasUnfilledPlaceholder: boolean;
@@ -194,6 +343,11 @@ const TERMINAL_WORKER_STATUSES = new Set([
 
 export function isTerminalWorkerStatus(status: unknown): boolean {
   return TERMINAL_WORKER_STATUSES.has(String(status || "").toLowerCase().trim());
+}
+
+export function shouldResolveRecoveredWorkerEscalations(status: unknown): boolean {
+  const normalizedStatus = String(status || "").toLowerCase().trim();
+  return normalizedStatus !== "blocked" && normalizedStatus !== "error" && normalizedStatus !== "transient_error";
 }
 
 // ── Span contract emitter ─────────────────────────────────────────────────────
@@ -815,7 +969,7 @@ export async function attemptBranchCleanlinessRecovery(
 // Priority: taskKind → role preference → worker model → uncertainty-aware routing → default
 // Policy adjustments from compiled lessons may override the candidate after selection.
 
-function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {}, routingAdjustments: RoutingAdjustment[] = []) {
+async function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {}, routingAdjustments: RoutingAdjustment[] = []) {
   const defaultModel = config?.copilot?.defaultModel || "Claude Sonnet 4.6";
   const strongModel = config?.copilot?.strongModel || defaultModel;
   const efficientModel = config?.copilot?.efficientModel || defaultModel;
@@ -843,11 +997,12 @@ function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {}, rou
     const recentROI = computeRecentROI(config, taskKind);
     const outcomeMetrics = computeOutcomeMetrics(config, taskKind);
     const benchmarkSignal = analyzeBenchmarkReadiness(config, taskHints);
-    const qualityFloorRoute = routeModelUnderQualityFloor(
+    const dynamicQualityFloor = computeDynamicQualityFloor(config, taskHints);
+    const qualityFloorRoute = await routeModelWithRealizedROI(
+      config,
       taskHints,
-      { defaultModel, strongModel, efficientModel },
-      { recentROI },
-      QUALITY_FLOOR_DEFAULT,
+      { defaultModel, strongModel, efficientModel, qualityByModel: config?.copilot?.qualityByModel || {} },
+      { qualityFloor: dynamicQualityFloor },
     );
     candidate = qualityFloorRoute.model;
     if (
@@ -866,7 +1021,7 @@ function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {}, rou
     if (qualityFloorRoute.uncertainty !== "low" || !qualityFloorRoute.meetsQualityFloor) {
       try {
         appendProgress(config,
-          `[QUALITY_FLOOR_ROUTE] ${roleName}: tier=${qualityFloorRoute.tier} uncertainty=${qualityFloorRoute.uncertainty} meetsFloor=${qualityFloorRoute.meetsQualityFloor} recentROI=${recentROI.toFixed(2)} → ${candidate}`
+          `[QUALITY_FLOOR_ROUTE] ${roleName}: tier=${qualityFloorRoute.tier} uncertainty=${qualityFloorRoute.uncertainty} meetsFloor=${qualityFloorRoute.meetsQualityFloor} realizedROI=${qualityFloorRoute.realizedROI.toFixed(2)} dynamicFloor=${dynamicQualityFloor.toFixed(2)} recentROI=${recentROI.toFixed(2)} → ${candidate}`
         );
       } catch { /* non-critical */ }
     }
@@ -910,7 +1065,7 @@ function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {}, rou
 
 // ── Build conversation-only context (persona is in .agent.md) ───────────────
 
-function buildConversationContext(history, instruction, sessionState: WorkerSessionState = {}, config: WorkerRunnerConfig = {}, workerKind = null, promptControls: PromptControls = {}) {
+function buildConversationContext(history, instruction: WorkerInstruction, sessionState: WorkerSessionState = {}, config: WorkerRunnerConfig = {}, workerKind = null, promptControls: PromptControls = {}) {
   const parts = [];
 
   // Persistent worker state — always injected first so workers always know where they stand
@@ -1191,11 +1346,21 @@ function buildConversationContext(history, instruction, sessionState: WorkerSess
     const testRunCmd = targetTestFiles.length > 0
       ? `npm test -- ${targetTestFiles.join(" ")}`
       : "npm test -- tests/core/<module>.test.ts";
+    const scopedTargetFiles = Array.isArray(instruction.targetFiles)
+      ? instruction.targetFiles.map((file) => String(file || "").trim()).filter(Boolean)
+      : [];
     parts.push("");
     parts.push("## ⛔ MANDATORY COMPLETION GATE — CHECK BEFORE WRITING BOX_STATUS=done");
     parts.push("At the end of your response, you MUST include ALL four of these — the gate scans for them literally:");
     parts.push("  ✓ BOX_MERGED_SHA=<actual sha>            ← run: git rev-parse HEAD after merge");
-    parts.push("  ✓ CLEAN_TREE_STATUS=clean                ← run: git status --porcelain (must produce empty output)");
+    parts.push("  ✓ CLEAN_TREE_STATUS=clean                ← run: git status --porcelain when the whole repo is clean");
+    if (scopedTargetFiles.length > 0) {
+      parts.push("    OR, when unrelated files keep the shared repo dirty, include this exact alternate evidence:");
+      parts.push("      CLEAN_TREE_STATUS=dirty-other-tasks-only");
+      parts.push("      TASK_SCOPED_CLEAN_STATUS=clean");
+      parts.push(`      TASK_SCOPED_CLEAN_TARGETS=${scopedTargetFiles.join(", ")}`);
+      parts.push(`      ← prove with: git status --porcelain -- ${scopedTargetFiles.join(" ")}`);
+    }
     parts.push(`  ✓ ===NPM TEST OUTPUT START===            ← run: ${testRunCmd}`);
     parts.push("    <paste full raw test stdout here>");
     parts.push("    ===NPM TEST OUTPUT END===");
@@ -1371,6 +1536,22 @@ export function parseWorkerResponse(stdout, stderr) {
     }
   }
 
+  // Track hook telemetry pairing gaps for observability.
+  // These gaps flow through validateWorkerContract for rework; we record them
+  // here so dispatchBlockReason surfaces the issue in session artifacts.
+  if (
+    toolExecutionTelemetry.gaps.some(
+      (g) => g.startsWith("HOOK_TELEMETRY_UNPAIRED") || g.startsWith("HOOK_TELEMETRY_MISMATCH"),
+    ) &&
+    !dispatchBlockReason &&
+    normalizedStatus !== "skipped"
+  ) {
+    const firstPairingGap = toolExecutionTelemetry.gaps.find(
+      (g) => g.startsWith("HOOK_TELEMETRY_UNPAIRED") || g.startsWith("HOOK_TELEMETRY_MISMATCH"),
+    );
+    dispatchBlockReason = `hook_telemetry_inconsistent:${String(firstPairingGap || "pairing-gap").slice(0, 100)}`;
+  }
+
   return {
     status: normalizedStatus,
     prUrl,
@@ -1429,7 +1610,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // ── Task 1: Uncertainty-aware model selection ─────────────────────────────
   // resolveModel now uses routeModelWithUncertainty (backed by historical ROI)
   // and applies policy routing adjustments from recurring failure lessons.
-  let model = resolveModel(config, roleName, instruction.taskKind, taskHints, routingAdjustments);
+  let model = await resolveModel(config, roleName, instruction.taskKind, taskHints, routingAdjustments);
 
   // ── Hard-task escalation: deliberation.mode → strong model upgrade ─────────
   // assessHardTaskEscalation (called inside decideDeliberationPolicy) can signal
@@ -1506,10 +1687,17 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   const ciFixEnrichedInstruction = isCiFixTask
     ? await injectCiFailureContextIfMissing(instructionWithSemanticContext as Record<string, unknown>, config)
     : instructionWithSemanticContext;
+  const reflectionMemoryContext = loadReflectionMemoryContext(config, roleName, instruction.taskKind, instruction.task);
+  const reflectedInstruction = reflectionMemoryContext
+    ? {
+        ...ciFixEnrichedInstruction,
+        context: [reflectionMemoryContext, String((ciFixEnrichedInstruction as any)?.context || "").trim()].filter(Boolean).join("\n\n"),
+      }
+    : ciFixEnrichedInstruction;
 
   // Build conversation-only context with prompt tier budget and hard constraints injected
   const conversationContext = buildConversationContext(
-    history, ciFixEnrichedInstruction, sessionState, config, workerKind,
+    history, reflectedInstruction, sessionState, config, workerKind,
     {
       tier,
       hardConstraints,
@@ -1660,6 +1848,21 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     ].join("\n")
   );
 
+  const routingTaskId = String(instruction.taskId || buildTaskFingerprint(instruction.taskKind || "general", instruction.task || "").slice(0, 24));
+  const estimatedPromptTokens = Math.max(1, Math.ceil(conversationContext.length / 4));
+  try {
+    await appendRouteROIEntry(config, {
+      taskId: routingTaskId,
+      model,
+      tier,
+      estimatedTokens: estimatedPromptTokens,
+      expectedQuality: estimateModelExpectedQuality(config, model),
+      lineageId: _dispatchLineageId,
+    });
+  } catch {
+    // non-critical routing telemetry
+  }
+
   const startMs = Date.now();
 
   // Circuit breaker: detect consecutive transient API errors from the Copilot CLI
@@ -1791,6 +1994,20 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       timestamp: new Date().toISOString(),
       status: "error"
     });
+    try {
+      await realizeRouteROIEntry(config, routingTaskId, 0, isTransient ? "transient_error" : "error");
+    } catch {
+      // non-critical routing telemetry
+    }
+    await persistReflectionMemory(config, {
+      roleName,
+      taskKind: instruction.taskKind,
+      task: instruction.task,
+      status: isTransient ? "transient_error" : "error",
+      retryAction: errorRetryDecision?.retryAction || null,
+      reason: errorMsg,
+      failureClass: errorRetryDecision?.failureClass || null,
+    }).catch(() => {});
     await persistLegacyWorkerSessionArtifacts(config, String(roleName || "worker"), {
       phase: "complete",
       task: String(instruction?.task || ""),
@@ -1804,6 +2021,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       updatedHistory,
       prUrl: null,
       tier,
+      reasonCode,
+      retryClass,
       failureClassification: null,
       retryDecision: errorRetryDecision
     };
@@ -1819,7 +2038,10 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   } catch { /* non-critical */ }
 
   const parsed: ParsedWorkerResponse = parseWorkerResponse(stdout, stderr);
-  const replayClosure = buildReplayClosureEvidence(parsed.fullOutput || "");
+  const artifactEvidence = checkPostMergeArtifact(parsed.fullOutput || "", {
+    expectedTargetFiles: Array.isArray(instruction.targetFiles) ? instruction.targetFiles : [],
+  });
+  const replayClosure = buildReplayClosureEvidence(parsed.fullOutput || "", artifactEvidence);
   const normalizedWorkerStatus = String(parsed.status || "").toLowerCase();
   const dispatchContract: DispatchVerificationContract = {
     doneWorkerWithVerificationReportEvidence:
@@ -1943,12 +2165,19 @@ export async function runWorkerConversation(config, roleName, instruction, histo
 
   // Auto-resolve transient ACCESS_BLOCKED escalations once the same worker+task
   // completes or partially completes in a later retry.
-  if (parsed.status !== "blocked" && parsed.status !== "error") {
+  if (shouldResolveRecoveredWorkerEscalations(parsed.status)) {
     resolveEscalationsForTask(config, {
       role: roleName,
       task: instruction.task,
       blockingReasonClass: BLOCKING_REASON_CLASS.ACCESS_BLOCKED,
       resolutionSummary: `Worker recovered with status=${parsed.status}`,
+      resolvedBy: `worker:${roleName}`,
+    }).catch(() => { /* non-fatal */ });
+    resolveEscalationsForTask(config, {
+      role: roleName,
+      task: instruction.task,
+      blockingReasonClass: BLOCKING_REASON_CLASS.WORKER_ERROR,
+      resolutionSummary: `Worker recovered after runtime failure with status=${parsed.status}`,
       resolvedBy: `worker:${roleName}`,
     }).catch(() => { /* non-fatal */ });
   }
@@ -2005,9 +2234,14 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   //
   // The artifact is computed once here and reused by both this gate and the
   // subsequent validateWorkerContract call, avoiding duplicate evaluation.
+  const scopedTargetFiles = Array.isArray(instruction.targetFiles)
+    ? instruction.targetFiles.map((file) => String(file || "").trim()).filter(Boolean)
+    : [];
   const isArtifactRequired = parsed.status === "done" && isArtifactGateRequired(workerKind ?? "unknown", instruction.taskKind);
   const precomputedArtifact = isArtifactRequired
-    ? checkPostMergeArtifact(parsed.fullOutput || parsed.summary || "")
+    ? checkPostMergeArtifact(parsed.fullOutput || parsed.summary || "", {
+        expectedTargetFiles: scopedTargetFiles,
+      })
     : undefined;
 
   // Telemetry: emit bypass signal when discovery-safe task passes without artifact check
@@ -2095,6 +2329,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       taskKind: instruction.taskKind,
       verificationText: String(instruction.verification || "").trim() || null,
       precomputedArtifact,
+      taskTargets: scopedTargetFiles,
     });
 
     // Evidence snapshot for audit (AC#4 defined schema)
@@ -2118,6 +2353,12 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       artifactDetail: postMergeArtifact ? {
         hasSha: postMergeArtifact.hasSha,
         hasTestOutput: postMergeArtifact.hasTestOutput,
+        hasCleanTreeEvidence: postMergeArtifact.hasCleanTreeEvidence,
+        hasTaskScopedCleanTreeEvidence: (postMergeArtifact as any).hasTaskScopedCleanTreeEvidence === true,
+        cleanTreeMode: String((postMergeArtifact as any).cleanTreeMode || "missing"),
+        taskScopedCleanTargets: Array.isArray((postMergeArtifact as any).taskScopedCleanTargets)
+          ? (postMergeArtifact as any).taskScopedCleanTargets as string[]
+          : [],
         hasReplayAttachEvidence: (postMergeArtifact as any).hasReplayAttachEvidence === true,
         hasExplicitTestOutputBlock: postMergeArtifact.hasExplicitTestBlock,
         hasUnfilledPlaceholder: postMergeArtifact.hasUnfilledPlaceholder,
@@ -2317,6 +2558,29 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     timestamp: new Date().toISOString(),
     status: parsed.status
   });
+
+  try {
+    await realizeRouteROIEntry(
+      config,
+      routingTaskId,
+      deriveOutcomeQualityScore(parsed.status, parsed.verificationEvidence || null, dispatchContract),
+      parsed.status,
+    );
+  } catch {
+    // non-critical routing telemetry
+  }
+
+  if (parsed.status !== "done" && parsed.status !== "success") {
+    await persistReflectionMemory(config, {
+      roleName,
+      taskKind: instruction.taskKind,
+      task: instruction.task,
+      status: parsed.status,
+      retryAction: retryDecision?.retryAction || null,
+      reason: parsed.summary,
+      failureClass: failureClassification?.primaryClass || retryDecision?.failureClass || null,
+    }).catch(() => {});
+  }
 
   return {
     status: parsed.status,

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { readJson } from "./fs_utils.js";
 import { runShadowEvaluation } from "./shadow_policy_evaluator.js";
 import {
@@ -434,4 +435,119 @@ export async function shouldApplyGovernanceRule(config, cycleId) {
     applyNewRules: cohort === COHORT.CANARY,
     reason:        `COHORT_ASSIGNED:${cohort}:algorithm=hash-mod:ratio=${ratio}`
   };
+}
+
+// ── Hook governance runtime contract ─────────────────────────────────────────
+
+export const DEFAULT_HOOK_POLICY_PATH = ".github/hooks/box.policy.json";
+
+export interface HookPolicy {
+  schemaVersion: string;
+  description?: string;
+  preToolUse: {
+    required: boolean;
+    mandatoryFields: string[];
+    validImpactValues: string[];
+    validClearanceValues: string[];
+    impactMinClearance: Record<string, string>;
+  };
+  hookDecision: {
+    required: boolean;
+    validDecisions: string[];
+    mandatoryFields: string[];
+  };
+  enforcement: {
+    requirePairedEnvelopeDecision: boolean;
+    denyOnMissingEnvelope: boolean;
+    denyOnMalformedEnvelope: boolean;
+    denyOnDeniedDecision: boolean;
+    requireEnvelopeBeforeDecision: boolean;
+  };
+}
+
+/** Minimal telemetry shape accepted by validateHookTelemetryConsistency. */
+export interface HookTelemetryInput {
+  envelopes: Array<{ scope: string; intent: string; impact: string; clearance: string }>;
+  hookDecisions: Array<{ envelopeScope: string; envelopeIntent: string; envelopeImpact: string; envelopeClearance: string }>;
+  gaps: string[];
+}
+
+/**
+ * Load the preToolUse hook governance policy from .github/hooks/box.policy.json.
+ *
+ * Returns null when the file is absent or unreadable (fail-open).
+ * Callers should log a warning but must not block on missing policy.
+ *
+ * @param rootDir - repo root directory (defaults to process.cwd())
+ */
+export async function loadHookPolicy(rootDir?: string): Promise<HookPolicy | null> {
+  const root = String(rootDir || process.cwd());
+  const policyPath = path.join(root, DEFAULT_HOOK_POLICY_PATH);
+  try {
+    const data = await readJson(policyPath, null);
+    if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+    return data as HookPolicy;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate hook telemetry consistency against the runtime policy contract.
+ *
+ * When the policy's enforcement.requirePairedEnvelopeDecision is true, checks:
+ *   - cardinality: every TOOL_INTENT must have a paired HOOK_DECISION
+ *   - field echo: each HOOK_DECISION's envelope_* fields must match its TOOL_INTENT
+ *
+ * @param telemetry - parsed hook telemetry from the worker output
+ * @param policy    - loaded hook policy (from loadHookPolicy)
+ * @returns { consistent: boolean; gaps: string[] }
+ */
+export function validateHookTelemetryConsistency(
+  telemetry: HookTelemetryInput,
+  policy: HookPolicy,
+): { consistent: boolean; gaps: string[] } {
+  const gaps: string[] = [];
+
+  if (!policy.enforcement.requirePairedEnvelopeDecision) {
+    return { consistent: true, gaps };
+  }
+
+  const { envelopes, hookDecisions } = telemetry;
+
+  if (envelopes.length === 0 && hookDecisions.length === 0) {
+    return { consistent: true, gaps };
+  }
+
+  if (envelopes.length !== hookDecisions.length) {
+    if (envelopes.length > hookDecisions.length) {
+      gaps.push(
+        `HOOK_TELEMETRY_UNPAIRED: ${envelopes.length - hookDecisions.length} TOOL_INTENT envelope(s) missing a paired HOOK_DECISION`,
+      );
+    } else {
+      gaps.push(
+        `HOOK_TELEMETRY_UNPAIRED: ${hookDecisions.length - envelopes.length} HOOK_DECISION(s) missing a preceding TOOL_INTENT envelope`,
+      );
+    }
+  }
+
+  const pairCount = Math.min(envelopes.length, hookDecisions.length);
+  for (let i = 0; i < pairCount; i++) {
+    const env = envelopes[i];
+    const dec = hookDecisions[i];
+    if (dec.envelopeScope !== env.scope) {
+      gaps.push(`HOOK_TELEMETRY_MISMATCH[${i}]: envelope_scope="${dec.envelopeScope}" does not match TOOL_INTENT scope="${env.scope}"`);
+    }
+    if (dec.envelopeIntent !== env.intent) {
+      gaps.push(`HOOK_TELEMETRY_MISMATCH[${i}]: envelope_intent="${dec.envelopeIntent}" does not match TOOL_INTENT intent="${env.intent}"`);
+    }
+    if (dec.envelopeImpact !== env.impact) {
+      gaps.push(`HOOK_TELEMETRY_MISMATCH[${i}]: envelope_impact="${dec.envelopeImpact}" does not match TOOL_INTENT impact="${env.impact}"`);
+    }
+    if (dec.envelopeClearance !== env.clearance) {
+      gaps.push(`HOOK_TELEMETRY_MISMATCH[${i}]: envelope_clearance="${dec.envelopeClearance}" does not match TOOL_INTENT clearance="${env.clearance}"`);
+    }
+  }
+
+  return { consistent: gaps.length === 0, gaps };
 }
