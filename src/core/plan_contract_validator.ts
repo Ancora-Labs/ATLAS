@@ -263,6 +263,18 @@ export function extractCiEvidenceFromMandatoryFinding(finding: unknown): {
   return { failedTestIdentifiers, errorMessages, stackTraces };
 }
 
+/**
+ * Canonical shape for every entry in executionStrategy.waves[*].tasks.
+ * All three fields are required; no plain-string tasks are permitted in
+ * this position — the parser normalizes strings before validation.
+ */
+export interface WaveTaskObject {
+  role: string;
+  task: string;
+  task_id: string;
+  [key: string]: unknown;
+}
+
 export interface PacketDensityThresholds {
   minTargetFiles: number;
   minAcceptanceCriteria: number;
@@ -1285,11 +1297,13 @@ function collectExecutionStrategyTaskRoles(payload: any): Array<{ role: string; 
     const tasks = Array.isArray((waveObj as any).tasks) ? (waveObj as any).tasks : [];
 
     for (const rawTask of tasks) {
-      // Normalize string tasks to canonical object shape — no silent skips.
-      // If a string task reaches the validator (e.g., in tests or retry paths without the
-      // parser normalization pass), treat it as an evolution-worker task rather than dropping it.
-      const task: any = (rawTask && typeof rawTask === "object")
-        ? rawTask
+      // Defensive guard: by the time the validator runs, all tasks should be
+      // WaveTaskObject instances (the parser normalizes strings via
+      // normalizeExecutionStrategyWaveTasks). A string here indicates a code
+      // path that bypassed the parser (e.g., direct unit-test injection or a
+      // future retry path). Coerce to evolution-worker rather than silently drop.
+      const task: WaveTaskObject = (rawTask && typeof rawTask === "object")
+        ? (rawTask as WaveTaskObject)
         : { role: "evolution-worker", task: String(rawTask || "").trim(), task_id: String(rawTask || "").trim() };
       const role = normalizeRoleValue(
         (task as any).role

@@ -61,6 +61,7 @@ import {
   OUTPUT_FIDELITY_GATE_FAIL_REASON,
   isCiCriticalMandatoryFinding,
   extractCiEvidenceFromMandatoryFinding,
+  type WaveTaskObject,
 } from "./plan_contract_validator.js";
 import {
   section,
@@ -93,6 +94,8 @@ import {
 
 // Re-export so existing callers that import from prometheus.ts continue to work
 export { _splitWavesIntoMicrowaves as splitWavesIntoMicrowaves, _MICROWAVE_MAX_TASKS_DEFAULT as MICROWAVE_MAX_TASKS_DEFAULT };
+// Re-export WaveTaskObject for callers that type-check execution strategy payloads
+export type { WaveTaskObject } from "./plan_contract_validator.js";
 
 import { warn, emitEvent } from "./logger.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
@@ -2120,17 +2123,30 @@ function deriveBeforeAfterState(src, taskText, acceptanceCriteria) {
 }
 
 /**
+ * Typed shape of a single wave inside executionStrategy.waves.
+ * tasks must be WaveTaskObject[]; plain strings are not permitted here —
+ * normalizeExecutionStrategyWaveTasks() enforces this contract.
+ */
+export interface ExecutionWave {
+  wave: number;
+  tasks: WaveTaskObject[];
+  dependsOnWaves?: number[];
+  maxParallelWorkers?: number;
+  [key: string]: unknown;
+}
+
+/**
  * Normalizes string entries in executionStrategy.waves[*].tasks to the canonical
  * {role, task, task_id} object shape. This removes parser/validator ambiguity that
  * arises when the LLM emits tasks as plain strings instead of structured objects.
  * String tasks are coerced to evolution-worker role as a safe default.
  */
-function normalizeExecutionStrategyWaveTasks(strategy: any): any {
+function normalizeExecutionStrategyWaveTasks(strategy: any): { waves: ExecutionWave[] } & Record<string, unknown> {
   if (!strategy || !Array.isArray(strategy.waves)) return strategy;
-  const waves = strategy.waves.map((w: any) => {
-    if (!w || typeof w !== "object" || !Array.isArray(w.tasks)) return w;
-    const tasks = w.tasks.map((t: any) => {
-      if (t && typeof t === "object") return t;
+  const waves: ExecutionWave[] = strategy.waves.map((w: any) => {
+    if (!w || typeof w !== "object" || !Array.isArray(w.tasks)) return w as ExecutionWave;
+    const tasks: WaveTaskObject[] = w.tasks.map((t: any): WaveTaskObject => {
+      if (t && typeof t === "object") return t as WaveTaskObject;
       const taskText = String(t || "").trim();
       return { role: "evolution-worker", task: taskText, task_id: taskText };
     });

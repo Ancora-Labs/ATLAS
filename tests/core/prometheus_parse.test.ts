@@ -83,6 +83,7 @@ import {
   QUARANTINE_CONFIDENCE_THRESHOLD as PCV_QUARANTINE_THRESHOLD,
   isCiCriticalMandatoryFinding,
   extractCiEvidenceFromMandatoryFinding,
+  type WaveTaskObject,
 } from "../../src/core/plan_contract_validator.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -265,6 +266,64 @@ describe("normalizePrometheusParsedOutput", () => {
       assert.ok(typeof t.task === "string" && t.task.length > 0, "task field must be a non-empty string");
       assert.ok(typeof t.role === "string" && t.role.length > 0, "role field must be present after normalization");
       assert.ok(typeof t.task_id === "string" && t.task_id.length > 0, "task_id field must be present after normalization");
+    }
+  });
+
+  it("preserves object tasks in executionStrategy.waves unchanged through normalization", () => {
+    // Object tasks that already satisfy the WaveTaskObject contract must pass
+    // through normalizePrometheusParsedOutput without mutation.
+    const objectTask: WaveTaskObject = {
+      role: "evolution-worker",
+      task: "Harden trust boundary",
+      task_id: "T-HTB-001",
+    };
+    const parsed = {
+      projectHealth: "needs-work",
+      plans: [{ task: "Harden trust boundary", role: "evolution-worker", wave: 1, task_id: "T-HTB-001" }],
+      executionStrategy: {
+        waves: [{ wave: 1, tasks: [objectTask] }],
+      },
+    };
+
+    const normalized = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    const waveTasks = normalized.executionStrategy?.waves?.[0]?.tasks;
+
+    assert.ok(Array.isArray(waveTasks), "wave tasks array must be present");
+    assert.equal(waveTasks.length, 1, "single object task must be preserved");
+    const t = waveTasks[0];
+    assert.equal(t.role, "evolution-worker", "role must be unchanged");
+    assert.equal(t.task, "Harden trust boundary", "task must be unchanged");
+    assert.equal(t.task_id, "T-HTB-001", "task_id must be unchanged");
+  });
+
+  it("produces no string tasks in executionStrategy after normalization — object-only contract", () => {
+    // Post-normalization, every entry in every wave's tasks array must be an
+    // object. This is the object-only contract enforced by WaveTaskObject.
+    const parsed = {
+      projectHealth: "needs-work",
+      plans: [
+        { task: "Alpha fix", role: "evolution-worker", wave: 1 },
+        { task: "Beta fix", role: "evolution-worker", wave: 2 },
+      ],
+      executionStrategy: {
+        waves: [
+          { wave: 1, tasks: ["Alpha fix"] },
+          { wave: 2, tasks: ["Beta fix"] },
+        ],
+      },
+    };
+
+    const normalized = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    for (const wave of (normalized.executionStrategy?.waves ?? [])) {
+      for (const t of (wave.tasks ?? [])) {
+        assert.notEqual(typeof t, "string",
+          `wave ${wave.wave}: string task found after normalization — violates WaveTaskObject contract`);
+        assert.equal(typeof t, "object", `wave ${wave.wave}: task must be an object`);
+        assert.ok("role" in t, "task object must have role field");
+        assert.ok("task" in t, "task object must have task field");
+        assert.ok("task_id" in t, "task object must have task_id field");
+      }
     }
   });
 
