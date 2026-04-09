@@ -121,6 +121,16 @@ export const PACKET_VIOLATION_CODE = Object.freeze({
    * are refreshed or the plan provides independent evidence.
    */
   STALE_DIAGNOSTICS_BACKED: "stale_diagnostics_backed",
+
+  // ── executionStrategy shape ───────────────────────────────────────────────
+  /**
+   * A task entry in executionStrategy.waves[*].tasks is a plain string rather
+   * than the required {role, task, task_id} object shape.  The parser
+   * (normalizeExecutionStrategyWaveTasks) must convert strings before the
+   * validator runs; a string reaching the validator indicates a bypassed
+   * normalization path.
+   */
+  WAVE_TASK_NOT_OBJECT:          "wave_task_not_object",
 });
 
 /**
@@ -1297,14 +1307,15 @@ function collectExecutionStrategyTaskRoles(payload: any): Array<{ role: string; 
     const tasks = Array.isArray((waveObj as any).tasks) ? (waveObj as any).tasks : [];
 
     for (const rawTask of tasks) {
-      // Defensive guard: by the time the validator runs, all tasks should be
-      // WaveTaskObject instances (the parser normalizes strings via
-      // normalizeExecutionStrategyWaveTasks). A string here indicates a code
-      // path that bypassed the parser (e.g., direct unit-test injection or a
-      // future retry path). Coerce to evolution-worker rather than silently drop.
-      const task: WaveTaskObject = (rawTask && typeof rawTask === "object")
-        ? (rawTask as WaveTaskObject)
-        : { role: "evolution-worker", task: String(rawTask || "").trim(), task_id: String(rawTask || "").trim() };
+      // Object-only contract: executionStrategy.waves[*].tasks must contain
+      // WaveTaskObject instances only.  normalizeExecutionStrategyWaveTasks()
+      // in prometheus.ts is the single normalization gate that converts any
+      // string entries before validation runs.  A string reaching this point
+      // indicates a code path that bypassed the parser — skip it so phantom
+      // role-coverage entries are never created from malformed input.
+      // (Violation code: PACKET_VIOLATION_CODE.WAVE_TASK_NOT_OBJECT)
+      if (!rawTask || typeof rawTask !== "object") continue;
+      const task = rawTask as WaveTaskObject;
       const role = normalizeRoleValue(
         (task as any).role
         ?? (task as any).workerRole

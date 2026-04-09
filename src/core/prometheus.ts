@@ -2137,11 +2137,15 @@ export interface ExecutionWave {
 
 /**
  * Normalizes string entries in executionStrategy.waves[*].tasks to the canonical
- * {role, task, task_id} object shape. This removes parser/validator ambiguity that
- * arises when the LLM emits tasks as plain strings instead of structured objects.
- * String tasks are coerced to evolution-worker role as a safe default.
+ * {role, task, task_id} object shape.  This is the single normalization gate:
+ * all LLM output passes through this function before any downstream validation.
+ * After normalization the tasks array is object-only; the validator enforces this
+ * contract strictly (PACKET_VIOLATION_CODE.WAVE_TASK_NOT_OBJECT).
+ *
+ * String tasks are coerced to evolution-worker role. Exported so retry paths and
+ * integration callers can apply the same normalization without re-parsing.
  */
-function normalizeExecutionStrategyWaveTasks(strategy: any): { waves: ExecutionWave[] } & Record<string, unknown> {
+export function normalizeExecutionStrategyWaveTasks(strategy: any): { waves: ExecutionWave[] } & Record<string, unknown> {
   if (!strategy || !Array.isArray(strategy.waves)) return strategy;
   const waves: ExecutionWave[] = strategy.waves.map((w: any) => {
     if (!w || typeof w !== "object" || !Array.isArray(w.tasks)) return w as ExecutionWave;

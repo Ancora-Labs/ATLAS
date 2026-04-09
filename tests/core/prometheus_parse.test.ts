@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   normalizePrometheusParsedOutput,
+  normalizeExecutionStrategyWaveTasks,
   applyPlanningRubric,
   RIGIDITY_PENALTY,
   filterResolvedCarryForwardItems,
@@ -83,6 +84,7 @@ import {
   QUARANTINE_CONFIDENCE_THRESHOLD as PCV_QUARANTINE_THRESHOLD,
   isCiCriticalMandatoryFinding,
   extractCiEvidenceFromMandatoryFinding,
+  PACKET_VIOLATION_CODE,
   type WaveTaskObject,
 } from "../../src/core/plan_contract_validator.js";
 
@@ -2680,11 +2682,38 @@ describe("validateAndInjectRolePlans", () => {
     assert.equal(validatePlanContract(injectedSkeleton).valid, true);
   });
 
-  it("treats string tasks in executionStrategy.waves as evolution-worker and detects missing coverage (negative path)", () => {
-    // String tasks must NOT be silently skipped by the validator.
-    // A string "Fix something" with no explicit role defaults to evolution-worker,
-    // and if no contract-valid plan exists for evolution-worker the result is missing coverage.
+  it("string tasks in executionStrategy.waves are skipped by the strict validator — no phantom role coverage (negative path)", () => {
+    // Object-only contract: the validator must NOT coerce string tasks to
+    // evolution-worker.  Strings reaching the validator indicate a bypassed
+    // normalizer (PACKET_VIOLATION_CODE.WAVE_TASK_NOT_OBJECT).  The validator
+    // skips them so no phantom role requirements are created from malformed input.
     const payload = {
+      executionStrategy: {
+        waves: [
+          {
+            wave: 1,
+            tasks: ["Fix something string task"],
+          },
+        ],
+      },
+      plans: [],
+    };
+
+    const result = validateAndInjectRolePlans(payload, { injectMissing: false });
+    // No object tasks → no role requirements extracted → ok=true with empty lists.
+    assert.equal(result.ok, true,
+      "validator must not produce missing-role failures from string tasks — strings are skipped");
+    assert.deepEqual(result.missingRoles, [],
+      "no phantom roles must be created from string tasks");
+    assert.deepEqual(result.requiredRoles, [],
+      "string tasks must not contribute to requiredRoles");
+  });
+
+  it("normalizeExecutionStrategyWaveTasks + validateAndInjectRolePlans detects missing coverage after string normalization", () => {
+    // This is the correct two-step pattern: run the normalizer (parser gate)
+    // first, then validate.  After normalization strings become evolution-worker
+    // objects, so missing plan coverage IS correctly reported.
+    const raw = {
       executionStrategy: {
         waves: [
           {
@@ -2696,10 +2725,30 @@ describe("validateAndInjectRolePlans", () => {
       plans: [], // No plans → evolution-worker role is uncovered
     };
 
+    // Step 1: parser normalizes string tasks → object tasks
+    const normalizedStrategy = normalizeExecutionStrategyWaveTasks(raw.executionStrategy);
+    const normalizedWaveTasks = normalizedStrategy?.waves?.[0]?.tasks;
+    assert.ok(Array.isArray(normalizedWaveTasks), "normalizer must return wave tasks array");
+    assert.equal(normalizedWaveTasks.length, 1, "string task must be preserved as one object");
+    assert.equal(typeof normalizedWaveTasks[0], "object", "task must be an object after normalization");
+    assert.equal(normalizedWaveTasks[0].role, "evolution-worker", "string task coerces to evolution-worker");
+
+    // Step 2: validator now sees objects and reports missing coverage
+    const payload = { ...raw, executionStrategy: normalizedStrategy };
     const result = validateAndInjectRolePlans(payload, { injectMissing: false });
-    assert.equal(result.ok, false, "must report missing coverage when string task has no matching plan");
+    assert.equal(result.ok, false,
+      "must report missing coverage after normalization when no plan covers evolution-worker");
     assert.ok(result.initialMissingRoles.includes("evolution-worker"),
-      "string task must be treated as evolution-worker and surface as a missing role");
+      "evolution-worker must appear as a missing role after normalization converts the string task");
+  });
+
+  it("PACKET_VIOLATION_CODE.WAVE_TASK_NOT_OBJECT is defined in the violation code taxonomy", () => {
+    // Ensures the violation code exists for downstream audit logging.
+    assert.equal(
+      PACKET_VIOLATION_CODE.WAVE_TASK_NOT_OBJECT,
+      "wave_task_not_object",
+      "WAVE_TASK_NOT_OBJECT must be present in PACKET_VIOLATION_CODE",
+    );
   });
 });
 
