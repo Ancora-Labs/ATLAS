@@ -195,7 +195,14 @@ export async function writeCheckpoint(config, checkpoint, opts = {}) {
     throw new Error("checkpoint must be a non-null object");
   }
   const stateDir = config?.paths?.stateDir || "state";
-  const options = opts as { fileName?: string; checkpointKind?: string; returnEnvelope?: boolean };
+  const options = opts as {
+    fileName?: string;
+    checkpointKind?: string;
+    returnEnvelope?: boolean;
+    token?: CancellationToken | null;
+  };
+  // Honour cooperative cancellation before performing the (potentially slow) write.
+  checkCancellationAtCheckpoint(options.token);
   const fileName = options.fileName
     ? String(options.fileName)
     : `checkpoint-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;

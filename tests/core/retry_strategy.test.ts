@@ -26,6 +26,8 @@ import {
   DEFAULT_RETRY_POLICIES,
   RETRY_STATE_SCHEMA,
   RETRY_METRIC_SCHEMA,
+  STEP_RETRY_CLASS,
+  classifyStepRetryClass,
   resolveRetryAction,
   buildRetryMetric,
   recommendRetryDeliberationMode,
@@ -663,5 +665,90 @@ describe("applyRetryROIGate", () => {
     const result = applyRetryROIGate(baseDecision, roiDeny());
     assert.ok(result.reason.includes("0.050"), `reason should include gain: ${result.reason}`);
     assert.ok(result.reason.includes("0.180"), `reason should include threshold: ${result.reason}`);
+  });
+});
+
+// ── STEP_RETRY_CLASS enum ─────────────────────────────────────────────────────
+
+describe("STEP_RETRY_CLASS enum", () => {
+  it("is frozen and contains all four class values", () => {
+    assert.ok(Object.isFrozen(STEP_RETRY_CLASS));
+    assert.equal(STEP_RETRY_CLASS.RETRYABLE,     "retryable");
+    assert.equal(STEP_RETRY_CLASS.IDEMPOTENT,    "idempotent");
+    assert.equal(STEP_RETRY_CLASS.NON_RETRYABLE, "non_retryable");
+    assert.equal(STEP_RETRY_CLASS.CANCELLABLE,   "cancellable");
+    assert.equal(Object.keys(STEP_RETRY_CLASS).length, 4);
+  });
+});
+
+// ── classifyStepRetryClass ────────────────────────────────────────────────────
+
+describe("classifyStepRetryClass — known step names", () => {
+  it("worker_execution → retryable, known=true", () => {
+    const r = classifyStepRetryClass("worker_execution");
+    assert.equal(r.class, STEP_RETRY_CLASS.RETRYABLE);
+    assert.equal(r.known, true);
+  });
+
+  it("rework_dispatch → retryable, known=true", () => {
+    const r = classifyStepRetryClass("rework_dispatch");
+    assert.equal(r.class, STEP_RETRY_CLASS.RETRYABLE);
+    assert.equal(r.known, true);
+  });
+
+  it("checkpoint_write → idempotent, known=true", () => {
+    const r = classifyStepRetryClass("checkpoint_write");
+    assert.equal(r.class, STEP_RETRY_CLASS.IDEMPOTENT);
+    assert.equal(r.known, true);
+  });
+
+  it("verification → non_retryable, known=true", () => {
+    const r = classifyStepRetryClass("verification");
+    assert.equal(r.class, STEP_RETRY_CLASS.NON_RETRYABLE);
+    assert.equal(r.known, true);
+  });
+
+  it("artifact_gate → non_retryable, known=true", () => {
+    const r = classifyStepRetryClass("artifact_gate");
+    assert.equal(r.class, STEP_RETRY_CLASS.NON_RETRYABLE);
+    assert.equal(r.known, true);
+  });
+
+  it("policy_gate → non_retryable, known=true", () => {
+    const r = classifyStepRetryClass("policy_gate");
+    assert.equal(r.class, STEP_RETRY_CLASS.NON_RETRYABLE);
+    assert.equal(r.known, true);
+  });
+
+  it("cancellation_check → cancellable, known=true", () => {
+    const r = classifyStepRetryClass("cancellation_check");
+    assert.equal(r.class, STEP_RETRY_CLASS.CANCELLABLE);
+    assert.equal(r.known, true);
+  });
+});
+
+describe("classifyStepRetryClass — negative paths", () => {
+  it("unknown step name → retryable (fail-open), known=false", () => {
+    const r = classifyStepRetryClass("totally_unknown_step");
+    assert.equal(r.class, STEP_RETRY_CLASS.RETRYABLE);
+    assert.equal(r.known, false);
+  });
+
+  it("empty string → retryable (fail-open), known=false", () => {
+    const r = classifyStepRetryClass("");
+    assert.equal(r.class, STEP_RETRY_CLASS.RETRYABLE);
+    assert.equal(r.known, false);
+  });
+
+  it("is case-insensitive for known step names", () => {
+    const r = classifyStepRetryClass("VERIFICATION");
+    assert.equal(r.class, STEP_RETRY_CLASS.NON_RETRYABLE);
+    assert.equal(r.known, true);
+  });
+
+  it("handles whitespace-padded step names", () => {
+    const r = classifyStepRetryClass("  checkpoint_write  ");
+    assert.equal(r.class, STEP_RETRY_CLASS.IDEMPOTENT);
+    assert.equal(r.known, true);
   });
 });

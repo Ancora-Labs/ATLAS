@@ -7,7 +7,9 @@ import {
   writeCheckpoint,
   initializeRunSegmentState,
   applyRunSegmentRollover,
+  checkCancellationAtCheckpoint,
 } from "../../src/core/checkpoint_engine.js";
+import { createCancellationToken, CancelledError } from "../../src/core/daemon_control.js";
 
 const REAL_DATE = Date;
 
@@ -110,6 +112,79 @@ describe("checkpoint_engine", () => {
     const r3 = applyRunSegmentRollover({ ...(r2.checkpoint as any) }, { completedBatches: 13, spanBatches: 5, historyMax: 2 });
     assert.equal(r3.rolledOver, false, "final batch completion should not create extra rollover");
     assert.equal((r3.checkpoint as any).runSegmentHistory.length, 2, "history must remain bounded");
+  });
+});
+
+// ── Cancellation-scope semantics ──────────────────────────────────────────────
+
+describe("checkCancellationAtCheckpoint", () => {
+  it("is a no-op when token is null", () => {
+    assert.doesNotThrow(() => checkCancellationAtCheckpoint(null));
+  });
+
+  it("is a no-op when token is undefined", () => {
+    assert.doesNotThrow(() => checkCancellationAtCheckpoint(undefined));
+  });
+
+  it("is a no-op when token is not cancelled", () => {
+    const token = createCancellationToken();
+    assert.doesNotThrow(() => checkCancellationAtCheckpoint(token));
+  });
+
+  it("throws CancelledError when token is cancelled", () => {
+    const token = createCancellationToken();
+    token.cancel("test-cancel");
+    assert.throws(() => checkCancellationAtCheckpoint(token), CancelledError);
+  });
+
+  it("CancelledError reason matches token cancel reason", () => {
+    const token = createCancellationToken();
+    token.cancel("stop-requested:test");
+    try {
+      checkCancellationAtCheckpoint(token);
+      assert.fail("expected CancelledError to be thrown");
+    } catch (err) {
+      assert.ok(err instanceof CancelledError);
+      assert.equal(err.reason, "stop-requested:test");
+    }
+  });
+});
+
+describe("writeCheckpoint — cancellation-scope", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-checkpoint-cancel-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("throws CancelledError when a cancelled token is passed in opts", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const token = createCancellationToken();
+    token.cancel("stop-requested");
+    await assert.rejects(
+      () => writeCheckpoint(config, { cycle: 1 }, { fileName: "test.json", token }),
+      CancelledError,
+    );
+  });
+
+  it("writes normally when a non-cancelled token is passed in opts", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const token = createCancellationToken();
+    const filePath = await writeCheckpoint(config, { cycle: 2 }, { fileName: "ok.json", token });
+    const raw = await fs.readFile(filePath, "utf8");
+    const parsed = JSON.parse(raw);
+    assert.equal(parsed.cycle, 2);
+  });
+
+  it("writes normally when no token is provided (backward-compatible)", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const filePath = await writeCheckpoint(config, { cycle: 3 }, { fileName: "no-token.json" });
+    const raw = await fs.readFile(filePath, "utf8");
+    assert.equal(JSON.parse(raw).cycle, 3);
   });
 });
 

@@ -2521,3 +2521,51 @@ describe("verification_gate — carry-forward backlog closure (#1-#5)", () => {
       `placeholder gap expected; got: [${result.gaps.join("; ")}]`);
   });
 });
+
+// ── Cancellation-scope at verification entry ──────────────────────────────────
+
+import {
+  checkCancellationAtVerification,
+} from "../../src/core/verification_gate.js";
+import { createCancellationToken, CancelledError } from "../../src/core/daemon_control.js";
+
+describe("verification_gate — checkCancellationAtVerification", () => {
+  it("is a no-op when token is null", () => {
+    assert.doesNotThrow(() => checkCancellationAtVerification(null));
+  });
+
+  it("is a no-op when token is undefined", () => {
+    assert.doesNotThrow(() => checkCancellationAtVerification(undefined));
+  });
+
+  it("is a no-op when token is not cancelled", () => {
+    const token = createCancellationToken();
+    assert.doesNotThrow(() => checkCancellationAtVerification(token));
+  });
+
+  it("throws CancelledError when token is already cancelled", () => {
+    const token = createCancellationToken();
+    token.cancel("stop-before-verification");
+    assert.throws(() => checkCancellationAtVerification(token), CancelledError);
+  });
+
+  it("CancelledError carries the cancel reason from the token", () => {
+    const token = createCancellationToken();
+    token.cancel("cycle-teardown");
+    try {
+      checkCancellationAtVerification(token);
+      assert.fail("expected CancelledError");
+    } catch (err) {
+      assert.ok(err instanceof CancelledError);
+      assert.equal(err.reason, "cycle-teardown");
+    }
+  });
+
+  it("negative path: does not throw for a freshly created non-cancelled token", () => {
+    const token = createCancellationToken();
+    // Not cancelled — must be a complete no-op
+    let threw = false;
+    try { checkCancellationAtVerification(token); } catch { threw = true; }
+    assert.equal(threw, false, "fresh token must not trigger CancelledError");
+  });
+});

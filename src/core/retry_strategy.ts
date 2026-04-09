@@ -589,6 +589,66 @@ export function applyRetryROIGate(
   };
 }
 
+// ── Per-step retryability class ───────────────────────────────────────────────
+
+/**
+ * Canonical classification of pipeline steps by their retryability semantics.
+ *
+ * Each orchestration step belongs to exactly one class:
+ *
+ *   retryable       — step can be fully retried with preserved state
+ *                     (e.g. worker_execution, rework_dispatch)
+ *   idempotent      — re-running produces the same result; safe to repeat
+ *                     (e.g. checkpoint_write)
+ *   non_retryable   — step must not be retried without an explicit rework
+ *                     instruction from the verification gate
+ *                     (e.g. verification, artifact_gate, policy_gate)
+ *   cancellable     — step must abort immediately on a cancellation signal;
+ *                     no retry is meaningful
+ *                     (e.g. cancellation_check)
+ *
+ * Consumers query this enum via classifyStepRetryClass(stepName).
+ */
+export const STEP_RETRY_CLASS = Object.freeze({
+  RETRYABLE:     "retryable",
+  IDEMPOTENT:    "idempotent",
+  NON_RETRYABLE: "non_retryable",
+  CANCELLABLE:   "cancellable",
+} as const);
+
+export type StepRetryClass = typeof STEP_RETRY_CLASS[keyof typeof STEP_RETRY_CLASS];
+
+/**
+ * Authoritative step-name → STEP_RETRY_CLASS mapping.
+ *
+ * Step names are lowercase_snake_case strings used in log telemetry, span events,
+ * and retry routing.  When a step name is unrecognised the function falls back to
+ * RETRYABLE (fail-open) and sets `known: false` so callers can emit a warning.
+ */
+const _STEP_RETRY_CLASS_MAP: Readonly<Record<string, StepRetryClass>> = Object.freeze({
+  worker_execution:   STEP_RETRY_CLASS.RETRYABLE,
+  rework_dispatch:    STEP_RETRY_CLASS.RETRYABLE,
+  checkpoint_write:   STEP_RETRY_CLASS.IDEMPOTENT,
+  verification:       STEP_RETRY_CLASS.NON_RETRYABLE,
+  artifact_gate:      STEP_RETRY_CLASS.NON_RETRYABLE,
+  policy_gate:        STEP_RETRY_CLASS.NON_RETRYABLE,
+  cancellation_check: STEP_RETRY_CLASS.CANCELLABLE,
+});
+
+/**
+ * Classify a named pipeline step by its retryability semantics.
+ *
+ * @param stepName — canonical step name (e.g. "worker_execution", "verification")
+ * @returns { class: StepRetryClass, known: boolean }
+ *   `known=false` means the name was not in the map; class defaults to RETRYABLE.
+ */
+export function classifyStepRetryClass(stepName: string): { class: StepRetryClass; known: boolean } {
+  const normalized = String(stepName || "").toLowerCase().trim();
+  const cls = _STEP_RETRY_CLASS_MAP[normalized];
+  if (cls !== undefined) return { class: cls, known: true };
+  return { class: STEP_RETRY_CLASS.RETRYABLE, known: false };
+}
+
 // ── State persistence helpers ─────────────────────────────────────────────────
 
 import path from "node:path";

@@ -16,6 +16,24 @@ import {
   classifyNodeTestGlobWindowsArtifact,
   type DispatchCommandValidationResult,
 } from "./verification_command_registry.js";
+import type { CancellationToken } from "./daemon_control.js";
+
+// ── Cooperative cancellation at verification entry point ──────────────────────
+
+/**
+ * Cooperative cancellation checkpoint for use at the start of verification flows.
+ *
+ * Mirrors checkCancellationAtCheckpoint from checkpoint_engine.ts but is scoped
+ * to the verification gate so callers can distinguish cancellation origin in logs.
+ *
+ * Safe to call with null/undefined — treated as no-op so callers that have not
+ * opted into cancellation are unaffected.
+ *
+ * @param token — CancellationToken from createCancellationToken(), or null/undefined
+ */
+export function checkCancellationAtVerification(token?: CancellationToken | null): void {
+  token?.throwIfCancelled();
+}
 
 // ── Named test proof patterns ─────────────────────────────────────────────────
 // Packets whose verification field names a specific test file + description must

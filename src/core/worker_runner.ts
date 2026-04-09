@@ -23,7 +23,7 @@ import { appendProgress, appendLineageEntry, appendFailureClassification } from 
 import { buildAgentArgs, nameToSlug } from "./agent_loader.js";
 import { buildVerificationChecklist, CANONICAL_VERIFICATION_REPORT_TEMPLATE } from "./verification_profiles.js";
 import { getVerificationCommands, classifyNodeTestGlobWindowsArtifact } from "./verification_command_registry.js";
-import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence, parseToolExecutionTelemetry } from "./verification_gate.js";
+import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence, parseToolExecutionTelemetry, checkCancellationAtVerification } from "./verification_gate.js";
 import {
   enforceModelPolicy,
   routeModelUnderQualityFloor,
@@ -1717,6 +1717,13 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   const stdout = String(result?.stdout || "");
   const stderr = String(result?.stderr || "");
 
+  // Cooperative cancellation: if the orchestrator cancelled while the worker was
+  // running, don't advance into the verification / audit path — the cycle is being
+  // torn down and any further writes would be misleading state artifacts.
+  if (_token?.cancelled) {
+    throw new CancelledError(_token.reason || "cancelled-after-worker-spawn");
+  }
+
   if (result.status !== 0) {
     const isTransient = result.aborted === true && /transient API error circuit breaker/i.test(stderr);
     const exitCodeInfo = classifyExitCode(result.status);
@@ -2066,6 +2073,9 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // Rework threshold: config.runtime.maxReworkAttempts (default: 2, per Athena AC#2 concern).
   // Evidence snapshot schema includes profile, report fields, gaps, attempt, and timestamp (AC#4).
   // requireTaskContract / maxReworkAttempts / currentAttempt declared above (shared with artifact gate).
+  // Cooperative cancellation: honour any in-flight stop signal before entering the
+  // verification path — this step is NON_RETRYABLE so we must not begin if torn down.
+  checkCancellationAtVerification(_token);
   if (requireTaskContract && parsed.status === "done") {
 
     // Artifact check is mandatory for all done-capable workers, even when workerKind is unknown.
