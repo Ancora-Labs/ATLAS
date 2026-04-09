@@ -242,6 +242,32 @@ describe("normalizePrometheusParsedOutput", () => {
     assert.equal(Number(normalized.requestBudget.hardCapTotal) >= 1, true);
   });
 
+  it("normalizes string tasks in executionStrategy.waves to canonical {role,task,task_id} objects", () => {
+    // If the LLM emits string tasks in executionStrategy.waves (legacy format),
+    // the parser must upgrade them to objects so the validator sees no ambiguity.
+    const parsed = {
+      projectHealth: "needs-work",
+      plans: [{ task: "Fix dispatch", role: "evolution-worker", wave: 1 }],
+      executionStrategy: {
+        waves: [
+          { wave: 1, tasks: ["Fix dispatch", "Harden trust boundary"] }
+        ]
+      }
+    };
+
+    const normalized = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    const waveTasks = normalized.executionStrategy?.waves?.[0]?.tasks;
+    assert.ok(Array.isArray(waveTasks), "wave tasks must be an array");
+    assert.equal(waveTasks.length, 2, "both string tasks must be preserved after normalization");
+    for (const t of waveTasks) {
+      assert.equal(typeof t, "object", "every wave task must be an object after normalization");
+      assert.ok(typeof t.task === "string" && t.task.length > 0, "task field must be a non-empty string");
+      assert.ok(typeof t.role === "string" && t.role.length > 0, "role field must be present after normalization");
+      assert.ok(typeof t.task_id === "string" && t.task_id.length > 0, "task_id field must be present after normalization");
+    }
+  });
+
   it("extracts plans from narrative wave sections when no JSON plans exist", () => {
     const parsed = {};
     const thinking = `
@@ -2593,6 +2619,28 @@ describe("validateAndInjectRolePlans", () => {
     );
     assert.equal(injectedSkeleton._rolePlanSkeletonSource, ROLE_PLAN_SKELETON_METADATA_SOURCE);
     assert.equal(validatePlanContract(injectedSkeleton).valid, true);
+  });
+
+  it("treats string tasks in executionStrategy.waves as evolution-worker and detects missing coverage (negative path)", () => {
+    // String tasks must NOT be silently skipped by the validator.
+    // A string "Fix something" with no explicit role defaults to evolution-worker,
+    // and if no contract-valid plan exists for evolution-worker the result is missing coverage.
+    const payload = {
+      executionStrategy: {
+        waves: [
+          {
+            wave: 1,
+            tasks: ["Fix something string task"],
+          },
+        ],
+      },
+      plans: [], // No plans → evolution-worker role is uncovered
+    };
+
+    const result = validateAndInjectRolePlans(payload, { injectMissing: false });
+    assert.equal(result.ok, false, "must report missing coverage when string task has no matching plan");
+    assert.ok(result.initialMissingRoles.includes("evolution-worker"),
+      "string task must be treated as evolution-worker and surface as a missing role");
   });
 });
 
