@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 2,
+  "updatedAt": "2026-04-09T17:28:29.310Z",
+  "contracts": [
+    {
+      "name": "SWE-bench",
+      "version": "1.1",
+      "requiredFields": [
+        "benchmarkName",
+        "taskId",
+        "status",
+        "model",
+        "tokensIn",
+        "tokensOut",
+        "elapsedMs",
+        "evaluatedAt"
+      ],
+      "dateFields": ["evaluatedAt"],
+      "stepBudgetFields": [],
+      "verifiedSuiteStatuses": ["success"],
+      "statusEnum": [
+        "success",
+        "partial",
+        "failed"
+      ]
+    },
+    {
+      "name": "OSWorld",
+      "version": "1.1",
+      "requiredFields": [
+        "benchmarkName",
+        "taskId",
+        "status",
+        "model",
+        "tokensIn",
+        "tokensOut",
+        "elapsedMs",
+        "evaluatedAt",
+        "stepBudget"
+      ],
+      "dateFields": ["evaluatedAt", "verifiedAt"],
+      "stepBudgetFields": ["stepBudget"],
+      "verifiedSuiteStatuses": ["success"],
+      "statusEnum": [
+        "success",
+        "partial",
+        "failed"
+      ]
+    }
+  ]
+}

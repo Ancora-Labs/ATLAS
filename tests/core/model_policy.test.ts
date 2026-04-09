@@ -1240,3 +1240,298 @@ describe("resolveJesusFallbackModel", () => {
     assert.equal(resolveJesusFallbackModel(cfg), "claude-haiku-3");
   });
 });
+
+// ── normalizeBenchmarkSample + classifyBenchmarkSuite (benchmark ingestion normalization) ──
+
+import {
+  normalizeBenchmarkSample,
+  classifyBenchmarkSuite,
+  BENCHMARK_SUITE_TYPE,
+} from "../../src/core/model_policy.js";
+
+/** Shared test contracts covering SWE-bench (no stepBudget) and OSWorld (stepBudget + verifiedAt). */
+const TEST_BENCHMARK_CONTRACTS = [
+  {
+    name: "SWE-bench",
+    version: "1.1",
+    requiredFields: [
+      "benchmarkName", "taskId", "status", "model",
+      "tokensIn", "tokensOut", "elapsedMs", "evaluatedAt",
+    ],
+    dateFields: ["evaluatedAt"],
+    stepBudgetFields: [],
+    statusEnum: ["success", "partial", "failed"],
+    verifiedSuiteStatuses: ["success"],
+  },
+  {
+    name: "OSWorld",
+    version: "1.1",
+    requiredFields: [
+      "benchmarkName", "taskId", "status", "model",
+      "tokensIn", "tokensOut", "elapsedMs", "evaluatedAt", "stepBudget",
+    ],
+    dateFields: ["evaluatedAt", "verifiedAt"],
+    stepBudgetFields: ["stepBudget"],
+    statusEnum: ["success", "partial", "failed"],
+    verifiedSuiteStatuses: ["success"],
+  },
+];
+
+describe("normalizeBenchmarkSample — strict ingestion normalization", () => {
+  it("normalizes a valid SWE-bench sample with no errors", () => {
+    const { sample, errors } = normalizeBenchmarkSample({
+      benchmarkName: "SWE-bench",
+      taskId: "task-001",
+      status: "success",
+      model: "Claude Sonnet 4.6",
+      tokensIn: 1000,
+      tokensOut: 500,
+      elapsedMs: 3200,
+      evaluatedAt: "2026-04-09T12:00:00.000Z",
+    }, TEST_BENCHMARK_CONTRACTS);
+    assert.equal(errors.length, 0, "valid sample must produce no errors");
+    assert.equal(sample.benchmarkName, "SWE-bench");
+    assert.equal(sample.status, "success");
+    assert.equal(sample.suiteType, BENCHMARK_SUITE_TYPE.VERIFIED);
+  });
+
+  it("normalizes evaluatedAt to ISO 8601 from a loose date string", () => {
+    const { sample } = normalizeBenchmarkSample({
+      benchmarkName: "SWE-bench",
+      taskId: "task-002",
+      status: "partial",
+      model: "Claude Sonnet 4.6",
+      tokensIn: 800,
+      tokensOut: 400,
+      elapsedMs: 2000,
+      evaluatedAt: "April 9, 2026",
+    }, TEST_BENCHMARK_CONTRACTS);
+    assert.ok(
+      sample.evaluatedAt.includes("T") || sample.evaluatedAt.endsWith("Z"),
+      "evaluatedAt must be converted to ISO 8601"
+    );
+  });
+
+  it("reports error for an unparseable date field", () => {
+    const { errors } = normalizeBenchmarkSample({
+      benchmarkName: "SWE-bench",
+      taskId: "task-003",
+      status: "success",
+      model: "Claude Sonnet 4.6",
+      tokensIn: 800,
+      tokensOut: 400,
+      elapsedMs: 2000,
+      evaluatedAt: "not-a-date",
+    }, TEST_BENCHMARK_CONTRACTS);
+    assert.ok(
+      errors.some(e => e.includes("invalid_date:evaluatedAt")),
+      "unparseable evaluatedAt must produce an invalid_date error"
+    );
+  });
+
+  it("validates stepBudget for OSWorld as a positive integer", () => {
+    const { errors } = normalizeBenchmarkSample({
+      benchmarkName: "OSWorld",
+      taskId: "task-004",
+      status: "success",
+      model: "Claude Sonnet 4.6",
+      tokensIn: 1200,
+      tokensOut: 600,
+      elapsedMs: 5000,
+      evaluatedAt: "2026-04-09T12:00:00.000Z",
+      stepBudget: 15,
+      verifiedAt: "2026-04-09T13:00:00.000Z",
+    }, TEST_BENCHMARK_CONTRACTS);
+    assert.equal(errors.length, 0, "valid OSWorld sample with stepBudget=15 must have no errors");
+  });
+
+  it("rejects a non-integer stepBudget", () => {
+    const { errors } = normalizeBenchmarkSample({
+      benchmarkName: "OSWorld",
+      taskId: "task-005",
+      status: "success",
+      model: "Claude Sonnet 4.6",
+      tokensIn: 1200,
+      tokensOut: 600,
+      elapsedMs: 5000,
+      evaluatedAt: "2026-04-09T12:00:00.000Z",
+      stepBudget: 3.7,
+    }, TEST_BENCHMARK_CONTRACTS);
+    assert.ok(
+      errors.some(e => e.includes("invalid_step_budget")),
+      "non-integer stepBudget must produce an invalid_step_budget error"
+    );
+  });
+
+  it("rejects a negative stepBudget", () => {
+    const { errors } = normalizeBenchmarkSample({
+      benchmarkName: "OSWorld",
+      taskId: "task-006",
+      status: "success",
+      model: "Claude Sonnet 4.6",
+      tokensIn: 1200,
+      tokensOut: 600,
+      elapsedMs: 5000,
+      evaluatedAt: "2026-04-09T12:00:00.000Z",
+      stepBudget: -5,
+    }, TEST_BENCHMARK_CONTRACTS);
+    assert.ok(
+      errors.some(e => e.includes("invalid_step_budget")),
+      "negative stepBudget must produce an invalid_step_budget error"
+    );
+  });
+
+  it("reports error for an unknown benchmark name", () => {
+    const { errors } = normalizeBenchmarkSample({
+      benchmarkName: "UnknownBench",
+      taskId: "task-007",
+      status: "success",
+      model: "Claude Sonnet 4.6",
+      tokensIn: 500,
+      tokensOut: 300,
+      elapsedMs: 1000,
+      evaluatedAt: "2026-04-09T12:00:00.000Z",
+    }, TEST_BENCHMARK_CONTRACTS);
+    assert.ok(
+      errors.some(e => e.includes("unknown_benchmark")),
+      "unknown benchmark must produce an unknown_benchmark error"
+    );
+  });
+
+  it("reports error for an invalid status value", () => {
+    const { errors } = normalizeBenchmarkSample({
+      benchmarkName: "SWE-bench",
+      taskId: "task-008",
+      status: "unknown-status",
+      model: "Claude Sonnet 4.6",
+      tokensIn: 500,
+      tokensOut: 300,
+      elapsedMs: 1000,
+      evaluatedAt: "2026-04-09T12:00:00.000Z",
+    }, TEST_BENCHMARK_CONTRACTS);
+    assert.ok(
+      errors.some(e => e.includes("invalid_status")),
+      "invalid status must produce an invalid_status error"
+    );
+  });
+
+  it("reports error for a missing required field (empty taskId)", () => {
+    const { errors } = normalizeBenchmarkSample({
+      benchmarkName: "SWE-bench",
+      taskId: "",
+      status: "success",
+      model: "Claude Sonnet 4.6",
+      tokensIn: 500,
+      tokensOut: 300,
+      elapsedMs: 1000,
+      evaluatedAt: "2026-04-09T12:00:00.000Z",
+    }, TEST_BENCHMARK_CONTRACTS);
+    assert.ok(
+      errors.some(e => e.includes("missing_field:taskId")),
+      "empty taskId must produce a missing_field error"
+    );
+  });
+
+  it("negative path: classifies a failed sample as exploratory_suite", () => {
+    const { sample } = normalizeBenchmarkSample({
+      benchmarkName: "SWE-bench",
+      taskId: "task-009",
+      status: "failed",
+      model: "Claude Sonnet 4.6",
+      tokensIn: 500,
+      tokensOut: 300,
+      elapsedMs: 1000,
+      evaluatedAt: "2026-04-09T12:00:00.000Z",
+    }, TEST_BENCHMARK_CONTRACTS);
+    assert.equal(
+      sample.suiteType, BENCHMARK_SUITE_TYPE.EXPLORATORY,
+      "failed status must be classified as exploratory_suite"
+    );
+  });
+
+  it("normalizationErrors field reflects the collected errors", () => {
+    const { sample } = normalizeBenchmarkSample({
+      benchmarkName: "SWE-bench",
+      taskId: "task-010",
+      status: "bad-status",
+      model: "Claude Sonnet 4.6",
+      tokensIn: 500,
+      tokensOut: 300,
+      elapsedMs: 1000,
+      evaluatedAt: "2026-04-09T12:00:00.000Z",
+    }, TEST_BENCHMARK_CONTRACTS);
+    assert.ok(
+      Array.isArray(sample.normalizationErrors),
+      "normalizationErrors must be an array on the returned sample"
+    );
+    assert.ok(sample.normalizationErrors.length > 0, "errors must be embedded in sample");
+  });
+});
+
+describe("classifyBenchmarkSuite — suite type classification", () => {
+  it("BENCHMARK_SUITE_TYPE constants have correct values and are frozen", () => {
+    assert.equal(BENCHMARK_SUITE_TYPE.VERIFIED,    "verified_suite");
+    assert.equal(BENCHMARK_SUITE_TYPE.EXPLORATORY, "exploratory_suite");
+    assert.ok(Object.isFrozen(BENCHMARK_SUITE_TYPE), "BENCHMARK_SUITE_TYPE must be frozen");
+  });
+
+  it("classifies a successful SWE-bench sample as verified_suite", () => {
+    const result = classifyBenchmarkSuite(
+      { benchmarkName: "SWE-bench", status: "success" },
+      TEST_BENCHMARK_CONTRACTS
+    );
+    assert.equal(result, BENCHMARK_SUITE_TYPE.VERIFIED);
+  });
+
+  it("classifies a partial SWE-bench sample as exploratory_suite", () => {
+    const result = classifyBenchmarkSuite(
+      { benchmarkName: "SWE-bench", status: "partial" },
+      TEST_BENCHMARK_CONTRACTS
+    );
+    assert.equal(result, BENCHMARK_SUITE_TYPE.EXPLORATORY);
+  });
+
+  it("classifies OSWorld success without verifiedAt as exploratory_suite (unverified)", () => {
+    const result = classifyBenchmarkSuite(
+      { benchmarkName: "OSWorld", status: "success" },
+      TEST_BENCHMARK_CONTRACTS
+    );
+    assert.equal(
+      result, BENCHMARK_SUITE_TYPE.EXPLORATORY,
+      "OSWorld success without verifiedAt must be exploratory"
+    );
+  });
+
+  it("classifies OSWorld success with valid verifiedAt as verified_suite", () => {
+    const result = classifyBenchmarkSuite(
+      { benchmarkName: "OSWorld", status: "success", verifiedAt: "2026-04-09T13:00:00.000Z" },
+      TEST_BENCHMARK_CONTRACTS
+    );
+    assert.equal(
+      result, BENCHMARK_SUITE_TYPE.VERIFIED,
+      "OSWorld success with valid verifiedAt must be verified_suite"
+    );
+  });
+
+  it("negative path: OSWorld success with unparseable verifiedAt is exploratory", () => {
+    const result = classifyBenchmarkSuite(
+      { benchmarkName: "OSWorld", status: "success", verifiedAt: "not-a-date" },
+      TEST_BENCHMARK_CONTRACTS
+    );
+    assert.equal(
+      result, BENCHMARK_SUITE_TYPE.EXPLORATORY,
+      "unparseable verifiedAt must prevent verified classification"
+    );
+  });
+
+  it("negative path: unknown benchmark always classifies as exploratory", () => {
+    const result = classifyBenchmarkSuite(
+      { benchmarkName: "UnknownBench", status: "success" },
+      TEST_BENCHMARK_CONTRACTS
+    );
+    assert.equal(
+      result, BENCHMARK_SUITE_TYPE.EXPLORATORY,
+      "unknown benchmark must default to exploratory_suite"
+    );
+  });
+});

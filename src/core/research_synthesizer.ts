@@ -1109,3 +1109,78 @@ ${topicBlocks}`;
 
   return section;
 }
+
+// ── Benchmark artifact ingestion normalization ─────────────────────────────────
+
+/**
+ * Normalize date and step-budget fields in a raw benchmark artifact record.
+ *
+ * Called during research synthesis when findings contain benchmark data
+ * (e.g. OSWorld-verified style, SWE-bench results) to ensure schema
+ * consistency before the data enters the planning context.
+ *
+ * Normalization rules:
+ *   - Date fields: normalized to ISO 8601.  Non-parseable values are set to null
+ *     and produce an error entry.
+ *   - Step-budget fields: coerced to positive integers.  Non-integer, negative,
+ *     or non-finite values are set to null and produce an error entry.
+ *
+ * Defaults (when opts is omitted):
+ *   dateFields      = ["evaluatedAt", "verifiedAt"]
+ *   stepBudgetFields = ["stepBudget"]
+ *
+ * @param artifact        — raw record from research/benchmark data
+ * @param opts.dateFields      — field names whose values must be ISO 8601 dates
+ * @param opts.stepBudgetFields — field names whose values must be positive integers
+ * @returns { normalized, errors } — normalized copy of artifact and list of normalization errors
+ */
+export function normalizeBenchmarkArtifactFields(
+  artifact: Record<string, unknown>,
+  opts: {
+    dateFields?: string[];
+    stepBudgetFields?: string[];
+  } = {}
+): { normalized: Record<string, unknown>; errors: string[] } {
+  if (!artifact || typeof artifact !== "object") {
+    return { normalized: {}, errors: ["invalid_artifact:not_an_object"] };
+  }
+
+  const errors: string[] = [];
+  const normalized: Record<string, unknown> = { ...artifact };
+
+  const dateFields = Array.isArray(opts.dateFields) && opts.dateFields.length > 0
+    ? opts.dateFields
+    : ["evaluatedAt", "verifiedAt"];
+
+  const stepBudgetFields = Array.isArray(opts.stepBudgetFields) && opts.stepBudgetFields.length > 0
+    ? opts.stepBudgetFields
+    : ["stepBudget"];
+
+  for (const field of dateFields) {
+    const rawVal = artifact[field];
+    if (rawVal === null || rawVal === undefined) continue;
+    const dateStr = String(rawVal).trim();
+    if (!dateStr) continue;
+    const parsed = new Date(dateStr);
+    if (isNaN(parsed.getTime())) {
+      errors.push(`invalid_date:${field}=${dateStr}`);
+      normalized[field] = null;
+    } else {
+      normalized[field] = parsed.toISOString();
+    }
+  }
+
+  for (const field of stepBudgetFields) {
+    const rawVal = artifact[field];
+    if (rawVal === null || rawVal === undefined) continue;
+    const num = Number(rawVal);
+    if (!Number.isFinite(num) || num <= 0 || !Number.isInteger(num)) {
+      errors.push(`invalid_step_budget:${field}=${rawVal}`);
+      normalized[field] = null;
+    } else {
+      normalized[field] = num;
+    }
+  }
+
+  return { normalized, errors };
+}

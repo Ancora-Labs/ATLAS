@@ -49,7 +49,7 @@ import { readJson, writeJson } from "./fs_utils.js";
 import { warn, emitEvent } from "./logger.js";
 import { EVENTS, EVENT_DOMAIN } from "./event_schema.js";
 import { SLO_TIMESTAMP_CONTRACT, SLO_METRIC } from "./slo_checker.js";
-import { hasVerificationReportEvidence } from "./verification_gate.js";
+import { hasCleanTreeStatusEvidence, hasVerificationReportEvidence } from "./verification_gate.js";
 import { hasFiniteAthenaOverallScore } from "./athena_reviewer.js";
 import { hasPrometheusRuntimeContractSignals, isStrategicFieldToolTraceContaminated, STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH } from "./prometheus.js";
 import { getLaneForWorkerName, isSpecialistLane } from "./role_registry.js";
@@ -547,7 +547,7 @@ function countDoneWorkersWithCleanTreeEvidence(workerResults: unknown): number |
       || row.fullOutput
       || "",
     );
-    if (/CLEAN_TREE_STATUS\s*=\s*clean\b/i.test(evidence)) count += 1;
+    if (hasCleanTreeStatusEvidence(evidence)) count += 1;
   }
   return count;
 }
@@ -1420,6 +1420,62 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
   }
 
   return { byTaskKind: resultByTaskKind, sampleCount: usableEntries };
+}
+
+// ── Evaluation suite split: verified_suite vs exploratory_suite ────────────────
+
+/**
+ * Suite categories for benchmark evaluation reporting.
+ * Mirrors BENCHMARK_SUITE_TYPE in model_policy.ts — kept local to avoid import coupling.
+ */
+export const EVALUATION_SUITE_TYPE = Object.freeze({
+  VERIFIED:    "verified_suite",
+  EXPLORATORY: "exploratory_suite",
+});
+
+/**
+ * Split a list of normalized benchmark samples into verified_suite and
+ * exploratory_suite buckets for evaluation reporting.
+ *
+ * A sample belongs to verified_suite when its suiteType field equals
+ * EVALUATION_SUITE_TYPE.VERIFIED.  All other samples (including those with
+ * normalizationErrors or unknown suiteType) fall into exploratory_suite.
+ *
+ * Returns a deterministic split even when samples is empty or null.
+ * Never throws.
+ */
+export function splitEvaluationSuites(samples: unknown[]): {
+  verified_suite: Array<Record<string, unknown>>;
+  exploratory_suite: Array<Record<string, unknown>>;
+  totalSamples: number;
+  verifiedCount: number;
+  exploratoryCount: number;
+} {
+  const safeList = Array.isArray(samples) ? samples : [];
+  const verified: Array<Record<string, unknown>> = [];
+  const exploratory: Array<Record<string, unknown>> = [];
+
+  for (const raw of safeList) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      exploratory.push({ _raw: raw, suiteType: EVALUATION_SUITE_TYPE.EXPLORATORY });
+      continue;
+    }
+    const sample = raw as Record<string, unknown>;
+    const suiteType = String(sample.suiteType ?? "").trim();
+    if (suiteType === EVALUATION_SUITE_TYPE.VERIFIED) {
+      verified.push(sample);
+    } else {
+      exploratory.push(sample);
+    }
+  }
+
+  return {
+    verified_suite:   verified,
+    exploratory_suite: exploratory,
+    totalSamples:     safeList.length,
+    verifiedCount:    verified.length,
+    exploratoryCount: exploratory.length,
+  };
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────

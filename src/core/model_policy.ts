@@ -1462,3 +1462,208 @@ export function computeMemoryHitBonus(
   if (ratio > 0 && ratio < 0.3) return { adjustment: MEMORY_HIT_ROUTING_WEIGHT, reason: `memory-low-effectiveness(ratio=${ratio.toFixed(2)})` };
   return { adjustment: 0, reason: `memory-neutral(ratio=${ratio.toFixed(2)})` };
 }
+
+// ── Benchmark ingestion normalization ─────────────────────────────────────────
+//
+// Provides strict ingestion normalization for benchmark artifacts (SWE-bench,
+// OSWorld-verified style, etc.) including schema/date/step-budget field validation
+// and suite classification (verified_suite vs exploratory_suite).
+
+/** Suite classification for benchmark evaluation reporting. */
+export const BENCHMARK_SUITE_TYPE = Object.freeze({
+  /** Verified results: status in verifiedSuiteStatuses AND verifiedAt present (for OSWorld-style). */
+  VERIFIED:    "verified_suite",
+  /** Exploratory results: failed, partial, or missing verification timestamp. */
+  EXPLORATORY: "exploratory_suite",
+});
+
+/** A benchmark sample after normalization including suite classification and error list. */
+export interface NormalizedBenchmarkSample extends BenchmarkSample {
+  stepBudget?: number | null;
+  verifiedAt?: string | null;
+  suiteType: string;
+  normalizationErrors: string[];
+}
+
+/**
+ * Normalize a raw benchmark artifact for strict ingestion.
+ *
+ * Validation steps:
+ *   1. Locate the matching contract by benchmarkName (case-insensitive).
+ *   2. Check all requiredFields — empty/null/undefined values are flagged.
+ *   3. Validate status against the contract's statusEnum.
+ *   4. Normalize dateFields to ISO 8601; non-parseable dates produce an error and are set to null.
+ *   5. Validate stepBudgetFields as positive integers; invalid values produce an error and are set to null.
+ *   6. Classify the sample as verified_suite or exploratory_suite via classifyBenchmarkSuite().
+ *
+ * Returns the normalized sample and a list of normalization errors.
+ * A non-empty errors array means the sample failed at least one validation rule.
+ * Never throws.
+ */
+export function normalizeBenchmarkSample(
+  raw: Record<string, unknown>,
+  contracts: BenchmarkContract[]
+): { sample: NormalizedBenchmarkSample; errors: string[] } {
+  const errors: string[] = [];
+  const partial = raw && typeof raw === "object" ? raw : {};
+  const benchmarkName = String(partial.benchmarkName ?? "").trim();
+
+  const contract = Array.isArray(contracts)
+    ? contracts.find((c) => c.name.toLowerCase() === benchmarkName.toLowerCase())
+    : undefined;
+
+  if (!contract) {
+    errors.push(`unknown_benchmark:${benchmarkName || "missing"}`);
+    return {
+      sample: {
+        benchmarkName,
+        taskId: "",
+        status: "",
+        model: "",
+        tokensIn: 0,
+        tokensOut: 0,
+        elapsedMs: 0,
+        evaluatedAt: "",
+        suiteType: BENCHMARK_SUITE_TYPE.EXPLORATORY,
+        normalizationErrors: errors,
+      },
+      errors,
+    };
+  }
+
+  // Validate required fields
+  for (const field of contract.requiredFields) {
+    const value = partial[field];
+    const missing =
+      value === null ||
+      value === undefined ||
+      (typeof value === "string" && String(value).trim().length === 0);
+    if (missing) errors.push(`missing_field:${field}`);
+  }
+
+  // Validate status enum (normalize to lowercase for comparison)
+  const statusRaw = String(partial.status ?? "").trim().toLowerCase();
+  if (!contract.statusEnum.includes(statusRaw)) {
+    errors.push(`invalid_status:${statusRaw || "missing"}`);
+  }
+
+  // Normalize date fields to ISO 8601
+  const dateFields: string[] = Array.isArray((contract as any).dateFields)
+    ? (contract as any).dateFields
+    : ["evaluatedAt"];
+  const normalizedDates: Record<string, string | null> = {};
+  for (const field of dateFields) {
+    const rawVal = partial[field];
+    if (rawVal === null || rawVal === undefined) {
+      normalizedDates[field] = null;
+      continue;
+    }
+    const dateStr = String(rawVal).trim();
+    if (!dateStr) {
+      normalizedDates[field] = null;
+      continue;
+    }
+    const parsed = new Date(dateStr);
+    if (isNaN(parsed.getTime())) {
+      errors.push(`invalid_date:${field}=${dateStr}`);
+      normalizedDates[field] = null;
+    } else {
+      normalizedDates[field] = parsed.toISOString();
+    }
+  }
+
+  // Validate step-budget fields (must be positive integers)
+  const stepBudgetFields: string[] = Array.isArray((contract as any).stepBudgetFields)
+    ? (contract as any).stepBudgetFields
+    : [];
+  let stepBudget: number | null = null;
+  for (const field of stepBudgetFields) {
+    const rawVal = partial[field];
+    if (rawVal === null || rawVal === undefined) {
+      // Missing — already flagged by requiredFields check if applicable
+      continue;
+    }
+    const num = Number(rawVal);
+    if (!Number.isFinite(num) || num <= 0 || !Number.isInteger(num)) {
+      errors.push(`invalid_step_budget:${field}=${rawVal}`);
+    } else {
+      stepBudget = num;
+    }
+  }
+
+  // Classify suite type
+  const suiteType = classifyBenchmarkSuite(
+    { ...(partial as any), status: statusRaw },
+    contracts
+  );
+
+  const sample: NormalizedBenchmarkSample = {
+    benchmarkName,
+    taskId:    String(partial.taskId    ?? "").trim(),
+    status:    statusRaw,
+    model:     String(partial.model     ?? "").trim(),
+    tokensIn:  Number(partial.tokensIn  ?? 0),
+    tokensOut: Number(partial.tokensOut ?? 0),
+    elapsedMs: Number(partial.elapsedMs ?? 0),
+    evaluatedAt: normalizedDates.evaluatedAt ?? String(partial.evaluatedAt ?? "").trim(),
+    stepBudget,
+    verifiedAt: normalizedDates.verifiedAt ?? null,
+    suiteType,
+    normalizationErrors: errors,
+  };
+
+  return { sample, errors };
+}
+
+/**
+ * Classify a benchmark sample into verified_suite or exploratory_suite.
+ *
+ * A sample is VERIFIED when:
+ *   - Its status is in the contract's verifiedSuiteStatuses list (default: ["success"]).
+ *   - For benchmarks with stepBudgetFields (OSWorld-style): verifiedAt must also be present
+ *     and parseable as a valid date.
+ *
+ * All other samples are classified as EXPLORATORY.
+ * Unknown benchmarks always fall through to EXPLORATORY (fail-safe).
+ */
+export function classifyBenchmarkSuite(
+  sample: Partial<BenchmarkSample> & Record<string, unknown>,
+  contracts: BenchmarkContract[]
+): string {
+  const benchmarkName = String(sample?.benchmarkName ?? "").trim().toLowerCase();
+  const contract = Array.isArray(contracts)
+    ? contracts.find((c) => c.name.toLowerCase() === benchmarkName)
+    : undefined;
+
+  // Unknown benchmark — cannot verify; always exploratory
+  if (!contract) {
+    return BENCHMARK_SUITE_TYPE.EXPLORATORY;
+  }
+
+  const allowedStatuses: string[] = Array.isArray((contract as any)?.verifiedSuiteStatuses)
+    ? (contract as any).verifiedSuiteStatuses.map((s: unknown) => String(s).toLowerCase())
+    : ["success"];
+
+  const status = String(sample?.status ?? "").trim().toLowerCase();
+  if (!allowedStatuses.includes(status)) {
+    return BENCHMARK_SUITE_TYPE.EXPLORATORY;
+  }
+
+  // For OSWorld-style benchmarks (those with stepBudgetFields), require a valid verifiedAt
+  const hasStepBudgetFields =
+    Array.isArray((contract as any)?.stepBudgetFields) &&
+    (contract as any).stepBudgetFields.length > 0;
+
+  if (hasStepBudgetFields) {
+    const verifiedAt = sample?.verifiedAt;
+    if (!verifiedAt || String(verifiedAt).trim().length === 0) {
+      return BENCHMARK_SUITE_TYPE.EXPLORATORY;
+    }
+    const parsed = new Date(String(verifiedAt).trim());
+    if (isNaN(parsed.getTime())) {
+      return BENCHMARK_SUITE_TYPE.EXPLORATORY;
+    }
+  }
+
+  return BENCHMARK_SUITE_TYPE.VERIFIED;
+}
