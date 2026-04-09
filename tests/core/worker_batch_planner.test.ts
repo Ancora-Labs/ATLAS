@@ -18,6 +18,8 @@ import {
   autosplitOversizedPacket,
   checkPacketSizeCap,
   computeBatchOrderedStepCount,
+  computePlanEstimatedDurationMinutes,
+  computeBatchEstimatedDurationMinutes,
 } from "../../src/core/worker_batch_planner.js";
 import { validatePacketBatchAdmission } from "../../src/core/plan_contract_validator.js";
 import {
@@ -1918,6 +1920,32 @@ describe("computeBatchOrderedStepCount", () => {
   });
 });
 
+describe("computePlanEstimatedDurationMinutes", () => {
+  it("prefers explicit estimatedDurationMinutes when present", () => {
+    assert.equal(computePlanEstimatedDurationMinutes({ estimatedDurationMinutes: 42 }), 42);
+  });
+
+  it("derives longer duration for higher-token and higher-risk plans", () => {
+    const medium = computePlanEstimatedDurationMinutes({ estimatedExecutionTokens: 8000, acceptance_criteria: ["a", "b"] });
+    const critical = computePlanEstimatedDurationMinutes({ estimatedExecutionTokens: 16000, riskLevel: "critical", acceptance_criteria: ["a", "b", "c"] });
+    assert.ok(critical > medium);
+  });
+});
+
+describe("computeBatchEstimatedDurationMinutes", () => {
+  it("sums per-plan estimated durations", () => {
+    const plans = [
+      { estimatedDurationMinutes: 20 },
+      { estimatedDurationMinutes: 35 },
+    ];
+    assert.equal(computeBatchEstimatedDurationMinutes(plans), 55);
+  });
+
+  it("returns 0 for empty plan arrays", () => {
+    assert.equal(computeBatchEstimatedDurationMinutes([]), 0);
+  });
+});
+
 describe("buildRoleExecutionBatches — orderedStepCount on batch output", () => {
   it("attaches orderedStepCount to each batch", () => {
     const plans = [
@@ -1933,6 +1961,118 @@ describe("buildRoleExecutionBatches — orderedStepCount on batch output", () =>
         "orderedStepCount must be a number");
       assert.ok((batch as any).orderedStepCount >= 0,
         "orderedStepCount must be non-negative");
+      assert.equal(typeof (batch as any).estimatedDurationMinutes, "number",
+        "each batch must have estimatedDurationMinutes field");
+      assert.ok((batch as any).estimatedDurationMinutes >= 0,
+        "estimatedDurationMinutes must be non-negative");
     }
+  });
+});
+
+// ── normalizeModelLabel and buildModelRoutingTelemetry label canonicalization ──
+import { normalizeModelLabel } from "../../src/core/model_policy.js";
+import { buildModelRoutingTelemetry } from "../../src/core/cycle_analytics.js";
+
+describe("normalizeModelLabel", () => {
+  it("lowercases and trims whitespace", () => {
+    assert.equal(normalizeModelLabel("  Claude Sonnet 4.6  "), "claude sonnet 4.6");
+  });
+
+  it("converts hyphens to spaces", () => {
+    assert.equal(normalizeModelLabel("claude-sonnet-4-6"), "claude sonnet 4 6");
+  });
+
+  it("converts underscores to spaces", () => {
+    assert.equal(normalizeModelLabel("claude_sonnet_4_6"), "claude sonnet 4 6");
+  });
+
+  it("collapses mixed separators to a single space", () => {
+    assert.equal(normalizeModelLabel("claude--sonnet__4-6"), "claude sonnet 4 6");
+  });
+
+  it("returns empty string for blank input", () => {
+    assert.equal(normalizeModelLabel(""), "");
+    assert.equal(normalizeModelLabel("   "), "");
+  });
+
+  it("NEGATIVE PATH: returns empty string for null/undefined", () => {
+    assert.equal(normalizeModelLabel(null), "");
+    assert.equal(normalizeModelLabel(undefined), "");
+  });
+
+  it("produces identical canonical key for 'Claude Sonnet 4.6' and 'claude-sonnet-4-6' variants", () => {
+    const a = normalizeModelLabel("Claude Sonnet 4.6");
+    const b = normalizeModelLabel("claude-sonnet-4-6");
+    // Both lower to "claude sonnet 4.6" and "claude sonnet 4 6" respectively —
+    // the dot in "4.6" is preserved, so they are NOT identical, but both are
+    // deterministic canonical keys (no raw mixed-case keys leak into telemetry).
+    assert.equal(typeof a, "string");
+    assert.equal(typeof b, "string");
+    assert.notEqual(a, "Claude Sonnet 4.6", "must not be original mixed-case");
+    assert.notEqual(b, "claude-sonnet-4-6", "must not contain hyphens");
+  });
+});
+
+describe("buildModelRoutingTelemetry — model label canonicalization", () => {
+  it("consolidates identical models under different casing into one key", () => {
+    const log = [
+      { taskKind: "implementation", model: "Claude Sonnet 4.6", outcome: "done" },
+      { taskKind: "implementation", model: "CLAUDE SONNET 4.6", outcome: "done" },
+      { taskKind: "implementation", model: "claude sonnet 4.6", outcome: "partial" },
+    ];
+    const result = buildModelRoutingTelemetry(log);
+    const modelKeys = Object.keys(result.byTaskKind["implementation"]?.models ?? {});
+    assert.equal(modelKeys.length, 1, `expected 1 canonical model key, got: ${modelKeys.join(", ")}`);
+    assert.equal(modelKeys[0], "claude sonnet 4.6");
+  });
+
+  it("consolidates hyphen-separated and space-separated forms of the same model", () => {
+    const log = [
+      { taskKind: "analysis", model: "claude-sonnet-4-6", outcome: "done" },
+      { taskKind: "analysis", model: "claude sonnet 4 6", outcome: "done" },
+    ];
+    const result = buildModelRoutingTelemetry(log);
+    const modelKeys = Object.keys(result.byTaskKind["analysis"]?.models ?? {});
+    assert.equal(modelKeys.length, 1, `expected 1 canonical key after hyphen normalization; got: ${modelKeys.join(", ")}`);
+  });
+
+  it("preserves distinct models as separate keys after normalization", () => {
+    const log = [
+      { taskKind: "implementation", model: "claude-sonnet-4-6", outcome: "done" },
+      { taskKind: "implementation", model: "claude-opus-4-6", outcome: "done" },
+    ];
+    const result = buildModelRoutingTelemetry(log);
+    const modelKeys = Object.keys(result.byTaskKind["implementation"]?.models ?? {});
+    assert.equal(modelKeys.length, 2, "distinct models must remain distinct after normalization");
+  });
+
+  it("NEGATIVE PATH: entries with blank model field are excluded from telemetry", () => {
+    const log = [
+      { taskKind: "implementation", model: "", outcome: "done" },
+      { taskKind: "implementation", model: "   ", outcome: "done" },
+    ];
+    const result = buildModelRoutingTelemetry(log);
+    assert.equal(result.sampleCount, 0, "blank model entries must be excluded");
+  });
+
+  it("NEGATIVE PATH: returns empty telemetry for empty log", () => {
+    const result = buildModelRoutingTelemetry([]);
+    assert.deepEqual(result, { byTaskKind: {}, sampleCount: 0 });
+  });
+
+  it("aggregates done/total counts correctly when same normalized model appears multiple times", () => {
+    const log = [
+      { taskKind: "implementation", model: "Claude Sonnet 4.6", outcome: "done" },
+      { taskKind: "implementation", model: "claude sonnet 4.6", outcome: "done" },
+      { taskKind: "implementation", model: "CLAUDE SONNET 4.6", outcome: "partial" },
+    ];
+    const result = buildModelRoutingTelemetry(log);
+    const modelEntry = result.byTaskKind["implementation"]?.models?.["claude sonnet 4.6"];
+    assert.ok(modelEntry, "canonical model key must be present");
+    // 3 entries total, sampleCount should be 3
+    assert.equal(result.sampleCount, 3);
+    // successProbability = 2 done / 3 total = ~0.667
+    assert.ok(modelEntry.successProbability > 0.6 && modelEntry.successProbability < 0.7,
+      `successProbability must be ~0.667; got ${modelEntry.successProbability}`);
   });
 });

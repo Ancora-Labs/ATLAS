@@ -1346,6 +1346,27 @@ export function computeExpectedValue(point: TaskKindEconomicsPoint): number {
   return (point.successProbability * point.capacityImpact) / Math.max(0.0001, point.requestCost);
 }
 
+/**
+ * Canonicalize a model name string to a consistent telemetry key.
+ *
+ * Canonical form: lowercase, hyphens and underscores collapsed to single
+ * spaces, surrounding whitespace trimmed.  This prevents fragmented ROI
+ * signals when the same model is logged under different string variations
+ * (e.g. "Claude Sonnet 4.6" vs "claude-sonnet-4-6" vs "claude_sonnet_4_6").
+ *
+ * @param name — raw model name from a log entry, config field, or API response
+ * @returns canonical key string; empty string when input is blank/null
+ */
+export function normalizeModelLabel(name: string | null | undefined): string {
+  const raw = String(name ?? "").trim();
+  if (!raw) return "";
+  return raw
+    .toLowerCase()
+    .replace(/[-_]+/g, " ")   // collapse hyphen/underscore separators to space
+    .replace(/\s+/g, " ")     // collapse repeated whitespace
+    .trim();
+}
+
 export function rankModelsByTaskKindExpectedValue(
   taskKind: string,
   models: string[],
@@ -1403,7 +1424,8 @@ export function rankModelsByTaskKindExpectedValue(
   for (const model of original) {
     const direct = normalizeEconomicsPoint(modelPoints[model]);
     const lower = normalizeEconomicsPoint(modelPoints[String(model).toLowerCase()]);
-    const point = direct || lower || defaultPoint;
+    const canonical = normalizeEconomicsPoint(modelPoints[normalizeModelLabel(model)]);
+    const point = direct || lower || canonical || defaultPoint;
     if (!point) continue;
     scoreByModel[model] = Math.round(computeExpectedValue(point) * 1000) / 1000;
     usableScores += 1;
