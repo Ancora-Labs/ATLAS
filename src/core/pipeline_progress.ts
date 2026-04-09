@@ -233,6 +233,7 @@ export const SLO_TIMESTAMP_STAGES = Object.freeze([
   "jesus_decided",
   "athena_approved",
   "workers_dispatching",
+  "workers_finishing",
   "cycle_complete",
 ]);
 

@@ -32,6 +32,7 @@ import {
   computeCycleSLOs,
   persistSloMetrics,
   readSloMetrics,
+  patchSloMetricsReplayEvidence,
 } from "../../src/core/slo_checker.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -523,9 +524,16 @@ describe("SLO schema enum completeness (AC8)", () => {
     assert.equal(new Set(vals).size, vals.length, "SLO_REASON values must be unique");
   });
 
-  it("SLO_TIMESTAMP_CONTRACT covers all SLO_METRIC keys", () => {
-    for (const metric of Object.values(SLO_METRIC)) {
-      assert.ok(metric in SLO_TIMESTAMP_CONTRACT, `SLO_TIMESTAMP_CONTRACT must include ${metric}`);
+  it("SLO_TIMESTAMP_CONTRACT covers the three primary SLO metrics (sub-metrics are computed separately)", () => {
+    const primaryMetrics = [SLO_METRIC.DECISION_LATENCY, SLO_METRIC.DISPATCH_LATENCY, SLO_METRIC.VERIFICATION_COMPLETION];
+    for (const metric of primaryMetrics) {
+      assert.ok(metric in SLO_TIMESTAMP_CONTRACT, `SLO_TIMESTAMP_CONTRACT must include primary metric ${metric}`);
+    }
+    // Sub-metrics derive from stageTimestamps directly, not through SLO_TIMESTAMP_CONTRACT,
+    // so they should NOT be present in the contract.
+    const subMetrics = [SLO_METRIC.WORKER_EXECUTION, SLO_METRIC.VERIFICATION_GATE, SLO_METRIC.REPLAY_EVIDENCE];
+    for (const metric of subMetrics) {
+      assert.ok(!(metric in SLO_TIMESTAMP_CONTRACT), `sub-metric ${metric} must NOT be in SLO_TIMESTAMP_CONTRACT`);
     }
   });
 });
@@ -895,5 +903,178 @@ describe("detectSustainedBreachSignatures — excess statistics", () => {
     ];
     const sigs = detectSustainedBreachSignatures(hist, { minConsecutiveBreaches: 3 });
     assert.equal(sigs[0].severity, "high");
+  });
+});
+
+// ── Sub-metrics: workerExecutionMs, verificationGateMs, replayEvidenceMs ──────
+
+describe("computeCycleSLOs — sub-metrics split of verificationCompletionMs", () => {
+  /** Timestamps with workers_finishing to enable sub-metric computation. */
+  function fullTimestamps(opts: {
+    workerExecutionMs?: number;
+    verificationGateMs?: number;
+  } = {}) {
+    const base = NOW + 10000 + 2000; // workers_dispatching base
+    return {
+      jesus_awakening:    makeTs(0),
+      jesus_decided:      makeTs(5000),
+      athena_approved:    makeTs(10000),
+      workers_dispatching: new Date(base).toISOString(),
+      workers_finishing:  new Date(base + (opts.workerExecutionMs ?? 200000)).toISOString(),
+      cycle_complete:     new Date(base + (opts.workerExecutionMs ?? 200000) + (opts.verificationGateMs ?? 5000)).toISOString(),
+    };
+  }
+
+  it("computes workerExecutionMs from workers_dispatching → workers_finishing", () => {
+    const ts = fullTimestamps({ workerExecutionMs: 200000, verificationGateMs: 5000 });
+    const record = computeCycleSLOs(DEFAULT_CONFIG, ts, makeTs(0), ts.cycle_complete);
+    assert.equal(record.metrics[SLO_METRIC.WORKER_EXECUTION], 200000);
+  });
+
+  it("computes verificationGateMs from workers_finishing → cycle_complete", () => {
+    const ts = fullTimestamps({ workerExecutionMs: 200000, verificationGateMs: 8000 });
+    const record = computeCycleSLOs(DEFAULT_CONFIG, ts, makeTs(0), ts.cycle_complete);
+    assert.equal(record.metrics[SLO_METRIC.VERIFICATION_GATE], 8000);
+  });
+
+  it("workerExecutionMs + verificationGateMs equals verificationCompletionMs (aggregate is intact)", () => {
+    const ts = fullTimestamps({ workerExecutionMs: 180000, verificationGateMs: 12000 });
+    const record = computeCycleSLOs(DEFAULT_CONFIG, ts, makeTs(0), ts.cycle_complete);
+    const workerMs = record.metrics[SLO_METRIC.WORKER_EXECUTION] as number;
+    const gateMs   = record.metrics[SLO_METRIC.VERIFICATION_GATE] as number;
+    const aggMs    = record.metrics[SLO_METRIC.VERIFICATION_COMPLETION] as number;
+    assert.ok(workerMs !== null, "workerExecutionMs must be computed");
+    assert.ok(gateMs   !== null, "verificationGateMs must be computed");
+    assert.ok(aggMs    !== null, "verificationCompletionMs must be computed");
+    assert.equal(workerMs + gateMs, aggMs, "sub-metrics must sum to aggregate");
+  });
+
+  it("sub-metrics are null when workers_finishing is absent (backward-compat)", () => {
+    // validTimestamps() has no workers_finishing
+    const record = computeCycleSLOs(DEFAULT_CONFIG, validTimestamps(), makeTs(0), makeTs(400000));
+    assert.equal(record.metrics[SLO_METRIC.WORKER_EXECUTION], null);
+    assert.equal(record.metrics[SLO_METRIC.VERIFICATION_GATE], null);
+  });
+
+  it("replayEvidenceMs is null when opts is omitted", () => {
+    const record = computeCycleSLOs(DEFAULT_CONFIG, validTimestamps(), makeTs(0), makeTs(400000));
+    assert.equal(record.metrics[SLO_METRIC.REPLAY_EVIDENCE], null);
+  });
+
+  it("replayEvidenceMs is set when provided via opts", () => {
+    const record = computeCycleSLOs(DEFAULT_CONFIG, validTimestamps(), makeTs(0), makeTs(400000), { replayEvidenceMs: 3500 });
+    assert.equal(record.metrics[SLO_METRIC.REPLAY_EVIDENCE], 3500);
+  });
+
+  it("replayEvidenceMs is rounded to nearest ms", () => {
+    const record = computeCycleSLOs(DEFAULT_CONFIG, validTimestamps(), makeTs(0), makeTs(400000), { replayEvidenceMs: 1234.7 });
+    assert.equal(record.metrics[SLO_METRIC.REPLAY_EVIDENCE], 1235);
+  });
+
+  it("replayEvidenceMs is null for negative values", () => {
+    const record = computeCycleSLOs(DEFAULT_CONFIG, validTimestamps(), makeTs(0), makeTs(400000), { replayEvidenceMs: -1 });
+    assert.equal(record.metrics[SLO_METRIC.REPLAY_EVIDENCE], null);
+  });
+
+  it("sub-metrics do NOT trigger SLO breaches even when large", () => {
+    // Large workerExecutionMs / verificationGateMs should not add to sloBreaches
+    const ts = fullTimestamps({ workerExecutionMs: 99_999_999, verificationGateMs: 99_999_999 });
+    const record = computeCycleSLOs(DEFAULT_CONFIG, ts, makeTs(0), ts.cycle_complete);
+    const subBreaches = record.sloBreaches.filter(
+      b => b.metric === SLO_METRIC.WORKER_EXECUTION || b.metric === SLO_METRIC.VERIFICATION_GATE
+    );
+    assert.equal(subBreaches.length, 0, "sub-metrics must never generate SLO breaches");
+  });
+
+  it("clock-skew on sub-metrics clamps to 0 (not negative)", () => {
+    const ts = fullTimestamps({ workerExecutionMs: -5000, verificationGateMs: 0 });
+    // manually swap workers_dispatching and workers_finishing to create skew
+    [ts.workers_dispatching, ts.workers_finishing] = [ts.workers_finishing, ts.workers_dispatching];
+    const record = computeCycleSLOs(DEFAULT_CONFIG, ts, makeTs(0), ts.cycle_complete);
+    const wMs = record.metrics[SLO_METRIC.WORKER_EXECUTION];
+    assert.ok(wMs !== null);
+    assert.ok((wMs as number) >= 0, "clock-skew sub-metric must be >= 0");
+  });
+
+  it("new SLO_METRIC constants have distinct string values", () => {
+    const subMetricValues = [
+      SLO_METRIC.WORKER_EXECUTION,
+      SLO_METRIC.VERIFICATION_GATE,
+      SLO_METRIC.REPLAY_EVIDENCE,
+    ];
+    assert.equal(new Set(subMetricValues).size, 3, "sub-metric string values must be unique");
+    for (const v of subMetricValues) {
+      assert.ok(typeof v === "string" && v.length > 0);
+    }
+  });
+});
+
+// ── patchSloMetricsReplayEvidence ─────────────────────────────────────────────
+
+describe("patchSloMetricsReplayEvidence", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-slo-patch-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("patches replayEvidenceMs into lastCycle.metrics and history[0].metrics", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const record = computeCycleSLOs(DEFAULT_CONFIG, validTimestamps(), makeTs(0), makeTs(400000));
+    await persistSloMetrics(config, record);
+
+    await patchSloMetricsReplayEvidence(config, 4200);
+
+    const stored = await readSloMetrics(config);
+    assert.equal(stored.lastCycle.metrics[SLO_METRIC.REPLAY_EVIDENCE], 4200);
+    assert.equal(stored.history[0].metrics[SLO_METRIC.REPLAY_EVIDENCE], 4200);
+  });
+
+  it("rounds replayEvidenceMs to nearest integer before storing", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const record = computeCycleSLOs(DEFAULT_CONFIG, validTimestamps(), makeTs(0), makeTs(400000));
+    await persistSloMetrics(config, record);
+
+    await patchSloMetricsReplayEvidence(config, 999.6);
+
+    const stored = await readSloMetrics(config);
+    assert.equal(stored.lastCycle.metrics[SLO_METRIC.REPLAY_EVIDENCE], 1000);
+  });
+
+  it("preserves all other metrics untouched", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const record = computeCycleSLOs(DEFAULT_CONFIG, validTimestamps(), makeTs(0), makeTs(400000));
+    await persistSloMetrics(config, record);
+
+    await patchSloMetricsReplayEvidence(config, 500);
+
+    const stored = await readSloMetrics(config);
+    assert.ok(stored.lastCycle.metrics[SLO_METRIC.DECISION_LATENCY] !== undefined);
+    assert.ok(stored.lastCycle.metrics[SLO_METRIC.VERIFICATION_COMPLETION] !== undefined);
+  });
+
+  it("is a no-op for negative replayEvidenceMs (negative path)", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const record = computeCycleSLOs(DEFAULT_CONFIG, validTimestamps(), makeTs(0), makeTs(400000));
+    await persistSloMetrics(config, record);
+
+    await patchSloMetricsReplayEvidence(config, -1);
+
+    const stored = await readSloMetrics(config);
+    // Should remain null (no patch applied)
+    assert.equal(stored.lastCycle.metrics[SLO_METRIC.REPLAY_EVIDENCE], null);
+  });
+
+  it("is a no-op when file does not exist (non-fatal path)", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    // No persistSloMetrics call — file doesn't exist
+    await assert.doesNotReject(
+      () => patchSloMetricsReplayEvidence(config, 1000),
+      "should not throw when slo_metrics.json does not exist"
+    );
   });
 });

@@ -34,6 +34,12 @@ export const SLO_METRIC = Object.freeze({
   DECISION_LATENCY: "decisionLatencyMs",
   DISPATCH_LATENCY: "dispatchLatencyMs",
   VERIFICATION_COMPLETION: "verificationCompletionMs",
+  // Sub-metrics that split VERIFICATION_COMPLETION for finer latency attribution.
+  // workerExecutionMs + verificationGateMs = verificationCompletionMs (backward-compat aggregate).
+  // replayEvidenceMs is measured after cycle_complete and patched in via patchSloMetricsReplayEvidence.
+  WORKER_EXECUTION: "workerExecutionMs",
+  VERIFICATION_GATE: "verificationGateMs",
+  REPLAY_EVIDENCE: "replayEvidenceMs",
 });
 
 /** SLO health status written to slo_metrics.json. */
@@ -60,6 +66,9 @@ export const SLO_MISSING_REASON = Object.freeze({
   MISSING_TIMESTAMP_DECISION: "MISSING_TIMESTAMP_DECISION",
   MISSING_TIMESTAMP_DISPATCH: "MISSING_TIMESTAMP_DISPATCH",
   MISSING_TIMESTAMP_VERIFICATION: "MISSING_TIMESTAMP_VERIFICATION",
+  // Sub-metric missing reasons — do not affect SLO breach/status logic.
+  MISSING_TIMESTAMP_WORKER_EXECUTION: "MISSING_TIMESTAMP_WORKER_EXECUTION",
+  MISSING_TIMESTAMP_VERIFICATION_GATE: "MISSING_TIMESTAMP_VERIFICATION_GATE",
 });
 
 /**
@@ -141,6 +150,13 @@ export const SLO_METRICS_SCHEMA = Object.freeze({
 
 // ── Default thresholds ────────────────────────────────────────────────────────
 
+/** Primary SLO metrics that have configurable thresholds and can trigger breaches. */
+const PRIMARY_SLO_METRICS = Object.freeze([
+  SLO_METRIC.DECISION_LATENCY,
+  SLO_METRIC.DISPATCH_LATENCY,
+  SLO_METRIC.VERIFICATION_COMPLETION,
+]);
+
 const DEFAULT_THRESHOLDS = Object.freeze({
   [SLO_METRIC.DECISION_LATENCY]: 120000,       // 2 min
   [SLO_METRIC.DISPATCH_LATENCY]: 30000,         // 30 s
@@ -158,6 +174,10 @@ const DEFAULT_THRESHOLDS = Object.freeze({
  *   - If a value is present but not a positive finite number → THRESHOLD_INVALID (explicit).
  * Neither case is silent: validation errors are returned and persisted in the cycle record.
  *
+ * Only PRIMARY_SLO_METRICS are threshold-validated.
+ * Sub-metrics (workerExecutionMs, verificationGateMs, replayEvidenceMs) are observational
+ * only and have no configurable thresholds.
+ *
  * @param {object} config
  * @returns {{ thresholds: object, validationErrors: Array }}
  */
@@ -166,7 +186,7 @@ function resolveThresholds(config) {
   const validationErrors = [];
   const thresholds: Record<string, any> = {};
 
-  for (const metric of Object.values(SLO_METRIC)) {
+  for (const metric of PRIMARY_SLO_METRICS) {
     const fallback = DEFAULT_THRESHOLDS[metric];
 
     if (!configured || typeof configured !== "object") {
@@ -244,9 +264,12 @@ function parseTimestamp(raw) {
  * @param {object} stageTimestamps - pipeline_progress.json.stageTimestamps
  * @param {string|null} startedAt  - pipeline_progress.json.startedAt (= cycleId)
  * @param {string|null} completedAt - pipeline_progress.json.completedAt
+ * @param {object} [opts]         - Optional parameters
+ * @param {number|null} [opts.replayEvidenceMs] - Time spent collecting replay evidence (post-cycle_complete).
+ *                                                Measured externally and patched via patchSloMetricsReplayEvidence.
  * @returns {object} cycleRecord conforming to SLO_METRICS_SCHEMA.cycleRecord
  */
-export function computeCycleSLOs(config, stageTimestamps, startedAt, completedAt) {
+export function computeCycleSLOs(config, stageTimestamps, startedAt, completedAt, opts: { replayEvidenceMs?: number | null } = {}) {
   const sloEnabled = config?.slo?.enabled !== false;
   const timestamps = stageTimestamps && typeof stageTimestamps === "object" ? stageTimestamps : {};
   const { thresholds, validationErrors: thresholdValidationErrors } = resolveThresholds(config);
@@ -255,6 +278,10 @@ export function computeCycleSLOs(config, stageTimestamps, startedAt, completedAt
     [SLO_METRIC.DECISION_LATENCY]: null,
     [SLO_METRIC.DISPATCH_LATENCY]: null,
     [SLO_METRIC.VERIFICATION_COMPLETION]: null,
+    // Sub-metrics — no breach checking; observability only.
+    [SLO_METRIC.WORKER_EXECUTION]: null,
+    [SLO_METRIC.VERIFICATION_GATE]: null,
+    [SLO_METRIC.REPLAY_EVIDENCE]: null,
   };
   const missingTimestamps = [];
   const sloBreaches = [];
@@ -305,6 +332,25 @@ export function computeCycleSLOs(config, stageTimestamps, startedAt, completedAt
     statusReason = SLO_REASON.OK;
   }
 
+  // ── Sub-metrics: split verificationCompletionMs for finer latency attribution ──
+  // These are observational only — they do not trigger breaches or affect SLO status.
+  // workerExecutionMs + verificationGateMs ≈ verificationCompletionMs (the aggregate).
+  // replayEvidenceMs covers post-cycle_complete replay evidence collection time.
+  const workerExecutionStart = parseTimestamp(timestamps["workers_dispatching"]);
+  const workerExecutionEnd   = parseTimestamp(timestamps["workers_finishing"]);
+  const verificationGateEnd  = parseTimestamp(timestamps["cycle_complete"]);
+
+  if (workerExecutionStart.valid && workerExecutionEnd.valid) {
+    metrics[SLO_METRIC.WORKER_EXECUTION] = Math.max(0, workerExecutionEnd.ms - workerExecutionStart.ms);
+  }
+  if (workerExecutionEnd.valid && verificationGateEnd.valid) {
+    metrics[SLO_METRIC.VERIFICATION_GATE] = Math.max(0, verificationGateEnd.ms - workerExecutionEnd.ms);
+  }
+  const _replayMs = opts?.replayEvidenceMs;
+  if (typeof _replayMs === "number" && Number.isFinite(_replayMs) && _replayMs >= 0) {
+    metrics[SLO_METRIC.REPLAY_EVIDENCE] = Math.round(_replayMs);
+  }
+
   return {
     cycleId: startedAt || null,
     startedAt: startedAt || null,
@@ -351,6 +397,54 @@ export async function persistSloMetrics(config, cycleRecord) {
     history,
     updatedAt: new Date().toISOString(),
   });
+}
+
+/**
+ * Patch the most-recent SLO cycle record with a measured replayEvidenceMs value.
+ *
+ * Call this after the replay evidence collection completes (post-cycle_complete).
+ * Updates both lastCycle and the leading history entry atomically so downstream
+ * analytics readers see a consistent replayEvidenceMs without re-running the full
+ * SLO computation.
+ *
+ * @param {object} config
+ * @param {number} replayEvidenceMs - measured elapsed ms for replay evidence collection
+ */
+export async function patchSloMetricsReplayEvidence(config: any, replayEvidenceMs: number): Promise<void> {
+  if (!Number.isFinite(replayEvidenceMs) || replayEvidenceMs < 0) return;
+  const filePath = sloMetricsPath(config);
+  try {
+    const existing = await readJson(filePath, null);
+    if (!existing || typeof existing !== "object") return;
+    const lastCycle = (existing as Record<string, unknown>).lastCycle;
+    if (!lastCycle || typeof lastCycle !== "object") return;
+
+    const patchedValue = Math.round(replayEvidenceMs);
+    const patchMetrics = (record: Record<string, unknown>): Record<string, unknown> => ({
+      ...record,
+      metrics: {
+        ...((record.metrics && typeof record.metrics === "object") ? record.metrics as Record<string, unknown> : {}),
+        [SLO_METRIC.REPLAY_EVIDENCE]: patchedValue,
+      },
+    });
+
+    const updatedLastCycle = patchMetrics(lastCycle as Record<string, unknown>);
+    const history = Array.isArray((existing as Record<string, unknown>).history)
+      ? [...(existing as Record<string, unknown>).history as unknown[]]
+      : [];
+    if (history.length > 0 && history[0] && typeof history[0] === "object") {
+      history[0] = patchMetrics(history[0] as Record<string, unknown>);
+    }
+
+    await writeJson(filePath, {
+      ...(existing as Record<string, unknown>),
+      lastCycle: updatedLastCycle,
+      history,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch {
+    // patch is advisory — never block orchestration
+  }
 }
 
 /**

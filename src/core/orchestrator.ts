@@ -40,7 +40,7 @@ import { EVENTS, EVENT_DOMAIN } from "./event_schema.js";
 import { readJson, readJsonSafe, writeJson, cleanupStaleTempFiles, READ_JSON_REASON } from "./fs_utils.js";
 import { updatePipelineProgress, readPipelineProgress } from "./pipeline_progress.js";
 import { loadEscalationQueue, sortEscalationQueue, processEscalationQueueClosures } from "./escalation_queue.js";
-import { computeCycleSLOs, persistSloMetrics, detectCoupledAlerts } from "./slo_checker.js";
+import { computeCycleSLOs, persistSloMetrics, detectCoupledAlerts, patchSloMetricsReplayEvidence } from "./slo_checker.js";
 import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealthComposite, CYCLE_PHASE, computeRuntimeContractProbe, readCycleAnalytics, evaluateBenchmarkGroundTruth, WORKER_CYCLE_ARTIFACTS_FILE, migrateWorkerCycleArtifacts, selectWorkerCycleRecord } from "./cycle_analytics.js";
 import { computeBaselineRecoveryState, persistBaselineMetrics, PARSER_CONFIDENCE_RECOVERY_THRESHOLD } from "./parser_baseline_recovery.js";
 import { computeDispatchStrictness, loadReplayRegressionState, DISPATCH_STRICTNESS } from "./parser_replay_harness.js";
@@ -5626,6 +5626,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       : debtLedger;
 
     // Persist replay closure evidence links for this cycle.
+    const _replayEvidenceStartMs = Date.now();
     const replayEvidenceFile = path.join(stateDir, "carry_forward_replay_evidence.jsonl");
     const replayRecords = resolvedPlanItems
       .map((item) => {
@@ -5652,6 +5653,9 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     if (replayRecords.length > 0) {
       await fs.appendFile(replayEvidenceFile, `${replayRecords.join("\n")}\n`, "utf8");
     }
+    // Measure replay evidence write duration and patch into SLO metrics record (advisory, non-blocking).
+    const _replayEvidenceMs = Date.now() - _replayEvidenceStartMs;
+    patchSloMetricsReplayEvidence(config, _replayEvidenceMs).catch(() => { /* advisory */ });
 
     // Auto-close debt items verified by replay evidence contract this cycle.
     // Only items with a fingerprint match AND full replay closure evidence are closed.

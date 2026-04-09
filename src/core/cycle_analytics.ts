@@ -1034,6 +1034,10 @@ export function computeCycleAnalytics(config, {
     decisionLatencyMs: toFiniteNumberOrNull(sloRecord?.metrics?.decisionLatencyMs),
     dispatchLatencyMs: toFiniteNumberOrNull(sloRecord?.metrics?.dispatchLatencyMs),
     verificationCompletionMs: toFiniteNumberOrNull(sloRecord?.metrics?.verificationCompletionMs),
+    // Sub-metrics splitting verificationCompletionMs for finer latency attribution.
+    workerExecutionMs: toFiniteNumberOrNull(sloRecord?.metrics?.workerExecutionMs),
+    verificationGateMs: toFiniteNumberOrNull(sloRecord?.metrics?.verificationGateMs),
+    replayEvidenceMs: toFiniteNumberOrNull(sloRecord?.metrics?.replayEvidenceMs),
     systemHealthScore: null,   // populated externally if self-improvement ran
     sloBreachCount: Array.isArray(sloRecord?.sloBreaches) ? sloRecord.sloBreaches.length : 0,
     sloStatus: sloRecord?.status ?? "unknown",
@@ -1054,6 +1058,8 @@ export function computeCycleAnalytics(config, {
       { field: "kpis.decisionLatencyMs", reason: MISSING_DATA_REASON.MISSING_SOURCE, impact: MISSING_DATA_IMPACT.KPI },
       { field: "kpis.dispatchLatencyMs", reason: MISSING_DATA_REASON.MISSING_SOURCE, impact: MISSING_DATA_IMPACT.KPI },
       { field: "kpis.verificationCompletionMs", reason: MISSING_DATA_REASON.MISSING_SOURCE, impact: MISSING_DATA_IMPACT.KPI },
+      { field: "kpis.workerExecutionMs", reason: MISSING_DATA_REASON.MISSING_SOURCE, impact: MISSING_DATA_IMPACT.KPI },
+      { field: "kpis.verificationGateMs", reason: MISSING_DATA_REASON.MISSING_SOURCE, impact: MISSING_DATA_IMPACT.KPI },
     );
   }
 
