@@ -2119,12 +2119,37 @@ function deriveBeforeAfterState(src, taskText, acceptanceCriteria) {
   };
 }
 
+/**
+ * Normalizes string entries in executionStrategy.waves[*].tasks to the canonical
+ * {role, task, task_id} object shape. This removes parser/validator ambiguity that
+ * arises when the LLM emits tasks as plain strings instead of structured objects.
+ * String tasks are coerced to evolution-worker role as a safe default.
+ */
+function normalizeExecutionStrategyWaveTasks(strategy: any): any {
+  if (!strategy || !Array.isArray(strategy.waves)) return strategy;
+  const waves = strategy.waves.map((w: any) => {
+    if (!w || typeof w !== "object" || !Array.isArray(w.tasks)) return w;
+    const tasks = w.tasks.map((t: any) => {
+      if (t && typeof t === "object") return t;
+      const taskText = String(t || "").trim();
+      return { role: "evolution-worker", task: taskText, task_id: taskText };
+    });
+    return { ...w, tasks };
+  });
+  return { ...strategy, waves };
+}
+
 function buildExecutionStrategyFromPlans(plans = []) {
   const waveMap = new Map();
   for (const plan of plans) {
     const wave = Number.isFinite(Number(plan.wave)) ? Number(plan.wave) : 1;
     if (!waveMap.has(wave)) waveMap.set(wave, []);
-    waveMap.get(wave).push(String(plan.task_id || plan.task || `wave-${wave}-task`));
+    const taskId = String(plan.task_id || plan.task || `wave-${wave}-task`);
+    waveMap.get(wave).push({
+      role: String(plan.role || "evolution-worker"),
+      task: String(plan.task || plan.task_id || `wave-${wave}-task`),
+      task_id: taskId,
+    });
   }
 
   const sortedWaves = [...waveMap.keys()].sort((a, b) => a - b);
@@ -3096,6 +3121,8 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
   if (!Array.isArray(executionStrategy.waves) || executionStrategy.waves.length === 0) {
     executionStrategy = buildExecutionStrategyFromPlans(plans);
   }
+  // Normalize string tasks to canonical {role, task, task_id} objects — no string ambiguity.
+  executionStrategy = normalizeExecutionStrategyWaveTasks(executionStrategy);
 
   let requestBudget = (input.requestBudget && Number.isFinite(Number(input.requestBudget.estimatedPremiumRequestsTotal)))
     ? {
@@ -3551,7 +3578,7 @@ The JSON block must contain all of the following fields:
     "byRole": [{ "role": "...", "planCount": <n>, "estimatedRequests": <n> }]
   },
   "executionStrategy": {
-    "waves": [{ "wave": <n>, "tasks": ["..."], "dependsOnWaves": [], "maxParallelWorkers": <n> }]
+    "waves": [{ "wave": <n>, "tasks": [{"role": "...", "task": "...", "task_id": "..."}], "dependsOnWaves": [], "maxParallelWorkers": <n> }]
   },
   "plans": [{
     "title": "...",

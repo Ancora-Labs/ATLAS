@@ -1284,8 +1284,13 @@ function collectExecutionStrategyTaskRoles(payload: any): Array<{ role: string; 
     const wave = normalizeWaveNumber((waveObj as any).wave, i + 1);
     const tasks = Array.isArray((waveObj as any).tasks) ? (waveObj as any).tasks : [];
 
-    for (const task of tasks) {
-      if (!task || typeof task !== "object") continue;
+    for (const rawTask of tasks) {
+      // Normalize string tasks to canonical object shape — no silent skips.
+      // If a string task reaches the validator (e.g., in tests or retry paths without the
+      // parser normalization pass), treat it as an evolution-worker task rather than dropping it.
+      const task: any = (rawTask && typeof rawTask === "object")
+        ? rawTask
+        : { role: "evolution-worker", task: String(rawTask || "").trim(), task_id: String(rawTask || "").trim() };
       const role = normalizeRoleValue(
         (task as any).role
         ?? (task as any).workerRole
