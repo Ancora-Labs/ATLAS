@@ -2125,6 +2125,31 @@ export function buildPatchedPlanCorrectionTracking(
       });
     }
 
+    // Check verification_commands / verificationCommands arrays for prose→executable rewrites.
+    // The TRACKED_FIELDS loop emits a generic "repaired" legacy correction when these change;
+    // this block additionally emits a structured VERIFICATION_PROSE_REWRITTEN mutation event
+    // when the rewrite is specifically prose→executable so postmortems can distinguish repair type.
+    for (const vcField of ["verification_commands", "verificationCommands"] as const) {
+      const origCmds = toNormalizedStringArray(orig[vcField]);
+      const patchedCmds = toNormalizedStringArray(patched[vcField]);
+      if (
+        origCmds.length > 0
+        && patchedCmds.length > 0
+        && !areTrackedFieldValuesEqual(origCmds, patchedCmds)
+        && origCmds.some((cmd) => !isExecutableVerificationCommand(cmd))
+        && patchedCmds.every((cmd) => isExecutableVerificationCommand(cmd))
+      ) {
+        legacyCorrections.push(`[PATCHED] plan[${pi}]: ${vcField} rewritten from prose to executable commands`);
+        mutationEvents.push({
+          kind: PATCHED_PLAN_MUTATION_KIND.VERIFICATION_PROSE_REWRITTEN,
+          planIndex: pi,
+          field: vcField,
+          before: origCmds,
+          after: patchedCmds,
+        });
+      }
+    }
+
     const originalCriteria = toNormalizedStringArray(orig.acceptance_criteria);
     const patchedCriteria = toNormalizedStringArray(patched.acceptance_criteria);
     const criteriaChanged = JSON.stringify(originalCriteria) !== JSON.stringify(patchedCriteria);
@@ -2867,7 +2892,7 @@ Prometheus has produced a plan. Your job is to validate it AND FIX any issues yo
 4. List what you fixed in "appliedFixes" and anything you could NOT fix in "unresolvedIssues".
 5. Batch-packaging directive (MANDATORY): read all tasks and regroup them into execution packets that maximize useful model context usage without overloading the model; prefer fewer dense packets, merge strongly related tasks, and keep strict sequential order where dependencies exist.
 6. CI fix packets MUST carry concrete CI failure evidence in githubCiContext.failedCiRuns so dispatch can inject deterministic failure context.
-7. Merge-oriented packets MUST require clean-tree raw verification artifacts in completion evidence: BOX_MERGED_SHA, CLEAN_TREE_STATUS=clean from git status --porcelain, plus explicit ===NPM TEST OUTPUT START===...===NPM TEST OUTPUT END=== block.
+7. Merge-oriented packets MUST require clean-tree raw verification artifacts in completion evidence: BOX_MERGED_SHA, plus either CLEAN_TREE_STATUS=clean from git status --porcelain or the shared-worktree-safe trio CLEAN_TREE_STATUS=dirty-other-tasks-only + TASK_SCOPED_CLEAN_STATUS=clean + TASK_SCOPED_CLEAN_TARGETS=<files>, plus explicit ===NPM TEST OUTPUT START===...===NPM TEST OUTPUT END=== block.
 
 **Quality criteria for each plan item:**
 1. Is the goal measurable? (not vague like "improve" or "refactor")

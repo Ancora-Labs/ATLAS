@@ -953,6 +953,52 @@ describe("buildPatchedPlanCorrectionTracking", () => {
       false
     );
   });
+
+  it("emits VERIFICATION_PROSE_REWRITTEN mutation when verification_commands array changes from prose to executable", () => {
+    const tracking = buildPatchedPlanCorrectionTracking(
+      [{
+        verification_commands: ["run tests manually by inspecting the output in the browser"],
+        acceptance_criteria: ["tests pass"],
+      }] as any[],
+      [{
+        verification_commands: ["npm test -- tests/core/athena_review_normalization.test.ts"],
+        acceptance_criteria: ["tests pass"],
+      }] as any[]
+    );
+
+    assert.ok(
+      tracking.mutationEvents.some((event) =>
+        event.kind === PATCHED_PLAN_MUTATION_KIND.VERIFICATION_PROSE_REWRITTEN &&
+        event.field === "verification_commands"
+      ),
+      "verification_commands prose rewrite must emit VERIFICATION_PROSE_REWRITTEN mutation event with field=verification_commands",
+    );
+    assert.ok(
+      tracking.legacyCorrections.some((entry) =>
+        entry.includes("verification_commands") && entry.includes("prose")
+      ),
+      "legacy string correction must be preserved for verification_commands prose rewrite",
+    );
+  });
+
+  it("does not emit VERIFICATION_PROSE_REWRITTEN for verification_commands when original commands were already executable", () => {
+    const tracking = buildPatchedPlanCorrectionTracking(
+      [{
+        verification_commands: ["npm test -- tests/core/old.test.ts"],
+      }] as any[],
+      [{
+        verification_commands: ["npm test -- tests/core/new.test.ts"],
+      }] as any[]
+    );
+
+    assert.equal(
+      tracking.mutationEvents.some((event) =>
+        event.kind === PATCHED_PLAN_MUTATION_KIND.VERIFICATION_PROSE_REWRITTEN
+      ),
+      false,
+      "must not emit VERIFICATION_PROSE_REWRITTEN when original verification_commands were already executable",
+    );
+  });
 });
 
 // ── Dual-lane verdict normalization contract ──────────────────────────────────
