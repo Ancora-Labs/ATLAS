@@ -1962,3 +1962,68 @@ describe("cycle_analytics — LEGACY_EVOLUTION_PROGRESS constants", () => {
     );
   });
 });
+
+// ── benchmarkAnalytics in computeCycleAnalytics ───────────────────────────────
+
+import { BENCHMARK_INTEGRITY_SCHEMA_VERSION } from "../../src/core/model_policy.js";
+
+describe("computeCycleAnalytics — benchmarkAnalytics field", () => {
+  const config = { paths: { stateDir: "state" } };
+
+  it("benchmarkAnalytics is null when benchmarkGroundTruth is not provided", () => {
+    const result = computeCycleAnalytics(config, { phase: CYCLE_PHASE.COMPLETED });
+    assert.equal(result.benchmarkAnalytics, null);
+  });
+
+  it("benchmarkAnalytics is populated when benchmarkGroundTruth is provided", () => {
+    const groundTruth = {
+      entries: [
+        {
+          cycleId: "c-1",
+          recommendations: [
+            { topic: "perf", implementationStatus: "implemented",  benchmarkScore: 0.8, capacityGain: 0.5 },
+            { topic: "auth", implementationStatus: "pending",      benchmarkScore: 0.6, capacityGain: 0.3 },
+          ],
+        },
+      ],
+    };
+    const result = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.COMPLETED,
+      benchmarkGroundTruth: groundTruth,
+    });
+    assert.ok(result.benchmarkAnalytics, "benchmarkAnalytics must be present");
+    assert.equal(result.benchmarkAnalytics.schemaVersion, BENCHMARK_INTEGRITY_SCHEMA_VERSION);
+    assert.equal(result.benchmarkAnalytics.sampleCount, 2);
+    assert.ok(result.benchmarkAnalytics.unresolvedRatio >= 0 && result.benchmarkAnalytics.unresolvedRatio <= 1);
+    assert.ok(typeof result.benchmarkAnalytics.integrityScore === "number");
+  });
+
+  it("benchmarkAnalytics contains contradiction count when present", () => {
+    const groundTruth = {
+      entries: [
+        {
+          recommendations: [
+            { topic: "cache", implementationStatus: "implemented" },
+            { topic: "cache", implementationStatus: "pending" },
+          ],
+        },
+      ],
+    };
+    const result = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.COMPLETED,
+      benchmarkGroundTruth: groundTruth,
+    });
+    assert.ok(result.benchmarkAnalytics, "benchmarkAnalytics must be present");
+    assert.equal(result.benchmarkAnalytics.contradictionCount, 1);
+  });
+
+  it("negative path: benchmarkAnalytics is null for empty entries", () => {
+    const result = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.COMPLETED,
+      benchmarkGroundTruth: { entries: [] },
+    });
+    // An empty entries array produces a zero-signal BenchmarkIntegrityResult
+    assert.ok(result.benchmarkAnalytics !== undefined, "benchmarkAnalytics must be defined");
+    assert.equal(result.benchmarkAnalytics.sampleCount, 0);
+  });
+});

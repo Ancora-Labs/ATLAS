@@ -878,3 +878,108 @@ describe("persistFailureClassification + loadRecentFailureClassifications", () =
     await fs.rm(dir, { recursive: true, force: true });
   });
 });
+
+// ── FailureEnvelope ───────────────────────────────────────────────────────────
+
+import {
+  FAILURE_ENVELOPE_SCHEMA_VERSION,
+  TERMINATION_CAUSE,
+  FAILURE_ENVELOPE_SCHEMA,
+  buildFailureEnvelope,
+} from "../../src/core/failure_classifier.js";
+
+describe("TERMINATION_CAUSE enum", () => {
+  it("is frozen and contains all five causes", () => {
+    assert.ok(Object.isFrozen(TERMINATION_CAUSE));
+    assert.equal(TERMINATION_CAUSE.ERROR,                "error");
+    assert.equal(TERMINATION_CAUSE.BLOCKED,              "blocked");
+    assert.equal(TERMINATION_CAUSE.CANCELLED,            "cancelled");
+    assert.equal(TERMINATION_CAUSE.TIMEOUT,              "timeout");
+    assert.equal(TERMINATION_CAUSE.VERIFICATION_FAILED,  "verification_failed");
+    assert.equal(Object.values(TERMINATION_CAUSE).length, 5);
+  });
+});
+
+describe("FAILURE_ENVELOPE_SCHEMA_VERSION", () => {
+  it("is the integer 1", () => {
+    assert.equal(FAILURE_ENVELOPE_SCHEMA_VERSION, 1);
+    assert.equal(typeof FAILURE_ENVELOPE_SCHEMA_VERSION, "number");
+  });
+});
+
+describe("FAILURE_ENVELOPE_SCHEMA", () => {
+  it("is frozen and lists all required fields", () => {
+    assert.ok(Object.isFrozen(FAILURE_ENVELOPE_SCHEMA));
+    for (const field of ["schemaVersion", "envelopeId", "taskId", "terminationCause", "classification", "retryDecision", "resolvedAt"]) {
+      assert.ok(FAILURE_ENVELOPE_SCHEMA.required.includes(field as any), `missing field: ${field}`);
+    }
+  });
+
+  it("terminationCauses lists all five causes", () => {
+    assert.equal(FAILURE_ENVELOPE_SCHEMA.terminationCauses.length, 5);
+    assert.ok(FAILURE_ENVELOPE_SCHEMA.terminationCauses.includes("verification_failed"));
+  });
+});
+
+describe("buildFailureEnvelope — happy path", () => {
+  it("returns envelope with all required fields for ERROR cause", () => {
+    const classification = makeClassification();
+    const envelope = buildFailureEnvelope(classification, null, TERMINATION_CAUSE.ERROR, "task-001");
+    assert.equal(envelope.schemaVersion, FAILURE_ENVELOPE_SCHEMA_VERSION);
+    assert.equal(typeof envelope.envelopeId, "string");
+    assert.ok(envelope.envelopeId.startsWith("fe-"), "envelopeId must start with fe-");
+    assert.equal(envelope.taskId, "task-001");
+    assert.equal(envelope.terminationCause, "error");
+    assert.deepEqual(envelope.classification, classification);
+    assert.equal(envelope.retryDecision, null);
+    assert.equal(typeof envelope.resolvedAt, "string");
+  });
+
+  it("returns envelope with VERIFICATION_FAILED cause and null classification", () => {
+    const envelope = buildFailureEnvelope(null, null, TERMINATION_CAUSE.VERIFICATION_FAILED, "task-002");
+    assert.equal(envelope.terminationCause, "verification_failed");
+    assert.equal(envelope.classification, null);
+    assert.equal(envelope.taskId, "task-002");
+  });
+
+  it("returns envelope with retryDecision when provided", () => {
+    const retry = { retryAction: "retry", strategyUsed: "adaptive" };
+    const envelope = buildFailureEnvelope(null, retry, TERMINATION_CAUSE.BLOCKED, null);
+    assert.equal(envelope.terminationCause, "blocked");
+    assert.deepEqual(envelope.retryDecision, retry);
+    assert.equal(envelope.taskId, null);
+  });
+
+  it("defaults to ERROR cause when an invalid cause is provided", () => {
+    const envelope = buildFailureEnvelope(null, null, "invalid_cause" as any, null);
+    assert.equal(envelope.terminationCause, "error");
+  });
+
+  it("sets taskId to null when not provided", () => {
+    const envelope = buildFailureEnvelope(null, null, TERMINATION_CAUSE.TIMEOUT);
+    assert.equal(envelope.taskId, null);
+    assert.equal(envelope.terminationCause, "timeout");
+  });
+
+  it("all five termination causes produce valid envelopes", () => {
+    for (const cause of Object.values(TERMINATION_CAUSE)) {
+      const envelope = buildFailureEnvelope(null, null, cause);
+      assert.equal(envelope.terminationCause, cause, `cause ${cause} must be preserved`);
+      assert.equal(envelope.schemaVersion, FAILURE_ENVELOPE_SCHEMA_VERSION);
+    }
+  });
+});
+
+describe("buildFailureEnvelope — negative paths", () => {
+  it("returns a valid envelope even with null classification and retry", () => {
+    const envelope = buildFailureEnvelope(null, null, TERMINATION_CAUSE.CANCELLED, "task-999");
+    assert.equal(envelope.classification, null);
+    assert.equal(envelope.retryDecision, null);
+    assert.ok(envelope.envelopeId, "envelopeId must be non-empty");
+    assert.ok(envelope.resolvedAt, "resolvedAt must be set");
+  });
+
+  it("never throws when called with minimal arguments", () => {
+    assert.doesNotThrow(() => buildFailureEnvelope(null, null, TERMINATION_CAUSE.ERROR));
+  });
+});

@@ -501,3 +501,42 @@ describe("generateRuntimeHookDecisions", () => {
     assert.equal(decisions[0].decision.reasonCode, "TOOL_INTENT_BLOCKED_COMMAND");
   });
 });
+
+// ── FailureEnvelope fields in dispatch results ────────────────────────────────
+
+import {
+  buildFailureEnvelope,
+  TERMINATION_CAUSE,
+  FAILURE_ENVELOPE_SCHEMA_VERSION,
+} from "../../src/core/failure_classifier.js";
+
+describe("FailureEnvelope in dispatch path", () => {
+  it("buildFailureEnvelope produces envelope with BLOCKED terminationCause for blocked workers", () => {
+    const envelope = buildFailureEnvelope(
+      { primaryClass: "policy", confidence: 0.8, flagged: false },
+      { retryAction: "escalate", strategyUsed: "adaptive" },
+      TERMINATION_CAUSE.BLOCKED,
+      "blocked-task-001",
+    );
+    assert.equal(envelope.terminationCause, "blocked");
+    assert.equal(envelope.taskId, "blocked-task-001");
+    assert.equal(envelope.schemaVersion, FAILURE_ENVELOPE_SCHEMA_VERSION);
+    assert.equal((envelope.classification as any)?.primaryClass, "policy");
+    assert.equal((envelope.retryDecision as any)?.retryAction, "escalate");
+  });
+
+  it("buildFailureEnvelope produces envelope with TIMEOUT terminationCause for timed-out workers", () => {
+    const envelope = buildFailureEnvelope(null, null, TERMINATION_CAUSE.TIMEOUT, "timeout-task-001");
+    assert.equal(envelope.terminationCause, "timeout");
+    assert.equal(envelope.taskId, "timeout-task-001");
+    assert.ok(envelope.envelopeId.startsWith("fe-"), "envelopeId must start with fe-");
+  });
+
+  it("negative path: envelope is valid even when classification is null (low-confidence path)", () => {
+    const envelope = buildFailureEnvelope(null, null, TERMINATION_CAUSE.ERROR, "err-task-002");
+    assert.equal(envelope.classification, null);
+    assert.equal(envelope.retryDecision, null);
+    assert.equal(envelope.terminationCause, "error");
+    assert.ok(envelope.resolvedAt, "resolvedAt must be an ISO string");
+  });
+});

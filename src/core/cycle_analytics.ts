@@ -55,7 +55,7 @@ import { hasPrometheusRuntimeContractSignals, isStrategicFieldToolTraceContamina
 import { getLaneForWorkerName, isSpecialistLane } from "./role_registry.js";
 import { isAnalyticsCompletedWorkerStatus } from "./worker_runner.js";
 import { loadCapabilityExecutionSummary } from "./state_tracker.js";
-import { normalizeModelLabel } from "./model_policy.js";
+import { normalizeModelLabel, computeBenchmarkIntegrityScore } from "./model_policy.js";
 
 // ── Funnel helpers ─────────────────────────────────────────────────────────────
 
@@ -998,6 +998,7 @@ export function computeCycleAnalytics(config, {
   rawPremiumEfficiency = null,
   executionAdjustedPremiumEfficiency = null,
   capabilityExecutionSummary = null,
+  benchmarkGroundTruth = null,
 }: any = {}) {
   const missingData = [];
   const stageTimestamps = pipelineProgress?.stageTimestamps || null;
@@ -1320,6 +1321,9 @@ export function computeCycleAnalytics(config, {
     lineageSummary: buildLineageSummary(lineageLog ?? []),
     memoryHitTelemetry: buildMemoryHitTelemetry(memoryHitLog ?? []),
     routingROISummary: buildRoutingROISummary(premiumUsageLog ?? [], lineageLog ?? []),
+    benchmarkAnalytics: benchmarkGroundTruth != null
+      ? computeBenchmarkIntegrityScore(benchmarkGroundTruth)
+      : null,
   };
 }
 

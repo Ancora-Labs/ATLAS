@@ -99,6 +99,7 @@ export type { WaveTaskObject } from "./plan_contract_validator.js";
 
 import { warn, emitEvent } from "./logger.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
+import { computeBenchmarkIntegrityScore } from "./model_policy.js";
 
 // ── Span contract emitter ─────────────────────────────────────────────────────
 
@@ -6761,6 +6762,9 @@ export function buildBenchmarkSection(benchmarkData: any): string {
     return "";
   }
 
+  // Compute integrity score to surface data quality alongside statuses
+  const integrity = computeBenchmarkIntegrityScore(benchmarkData);
+
   const lines = latest.recommendations.map((rec: any) => {
     const status = String(rec.implementationStatus || "pending").toUpperCase();
     const score = typeof rec.benchmarkScore === "number"
@@ -6775,7 +6779,10 @@ export function buildBenchmarkSection(benchmarkData: any): string {
   }).join("\n");
 
   const cycleLabel = latest.cycleId ? ` (cycle ${latest.cycleId})` : "";
-  return `\n\n## RESEARCH BENCHMARK STATUS${cycleLabel}\nPrior research recommendation tracking — avoid re-proposing implemented items; prioritize pending ones:\n${lines}`;
+  const integrityLabel = integrity.sampleCount > 0
+    ? ` | integrity=${integrity.integrityScore.toFixed(2)} unresolved=${(integrity.unresolvedRatio * 100).toFixed(0)}% contradictions=${integrity.contradictionCount}`
+    : "";
+  return `\n\n## RESEARCH BENCHMARK STATUS${cycleLabel}${integrityLabel}\nPrior research recommendation tracking — avoid re-proposing implemented items; prioritize pending ones:\n${lines}`;
 }
 
 export function buildRoutingOutcomeSection(premiumUsageData: any): string {

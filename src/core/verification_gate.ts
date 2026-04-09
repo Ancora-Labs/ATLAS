@@ -1335,3 +1335,46 @@ export function applyDispatchCommandGate(
 
   return { task: sanitizedTask, gate };
 }
+
+// ── Verification Failure Envelope ─────────────────────────────────────────────
+
+import {
+  buildFailureEnvelope,
+  TERMINATION_CAUSE,
+  type FailureEnvelope,
+} from "./failure_classifier.js";
+
+/**
+ * Build a FailureEnvelope from a verification gap list.
+ *
+ * Provides a structured, typed record for postmortem analysis when the
+ * verification gate detects unresolved gaps after a worker merge.
+ *
+ * @param gaps    - array of gap strings produced by checkPostMergeArtifact()
+ * @param taskId  - task identifier, or null when not available
+ * @returns FailureEnvelope with terminationCause = VERIFICATION_FAILED
+ */
+export function buildVerificationFailureEnvelope(
+  gaps: string[],
+  taskId?: string | null,
+): FailureEnvelope {
+  const classification = gaps.length > 0
+    ? {
+        schemaVersion: 1,
+        primaryClass: "verification",
+        confidence: 0.9,
+        flagged: false,
+        evidence: {
+          error_message: `verification gate: ${gaps.length} unresolved gap(s)`,
+          gaps: gaps.slice(0, 20),
+        },
+        classifiedAt: new Date().toISOString(),
+      }
+    : null;
+  return buildFailureEnvelope(
+    classification,
+    null,
+    TERMINATION_CAUSE.VERIFICATION_FAILED,
+    taskId,
+  );
+}

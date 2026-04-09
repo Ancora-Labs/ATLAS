@@ -1112,6 +1112,163 @@ function deriveLatestBenchmarkSignal(benchmarkGroundTruth: any): {
   };
 }
 
+// ── Integrity-Aware Benchmark Scoring ────────────────────────────────────────
+
+/** Schema version for computeBenchmarkIntegrityScore output. */
+export const BENCHMARK_INTEGRITY_SCHEMA_VERSION = 1;
+
+/**
+ * Non-linear unresolved-ratio penalty thresholds used by computeBenchmarkIntegrityScore.
+ *
+ * 0 – minor:    ratio < 0.30  → penalty multiplier 0.90  (minor penalty)
+ * minor – moderate: ratio < 0.60 → penalty multiplier 0.70  (moderate penalty)
+ * moderate+:    ratio ≥ 0.60  → penalty multiplier 0.50  (severe penalty)
+ */
+export const BENCHMARK_INTEGRITY_UNRESOLVED_THRESHOLDS = Object.freeze({
+  minor:    0.30,
+  moderate: 0.60,
+} as const);
+
+/** Machine-readable reason codes for benchmark contradiction detection. */
+export const BENCHMARK_CONTRADICTION_REASON = Object.freeze({
+  SAME_TOPIC_CONFLICTING_STATUS: "SAME_TOPIC_CONFLICTING_STATUS",
+  DUPLICATE_ENTRY:               "DUPLICATE_ENTRY",
+} as const);
+
+export interface BenchmarkIntegrityResult {
+  schemaVersion: typeof BENCHMARK_INTEGRITY_SCHEMA_VERSION;
+  /** Overall integrity score in [0, 1] after applying penalties. Higher is better. */
+  integrityScore: number;
+  /** Number of contradiction pairs detected. */
+  contradictionCount: number;
+  /** Number of unique, normalized suite/topic names. */
+  normalizedSuiteCount: number;
+  /** Ratio of unresolved recommendations over total (0–1). */
+  unresolvedRatio: number;
+  /** Penalty multiplier applied due to unresolved ratio. */
+  penaltyApplied: number;
+  /** Raw average benchmark score before integrity penalty. */
+  avgBenchmarkScore: number;
+  /** Raw average capacity gain before integrity penalty. */
+  avgCapacityGain: number;
+  /** Total recommendation records processed. */
+  sampleCount: number;
+}
+
+/**
+ * Compute an integrity-aware benchmark score from ground-truth recommendation data.
+ *
+ * Upgrades status-only scoring with:
+ *   1. Normalized suite/topic names (lowercase, deduplication).
+ *   2. Contradiction detection: same topic with conflicting "implemented" / non-implemented status.
+ *   3. Non-linear unresolved-ratio penalty curve (minor / moderate / severe thresholds).
+ *
+ * Returns a zero-signal record when no benchmark data is available.
+ *
+ * @param benchmarkGroundTruth - parsed benchmark_ground_truth.json content
+ */
+export function computeBenchmarkIntegrityScore(benchmarkGroundTruth: any): BenchmarkIntegrityResult {
+  const zero: BenchmarkIntegrityResult = {
+    schemaVersion: BENCHMARK_INTEGRITY_SCHEMA_VERSION,
+    integrityScore: 0,
+    contradictionCount: 0,
+    normalizedSuiteCount: 0,
+    unresolvedRatio: 0,
+    penaltyApplied: 1,
+    avgBenchmarkScore: 0,
+    avgCapacityGain: 0,
+    sampleCount: 0,
+  };
+
+  const entries = Array.isArray(benchmarkGroundTruth?.entries) ? benchmarkGroundTruth.entries : [];
+  const latest = entries.length > 0 ? entries[0] : null;
+  const recs = Array.isArray(latest?.recommendations) ? latest.recommendations : [];
+  if (recs.length === 0) return zero;
+
+  // ── 1. Collect metrics + normalize topic names ───────────────────────────
+  const topicStatusMap = new Map<string, Set<string>>();
+  const suiteNames = new Set<string>();
+  let unresolved = 0;
+  let scoreSum = 0;
+  let scoreCount = 0;
+  let gainSum = 0;
+  let gainCount = 0;
+
+  for (const rec of recs) {
+    if (!rec || typeof rec !== "object") continue;
+    const raw = rec as Record<string, unknown>;
+
+    // Normalize topic/suite name: lowercase, trim, collapse whitespace
+    const topic = String(raw.topic || raw.id || raw.summary || "unknown")
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, "_")
+      .slice(0, 80);
+    const suite = String(raw.suite || raw.benchmarkSuite || topic).toLowerCase().trim();
+    suiteNames.add(suite);
+
+    const status = String(raw.implementationStatus || "pending").toLowerCase().trim();
+    const isImplemented = status === "implemented" || status === "implemented_correctly";
+    if (!isImplemented) unresolved++;
+
+    // Track per-topic status values for contradiction detection
+    const existing = topicStatusMap.get(topic) ?? new Set();
+    existing.add(isImplemented ? "implemented" : "unresolved");
+    topicStatusMap.set(topic, existing);
+
+    const score = Number(raw.benchmarkScore);
+    if (Number.isFinite(score)) { scoreSum += score; scoreCount++; }
+    const gain = Number(raw.capacityGain);
+    if (Number.isFinite(gain)) { gainSum += gain; gainCount++; }
+  }
+
+  const unresolvedRatio = recs.length > 0 ? unresolved / recs.length : 0;
+  const avgBenchmarkScore = scoreCount > 0 ? scoreSum / scoreCount : 0;
+  const avgCapacityGain = gainCount > 0 ? gainSum / gainCount : 0;
+
+  // ── 2. Contradiction detection ───────────────────────────────────────────
+  let contradictionCount = 0;
+  for (const [, statuses] of topicStatusMap) {
+    if (statuses.has("implemented") && statuses.has("unresolved")) {
+      contradictionCount++;
+    }
+  }
+
+  // ── 3. Non-linear unresolved penalty ────────────────────────────────────
+  let penaltyApplied: number;
+  if (unresolvedRatio < BENCHMARK_INTEGRITY_UNRESOLVED_THRESHOLDS.minor) {
+    penaltyApplied = 0.90;
+  } else if (unresolvedRatio < BENCHMARK_INTEGRITY_UNRESOLVED_THRESHOLDS.moderate) {
+    penaltyApplied = 0.70;
+  } else {
+    penaltyApplied = 0.50;
+  }
+
+  // Additional contradiction penalty: each contradiction reduces score by 0.05 (max 0.3)
+  const contradictionPenalty = Math.min(0.30, contradictionCount * 0.05);
+
+  // Base score: blend of avgBenchmarkScore, avgCapacityGain, resolved ratio
+  const resolvedRatio = 1 - unresolvedRatio;
+  const rawScore = clamp01(
+    (avgBenchmarkScore * 0.40) + (avgCapacityGain * 0.30) + (resolvedRatio * 0.30)
+  );
+  const integrityScore = Math.round(
+    clamp01(rawScore * penaltyApplied - contradictionPenalty) * 1000
+  ) / 1000;
+
+  return {
+    schemaVersion: BENCHMARK_INTEGRITY_SCHEMA_VERSION,
+    integrityScore,
+    contradictionCount,
+    normalizedSuiteCount: suiteNames.size,
+    unresolvedRatio: Math.round(unresolvedRatio * 1000) / 1000,
+    penaltyApplied,
+    avgBenchmarkScore: Math.round(avgBenchmarkScore * 1000) / 1000,
+    avgCapacityGain: Math.round(avgCapacityGain * 1000) / 1000,
+    sampleCount: recs.length,
+  };
+}
+
 export const RETRY_EXPECTED_GAIN_MIN_THRESHOLD = 0.18;
 
 function deriveRoutingOutcomeSignal(premiumUsageData: any, taskKind: string): {
@@ -1164,10 +1321,15 @@ export function assessRetryExpectedROI(input: {
   }
   const outcome = deriveRoutingOutcomeSignal(input?.premiumUsageData, taskKind);
   const benchmark = deriveLatestBenchmarkSignal(input?.benchmarkGroundTruth);
+  const integrity = computeBenchmarkIntegrityScore(input?.benchmarkGroundTruth);
   const successSignal = outcome.sampleCount > 0 ? outcome.successRate : 0.5;
-  const benchmarkSignal = benchmark.sampleCount > 0
+  // Use integrity-aware benchmark signal: blend raw score with integrityScore penalty
+  const rawBenchmarkSignal = benchmark.sampleCount > 0
     ? clamp01((benchmark.avgBenchmarkScore + benchmark.avgCapacityGain + (1 - benchmark.unresolvedRatio)) / 3)
     : 0.5;
+  const benchmarkSignal = integrity.sampleCount > 0
+    ? clamp01(rawBenchmarkSignal * integrity.penaltyApplied - Math.min(0.15, integrity.contradictionCount * 0.03))
+    : rawBenchmarkSignal;
   const attemptDecay = 1 / attempt;
   const expectedGain = Math.round(clamp01(successSignal * benchmarkSignal * attemptDecay) * 1000) / 1000;
   const allowRetry = expectedGain >= threshold;
@@ -1227,6 +1389,7 @@ export function assessHardTaskEscalation(
     : clamp01(Number(history.recentROI || 0));
 
   const benchmark = deriveLatestBenchmarkSignal(signals.benchmarkGroundTruth || null);
+  const integrityResult = computeBenchmarkIntegrityScore(signals.benchmarkGroundTruth || null);
   const lowSamples = outcomeSampleCount > 0 && outcomeSampleCount < t.minObservedSamples;
   const noSamples = outcomeSampleCount === 0;
   const weakSuccess = outcomeSampleCount > 0 && outcomeSuccessRate < t.minSuccessRate;
@@ -1239,7 +1402,11 @@ export function assessHardTaskEscalation(
     benchmark.sampleCount > 0 &&
     benchmark.avgCapacityGain > 0 &&
     benchmark.avgCapacityGain < t.minCapacityGain;
-  const highUnresolvedBenchmark = benchmark.sampleCount > 0 && benchmark.unresolvedRatio >= 0.6;
+  // Use integrity-aware unresolved check: either raw ratio threshold or low integrity score
+  const highUnresolvedBenchmark = benchmark.sampleCount > 0 && (
+    benchmark.unresolvedRatio >= BENCHMARK_INTEGRITY_UNRESOLVED_THRESHOLDS.moderate ||
+    (integrityResult.sampleCount > 0 && integrityResult.integrityScore < 0.35)
+  );
 
   const penalties = [
     noSamples ? 0.35 : 0,

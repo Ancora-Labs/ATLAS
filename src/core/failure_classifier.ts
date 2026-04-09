@@ -598,3 +598,103 @@ export async function persistFailureClassification(
     /* best-effort — never block orchestration */
   }
 }
+
+// ── Failure Envelope ──────────────────────────────────────────────────────────
+
+/** Schema version for the unified failure envelope. */
+export const FAILURE_ENVELOPE_SCHEMA_VERSION = 1;
+
+/**
+ * Typed enumeration of top-level termination causes that produced a failure.
+ * Consumed by worker_runner, verification_gate, and postmortem analysis.
+ *
+ * - error:                Worker process exited with a non-zero code or threw.
+ * - blocked:              Worker was blocked by a policy gate or escalation limit.
+ * - cancelled:            Execution was cancelled via CancellationToken.
+ * - timeout:              Worker process exceeded the configured time limit.
+ * - verification_failed:  Post-merge verification gate produced unresolved gaps.
+ */
+export const TERMINATION_CAUSE = Object.freeze({
+  ERROR:                "error",
+  BLOCKED:              "blocked",
+  CANCELLED:            "cancelled",
+  TIMEOUT:              "timeout",
+  VERIFICATION_FAILED:  "verification_failed",
+} as const);
+
+export type TerminationCause = typeof TERMINATION_CAUSE[keyof typeof TERMINATION_CAUSE];
+
+/** Unified failure envelope consumed by worker_runner, verification_gate, and postmortem analysis. */
+export interface FailureEnvelope {
+  /** Monotonically incrementing schema version for forward-compat. */
+  schemaVersion: typeof FAILURE_ENVELOPE_SCHEMA_VERSION;
+  /** Unique envelope identifier (crypto random hex prefix). */
+  envelopeId: string;
+  /** Task identifier — null when not available at classification time. */
+  taskId: string | null;
+  /** The top-level cause that terminated execution. */
+  terminationCause: TerminationCause;
+  /** Structured failure classification — null when classification failed or was not attempted. */
+  classification: Record<string, unknown> | null;
+  /** Adaptive retry decision — null when retry resolution was not attempted. */
+  retryDecision: Record<string, unknown> | null;
+  /** ISO timestamp when this envelope was assembled. */
+  resolvedAt: string;
+}
+
+/** Lightweight schema descriptor for validation consumers. */
+export const FAILURE_ENVELOPE_SCHEMA = Object.freeze({
+  schemaVersion: FAILURE_ENVELOPE_SCHEMA_VERSION,
+  required: ["schemaVersion", "envelopeId", "taskId", "terminationCause", "classification", "retryDecision", "resolvedAt"] as const,
+  terminationCauses: Object.values(TERMINATION_CAUSE),
+});
+
+/**
+ * Build a unified FailureEnvelope from existing classification and retry decision objects.
+ *
+ * Never throws — all errors are caught and logged to a `buildError` field.
+ * Returns the envelope on both success and partial-failure paths so callers
+ * can always persist a structured record.
+ *
+ * @param classification  - output of classifyFailure().classification (or null)
+ * @param retryDecision   - output of resolveRetryAction().decision (or null)
+ * @param terminationCause - one of TERMINATION_CAUSE values
+ * @param taskId          - task identifier, or null when not available
+ */
+export function buildFailureEnvelope(
+  classification: Record<string, unknown> | null,
+  retryDecision: Record<string, unknown> | null,
+  terminationCause: TerminationCause,
+  taskId?: string | null,
+): FailureEnvelope {
+  try {
+    const cause: TerminationCause = Object.values(TERMINATION_CAUSE).includes(terminationCause as any)
+      ? terminationCause
+      : TERMINATION_CAUSE.ERROR;
+
+    // Generate a short stable ID from timestamp + random suffix.
+    const envelopeId = `fe-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+
+    return {
+      schemaVersion: FAILURE_ENVELOPE_SCHEMA_VERSION,
+      envelopeId,
+      taskId: taskId != null ? String(taskId) : null,
+      terminationCause: cause,
+      classification: classification ?? null,
+      retryDecision: retryDecision ?? null,
+      resolvedAt: new Date().toISOString(),
+    };
+  } catch (err) {
+    // Fallback envelope that never blocks orchestration — includes the build error for observability.
+    return {
+      schemaVersion: FAILURE_ENVELOPE_SCHEMA_VERSION,
+      envelopeId: `fe-err-${Date.now().toString(36)}`,
+      taskId: taskId != null ? String(taskId) : null,
+      terminationCause: terminationCause ?? TERMINATION_CAUSE.ERROR,
+      classification: null,
+      retryDecision: null,
+      resolvedAt: new Date().toISOString(),
+      ...(({ buildError: String((err as any)?.message || err) }) as any),
+    };
+  }
+}

@@ -46,7 +46,7 @@ import {
 import { appendEscalation, BLOCKING_REASON_CLASS, NEXT_ACTION, resolveEscalationsForTask } from "./escalation_queue.js";
 import { buildTaskFingerprint, buildLineageId, LINEAGE_ENTRY_STATUS } from "./lineage_graph.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
-import { classifyFailure, classifyExitCode } from "./failure_classifier.js";
+import { classifyFailure, classifyExitCode, buildFailureEnvelope, TERMINATION_CAUSE } from "./failure_classifier.js";
 import { resolveRetryAction, persistRetryMetric, RETRY_ACTION, RETRY_STRATEGY_SCHEMA_VERSION } from "./retry_strategy.js";
 import { filterMemoryEntriesByTrust, isPrivilegedMemoryRequester, buildMemoryHitRecord } from "./trust_boundary.js";
 import type { MemoryHitRecord } from "./trust_boundary.js";
@@ -1987,6 +1987,25 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       }
     } catch { /* non-fatal */ }
 
+    // Build unified failure envelope for observability and postmortem analysis
+    try {
+      const terminationCause = result.timedOut ? TERMINATION_CAUSE.TIMEOUT : TERMINATION_CAUSE.ERROR;
+      const cfResult2 = classifyFailure({
+        workerStatus: "error",
+        blockingReasonClass: BLOCKING_REASON_CLASS.WORKER_ERROR,
+        errorMessage: errorMsg,
+        logLines: result.timedOut ? ["Process timed out"] : [],
+        taskId: instruction.taskId || null,
+      });
+      const envelope = buildFailureEnvelope(
+        cfResult2.ok ? cfResult2.classification : null,
+        errorRetryDecision,
+        terminationCause,
+        instruction.taskId || null,
+      );
+      appendFailureClassification(config, { ...envelope, _type: "failure_envelope" }).catch(() => { /* non-fatal */ });
+    } catch { /* non-fatal — envelope build must never block worker results */ }
+
     updatedHistory.push({
       from: roleName,
       content: `ERROR: ${errorMsg}`,
@@ -2571,6 +2590,19 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         }
       } catch { /* non-fatal — retry resolution must never block worker results */ }
     }
+
+    // Build unified failure envelope for observability and postmortem analysis
+    try {
+      const statusStr = String(parsed.status);
+      const envCause = statusStr === "blocked" ? TERMINATION_CAUSE.BLOCKED : TERMINATION_CAUSE.ERROR;
+      const envelope = buildFailureEnvelope(
+        failureClassification ? (failureClassification as Record<string, unknown>) : null,
+        retryDecision ? (retryDecision as Record<string, unknown>) : null,
+        envCause,
+        instruction.taskId || null,
+      );
+      appendFailureClassification(config, { ...envelope, _type: "failure_envelope" }).catch(() => { /* non-fatal */ });
+    } catch { /* non-fatal — envelope build must never block worker results */ }
   }
 
   // Add worker's response to history

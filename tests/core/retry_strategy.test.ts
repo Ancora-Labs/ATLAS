@@ -752,3 +752,36 @@ describe("classifyStepRetryClass — negative paths", () => {
     assert.equal(r.known, true);
   });
 });
+
+// ── FailureEnvelope integration ───────────────────────────────────────────────
+
+import {
+  buildFailureEnvelope,
+  TERMINATION_CAUSE,
+  FAILURE_ENVELOPE_SCHEMA_VERSION,
+} from "../../src/core/failure_classifier.js";
+
+describe("FailureEnvelope + resolveRetryAction integration", () => {
+  it("envelope retryDecision is populated from resolveRetryAction output", () => {
+    const rd = resolveRetryAction(FAILURE_CLASS.LOGIC_DEFECT, 0, {}, null);
+    assert.ok(rd.ok, "resolveRetryAction must succeed");
+    const envelope = buildFailureEnvelope(null, rd.decision, TERMINATION_CAUSE.ERROR, "task-x");
+    assert.ok(envelope.retryDecision, "retryDecision must be set in envelope");
+    assert.equal((envelope.retryDecision as any).failureClass, FAILURE_CLASS.LOGIC_DEFECT);
+    assert.equal(envelope.schemaVersion, FAILURE_ENVELOPE_SCHEMA_VERSION);
+  });
+
+  it("envelope retryDecision retryAction matches resolveRetryAction output for ENVIRONMENT class", () => {
+    const rd = resolveRetryAction(FAILURE_CLASS.ENVIRONMENT, 0, {}, null);
+    assert.ok(rd.ok);
+    const envelope = buildFailureEnvelope(null, rd.decision, TERMINATION_CAUSE.ERROR, null);
+    assert.equal((envelope.retryDecision as any).retryAction, rd.decision.retryAction);
+  });
+
+  it("negative path: envelope with null retryDecision is still valid", () => {
+    const envelope = buildFailureEnvelope(null, null, TERMINATION_CAUSE.BLOCKED, null);
+    assert.equal(envelope.retryDecision, null);
+    assert.equal(envelope.terminationCause, "blocked");
+    assert.ok(envelope.envelopeId, "envelopeId must be non-empty");
+  });
+});

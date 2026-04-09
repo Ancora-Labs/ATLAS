@@ -4313,3 +4313,33 @@ export function runDualLanePlanReview(plans: any[], config?: any): DualLaneVerdi
   const policy = resolveEffectiveLaneMergePolicy(config);
   return mergeLaneVerdicts(laneA, laneB, policy);
 }
+
+// ── Postmortem Envelope Summary ───────────────────────────────────────────────
+
+import type { FailureEnvelope } from "./failure_classifier.js";
+
+/**
+ * Extract postmortem-relevant fields from a FailureEnvelope for compact storage.
+ *
+ * The summary omits the raw classification evidence (which can be large) and
+ * retains only the fields that drive postmortem decision quality and
+ * TRACKED_FIELDS deep-equality comparisons.
+ *
+ * @param envelope - FailureEnvelope produced by buildFailureEnvelope()
+ * @returns compact postmortem record or null when envelope is not provided
+ */
+export function buildPostmortemEnvelopeSummary(
+  envelope: FailureEnvelope | null | undefined,
+): Record<string, unknown> | null {
+  if (!envelope || typeof envelope !== "object") return null;
+  return {
+    envelopeId:        envelope.envelopeId,
+    taskId:            envelope.taskId,
+    terminationCause:  envelope.terminationCause,
+    primaryClass:      (envelope.classification as any)?.primaryClass ?? null,
+    confidence:        (envelope.classification as any)?.confidence ?? null,
+    flagged:           (envelope.classification as any)?.flagged ?? null,
+    retryAction:       (envelope.retryDecision as any)?.retryAction ?? null,
+    resolvedAt:        envelope.resolvedAt,
+  };
+}

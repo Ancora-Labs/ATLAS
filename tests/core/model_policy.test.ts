@@ -1535,3 +1535,145 @@ describe("classifyBenchmarkSuite — suite type classification", () => {
     );
   });
 });
+
+// ── computeBenchmarkIntegrityScore ────────────────────────────────────────────
+
+import {
+  computeBenchmarkIntegrityScore,
+  BENCHMARK_INTEGRITY_SCHEMA_VERSION,
+  BENCHMARK_INTEGRITY_UNRESOLVED_THRESHOLDS,
+  BENCHMARK_CONTRADICTION_REASON,
+} from "../../src/core/model_policy.js";
+
+function makeGroundTruth(recommendations: object[]): object {
+  return {
+    entries: [
+      {
+        cycleId: "test-cycle",
+        recommendations,
+      },
+    ],
+  };
+}
+
+describe("BENCHMARK_INTEGRITY_UNRESOLVED_THRESHOLDS", () => {
+  it("is frozen and has minor and moderate thresholds", () => {
+    assert.ok(Object.isFrozen(BENCHMARK_INTEGRITY_UNRESOLVED_THRESHOLDS));
+    assert.equal(BENCHMARK_INTEGRITY_UNRESOLVED_THRESHOLDS.minor, 0.30);
+    assert.equal(BENCHMARK_INTEGRITY_UNRESOLVED_THRESHOLDS.moderate, 0.60);
+  });
+});
+
+describe("BENCHMARK_CONTRADICTION_REASON", () => {
+  it("is frozen and has expected reason codes", () => {
+    assert.ok(Object.isFrozen(BENCHMARK_CONTRADICTION_REASON));
+    assert.equal(BENCHMARK_CONTRADICTION_REASON.SAME_TOPIC_CONFLICTING_STATUS, "SAME_TOPIC_CONFLICTING_STATUS");
+    assert.equal(BENCHMARK_CONTRADICTION_REASON.DUPLICATE_ENTRY, "DUPLICATE_ENTRY");
+  });
+});
+
+describe("computeBenchmarkIntegrityScore — zero signal", () => {
+  it("returns zero-signal when benchmarkGroundTruth is null", () => {
+    const result = computeBenchmarkIntegrityScore(null);
+    assert.equal(result.schemaVersion, BENCHMARK_INTEGRITY_SCHEMA_VERSION);
+    assert.equal(result.sampleCount, 0);
+    assert.equal(result.integrityScore, 0);
+    assert.equal(result.contradictionCount, 0);
+  });
+
+  it("returns zero-signal when no entries are present", () => {
+    const result = computeBenchmarkIntegrityScore({ entries: [] });
+    assert.equal(result.sampleCount, 0);
+    assert.equal(result.integrityScore, 0);
+  });
+
+  it("returns zero-signal when latest entry has no recommendations", () => {
+    const result = computeBenchmarkIntegrityScore({ entries: [{ cycleId: "c1", recommendations: [] }] });
+    assert.equal(result.sampleCount, 0);
+  });
+});
+
+describe("computeBenchmarkIntegrityScore — scoring", () => {
+  it("low unresolved ratio (< 0.30) applies minor penalty (0.90)", () => {
+    const gt = makeGroundTruth([
+      { topic: "a", implementationStatus: "implemented", benchmarkScore: 0.8, capacityGain: 0.5 },
+      { topic: "b", implementationStatus: "implemented", benchmarkScore: 0.9, capacityGain: 0.6 },
+      { topic: "c", implementationStatus: "implemented", benchmarkScore: 0.7, capacityGain: 0.4 },
+      { topic: "d", implementationStatus: "pending",     benchmarkScore: 0.6, capacityGain: 0.3 },
+    ]);
+    const result = computeBenchmarkIntegrityScore(gt);
+    assert.equal(result.penaltyApplied, 0.90, "minor penalty must be 0.90");
+    assert.ok(result.unresolvedRatio < 0.30, "unresolvedRatio must be below minor threshold");
+    assert.ok(result.integrityScore > 0, "integrityScore must be positive");
+  });
+
+  it("moderate unresolved ratio (0.30–0.60) applies moderate penalty (0.70)", () => {
+    const recs = [
+      { topic: "a", implementationStatus: "implemented" },
+      { topic: "b", implementationStatus: "implemented" },
+      { topic: "c", implementationStatus: "pending" },
+      { topic: "d", implementationStatus: "pending" },
+    ];
+    const result = computeBenchmarkIntegrityScore(makeGroundTruth(recs));
+    // 2 out of 4 pending → unresolvedRatio = 0.50 (in moderate range)
+    assert.equal(result.penaltyApplied, 0.70);
+    assert.ok(result.unresolvedRatio >= 0.30 && result.unresolvedRatio < 0.60);
+  });
+
+  it("severe unresolved ratio (>= 0.60) applies severe penalty (0.50)", () => {
+    const recs = [
+      { topic: "a", implementationStatus: "pending" },
+      { topic: "b", implementationStatus: "pending" },
+      { topic: "c", implementationStatus: "pending" },
+      { topic: "d", implementationStatus: "implemented" },
+    ];
+    const result = computeBenchmarkIntegrityScore(makeGroundTruth(recs));
+    assert.equal(result.penaltyApplied, 0.50);
+    assert.ok(result.unresolvedRatio >= 0.60);
+  });
+
+  it("detects contradictions when same topic has both implemented and unresolved status", () => {
+    const recs = [
+      { topic: "cache-fix", implementationStatus: "implemented",   benchmarkScore: 0.8 },
+      { topic: "cache-fix", implementationStatus: "pending",       benchmarkScore: 0.8 },
+      { topic: "auth-fix",  implementationStatus: "implemented",   benchmarkScore: 0.9 },
+    ];
+    const result = computeBenchmarkIntegrityScore(makeGroundTruth(recs));
+    assert.equal(result.contradictionCount, 1, "must detect one contradiction for cache-fix");
+  });
+
+  it("normalizes suite names to lowercase", () => {
+    const recs = [
+      { topic: "A", suite: "SuiteAlpha", implementationStatus: "implemented" },
+      { topic: "B", suite: "SUITEALPHA", implementationStatus: "implemented" },
+    ];
+    const result = computeBenchmarkIntegrityScore(makeGroundTruth(recs));
+    assert.equal(result.normalizedSuiteCount, 1, "suite names must be deduplicated after normalization");
+  });
+
+  it("integrityScore is in [0, 1]", () => {
+    const recs = Array.from({ length: 5 }, (_, i) => ({
+      topic: `t${i}`, implementationStatus: "pending", benchmarkScore: 0.5, capacityGain: 0.2
+    }));
+    const result = computeBenchmarkIntegrityScore(makeGroundTruth(recs));
+    assert.ok(result.integrityScore >= 0 && result.integrityScore <= 1,
+      `integrityScore must be in [0,1], got ${result.integrityScore}`);
+  });
+});
+
+describe("computeBenchmarkIntegrityScore — negative paths", () => {
+  it("does not throw for null or undefined input", () => {
+    assert.doesNotThrow(() => computeBenchmarkIntegrityScore(null));
+    assert.doesNotThrow(() => computeBenchmarkIntegrityScore(undefined));
+  });
+
+  it("handles records with missing topic and status gracefully", () => {
+    const recs = [
+      { benchmarkScore: 0.5 },  // no topic or status
+      { topic: null, implementationStatus: null },
+    ];
+    const result = computeBenchmarkIntegrityScore(makeGroundTruth(recs));
+    assert.equal(result.sampleCount, 2);
+    assert.ok(result.integrityScore >= 0);
+  });
+});
