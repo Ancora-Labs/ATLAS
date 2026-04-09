@@ -1,10 +1,386 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-04-07T13:55:39.136Z",
+  "updatedAt": "2026-04-09T06:04:11.552Z",
   "entries": [
     {
+      "cycleId": "2026-04-09T05:25:41.196Z",
+      "evaluatedAt": "2026-04-09T06:04:11.551Z",
+      "schemaVersion": 1,
+      "recommendations": [
+        {
+          "id": "rec-copilot-cloud-agent-governance-controls-0",
+          "topic": "Copilot Cloud-Agent Governance Controls",
+          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`  \n2. **What is the specific behavior change?** Add a pre-dispatch governance check that reads repo policy profile (`validationToolsEnabled`, `requireWorkflowApproval`) and blocks autonomous runs when task diff touches `.github/workflows/**` ",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-durable-multi-agent-routing-and-state-1",
+          "topic": "Durable Multi-Agent Routing and State",
+          "summary": "1. **Which BOX file changes?** `src/core/orchestrator.ts`  \n2. **What is the specific behavior change?** Introduce checkpointed worker-cycle execution keyed by deterministic `thread_id` (`repo:cycle:task:attempt`) and persist latest checkpoint metadata after each major phase (plan, patch, test, veri",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-timeout-and-retry-semantics-for-autonomo-2",
+          "topic": "Timeout and Retry Semantics for Autonomous Runs",
+          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`  \n2. **What is the specific behavior change?** Add explicit retry taxonomy (`nonRetryable` vs `retryable`) and bounded retry config per failure class, with conservative default of no automatic workflow-level retries.  \n3. **What is the verif",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-evaluator-driven-self-improvement-and-ag-3",
+          "topic": "Evaluator-Driven Self-Improvement and Agent Design",
+          "summary": "1. **Which BOX file changes?** `src/core/prometheus.ts`  \n2. **What is the specific behavior change?** Introduce planner mode selection (`workflow_template` vs `agentic_exploration`) with default to workflow templates for known task classes and escalation to exploratory mode only after bounded failu",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "cycleId": "2026-04-08T19:14:59.482Z",
+      "evaluatedAt": "2026-04-08T19:44:32.934Z",
+      "schemaVersion": 1,
+      "recommendations": [
+        {
+          "id": "rec-copilot-cloud-agent-runtime-hardening-mc-0",
+          "topic": "Copilot Cloud Agent Runtime Hardening (MCP, Skills, Hooks)",
+          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`  \n2. **What is the specific behavior change?** Add MCP preflight validation before worker dispatch: reject non-`COPILOT_MCP_*` secret references, reject unsupported server types/auth modes, and enforce explicit tool allowlists (block `[\"*\"]`",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-durable-multi-agent-orchestration-patter-1",
+          "topic": "Durable Multi-Agent Orchestration Patterns (LangGraph, CrewAI, AutoGen)",
+          "summary": "1. **Which BOX file changes?** `src/core/orchestrator.ts`  \n2. **What is the specific behavior change?** Introduce per-cycle checkpoint envelope `{thread_id, checkpoint_id, state_snapshot}` and resume logic that restarts from the last persisted checkpoint instead of restarting the full cycle.  \n3. *",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-reliability-defaults-and-external-benchm-2",
+          "topic": "Reliability Defaults and External Benchmark Feedback Loops",
+          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`  \n2. **What is the specific behavior change?** Implement retry policy object `{initialIntervalMs, backoffCoefficient, maximumIntervalMs, maximumAttempts, nonRetryableErrorTypes}` and classify deterministic planner/policy/schema failures as n",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "cycleId": "2026-04-08T17:03:01.304Z",
+      "evaluatedAt": "2026-04-08T17:28:52.653Z",
+      "schemaVersion": 1,
+      "recommendations": [
+        {
+          "id": "rec-deterministic-retry-and-failure-semantic-0",
+          "topic": "Deterministic Retry and Failure Semantics",
+          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`  \n2. **What exactly changes?** Add explicit worker-step retry policy execution with fields `{initialIntervalMs, backoffCoefficient, maximumIntervalMs, maximumAttempts, nonRetryableErrorTypes}`; enforce timeout-coupled retries; allow per-erro",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-schema-constrained-planning-and-session--1",
+          "topic": "Schema-Constrained Planning and Session Control",
+          "summary": "1. **Which BOX file changes?** `src/core/prometheus.ts`  \n2. **What exactly changes?** Add a strict Prometheus response schema with required fields `{plan_reasoning, init_plan, plan, current_plan_step, stop, send_to, message}`, `additionalProperties:false`, and fixed `stop` enum; enforce two-phase p",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-adaptive-multi-agent-routing-and-hierarc-2",
+          "topic": "Adaptive Multi-Agent Routing and Hierarchical Orchestration",
+          "summary": "1. **Which BOX file changes?** `src/core/prometheus.ts`  \n2. **What exactly changes?** Replace static worker ordering with selector-based routing: optional deterministic `selectorFunc`, optional `candidateFunc`, max selection attempts, strict participant validation, and deterministic fallback policy",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "cycleId": "2026-04-08T16:20:15.540Z",
+      "evaluatedAt": "2026-04-08T16:50:00.374Z",
+      "schemaVersion": 1,
+      "recommendations": [
+        {
+          "id": "rec-copilot-cloud-agent-runtime-controls-mcp-0",
+          "topic": "Copilot Cloud Agent Runtime Controls (MCP + Skills)",
+          "summary": "1. **File to change**: `src/core/worker_runner.ts`  \n2. **Specific behavior change**: Add an MCP policy block to worker prompt assembly and post-run parsing that (a) rejects wildcard MCP tool exposure for privileged roles, (b) requires explicit server/tool allowlists, and (c) records MCP startup evi",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-durable-orchestration-patterns-for-long--1",
+          "topic": "Durable Orchestration Patterns for Long-Running Cycles",
+          "summary": "1. **File to change**: `src/core/orchestrator.ts`  \n2. **Specific behavior change**: Introduce Temporal-inspired deterministic run-chain controls without adding Temporal runtime: explicit retry policy object (`initialInterval`, `backoffCoefficient`, `maximumInterval`, `maximumAttempts`, `nonRetryabl",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-benchmark-validity-and-reproducible-eval-2",
+          "topic": "Benchmark Validity and Reproducible Evaluation Protocols",
+          "summary": "1. **File to change**: `src/core/verification_gate.ts`  \n2. **Specific behavior change**: Add benchmark-evidence schema checks for BOX evaluation tasks requiring protocol metadata fields (`split`, `resolved_count`, `split_total`, `agent_framework`, `framework_version`, `tool_calling_mode`, `temperat",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "cycleId": "2026-04-08T14:16:59.009Z",
+      "evaluatedAt": "2026-04-08T16:18:15.437Z",
+      "schemaVersion": 1,
+      "recommendations": [
+        {
+          "id": "rec-durable-execution-state-and-workflow-con-0",
+          "topic": "Durable execution state and workflow control semantics",
+          "summary": "1. **Which BOX file changes?** `src/core/orchestrator.ts` and `src/core/research_synthesizer.ts` (state persistence path shared through orchestrator state handling).\n2. **What exactly changes?** Introduce checkpoint chain records for each cycle step with fields `{thread_id, checkpoint_ns, checkpoint",
+          "implementationStatus": "pending",
+          "benchmarkScore": 1,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-copilot-cloud-agent-configuration-and-en-1",
+          "topic": "Copilot cloud-agent configuration and enforcement surfaces",
+          "summary": "1. **Which BOX file changes?** `.github/agents/prometheus.agent.md`, `.github/agents/athena.agent.md`, `.github/agents/research-scout.agent.md`, `.github/agents/research-synthesizer.agent.md`.\n2. **What exactly changes?** Add explicit frontmatter for each agent with strict `tools` allowlist, `target",
+          "implementationStatus": "pending",
+          "benchmarkScore": 1,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-autonomous-agent-safety-architecture-and-2",
+          "topic": "Autonomous-agent safety architecture and reviewer quality evidence",
+          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts` and `src/core/verification_gate.ts`.\n2. **What exactly changes?** Insert an execution-kernel layer that receives structured tool intents `{tool, args, scope, intent, impact, clearance}` from workers, performs policy evaluation before any too",
+          "implementationStatus": "pending",
+          "benchmarkScore": 1,
+          "capacityGain": null,
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "cycleId": "2026-04-08T12:57:51.139Z",
+      "evaluatedAt": "2026-04-08T13:13:41.664Z",
+      "schemaVersion": 1,
+      "recommendations": [
+        {
+          "id": "rec-swe-bench-multi-agent-repair-pipelines-a-0",
+          "topic": "SWE-bench multi-agent repair pipelines and measurable planning priors",
+          "summary": "1. **File**: `src/core/prometheus.ts`  \n2. **Behavior change**: Add a benchmark-prior table keyed by repository family (e.g., django-like, sympy-like) and use it to set initial task strategy (single specialist vs split roles) and attempt budget before plan emission.  \n3. **Verifiable outcome**: Gene",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-deterministic-worker-runtime-governance--1",
+          "topic": "Deterministic worker runtime governance (retry, concurrency, Copilot policy)",
+          "summary": "1. **File**: `src/core/worker_runner.ts`  \n2. **Behavior change**: Introduce a typed retry-policy validator/normalizer before worker launch; reject invalid configs with explicit errors and persist normalized policy on dispatch records.  \n3. **Verifiable outcome**: Worker dispatch fails fast for inva",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-multi-agent-orchestration-contracts-and--2",
+          "topic": "Multi-agent orchestration contracts and anti-loop replanning",
+          "summary": "1. **File**: `src/core/orchestrator.ts`  \n2. **Behavior change**: Implement a two-loop controller with persisted `task/facts/plan/n_rounds/n_stalls`, schema-validated progress ledger, and automatic replan when stalls hit threshold (default 3).  \n3. **Verifiable outcome**: Orchestrator state JSON alw",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "cycleId": "2026-04-08T12:08:45.941Z",
+      "evaluatedAt": "2026-04-08T12:26:58.030Z",
+      "schemaVersion": 1,
+      "recommendations": [
+        {
+          "id": "rec-copilot-cloud-agent-environment-determin-0",
+          "topic": "Copilot Cloud Agent Environment Determinism",
+          "summary": "1. **File to change**: `src/core/worker_runner.ts` (plus repository workflow `.github/workflows/copilot-setup-steps.yml` generation/validation path if worker provisions repos).  \n2. **Specific behavior change**: Add a pre-run environment policy validator that enforces `copilot-setup-steps.yml` contr",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-durable-worker-runtime-and-retry-semanti-1",
+          "topic": "Durable Worker Runtime and Retry Semantics (Temporal TS)",
+          "summary": "1. **File to change**: `src/core/orchestrator.ts`.  \n2. **Specific behavior change**: Introduce explicit worker lifecycle state machine and graceful shutdown windows modeled on Temporal semantics (`RUNNING/STOPPING/STOPPED/FAILED`), with stop behavior that halts new work intake and allows bounded in",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-interrupt-team-and-termination-control-p-2",
+          "topic": "Interrupt, Team, and Termination Control Patterns",
+          "summary": "1. **File to change**: `src/core/orchestrator.ts`.  \n2. **Specific behavior change**: Add resumable interrupt checkpoints for high-risk operations with persisted `thread_id` equivalent in BOX state; require resume payload mapping by checkpoint ID for multi-pause scenarios and enforce idempotent pre-",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-reasoning-controls-and-external-benchmar-3",
+          "topic": "Reasoning Controls and External Benchmark Signals",
+          "summary": "1. **File to change**: `.github/agents/prometheus.agent.md`.  \n2. **Specific behavior change**: Add model-mode routing rules that explicitly choose reasoning mode per task class (`adaptive/high-effort` for plan synthesis, `thinking disabled/omitted` for routine edits), plus strict output-block parsi",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "cycleId": "2026-04-08T10:33:33.149Z",
+      "evaluatedAt": "2026-04-08T11:11:55.513Z",
+      "schemaVersion": 1,
+      "recommendations": [
+        {
+          "id": "rec-deliberate-planning-and-multi-agent-plan-0",
+          "topic": "Deliberate Planning and Multi-Agent Plan Synthesis",
+          "summary": "1. **File to change**: `src/core/prometheus.ts`  \n2. **Specific behavior change**: Add typed planning lanes (`planning`, `security`, `tests`, `release`) and a fan-in collector that waits for all lane outputs before final plan assembly; reject incomplete lane sets instead of generating a plan from pa",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-agent-governance-hitl-control-and-operat-1",
+          "topic": "Agent Governance, HITL Control, and Operational Reliability",
+          "summary": "1. **File to change**: `src/core/worker_runner.ts`  \n2. **Specific behavior change**: Add a pre-dispatch Copilot-policy reconciliation step that calls the org Copilot coding-agent management endpoints and blocks worker execution if target repo is not enabled under current org policy.  \n3. **Verifiab",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-durable-orchestration-and-evaluator-firs-2",
+          "topic": "Durable Orchestration and Evaluator-First Self-Improvement",
+          "summary": "1. **File to change**: `src/core/orchestrator.ts`  \n2. **Specific behavior change**: Add a deterministic step journal and cycle rollover behavior analogous to Continue-As-New: persist minimal serializable state at boundary and start next cycle from checkpoint snapshot, with side-effectful operations",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "cycleId": "2026-04-08T08:39:39.307Z",
+      "evaluatedAt": "2026-04-08T09:19:35.717Z",
+      "schemaVersion": 1,
+      "recommendations": [
+        {
+          "id": "rec-structured-code-action-interfaces-and-co-0",
+          "topic": "Structured Code Action Interfaces and Context Pruning",
+          "summary": "1. **File to change**: `src/core/worker_runner.ts` (plus tool prompt contract in `.github/agents/*.agent.md` for worker roles).  \n2. **Specific behavior change**: Replace free-form edit/read task instructions with a structured tool contract (`readCode`/`editCode`) and require selector-based edit int",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-mcp-governance-and-hook-based-runtime-co-1",
+          "topic": "MCP Governance and Hook-Based Runtime Controls",
+          "summary": "1. **File to change**: `src/core/worker_runner.ts`.  \n2. **Specific behavior change**: Introduce explicit MCP policy profiles that compile to deterministic headers/env (`X-MCP-*` / `GITHUB_*`) per worker phase and log final effective config hash with each run artifact.  \n3. **Verifiable outcome**: F",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-spec-driven-multi-agent-workflow-groundi-2",
+          "topic": "Spec-Driven Multi-Agent Workflow Grounding",
+          "summary": "1. **File to change**: `src/core/prometheus.ts`, `src/core/athena.ts`, and `src/core/orchestrator.ts`.  \n2. **Specific behavior change**: Enforce explicit phase artifacts (`SPEC/PLAN/TASKS`) and add phase-transition gates requiring discovery and validation outputs before execution handoff.  \n3. **Ve",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-evaluation-integrity-beyond-pass-rate-me-3",
+          "topic": "Evaluation Integrity Beyond Pass-Rate Metrics",
+          "summary": "1. **File to change**: `src/core/athena.ts` and `src/core/verification_gate.ts`.  \n2. **Specific behavior change**: Add design-compliance verdict classification separate from test verdict; reject “tests pass + design violated” outcomes from autonomous acceptance path.  \n3. **Verifiable outcome**: At",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "cycleId": "2026-04-08T06:53:09.851Z",
+      "evaluatedAt": "2026-04-08T07:33:53.167Z",
+      "schemaVersion": 1,
+      "recommendations": [
+        {
+          "id": "rec-copilot-runtime-and-durable-orchestratio-0",
+          "topic": "Copilot Runtime and Durable Orchestration Patterns",
+          "summary": "Copilot Runtime and Durable Orchestration Patterns",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-benchmark-harness-and-process-level-qual-1",
+          "topic": "Benchmark Harness and Process-Level Quality Diagnostics",
+          "summary": "Benchmark Harness and Process-Level Quality Diagnostics",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-reliability-and-validation-governance-2",
+          "topic": "Reliability and Validation Governance",
+          "summary": "Reliability and Validation Governance",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        },
+        {
+          "id": "rec-multi-sample-voting-for-planning-quality-3",
+          "topic": "Multi-Sample Voting for Planning Quality",
+          "summary": "Multi-Sample Voting for Planning Quality",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        }
+      ]
+    },
+    {
       "cycleId": "2026-04-07T13:16:35.547Z",
-      "evaluatedAt": "2026-04-07T13:55:39.135Z",
+      "evaluatedAt": "2026-04-07T20:44:05.705Z",
       "schemaVersion": 1,
       "recommendations": [
         {
@@ -12,7 +388,7 @@
           "topic": "Copilot CLI Runtime Governance and Extension Control",
           "summary": "Copilot CLI Runtime Governance and Extension Control",
           "implementationStatus": "pending",
-          "benchmarkScore": null,
+          "benchmarkScore": 1,
           "capacityGain": null,
           "evidence": ""
         },
@@ -21,7 +397,7 @@
           "topic": "Temporal Patterns for Durable Cadence, Serialization, and External Completion",
           "summary": "Temporal Patterns for Durable Cadence, Serialization, and External Completion",
           "implementationStatus": "pending",
-          "benchmarkScore": null,
+          "benchmarkScore": 1,
           "capacityGain": null,
           "evidence": ""
         },
@@ -30,7 +406,7 @@
           "topic": "LangGraph-Inspired State, Replay, and Hierarchical Routing Patterns",
           "summary": "LangGraph-Inspired State, Replay, and Hierarchical Routing Patterns",
           "implementationStatus": "pending",
-          "benchmarkScore": null,
+          "benchmarkScore": 1,
           "capacityGain": null,
           "evidence": ""
         }

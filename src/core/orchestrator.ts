@@ -6004,6 +6004,35 @@ function _buildCiContextBlock(data: {
   ].join("\n");
 }
 
+function _readCiEvidenceFromPlan(plan: any): {
+  source: string;
+  headSha: string;
+  failedTestIds: string[];
+  errors: string[];
+  stacks: string[];
+} | null {
+  const evidence = plan?.ciFailureEvidence;
+  if (!evidence || typeof evidence !== "object") return null;
+  const failedTestIds = Array.isArray(evidence.failedTestIdentifiers)
+    ? evidence.failedTestIdentifiers.map((v: unknown) => String(v || "").trim()).filter(Boolean)
+    : [];
+  const errors = Array.isArray(evidence.errorMessages)
+    ? evidence.errorMessages.map((v: unknown) => String(v || "").trim()).filter(Boolean)
+    : [];
+  const stacks = Array.isArray(evidence.stackTraces)
+    ? evidence.stackTraces.map((v: unknown) => String(v || "").trim()).filter(Boolean)
+    : [];
+  if (failedTestIds.length === 0 && errors.length === 0 && stacks.length === 0) return null;
+  const headSha = String(evidence.headSha || plan?.githubCiContext?.failedCiRuns?.[0]?.headSha || "");
+  return {
+    source: String(evidence.source || "mandatory_ci_findings"),
+    headSha,
+    failedTestIds,
+    errors,
+    stacks,
+  };
+}
+
 /**
  * Injects deterministic CI failure evidence into a worker context string for
  * ci-fix tasks.  Fetches GitHub Actions job logs for the failed run identified
@@ -6017,6 +6046,12 @@ export async function appendCiFixContext(
   plan: any,
   baseContext: string,
 ): Promise<string> {
+  const packetEvidence = _readCiEvidenceFromPlan(plan);
+  if (packetEvidence) {
+    const block = _buildCiContextBlock(packetEvidence);
+    return baseContext ? `${baseContext}\n\n${block}` : block;
+  }
+
   const failedCiRuns = plan?.githubCiContext?.failedCiRuns;
   if (!Array.isArray(failedCiRuns) || failedCiRuns.length === 0) return baseContext;
 

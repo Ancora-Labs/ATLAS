@@ -59,6 +59,8 @@ import {
   getPacketThresholdsForLane,
   scanParsedOutputForProcessThought,
   OUTPUT_FIDELITY_GATE_FAIL_REASON,
+  isCiCriticalMandatoryFinding,
+  extractCiEvidenceFromMandatoryFinding,
 } from "./plan_contract_validator.js";
 import {
   section,
@@ -492,6 +494,95 @@ export function applyMandatoryCoverageEnforceReject(
   };
   next.plans = [];
   return next;
+}
+
+function isCiFixPlan(plan: unknown): boolean {
+  if (!plan || typeof plan !== "object") return false;
+  const entry = plan as Record<string, unknown>;
+  const taskKind = String(entry.taskKind || entry.kind || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
+  if (taskKind === "ci-fix") return true;
+  const text = `${String(entry.task || "")} ${String(entry.title || "")}`.toLowerCase();
+  return /\bci[-_\s]?fix\b/.test(text);
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values) {
+    const value = String(raw || "").trim();
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+}
+
+export function enforceCiRepairPacketForMandatoryFindings(
+  payload: any,
+  mandatoryFindings: MandatoryHealthAuditFinding[],
+): { output: any; injected: boolean; findingIds: string[] } {
+  const output = (payload && typeof payload === "object") ? payload : {};
+  const findings = Array.isArray(mandatoryFindings) ? mandatoryFindings.filter(isCiCriticalMandatoryFinding) : [];
+  if (findings.length === 0) {
+    return { output, injected: false, findingIds: [] };
+  }
+
+  if (!Array.isArray(output.plans)) output.plans = [];
+  const findingIds = findings.map((finding) => finding.id);
+  const evidence = findings.map(extractCiEvidenceFromMandatoryFinding);
+  const failedTestIdentifiers = uniqueStrings(evidence.flatMap((entry) => entry.failedTestIdentifiers));
+  const errorMessages = uniqueStrings(evidence.flatMap((entry) => entry.errorMessages));
+  const stackTraces = uniqueStrings(evidence.flatMap((entry) => entry.stackTraces));
+  const ciFailureEvidence = {
+    source: "mandatory_ci_findings",
+    findingIds,
+    failedTestIdentifiers,
+    errorMessages,
+    stackTraces,
+  };
+
+  const existingIndex = output.plans.findIndex((plan: unknown) => isCiFixPlan(plan));
+  if (existingIndex >= 0) {
+    const existing = (output.plans[existingIndex] && typeof output.plans[existingIndex] === "object")
+      ? output.plans[existingIndex]
+      : {};
+    output.plans[existingIndex] = {
+      ...existing,
+      taskKind: "ci-fix",
+      wave: 1,
+      ciFailureEvidence,
+      githubCiContext: (existing as any).githubCiContext || output.githubCiContext,
+    };
+    return { output, injected: false, findingIds };
+  }
+
+  output.plans.push({
+    role: "evolution-worker",
+    wave: 1,
+    taskKind: "ci-fix",
+    task: `Build explicit CI repair packet from mandatory CI-critical findings: ${findingIds.join(", ")}`,
+    target_files: [
+      "src/core/prometheus.ts",
+      "src/core/orchestrator.ts",
+      "tests/core/prometheus_parse.test.ts",
+      "tests/core/orchestrator_ci_fix_context.test.ts",
+    ],
+    scope: "ci",
+    dependencies: [],
+    acceptance_criteria: [
+      "Worker context includes deterministic CI_FAILURE_CONTEXT with concrete failing evidence from mandatory findings or CI logs.",
+      "CI repair packet remains on wave 1 and preserves required CI metadata for dispatch hydration.",
+    ],
+    verification: "tests/core/prometheus_parse.test.ts — test: forces wave-1 ci-fix packet construction from CI-critical findings",
+    capacityDelta: 0.1,
+    requestROI: 1.1,
+    estimatedExecutionTokens: 4000,
+    ciFailureEvidence,
+    githubCiContext: output.githubCiContext,
+  });
+  return { output, injected: true, findingIds };
 }
 
 function sanitizePromptLine(value: unknown, maxLen = 220): string {
@@ -5373,41 +5464,22 @@ Mandatory requirements:
   }
 
   // ── CI-fix structural injection guard ────────────────────────────────────────
-  // If any mandatory finding linked to CI failures was excluded by the LLM under a
-  // passing coverage gate, inject a skeleton ci-fix plan directly. The finding's
-  // presence in health_audit_findings.json is sufficient evidence that CI was failing
-  // at audit time — Jesus only writes CI findings when CI failures are active.
-  if (
-    Array.isArray((rawParsedInput._mandatoryTaskCoverageGate as any)?.excluded) &&
-    (rawParsedInput._mandatoryTaskCoverageGate as any)?.ok === true
-  ) {
-    const excludedGateIds = new Set<string>((rawParsedInput._mandatoryTaskCoverageGate as any).excluded as string[]);
-    const excludedCiFindings = mandatoryFindings.filter(
-      (f) =>
-        excludedGateIds.has(f.id) &&
-        (f.area === "ci" || /ci[.\-_]?fix/i.test(f.capabilityNeeded) || /ci[.\-_]?fail/i.test(String(f.finding))),
+  // Force a deterministic wave-1 ci-fix packet whenever CI-critical mandatory
+  // findings exist. The packet carries concrete failure evidence extracted from
+  // findings so dispatch can hydrate CI_FAILURE_CONTEXT even when external logs
+  // are unavailable.
+  const ciRepairEnforcement = enforceCiRepairPacketForMandatoryFindings(rawParsedInput, mandatoryFindings);
+  rawParsedInput = ciRepairEnforcement.output;
+  if (ciRepairEnforcement.findingIds.length > 0) {
+    await appendProgress(
+      config,
+      `[PROMETHEUS][CI_FIX_ENFORCED] ${ciRepairEnforcement.injected ? "Injected" : "Enriched"} wave-1 ci-fix packet from mandatory CI finding(s): ${ciRepairEnforcement.findingIds.join(", ")}`
     );
-    if (excludedCiFindings.length > 0) {
-      if (!Array.isArray(rawParsedInput.plans)) rawParsedInput.plans = [];
-      rawParsedInput.plans.push({
-        role: "evolution-worker",
-        wave: 1,
-        task: `Fix CI failures — auto-injected because mandatory CI finding(s) were excluded: ${excludedCiFindings.map((f) => f.id).join(", ")}`,
-        target_files: [] as unknown as string[],
-        scope: "ci",
-        acceptance_criteria: ["CI passes on main branch"],
-        estimatedExecutionTokens: 4000,
-      });
-      await appendProgress(
-        config,
-        `[PROMETHEUS][CI_FIX_INJECTED] Injected ci-fix skeleton plan — excluded CI mandatory finding(s): ${excludedCiFindings.map((f) => f.id).join(", ")}`,
-      );
-      await recordCapabilityExecution(
-        config,
-        "ci-failure-log-injection",
-        `injected=1 excludedCiFindings=${excludedCiFindings.map((f) => f.id).join(",")}`,
-      );
-    }
+    await recordCapabilityExecution(
+      config,
+      "ci-failure-log-injection",
+      `enforced=1 injected=${ciRepairEnforcement.injected ? 1 : 0} mandatoryCiFindings=${ciRepairEnforcement.findingIds.join(",")}`,
+    );
   }
 
   // ── Execution-strategy role coverage gate (post-LLM, pre-Athena) ─────────────

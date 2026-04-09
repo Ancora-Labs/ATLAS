@@ -185,6 +185,84 @@ export const AMBIGUOUS_TASK_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
  */
 export const MANDATORY_EXCLUSION_JUSTIFICATION_MIN_LENGTH = 12;
 
+const CI_CRITICAL_AREA_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /^ci$/,
+  /continuous[\s_-]?integration/i,
+  /github[\s_-]?actions/i,
+  /\bbuild\b/i,
+  /\btest(?:s|ing)?\b/i,
+]);
+
+const CI_CRITICAL_TEXT_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bci(?:[\s._-]?fix|[\s._-]?failure|[\s._-]?fail(?:ing|ed)?)\b/i,
+  /\bworkflow\b/i,
+  /\bpipeline\b/i,
+  /\bchecks?\b/i,
+]);
+
+export function isCiCriticalMandatoryFinding(finding: unknown): boolean {
+  if (!finding || typeof finding !== "object") return false;
+  const entry = finding as Record<string, unknown>;
+  const severity = String(entry.severity || "").trim().toLowerCase();
+  if (severity !== "critical") return false;
+
+  const area = String(entry.area || "").trim().toLowerCase();
+  const capability = String(entry.capabilityNeeded || "").trim().toLowerCase();
+  const text = `${String(entry.finding || "")}\n${String(entry.remediation || "")}`.toLowerCase();
+  return (
+    CI_CRITICAL_AREA_PATTERNS.some((pattern) => pattern.test(area))
+    || CI_CRITICAL_TEXT_PATTERNS.some((pattern) => pattern.test(capability))
+    || CI_CRITICAL_TEXT_PATTERNS.some((pattern) => pattern.test(text))
+  );
+}
+
+function collectUniqueMatches(text: string, matcher: RegExp): string[] {
+  const src = String(text || "");
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const match of src.matchAll(matcher)) {
+    const token = String(match[1] || match[0] || "").trim();
+    if (!token) continue;
+    const key = token.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(token);
+  }
+  return out;
+}
+
+export function extractCiEvidenceFromMandatoryFinding(finding: unknown): {
+  failedTestIdentifiers: string[];
+  errorMessages: string[];
+  stackTraces: string[];
+} {
+  if (!finding || typeof finding !== "object") {
+    return { failedTestIdentifiers: [], errorMessages: [], stackTraces: [] };
+  }
+  const entry = finding as Record<string, unknown>;
+  const text = `${String(entry.finding || "")}\n${String(entry.remediation || "")}`;
+
+  const failedTestIdentifiers = collectUniqueMatches(
+    text,
+    /\b(tests\/[A-Za-z0-9_./-]+\.(?:test|spec)\.[cm]?[jt]s)\b/g
+  );
+  const errorMessages = collectUniqueMatches(
+    text,
+    /(\b(?:\w+Error|AssertionError|TypeError|ReferenceError|SyntaxError):[^\n;]+)/g
+  );
+  const stackTraces = collectUniqueMatches(
+    text,
+    /(\bat\s+\S[^\n;]*)/g
+  );
+
+  if (errorMessages.length === 0) {
+    const fallback = String(entry.finding || "").trim();
+    if (fallback.length > 0) errorMessages.push(fallback);
+  }
+
+  return { failedTestIdentifiers, errorMessages, stackTraces };
+}
+
 export interface PacketDensityThresholds {
   minTargetFiles: number;
   minAcceptanceCriteria: number;

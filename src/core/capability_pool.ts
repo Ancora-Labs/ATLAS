@@ -186,6 +186,32 @@ export function inferCapabilityTag(plan) {
  * @returns {WorkerSelection}
  */
 export function selectWorkerForPlan(plan, config?, lanePerformance?: LanePerformanceLedger) {
+  const explicitRole = String(plan?.role || "").trim();
+  const explicitLane = explicitRole ? getLaneForWorkerName(explicitRole, "") : "";
+  if (explicitRole && explicitLane) {
+    return {
+      role: explicitRole,
+      lane: explicitLane,
+      reason: `Explicit planner role "${explicitRole}" preserved (lane "${explicitLane}")`,
+      isFallback: false,
+      performanceScore: getLaneScore(lanePerformance ?? {}, explicitLane),
+      rerouteReasonCode: null,
+    };
+  }
+
+  const explicitLaneKey = explicitRole.toLowerCase();
+  if (explicitRole && Object.prototype.hasOwnProperty.call(LANE_WORKER_NAMES, explicitLaneKey)) {
+    const canonicalRole = LANE_WORKER_NAMES[explicitLaneKey];
+    return {
+      role: canonicalRole,
+      lane: explicitLaneKey,
+      reason: `Explicit planner lane "${explicitRole}" normalized to worker "${canonicalRole}"`,
+      isFallback: false,
+      performanceScore: getLaneScore(lanePerformance ?? {}, explicitLaneKey),
+      rerouteReasonCode: null,
+    };
+  }
+
   const capTag = inferCapabilityTag(plan);
   const customMap = config?.workerPool?.capabilityMap;
   const mapping = customMap?.[capTag] || DEFAULT_CAPABILITY_MAP[capTag] || { lane: "implementation", fallback: "evolution-worker" };

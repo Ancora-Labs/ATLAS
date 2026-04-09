@@ -1728,6 +1728,25 @@ describe("validatePacketBatchAdmission", () => {
     const result = validatePacketBatchAdmission(null as any, 3);
     assert.equal(result.blocked, false);
   });
+
+  it("does not block when same role is split into Athena batches each under cap", () => {
+    const plans = [
+      { role: "evolution-worker", _batchWorkerRole: "evolution-worker", _batchIndex: 1, orderedSteps: ["a", "b"] },
+      { role: "evolution-worker", _batchWorkerRole: "evolution-worker", _batchIndex: 2, orderedSteps: ["c", "d"] },
+    ];
+    const result = validatePacketBatchAdmission(plans, 2);
+    assert.equal(result.blocked, false, "independent Athena batches under cap must pass");
+  });
+
+  it("blocks when an Athena role-batch itself exceeds cap", () => {
+    const plans = [
+      { role: "evolution-worker", _batchWorkerRole: "evolution-worker", _batchIndex: 1, orderedSteps: ["a", "b", "c"] },
+      { role: "evolution-worker", _batchWorkerRole: "evolution-worker", _batchIndex: 2, orderedSteps: ["d"] },
+    ];
+    const result = validatePacketBatchAdmission(plans, 2);
+    assert.equal(result.blocked, true);
+    assert.ok(result.reason?.includes("batch 1"), `reason must mention oversize batch; got: ${result.reason}`);
+  });
 });
 
 // ── buildTokenFirstBatches wave topology preservation (Task 3) ───────────────

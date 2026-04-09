@@ -191,4 +191,34 @@ describe("appendCiFixContext", () => {
     assert.ok(out.includes("..."), "long evidence must be truncated deterministically");
     assert.ok(!out.includes("should not win over github source"), "fallback source must not override higher-priority source");
   });
+
+  it("injects CI_FAILURE_CONTEXT from plan-carried mandatory finding evidence before external fetch", async () => {
+    let fetchCalls = 0;
+    mock.method(globalThis, "fetch", async () => {
+      fetchCalls += 1;
+      return { ok: false, status: 500 } as any;
+    });
+
+    const plan = {
+      taskKind: "ci-fix",
+      ciFailureEvidence: {
+        source: "mandatory_ci_findings",
+        headSha: "packetsha123",
+        failedTestIdentifiers: ["tests/core/packet_ci_failure.test.ts"],
+        errorMessages: ["AssertionError: expected 2 to equal 3"],
+        stackTraces: ["at run (tests/core/packet_ci_failure.test.ts:8:2)"],
+      },
+      githubCiContext: {
+        failedCiRuns: [{ runId: 123, headSha: "unusedsha" }],
+      },
+    };
+
+    const out = await appendCiFixContext(config, plan, "base context");
+    assert.ok(out.includes("## CI_FAILURE_CONTEXT"));
+    assert.ok(out.includes("commit_sha: packetsha123"));
+    assert.ok(out.includes("failed_test_identifiers: tests/core/packet_ci_failure.test.ts"));
+    assert.ok(out.includes("error_messages: AssertionError: expected 2 to equal 3"));
+    assert.ok(out.includes("source: mandatory_ci_findings"));
+    assert.equal(fetchCalls, 0, "plan-carried evidence should bypass external CI fetch");
+  });
 });

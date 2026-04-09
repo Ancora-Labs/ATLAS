@@ -56,6 +56,7 @@ import {
   validateCycleProofEvidenceSeams,
   buildTrustedMemoryShortlist,
   normalizeScalarContractField,
+  enforceCiRepairPacketForMandatoryFindings,
   isResearchDegradedModeActive,
   sanitizePlanningFieldForPersistence,
   STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH,
@@ -80,6 +81,8 @@ import {
   filterQuarantinedPlans,
   isPacketQuarantined,
   QUARANTINE_CONFIDENCE_THRESHOLD as PCV_QUARANTINE_THRESHOLD,
+  isCiCriticalMandatoryFinding,
+  extractCiEvidenceFromMandatoryFinding,
 } from "../../src/core/plan_contract_validator.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -4109,6 +4112,98 @@ describe("health-audit mandatory task injection contract", () => {
     });
     assert.ok(diff.includes("missing=[none]"));
     assert.ok(diff.includes("invalid=[none]"));
+  });
+
+  it("forces a wave-1 ci-fix packet when CI-critical mandatory findings exist", () => {
+    const payload: any = {
+      githubCiContext: {
+        failedCiRuns: [{ runId: 123, headSha: "abc123" }],
+      },
+      plans: [],
+    };
+    const findings: any[] = [
+      {
+        id: "ci-failure-1",
+        area: "ci",
+        severity: "critical",
+        finding: "TypeError: expected true to be false in tests/core/ci_gate.test.ts",
+        remediation: "at Object.<anonymous> (tests/core/ci_gate.test.ts:12:4)",
+        capabilityNeeded: "ci-fix-packet",
+      },
+    ];
+
+    const enforced = enforceCiRepairPacketForMandatoryFindings(payload, findings as any);
+    assert.equal(enforced.injected, true);
+    const ciPlan = enforced.output.plans.find((plan: any) => plan.taskKind === "ci-fix");
+    assert.ok(ciPlan, "ci-fix plan must be injected");
+    assert.equal(ciPlan.wave, 1, "ci-fix packet must be forced into wave 1");
+    assert.equal(ciPlan.githubCiContext.failedCiRuns[0].headSha, "abc123");
+    assert.ok(ciPlan.ciFailureEvidence.errorMessages.some((msg: string) => msg.includes("TypeError")));
+    assert.ok(ciPlan.ciFailureEvidence.failedTestIdentifiers.includes("tests/core/ci_gate.test.ts"));
+  });
+
+  it("enriches an existing ci-fix packet without duplication (negative path)", () => {
+    const payload: any = {
+      plans: [
+        {
+          task: "Fix CI failures",
+          taskKind: "ci-fix",
+          wave: 3,
+          ciFailureEvidence: { errorMessages: ["old"] },
+        },
+      ],
+    };
+    const findings: any[] = [
+      {
+        id: "ci-failure-1",
+        area: "ci",
+        severity: "critical",
+        finding: "AssertionError: expected 1 to equal 2",
+        remediation: "FAIL tests/core/failure.test.ts",
+        capabilityNeeded: "ci-fix",
+      },
+    ];
+
+    const enforced = enforceCiRepairPacketForMandatoryFindings(payload, findings as any);
+    assert.equal(enforced.injected, false);
+    assert.equal(enforced.output.plans.length, 1, "existing packet should be enriched, not duplicated");
+    assert.equal(enforced.output.plans[0].wave, 1, "existing ci-fix packet must be moved to wave 1");
+    assert.ok(enforced.output.plans[0].ciFailureEvidence.errorMessages.some((m: string) => m.includes("AssertionError")));
+  });
+
+  it("negative path: does not force ci-fix packet for non-CI mandatory findings", () => {
+    const payload: any = { plans: [] };
+    const findings: any[] = [
+      {
+        id: "memory-critical-1",
+        area: "memory",
+        severity: "critical",
+        finding: "Memory snapshots are stale",
+        remediation: "Refresh carry-forward summarization",
+        capabilityNeeded: "memory-refresh",
+      },
+    ];
+
+    const enforced = enforceCiRepairPacketForMandatoryFindings(payload, findings as any);
+    assert.equal(enforced.injected, false);
+    assert.equal(enforced.output.plans.length, 0);
+  });
+
+  it("detects CI-critical mandatory finding and extracts concrete evidence", () => {
+    const finding: any = {
+      id: "ci-failure-2",
+      area: "continuous-integration",
+      severity: "critical",
+      finding: "TypeError: boom on tests/core/ci_gate.test.ts",
+      remediation: "at Runner.run (tests/core/ci_gate.test.ts:42:9)",
+      capabilityNeeded: "ci-fix",
+    };
+
+    assert.equal(isCiCriticalMandatoryFinding(finding), true);
+    const evidence = extractCiEvidenceFromMandatoryFinding(finding);
+    assert.ok(evidence.failedTestIdentifiers.includes("tests/core/ci_gate.test.ts"));
+    assert.ok(evidence.errorMessages.some((msg) => msg.includes("TypeError: boom")));
+    assert.ok(evidence.stackTraces.some((line) => line.includes("at Runner.run")));
   });
 });
 

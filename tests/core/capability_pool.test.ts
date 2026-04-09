@@ -50,6 +50,30 @@ describe("capability_pool", () => {
       assert.equal(selection.isFallback, false);
     });
 
+    it("preserves explicit evolution-worker role even when task text looks like test-infra", () => {
+      const plan = { task: "Add tests for parser timeout handling", role: "evolution-worker" };
+      const selection = selectWorkerForPlan(plan);
+      assert.equal(selection.role, "evolution-worker");
+      assert.equal(selection.lane, "implementation");
+      assert.match(selection.reason, /Explicit planner role/i);
+    });
+
+    it("preserves explicit quality-worker role for test plans", () => {
+      const plan = { task: "Add tests for parser timeout handling", role: "quality-worker" };
+      const selection = selectWorkerForPlan(plan);
+      assert.equal(selection.role, "quality-worker");
+      assert.equal(selection.lane, "quality");
+      assert.match(selection.reason, /Explicit planner role/i);
+    });
+
+    it("normalizes explicit lane labels to canonical worker names", () => {
+      const plan = { task: "Enforce governance freeze gate", role: "governance" };
+      const selection = selectWorkerForPlan(plan);
+      assert.equal(selection.role, "governance-worker");
+      assert.equal(selection.lane, "governance");
+      assert.match(selection.reason, /normalized to worker/i);
+    });
+
     it("governance task routes to governance-worker", () => {
       const plan = { task: "Update governance freeze policy rules" };
       const selection = selectWorkerForPlan(plan);
@@ -104,6 +128,16 @@ describe("capability_pool", () => {
       ];
       const result = assignWorkersToPlans(plans);
       assert.ok(typeof result.diversityIndex === "number");
+    });
+
+    it("retains multi-lane topology for mixed explicit roles", () => {
+      const plans = [
+        { task: "Add tests around planner", role: "evolution-worker" },
+        { task: "Add tests around reviewer", role: "quality-worker" },
+      ];
+      const result = assignWorkersToPlans(plans);
+      assert.equal(result.activeLaneCount, 2);
+      assert.equal(result.diversityCheck.meetsMinimum, true);
     });
   });
 
@@ -505,6 +539,18 @@ describe("capability_pool — lane diversity threshold enforcement", () => {
       assert.equal(result.diversityCheck.meetsMinimum, false);
       assert.ok(/minimum is 5/i.test(result.diversityCheck.warning),
         "warning must cite the minimum threshold");
+    });
+
+    it("keeps distinct lanes when plans use lane labels instead of worker names", () => {
+      const plans = [
+        { role: "governance", task: "Harden policy gate" },
+        { role: "quality", task: "Add regression tests" },
+      ];
+      const result = assignWorkersToPlans(plans);
+      assert.equal(result.activeLaneCount, 2);
+      assert.equal(result.laneCounts.governance, 1);
+      assert.equal(result.laneCounts.quality, 1);
+      assert.equal(result.diversityCheck.meetsMinimum, true);
     });
 
     it("diversityThreshold=0 always passes (diversity check disabled)", () => {

@@ -70,9 +70,18 @@ export function parseSynthesisTopics(rawText: string): Array<Record<string, unkn
 
   for (const block of blocks) {
     const topic: Record<string, unknown> = {};
+    // Normalize common heading punctuation variants so downstream regexes stay stable.
+    // Examples:
+    //   **Scout's Findings:**  -> **Scout's Findings**:
+    //   Scout’s               -> Scout's
+    //   Prometheus‑Ready      -> Prometheus-Ready
+    const normalizedBlock = block
+      .replace(/\*\*([^*\n]+?):\*\*/g, "**$1**:")
+      .replace(/[’]/g, "'")
+      .replace(/[‐‑‒–—]/g, "-");
 
     // Topic name is the first line
-    const firstLine = block.split("\n")[0]?.trim();
+    const firstLine = normalizedBlock.split("\n")[0]?.trim();
     if (firstLine) topic.topic = firstLine;
 
     // Skip synthesis header/preamble artefacts that can appear before first real topic.
@@ -81,59 +90,60 @@ export function parseSynthesisTopics(rawText: string): Array<Record<string, unkn
     }
 
     // ── New librarian format: Topic Metadata ──
-    const freshnessMatch = block.match(/\*?\*?Freshness\*?\*?:\s*(.+)/i);
+    const freshnessMatch = normalizedBlock.match(/\*?\*?Freshness\*?\*?:\s*(.+)/i);
     if (freshnessMatch) topic.freshness = freshnessMatch[1].trim();
 
-    const avgConfMatch = block.match(/\*?\*?Average\s*Confidence\*?\*?:\s*([\d.]+)/i);
+    const avgConfMatch = normalizedBlock.match(/\*?\*?Average\s*Confidence\*?\*?:\s*([\d.]+)/i);
     if (avgConfMatch) topic.confidence = avgConfMatch[1].trim();
 
-    const srcCountMatch = block.match(/\*?\*?Source\s*Count\*?\*?:\s*(\d+)/i);
+    const srcCountMatch = normalizedBlock.match(/\*?\*?Source\s*Count\*?\*?:\s*(\d+)/i);
     if (srcCountMatch) topic.sourceCount = parseInt(srcCountMatch[1], 10);
 
     // ── Parse individual sources within this topic ──
-    const sourceBlocks = block.split(/###\s+/).filter(b => b.trim());
+    const sourceBlocks = normalizedBlock.split(/###\s+/).filter(b => b.trim());
     const sources: Array<Record<string, unknown>> = [];
     for (const sb of sourceBlocks) {
+      const normalizedSb = sb.replace(/\*\*([^*\n]+?):\*\*/g, "**$1**:");
       const source: Record<string, unknown> = {};
-      const sbFirstLine = sb.split("\n")[0]?.trim();
+      const sbFirstLine = normalizedSb.split("\n")[0]?.trim();
       if (!sbFirstLine) continue;
       source.title = sbFirstLine;
 
-      const urlMatch = sb.match(/[-*]*\s*URL:\s*(.+)/i);
+      const urlMatch = normalizedSb.match(/[-*]*\s*URL:\s*(.+)/i);
       if (urlMatch) source.url = urlMatch[1].trim();
 
-      const dateMatch = sb.match(/[-*]*\s*Date:\s*(.+)/i);
+      const dateMatch = normalizedSb.match(/[-*]*\s*Date:\s*(.+)/i);
       if (dateMatch) source.date = dateMatch[1].trim();
 
-      const confMatch = sb.match(/[-*]*\s*Confidence:\s*([\d.]+)/i);
+      const confMatch = normalizedSb.match(/[-*]*\s*Confidence:\s*([\d.]+)/i);
       if (confMatch) source.confidence = parseFloat(confMatch[1]);
 
-      const dupMatch = sb.match(/[-*]*\s*isDuplicate:\s*(true|false)/i);
+      const dupMatch = normalizedSb.match(/[-*]*\s*isDuplicate:\s*(true|false)/i);
       if (dupMatch) source.isDuplicate = dupMatch[1].toLowerCase() === "true";
 
       // Extracted Content: grab everything after the marker until next ### or end
-      const ecMatch = sb.match(/\*?\*?Extracted\s*Content\*?\*?:\s*\n([\s\S]*?)(?=\n---|\n###|$)/i);
+      const ecMatch = normalizedSb.match(/\*?\*?Extracted\s*Content\*?\*?:\s*\n([\s\S]*?)(?=\n---|\n###|$)/i);
       if (ecMatch) {
         source.extractedContent = ecMatch[1].trim();
       }
 
       // New enricher format: Scout's Findings (verbatim), Synthesizer Enrichment, Prometheus-Ready Summary
-      const scoutFindingsMatch = sb.match(/\*?\*?Scout'?s?\s*Findings\*?\*?:\s*\n([\s\S]*?)(?=\n\*?\*?Synthesizer\s*Enrichment\b|\n---\s*\n|\n###|$)/i);
+      const scoutFindingsMatch = normalizedSb.match(/\*?\*?Scout(?:'|’)?s?\s*Findings\*?\*?:\s*(?:\n|\r\n)?([\s\S]*?)(?=\n\*?\*?Synthesizer\s*Enrichment\b|\n---\s*\n|\n###|$)/i);
       if (scoutFindingsMatch) {
         source.scoutFindings = scoutFindingsMatch[1].trim();
       }
 
-      const enrichmentMatch = sb.match(/\*?\*?Synthesizer\s*Enrichment\*?\*?:\s*\n([\s\S]*?)(?=\n\*?\*?Prometheus-?Ready\s*Summary\b|\n---\s*\n|\n###|$)/i);
+      const enrichmentMatch = normalizedSb.match(/\*?\*?Synthesizer\s*Enrichment\*?\*?:\s*(?:\n|\r\n)?([\s\S]*?)(?=\n\*?\*?Prometheus[-‑–—]?Ready\s*Summary\b|\n---\s*\n|\n###|$)/i);
       if (enrichmentMatch) {
         source.synthesizerEnrichment = enrichmentMatch[1].trim();
       }
 
-      const prometheusMatch = sb.match(/\*?\*?Prometheus-?Ready\s*Summary\*?\*?:\s*\n([\s\S]*?)(?=\n---\s*\n|\n###|$)/i);
+      const prometheusMatch = normalizedSb.match(/\*?\*?Prometheus[-‑–—]?Ready\s*Summary\*?\*?:\s*(?:\n|\r\n)?([\s\S]*?)(?=\n---\s*\n|\n###|$)/i);
       if (prometheusMatch) {
         source.prometheusReadySummary = prometheusMatch[1].trim();
       }
 
-      const ktMatch = sb.match(/[-*]*\s*Knowledge\s*Type:\s*(.+)/i);
+      const ktMatch = normalizedSb.match(/[-*]*\s*Knowledge\s*Type:\s*(.+)/i);
       if (ktMatch) source.knowledgeType = ktMatch[1].trim().toLowerCase();
 
       const hasMeaningfulPayload = Boolean(
@@ -153,7 +163,7 @@ export function parseSynthesisTopics(rawText: string): Array<Record<string, unkn
     }
 
     // ── Legacy format support: Net Findings / Applicable Ideas ──
-    const findingsMatch = block.match(/\*?\*?Net\s*Findings\*?\*?:\s*\n([\s\S]*?)(?=\n\*?\*?Applicable|$)/i);
+    const findingsMatch = normalizedBlock.match(/\*?\*?Net\s*Findings\*?\*?:\s*\n([\s\S]*?)(?=\n\*?\*?Applicable|$)/i);
     if (findingsMatch) {
       topic.netFindings = findingsMatch[1]
         .split("\n")
@@ -161,7 +171,7 @@ export function parseSynthesisTopics(rawText: string): Array<Record<string, unkn
         .filter(l => l.length > 0);
     }
 
-    const ideasMatch = block.match(/\*?\*?Applicable\s*Ideas\s*for\s*BOX\*?\*?:\s*\n([\s\S]*?)(?=\n\*?\*?Risks|$)/i);
+    const ideasMatch = normalizedBlock.match(/\*?\*?Applicable\s*Ideas\s*for\s*BOX\*?\*?:\s*\n([\s\S]*?)(?=\n\*?\*?Risks|$)/i);
     if (ideasMatch) {
       topic.applicableIdeas = ideasMatch[1]
         .split("\n")
@@ -169,7 +179,7 @@ export function parseSynthesisTopics(rawText: string): Array<Record<string, unkn
         .filter(l => l.length > 0);
     }
 
-    const risksMatch = block.match(/\*?\*?Risks\*?\*?:\s*\n([\s\S]*?)(?=\n\*?\*?Conflicting|$)/i);
+    const risksMatch = normalizedBlock.match(/\*?\*?Risks\*?\*?:\s*\n([\s\S]*?)(?=\n\*?\*?Conflicting|$)/i);
     if (risksMatch) {
       topic.risks = risksMatch[1]
         .split("\n")
@@ -177,7 +187,7 @@ export function parseSynthesisTopics(rawText: string): Array<Record<string, unkn
         .filter(l => l.length > 0);
     }
 
-    const conflictsMatch = block.match(/\*?\*?Conflicting\s*Views\*?\*?:\s*\n([\s\S]*?)(?=\n\*?\*?Confidence|$)/i);
+    const conflictsMatch = normalizedBlock.match(/\*?\*?Conflicting\s*Views\*?\*?:\s*\n([\s\S]*?)(?=\n\*?\*?Confidence|$)/i);
     if (conflictsMatch) {
       topic.conflictingViews = conflictsMatch[1]
         .split("\n")
@@ -187,13 +197,13 @@ export function parseSynthesisTopics(rawText: string): Array<Record<string, unkn
 
     // Legacy confidence field (if not already set by new format)
     if (!topic.confidence) {
-      const legacyConfMatch = block.match(/\*?\*?Confidence\*?\*?:\s*(.+)/i);
+      const legacyConfMatch = normalizedBlock.match(/\*?\*?Confidence\*?\*?:\s*(.+)/i);
       if (legacyConfMatch) topic.confidence = legacyConfMatch[1].trim();
     }
 
     // Legacy sources list (if not already set by new format)
     if (!topic.sourceList) {
-      const sourcesMatch = block.match(/\*?\*?Sources\*?\*?:\s*\n([\s\S]*?)(?=\n##|$)/i);
+      const sourcesMatch = normalizedBlock.match(/\*?\*?Sources\*?\*?:\s*\n([\s\S]*?)(?=\n##|$)/i);
       if (sourcesMatch) {
         topic.sourceList = sourcesMatch[1]
           .split("\n")
