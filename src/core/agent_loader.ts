@@ -437,7 +437,7 @@ export function validateAllAgentContracts(): {
   results: AgentContractValidation[];
   violations: AgentContractValidation[];
 } {
-  let slugs: string[] = [];
+  let slugs: string[];
   try {
     slugs = readdirSync(AGENTS_DIR)
       .filter(f => f.endsWith(".agent.md"))
