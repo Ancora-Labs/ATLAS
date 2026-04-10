@@ -1871,7 +1871,6 @@ describe("pipeline progress — terminology drift prevention (stage IDs)", () =>
       DEPENDENCY_READINESS_INCOMPLETE:"dependency_readiness_incomplete",
       ROLLING_YIELD_THROTTLE:         "rolling_yield_throttle",
       SPECIALIZATION_ADMISSION_GATE:  "specialization_admission_gate_failed",
-      PENDING_CI_REPAIR:              "pending_ci_repair",
       OVERSIZED_PACKET:               "packet_exceeds_actionable_steps_cap",
     };
 
