@@ -101,6 +101,7 @@ export function buildAgentArgs({
   noAskUser = false,
   silent = false,
   maxContinues = undefined,
+  runContract = undefined,
 }: any = {}) {
   const args = [];
 
@@ -122,7 +123,9 @@ export function buildAgentArgs({
   if (noAskUser) args.push("--no-ask-user");
   if (autopilot) {
     args.push("--autopilot");
-    if (maxContinues != null) args.push("--max-autopilot-continues", String(maxContinues));
+    // runContract.maxTurns takes precedence over the legacy maxContinues arg.
+    const effectiveMaxContinues = runContract?.maxTurns ?? maxContinues;
+    if (effectiveMaxContinues != null) args.push("--max-autopilot-continues", String(effectiveMaxContinues));
   }
   if (silent) args.push("--silent");
 

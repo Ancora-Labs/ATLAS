@@ -424,6 +424,10 @@ function determineClass(input) {
  *   @param {string}  [input.stackTrace]            — optional: stack trace
  *   @param {string[]}[input.logLines]              — optional: relevant log lines (max 10)
  *   @param {string}  [input.taskId]                — optional: task identifier
+ *   @param {object}  [input.attemptMeta]           — optional: attempt-scoped metadata
+ *     @param {string}  [input.attemptMeta.runId]          — short hex run identifier
+ *     @param {number}  [input.attemptMeta.attempt]         — zero-based attempt index
+ *     @param {string}  [input.attemptMeta.firstAttemptAt]  — ISO timestamp of first attempt
  *
  * @returns {{ ok: true, classification: ClassificationResult } |
  *           { ok: false, code: string, field?: string, message: string }}
@@ -436,6 +440,14 @@ export function classifyFailure(input) {
 
   const { primaryClass, confidence } = determineClass(input);
 
+  const attemptMeta: AttemptMeta | null = input.attemptMeta && typeof input.attemptMeta === "object"
+    ? {
+        runId:          input.attemptMeta.runId != null ? String(input.attemptMeta.runId) : undefined,
+        attempt:        Number.isFinite(Number(input.attemptMeta.attempt)) ? Number(input.attemptMeta.attempt) : undefined,
+        firstAttemptAt: input.attemptMeta.firstAttemptAt != null ? String(input.attemptMeta.firstAttemptAt) : undefined,
+      }
+    : null;
+
   const classification = {
     schemaVersion:     FAILURE_CLASSIFIER_SCHEMA_VERSION,
     classifierVersion: CLASSIFIER_TAXONOMY_VERSION,
@@ -443,6 +455,7 @@ export function classifyFailure(input) {
     primaryClass,
     confidence,
     flagged:           confidence < LOW_CONFIDENCE_THRESHOLD,
+    attemptMeta,
     evidence: {
       error_message:         String(input.errorMessage || ""),
       stack_trace:           String(input.stackTrace || ""),
@@ -638,14 +651,26 @@ export interface FailureEnvelope {
   classification: Record<string, unknown> | null;
   /** Adaptive retry decision — null when retry resolution was not attempted. */
   retryDecision: Record<string, unknown> | null;
+  /** Attempt-scoped execution metadata for replay tracing. */
+  attemptMeta: AttemptMeta | null;
   /** ISO timestamp when this envelope was assembled. */
   resolvedAt: string;
+}
+
+/** Attempt-scoped metadata attached to failure envelopes for deterministic replay tracing. */
+export interface AttemptMeta {
+  /** Short hex run identifier derived from taskId + attempt + timestamp. */
+  runId?: string;
+  /** Zero-based attempt index (0 = first attempt). */
+  attempt?: number;
+  /** ISO timestamp of the first attempt in this lineage. */
+  firstAttemptAt?: string;
 }
 
 /** Lightweight schema descriptor for validation consumers. */
 export const FAILURE_ENVELOPE_SCHEMA = Object.freeze({
   schemaVersion: FAILURE_ENVELOPE_SCHEMA_VERSION,
-  required: ["schemaVersion", "envelopeId", "taskId", "terminationCause", "classification", "retryDecision", "resolvedAt"] as const,
+  required: ["schemaVersion", "envelopeId", "taskId", "terminationCause", "classification", "retryDecision", "attemptMeta", "resolvedAt"] as const,
   terminationCauses: Object.values(TERMINATION_CAUSE),
 });
 
@@ -660,12 +685,14 @@ export const FAILURE_ENVELOPE_SCHEMA = Object.freeze({
  * @param retryDecision   - output of resolveRetryAction().decision (or null)
  * @param terminationCause - one of TERMINATION_CAUSE values
  * @param taskId          - task identifier, or null when not available
+ * @param attemptMeta     - optional attempt-scoped metadata for replay tracing
  */
 export function buildFailureEnvelope(
   classification: Record<string, unknown> | null,
   retryDecision: Record<string, unknown> | null,
   terminationCause: TerminationCause,
   taskId?: string | null,
+  attemptMeta?: AttemptMeta | null,
 ): FailureEnvelope {
   try {
     const cause: TerminationCause = Object.values(TERMINATION_CAUSE).includes(terminationCause as any)
@@ -682,6 +709,7 @@ export function buildFailureEnvelope(
       terminationCause: cause,
       classification: classification ?? null,
       retryDecision: retryDecision ?? null,
+      attemptMeta: attemptMeta ?? null,
       resolvedAt: new Date().toISOString(),
     };
   } catch (err) {
@@ -693,6 +721,7 @@ export function buildFailureEnvelope(
       terminationCause: terminationCause ?? TERMINATION_CAUSE.ERROR,
       classification: null,
       retryDecision: null,
+      attemptMeta: attemptMeta ?? null,
       resolvedAt: new Date().toISOString(),
       ...(({ buildError: String((err as any)?.message || err) }) as any),
     };

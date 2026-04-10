@@ -5,6 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import {
   parseWorkerResponse,
+  deriveDeterministicCleanTreeEvidence,
   detectRepoContamination,
   attemptBranchCleanlinessRecovery,
   shouldEnableFullToolAccess,
@@ -13,6 +14,7 @@ import {
   applyMemoryTrustFilter,
   computeMemoryHitRatio,
   isTerminalWorkerStatus,
+  shouldResolveRecoveredWorkerEscalations,
 } from "../../src/core/worker_runner.js";
 import { isProcessAlive } from "../../src/core/daemon_control.js";
 import { buildRoutingROISummary } from "../../src/core/cycle_analytics.js";
@@ -172,6 +174,38 @@ describe("parseWorkerResponse", () => {
   });
 });
 
+describe("deriveDeterministicCleanTreeEvidence", () => {
+  it("returns global clean evidence when repo status is empty", () => {
+    const result = deriveDeterministicCleanTreeEvidence("", "", ["src/core/orchestrator.ts"]);
+    assert.equal(result.mode, "global");
+    assert.deepEqual(result.lines, ["CLEAN_TREE_STATUS=clean"]);
+  });
+
+  it("returns task-scoped clean evidence when repo is dirty but task targets are clean", () => {
+    const result = deriveDeterministicCleanTreeEvidence(
+      " M state/progress.txt\n",
+      "",
+      ["src/core/orchestrator.ts", "tests/core/orchestrator_runtime_contracts.test.ts"],
+    );
+    assert.equal(result.mode, "task-scoped");
+    assert.deepEqual(result.lines, [
+      "CLEAN_TREE_STATUS=dirty-other-tasks-only",
+      "TASK_SCOPED_CLEAN_STATUS=clean",
+      "TASK_SCOPED_CLEAN_TARGETS=src/core/orchestrator.ts, tests/core/orchestrator_runtime_contracts.test.ts",
+    ]);
+  });
+
+  it("returns none when repo and task targets are both dirty", () => {
+    const result = deriveDeterministicCleanTreeEvidence(
+      " M state/progress.txt\n M src/core/orchestrator.ts\n",
+      " M src/core/orchestrator.ts\n",
+      ["src/core/orchestrator.ts"],
+    );
+    assert.equal(result.mode, "none");
+    assert.deepEqual(result.lines, []);
+  });
+});
+
 describe("isTerminalWorkerStatus", () => {
   it("treats recovery artifact status as terminal", () => {
     assert.equal(isTerminalWorkerStatus("recovered"), true);
@@ -179,6 +213,20 @@ describe("isTerminalWorkerStatus", () => {
 
   it("negative path: leaves active statuses non-terminal", () => {
     assert.equal(isTerminalWorkerStatus("working"), false);
+  });
+});
+
+describe("shouldResolveRecoveredWorkerEscalations", () => {
+  it("returns true for recovered terminal outcomes", () => {
+    assert.equal(shouldResolveRecoveredWorkerEscalations("done"), true);
+    assert.equal(shouldResolveRecoveredWorkerEscalations("partial"), true);
+    assert.equal(shouldResolveRecoveredWorkerEscalations("skipped"), true);
+  });
+
+  it("negative path: does not resolve on active failure outcomes", () => {
+    assert.equal(shouldResolveRecoveredWorkerEscalations("blocked"), false);
+    assert.equal(shouldResolveRecoveredWorkerEscalations("error"), false);
+    assert.equal(shouldResolveRecoveredWorkerEscalations("transient_error"), false);
   });
 });
 
@@ -633,5 +681,55 @@ describe("WorkerActivityEntry wave field — structural contract", () => {
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+// ── buildWorkerRunContract ────────────────────────────────────────────────────
+
+import { buildWorkerRunContract } from "../../src/core/worker_runner.js";
+
+describe("buildWorkerRunContract", () => {
+  it("returns defaults when config and instruction are empty", () => {
+    const contract = buildWorkerRunContract({}, {});
+    assert.equal(contract.maxTurns, 50);
+    assert.equal(contract.workflowName, "box-evolution");
+    assert.equal(contract.groupId, "box-workers");
+    assert.equal(contract.traceIncludeSensitiveData, false);
+    assert.equal(contract.sessionInputPolicy, "allow_all");
+    assert.deepEqual(contract.traceMetadata, {});
+  });
+
+  it("instruction overrides config-level maxTurns", () => {
+    const config = { workerRunContract: { maxTurns: 25 } };
+    const instruction = { maxTurns: 10 };
+    const contract = buildWorkerRunContract(config, instruction);
+    assert.equal(contract.maxTurns, 10);
+  });
+
+  it("config-level maxTurns used when instruction omits it", () => {
+    const config = { workerRunContract: { maxTurns: 30 } };
+    const contract = buildWorkerRunContract(config, {});
+    assert.equal(contract.maxTurns, 30);
+  });
+
+  it("traceIncludeSensitiveData defaults to false and never exceeds explicit false", () => {
+    const contract = buildWorkerRunContract({ workerRunContract: { traceIncludeSensitiveData: false } }, {});
+    assert.equal(contract.traceIncludeSensitiveData, false);
+  });
+
+  it("traceIncludeSensitiveData explicit true is respected", () => {
+    const contract = buildWorkerRunContract({ workerRunContract: { traceIncludeSensitiveData: true } }, {});
+    assert.equal(contract.traceIncludeSensitiveData, true);
+  });
+
+  it("negative: null config and null instruction yield safe defaults", () => {
+    const contract = buildWorkerRunContract(null, null);
+    assert.equal(contract.maxTurns, 50);
+    assert.equal(contract.traceIncludeSensitiveData, false);
+  });
+
+  it("sessionInputPolicy propagates valid string values", () => {
+    const contract = buildWorkerRunContract({ workerRunContract: { sessionInputPolicy: "no_tools" } }, {});
+    assert.equal(contract.sessionInputPolicy, "no_tools");
   });
 });

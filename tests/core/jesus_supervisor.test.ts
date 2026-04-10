@@ -20,6 +20,7 @@ import {
   sanitizeDirectiveFieldForPersistence,
   shouldWarnJesusDecisionLatency,
   hasReachedJesusSoftTimeout,
+  formatJesusTierEscalationMessage,
   emitJesusSpanTransition,
   JESUS_AGENT_ID,
   JESUS_WARNING_CODE,
@@ -977,6 +978,28 @@ describe("jesus_supervisor — fallback activation event contract", () => {
   });
 });
 
+describe("jesus_supervisor — tier escalation messaging", () => {
+  it("uses non-terminal wording for fallback activation after tier budget exhaustion", () => {
+    const message = formatJesusTierEscalationMessage(
+      { label: "T2", timeoutMs: 600_000, model: "Claude Sonnet 4.6" },
+      { label: "T3", timeoutMs: 1_800_000, model: "gpt-5.3-codex" },
+      "JESUS_LATENCY_FALLBACK",
+    );
+    assert.match(message, /reached its 600s tier budget/i);
+    assert.doesNotMatch(message, /timed out after 600s/i);
+  });
+
+  it("keeps timeout wording for same-model escalation tiers", () => {
+    const message = formatJesusTierEscalationMessage(
+      { label: "T1", timeoutMs: 60_000, model: "Claude Sonnet 4.6" },
+      { label: "T2", timeoutMs: 600_000, model: "Claude Sonnet 4.6" },
+      "JESUS_LATENCY_ESCALATION",
+    );
+    assert.match(message, /timed out after 60s/i);
+    assert.match(message, /escalating to T2/i);
+  });
+});
+
 // ── Soft-timeout cutoff event contract ──────────────────────────────────────────
 
 describe("jesus_supervisor — soft-timeout cutoff event contract", () => {
@@ -1186,3 +1209,55 @@ describe("jesus_supervisor — JESUS_AGENT_ID and JESUS_WARNING_CODE constants",
   });
 });
 
+
+// ── hasCiSystemLearningDebt ───────────────────────────────────────────────────
+
+import { hasCiSystemLearningDebt } from "../../src/core/jesus_supervisor.js";
+
+describe("hasCiSystemLearningDebt", () => {
+  it("returns false for empty findings array", () => {
+    assert.equal(hasCiSystemLearningDebt([]), false);
+  });
+
+  it("returns true when any finding has ciFastlaneRequired=true", () => {
+    assert.equal(hasCiSystemLearningDebt([{ ciFastlaneRequired: true }]), true);
+  });
+
+  it("returns true when area=ci and severity=critical", () => {
+    assert.equal(
+      hasCiSystemLearningDebt([{ area: "ci", severity: "critical", finding: "CI broken", remediation: "" }]),
+      true
+    );
+  });
+
+  it("returns true when capabilityNeeded=ci-fix", () => {
+    assert.equal(
+      hasCiSystemLearningDebt([{ capabilityNeeded: "ci-fix", severity: "critical" }]),
+      true
+    );
+  });
+
+  it("returns true when area=system-learning with CI-break pattern", () => {
+    const findings = [{
+      area: "system-learning",
+      severity: "critical",
+      finding: "CI-broken tests accumulating as system-learning debt",
+      remediation: "ci-fix required"
+    }];
+    assert.equal(hasCiSystemLearningDebt(findings), true);
+  });
+
+  it("negative: returns false for non-CI finding", () => {
+    const findings = [{ area: "planning", severity: "warning", finding: "low plan quality", remediation: "" }];
+    assert.equal(hasCiSystemLearningDebt(findings), false);
+  });
+
+  it("negative: returns false for null/non-array input", () => {
+    assert.equal(hasCiSystemLearningDebt(null as any), false);
+    assert.equal(hasCiSystemLearningDebt("string" as any), false);
+  });
+
+  it("negative: returns false when finding is null or non-object", () => {
+    assert.equal(hasCiSystemLearningDebt([null, undefined, 42, "string"]), false);
+  });
+});

@@ -2125,3 +2125,66 @@ describe("computeCycleAnalytics — cycleTruthContract (cycle-truth contract)", 
     assert.equal(result.cycleTruthContract.isFullyCovered, false);
   });
 });
+
+// ── CYCLE_OUTCOME_STATUS — CI_DEBT_UNRESOLVED ─────────────────────────────────
+
+import { computeCiRemediationStatus } from "../../src/core/cycle_analytics.js";
+
+describe("CYCLE_OUTCOME_STATUS.CI_DEBT_UNRESOLVED", () => {
+  it("is defined and equals 'ci_debt_unresolved'", () => {
+    assert.equal(CYCLE_OUTCOME_STATUS.CI_DEBT_UNRESOLVED, "ci_debt_unresolved");
+  });
+
+  it("is frozen in the enum", () => {
+    assert.ok(Object.isFrozen(CYCLE_OUTCOME_STATUS));
+  });
+});
+
+describe("computeCiRemediationStatus", () => {
+  it("required=false and satisfied=false when no findings", () => {
+    const result = computeCiRemediationStatus([], []);
+    assert.equal(result.required, false);
+    assert.equal(result.satisfied, false);
+    assert.equal(result.completedCiFixWorkers, 0);
+    assert.deepEqual(result.findingIds, []);
+  });
+
+  it("required=true when a finding has ciFastlaneRequired=true", () => {
+    const findings = [{ ciFastlaneRequired: true, findingId: "f1" }];
+    const result = computeCiRemediationStatus([], findings);
+    assert.equal(result.required, true);
+    assert.equal(result.satisfied, false);
+    assert.deepEqual(result.findingIds, ["f1"]);
+  });
+
+  it("satisfied=true when ci-fix worker completed", () => {
+    const findings = [{ ciFastlaneRequired: true, findingId: "f2" }];
+    const workers = [{ taskKind: "ci-fix", status: "done" }];
+    const result = computeCiRemediationStatus(workers, findings);
+    assert.equal(result.required, true);
+    assert.equal(result.satisfied, true);
+    assert.equal(result.completedCiFixWorkers, 1);
+  });
+
+  it("negative: ci-fix worker with status other than done does not satisfy", () => {
+    const findings = [{ area: "ci", findingId: "f3" }];
+    const workers = [{ taskKind: "ci-fix", status: "failed" }];
+    const result = computeCiRemediationStatus(workers, findings);
+    assert.equal(result.satisfied, false);
+    assert.equal(result.completedCiFixWorkers, 0);
+  });
+
+  it("negative: non-ci-fix worker does not satisfy CI requirement", () => {
+    const findings = [{ capabilityNeeded: "ci-fix", findingId: "f4" }];
+    const workers = [{ taskKind: "refactor", status: "done" }];
+    const result = computeCiRemediationStatus(workers, findings);
+    assert.equal(result.required, true);
+    assert.equal(result.satisfied, false);
+  });
+
+  it("handles null/non-array inputs gracefully", () => {
+    const result = computeCiRemediationStatus(null as any, null as any);
+    assert.equal(result.required, false);
+    assert.equal(result.satisfied, false);
+  });
+});

@@ -36,6 +36,33 @@ import { buildSpanEvent, EVENTS, EVENT_DOMAIN, JESUS_SOFT_TIMEOUT_POLICY_CONTRAC
 import { computeQueueViability } from "./pipeline_progress.js";
 import { resolveJesusFallbackModel, ROUTING_REASON } from "./model_policy.js";
 
+// ── CI system-learning debt detection ────────────────────────────────────────
+
+/**
+ * Returns true when any health finding describes CI-breaking debt in a
+ * system-learning context. Used to set ciFastlaneRequired on the directive
+ * so Prometheus generates a wave-1 CI-fix packet without waiting for the next
+ * health audit cycle.
+ */
+export function hasCiSystemLearningDebt(findings: unknown[]): boolean {
+  if (!Array.isArray(findings)) return false;
+  const CI_DEBT_PATTERN = /\bci[-_\s]?(?:broken|break|fail(?:ed|ing)?|fix|repair)\b/i;
+  return findings.some((f: any) => {
+    if (!f || typeof f !== "object") return false;
+    if (f.ciFastlaneRequired === true) return true;
+    const severity = String(f.severity || "").trim().toLowerCase();
+    if (severity !== "critical" && severity !== "warning") return false;
+    const area = String(f.area || "").trim().toLowerCase();
+    const text = `${String(f.finding || "")} ${String(f.remediation || "")}`;
+    return (
+      area === "ci"
+      || f.capabilityNeeded === "ci-fix"
+      || (area === "system-learning" && CI_DEBT_PATTERN.test(text))
+      || CI_DEBT_PATTERN.test(text)
+    );
+  });
+}
+
 // ── Span contract emitter ─────────────────────────────────────────────────────
 
 /** Canonical agent identifier for Jesus in span events. */
@@ -1286,6 +1313,8 @@ ${workersList}`;
     };
   }
 
+  const ciFastlaneRequired = hasCiSystemLearningDebt(healthFindings);
+
   const directive = {
     ...d,
     briefForPrometheus: sanitizeDirectiveFieldForPersistence(String((d as any).briefForPrometheus || "")),
@@ -1301,7 +1330,14 @@ ${workersList}`;
     },
     capacityDelta,
     expectedOutcome,
+    ciFastlaneRequired,
   };
+
+  if (ciFastlaneRequired) {
+    await appendProgress(config,
+      `[JESUS] CI system-learning debt detected — ciFastlaneRequired=true set on directive; Prometheus will generate wave-1 CI-fix fastlane packet`
+    );
+  }
 
   await writeJson(path.join(stateDir, "jesus_directive.json"), directive);
 

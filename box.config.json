@@ -552,5 +552,17 @@
       "minSpecializedShare": 0.35,
       "fitScoreThreshold": 0.65
     }
+  },
+  "workerRunContract": {
+    "maxTurns": 50,
+    "workflowName": "box-evolution",
+    "groupId": "box-workers",
+    "traceIncludeSensitiveData": false,
+    "sessionInputPolicy": "allow_all",
+    "sessionCompaction": {
+      "enabled": true,
+      "maxHistoryMessages": 12,
+      "compactionThreshold": 20
+    }
   }
 }

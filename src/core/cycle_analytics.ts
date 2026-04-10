@@ -147,6 +147,15 @@ export const CYCLE_OUTCOME_STATUS = Object.freeze({
    * and required remediation actions before re-dispatching.
    */
   DISPATCH_BLOCK_REMEDIATION: "dispatch_block_remediation",
+  /**
+   * Cycle completed but CI-critical system-learning debt was detected and no
+   * CI-fix worker produced a successful remediation result.  The cycle cannot
+   * be closed as healthy until CI debt is resolved.
+   *
+   * Consumers must inspect `outcomes.ciRemediationEvidence` for the set of
+   * unresolved CI finding IDs and the expected remediation action.
+   */
+  CI_DEBT_UNRESOLVED: "ci_debt_unresolved",
 });
 
 /**
@@ -2308,5 +2317,59 @@ export function buildMemoryHitTelemetry(memoryHitLog: unknown[]): {
   const hitRate = sampleCount > 0 ? Math.round((hits / sampleCount) * 1000) / 1000 : 0;
   const outcomeRate = hitResolved > 0 ? Math.round((hitWithDone / hitResolved) * 1000) / 1000 : 0;
   return { hits, misses, hitRate, sampleCount, outcomeRate };
+}
+
+// ── CI remediation evidence ────────────────────────────────────────────────────
+
+/** Proof record for CI-fix remediation within a cycle. */
+export interface CiRemediationEvidence {
+  /** Whether a CI-fix fastlane was required this cycle. */
+  required: boolean;
+  /** True only when at least one ci-fix worker completed with status="done". */
+  satisfied: boolean;
+  /** IDs of mandatory CI-critical findings that drove the requirement. */
+  findingIds: string[];
+  /** Count of ci-fix workers that completed successfully. */
+  completedCiFixWorkers: number;
+}
+
+/**
+ * Computes CI remediation evidence for the current cycle.
+ *
+ * @param workerResults   Array of worker result objects from the current cycle.
+ * @param mandatoryFindings  Array of health audit finding objects.
+ * @returns CiRemediationEvidence record.
+ */
+export function computeCiRemediationStatus(
+  workerResults: unknown[],
+  mandatoryFindings: unknown[]
+): CiRemediationEvidence {
+  const findings = Array.isArray(mandatoryFindings) ? mandatoryFindings : [];
+  const workers = Array.isArray(workerResults) ? workerResults : [];
+
+  const ciFindings = findings.filter((f: any) => {
+    if (!f || typeof f !== "object") return false;
+    return (
+      f.ciFastlaneRequired === true
+      || f.capabilityNeeded === "ci-fix"
+      || String(f.area || "").toLowerCase() === "ci"
+    );
+  });
+
+  const required = ciFindings.length > 0;
+  const findingIds = ciFindings
+    .map((f: any) => String(f.findingId || f.id || ""))
+    .filter(Boolean);
+
+  const completedCiFixWorkers = workers.filter((w: any) => {
+    if (!w || typeof w !== "object") return false;
+    const kind = String(w.taskKind || w.kind || "").toLowerCase();
+    const status = String(w.status || w.outcome || "").toLowerCase();
+    return kind === "ci-fix" && status === "done";
+  }).length;
+
+  const satisfied = required && completedCiFixWorkers > 0;
+
+  return { required, satisfied, findingIds, completedCiFixWorkers };
 }
 

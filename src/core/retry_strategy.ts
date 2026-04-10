@@ -104,6 +104,25 @@ export const RETRY_ACTION = Object.freeze({
   ESCALATE:       "escalate",
 });
 
+// ── Worker step state enum ────────────────────────────────────────────────────
+
+/**
+ * Explicit step-state contract for worker execution turns.
+ * Attached to retry decisions so orchestration logic can distinguish the
+ * semantic reason a worker turn ended without a FINAL_OUTPUT.
+ *
+ *   RUN_AGAIN      — the worker completed a turn and should continue to the next
+ *   HANDOFF        — the worker explicitly hands off to a downstream role
+ *   FINAL_OUTPUT   — the worker produced its terminal output (done/partial/blocked)
+ *   INTERRUPTION   — the worker was interrupted mid-turn (timeout, signal, error)
+ */
+export const WORKER_STEP_STATE = Object.freeze({
+  RUN_AGAIN:    "RUN_AGAIN",
+  HANDOFF:      "HANDOFF",
+  FINAL_OUTPUT: "FINAL_OUTPUT",
+  INTERRUPTION: "INTERRUPTION",
+});
+
 // ── Validation reason codes ───────────────────────────────────────────────────
 
 /**
@@ -268,6 +287,26 @@ export const RETRY_METRIC_SCHEMA = Object.freeze({
 const _VALID_FAILURE_CLASSES = new Set(Object.values(FAILURE_CLASS));
 
 /**
+ * Map a retry action to its corresponding worker step state.
+ * Used to annotate resolved retry decisions with execution semantics.
+ */
+function _retryActionToStepState(retryAction: string): string {
+  switch (retryAction) {
+    case RETRY_ACTION.RETRY:
+    case RETRY_ACTION.COOLDOWN_RETRY:
+    case RETRY_ACTION.REWORK:
+      return WORKER_STEP_STATE.RUN_AGAIN;
+    case RETRY_ACTION.REASSIGN:
+    case RETRY_ACTION.SPLIT:
+      return WORKER_STEP_STATE.HANDOFF;
+    case RETRY_ACTION.ESCALATE:
+      return WORKER_STEP_STATE.INTERRUPTION;
+    default:
+      return WORKER_STEP_STATE.INTERRUPTION;
+  }
+}
+
+/**
  * Merge config-provided adaptive retry overrides over the default policy for a class.
  * Config overrides live at config.runtime.adaptiveRetry[failureClass].
  *
@@ -384,6 +423,7 @@ export function resolveRetryAction(failureClass, attempts, config = {}, taskId =
         failureClass,
         attempts:         attemptNum,
         retryAction:      RETRY_ACTION.RETRY,
+        workerStepState:  WORKER_STEP_STATE.RUN_AGAIN,
         cooldownUntilMs:  null,
         cooldownMs:       null,
         escalationTarget: null,
@@ -488,6 +528,7 @@ export function resolveRetryAction(failureClass, attempts, config = {}, taskId =
       failureClass,
       attempts:         attemptNum,
       retryAction,
+      workerStepState:  _retryActionToStepState(retryAction),
       cooldownUntilMs,
       cooldownMs,
       escalationTarget: escalationTarget ?? null,

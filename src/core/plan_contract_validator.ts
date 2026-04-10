@@ -1,4 +1,4 @@
-/**
+﻿/**
  * plan_contract_validator.js — Contract-first plan validation (Packet 2)
  *
  * Every plan emitted by Prometheus must pass this validator before persistence.
@@ -210,20 +210,34 @@ const CI_CRITICAL_TEXT_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
   /\bchecks?\b/i,
 ]);
 
+/** Pattern to detect CI-broken debt in system-learning findings. */
+const CI_SYSTEM_LEARNING_DEBT_PATTERN = /\bci[-_\s]?(?:broken|break|fail(?:ed|ing)?|fix|repair)\b/i;
+
 export function isCiCriticalMandatoryFinding(finding: unknown): boolean {
   if (!finding || typeof finding !== "object") return false;
   const entry = finding as Record<string, unknown>;
   const severity = String(entry.severity || "").trim().toLowerCase();
   if (severity !== "critical") return false;
 
+  // Explicit fastlane marker — highest-signal override.
+  if (entry.ciFastlaneRequired === true) return true;
+
   const area = String(entry.area || "").trim().toLowerCase();
   const capability = String(entry.capabilityNeeded || "").trim().toLowerCase();
   const text = `${String(entry.finding || "")}\n${String(entry.remediation || "")}`.toLowerCase();
-  return (
+
+  // Standard CI-area / CI-text pattern matching.
+  if (
     CI_CRITICAL_AREA_PATTERNS.some((pattern) => pattern.test(area))
     || CI_CRITICAL_TEXT_PATTERNS.some((pattern) => pattern.test(capability))
     || CI_CRITICAL_TEXT_PATTERNS.some((pattern) => pattern.test(text))
-  );
+  ) return true;
+
+  // System-learning findings that describe CI-breaking behavior are also CI-critical
+  // when the finding text matches a CI-debt signal, regardless of area label.
+  if (area === "system-learning" && CI_SYSTEM_LEARNING_DEBT_PATTERN.test(text)) return true;
+
+  return false;
 }
 
 function collectUniqueMatches(text: string, matcher: RegExp): string[] {
@@ -273,6 +287,40 @@ export function extractCiEvidenceFromMandatoryFinding(finding: unknown): {
   return { failedTestIdentifiers, errorMessages, stackTraces };
 }
 
+/**
+ * Return true when the plans array already contains at least one wave-1 CI fix plan.
+ *
+ * A plan is considered a CI repair plan when its taskKind equals "ci-fix",
+ * OR its task text / task_id matches the canonical CI fix pattern, AND it sits
+ * on wave 1.  This check is used by the pre-dispatch CI-closure gate to decide
+ * whether non-CI plans can be dispatched alongside an outstanding CI repair.
+ */
+export function hasActiveCiRepairPlan(plans: unknown[]): boolean {
+  if (!Array.isArray(plans)) return false;
+  return plans.some((plan) => {
+    if (!plan || typeof plan !== "object") return false;
+    const p = plan as Record<string, unknown>;
+    const wave = Number(p.wave);
+    if (wave !== 1) return false;
+    if (String(p.taskKind || "").trim().toLowerCase() === "ci-fix") return true;
+    const taskText = String(p.task || p.title || p.task_id || "").toLowerCase();
+    return /\bci[\s_-]?(fix|repair|failure)\b/.test(taskText);
+  });
+}
+/**
+ * Return true when the plans array contains ONLY CI-repair plans (taskKind=ci-fix).
+ * Used to allow dispatch to proceed when all queued work is CI remediation.
+ */
+export function allPlansAreCiRepair(plans: unknown[]): boolean {
+  if (!Array.isArray(plans) || plans.length === 0) return false;
+  return plans.every((plan) => {
+    if (!plan || typeof plan !== "object") return false;
+    const p = plan as Record<string, unknown>;
+    if (String(p.taskKind || "").trim().toLowerCase() === "ci-fix") return true;
+    const taskText = String(p.task || p.title || p.task_id || "").toLowerCase();
+    return /\bci[\s_-]?(fix|repair|failure)\b/.test(taskText);
+  });
+}
 /**
  * Canonical shape for every entry in executionStrategy.waves[*].tasks.
  * All three fields are required; no plain-string tasks are permitted in

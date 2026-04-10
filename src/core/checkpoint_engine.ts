@@ -1,6 +1,7 @@
 import path from "node:path";
 import crypto from "node:crypto";
 import { readJsonSafe, READ_JSON_REASON, writeJsonAtomic } from "./fs_utils.js";
+import { unlink } from "node:fs/promises";
 import type { CancellationToken } from "./daemon_control.js";
 
 export const CHECKPOINT_SCHEMA_VERSION = 2;
@@ -15,6 +16,7 @@ export const CHECKPOINT_NS = {
   REVIEWER: "reviewer",
   DISPATCH: "dispatch",
   VERIFICATION: "verification",
+  ATTEMPT: "attempt",
 } as const;
 
 export type CheckpointNs = typeof CHECKPOINT_NS[keyof typeof CHECKPOINT_NS];
@@ -291,4 +293,39 @@ export async function writeBoundaryCheckpoint(
   );
   await writeJsonAtomic(filePath, envelope);
   return filePath;
+}
+
+/**
+ * Reset the boundary checkpoint file for a given thread/namespace so stale
+ * attempt state cannot bleed into the next retry. Safe to call even if no
+ * checkpoint file exists (missing file is treated as a no-op).
+ *
+ * @param config            - runtime config with paths.stateDir
+ * @param opts.thread_id    - stable cycle/worker identifier
+ * @param opts.checkpoint_ns - namespace to clear (default: CHECKPOINT_NS.ATTEMPT)
+ */
+export async function resetAttemptBoundary(
+  config: unknown,
+  opts: {
+    thread_id: string;
+    checkpoint_ns?: typeof CHECKPOINT_NS[keyof typeof CHECKPOINT_NS] | string;
+  },
+): Promise<void> {
+  const stateDir = (config as any)?.paths?.stateDir || "state";
+  const ns = String(opts.checkpoint_ns || CHECKPOINT_NS.ATTEMPT);
+  const thread_id = String(opts.thread_id || "");
+  const safeNs = ns.replace(/[^a-zA-Z0-9_-]/g, "-");
+  const safeThread = thread_id.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 32);
+  const fileName = safeThread
+    ? `boundary_checkpoint_${safeNs}_${safeThread}.json`
+    : `boundary_checkpoint_${safeNs}.json`;
+  const filePath = path.join(stateDir, fileName);
+  try {
+    await unlink(filePath);
+  } catch (err: any) {
+    // ENOENT means no checkpoint to clear — that is fine.
+    if (err?.code !== "ENOENT") {
+      throw err;
+    }
+  }
 }

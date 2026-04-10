@@ -41,7 +41,7 @@ import { readJson, readJsonSafe, writeJson, cleanupStaleTempFiles, READ_JSON_REA
 import { updatePipelineProgress, readPipelineProgress } from "./pipeline_progress.js";
 import { loadEscalationQueue, sortEscalationQueue, processEscalationQueueClosures } from "./escalation_queue.js";
 import { computeCycleSLOs, persistSloMetrics, detectCoupledAlerts, patchSloMetricsReplayEvidence } from "./slo_checker.js";
-import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealthComposite, CYCLE_PHASE, computeRuntimeContractProbe, readCycleAnalytics, evaluateBenchmarkGroundTruth, WORKER_CYCLE_ARTIFACTS_FILE, migrateWorkerCycleArtifacts, selectWorkerCycleRecord, generateDeterministicTaskId } from "./cycle_analytics.js";
+import { computeCycleAnalytics, persistCycleAnalytics, computeCycleHealth, persistCycleHealthComposite, CYCLE_PHASE, computeRuntimeContractProbe, readCycleAnalytics, evaluateBenchmarkGroundTruth, WORKER_CYCLE_ARTIFACTS_FILE, migrateWorkerCycleArtifacts, selectWorkerCycleRecord, generateDeterministicTaskId, CYCLE_OUTCOME_STATUS, computeCiRemediationStatus } from "./cycle_analytics.js";
 import { computeBaselineRecoveryState, persistBaselineMetrics, PARSER_CONFIDENCE_RECOVERY_THRESHOLD } from "./parser_baseline_recovery.js";
 import { computeDispatchStrictness, loadReplayRegressionState, DISPATCH_STRICTNESS } from "./parser_replay_harness.js";
 import {
@@ -2063,10 +2063,15 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
       );
     }
 
-    await safeUpdatePipelineProgress(config, "workers_running", `Resumed worker batch ${index + 1}/${workerBatches.length}: ${batch.role}`, {
+    const resumeDispatchTarget = await resolveDispatchTargetForPlan(config, batch);
+    const resumeWorkerLabel = resumeDispatchTarget.roleName === String(batch.role || "worker")
+      ? resumeDispatchTarget.roleName
+      : `${String(batch.role || "worker")} -> ${resumeDispatchTarget.roleName}`;
+
+    await safeUpdatePipelineProgress(config, "workers_running", `Resumed worker batch ${index + 1}/${workerBatches.length}: ${resumeWorkerLabel}`, {
       workersTotal: workerBatches.length,
       workersDone: index,
-      currentWorker: batch.role,
+      currentWorker: resumeDispatchTarget.roleName,
       resumedFromCheckpoint: true,
       forcedResume: force
     });
@@ -2086,7 +2091,7 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
         const msg = String(err?.message || err).slice(0, 200);
         await appendProgress(config, `[RESUME] Worker ${batch.role} failed: ${msg}`);
         warn(`[orchestrator] resumed worker dispatch error: ${msg}`);
-        workerResult = { roleName: batch.role, status: "error", summary: msg };
+        workerResult = { roleName: resumeDispatchTarget.roleName, status: "error", summary: msg };
       }
 
       // Auto-retry on transient API errors with escalating cooldown
@@ -2170,11 +2175,14 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
       });
     }
 
-    // Inter-batch rate-limit cooldown to avoid transient API errors
-    const resumeDelay = Number(config?.runtime?.interBatchDelayMs || 90000);
-    if (index + 1 < workerBatches.length && resumeDelay > 0) {
-      await appendProgress(config, `[RESUME] Inter-batch cooldown ${Math.round(resumeDelay / 1000)}s to avoid rate limits`);
-      await sleep(resumeDelay);
+    const resumeCooldown = resolveInterBatchCooldownDecision(config, {
+      remainingBatches: workerBatches.length - (index + 1),
+      workerStatus: String(workerResult?.status || ""),
+      transientRetries,
+    });
+    if (resumeCooldown.cooldownMs > 0) {
+      await appendProgress(config, `[RESUME] Inter-batch cooldown ${Math.round(resumeCooldown.cooldownMs / 1000)}s reason=${resumeCooldown.reason}`);
+      await sleep(resumeCooldown.cooldownMs);
     }
   }
 
@@ -2780,13 +2788,7 @@ async function resolveRoleWithAccessFallback(config, roleName) {
   return hasUnresolvedAccessBlocked ? IMPLEMENTATION_WORKER : roleName;
 }
 
-// ── Dispatch a single worker from a Prometheus plan item ───────────────────
-
-async function dispatchWorker(config, plan) {
-  // Resolve actual worker agent: plan.role is a logical category ("orchestrator", "athena", etc.).
-  // Map roles without a dedicated .agent.md to "evolution-worker" for implementation tasks.
-  const logicalRole = plan.role;
-  const taskKind = plan.taskKind || plan.kind || "implementation";
+function buildDispatchTaskText(plan) {
   const batchPlans = Array.isArray(plan?.plans) ? plan.plans : null;
   const orderedBatchLines = batchPlans
     ? batchPlans.map((item, i) => {
@@ -2808,9 +2810,39 @@ async function dispatchWorker(config, plan) {
     : "";
   const task = batchPlans
     ? `Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exact blocker.\n\nOrdered steps:\n${orderedBatchLines}`
-    : plan.task;
+    : plan?.task;
+
+  return { batchPlans, task };
+}
+
+async function resolveDispatchTargetForPlan(config, plan) {
+  const logicalRole = plan?.role;
+  const taskKind = plan?.taskKind || plan?.kind || "implementation";
+  const { batchPlans, task } = buildDispatchTaskText(plan);
   const resolvedRoleName = resolveWorkerRole(logicalRole, taskKind, task);
   const roleName = await resolveRoleWithAccessFallback(config, resolvedRoleName);
+  return {
+    logicalRole: String(logicalRole || "").trim() || "worker",
+    taskKind,
+    batchPlans,
+    task,
+    resolvedRoleName,
+    roleName,
+  };
+}
+
+// ── Dispatch a single worker from a Prometheus plan item ───────────────────
+
+async function dispatchWorker(config, plan) {
+  // Resolve actual worker agent: plan.role is a logical category ("orchestrator", "athena", etc.).
+  // Map roles without a dedicated .agent.md to "evolution-worker" for implementation tasks.
+  const dispatchTarget = await resolveDispatchTargetForPlan(config, plan);
+  const _logicalRole = dispatchTarget.logicalRole;
+  const taskKind = dispatchTarget.taskKind;
+  const batchPlans = dispatchTarget.batchPlans;
+  const task = dispatchTarget.task;
+  const resolvedRoleName = dispatchTarget.resolvedRoleName;
+  const roleName = dispatchTarget.roleName;
   if (roleName !== resolvedRoleName) {
     await appendProgress(
       config,
@@ -3135,6 +3167,44 @@ function tightenRoleWaveBatches(workerBatches: any[], config: any): { batches: a
   });
 
   return { batches: reindexed, mergedCount };
+}
+
+export function resolveInterBatchCooldownDecision(
+  config: any,
+  options: {
+    remainingBatches?: number;
+    workerStatus?: string | null;
+    transientRetries?: number;
+  } = {},
+): { cooldownMs: number; reason: string } {
+  const baseDelayRaw = Number(config?.runtime?.interBatchDelayMs || 90000);
+  const baseDelay = Number.isFinite(baseDelayRaw) && baseDelayRaw > 0
+    ? Math.floor(baseDelayRaw)
+    : 0;
+  if (baseDelay <= 0) return { cooldownMs: 0, reason: "disabled" };
+
+  const remainingBatches = Number(options.remainingBatches || 0);
+  if (remainingBatches <= 0) return { cooldownMs: 0, reason: "no_remaining_batches" };
+
+  const transientRetries = Number(options.transientRetries || 0);
+  if (transientRetries > 0) {
+    return { cooldownMs: baseDelay, reason: "transient_retry_recovery" };
+  }
+
+  const fastDelayDefault = Math.min(baseDelay, 15000);
+  const fastDelayRaw = Number(config?.runtime?.interBatchSuccessDelayMs ?? fastDelayDefault);
+  const fastDelay = Number.isFinite(fastDelayRaw) && fastDelayRaw >= 0
+    ? Math.min(baseDelay, Math.floor(fastDelayRaw))
+    : fastDelayDefault;
+  const workerStatus = String(options.workerStatus || "").toLowerCase().trim();
+  if (workerStatus === "done" || workerStatus === "success" || workerStatus === "skipped") {
+    return {
+      cooldownMs: fastDelay,
+      reason: fastDelay < baseDelay ? "successful_batch_fast_path" : "successful_batch_default_delay",
+    };
+  }
+
+  return { cooldownMs: baseDelay, reason: "conservative_fallback" };
 }
 
 async function resolveAdaptivePlanCap(config: any, stateDir: string): Promise<{ cap: number; reason: string }> {
@@ -4616,7 +4686,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         }
 
         const sortedIndexes = [...grouped.keys()].sort((a, b) => a - b);
-        return sortedIndexes.map((batchIndex, pos) => {
+        const prebuiltBatches = sortedIndexes.map((batchIndex) => {
           const batchPlans = grouped.get(batchIndex) || [];
           const role = String(
             batchPlans[0]?._batchWorkerRole
@@ -4628,15 +4698,25 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
             role,
             plans: batchPlans,
             wave,
-            roleBatchIndex: pos + 1,
-            roleBatchTotal: sortedIndexes.length,
-            bundleIndex: pos + 1,
-            totalBundles: sortedIndexes.length,
-            githubFinalizer: pos === sortedIndexes.length - 1,
+            _athenaOriginalBatchIndex: batchIndex,
             tokenFirstPacked: true,
             athenaBatchAssigned: true,
           };
         });
+        return prebuiltBatches
+          .sort((left, right) => (
+            Number(left?.wave || 1) - Number(right?.wave || 1)
+          ) || (
+            Number((left as any)?._athenaOriginalBatchIndex || 1) - Number((right as any)?._athenaOriginalBatchIndex || 1)
+          ))
+          .map((batch, pos) => ({
+            ...batch,
+            roleBatchIndex: pos + 1,
+            roleBatchTotal: prebuiltBatches.length,
+            bundleIndex: pos + 1,
+            totalBundles: prebuiltBatches.length,
+            githubFinalizer: pos === prebuiltBatches.length - 1,
+          }));
       })()
     : (useTokenFirst
       ? await (async () => {
@@ -4961,17 +5041,22 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     }
     waveBatchCount += 1;
 
-    await safeUpdatePipelineProgress(config, "workers_running", `Running worker batch ${workersDone + 1}/${workerBatches.length}: ${batch.role}`, {
+    const dispatchTarget = await resolveDispatchTargetForPlan(config, batch);
+    const workerLabel = dispatchTarget.roleName === String(batch.role || "worker")
+      ? dispatchTarget.roleName
+      : `${String(batch.role || "worker")} -> ${dispatchTarget.roleName}`;
+
+    await safeUpdatePipelineProgress(config, "workers_running", `Running worker batch ${workersDone + 1}/${workerBatches.length}: ${workerLabel}`, {
       workersTotal: workerBatches.length,
       workersDone,
-      currentWorker: batch.role
+      currentWorker: dispatchTarget.roleName
     });
     const workerPremiumEvent = await spendPremium(
-      String(batch.role || "worker"),
+      dispatchTarget.roleName,
       "worker_batch_dispatch",
       { pendingOutcome: true },
     );
-    await appendProgress(config, `[AGENT] » WORKER · ${batch.role} · batch=${workersDone + 1}/${workerBatches.length} · req#${_cycleRequests} this cycle`);
+    await appendProgress(config, `[AGENT] » WORKER · ${workerLabel} · batch=${workersDone + 1}/${workerBatches.length} · req#${_cycleRequests} this cycle`);
     await persistWorkerDispatchArtifacts(config, {
       cycleId: dispatchArtifactCycleId,
       role: String(batch?.role || ""),
@@ -4994,7 +5079,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         const msg = String(err?.message || err).slice(0, 200);
         await appendProgress(config, `[CYCLE] Worker ${batch.role} failed: ${msg}`);
         warn(`[orchestrator] worker dispatch error: ${msg}`);
-        workerResult = { roleName: batch.role, status: "error", summary: msg };
+        workerResult = { roleName: dispatchTarget.roleName, status: "error", summary: msg };
       }
 
       // Auto-retry on transient API errors with escalating cooldown
@@ -5168,7 +5253,9 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       }
     }
 
-    await appendProgress(config, `[WORKER_BATCH] ✓ BATCH ${workersDone}/${workerBatches.length} DONE  role=${batch.role}  status=${workerResult?.status || "unknown"}  total_req=${_cycleRequests}`);
+    const completedRole = String(workerResult?.roleName || dispatchTarget.roleName || batch.role || "unknown");
+    const logicalRoleText = completedRole === String(batch.role || "") ? "" : `  logicalRole=${String(batch.role || "unknown")}`;
+    await appendProgress(config, `[WORKER_BATCH] ✓ BATCH ${workersDone}/${workerBatches.length} DONE  role=${completedRole}${logicalRoleText}  status=${workerResult?.status || "unknown"}  total_req=${_cycleRequests}`);
 
     // Record the timestamp when this batch completed — used as the idle-gap start
     // when the next wave boundary crossing is detected.
@@ -5211,11 +5298,14 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     }
     await waitForWorkersToFinish(config);
 
-    // Inter-batch rate-limit cooldown to avoid transient API errors
-    const cycleDelay = Number(config?.runtime?.interBatchDelayMs || 90000);
-    if (workersDone < workerBatches.length && cycleDelay > 0) {
-      await appendProgress(config, `[CYCLE] Inter-batch cooldown ${Math.round(cycleDelay / 1000)}s to avoid rate limits`);
-      await sleep(cycleDelay);
+    const cycleCooldown = resolveInterBatchCooldownDecision(config, {
+      remainingBatches: workerBatches.length - workersDone,
+      workerStatus: String(workerResult?.status || ""),
+      transientRetries,
+    });
+    if (cycleCooldown.cooldownMs > 0) {
+      await appendProgress(config, `[CYCLE] Inter-batch cooldown ${Math.round(cycleCooldown.cooldownMs / 1000)}s reason=${cycleCooldown.reason}`);
+      await sleep(cycleCooldown.cooldownMs);
     }
   }
 
@@ -5548,9 +5638,24 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
           await appendProgress(config, `[AUTONOMY_BAND] benchmark entries seeded from synthesis - entries=${benchmarkEntries.length}`);
         }
       }
-      const cycleOutcomeStatus = totalWorkers === 0
-        ? "no_plans"
-        : (completedWorkers >= totalWorkers && crashCount === 0 ? "success" : (completedWorkers > 0 ? "partial" : "failed"));
+      const cycleOutcomeStatus = (() => {
+        if (totalWorkers === 0) return CYCLE_OUTCOME_STATUS.NO_PLANS;
+        const baseStatus = completedWorkers >= totalWorkers && crashCount === 0
+          ? CYCLE_OUTCOME_STATUS.SUCCESS
+          : (completedWorkers > 0 ? CYCLE_OUTCOME_STATUS.PARTIAL : CYCLE_OUTCOME_STATUS.FAILED);
+        // CI debt gate: if CI fastlane was required and no ci-fix worker completed,
+        // override to CI_DEBT_UNRESOLVED to prevent the cycle from closing as healthy.
+        if ((jesusDecision as any)?.ciFastlaneRequired === true) {
+          const ciEvidence = computeCiRemediationStatus(allWorkerResults ?? [], []);
+          if (!ciEvidence.satisfied) {
+            void appendProgress(config,
+              `[ORCHESTRATOR] CI_DEBT_UNRESOLVED — ciFastlaneRequired but completedCiFixWorkers=${ciEvidence.completedCiFixWorkers}; cycle cannot close as healthy`
+            );
+            return CYCLE_OUTCOME_STATUS.CI_DEBT_UNRESOLVED;
+          }
+        }
+        return baseStatus;
+      })();
       const autoResolution = autoResolveBenchmarkRecommendations(benchmarkEntries, {
         verifiedDoneWorkers: _verifiedDoneWorkers,
         workerBatches,

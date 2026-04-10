@@ -88,6 +88,33 @@ export interface WorkerRoleConfig {
   [key: string]: unknown;
 }
 
+// ─── Worker Run Contract ───────────────────────────────────────────
+
+/**
+ * Deterministic run contract attached to every worker dispatch.
+ * Provides bounded execution metadata for tracing, session lifecycle control,
+ * and token-pressure management in long-running worker loops.
+ */
+export interface WorkerRunContract {
+  /** Maximum number of model turns (continues) for this session. */
+  maxTurns: number;
+  /** Human-readable workflow name for tracing and analytics. */
+  workflowName: string;
+  /** Group identifier for correlated dispatches within a cycle. */
+  groupId: string;
+  /** Arbitrary trace metadata for observability integrations. */
+  traceMetadata: Record<string, unknown>;
+  /** When false (default), suppress PII/secrets from trace output. */
+  traceIncludeSensitiveData: boolean;
+  /**
+   * Controls which tool categories are admitted in the session.
+   *   allow_all  — full tool access (default for implementation workers)
+   *   no_tools   — disable all tools (analysis-only workers)
+   *   auto       — derive from worker kind
+   */
+  sessionInputPolicy: "allow_all" | "no_tools" | "auto";
+}
+
 // ─── Generic result pattern ────────────────────────────────────────
 export interface Result<T = unknown> {
   ok: boolean;

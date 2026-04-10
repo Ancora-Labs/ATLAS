@@ -15,6 +15,7 @@
 
 import path from "node:path";
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { spawnAsync, writeJson } from "./fs_utils.js";
 import { addSchemaVersion, STATE_FILE_TYPE } from "./schema_registry.js";
@@ -24,7 +25,7 @@ import { buildAgentArgs, nameToSlug } from "./agent_loader.js";
 import { buildVerificationChecklist, CANONICAL_VERIFICATION_REPORT_TEMPLATE } from "./verification_profiles.js";
 import { getVerificationCommands, classifyNodeTestGlobWindowsArtifact } from "./verification_command_registry.js";
 import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence, parseToolExecutionTelemetry, checkCancellationAtVerification, auditRuntimeHookEnforcement } from "./verification_gate.js";
-import { writeBoundaryCheckpoint, CHECKPOINT_NS } from "./checkpoint_engine.js";
+import { writeBoundaryCheckpoint, resetAttemptBoundary, CHECKPOINT_NS } from "./checkpoint_engine.js";
 import {
   enforceModelPolicy,
   routeModelWithRealizedROI,
@@ -47,6 +48,7 @@ import { appendEscalation, BLOCKING_REASON_CLASS, NEXT_ACTION, resolveEscalation
 import { buildTaskFingerprint, buildLineageId, LINEAGE_ENTRY_STATUS } from "./lineage_graph.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
 import { classifyFailure, classifyExitCode, buildFailureEnvelope, TERMINATION_CAUSE } from "./failure_classifier.js";
+import type { AttemptMeta } from "./failure_classifier.js";
 import { resolveRetryAction, persistRetryMetric, RETRY_ACTION, RETRY_STRATEGY_SCHEMA_VERSION } from "./retry_strategy.js";
 import { filterMemoryEntriesByTrust, isPrivilegedMemoryRequester, buildMemoryHitRecord } from "./trust_boundary.js";
 import type { MemoryHitRecord } from "./trust_boundary.js";
@@ -1192,8 +1194,26 @@ function buildConversationContext(history, instruction: WorkerInstruction, sessi
 
   if (history.length > 0) {
     parts.push("## CONVERSATION HISTORY");
-    const recentHistory = history.slice(-12);
-    for (const msg of recentHistory) {
+    // Bounded session compaction: when history exceeds compactionThreshold, collapse
+    // older messages into a single sentinel summary to reduce token pressure while
+    // retaining full context for the most-recent turns.
+    const compactionCfg = (config as any)?.workerRunContract?.sessionCompaction;
+    const compactionEnabled = compactionCfg?.enabled !== false;
+    const maxVerbatim = Number(compactionCfg?.maxHistoryMessages ?? 12);
+    const compactionThreshold = Number(compactionCfg?.compactionThreshold ?? 20);
+    let historyToShow: typeof history;
+    if (compactionEnabled && history.length > compactionThreshold) {
+      const olderCount = history.length - maxVerbatim;
+      const sentinel = {
+        from: "system",
+        content: `[COMPACTED: ${olderCount} earlier message(s) summarized — recent ${maxVerbatim} messages shown verbatim below]`,
+        timestamp: (history[olderCount - 1] as any)?.timestamp,
+      };
+      historyToShow = [sentinel, ...history.slice(-maxVerbatim)];
+    } else {
+      historyToShow = history.slice(-maxVerbatim);
+    }
+    for (const msg of historyToShow) {
       const from = String(msg?.from || "").toLowerCase();
       if (from === "athena" || from === "prometheus") {
         parts.push(`\nINSTRUCTION: ${truncate(msg.content, 600)}`);
@@ -1569,6 +1589,75 @@ export function parseWorkerResponse(stdout, stderr) {
   };
 }
 
+export function deriveDeterministicCleanTreeEvidence(
+  repoStatusOutput: string,
+  scopedStatusOutput: string,
+  targetFiles: string[] = [],
+): { mode: "global" | "task-scoped" | "none"; lines: string[] } {
+  const normalizedTargets = Array.isArray(targetFiles)
+    ? targetFiles.map((file) => String(file || "").trim()).filter(Boolean)
+    : [];
+  const repoDirty = String(repoStatusOutput || "").trim().length > 0;
+  if (!repoDirty) {
+    return {
+      mode: "global",
+      lines: ["CLEAN_TREE_STATUS=clean"],
+    };
+  }
+
+  const scopedDirty = String(scopedStatusOutput || "").trim().length > 0;
+  if (normalizedTargets.length > 0 && !scopedDirty) {
+    return {
+      mode: "task-scoped",
+      lines: [
+        "CLEAN_TREE_STATUS=dirty-other-tasks-only",
+        "TASK_SCOPED_CLEAN_STATUS=clean",
+        `TASK_SCOPED_CLEAN_TARGETS=${normalizedTargets.join(", ")}`,
+      ],
+    };
+  }
+
+  return { mode: "none", lines: [] };
+}
+
+async function supplementCleanTreeEvidenceIfMissing(config, parsed, instruction) {
+  if (!parsed || hasCleanTreeStatusEvidence(parsed.fullOutput || "")) {
+    return { applied: false, mode: "none" as const };
+  }
+
+  const cwd = String(config?.rootDir || process.cwd());
+  const targetFiles = Array.isArray(instruction?.targetFiles)
+    ? instruction.targetFiles.map((file) => String(file || "").trim()).filter(Boolean)
+    : [];
+
+  try {
+    const repoStatus = await spawnAsync("git", ["status", "--porcelain"], { cwd }) as SpawnAsyncResult;
+    if (repoStatus.status !== 0) return { applied: false, mode: "none" as const };
+
+    let scopedStatusOutput = "";
+    if (String(repoStatus.stdout || "").trim().length > 0 && targetFiles.length > 0) {
+      const scopedStatus = await spawnAsync("git", ["status", "--porcelain", "--", ...targetFiles], { cwd }) as SpawnAsyncResult;
+      if (scopedStatus.status !== 0) return { applied: false, mode: "none" as const };
+      scopedStatusOutput = String(scopedStatus.stdout || "");
+    }
+
+    const evidence = deriveDeterministicCleanTreeEvidence(
+      String(repoStatus.stdout || ""),
+      scopedStatusOutput,
+      targetFiles,
+    );
+    if (evidence.mode === "none" || evidence.lines.length === 0) {
+      return { applied: false, mode: "none" as const };
+    }
+
+    parsed.fullOutput = `${String(parsed.fullOutput || "").trimEnd()}\n${evidence.lines.join("\n")}`.trim();
+    parsed.cleanTreeStatus = true;
+    return { applied: true, mode: evidence.mode };
+  } catch {
+    return { applied: false, mode: "none" as const };
+  }
+}
+
 export function isNonRetryablePolicyBlockReason(reason: unknown): boolean {
   const text = String(reason || "").trim().toLowerCase();
   if (!text) return false;
@@ -1578,9 +1667,48 @@ export function isNonRetryablePolicyBlockReason(reason: unknown): boolean {
   return false;
 }
 
+/**
+ * Build a deterministic WorkerRunContract for a dispatch by merging box.config.json
+ * defaults with optional per-instruction overrides. Provides bounded execution bounds
+ * (maxTurns, sessionInputPolicy) and tracing metadata for every worker invocation.
+ */
+export function buildWorkerRunContract(config: any, instruction: any): import("../types/index.js").WorkerRunContract {
+  const base = config?.workerRunContract || {};
+  return {
+    maxTurns:                 Number(instruction?.maxTurns  ?? base?.maxTurns  ?? 50),
+    workflowName:             String(instruction?.workflowName ?? base?.workflowName ?? "box-evolution"),
+    groupId:                  String(instruction?.groupId   ?? base?.groupId   ?? "box-workers"),
+    traceMetadata:            typeof base?.traceMetadata === "object" && base.traceMetadata
+                                ? { ...base.traceMetadata }
+                                : {},
+    traceIncludeSensitiveData: base?.traceIncludeSensitiveData === true ? true : false,
+    sessionInputPolicy:       (base?.sessionInputPolicy || "allow_all") as "allow_all" | "no_tools" | "auto",
+  };
+}
+
+/**
+ * Derive a short, deterministic run identifier from taskId + attempt + timestamp.
+ * Used to correlate failure envelopes, retry decisions, and boundary checkpoints
+ * within a single attempt lineage.
+ */
+function buildRunId(taskId: string | number | null | undefined, attempt: number): string {
+  const seed = `${String(taskId ?? "")}:${attempt}:${Date.now()}`;
+  return createHash("sha256").update(seed).digest("hex").slice(0, 16);
+}
+
 // ── Main Worker Conversation ─────────────────────────────────────────────────
 
 export async function runWorkerConversation(config, roleName, instruction, history = [], sessionState: WorkerSessionState = {}, _token?: CancellationToken | null) {
+  // ── Attempt-scoped execution metadata ────────────────────────────────────
+  // runId links all failure/retry artifacts for this specific attempt lineage.
+  // firstAttemptAt is only set once and carried forward across retries.
+  const attempt = Number(instruction?.reworkAttempt ?? 0);
+  const runId = buildRunId(instruction?.taskId, attempt);
+  const firstAttemptAt: string = String(
+    instruction?.firstAttemptAt ?? new Date().toISOString()
+  );
+  const attemptMeta: AttemptMeta = { runId, attempt, firstAttemptAt };
+
   const taskHints: TaskHints = {
     estimatedLines: Number(instruction.estimatedLines || 0),
     estimatedDurationMinutes: Number(instruction.estimatedDurationMinutes || 0),
@@ -1820,13 +1948,15 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // Single-prompt mode: no autopilot continuations.
   // All implementation workers dispatched by the daemon need full tool access.
   const allowAllTools = shouldEnableFullToolAccess(roleName, instruction.taskKind, instruction.task);
+  const runContract = buildWorkerRunContract(config, instruction);
   const args = buildAgentArgs({
     agentSlug,
     prompt: conversationContext,
     model,
     allowAll: allowAllTools,
     noAskUser: allowAllTools,
-    maxContinues: undefined
+    maxContinues: undefined,
+    runContract,
   });
 
   // Compute timeout: config.runtime.workerTimeoutMinutes → ms.
@@ -1957,6 +2087,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         errorMessage: errorMsg,
         logLines: result.timedOut ? ["Process timed out"] : [],
         taskId: instruction.taskId || null,
+        attemptMeta,
       });
       if (cfResult.ok) {
         appendFailureClassification(config, cfResult.classification).catch(() => { /* non-fatal */ });
@@ -1972,6 +2103,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         errorMessage: errorMsg,
         logLines: result.timedOut ? ["Process timed out"] : [],
         taskId: instruction.taskId || null,
+        attemptMeta,
       });
       if (exitClassification.ok) {
         const rd = resolveRetryAction(
@@ -1996,12 +2128,14 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         errorMessage: errorMsg,
         logLines: result.timedOut ? ["Process timed out"] : [],
         taskId: instruction.taskId || null,
+        attemptMeta,
       });
       const envelope = buildFailureEnvelope(
         cfResult2.ok ? cfResult2.classification : null,
         errorRetryDecision,
         terminationCause,
         instruction.taskId || null,
+        attemptMeta,
       );
       appendFailureClassification(config, { ...envelope, _type: "failure_envelope" }).catch(() => { /* non-fatal */ });
     } catch { /* non-fatal — envelope build must never block worker results */ }
@@ -2046,16 +2180,36 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     };
   }
 
-  // Save raw output for debugging
+  // Save raw output for debugging — include runId so attempt lineages can be correlated.
+  // This file is overwritten each attempt; resetAttemptBoundary below clears stale
+  // attempt-scoped checkpoints so replay state stays deterministic.
   try {
     writeFileSync(
       path.join(config.paths?.stateDir || "state", `debug_worker_${roleName.replace(/\s+/g, "_")}.txt`),
-      `TASK: ${instruction.task}\n\nOUTPUT:\n${stdout}`,
+      `TASK: ${instruction.task}\nRUN_ID: ${runId}\nATTEMPT: ${attempt}\n\nOUTPUT:\n${stdout}`,
       "utf8"
     );
   } catch { /* non-critical */ }
 
+  // Reset attempt-scoped boundary checkpoint so retries begin from a clean slate.
+  try {
+    const checkpointThreadId = String(instruction?.taskId || instruction?.lineageId || roleName || "");
+    if (checkpointThreadId) {
+      await resetAttemptBoundary(config, {
+        thread_id: checkpointThreadId,
+        checkpoint_ns: CHECKPOINT_NS.ATTEMPT,
+      });
+    }
+  } catch { /* non-critical — checkpoint reset must never block result path */ }
+
   const parsed: ParsedWorkerResponse = parseWorkerResponse(stdout, stderr);
+  const cleanTreeSupplement = await supplementCleanTreeEvidenceIfMissing(config, parsed, instruction);
+  if (cleanTreeSupplement.applied) {
+    await appendProgress(
+      config,
+      `[WORKER:${roleName}] Deterministic clean-tree evidence supplemented mode=${cleanTreeSupplement.mode}`
+    );
+  }
   const artifactEvidence = checkPostMergeArtifact(parsed.fullOutput || "", {
     expectedTargetFiles: Array.isArray(instruction.targetFiles) ? instruction.targetFiles : [],
   });

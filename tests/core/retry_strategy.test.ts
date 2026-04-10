@@ -785,3 +785,43 @@ describe("FailureEnvelope + resolveRetryAction integration", () => {
     assert.ok(envelope.envelopeId, "envelopeId must be non-empty");
   });
 });
+
+// ── WORKER_STEP_STATE ─────────────────────────────────────────────────────────
+
+import { WORKER_STEP_STATE } from "../../src/core/retry_strategy.js";
+
+describe("WORKER_STEP_STATE enum", () => {
+  it("is frozen and has all four required states", () => {
+    assert.ok(Object.isFrozen(WORKER_STEP_STATE));
+    assert.equal(WORKER_STEP_STATE.RUN_AGAIN, "RUN_AGAIN");
+    assert.equal(WORKER_STEP_STATE.HANDOFF, "HANDOFF");
+    assert.equal(WORKER_STEP_STATE.FINAL_OUTPUT, "FINAL_OUTPUT");
+    assert.equal(WORKER_STEP_STATE.INTERRUPTION, "INTERRUPTION");
+  });
+
+  it("has exactly four values", () => {
+    assert.equal(Object.keys(WORKER_STEP_STATE).length, 4);
+  });
+});
+
+describe("resolveRetryAction — workerStepState field", () => {
+  it("retry action produces RUN_AGAIN workerStepState in uniform mode", () => {
+    const result = resolveRetryAction(FAILURE_CLASS.ENVIRONMENT, 0, uniformConfig(), null);
+    assert.ok(result.ok);
+    assert.ok("workerStepState" in result.decision, "workerStepState must be present");
+    assert.equal(result.decision.workerStepState, WORKER_STEP_STATE.RUN_AGAIN);
+  });
+
+  it("escalate action produces INTERRUPTION workerStepState", () => {
+    // Force escalation by exceeding maxAttempts for environment class in adaptive mode
+    const result = resolveRetryAction(FAILURE_CLASS.ENVIRONMENT, 99, adaptiveConfig(), null);
+    assert.ok(result.ok);
+    assert.equal(result.decision.workerStepState, WORKER_STEP_STATE.INTERRUPTION);
+  });
+
+  it("negative: invalid failure class returns ok=false with UNKNOWN_FAILURE_CLASS code", () => {
+    const result = resolveRetryAction("UNKNOWN_CLASS" as any, 0, {}, null);
+    assert.equal(result.ok, false);
+    assert.equal(result.code, RETRY_RESOLVE_REASON.UNKNOWN_FAILURE_CLASS);
+  });
+});
