@@ -2520,3 +2520,62 @@ export function computeHistoricalLaneDifficultyPriors(
   return result;
 }
 
+// ── Postmortem Recurrence Impact ─────────────────────────────────────────────
+
+/**
+ * Compute the measurable policy impact of Athena postmortem recurrence quality.
+ *
+ * "Recurrence" = a failure that was already the subject of a postmortem and yet
+ * recurred in a subsequent cycle.  High recurrence means postmortems are not
+ * translating into action.
+ *
+ * Decision rules:
+ *   - recurrenceRate = recurrences / max(totalPostmortems, 1)
+ *   - impactScore = 1 - recurrenceRate   (higher is better: 1.0 = zero recurrence)
+ *   - policyRecommendation derived from threshold bands
+ *
+ * @param postmortems        — array of postmortem records; each may have `recurred: boolean`
+ * @param recurrenceHistory  — optional explicit list of cycleIds known to have had recurrence
+ */
+export function computePostmortemRecurrenceImpact(
+  postmortems: unknown[],
+  recurrenceHistory: string[] = [],
+): {
+  recurrenceRate: number;
+  impactScore: number;
+  recurrenceCount: number;
+  totalPostmortems: number;
+  policyRecommendation: string;
+} {
+  const pms = Array.isArray(postmortems) ? postmortems : [];
+  const totalPostmortems = pms.length;
+
+  // Count recurrences from postmortem records plus explicit history (deduplicated)
+  const recurredFromRecords = pms.filter(
+    (pm) => pm && typeof pm === "object" && Boolean((pm as any).recurred),
+  ).length;
+
+  const explicitRecurrences = Array.isArray(recurrenceHistory) ? recurrenceHistory.length : 0;
+  // Avoid double-counting: use whichever measure is higher
+  const recurrenceCount = Math.max(recurredFromRecords, explicitRecurrences);
+
+  const recurrenceRate = totalPostmortems > 0
+    ? Math.round((recurrenceCount / totalPostmortems) * 10000) / 10000
+    : 0;
+
+  const impactScore = Math.round((1 - recurrenceRate) * 10000) / 10000;
+
+  let policyRecommendation: string;
+  if (recurrenceRate === 0) {
+    policyRecommendation = "no_action_required: zero_recurrence";
+  } else if (recurrenceRate <= 0.20) {
+    policyRecommendation = "monitor: low_recurrence";
+  } else if (recurrenceRate <= 0.50) {
+    policyRecommendation = "review_postmortem_quality: moderate_recurrence";
+  } else {
+    policyRecommendation = "escalate_reflection_depth: high_recurrence";
+  }
+
+  return { recurrenceRate, impactScore, recurrenceCount, totalPostmortems, policyRecommendation };
+}
+

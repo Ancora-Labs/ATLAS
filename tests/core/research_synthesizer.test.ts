@@ -575,3 +575,159 @@ describe("scheduleBoundedRecoverySynthesis", () => {
     );
   });
 });
+
+// ── Category Frontier Ingestion Tests ─────────────────────────────────────────
+
+import {
+  normalizeCategoryFrontierEntry,
+  buildBenchmarkEntry,
+  persistBenchmarkEntry,
+  BENCHMARK_ENTRY_SCHEMA_VERSION,
+} from "../../src/core/research_synthesizer.js";
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs/promises";
+
+describe("normalizeCategoryFrontierEntry — category frontier normalization", () => {
+  it("normalizes a valid frontier entry with all fields", () => {
+    const { entry, errors } = normalizeCategoryFrontierEntry({
+      category: "django",
+      resolvedCount: 72,
+      totalCount: 100,
+      model: "Claude Sonnet 4.6",
+      date: "2024-01-01",
+    });
+    assert.equal(errors.length, 0, "no errors for valid input");
+    assert.equal(entry.category, "django");
+    assert.equal(entry.resolvedCount, 72);
+    assert.equal(entry.totalCount, 100);
+    assert.equal(entry.frontierScore, 0.72);
+    assert.equal(entry.model, "Claude Sonnet 4.6");
+  });
+
+  it("computes frontierScore correctly from resolvedCount/totalCount", () => {
+    const { entry } = normalizeCategoryFrontierEntry({
+      category: "scikit-learn",
+      resolvedCount: 3,
+      totalCount: 10,
+      model: "GPT-4o",
+      date: "2024-06-01",
+    });
+    assert.equal(entry.frontierScore, 0.30);
+  });
+
+  it("returns frontierScore=0 when totalCount is 0 (no division by zero)", () => {
+    const { entry } = normalizeCategoryFrontierEntry({
+      category: "empty-category",
+      resolvedCount: 0,
+      totalCount: 0,
+      model: "test-model",
+      date: "2024-01-01",
+    });
+    assert.equal(entry.frontierScore, 0, "zero totalCount → frontierScore=0");
+  });
+
+  it("records validation error when category is missing (negative path)", () => {
+    const { errors } = normalizeCategoryFrontierEntry({
+      resolvedCount: 5,
+      totalCount: 10,
+      model: "test",
+      date: "2024-01-01",
+    });
+    assert.ok(errors.some((e) => e.includes("missing_field:category")), "missing category → error");
+  });
+
+  it("records validation error when resolved > total (negative path)", () => {
+    const { errors } = normalizeCategoryFrontierEntry({
+      category: "django",
+      resolvedCount: 50,
+      totalCount: 10,
+      model: "test",
+      date: "2024-01-01",
+    });
+    assert.ok(errors.some((e) => e.includes("invalid_counts")), "resolved>total → error");
+  });
+
+  it("normalizes per-instance results when provided", () => {
+    const { entry } = normalizeCategoryFrontierEntry({
+      category: "django",
+      resolvedCount: 2,
+      totalCount: 3,
+      model: "Claude",
+      date: "2024-01-01",
+      perInstance: [
+        { instanceId: "django__1234", resolved: true, model: "Claude", date: "2024-01-01" },
+        { instanceId: "django__5678", resolved: false, model: "Claude", date: "2024-01-01" },
+      ],
+    });
+    assert.ok(Array.isArray(entry.perInstance), "perInstance should be array");
+    assert.equal(entry.perInstance?.length, 2);
+    assert.equal(entry.perInstance?.[0].instanceId, "django__1234");
+    assert.equal(entry.perInstance?.[0].resolved, true);
+  });
+});
+
+describe("buildBenchmarkEntry — category frontiers integration", () => {
+  it("includes categoryFrontiers when provided", () => {
+    const frontiers = [
+      {
+        category: "django",
+        resolvedCount: 72,
+        totalCount: 100,
+        frontierScore: 0.72,
+        model: "Claude",
+        date: "2024-01-01",
+      },
+    ];
+    const entry = buildBenchmarkEntry("cycle-001", [], frontiers);
+    assert.ok(Array.isArray(entry.categoryFrontiers), "categoryFrontiers present");
+    assert.equal(entry.categoryFrontiers?.length, 1);
+    assert.equal(entry.categoryFrontiers?.[0].category, "django");
+  });
+
+  it("omits categoryFrontiers when not provided", () => {
+    const entry = buildBenchmarkEntry("cycle-002", []);
+    assert.equal(entry.categoryFrontiers, undefined, "categoryFrontiers absent when not passed");
+  });
+
+  it("omits categoryFrontiers when empty array provided", () => {
+    const entry = buildBenchmarkEntry("cycle-003", [], []);
+    assert.equal(entry.categoryFrontiers, undefined, "empty frontiers array omitted");
+  });
+
+  it("schemaVersion is BENCHMARK_ENTRY_SCHEMA_VERSION", () => {
+    const entry = buildBenchmarkEntry("cycle-004", []);
+    assert.equal(entry.schemaVersion, BENCHMARK_ENTRY_SCHEMA_VERSION);
+  });
+});
+
+describe("persistBenchmarkEntry — category frontiers persistence", () => {
+  it("persists entry with categoryFrontiers to json file", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-synth-cat-"));
+    const config = { paths: { stateDir: tmpDir } };
+    const frontiers = [
+      {
+        category: "django",
+        resolvedCount: 50,
+        totalCount: 100,
+        frontierScore: 0.50,
+        model: "test-model",
+        date: "2024-01-01",
+      },
+    ];
+    await persistBenchmarkEntry(config, "cycle-persist-001", [], frontiers);
+    const filePath = path.join(tmpDir, "benchmark_ground_truth.json");
+    const raw = JSON.parse(await fs.readFile(filePath, "utf8"));
+    assert.ok(Array.isArray(raw.entries), "entries array present");
+    assert.equal(raw.entries.length, 1);
+    assert.ok(Array.isArray(raw.entries[0].categoryFrontiers), "categoryFrontiers in persisted entry");
+    assert.equal(raw.entries[0].categoryFrontiers[0].category, "django");
+  });
+
+  it("does not throw when stateDir is invalid (fail-open)", async () => {
+    await assert.doesNotReject(
+      persistBenchmarkEntry({ paths: { stateDir: "/nonexistent/dir" } }, "cycle-x", []),
+      "persistBenchmarkEntry must not throw on write failure",
+    );
+  });
+});

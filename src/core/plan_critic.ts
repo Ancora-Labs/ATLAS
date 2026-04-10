@@ -338,6 +338,122 @@ export function repairPlan(plan, criticResult) {
 }
 
 /**
+ * Score a candidate set (array of plans) as a single aggregate.
+ *
+ * Aggregates `critiquePlan` scores across all plans and returns:
+ *   - setScore: mean critic score across the candidate set (0–1)
+ *   - dimensionCoverage: fraction of distinct CRITIC_DIMENSION keys that have ≥1 plan scoring 1.0
+ *   - planCount: number of plans in the candidate set
+ *
+ * @param {object[]} plans - candidate plan set to score
+ * @returns {{ setScore: number, dimensionCoverage: number, planCount: number }}
+ */
+export function scoreCandidateSet(plans: object[]): {
+  setScore: number;
+  dimensionCoverage: number;
+  planCount: number;
+} {
+  if (!Array.isArray(plans) || plans.length === 0) {
+    return { setScore: 0, dimensionCoverage: 0, planCount: 0 };
+  }
+  const results = plans.map(p => critiquePlan(p));
+  const totalScore = results.reduce((acc, r) => acc + r.score, 0);
+  const setScore = Math.round((totalScore / results.length) * 1000) / 1000;
+
+  // Dimension coverage: fraction of CRITIC_DIMENSION keys that have at least one plan scoring 1.0
+  const allDimKeys = Object.values(CRITIC_DIMENSION);
+  const coveredDims = allDimKeys.filter(dimKey =>
+    results.some(r => r.dimensions[dimKey] === 1.0)
+  );
+  const dimensionCoverage = allDimKeys.length > 0
+    ? Math.round((coveredDims.length / allDimKeys.length) * 1000) / 1000
+    : 0;
+
+  return { setScore, dimensionCoverage, planCount: plans.length };
+}
+
+/**
+ * Score differential below which two candidate sets are treated as tied.
+ * When candidates are within this threshold, uncertainty-aware tie-breaks apply.
+ */
+export const CANDIDATE_TIE_THRESHOLD = 0.05 as const;
+
+/**
+ * Maximum number of candidate sets to evaluate in selectBestCandidateSet.
+ * Bounds the cost of candidate comparison to prevent O(n) plan-critic loops.
+ */
+export const MAX_CANDIDATE_SETS = 5 as const;
+
+/**
+ * Select the best candidate plan set from multiple alternatives using rubric scoring
+ * and uncertainty-aware tie-breaks.
+ *
+ * Selection algorithm:
+ *   1. Score each candidate set via scoreCandidateSet (bounded to MAX_CANDIDATE_SETS).
+ *   2. Rank by setScore descending.
+ *   3. When the top two candidates are within CANDIDATE_TIE_THRESHOLD:
+ *        - Prefer higher dimensionCoverage (broader quality signal).
+ *        - If still tied, prefer fewer plans (lower blast radius).
+ *        - If still tied, use the original order (stable, first-found wins).
+ *   4. Return the winning set with selection metadata.
+ *
+ * @param candidates - array of candidate plan sets (each set is an array of plans)
+ * @param opts - optional { threshold?: number } to override tie-break threshold
+ * @returns {{ bestCandidates: object[], rank: number, score: number, tieBreakUsed: boolean, reason: string }}
+ */
+export function selectBestCandidateSet(
+  candidates: object[][],
+  opts: { threshold?: number } = {},
+): {
+  bestCandidates: object[];
+  rank: number;
+  score: number;
+  tieBreakUsed: boolean;
+  reason: string;
+} {
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    return { bestCandidates: [], rank: 0, score: 0, tieBreakUsed: false, reason: "no_candidates" };
+  }
+
+  const bounded = candidates.slice(0, MAX_CANDIDATE_SETS);
+  const tieThreshold = typeof opts.threshold === "number" ? opts.threshold : CANDIDATE_TIE_THRESHOLD;
+
+  const scored = bounded.map((set, idx) => ({
+    set,
+    idx,
+    ...scoreCandidateSet(Array.isArray(set) ? set : []),
+  }));
+
+  // Primary sort: setScore descending
+  scored.sort((a, b) => {
+    if (b.setScore !== a.setScore) return b.setScore - a.setScore;
+    // Tie-break 1: higher dimensionCoverage
+    if (b.dimensionCoverage !== a.dimensionCoverage) return b.dimensionCoverage - a.dimensionCoverage;
+    // Tie-break 2: fewer plans (lower blast radius)
+    if (a.planCount !== b.planCount) return a.planCount - b.planCount;
+    // Tie-break 3: original index (stable)
+    return a.idx - b.idx;
+  });
+
+  const best = scored[0];
+  const second = scored[1];
+
+  const tieBreakUsed = second !== undefined && Math.abs(best.setScore - second.setScore) <= tieThreshold;
+
+  const reason = tieBreakUsed
+    ? `tie_break_applied: scores_within_${tieThreshold}_used_dimension_coverage_${best.dimensionCoverage}`
+    : `clear_winner: score=${best.setScore}`;
+
+  return {
+    bestCandidates: Array.isArray(best.set) ? best.set : [],
+    rank: best.idx,
+    score: best.setScore,
+    tieBreakUsed,
+    reason,
+  };
+}
+
+/**
  * Full dual-pass: run critic on all plans, repair rejected ones, re-evaluate.
  *
  * @param {object[]} plans

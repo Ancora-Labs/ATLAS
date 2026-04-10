@@ -4460,3 +4460,60 @@ export function buildPostmortemEnvelopeSummary(
     resolvedAt:        envelope.resolvedAt,
   };
 }
+
+// ── Postmortem Recurrence Quality Score ───────────────────────────────────────
+
+/**
+ * Compute a quality score measuring how effectively Athena postmortems prevent
+ * recurrence of the same failure class.
+ *
+ * Quality criteria:
+ *   1. decisionQualityLabel present and not "low"           → +1 pt each
+ *   2. recommendation is not NONE (i.e., actionable)         → +1 pt each
+ *   3. evidenceCompleteness is "complete" or "sufficient"    → +1 pt each
+ *   4. recurred === false (did not recur after postmortem)   → +2 pts each
+ *
+ * qualityScore = totalPoints / maxPoints, clamped to [0, 1].
+ *
+ * Returns 0 for empty input.
+ *
+ * @param postmortems — array of postmortem records from Athena
+ */
+export function computeRecurrenceQualityScore(postmortems: unknown[]): {
+  qualityScore: number;
+  totalPoints: number;
+  maxPoints: number;
+  postmortemCount: number;
+} {
+  const pms = Array.isArray(postmortems) ? postmortems : [];
+  if (pms.length === 0) {
+    return { qualityScore: 0, totalPoints: 0, maxPoints: 0, postmortemCount: 0 };
+  }
+
+  let totalPoints = 0;
+  const maxPoints = pms.length * 4; // max 4 points per postmortem
+
+  for (const pm of pms) {
+    const p = pm && typeof pm === "object" ? pm as Record<string, unknown> : {};
+
+    // +1 if decisionQualityLabel is present and non-empty and not "low"
+    const dql = String(p.decisionQualityLabel ?? "").trim().toLowerCase();
+    if (dql && dql !== "low" && dql !== "unknown") totalPoints++;
+
+    // +1 if recommendation is actionable (not NONE or empty)
+    const rec = String(p.recommendation ?? "").trim().toLowerCase();
+    if (rec && rec !== "none" && rec !== "no_recommendation") totalPoints++;
+
+    // +1 if evidenceCompleteness is "complete" or "sufficient"
+    const ec = String(p.evidenceCompleteness ?? "").trim().toLowerCase();
+    if (ec === "complete" || ec === "sufficient") totalPoints++;
+
+    // +2 if the postmortem did NOT recur (issue was resolved)
+    const recurred = (p as any).recurred;
+    if (recurred === false) totalPoints += 2;
+  }
+
+  const qualityScore = Math.round((totalPoints / maxPoints) * 10000) / 10000;
+
+  return { qualityScore, totalPoints, maxPoints, postmortemCount: pms.length };
+}

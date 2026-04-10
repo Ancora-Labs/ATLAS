@@ -1074,6 +1074,106 @@ export const IMPLEMENTATION_STATUS = Object.freeze({
 /** Schema version for benchmark_ground_truth.json entries. */
 export const BENCHMARK_ENTRY_SCHEMA_VERSION = 1;
 
+// ── Category Frontier Structures ─────────────────────────────────────────────
+
+/**
+ * Per-instance result within a benchmark category frontier.
+ * Optional — only populated when per-instance data is available.
+ */
+export interface BenchmarkInstanceResult {
+  /** Stable unique instance identifier (e.g. SWE-bench task id). */
+  instanceId: string;
+  /** Whether this instance was resolved/passed. */
+  resolved: boolean;
+  /** Model that achieved this result. */
+  model: string;
+  /** ISO 8601 date the result was recorded. */
+  date: string;
+}
+
+/**
+ * Frontier entry for a single benchmark category.
+ * Tracks the best-known score (resolved/total) for a specific category,
+ * along with the model and date that achieved it.
+ */
+export interface BenchmarkCategoryFrontier {
+  /** Category name (e.g. "django", "scikit-learn", "OSWorld-web"). */
+  category: string;
+  /** Number of instances resolved at the frontier. */
+  resolvedCount: number;
+  /** Total instances in this category. */
+  totalCount: number;
+  /** Normalized resolution rate at frontier: resolvedCount / totalCount. */
+  frontierScore: number;
+  /** Model that achieved the frontier result. */
+  model: string;
+  /** ISO 8601 date of the frontier measurement. */
+  date: string;
+  /** Optional per-instance results for the frontier. */
+  perInstance?: BenchmarkInstanceResult[];
+}
+
+/**
+ * Build a normalized BenchmarkCategoryFrontier entry from raw input.
+ *
+ * Validation rules:
+ *   - resolvedCount/totalCount must be non-negative integers; resolved <= total.
+ *   - frontierScore = resolvedCount / totalCount (clamped to [0, 1]).
+ *   - totalCount=0 → frontierScore = 0 (avoid division by zero).
+ *   - model and date are coerced to strings; empty values are retained as-is.
+ *
+ * @param raw — untrusted input from external benchmark source
+ * @returns normalized frontier entry and any validation errors
+ */
+export function normalizeCategoryFrontierEntry(
+  raw: Record<string, unknown>,
+): { entry: BenchmarkCategoryFrontier; errors: string[] } {
+  const errors: string[] = [];
+  const input = raw && typeof raw === "object" ? raw : {};
+
+  const category = String(input.category ?? "").trim();
+  if (!category) errors.push("missing_field:category");
+
+  const resolvedCount = Math.max(0, Math.floor(Number(input.resolvedCount ?? 0)));
+  const totalCount = Math.max(0, Math.floor(Number(input.totalCount ?? 0)));
+
+  if (resolvedCount > totalCount && totalCount > 0) {
+    errors.push(`invalid_counts:resolved(${resolvedCount})>total(${totalCount})`);
+  }
+
+  const frontierScore = totalCount > 0
+    ? Math.min(1, Math.max(0, Math.round((resolvedCount / totalCount) * 10000) / 10000))
+    : 0;
+
+  const model = String(input.model ?? "").trim();
+  const date = String(input.date ?? "").trim();
+
+  let perInstance: BenchmarkInstanceResult[] | undefined;
+  if (Array.isArray(input.perInstance)) {
+    perInstance = input.perInstance.map((inst: unknown, idx: number) => {
+      const r = inst && typeof inst === "object" ? inst as Record<string, unknown> : {};
+      return {
+        instanceId: String(r.instanceId ?? `instance-${idx}`),
+        resolved: Boolean(r.resolved),
+        model: String(r.model ?? model),
+        date: String(r.date ?? date),
+      };
+    });
+  }
+
+  const entry: BenchmarkCategoryFrontier = {
+    category,
+    resolvedCount,
+    totalCount,
+    frontierScore,
+    model,
+    date,
+    ...(perInstance !== undefined ? { perInstance } : {}),
+  };
+
+  return { entry, errors };
+}
+
 /** A single tracked research recommendation entry. */
 export interface ResearchRecommendation {
   id: string;
@@ -1133,13 +1233,24 @@ export function extractRecommendationsList(
 export function buildBenchmarkEntry(
   cycleId: string,
   topics: Array<Record<string, unknown>>,
-): { cycleId: string; evaluatedAt: string; schemaVersion: number; recommendations: ResearchRecommendation[] } {
-  return {
+  categoryFrontiers?: BenchmarkCategoryFrontier[],
+): {
+  cycleId: string;
+  evaluatedAt: string;
+  schemaVersion: number;
+  recommendations: ResearchRecommendation[];
+  categoryFrontiers?: BenchmarkCategoryFrontier[];
+} {
+  const entry: ReturnType<typeof buildBenchmarkEntry> = {
     cycleId: String(cycleId || ""),
     evaluatedAt: new Date().toISOString(),
     schemaVersion: BENCHMARK_ENTRY_SCHEMA_VERSION,
     recommendations: extractRecommendationsList(topics),
   };
+  if (Array.isArray(categoryFrontiers) && categoryFrontiers.length > 0) {
+    entry.categoryFrontiers = categoryFrontiers;
+  }
+  return entry;
 }
 
 /**
@@ -1151,11 +1262,12 @@ export async function persistBenchmarkEntry(
   config: any,
   cycleId: string,
   topics: Array<Record<string, unknown>>,
+  categoryFrontiers?: BenchmarkCategoryFrontier[],
 ): Promise<void> {
   const stateDir = config?.paths?.stateDir || "state";
   const filePath = path.join(stateDir, "benchmark_ground_truth.json");
   try {
-    const entry = buildBenchmarkEntry(cycleId, topics);
+    const entry = buildBenchmarkEntry(cycleId, topics, categoryFrontiers);
     const existing = await readJson(filePath, {
       schemaVersion: BENCHMARK_ENTRY_SCHEMA_VERSION,
       updatedAt: null,

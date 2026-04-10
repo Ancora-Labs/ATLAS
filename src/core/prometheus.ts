@@ -35,7 +35,7 @@ import {
   GRAPH_DIAGNOSTICS_JSONL_SCHEMA,
   GRAPH_DIAGNOSTICS_RECORD_TYPE,
 } from "./dependency_graph_resolver.js";
-import { dualPassCriticRepair } from "./plan_critic.js";
+import { dualPassCriticRepair, selectBestCandidateSet, CANDIDATE_TIE_THRESHOLD as _CANDIDATE_TIE_THRESHOLD, MAX_CANDIDATE_SETS as _MAX_CANDIDATE_SETS } from "./plan_critic.js";
 import { compileAcceptanceCriteria, enrichPlansWithAC } from "./ac_compiler.js";
 import {
   validateLeadershipContract,
@@ -3978,6 +3978,53 @@ export function applyPlanningRubric(plans: any[]): any[] {
       if (scoreDiff !== 0) return scoreDiff;
       return Number(a?.priority || 9999) - Number(b?.priority || 9999);
     });
+}
+
+// ── Bounded Candidate Generation and Selection ────────────────────────────────
+
+/**
+ * Re-exported constants from plan_critic so callers only need one import.
+ * Bounded maximum candidate sets evaluated during deterministic selection.
+ */
+export const MAX_CANDIDATE_SETS = _MAX_CANDIDATE_SETS;
+
+/**
+ * Score delta below which two candidate sets are treated as tied and
+ * uncertainty-aware tie-breaks apply.
+ */
+export const CANDIDATE_TIE_THRESHOLD = _CANDIDATE_TIE_THRESHOLD;
+
+/**
+ * Select the best plan set from multiple generated candidate alternatives using
+ * rubric scoring and uncertainty-aware tie-breaks.
+ *
+ * This is the Prometheus-level entry point for multi-candidate planning.
+ * Instead of committing to a single draft, Prometheus can generate up to
+ * MAX_CANDIDATE_SETS candidate plan arrays and pass them here.  The function
+ * uses the critic rubric to score each set, then applies tie-breaks when
+ * top candidates are within CANDIDATE_TIE_THRESHOLD.
+ *
+ * Tie-break cascade (in order, fully deterministic):
+ *   1. Higher aggregate rubric score wins.
+ *   2. If tied (within threshold): higher dimension coverage wins.
+ *   3. If still tied: fewer total plans wins (lower blast radius).
+ *   4. If still tied: earlier candidate (lower array index) wins.
+ *
+ * @param candidateSets — array of candidate plan arrays (max MAX_CANDIDATE_SETS evaluated)
+ * @param opts          — { threshold?: number } overrides the tie-break threshold
+ * @returns Selection result with bestCandidates, score, and metadata
+ */
+export function selectBestCandidatePlans(
+  candidateSets: object[][],
+  opts: { threshold?: number } = {},
+): {
+  bestCandidates: object[];
+  rank: number;
+  score: number;
+  tieBreakUsed: boolean;
+  reason: string;
+} {
+  return selectBestCandidateSet(candidateSets, opts);
 }
 
 // ── Architecture Drift Confidence Binding (Task 4) ──────────────────────────

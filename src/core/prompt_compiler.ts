@@ -201,6 +201,33 @@ export const COMMON_SECTIONS = Object.freeze({
 });
 
 /**
+ * Prompt section instructing the planner to generate bounded candidate plan sets
+ * rather than a single draft.  Each candidate should be a self-contained,
+ * complete plan array that can be scored independently by the plan critic.
+ *
+ * Usage: include this section in the Prometheus planning prompt when multi-candidate
+ * generation is enabled.  The orchestrator will pass all returned candidate sets to
+ * selectBestCandidatePlans for rubric-based deterministic selection.
+ *
+ * Bounded to MAX_CANDIDATE_SETS (default 5) to control token spend.
+ */
+export const CANDIDATE_GENERATION_SECTION = section(
+  "candidate-generation",
+  [
+    "CANDIDATE PLAN GENERATION (bounded multi-draft mode):",
+    "Generate between 2 and 5 distinct candidate plan sets. Each candidate set must be a",
+    "self-contained, complete, and immediately executable plan array.",
+    "Candidates must differ in: decomposition strategy, wave ordering, or task granularity.",
+    "Do NOT generate near-duplicate candidates that differ only in phrasing.",
+    "Label each candidate with: [CANDIDATE N] where N starts at 1.",
+    "The orchestrator will score all candidates using the plan critic rubric and select the",
+    "best set deterministically. You do not need to rank or select — generate all candidates.",
+    "Each candidate must satisfy: measurable acceptance criteria, concrete verification command,",
+    "specific target files, positive capacityDelta, and requestROI > 1.",
+  ].join("\n")
+);
+
+/**
  * Estimate token count for a text string.
  * Uses the ~4 chars per token heuristic (accurate ±10% for English/code).
  *

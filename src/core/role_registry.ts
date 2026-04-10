@@ -91,6 +91,85 @@ export function isSpecialistLane(lane: unknown): boolean {
   return normalized.length > 0 && normalized !== "implementation" && normalized in LANE_WORKER_NAMES;
 }
 
+// ── Task-Lane Classification ───────────────────────────────────────────────────
+
+/**
+ * Deterministic task-lane kinds.
+ *
+ * WORKFLOW — scripted, tool-executable, deterministic sequences (CI, infra, pipelines).
+ *            These tasks have fixed steps, known acceptance criteria, and run without
+ *            AI deliberation beyond initial dispatch.
+ *
+ * AGENT    — tasks requiring AI reasoning, code generation, research, or review.
+ *            These tasks benefit from full specialist worker attention and should
+ *            not be short-circuited to workflow-style execution.
+ */
+export const TASK_LANE_KIND = Object.freeze({
+  WORKFLOW: "workflow",
+  AGENT:    "agent",
+} as const);
+
+export type TaskLaneKind = typeof TASK_LANE_KIND[keyof typeof TASK_LANE_KIND];
+
+/**
+ * Task-kind tokens that signal workflow-lane tasks (scripted, tool-executable).
+ * Any plan whose taskKind normalized form matches one of these tokens is routed
+ * to the WORKFLOW lane.
+ */
+export const WORKFLOW_TASK_KIND_TOKENS: ReadonlySet<string> = new Set([
+  "ci",
+  "ci-fix",
+  "ci-repair",
+  "infra",
+  "infrastructure",
+  "pipeline",
+  "deploy",
+  "release",
+  "migration",
+  "scaffold",
+  "debt",
+  "architecture-drift",
+]);
+
+/**
+ * Task-text patterns that signal workflow tasks even when taskKind is absent.
+ * Matched case-insensitively against the plan's task field.
+ */
+const WORKFLOW_TASK_TEXT_PATTERN =
+  /\b(ci[- ]fix|ci[- ]repair|deploy|pipeline|release|scaffold|migration|infra(structure)?|docker|architecture[- ]drift)\b/i;
+
+/**
+ * Classify a plan as WORKFLOW or AGENT lane.
+ *
+ * Rules (in order, first match wins):
+ *   1. If plan.taskLane is explicitly set and is a valid TASK_LANE_KIND, use it.
+ *   2. If plan.taskKind normalized matches any WORKFLOW_TASK_KIND_TOKENS, → WORKFLOW.
+ *   3. If plan.task matches WORKFLOW_TASK_TEXT_PATTERN, → WORKFLOW.
+ *   4. Default: AGENT.
+ *
+ * @param plan — plan object (any shape; robust to missing fields)
+ * @returns "workflow" | "agent"
+ */
+export function classifyTaskLaneKind(plan: unknown): TaskLaneKind {
+  if (!plan || typeof plan !== "object") return TASK_LANE_KIND.AGENT;
+  const p = plan as Record<string, unknown>;
+
+  // 1. Explicit override
+  const explicitLane = String(p.taskLane || "").trim().toLowerCase();
+  if (explicitLane === TASK_LANE_KIND.WORKFLOW) return TASK_LANE_KIND.WORKFLOW;
+  if (explicitLane === TASK_LANE_KIND.AGENT)    return TASK_LANE_KIND.AGENT;
+
+  // 2. taskKind token match
+  const taskKind = normalizeTaskKindLabel(p.taskKind);
+  if (taskKind && WORKFLOW_TASK_KIND_TOKENS.has(taskKind)) return TASK_LANE_KIND.WORKFLOW;
+
+  // 3. Task text pattern
+  const taskText = String(p.task || "");
+  if (WORKFLOW_TASK_TEXT_PATTERN.test(taskText)) return TASK_LANE_KIND.WORKFLOW;
+
+  return TASK_LANE_KIND.AGENT;
+}
+
 const ATHENA_REVIEW_KIND_TOKENS = Object.freeze([
   "athena",
   "review",

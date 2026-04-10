@@ -3076,6 +3076,11 @@ import {
   getLaneScore,
   computeAdaptiveSpecialistFillThreshold,
   buildLanePerformanceFromCycleTelemetry as buildLanePerf,
+  routeTaskToLane,
+  computeLaneROIAdmission,
+  TASK_LANE_KIND,
+  LANE_ROI_ADMISSION_MIN_COMPLETION_RATE,
+  LANE_ROI_ADMISSION_MIN_ROI,
 } from "../../src/core/capability_pool.js";
 import {
   estimatePlanTokens,
@@ -3128,5 +3133,90 @@ describe("Athena pre-batched reroute telemetry — computed signals (not hardcod
     const usable = 0;
     const fillRatio = usable > 0 ? Math.round((tokens / usable) * 1000) / 1000 : 0;
     assert.equal(fillRatio, 0, "fillRatio must be 0 when usable tokens is zero");
+  });
+});
+
+describe("routeTaskToLane — deterministic task-lane router", () => {
+  it("routes CI-fix task to workflow lane", () => {
+    const plan = { task: "Run ci-fix repair for failing test suite", taskKind: "ci-fix" };
+    assert.equal(routeTaskToLane(plan), TASK_LANE_KIND.WORKFLOW, "ci-fix taskKind → workflow");
+  });
+
+  it("routes infrastructure task to workflow lane by task text", () => {
+    const plan = { task: "Deploy updated Docker infrastructure image" };
+    assert.equal(routeTaskToLane(plan), TASK_LANE_KIND.WORKFLOW, "deploy task text → workflow");
+  });
+
+  it("routes code implementation task to agent lane", () => {
+    const plan = { task: "Implement bounded candidate generation in prometheus.ts", taskKind: "implementation" };
+    assert.equal(routeTaskToLane(plan), TASK_LANE_KIND.AGENT, "implementation → agent");
+  });
+
+  it("routes task with explicit taskLane=workflow override", () => {
+    const plan = { task: "Some ambiguous task", taskLane: "workflow" };
+    assert.equal(routeTaskToLane(plan), TASK_LANE_KIND.WORKFLOW, "explicit override → workflow");
+  });
+
+  it("routes task with explicit taskLane=agent override", () => {
+    const plan = { task: "ci-fix repair", taskLane: "agent" };
+    assert.equal(routeTaskToLane(plan), TASK_LANE_KIND.AGENT, "explicit agent override takes priority");
+  });
+
+  it("defaults to agent lane for null/undefined input (negative path)", () => {
+    assert.equal(routeTaskToLane(null), TASK_LANE_KIND.AGENT, "null → agent default");
+    assert.equal(routeTaskToLane(undefined), TASK_LANE_KIND.AGENT, "undefined → agent default");
+    assert.equal(routeTaskToLane({}), TASK_LANE_KIND.AGENT, "empty object → agent default");
+  });
+
+  it("TASK_LANE_KIND enum has WORKFLOW and AGENT values", () => {
+    assert.equal(TASK_LANE_KIND.WORKFLOW, "workflow");
+    assert.equal(TASK_LANE_KIND.AGENT, "agent");
+  });
+});
+
+describe("computeLaneROIAdmission — specialization admission by lane ROI", () => {
+  it("admits when a lane meets both completion and ROI thresholds", () => {
+    const signals = {
+      quality: { completionRate: 0.75, roi: 0.60 },
+      implementation: { completionRate: 0.30, roi: 0.20 },
+    };
+    const result = computeLaneROIAdmission(signals);
+    assert.equal(result.admitted, true, "admitted when at least one lane passes");
+    assert.ok(result.passingLanes.includes("quality"), "quality lane passes");
+    assert.ok(result.failingLanes.includes("implementation"), "implementation fails");
+  });
+
+  it("blocks when all lanes are below thresholds (negative path)", () => {
+    const signals = {
+      quality: { completionRate: 0.20, roi: 0.10 },
+      implementation: { completionRate: 0.15, roi: 0.05 },
+    };
+    const result = computeLaneROIAdmission(signals);
+    assert.equal(result.admitted, false, "blocked when all lanes fail thresholds");
+    assert.equal(result.passingLanes.length, 0, "no passing lanes");
+    assert.equal(result.failingLanes.length, 2, "both lanes failing");
+  });
+
+  it("admits with optimistic default when no signals are provided", () => {
+    const result = computeLaneROIAdmission({});
+    assert.equal(result.admitted, true, "empty signals → optimistic default");
+    assert.ok(result.reason.includes("no_lane_signals"), "reason cites no signals");
+  });
+
+  it("uses custom threshold overrides", () => {
+    const signals = { quality: { completionRate: 0.50, roi: 0.40 } };
+    // Standard thresholds would pass (0.50 >= 0.40 and 0.40 >= 0.30)
+    const passResult = computeLaneROIAdmission(signals);
+    assert.equal(passResult.admitted, true, "passes with default thresholds");
+    // Stricter thresholds fail
+    const failResult = computeLaneROIAdmission(signals, { minCompletionRate: 0.80, minROI: 0.70 });
+    assert.equal(failResult.admitted, false, "fails with strict thresholds");
+  });
+
+  it("LANE_ROI_ADMISSION constants are exported and positive", () => {
+    assert.ok(LANE_ROI_ADMISSION_MIN_COMPLETION_RATE > 0, "min completion rate is positive");
+    assert.ok(LANE_ROI_ADMISSION_MIN_ROI > 0, "min ROI is positive");
+    assert.ok(LANE_ROI_ADMISSION_MIN_COMPLETION_RATE < 1, "min completion rate is less than 1");
+    assert.ok(LANE_ROI_ADMISSION_MIN_ROI < 1, "min ROI is less than 1");
   });
 });

@@ -72,8 +72,15 @@ import {
   RolePlanCompletenessError,
   normalizeStaleCiBreakFindings,
   CI_BREAK_FINDING_FRESHNESS_MAX_AGE_MS,
+  selectBestCandidatePlans,
+  MAX_CANDIDATE_SETS,
+  CANDIDATE_TIE_THRESHOLD,
 } from "../../src/core/prometheus.js";
-import { compilePrompt, markCacheableSegments } from "../../src/core/prompt_compiler.js";
+import { compilePrompt, markCacheableSegments, CANDIDATE_GENERATION_SECTION } from "../../src/core/prompt_compiler.js";
+import {
+  scoreCandidateSet,
+  selectBestCandidateSet,
+} from "../../src/core/plan_critic.js";
 import {
   isNonSpecificVerification,
   validatePlanContract,
@@ -6029,5 +6036,161 @@ describe("normalizeStaleCiBreakFindings", () => {
     assert.equal(result.suppressedCount, 2, "both ci-fix and ci-setup findings should be suppressed");
     const normalized = result.payload as any;
     assert.equal(normalized.findings.length, 1, "only system-learning finding remains");
+  });
+});
+
+describe("selectBestCandidatePlans — bounded candidate generation", () => {
+  const makeStrongPlan = (task: string) => ({
+    task,
+    scope: "src/core/prometheus.ts",
+    target_files: ["src/core/prometheus.ts", "tests/core/prometheus_parse.test.ts"],
+    acceptance_criteria: ["npm test passes with no new failures", "coverage includes new logic"],
+    verification: "npm test",
+    before_state: "single-draft planning without scoring",
+    after_state: "rubric-scored candidate selection active",
+    leverage_rank: ["task-quality", "worker-specialization"],
+    capacityDelta: 0.2,
+    requestROI: 1.5,
+    riskLevel: "low",
+    role: "evolution-worker",
+  });
+
+  const makeWeakPlan = (task: string) => ({
+    task,
+    scope: "",
+    target_files: [],
+    acceptance_criteria: [],
+    verification: "",
+    leverage_rank: [],
+    capacityDelta: 0,
+    requestROI: 0,
+  });
+
+  it("selects the highest-scoring candidate set (clear winner)", () => {
+    const strong = [makeStrongPlan("Implement rubric scoring in Prometheus")];
+    const weak = [makeWeakPlan("improve stuff")];
+    const result = selectBestCandidatePlans([weak, strong]);
+    assert.ok(Array.isArray(result.bestCandidates), "bestCandidates is array");
+    assert.ok(result.score > 0, "winning score is positive");
+    assert.equal(result.bestCandidates, strong, "strong candidate wins");
+    assert.equal(result.tieBreakUsed, false, "no tie-break for clear winner");
+  });
+
+  it("applies uncertainty-aware tie-break when scores are within CANDIDATE_TIE_THRESHOLD", () => {
+    // Two plans with similar scores; second has wider dimension coverage
+    const planA = makeStrongPlan("Plan A");
+    const planB = {
+      ...makeStrongPlan("Plan B"),
+      scope: "src/core/plan_critic.ts",
+      target_files: ["src/core/plan_critic.ts", "tests/core/plan_critic.test.ts"],
+    };
+    // Both candidate sets contain one strong plan — scores will be nearly equal
+    const result = selectBestCandidatePlans([[planA], [planB]]);
+    assert.ok(Array.isArray(result.bestCandidates), "returns an array");
+    assert.equal(result.bestCandidates.length, 1, "one plan in winner");
+    // When tied, the result is deterministic (consistent on repeat calls)
+    const result2 = selectBestCandidatePlans([[planA], [planB]]);
+    assert.deepEqual(result.bestCandidates, result2.bestCandidates, "deterministic on repeat");
+  });
+
+  it("negative path: returns empty set for empty candidates input", () => {
+    const result = selectBestCandidatePlans([]);
+    assert.deepEqual(result.bestCandidates, [], "empty candidates → empty result");
+    assert.equal(result.score, 0, "score is 0 for empty input");
+    assert.equal(result.reason, "no_candidates", "reason indicates no candidates");
+  });
+
+  it("bounds evaluation to MAX_CANDIDATE_SETS even when more are provided", () => {
+    // Create 10 candidate sets (exceeds MAX_CANDIDATE_SETS = 5)
+    const sets = Array.from({ length: 10 }, (_, i) => [makeStrongPlan(`Plan ${i}`)]);
+    const result = selectBestCandidatePlans(sets);
+    assert.ok(Array.isArray(result.bestCandidates), "returns array regardless of overflow");
+    assert.ok(result.rank < MAX_CANDIDATE_SETS, "rank is within bounded window");
+  });
+
+  it("CANDIDATE_TIE_THRESHOLD is exported and positive", () => {
+    assert.ok(typeof CANDIDATE_TIE_THRESHOLD === "number", "is a number");
+    assert.ok(CANDIDATE_TIE_THRESHOLD > 0, "is positive");
+    assert.ok(CANDIDATE_TIE_THRESHOLD < 1, "is less than 1");
+  });
+
+  it("MAX_CANDIDATE_SETS is exported and >= 2", () => {
+    assert.ok(typeof MAX_CANDIDATE_SETS === "number", "is a number");
+    assert.ok(MAX_CANDIDATE_SETS >= 2, "allows at least 2 candidates");
+  });
+});
+
+describe("scoreCandidateSet", () => {
+  it("scores a strong plan set higher than a weak plan set", () => {
+    const strong = [{
+      task: "Add typed retry contracts with deterministic artifact paths",
+      scope: "src/core/worker_runner.ts",
+      target_files: ["src/core/worker_runner.ts", "tests/core/worker_runner.test.ts"],
+      acceptance_criteria: ["npm test passes", "retry paths verified"],
+      verification: "npm test",
+      before_state: "single retry path",
+      after_state: "typed retry contracts with per-attempt directories",
+      leverage_rank: ["task-quality", "worker-specialization"],
+      capacityDelta: 0.3,
+      requestROI: 1.8,
+      riskLevel: "medium",
+      role: "evolution-worker",
+    }];
+    const weak = [{ task: "improve stuff" }];
+    const strongResult = scoreCandidateSet(strong);
+    const weakResult = scoreCandidateSet(weak);
+    assert.ok(strongResult.setScore > weakResult.setScore, "strong plan set scores higher");
+  });
+
+  it("returns planCount matching input length", () => {
+    const plans = [{ task: "Task A" }, { task: "Task B" }, { task: "Task C" }];
+    const result = scoreCandidateSet(plans);
+    assert.equal(result.planCount, 3, "planCount matches input");
+  });
+
+  it("negative path: empty input returns zero scores", () => {
+    const result = scoreCandidateSet([]);
+    assert.equal(result.setScore, 0, "zero score for empty set");
+    assert.equal(result.dimensionCoverage, 0, "zero coverage for empty set");
+    assert.equal(result.planCount, 0, "zero plans for empty set");
+  });
+});
+
+describe("CANDIDATE_GENERATION_SECTION", () => {
+  it("is a non-empty prompt section with name and content", () => {
+    assert.ok(CANDIDATE_GENERATION_SECTION, "exported and truthy");
+    assert.equal(typeof CANDIDATE_GENERATION_SECTION.name, "string", "has name");
+    assert.ok(CANDIDATE_GENERATION_SECTION.name.length > 0, "name is non-empty");
+    assert.equal(typeof CANDIDATE_GENERATION_SECTION.content, "string", "has content");
+    assert.ok(CANDIDATE_GENERATION_SECTION.content.length > 0, "content is non-empty");
+  });
+
+  it("content references candidate generation and rubric constraints", () => {
+    assert.ok(/candidate/i.test(CANDIDATE_GENERATION_SECTION.content), "mentions candidates");
+    assert.ok(/acceptance.criteria|verification/i.test(CANDIDATE_GENERATION_SECTION.content), "mentions criteria");
+  });
+});
+
+describe("selectBestCandidateSet — deterministic candidate selection", () => {
+  it("selects the higher-scoring candidate set from two options", () => {
+    const strong = [{ task: "Add rubric scoring", scope: "src/core/plan_critic.ts", target_files: ["src/core/plan_critic.ts"], acceptance_criteria: ["AC1: scores > 0"], verification: "npm test", leverage_rank: ["Prometheus"], capacityDelta: 5, requestROI: 0.7 }];
+    const weak = [{ task: "improve things", scope: "", target_files: [], acceptance_criteria: [], verification: "", leverage_rank: [], capacityDelta: 0, requestROI: 0 }];
+    const result = selectBestCandidateSet([weak, strong]);
+    assert.ok(result, "returns a result");
+    assert.ok(Array.isArray(result.bestCandidates), "result has bestCandidates");
+    assert.equal(result.bestCandidates, strong, "strong set is selected");
+  });
+
+  it("returns empty set when no candidates provided (negative path)", () => {
+    const result = selectBestCandidateSet([]);
+    assert.deepEqual(result.bestCandidates, [], "empty input → empty set");
+  });
+
+  it("is deterministic (same input → same output on repeat calls)", () => {
+    const setA = [{ task: "Plan A", scope: "s", target_files: ["a"], acceptance_criteria: ["AC"], verification: "v", leverage_rank: ["L"], capacityDelta: 2, requestROI: 0.5 }];
+    const setB = [{ task: "Plan B", scope: "t", target_files: ["b", "c"], acceptance_criteria: ["AC1", "AC2"], verification: "v2", leverage_rank: ["M"], capacityDelta: 3, requestROI: 0.6 }];
+    const r1 = selectBestCandidateSet([setA, setB]);
+    const r2 = selectBestCandidateSet([setA, setB]);
+    assert.deepEqual(r1.bestCandidates, r2.bestCandidates, "deterministic on repeat calls");
   });
 });

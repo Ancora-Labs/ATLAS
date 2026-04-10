@@ -11,7 +11,11 @@
  * optimal worker for each plan.
  */
 
-import { LANE_WORKER_NAMES, WORKER_CAPABILITIES, getLaneForWorkerName } from "./role_registry.js";
+import { LANE_WORKER_NAMES, WORKER_CAPABILITIES, getLaneForWorkerName, TASK_LANE_KIND, classifyTaskLaneKind, type TaskLaneKind } from "./role_registry.js";
+
+// Re-export lane-kind types so callers only need one import
+export { TASK_LANE_KIND, classifyTaskLaneKind };
+export type { TaskLaneKind };
 
 /**
  * Per-lane outcome accumulator.  Populated by callers (e.g. orchestrator or
@@ -1044,5 +1048,116 @@ export function evaluateSpecializationAdmissionGate(
     consecutiveBlockCycles: consecutiveBlockCycles + 1,
     effectiveAdaptiveMin,
     bypassType: "true_under_utilization",
+  };
+}
+
+// ── Task-Lane Router ──────────────────────────────────────────────────────────
+
+/**
+ * Route a plan to a task lane: WORKFLOW or AGENT.
+ *
+ * Delegates to classifyTaskLaneKind (defined in role_registry) which applies
+ * a deterministic three-step rule: explicit override → taskKind token → task text.
+ *
+ * Exported here so orchestration callers only need to import from capability_pool.
+ *
+ * @param plan — plan object (any shape; robust to missing fields)
+ * @returns "workflow" | "agent"
+ */
+export function routeTaskToLane(plan: unknown): TaskLaneKind {
+  return classifyTaskLaneKind(plan);
+}
+
+// ── Lane ROI Admission ────────────────────────────────────────────────────────
+
+/**
+ * Minimum lane completion rate below which a lane is treated as under-performing
+ * for specialization admission purposes.
+ */
+export const LANE_ROI_ADMISSION_MIN_COMPLETION_RATE = 0.40 as const;
+
+/**
+ * Minimum ROI value below which a lane is treated as not generating sufficient
+ * economic return to justify specialist assignment.
+ */
+export const LANE_ROI_ADMISSION_MIN_ROI = 0.30 as const;
+
+/**
+ * Evaluate specialization admission using measured lane ROI and completion signals.
+ *
+ * This is a complementary gate to evaluateSpecializationAdmissionGate that uses
+ * live per-lane telemetry (completion rates and ROI values) rather than just
+ * specialist-share counts.
+ *
+ * Decision rules:
+ *   - If no lane signals are provided → admitted (no data, optimistic default).
+ *   - If ALL AGENT lanes have completionRate < minCompletionRate OR roi < minROI
+ *     → blocked: specialist lanes are not performing and should not be filled.
+ *   - If ANY AGENT lane exceeds both thresholds → admitted.
+ *   - WORKFLOW lanes are excluded from the specialist ROI gate (they are
+ *     dispatched regardless of specialist fill targets).
+ *
+ * @param laneSignals        — per-lane telemetry from buildLaneTelemetrySignals
+ * @param opts               — optional thresholds to override defaults
+ * @returns {{ admitted: boolean, reason: string, passingLanes: string[], failingLanes: string[] }}
+ */
+export function computeLaneROIAdmission(
+  laneSignals: LaneTelemetrySignalMap,
+  opts: {
+    minCompletionRate?: number;
+    minROI?: number;
+  } = {},
+): {
+  admitted: boolean;
+  reason: string;
+  passingLanes: string[];
+  failingLanes: string[];
+} {
+  const signals = laneSignals && typeof laneSignals === "object" ? laneSignals : {};
+  const entries = Object.entries(signals);
+
+  if (entries.length === 0) {
+    return {
+      admitted: true,
+      reason: "no_lane_signals: optimistic_default",
+      passingLanes: [],
+      failingLanes: [],
+    };
+  }
+
+  const minCompletion = typeof opts.minCompletionRate === "number"
+    ? opts.minCompletionRate
+    : LANE_ROI_ADMISSION_MIN_COMPLETION_RATE;
+  const minROI = typeof opts.minROI === "number"
+    ? opts.minROI
+    : LANE_ROI_ADMISSION_MIN_ROI;
+
+  const passingLanes: string[] = [];
+  const failingLanes: string[] = [];
+
+  for (const [lane, signal] of entries) {
+    const cr = typeof signal?.completionRate === "number" ? signal.completionRate : 0;
+    const roi = typeof signal?.roi === "number" ? signal.roi : 0;
+    if (cr >= minCompletion && roi >= minROI) {
+      passingLanes.push(lane);
+    } else {
+      failingLanes.push(lane);
+    }
+  }
+
+  if (passingLanes.length > 0) {
+    return {
+      admitted: true,
+      reason: `lane_roi_passing: ${passingLanes.join(",")}`,
+      passingLanes,
+      failingLanes,
+    };
+  }
+
+  return {
+    admitted: false,
+    reason: `lane_roi_below_threshold: all_lanes_failing (minCompletion=${minCompletion} minROI=${minROI})`,
+    passingLanes,
+    failingLanes,
   };
 }

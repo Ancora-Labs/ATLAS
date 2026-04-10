@@ -1806,3 +1806,88 @@ describe("computeBenchmarkPlanningPriors", () => {
     assert.equal(result.retryViolationAdjustment, 0);
   });
 });
+
+// ── Category Frontier Score Tests ─────────────────────────────────────────────
+
+import {
+  computeCategoryFrontierScore,
+  computePerInstanceNormalization,
+} from "../../src/core/model_policy.js";
+
+describe("computeCategoryFrontierScore — per-category benchmark aggregation", () => {
+  const makeEntry = (category: string, frontierScore: number, model = "test-model") => ({
+    categoryFrontiers: [{ category, frontierScore, model }],
+  });
+
+  it("returns the best frontierScore across entries for a category", () => {
+    const entries = [
+      makeEntry("django", 0.65, "ModelA"),
+      makeEntry("django", 0.72, "ModelB"),
+      makeEntry("django", 0.60, "ModelC"),
+    ];
+    const result = computeCategoryFrontierScore(entries, "django");
+    assert.equal(result.frontierScore, 0.72, "best score is 0.72");
+    assert.equal(result.bestModel, "ModelB");
+    assert.equal(result.evaluatedCount, 3);
+  });
+
+  it("is case-insensitive for category name", () => {
+    const entries = [makeEntry("Django", 0.55, "ModelA")];
+    const result = computeCategoryFrontierScore(entries, "django");
+    assert.equal(result.frontierScore, 0.55, "case-insensitive match");
+  });
+
+  it("returns null frontierScore when category is not present (negative path)", () => {
+    const entries = [makeEntry("django", 0.72)];
+    const result = computeCategoryFrontierScore(entries, "scikit-learn");
+    assert.equal(result.frontierScore, null, "unmatched category → null");
+    assert.equal(result.evaluatedCount, 0);
+  });
+
+  it("returns null frontierScore for empty entries array (negative path)", () => {
+    const result = computeCategoryFrontierScore([], "django");
+    assert.equal(result.frontierScore, null);
+  });
+
+  it("skips entries without categoryFrontiers field", () => {
+    const entries = [
+      { recommendations: [] },
+      makeEntry("django", 0.80),
+    ];
+    const result = computeCategoryFrontierScore(entries, "django");
+    assert.equal(result.frontierScore, 0.80, "skips entry with no categoryFrontiers");
+    assert.equal(result.evaluatedCount, 1);
+  });
+});
+
+describe("computePerInstanceNormalization — instance score vs frontier", () => {
+  it("returns 1.0 when instance score equals frontier", () => {
+    const result = computePerInstanceNormalization(0.72, 0.72);
+    assert.equal(result, 1.0, "matching score → normalized to 1.0");
+  });
+
+  it("returns normalized ratio below 1.0 when instance is below frontier", () => {
+    const result = computePerInstanceNormalization(0.36, 0.72);
+    assert.equal(result, 0.5, "half of frontier score → 0.5");
+  });
+
+  it("clamps to 1.0 when instance exceeds frontier (new best)", () => {
+    const result = computePerInstanceNormalization(0.90, 0.72);
+    assert.equal(result, 1.0, "exceeds frontier → clamped to 1.0");
+  });
+
+  it("returns null when frontierScore is null (no frontier data)", () => {
+    const result = computePerInstanceNormalization(0.50, null);
+    assert.equal(result, null, "null frontier → null normalization");
+  });
+
+  it("returns null when frontierScore is zero (negative path)", () => {
+    const result = computePerInstanceNormalization(0.50, 0);
+    assert.equal(result, null, "zero frontier → null normalization");
+  });
+
+  it("returns null for non-finite instance score (negative path)", () => {
+    const result = computePerInstanceNormalization(NaN, 0.72);
+    assert.equal(result, null, "NaN instance score → null");
+  });
+});

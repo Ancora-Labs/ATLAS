@@ -2000,3 +2000,73 @@ export function classifyBenchmarkSuite(
 
   return BENCHMARK_SUITE_TYPE.VERIFIED;
 }
+
+// ── Category Frontier Scoring ─────────────────────────────────────────────────
+
+/**
+ * Compute the aggregate frontier score for a given benchmark category
+ * across a set of benchmark entries.
+ *
+ * The frontier score is the highest `frontierScore` value seen for the
+ * requested category across all entries with `categoryFrontiers` populated.
+ *
+ * Returns null when no matching category data is found.
+ *
+ * @param entries  — benchmark ground truth entries (from benchmark_ground_truth.json)
+ * @param category — category name to aggregate (case-insensitive)
+ */
+export function computeCategoryFrontierScore(
+  entries: unknown[],
+  category: string,
+): { frontierScore: number | null; evaluatedCount: number; bestModel: string | null } {
+  if (!Array.isArray(entries) || entries.length === 0 || !category) {
+    return { frontierScore: null, evaluatedCount: 0, bestModel: null };
+  }
+
+  const targetCategory = String(category).trim().toLowerCase();
+  let bestScore = -Infinity;
+  let bestModel: string | null = null;
+  let evaluatedCount = 0;
+
+  for (const entry of entries) {
+    const frontiers = (entry as any)?.categoryFrontiers;
+    if (!Array.isArray(frontiers)) continue;
+    for (const frontier of frontiers) {
+      const cat = String(frontier?.category ?? "").trim().toLowerCase();
+      if (cat !== targetCategory) continue;
+      const score = typeof frontier?.frontierScore === "number" ? frontier.frontierScore : null;
+      if (score === null) continue;
+      evaluatedCount++;
+      if (score > bestScore) {
+        bestScore = score;
+        bestModel = String(frontier?.model ?? "").trim() || null;
+      }
+    }
+  }
+
+  return {
+    frontierScore: evaluatedCount > 0 ? Math.round(bestScore * 10000) / 10000 : null,
+    evaluatedCount,
+    bestModel,
+  };
+}
+
+/**
+ * Normalize a raw instance score against the current frontier score for its category.
+ *
+ * Returns a value in [0, 1]:
+ *   - 1.0 means the instance score matches or exceeds the frontier.
+ *   - 0.0 means the instance score is zero.
+ *   - null returned when frontierScore is null or zero (cannot normalize).
+ *
+ * @param instanceScore  — raw score for a single benchmark instance (e.g., 0.72)
+ * @param frontierScore  — best known score for this category (from computeCategoryFrontierScore)
+ */
+export function computePerInstanceNormalization(
+  instanceScore: number,
+  frontierScore: number | null,
+): number | null {
+  if (frontierScore === null || frontierScore <= 0) return null;
+  if (typeof instanceScore !== "number" || !Number.isFinite(instanceScore)) return null;
+  return Math.min(1, Math.max(0, Math.round((instanceScore / frontierScore) * 10000) / 10000));
+}
