@@ -298,6 +298,139 @@ const SYNTHESIS_MIN_ACTIONABLE_DENSITY_PER_TOPIC = 1;
  */
 export const SYNTHESIS_ACTIONABLE_SIGNAL_MIN_LENGTH = 5;
 
+// ─── Deterministic applicability scoring ──────────────────────────────────────
+//
+// Research topics that describe non-BOX runtime platforms produce planning
+// pressure without execution path — they must be identified deterministically
+// and excluded from the Prometheus planning prompt.
+//
+// BOX runtime: Node.js/TypeScript/ESM process, Copilot CLI agent dispatch,
+// GitHub Actions, npm ecosystem.  It does NOT run Temporal workflows,
+// Kubernetes workloads, Go routines, JVM services, or serverless functions.
+
+/** Non-BOX platform detection rules. Each rule matches a specific external runtime. */
+const NON_PLATFORM_RULES: ReadonlyArray<{
+  readonly pattern: RegExp;
+  readonly platform: string;
+  readonly reason: string;
+}> = [
+  {
+    pattern: /\btemporal\b|\btemporal\.io\b/i,
+    platform: "Temporal.io",
+    reason: "BOX does not run Temporal workflows; applying this API requires a runtime migration",
+  },
+  {
+    pattern: /\bkubernetes\b|\bk8s\b|\bkubectl\b|\bhelmchart\b|\bhelm chart\b/i,
+    platform: "Kubernetes",
+    reason: "BOX is a Node.js CLI orchestrator, not a Kubernetes workload",
+  },
+  {
+    pattern: /\bgoroutine\b|\bgolang\b|\bgo\s+channel\b|\bgo\s+runtime\b/i,
+    platform: "Go runtime",
+    reason: "BOX is implemented in TypeScript/Node.js, not Go",
+  },
+  {
+    pattern: /\bspring\s*boot\b|\bjvm\b|\bjava\s+stream\b|\bgradle\b|\bmaven\b/i,
+    platform: "JVM/Java",
+    reason: "BOX runtime is Node.js/TypeScript, not JVM-based",
+  },
+  {
+    pattern: /\baws\s+lambda\b|\bserverless\s+function\b|\blambda\s+function\b/i,
+    platform: "AWS Lambda/Serverless",
+    reason: "BOX is a long-running process, not a serverless function",
+  },
+];
+
+/** BOX runtime indicator patterns — confirm the topic is relevant to this codebase. */
+const BOX_PLATFORM_INDICATORS: ReadonlyArray<RegExp> = [
+  /\bnode\.js\b|\bnodejs\b/i,
+  /\btsconfig\b/i,           // BOX-specific TS project config (not standalone "TypeScript" which is too generic)
+  /\bcopilot\s*(?:cli|agent|cloud\s*agent)\b/i,
+  /\bgithub\s+(?:actions|copilot)\b/i,
+  /\bsrc\/core\b/i,
+  /\.agent\.md\b/i,
+  /\bnpm\s+(?:run|install|test)\b/i,
+];
+
+export type TopicApplicabilityVerdict = "applicable" | "not_applicable" | "conditionally_applicable";
+
+export interface TopicApplicabilityResult {
+  verdict: TopicApplicabilityVerdict;
+  /** 0.0 = not applicable, 0.4 = conditional, 1.0 = fully applicable */
+  score: number;
+  /** Human-readable evidence for the verdict */
+  evidence: string[];
+  /** Non-BOX platform identified, if any */
+  detectedPlatform?: string;
+}
+
+/**
+ * Score a research topic for applicability to the BOX platform.
+ *
+ *   - "not_applicable":             topic describes a non-BOX runtime with no
+ *                                   BOX-relevant signals — exclude from planning.
+ *   - "conditionally_applicable":   topic has non-platform content or the
+ *                                   synthesizer flagged it LOW but some
+ *                                   BOX-relevant signals exist.
+ *   - "applicable":                 no non-platform patterns detected.
+ *
+ * The verdict is deterministic and based solely on static pattern matching
+ * over the topic's aggregated text content.
+ */
+export function scoreTopicApplicability(topic: Record<string, unknown>): TopicApplicabilityResult {
+  // Aggregate all text content for pattern matching
+  const parts: string[] = [
+    String(topic.topic || ""),
+    String(topic.prometheusReadySummary || ""),
+  ];
+  const sources = Array.isArray(topic.sources) ? topic.sources as Array<Record<string, unknown>> : [];
+  for (const src of sources) {
+    parts.push(String(src.url || ""));
+    parts.push(String(src.title || ""));
+    parts.push(String(src.prometheusReadySummary || "").slice(0, 500));
+    parts.push(String(src.scoutFindings || "").slice(0, 400));
+  }
+  const allText = parts.join(" ");
+
+  const matchedRules = NON_PLATFORM_RULES.filter(r => r.pattern.test(allText));
+  const hasBoxIndicators = BOX_PLATFORM_INDICATORS.some(p => p.test(allText));
+  const synthMarkedLow = /relevance\s*:\s*low/i.test(allText);
+
+  if (matchedRules.length === 0 && !synthMarkedLow) {
+    return { verdict: "applicable", score: 1.0, evidence: ["No non-platform patterns detected"] };
+  }
+
+  if (matchedRules.length > 0) {
+    const evidence = matchedRules.map(r => `Detected ${r.platform}: ${r.reason}`);
+    if (synthMarkedLow) evidence.push("Synthesizer marked this topic as 'Relevance: LOW'");
+
+    if (hasBoxIndicators) {
+      return {
+        verdict: "conditionally_applicable",
+        score: 0.4,
+        evidence: [...evidence, "Some BOX-relevant patterns also present; concept may transfer"],
+        detectedPlatform: matchedRules[0].platform,
+      };
+    }
+
+    return {
+      verdict: "not_applicable",
+      score: 0.0,
+      evidence,
+      detectedPlatform: matchedRules[0].platform,
+    };
+  }
+
+  // Synthesizer flagged LOW but no hard platform mismatch
+  return {
+    verdict: "conditionally_applicable",
+    score: 0.4,
+    evidence: ["Synthesizer marked this topic as 'Relevance: LOW' — no explicit platform mismatch"],
+  };
+}
+
+// ─── end applicability scoring ────────────────────────────────────────────────
+
 export interface SynthesisTopicDensity {
   topic: string;
   /** Count of non-empty actionable signals: netFindings + applicableIdeas + prometheusReadySummary entries */
@@ -630,7 +763,19 @@ export function sanitizeResearchSynthesisForPersistence(payload: {
   // Persistence-time invariant: only retain topics with a name AND at least one actionable artifact.
   // Topics that have a name but zero signal are silently dropped so they do not pollute
   // the quality gate or degrade planning mode without cause.
-  }).filter((topic) => Boolean(topic.topic) && topicHasActionableArtifact(topic));
+  }).filter((topic) => Boolean(topic.topic) && topicHasActionableArtifact(topic))
+    .map((topic) => {
+      // Annotate each retained topic with a deterministic applicability score so
+      // downstream consumers (Prometheus planning prompt) can filter non-platform
+      // research without re-evaluating the topic content.
+      const applicability = scoreTopicApplicability(topic);
+      return {
+        ...topic,
+        applicabilityScore: applicability.verdict,
+        applicabilityEvidence: applicability.evidence,
+        ...(applicability.detectedPlatform ? { applicabilityDetectedPlatform: applicability.detectedPlatform } : {}),
+      };
+    });
 
   const crossTopicConnections = clampList(payload.crossTopicConnections, MAX_CONNECTIONS, MAX_TOPIC_TEXT);
   const researchGaps = String(payload.researchGaps || "").slice(0, MAX_RESEARCH_GAPS).trim();

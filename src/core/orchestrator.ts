@@ -74,7 +74,7 @@ import { executeRollback, ROLLBACK_LEVEL, ROLLBACK_TRIGGER } from "./rollback_en
 import { initializeAggregateLiveLog, appendAggregateLiveLogSync } from "./live_log.js";
 import { buildRoleExecutionBatches, buildTokenFirstBatches, measureWaveBoundaryIdleGap, shouldPackAcrossWaveBoundary } from "./worker_batch_planner.js";
 import { computeFrontier } from "./dag_scheduler.js";
-import { agentFileExists, nameToSlug } from "./agent_loader.js";
+import { agentFileExists, nameToSlug, validateCriticalAgentContracts } from "./agent_loader.js";
 import { getRoleRegistry, assertRoleCapabilityForTask, isAthenaReviewOrPostmortemTask } from "./role_registry.js";
 import {
   checkArchitectureDrift,
@@ -1058,6 +1058,28 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       }
     } catch (cloudAgentErr) {
       warn(`[orchestrator] cloud-agent governance profile gate failed (non-fatal): ${String(cloudAgentErr?.message || cloudAgentErr)}`);
+    }
+
+    // Agent contract validation: prometheus and athena must have valid frontmatter
+    try {
+      const agentContractResult = validateCriticalAgentContracts();
+      if (!agentContractResult.allValid) {
+        const firstViolation = agentContractResult.violations[0];
+        const detail = `agent_contract_invalid:slug=${firstViolation.slug};violations=${firstViolation.violations.join(",")};non_retryable=false`;
+        return {
+          blocked: true,
+          reason: `${BLOCK_REASON.CLOUD_AGENT_GOVERNANCE_POLICY_VIOLATION}:${detail}`,
+          action: undefined,
+          dispatchBlockReason: `${BLOCK_REASON.CLOUD_AGENT_GOVERNANCE_POLICY_VIOLATION}:${detail}`,
+          graphResult: null,
+          cycleId,
+          budgetEligibility,
+          gateKey: "CLOUD_AGENT_GOVERNANCE",
+          gateIndex: GATE_PRECEDENCE.CLOUD_AGENT_GOVERNANCE,
+        };
+      }
+    } catch (agentContractErr) {
+      warn(`[orchestrator] agent contract governance gate failed (non-fatal): ${String(agentContractErr?.message || agentContractErr)}`);
     }
   }
 

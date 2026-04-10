@@ -335,7 +335,139 @@ function tryParseJson(text) {
   return null;
 }
 
-// ÔöÇÔöÇ Log agent thinking to a visible file ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+// ─── Agent contract validation ────────────────────────────────────────────────
+//
+// Validates that every .agent.md file has the required YAML frontmatter fields.
+// Used by doctor checks and the cloud-agent governance gate.
+
+/**
+ * YAML frontmatter fields required in every .agent.md file that BOX dispatches.
+ * - description: mandatory per GitHub custom-agent spec
+ * - model:       mandatory for deterministic model selection (no implicit fallback)
+ * - tools:       mandatory so the governance gate can verify the tool surface
+ */
+export interface AgentContractValidation {
+  slug: string;
+  filePath: string;
+  valid: boolean;
+  violations: string[];
+  fields: {
+    name?: string;
+    description?: string;
+    model?: string;
+    tools?: string[];
+  };
+}
+
+/**
+ * Validate a single agent's .agent.md frontmatter contract.
+ * Uses regex extraction (no YAML parser dep) for deterministic behavior.
+ */
+export function validateAgentContract(slug: string): AgentContractValidation {
+  const filePath = path.join(AGENTS_DIR, `${slug}.agent.md`);
+  const result: AgentContractValidation = {
+    slug,
+    filePath,
+    valid: false,
+    violations: [],
+    fields: {},
+  };
+
+  if (!existsSync(filePath)) {
+    result.violations.push("file_missing");
+    return result;
+  }
+
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, "utf8");
+  } catch {
+    result.violations.push("file_unreadable");
+    return result;
+  }
+
+  // Extract YAML frontmatter block: --- ... ---
+  const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!fmMatch) {
+    result.violations.push("frontmatter_missing");
+    return result;
+  }
+
+  const fmText = fmMatch[1];
+
+  const extractField = (key: string): string | undefined => {
+    const m = fmText.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
+    return m ? m[1].trim() : undefined;
+  };
+
+  const extractTools = (): string[] | undefined => {
+    // Inline array form: tools: [read, search]
+    const inline = fmText.match(/^tools:\s*\[([^\]]*)\]/m);
+    if (inline) return inline[1].split(",").map(t => t.trim()).filter(Boolean);
+    // Block list form:
+    //   tools:
+    //     - read
+    //     - search
+    const block = fmText.match(/^tools:\s*\n((?:[ \t]+-[ \t]*.+\n?)+)/m);
+    if (block) {
+      return block[1].split("\n").map(l => l.replace(/^[ \t]+-[ \t]*/, "").trim()).filter(Boolean);
+    }
+    return undefined;
+  };
+
+  result.fields.name = extractField("name");
+  result.fields.description = extractField("description");
+  result.fields.model = extractField("model");
+  result.fields.tools = extractTools();
+
+  if (!result.fields.description) result.violations.push("description_missing");
+  if (!result.fields.model) result.violations.push("model_missing");
+  if (!result.fields.tools || result.fields.tools.length === 0) result.violations.push("tools_missing");
+
+  result.valid = result.violations.length === 0;
+  return result;
+}
+
+/**
+ * Validate all .agent.md files found in the agents directory.
+ * Returns per-agent results plus a summary.
+ */
+export function validateAllAgentContracts(): {
+  allValid: boolean;
+  results: AgentContractValidation[];
+  violations: AgentContractValidation[];
+} {
+  let slugs: string[];
+  try {
+    slugs = readdirSync(AGENTS_DIR)
+      .filter(f => f.endsWith(".agent.md"))
+      .map(f => f.replace(/\.agent\.md$/, ""));
+  } catch {
+    // Agents dir unreadable — treat as valid to avoid blocking on infra failures
+    return { allValid: true, results: [], violations: [] };
+  }
+  const results = slugs.map(validateAgentContract);
+  const violations = results.filter(r => !r.valid);
+  return { allValid: violations.length === 0, results, violations };
+}
+
+/**
+ * Validate only the agents critical to the planning dispatch pipeline.
+ * Prometheus and Athena are the minimum required; if either is invalid,
+ * the governance gate should block dispatch.
+ */
+export function validateCriticalAgentContracts(): {
+  allValid: boolean;
+  results: AgentContractValidation[];
+  violations: AgentContractValidation[];
+} {
+  const criticalSlugs = ["prometheus", "athena"];
+  const results = criticalSlugs.map(validateAgentContract);
+  const violations = results.filter(r => !r.valid);
+  return { allValid: violations.length === 0, results, violations };
+}
+
+// ─── Log agent thinking to a visible file ─────────────────────────────────────
 
 export function logAgentThinking(stateDir, agentName, thinking) {
   if (!thinking || thinking.length < 10) return;

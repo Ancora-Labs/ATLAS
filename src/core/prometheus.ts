@@ -730,14 +730,26 @@ function buildResearchPromptSection(
   sourceCount: number;
   coverageTarget: number;
 } {
-  // Staleness: if research artifacts are older than 72 h, flag them as stale
-  // so Prometheus deprioritises re-injecting the same cached signal each cycle.
   const STALE_THRESHOLD_MS = 72 * 60 * 60 * 1000;
   const isStale = typeof artifactAgeMs === "number" && artifactAgeMs > 0
     && (Date.now() - artifactAgeMs) > STALE_THRESHOLD_MS;
   const synthesisObj = (synthesis && typeof synthesis === "object") ? synthesis as Record<string, unknown> : {};
   const scoutObj = (scout && typeof scout === "object") ? scout as Record<string, unknown> : {};
-  const topics = extractResearchTopics(synthesis, scout);
+
+  // ── Applicability filtering ─────────────────────────────────────────────────
+  // Exclude topics marked not_applicable (non-BOX platform research) from the
+  // planning prompt so they do not create plan pressure without execution path.
+  // Build a filtered synthesis view before passing to extractResearchTopics.
+  const rawSynthesisTopics = Array.isArray(synthesisObj.topics)
+    ? synthesisObj.topics as Array<Record<string, unknown>>
+    : [];
+  const applicableTopics = rawSynthesisTopics.filter(
+    t => String(t?.applicabilityScore || "") !== "not_applicable"
+  );
+  const excludedCount = rawSynthesisTopics.length - applicableTopics.length;
+  const filteredSynthesisObj = { ...synthesisObj, topics: applicableTopics };
+
+  const topics = extractResearchTopics(filteredSynthesisObj, scout);
   const topicCount = topics.length;
   const sourceCount = Number.isFinite(Number(synthesisObj.scoutSourceCount))
     ? Number(synthesisObj.scoutSourceCount)
@@ -797,7 +809,11 @@ function buildResearchPromptSection(
     ? `\n⚠️  STALE: Research artifacts are >72 h old. Do NOT produce redundant plans for topics already in ACCUMULATED TOPIC KNOWLEDGE. Only generate NEW packets for genuinely unaddressed gaps.`
     : "";
 
-  const sectionText = `\n\n## EXTERNAL RESEARCH INTELLIGENCE${stalenessNote}\nResearch signal available for this cycle: ${topicCount} topic(s), ${sourceCount} source(s).\n\nResearch coverage target: ${coverageTarget > 0 ? coverageTarget : "AUTO"} research-backed packet(s) when materially applicable.\nDo NOT ignore this section. For each high-confidence unresolved topic, either:\n1) produce an actionable packet with concrete target_files and verification, or\n2) state that it is already implemented and cite exact file evidence in before_state/after_state.\n\nAll research topics:\n${topicLines || "(none)"}${crossTopicLines ? `\n\nCross-topic implementation dependencies (act on these together — these are your highest-priority planning inputs):\n${crossTopicLines}` : ""}${priorityActionLines ? `\n\nPlanner-ready priority actions (distilled):\n${priorityActionLines}` : ""}${riskFlagLines ? `\n\nPlanner risk flags:\n${riskFlagLines}` : ""}${sourceSignals ? `\n\nSource signals:\n${sourceSignals}` : ""}${gapsPreview ? `\n\nResearch gaps to address next (areas the Scout did NOT cover — generate packets for these):\n${gapsPreview}` : ""}`;
+  const excludedNote = excludedCount > 0
+    ? `\n⚠️  ${excludedCount} topic(s) excluded as not_applicable to BOX platform (non-BOX runtime detected — Temporal, Kubernetes, Go, JVM, etc.). Do NOT generate plans for excluded topics.`
+    : "";
+
+  const sectionText = `\n\n## EXTERNAL RESEARCH INTELLIGENCE${stalenessNote}${excludedNote}\nResearch signal available for this cycle: ${topicCount} topic(s), ${sourceCount} source(s).\n\nResearch coverage target: ${coverageTarget > 0 ? coverageTarget : "AUTO"} research-backed packet(s) when materially applicable.\nDo NOT ignore this section. For each high-confidence unresolved topic, either:\n1) produce an actionable packet with concrete target_files and verification, or\n2) state that it is already implemented and cite exact file evidence in before_state/after_state.\n\nAll research topics:\n${topicLines || "(none)"}${crossTopicLines ? `\n\nCross-topic implementation dependencies (act on these together — these are your highest-priority planning inputs):\n${crossTopicLines}` : ""}${priorityActionLines ? `\n\nPlanner-ready priority actions (distilled):\n${priorityActionLines}` : ""}${riskFlagLines ? `\n\nPlanner risk flags:\n${riskFlagLines}` : ""}${sourceSignals ? `\n\nSource signals:\n${sourceSignals}` : ""}${gapsPreview ? `\n\nResearch gaps to address next (areas the Scout did NOT cover — generate packets for these):\n${gapsPreview}` : ""}`;
 
   return { sectionText, topicCount, sourceCount, coverageTarget };
 }
@@ -1043,6 +1059,58 @@ export function tagStaleDiagnosticsBackedPlans(
   }
 
   return plans;
+}
+
+export function applyAdmissionPacketHardFilter(
+  plans: any[],
+  contractResult: { results?: Array<{ planIndex: number; valid: boolean; violations: Array<{ code?: string; severity?: string }> }> },
+): {
+  filteredCount: number;
+  warnedOnly: boolean;
+  rejectedPlanIndices: number[];
+} {
+  const safePlans = Array.isArray(plans) ? plans : [];
+  const results = Array.isArray(contractResult?.results) ? contractResult.results : [];
+  const ADMISSION_REJECTION_VIOLATION_CODES: Set<string> = new Set([
+    PACKET_VIOLATION_CODE.MISSING_CAPACITY_DELTA,
+    PACKET_VIOLATION_CODE.INVALID_CAPACITY_DELTA,
+    PACKET_VIOLATION_CODE.MISSING_REQUEST_ROI,
+    PACKET_VIOLATION_CODE.INVALID_REQUEST_ROI,
+    PACKET_VIOLATION_CODE.MISSING_IMPLEMENTATION_EVIDENCE,
+    PACKET_VIOLATION_CODE.MISSING_CAPACITY_FIRST_JUSTIFICATION,
+  ]);
+
+  const rejectedPlanIndices = results
+    .filter(r => !r.valid && Array.isArray(r.violations) && r.violations.some(v =>
+      ADMISSION_REJECTION_VIOLATION_CODES.has(String(v.code || "")) &&
+      v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL
+    ))
+    .map(r => r.planIndex)
+    .filter(index => Number.isInteger(index) && index >= 0 && index < safePlans.length)
+    .sort((a, b) => b - a);
+
+  if (rejectedPlanIndices.length === 0) {
+    return { filteredCount: 0, warnedOnly: false, rejectedPlanIndices: [] };
+  }
+
+  const remainingCount = safePlans.length - rejectedPlanIndices.length;
+  if (remainingCount <= 0) {
+    return {
+      filteredCount: 0,
+      warnedOnly: true,
+      rejectedPlanIndices,
+    };
+  }
+
+  for (const idx of rejectedPlanIndices) {
+    safePlans.splice(idx, 1);
+  }
+
+  return {
+    filteredCount: rejectedPlanIndices.length,
+    warnedOnly: false,
+    rejectedPlanIndices,
+  };
 }
 
 async function readLatestJsonlRecord(filePath: string): Promise<any | null> {
@@ -6105,29 +6173,22 @@ Mandatory requirements:
     // Filter uses deterministic PACKET_VIOLATION_CODE codes (canonical taxonomy from
     // plan_contract_validator.ts) rather than field-name string equality, so matching
     // is immune to field rename and consistent with the generation-boundary gate codes.
-    const ADMISSION_REJECTION_VIOLATION_CODES: Set<string> = new Set([
-      PACKET_VIOLATION_CODE.MISSING_CAPACITY_DELTA,
-      PACKET_VIOLATION_CODE.INVALID_CAPACITY_DELTA,
-      PACKET_VIOLATION_CODE.MISSING_REQUEST_ROI,
-      PACKET_VIOLATION_CODE.INVALID_REQUEST_ROI,
-      PACKET_VIOLATION_CODE.MISSING_IMPLEMENTATION_EVIDENCE,
-      PACKET_VIOLATION_CODE.MISSING_CAPACITY_FIRST_JUSTIFICATION,
-    ]);
-    const admissionRejectIndices = contractResult.results
-      .filter(r => !r.valid && r.violations.some(v =>
-        ADMISSION_REJECTION_VIOLATION_CODES.has(v.code) &&
-        v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL
-      ))
-      .map(r => r.planIndex)
-      .sort((a, b) => b - a); // reverse order for safe in-place splice
-    if (admissionRejectIndices.length > 0) {
-      for (const idx of admissionRejectIndices) {
-        parsed.plans.splice(idx, 1);
+    const admissionHardFilter = applyAdmissionPacketHardFilter(parsed.plans, contractResult);
+    if (admissionHardFilter.rejectedPlanIndices.length > 0) {
+      if (admissionHardFilter.warnedOnly) {
+        await appendProgress(
+          config,
+          `[PROMETHEUS][CONTRACT] WARN: all ${admissionHardFilter.rejectedPlanIndices.length} plan(s) ` +
+          `hit admission hard-filter for missing required evidence or capacity-first justification ` +
+          `- preserving for Athena review to avoid a no-plan cycle`,
+        );
+        parsed._allPlansAdmissionFilterWarnOnly = true;
+      } else {
+        await appendProgress(config,
+          `[PROMETHEUS][CONTRACT] Hard-filtered ${admissionHardFilter.filteredCount} low-quality/redundant admission packet(s) missing required evidence or capacity-first justification`
+        );
+        parsed._capacityRoiFilteredCount = admissionHardFilter.filteredCount;
       }
-      await appendProgress(config,
-        `[PROMETHEUS][CONTRACT] Hard-filtered ${admissionRejectIndices.length} low-quality/redundant admission packet(s) missing required evidence or capacity-first justification`
-      );
-      parsed._capacityRoiFilteredCount = admissionRejectIndices.length;
     }
 
     // ── Stale-diagnostics hard rejection gate ────────────────────────────────
