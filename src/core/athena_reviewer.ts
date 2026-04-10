@@ -848,6 +848,19 @@ export const POSTMORTEM_CLOSURE_VALIDATION_REASON = Object.freeze({
 } as const);
 
 /**
+ * Reason codes for closure boundary violations.
+ * Used when the completion-boundary enforcement blocks finalization.
+ *
+ * @enum {string}
+ */
+export const CLOSURE_BOUNDARY_VIOLATION_REASON = Object.freeze({
+  /** AI retry did not produce valid closure fields — fail-closed. */
+  RETRY_FAILED: "RETRY_FAILED",
+  /** AI retry call itself failed (network/binary error). */
+  RETRY_CALL_FAILED: "RETRY_CALL_FAILED",
+} as const);
+
+/**
  * Required non-empty fields in the postmortem closure evidence record.
  * The AI postmortem path must populate all three fields with non-trivial content.
  *
@@ -956,6 +969,58 @@ export function applyPostmortemLearningGradeStatus(
   normalized.learningGradeEligible = true;
   normalized.requiresReplayOrManualCompletion = false;
   return normalized;
+}
+
+/**
+ * Returns true when a postmortem carries a closure boundary violation flag.
+ * A boundary-violated postmortem must not be used to finalize a worker as done.
+ *
+ * @param postmortem — postmortem object returned by runAthenaPostmortem
+ */
+export function isClosureBoundaryViolation(postmortem: any): boolean {
+  return postmortem?.closureBoundaryViolation === true;
+}
+
+/**
+ * Build a targeted retry prompt for Athena when the initial postmortem
+ * response is missing required closure fields.
+ *
+ * @param basePrompt         — original context prompt sent to Athena
+ * @param closureValidation  — result of validatePostmortemClosureFields
+ * @param partialPostmortem  — the partial postmortem from the first attempt
+ */
+export function buildPostmortemClosureRetryPrompt(
+  basePrompt: string,
+  closureValidation: ReturnType<typeof validatePostmortemClosureFields>,
+  partialPostmortem: Record<string, any>,
+): string {
+  const missingList = closureValidation.emptyFields.map((f, i) => `${i + 1}. ${f}`).join("\n");
+  const partial = {
+    expectedOutcome: partialPostmortem.expectedOutcome || "",
+    actualOutcome:   partialPostmortem.actualOutcome   || "",
+    deviation:       partialPostmortem.deviation       || "",
+  };
+  return `${basePrompt}
+
+## RETRY — MISSING REQUIRED CLOSURE FIELDS
+
+Your previous postmortem response was missing required closure fields.
+These fields are mandatory for completion-boundary enforcement.
+
+Missing fields:
+${missingList}
+
+Current (incomplete) values from your first response:
+- expectedOutcome: "${partial.expectedOutcome}"
+- actualOutcome:   "${partial.actualOutcome}"
+- deviation:       "${partial.deviation}"
+
+Return a corrected ===DECISION=== JSON block that includes non-empty values for:
+1. expectedOutcome — concise description of what the task was supposed to achieve
+2. actualOutcome   — concise description of what was actually done
+3. deviation       — exactly one of: "none" | "minor" | "major"
+
+Do not omit these fields. The postmortem cannot be used for learning without them.`;
 }
 
 /**
@@ -3869,16 +3934,68 @@ ${recurrenceContext}
     model: athenaModel
   };
 
-  // ── Postmortem closure field validation (Task 1 gate) ──────────────────────
+  // ── Postmortem closure field validation — completion-boundary enforcement ────
   // Require non-empty expectedOutcome, actualOutcome, and deviation before
-  // persisting. Empty fields degrade the postmortem and prevent carry-forward
-  // lesson extraction and decision quality scoring from using it.
-  const closureValidation = validatePostmortemClosureFields(rawPostmortem);
-  const postmortem = applyPostmortemLearningGradeStatus(rawPostmortem, { closureValidation });
+  // persisting. If the AI's first response is missing these fields, attempt ONE
+  // retry with a targeted correction prompt (fail-close pattern matching the plan
+  // review retry). If the retry still fails, the postmortem carries
+  // closureBoundaryViolation=true, the recommendation is escalated, and the
+  // completion boundary is enforced — the worker cannot be finalised as done.
+  let closureValidation = validatePostmortemClosureFields(rawPostmortem);
   if (!closureValidation.valid) {
     await appendProgress(config,
-      `[ATHENA] Postmortem closure validation FAILED — ${closureValidation.reason} — empty fields: ${closureValidation.emptyFields.join(", ")}`
+      `[ATHENA] Closure boundary: fields invalid (${closureValidation.emptyFields.join(", ")}) — retrying once with correction prompt`
     );
+    const closureRetryPrompt = buildPostmortemClosureRetryPrompt(contextPrompt, closureValidation, rawPostmortem);
+    let closureRetryOk = false;
+    try {
+      const retryAiResult = await callCopilotAgent(command, "athena", closureRetryPrompt, config, athenaModel);
+      if (retryAiResult.ok && retryAiResult.parsed) {
+        const rd = retryAiResult.parsed;
+        // Patch only the missing fields from the retry response
+        if (String(rd.expectedOutcome || "").trim()) rawPostmortem.expectedOutcome = String(rd.expectedOutcome).trim();
+        if (String(rd.actualOutcome   || "").trim()) rawPostmortem.actualOutcome   = String(rd.actualOutcome).trim();
+        const retryDeviation = String(rd.deviation || "").trim();
+        if (retryDeviation) rawPostmortem.deviation = retryDeviation;
+        const retryValidation = validatePostmortemClosureFields(rawPostmortem);
+        if (retryValidation.valid) {
+          closureRetryOk = true;
+          closureValidation = retryValidation;
+          await appendProgress(config, `[ATHENA] Closure boundary: retry succeeded — all closure fields now present`);
+        } else {
+          await appendProgress(config,
+            `[ATHENA] Closure boundary: retry did not fix fields (${retryValidation.emptyFields.join(", ")}) — fail-closed`
+          );
+        }
+      } else {
+        await appendProgress(config,
+          `[ATHENA] Closure boundary: retry AI call failed — ${String((retryAiResult as any).error || "no JSON")} — fail-closed`
+        );
+      }
+    } catch (retryErr) {
+      await appendProgress(config,
+        `[ATHENA] Closure boundary: retry threw — ${String((retryErr as Error)?.message || retryErr).slice(0, 120)} — fail-closed`
+      );
+    }
+    if (!closureRetryOk) {
+      // Completion-boundary enforcement: mark violation and escalate recommendation.
+      // The caller (evolution_executor / orchestrator) MUST NOT finalise this
+      // worker as done — isClosureBoundaryViolation() will return true.
+      (rawPostmortem as any).closureBoundaryViolation = true;
+      (rawPostmortem as any).closureBoundaryViolationReason = CLOSURE_BOUNDARY_VIOLATION_REASON.RETRY_FAILED;
+      rawPostmortem.recommendation = POSTMORTEM_RECOMMENDATION.ESCALATE;
+      await appendProgress(config,
+        `[ATHENA] CLOSURE BOUNDARY VIOLATED — worker completion cannot be finalised — escalating`
+      );
+    }
+  }
+  const postmortem = applyPostmortemLearningGradeStatus(rawPostmortem, { closureValidation });
+  // Propagate boundary violation flag through to the enriched postmortem
+  if ((rawPostmortem as any).closureBoundaryViolation) {
+    (postmortem as any).closureBoundaryViolation = true;
+    (postmortem as any).closureBoundaryViolationReason = (rawPostmortem as any).closureBoundaryViolationReason;
+    // Ensure escalation recommendation is preserved after applyPostmortemLearningGradeStatus
+    (postmortem as any).recommendation = POSTMORTEM_RECOMMENDATION.ESCALATE;
   }
 
   // Classify defect channel

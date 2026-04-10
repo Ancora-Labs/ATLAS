@@ -5064,6 +5064,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       doneWorkerWithVerificationReportEvidence?: boolean;
       doneWorkerWithCleanTreeStatusEvidence?: boolean;
       dispatchBlockReason?: string | null;
+      closureBoundaryViolation?: boolean;
       replayClosure?: {
         contractSatisfied?: boolean;
         canonicalCommands?: string[];
@@ -5072,6 +5073,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       } | null;
     } | null;
     dispatchBlockReason?: string | null;
+    closureBoundaryViolation?: boolean;
   }> = [];
   // Collects (taskText, verificationEvidence) from successful workers for
   // carry-forward auto-close matching at end of cycle.
@@ -5299,6 +5301,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       verificationEvidence: workerResult?.verificationEvidence || null,
       dispatchContract: workerResult?.dispatchContract || null,
       dispatchBlockReason: workerResult?.dispatchBlockReason || null,
+      closureBoundaryViolation: workerResult?.dispatchContract?.closureBoundaryViolation === true,
     });
     // replayClosureContract is reserved for future replay-gate wiring
     const replayClosureContract: { contractSatisfied?: boolean } | undefined = undefined;
@@ -5514,6 +5517,8 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   const _verifiedDoneWorkers = allWorkerResults.filter((row: any) => {
     const status = String(row?.status || "").toLowerCase();
     if (status !== "done" && status !== "success") return false;
+    // Exclude workers that violated the closure boundary (missing expectedOutcome/actualOutcome/deviation)
+    if (row?.closureBoundaryViolation === true) return false;
     const contractEvidence = row?.dispatchContract?.doneWorkerWithVerificationReportEvidence;
     if (contractEvidence === true) return true;
     return hasVerificationReportEvidence(String(row?.verificationEvidence || row?.fullOutput || ""));

@@ -319,6 +319,8 @@ type DispatchVerificationContract = {
   doneWorkerWithVerificationReportEvidence: boolean;
   doneWorkerWithCleanTreeStatusEvidence: boolean;
   dispatchBlockReason: string | null;
+  /** True when the worker's done-path output lacks required closure fields. */
+  closureBoundaryViolation: boolean;
   replayClosure: {
     contractSatisfied: boolean;
     canonicalCommands: string[];
@@ -1386,6 +1388,9 @@ function buildConversationContext(history, instruction: WorkerInstruction, sessi
     parts.push("  ✓ ===VERIFICATION_REPORT===              ← use pass/fail/n/a, not placeholders");
     parts.push("    BUILD=pass  TESTS=pass  SECURITY=pass  ...etc.");
     parts.push("    ===END_VERIFICATION===");
+    parts.push("  ✓ BOX_EXPECTED_OUTCOME=<one-line: what this task was supposed to achieve>");
+    parts.push("  ✓ BOX_ACTUAL_OUTCOME=<one-line: what was actually done/delivered>");
+    parts.push("  ✓ BOX_DEVIATION=none|minor|major  ← 'none' if on-plan, 'minor'/'major' if off-plan");
     parts.push("If ANY item is missing, unfilled, or uses an old format → write BOX_STATUS=partial and list what could not be completed.");
     parts.push("⚠️ Do NOT use POST_MERGE_TEST_OUTPUT — that format is rejected. Use ===NPM TEST OUTPUT START/END=== instead.");
   }
@@ -1589,6 +1594,31 @@ export function parseWorkerResponse(stdout, stderr) {
   };
 }
 
+/**
+ * Check whether a worker's done-path output contains the required closure
+ * evidence fields (BOX_EXPECTED_OUTCOME, BOX_ACTUAL_OUTCOME, BOX_DEVIATION).
+ *
+ * These fields enforce the completion boundary: a worker cannot be accepted
+ * as done without self-reported closure evidence that matches the postmortem
+ * schema used by Athena (expectedOutcome / actualOutcome / deviation).
+ *
+ * @param output — worker's full stdout (or combined stdout+stderr)
+ * @returns {{ valid: boolean, missingFields: string[] }}
+ */
+export function checkWorkerOutputClosureFields(output: string): {
+  valid: boolean;
+  missingFields: string[];
+} {
+  const text = String(output || "");
+  const missingFields: string[] = [];
+
+  if (!/BOX_EXPECTED_OUTCOME=\S/i.test(text)) missingFields.push("BOX_EXPECTED_OUTCOME");
+  if (!/BOX_ACTUAL_OUTCOME=\S/i.test(text))   missingFields.push("BOX_ACTUAL_OUTCOME");
+  if (!/BOX_DEVIATION=(none|minor|major)/i.test(text)) missingFields.push("BOX_DEVIATION");
+
+  return { valid: missingFields.length === 0, missingFields };
+}
+
 export function deriveDeterministicCleanTreeEvidence(
   repoStatusOutput: string,
   scopedStatusOutput: string,
@@ -1620,15 +1650,27 @@ export function deriveDeterministicCleanTreeEvidence(
   return { mode: "none", lines: [] };
 }
 
+export function resolveCleanTreeEvidenceTargets(parsed, instruction): string[] {
+  const parsedFilesTouched = Array.isArray(parsed?.filesTouched)
+    ? parsed.filesTouched.map((file) => String(file || "").trim()).filter(Boolean)
+    : [];
+  if (parsedFilesTouched.length > 0) {
+    return [...new Set<string>(parsedFilesTouched)];
+  }
+
+  const instructionTargetFiles = Array.isArray(instruction?.targetFiles)
+    ? instruction.targetFiles.map((file) => String(file || "").trim()).filter(Boolean)
+    : [];
+  return [...new Set<string>(instructionTargetFiles)];
+}
+
 async function supplementCleanTreeEvidenceIfMissing(config, parsed, instruction) {
   if (!parsed || hasCleanTreeStatusEvidence(parsed.fullOutput || "")) {
     return { applied: false, mode: "none" as const };
   }
 
   const cwd = String(config?.rootDir || process.cwd());
-  const targetFiles = Array.isArray(instruction?.targetFiles)
-    ? instruction.targetFiles.map((file) => String(file || "").trim()).filter(Boolean)
-    : [];
+  const targetFiles = resolveCleanTreeEvidenceTargets(parsed, instruction);
 
   try {
     const repoStatus = await spawnAsync("git", ["status", "--porcelain"], { cwd }) as SpawnAsyncResult;
@@ -1903,6 +1945,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       doneWorkerWithVerificationReportEvidence: false,
       doneWorkerWithCleanTreeStatusEvidence: false,
       dispatchBlockReason: `role_capability_check_failed:${capabilityCheck.code}`,
+      closureBoundaryViolation: false,
       replayClosure: {
         contractSatisfied: replayClosure.contractSatisfied === true,
         canonicalCommands: Array.isArray(replayClosure.canonicalCommands) ? replayClosure.canonicalCommands : [],
@@ -2210,11 +2253,25 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       `[WORKER:${roleName}] Deterministic clean-tree evidence supplemented mode=${cleanTreeSupplement.mode}`
     );
   }
+  const cleanTreeTargetFiles = resolveCleanTreeEvidenceTargets(parsed, instruction);
   const artifactEvidence = checkPostMergeArtifact(parsed.fullOutput || "", {
-    expectedTargetFiles: Array.isArray(instruction.targetFiles) ? instruction.targetFiles : [],
+    expectedTargetFiles: cleanTreeTargetFiles,
   });
   const replayClosure = buildReplayClosureEvidence(parsed.fullOutput || "", artifactEvidence);
   const normalizedWorkerStatus = String(parsed.status || "").toLowerCase();
+  // Closure boundary enforcement: a done worker must include self-reported closure fields
+  // (BOX_EXPECTED_OUTCOME, BOX_ACTUAL_OUTCOME, BOX_DEVIATION). Missing fields block finalization.
+  const closureFieldCheck = checkWorkerOutputClosureFields(parsed.fullOutput || "");
+  const closureBoundaryViolation =
+    (normalizedWorkerStatus === "done" || normalizedWorkerStatus === "success")
+    && !closureFieldCheck.valid;
+  if (closureBoundaryViolation) {
+    parsed.status = "partial";
+    parsed.summary = `[CLOSURE BOUNDARY] done blocked — missing required closure fields: ${closureFieldCheck.missingFields.join(", ")}\n${parsed.summary}`;
+    await appendProgress(config,
+      `[WORKER:${roleName}] CLOSURE_BOUNDARY_VIOLATION — done downgraded to partial — missing: ${closureFieldCheck.missingFields.join(", ")}`
+    );
+  }
   const dispatchContract: DispatchVerificationContract = {
     doneWorkerWithVerificationReportEvidence:
       (normalizedWorkerStatus === "done" || normalizedWorkerStatus === "success")
@@ -2225,6 +2282,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     dispatchBlockReason: normalizedWorkerStatus === "blocked"
       ? (parsed.dispatchBlockReason || "worker_reported_blocked_without_reason")
       : null,
+    closureBoundaryViolation,
     replayClosure: {
       contractSatisfied: replayClosure.contractSatisfied === true,
       canonicalCommands: Array.isArray(replayClosure.canonicalCommands) ? replayClosure.canonicalCommands : [],
@@ -2431,9 +2489,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   //
   // The artifact is computed once here and reused by both this gate and the
   // subsequent validateWorkerContract call, avoiding duplicate evaluation.
-  const scopedTargetFiles = Array.isArray(instruction.targetFiles)
-    ? instruction.targetFiles.map((file) => String(file || "").trim()).filter(Boolean)
-    : [];
+  const scopedTargetFiles = cleanTreeTargetFiles;
   const isArtifactRequired = parsed.status === "done" && isArtifactGateRequired(workerKind ?? "unknown", instruction.taskKind);
   const precomputedArtifact = isArtifactRequired
     ? checkPostMergeArtifact(parsed.fullOutput || parsed.summary || "", {
