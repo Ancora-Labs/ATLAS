@@ -188,6 +188,23 @@ export const HEALTH_AUDIT_MANDATORY_SEVERITIES: ReadonlySet<string> = new Set(["
 export const STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH = 10 as const;
 
 /**
+ * Normalize a string for contamination pattern matching using Unicode NFKC
+ * decomposition.  NFKC collapses Unicode homoglyphs (e.g. mathematical bold
+ * "𝐋et" → "Let", fullwidth "Ｉ" → "I") so that pattern matching is not
+ * bypassable via look-alike Unicode code-points.
+ *
+ * Safe to call on arbitrary strings — never throws.
+ * Exported for testing.
+ */
+export function normalizeTextForContaminationCheck(text: string): string {
+  try {
+    return String(text || "").normalize("NFKC");
+  } catch {
+    return String(text || "");
+  }
+}
+
+/**
  * Lexical patterns that identify first-person process narration — AI agents
  * narrating their own tool usage in present tense.  These must NOT appear in
  * persisted strategic planning fields (keyFindings, strategicNarrative).
@@ -234,6 +251,10 @@ export const SEMANTIC_TOOL_TRACE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze
  *   3. Process narration lexical patterns (first-person action narration)
  *   4. Semantic tool-trace fragments (tool invocation text, output blocks)
  *
+ * Unicode NFKC normalization is applied before pattern matching so that
+ * homoglyph substitutions (e.g. mathematical bold "𝐋et me" → "Let me") cannot
+ * bypass ASCII-anchored patterns.
+ *
  * Matches the same patterns stripped by sanitizePlanningFieldForPersistence
  * plus the PROCESS_THOUGHT_MARKER_PATTERNS from plan_contract_validator.ts so
  * validation and sanitisation share a single, consistent surface.
@@ -241,7 +262,9 @@ export const SEMANTIC_TOOL_TRACE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze
  * Exported for testing.
  */
 export function isStrategicFieldToolTraceContaminated(text: string): boolean {
-  const s = String(text || "");
+  // Apply Unicode NFKC normalization to defeat homoglyph bypasses before any
+  // ASCII-anchored pattern matching.
+  const s = normalizeTextForContaminationCheck(text);
   // ── Category 1: classic tool-call / role-prefix markers ──────────────────
   if (/^(tool_call|tool_result|function_call|assistant:|system:|user:)/im.test(s)) return true;
   if (/^copilot>/im.test(s)) return true;
@@ -3086,15 +3109,38 @@ function hasValidParserContractFields(parsed: any): boolean {
   const health = rawHealth.replace(/\s+/g, "-");
   const estimatedTotal = Number(parsed?.requestBudget?.estimatedPremiumRequestsTotal);
   const generatedAt = String(parsed?.generatedAt ?? "").trim();
-  const keyFindings = String(parsed?.keyFindings ?? "").trim();
+  // keyFindings must be a string — reject arrays, objects, and other non-string types
+  // that coerce to misleading values (e.g. an array ["f1","f2"] would become "f1,f2").
+  if (typeof parsed.keyFindings !== "string") return false;
+  const keyFindings = parsed.keyFindings.trim();
   const strategicNarrative = String(parsed?.strategicNarrative ?? "").trim();
-  return REQUIRED_PROMETHEUS_HEALTH_VALUES.has(health)
-    && Number.isFinite(estimatedTotal)
-    && generatedAt.length > 0
-    && keyFindings.length >= STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH
-    && !isStrategicFieldToolTraceContaminated(keyFindings)
-    && strategicNarrative.length >= STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH
-    && !isStrategicFieldToolTraceContaminated(strategicNarrative);
+  if (
+    !REQUIRED_PROMETHEUS_HEALTH_VALUES.has(health)
+    || !Number.isFinite(estimatedTotal)
+    || generatedAt.length === 0
+    || keyFindings.length < STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH
+    || isStrategicFieldToolTraceContaminated(keyFindings)
+    || strategicNarrative.length < STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH
+    || isStrategicFieldToolTraceContaminated(strategicNarrative)
+  ) {
+    return false;
+  }
+  // Acceptance-criteria emptiness detection at the generation boundary.
+  // Only fires when at least one plan explicitly declares the acceptance_criteria
+  // key (model committed to providing AC) but every declared item is blank/empty.
+  // Plans that omit the key entirely are handled post-normalization by validatePlanContract.
+  const plans = Array.isArray(parsed.plans) ? parsed.plans : [];
+  if (plans.length > 0) {
+    const plansWithExplicitAC = plans.filter((p: any) => p != null && "acceptance_criteria" in p);
+    if (plansWithExplicitAC.length > 0) {
+      const hasAnyNonEmptyAC = plansWithExplicitAC.some((p: any) =>
+        Array.isArray(p.acceptance_criteria) &&
+        p.acceptance_criteria.some((item: any) => String(item ?? "").trim().length > 0)
+      );
+      if (!hasAnyNonEmptyAC) return false;
+    }
+  }
+  return true;
 }
 
 function buildParserContractRetryDiff(parsed: any): string {
@@ -3117,13 +3163,18 @@ function buildParserContractRetryDiff(parsed: any): string {
   if (!rawGeneratedAt) {
     missing.push("generatedAt");
   }
-  const rawKeyFindings = String(parsed?.keyFindings ?? "").trim();
-  if (!rawKeyFindings) {
-    missing.push("keyFindings");
-  } else if (rawKeyFindings.length < STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH) {
-    invalid.push(`keyFindings_too_short(len=${rawKeyFindings.length})`);
-  } else if (isStrategicFieldToolTraceContaminated(rawKeyFindings)) {
-    invalid.push("keyFindings_tool_trace_contaminated");
+  // keyFindings must be a string type — report non-string types explicitly.
+  if (parsed?.keyFindings !== undefined && typeof parsed.keyFindings !== "string") {
+    invalid.push(`keyFindings_wrong_type(${typeof parsed.keyFindings})`);
+  } else {
+    const rawKeyFindings = String(parsed?.keyFindings ?? "").trim();
+    if (!rawKeyFindings) {
+      missing.push("keyFindings");
+    } else if (rawKeyFindings.length < STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH) {
+      invalid.push(`keyFindings_too_short(len=${rawKeyFindings.length})`);
+    } else if (isStrategicFieldToolTraceContaminated(rawKeyFindings)) {
+      invalid.push("keyFindings_tool_trace_contaminated");
+    }
   }
   const rawStrategicNarrative = String(parsed?.strategicNarrative ?? "").trim();
   if (!rawStrategicNarrative) {
@@ -3132,6 +3183,22 @@ function buildParserContractRetryDiff(parsed: any): string {
     invalid.push(`strategicNarrative_too_short(len=${rawStrategicNarrative.length})`);
   } else if (isStrategicFieldToolTraceContaminated(rawStrategicNarrative)) {
     invalid.push("strategicNarrative_tool_trace_contaminated");
+  }
+  // Report when plans explicitly declare acceptance_criteria (key present) but all items are blank.
+  // Plans that omit the key entirely are caught post-normalization; only explicit emptiness is
+  // a generation-boundary violation.
+  const plans = Array.isArray(parsed?.plans) ? parsed.plans : [];
+  if (plans.length > 0) {
+    const plansWithExplicitAC = plans.filter((p: any) => p != null && "acceptance_criteria" in p);
+    if (plansWithExplicitAC.length > 0) {
+      const hasAnyNonEmptyAC = plansWithExplicitAC.some((p: any) =>
+        Array.isArray(p.acceptance_criteria) &&
+        p.acceptance_criteria.some((item: any) => String(item ?? "").trim().length > 0)
+      );
+      if (!hasAnyNonEmptyAC) {
+        missing.push("plans[*].acceptance_criteria");
+      }
+    }
   }
   const missingText = missing.length > 0 ? missing.join(", ") : "none";
   const invalidText = invalid.length > 0 ? invalid.join(", ") : "none";

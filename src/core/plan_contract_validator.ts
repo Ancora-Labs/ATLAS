@@ -1046,11 +1046,20 @@ export const PROCESS_THOUGHT_MARKER_PATTERNS: ReadonlyArray<RegExp> = Object.fre
  * Detect whether a string contains process-thought markers.
  * Pure function — no side effects.
  *
+ * Unicode NFKC normalization is applied before matching so homoglyph
+ * substitutions (e.g. mathematical bold characters) cannot bypass ASCII-
+ * anchored patterns.
+ *
  * @param text — any string (plan task text, analysis narrative, etc.)
  * @returns true when at least one process-thought marker is present
  */
 export function detectProcessThoughtMarkers(text: string): boolean {
-  const s = String(text || "");
+  let s = String(text || "");
+  try {
+    s = s.normalize("NFKC");
+  } catch {
+    // normalize() should never throw on a valid string, but guard defensively.
+  }
   return PROCESS_THOUGHT_MARKER_PATTERNS.some((pattern) => pattern.test(s));
 }
 
