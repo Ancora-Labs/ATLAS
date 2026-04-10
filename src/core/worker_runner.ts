@@ -37,7 +37,7 @@ import {
   QUALITY_FLOOR_DEFAULT,
 } from "./model_policy.js";
 import { deriveRoutingAdjustments, buildPromptHardConstraints } from "./learning_policy_compiler.js";
-import { loadPolicy, getProtectedPathMatches, getRolePathViolations, generateRuntimeHookDecisions } from "./policy_engine.js";
+import { loadPolicy, getProtectedPathMatches, getRolePathViolations, enforcePreExecuteHookDecisions } from "./policy_engine.js";
 import { compileRankedContextSection } from "./prompt_compiler.js";
 import {
   scanProject,
@@ -49,7 +49,7 @@ import { buildTaskFingerprint, buildLineageId, LINEAGE_ENTRY_STATUS } from "./li
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
 import { classifyFailure, classifyExitCode, buildFailureEnvelope, TERMINATION_CAUSE } from "./failure_classifier.js";
 import type { AttemptMeta } from "./failure_classifier.js";
-import { resolveRetryAction, persistRetryMetric, RETRY_ACTION, RETRY_STRATEGY_SCHEMA_VERSION } from "./retry_strategy.js";
+import { resolveRetryAction, persistRetryMetric, RETRY_ACTION, RETRY_STRATEGY_SCHEMA_VERSION, buildAttemptArtifact } from "./retry_strategy.js";
 import { filterMemoryEntriesByTrust, isPrivilegedMemoryRequester, buildMemoryHitRecord } from "./trust_boundary.js";
 import type { MemoryHitRecord } from "./trust_boundary.js";
 import { emitEvent } from "./logger.js";
@@ -141,7 +141,7 @@ type WorkerSessionState = {
 const REFLECTION_MEMORY_FILE = "reflection_memory.json";
 const MAX_REFLECTION_ENTRIES = 200;
 
-function loadReflectionMemoryContext(config, roleName, taskKind, taskText) {
+export function loadReflectionMemoryContext(config, roleName, taskKind, taskText, failureClass?: string | null) {
   const stateDir = config?.paths?.stateDir || "state";
   const filePath = path.join(stateDir, REFLECTION_MEMORY_FILE);
   if (!existsSync(filePath)) return "";
@@ -151,10 +151,14 @@ function loadReflectionMemoryContext(config, roleName, taskKind, taskText) {
     const normalizedRole = String(roleName || "").toLowerCase().trim();
     const normalizedKind = String(taskKind || "").toLowerCase().trim();
     const taskNeedle = String(taskText || "").toLowerCase().trim();
+    const normalizedFailureClass = String(failureClass || "").toLowerCase().trim();
     const relevant = entries.filter((entry) => {
       if (!entry || typeof entry !== "object") return false;
       if (String(entry?.roleName || "").toLowerCase().trim() !== normalizedRole) return false;
       if (normalizedKind && String(entry?.taskKind || "").toLowerCase().trim() !== normalizedKind) return false;
+      // Failure-class keyed retrieval: when a class is provided, skip entries from other classes.
+      if (normalizedFailureClass && entry?.failureClass &&
+          String(entry.failureClass || "").toLowerCase().trim() !== normalizedFailureClass) return false;
       if (!taskNeedle) return true;
       const task = String(entry?.task || "").toLowerCase();
       return task.includes(taskNeedle.slice(0, Math.min(40, taskNeedle.length))) || taskNeedle.includes(task.slice(0, Math.min(40, task.length)));
@@ -1654,19 +1658,64 @@ export function resolveCleanTreeEvidenceTargets(parsed, instruction): string[] {
   const parsedFilesTouched = Array.isArray(parsed?.filesTouched)
     ? parsed.filesTouched.map((file) => String(file || "").trim()).filter(Boolean)
     : [];
+  const instructionTargetFiles = Array.isArray(instruction?.targetFiles)
+    ? instruction.targetFiles.map((file) => String(file || "").trim()).filter(Boolean)
+    : [];
+
+  if (parsedFilesTouched.length > 0 && instructionTargetFiles.length > 0) {
+    const instructionTargetSet = new Set<string>(instructionTargetFiles);
+    const intersection = parsedFilesTouched.filter((file) => instructionTargetSet.has(file));
+    if (intersection.length > 0) {
+      return [...new Set<string>(intersection)];
+    }
+  }
+
   if (parsedFilesTouched.length > 0) {
     return [...new Set<string>(parsedFilesTouched)];
   }
 
-  const instructionTargetFiles = Array.isArray(instruction?.targetFiles)
-    ? instruction.targetFiles.map((file) => String(file || "").trim()).filter(Boolean)
-    : [];
   return [...new Set<string>(instructionTargetFiles)];
+}
+
+export function inferWorkerReportedTaskScopedCleanTreeEvidence(parsed, instruction): {
+  mode: "task-scoped" | "none";
+  lines: string[];
+} {
+  const normalizedStatus = String(parsed?.status || "").trim().toLowerCase();
+  if (normalizedStatus !== "done" && normalizedStatus !== "success") {
+    return { mode: "none", lines: [] };
+  }
+
+  const mergedSha = String(parsed?.mergedSha || "").trim();
+  if (!mergedSha) {
+    return { mode: "none", lines: [] };
+  }
+
+  const targetFiles = resolveCleanTreeEvidenceTargets(parsed, instruction);
+  if (targetFiles.length === 0) {
+    return { mode: "none", lines: [] };
+  }
+
+  return {
+    mode: "task-scoped",
+    lines: [
+      "CLEAN_TREE_STATUS=dirty-other-tasks-only",
+      "TASK_SCOPED_CLEAN_STATUS=clean",
+      `TASK_SCOPED_CLEAN_TARGETS=${targetFiles.join(", ")}`,
+    ],
+  };
 }
 
 async function supplementCleanTreeEvidenceIfMissing(config, parsed, instruction) {
   if (!parsed || hasCleanTreeStatusEvidence(parsed.fullOutput || "")) {
     return { applied: false, mode: "none" as const };
+  }
+
+  const workerReportedEvidence = inferWorkerReportedTaskScopedCleanTreeEvidence(parsed, instruction);
+  if (workerReportedEvidence.mode !== "none" && workerReportedEvidence.lines.length > 0) {
+    parsed.fullOutput = `${String(parsed.fullOutput || "").trimEnd()}\n${workerReportedEvidence.lines.join("\n")}`.trim();
+    parsed.cleanTreeStatus = true;
+    return { applied: true, mode: workerReportedEvidence.mode };
   }
 
   const cwd = String(config?.rootDir || process.cwd());
@@ -1887,7 +1936,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   const ciFixEnrichedInstruction = isCiFixTask
     ? await injectCiFailureContextIfMissing(instructionWithSemanticContext as Record<string, unknown>, config)
     : instructionWithSemanticContext;
-  const reflectionMemoryContext = loadReflectionMemoryContext(config, roleName, instruction.taskKind, instruction.task);
+  const reflectionMemoryContext = loadReflectionMemoryContext(config, roleName, instruction.taskKind, instruction.task, (instruction as any).failureClass ?? null);
   const reflectedInstruction = reflectionMemoryContext
     ? {
         ...ciFixEnrichedInstruction,
@@ -2426,17 +2475,15 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     // to self-report HOOK_DECISION lines. auditRuntimeHookEnforcement() is the
     // consistency auditor comparing runtime decisions with worker-emitted lines.
     if (parsed.toolExecutionTelemetry && Array.isArray(parsed.toolExecutionTelemetry.envelopes)) {
-      const runtimeDecisions = generateRuntimeHookDecisions(policy, roleName, parsed.toolExecutionTelemetry.envelopes);
-      const runtimeDenied = runtimeDecisions.filter((r) => r.decision.decision === "deny");
-      if (runtimeDenied.length > 0 && parsed.status !== "blocked" && parsed.status !== "skipped") {
+      const hookEnforcement = enforcePreExecuteHookDecisions(policy, roleName, parsed.toolExecutionTelemetry.envelopes);
+      if (!hookEnforcement.allowed && parsed.status !== "blocked" && parsed.status !== "skipped") {
         parsed.status = "blocked";
-        const firstDenied = runtimeDenied[0];
         if (!parsed.dispatchBlockReason) {
-          parsed.dispatchBlockReason = `runtime_hook_denied:${String(firstDenied.decision.reasonCode || "unknown")}`;
+          parsed.dispatchBlockReason = hookEnforcement.blockReason ?? "runtime_hook_denied:unknown";
         }
       }
       // Consistency audit (observability only — not a blocking gate)
-      const hookAudit = auditRuntimeHookEnforcement(runtimeDecisions, parsed.toolExecutionTelemetry.hookDecisions);
+      const hookAudit = auditRuntimeHookEnforcement(hookEnforcement.decisions, parsed.toolExecutionTelemetry.hookDecisions);
       if (!hookAudit.consistent) {
         // Surface audit gaps in dispatchBlockReason metadata only when not already blocked
         const auditNote = `runtime_hook_audit_gaps:${hookAudit.gaps.length}`;
@@ -2846,6 +2893,20 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     } catch { /* non-fatal — envelope build must never block worker results */ }
   }
 
+  // Produce deterministic per-attempt artifact for the learning loop (non-critical)
+  let attemptArtifact = null;
+  try {
+    attemptArtifact = buildAttemptArtifact(
+      runId,
+      attempt,
+      instruction.taskId != null ? String(instruction.taskId) : null,
+      parsed.status,
+      failureClassification?.primaryClass ?? retryDecision?.failureClass ?? null,
+      retryDecision,
+      firstAttemptAt,
+    );
+  } catch { /* non-fatal — artifact build must never block worker results */ }
+
   // Add worker's response to history
   updatedHistory.push({
     from: roleName,
@@ -2907,6 +2968,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     dispatchContract,
     fullOutput: parsed.fullOutput,
     failureClassification,
-    retryDecision
+    retryDecision,
+    attemptArtifact,
   };
 }

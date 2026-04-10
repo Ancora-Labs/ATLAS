@@ -7,6 +7,7 @@ import {
   parseWorkerResponse,
   deriveDeterministicCleanTreeEvidence,
   resolveCleanTreeEvidenceTargets,
+  inferWorkerReportedTaskScopedCleanTreeEvidence,
   detectRepoContamination,
   attemptBranchCleanlinessRecovery,
   shouldEnableFullToolAccess,
@@ -209,6 +210,30 @@ describe("deriveDeterministicCleanTreeEvidence", () => {
 });
 
 describe("resolveCleanTreeEvidenceTargets", () => {
+  it("intersects BOX_FILES_TOUCHED with instruction targetFiles when worker output includes incidental files", () => {
+    const result = resolveCleanTreeEvidenceTargets(
+      {
+        filesTouched: [
+          "src/core/doctor.ts",
+          "src/core/orchestrator.ts",
+          "state/benchmark_ground_truth.json",
+        ],
+      },
+      {
+        targetFiles: [
+          "src/core/doctor.ts",
+          "src/core/orchestrator.ts",
+          "tests/core/orchestrator_pipeline_progress.test.ts",
+        ],
+      },
+    );
+
+    assert.deepEqual(result, [
+      "src/core/doctor.ts",
+      "src/core/orchestrator.ts",
+    ]);
+  });
+
   it("prefers BOX_FILES_TOUCHED over broad instruction targetFiles", () => {
     const result = resolveCleanTreeEvidenceTargets(
       {
@@ -247,6 +272,51 @@ describe("resolveCleanTreeEvidenceTargets", () => {
       "src/core/orchestrator.ts",
       "tests/core/orchestrator_runtime_contracts.test.ts",
     ]);
+  });
+});
+
+describe("inferWorkerReportedTaskScopedCleanTreeEvidence", () => {
+  it("synthesizes task-scoped clean-tree evidence from worker-reported merged output", () => {
+    const result = inferWorkerReportedTaskScopedCleanTreeEvidence(
+      {
+        status: "done",
+        mergedSha: "abc1234",
+        filesTouched: [
+          "src/core/doctor.ts",
+          "src/core/orchestrator.ts",
+          "state/benchmark_ground_truth.json",
+        ],
+      },
+      {
+        targetFiles: [
+          "src/core/doctor.ts",
+          "src/core/orchestrator.ts",
+        ],
+      },
+    );
+
+    assert.equal(result.mode, "task-scoped");
+    assert.deepEqual(result.lines, [
+      "CLEAN_TREE_STATUS=dirty-other-tasks-only",
+      "TASK_SCOPED_CLEAN_STATUS=clean",
+      "TASK_SCOPED_CLEAN_TARGETS=src/core/doctor.ts, src/core/orchestrator.ts",
+    ]);
+  });
+
+  it("returns none when worker completion is not merged", () => {
+    const result = inferWorkerReportedTaskScopedCleanTreeEvidence(
+      {
+        status: "done",
+        mergedSha: "",
+        filesTouched: ["src/core/doctor.ts"],
+      },
+      {
+        targetFiles: ["src/core/doctor.ts"],
+      },
+    );
+
+    assert.equal(result.mode, "none");
+    assert.deepEqual(result.lines, []);
   });
 });
 
@@ -839,5 +909,260 @@ describe("extractWorkerViolationSummary", () => {
       dispatchContract: "not-an-object",
     });
     assert.equal(result.closureBoundaryViolation, false);
+  });
+});
+
+// ── loadReflectionMemoryContext — failure-class keyed retrieval ──────────────
+
+import { loadReflectionMemoryContext } from "../../src/core/worker_runner.js";
+
+describe("loadReflectionMemoryContext — failure-class keyed retrieval", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-reflection-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns empty string when no reflection memory file exists", () => {
+    const result = loadReflectionMemoryContext(
+      { paths: { stateDir: tmpDir } },
+      "king-david",
+      "implementation",
+      "fix the auth bug",
+    );
+    assert.equal(result, "");
+  });
+
+  it("returns matching entries without failureClass filter", async () => {
+    const entries = [
+      {
+        roleName: "king-david",
+        taskKind: "implementation",
+        task: "fix the auth bug",
+        status: "blocked",
+        failureClass: "logic_defect",
+        retryAction: "rework",
+        reason: "failed to resolve imports",
+        recordedAt: "2024-01-01T00:00:00Z",
+      },
+    ];
+    await fs.writeFile(
+      path.join(tmpDir, "reflection_memory.json"),
+      JSON.stringify({ schemaVersion: 1, updatedAt: new Date().toISOString(), entries }),
+    );
+    const result = loadReflectionMemoryContext(
+      { paths: { stateDir: tmpDir } },
+      "king-david",
+      "implementation",
+      "fix the auth bug",
+    );
+    assert.ok(result.includes("REFLECTION MEMORY"), "must include memory header");
+    assert.ok(result.includes("rework"), "must include retryAction from entry");
+  });
+
+  it("filters entries by failureClass when provided — keeps matching class", async () => {
+    const entries = [
+      {
+        roleName: "king-david",
+        taskKind: "implementation",
+        task: "fix tests",
+        status: "blocked",
+        failureClass: "logic_defect",
+        retryAction: "rework",
+        reason: "wrong logic",
+        recordedAt: "2024-01-01T00:00:00Z",
+      },
+      {
+        roleName: "king-david",
+        taskKind: "implementation",
+        task: "fix tests",
+        status: "blocked",
+        failureClass: "environment",
+        retryAction: "cooldown_retry",
+        reason: "disk full",
+        recordedAt: "2024-01-01T00:01:00Z",
+      },
+    ];
+    await fs.writeFile(
+      path.join(tmpDir, "reflection_memory.json"),
+      JSON.stringify({ schemaVersion: 1, updatedAt: new Date().toISOString(), entries }),
+    );
+    const result = loadReflectionMemoryContext(
+      { paths: { stateDir: tmpDir } },
+      "king-david",
+      "implementation",
+      "fix tests",
+      "environment",
+    );
+    assert.ok(result.includes("cooldown_retry"), "must include the environment-class entry");
+    assert.ok(!result.includes("wrong logic"), "must NOT include the logic_defect entry");
+  });
+
+  it("negative: returns empty string when failureClass matches no entries", async () => {
+    const entries = [
+      {
+        roleName: "king-david",
+        taskKind: "implementation",
+        task: "fix tests",
+        status: "blocked",
+        failureClass: "logic_defect",
+        retryAction: "rework",
+        reason: "logic error",
+        recordedAt: "2024-01-01T00:00:00Z",
+      },
+    ];
+    await fs.writeFile(
+      path.join(tmpDir, "reflection_memory.json"),
+      JSON.stringify({ schemaVersion: 1, updatedAt: new Date().toISOString(), entries }),
+    );
+    const result = loadReflectionMemoryContext(
+      { paths: { stateDir: tmpDir } },
+      "king-david",
+      "implementation",
+      "fix tests",
+      "model",
+    );
+    assert.equal(result, "", "no entries matching failureClass=model must yield empty string");
+  });
+});
+
+// ── enforcePreExecuteHookDecisions — authoritative hook enforcement ──────────
+
+import { enforcePreExecuteHookDecisions } from "../../src/core/policy_engine.js";
+
+describe("enforcePreExecuteHookDecisions", () => {
+  it("returns allowed=true when no envelopes are provided", () => {
+    const result = enforcePreExecuteHookDecisions({}, "king-david", []);
+    assert.equal(result.allowed, true);
+    assert.equal(result.deniedCount, 0);
+    assert.equal(result.blockReason, null);
+    assert.deepEqual(result.decisions, []);
+  });
+
+  it("returns allowed=true when policy is null and envelopes are well-formed", () => {
+    const envelopes = [
+      { scope: "src/core/**", intent: "edit file", impact: "medium", clearance: "write" },
+    ];
+    const result = enforcePreExecuteHookDecisions(null, "king-david", envelopes);
+    assert.equal(result.allowed, true);
+    assert.equal(result.deniedCount, 0);
+    assert.equal(result.blockReason, null);
+  });
+
+  it("returns allowed=false when policy blocks a high-impact envelope requiring admin clearance", () => {
+    const policy = {
+      rolePolicies: {},
+      preToolUse: {
+        required: true,
+        mandatoryFields: ["scope", "intent", "impact", "clearance"],
+        validImpactValues: ["low", "medium", "high", "critical"],
+        validClearanceValues: ["read", "write", "admin"],
+        impactMinClearance: { critical: "admin" },
+      },
+    };
+    const envelopes = [
+      { scope: "infra/**", intent: "deploy to production", impact: "critical", clearance: "write" },
+    ];
+    const result = enforcePreExecuteHookDecisions(policy, "king-david", envelopes);
+    assert.equal(result.allowed, false);
+    assert.ok(result.deniedCount >= 1);
+    assert.ok(typeof result.blockReason === "string" && result.blockReason.startsWith("runtime_hook_denied:"));
+    assert.ok(result.firstDeniedScope !== null || result.firstDeniedReasonCode !== null);
+  });
+
+  it("negative: returns allowed=false when a non-array is passed as envelopes", () => {
+    // Non-array envelopes must produce an empty decisions set and be treated as allowed
+    const result = enforcePreExecuteHookDecisions({}, "king-david", null as unknown as unknown[]);
+    assert.equal(result.allowed, true);
+    assert.equal(result.deniedCount, 0);
+    assert.deepEqual(result.decisions, []);
+  });
+
+  it("exposes structured decisions array for audit telemetry", () => {
+    const envelopes = [
+      { scope: "src/**", intent: "read file", impact: "low", clearance: "read" },
+    ];
+    const result = enforcePreExecuteHookDecisions({}, "king-david", envelopes);
+    assert.ok(Array.isArray(result.decisions));
+    assert.equal(result.decisions.length, 1);
+    assert.ok("envelope" in result.decisions[0]);
+    assert.ok("decision" in result.decisions[0]);
+  });
+});
+
+// ── buildAttemptArtifact — deterministic per-attempt artifact ────────────────
+
+import { buildAttemptArtifact, ATTEMPT_ARTIFACT_SCHEMA_VERSION } from "../../src/core/retry_strategy.js";
+
+describe("buildAttemptArtifact", () => {
+  it("produces a schema-v1 artifact with correct structure", () => {
+    const artifact = buildAttemptArtifact(
+      "abc123",
+      0,
+      "task-42",
+      "blocked",
+      "logic_defect",
+      { retryAction: "rework" },
+      "2024-01-01T00:00:00Z",
+    );
+    assert.equal(artifact.schemaVersion, ATTEMPT_ARTIFACT_SCHEMA_VERSION);
+    assert.equal(artifact.runId, "abc123");
+    assert.equal(artifact.attempt, 0);
+    assert.equal(artifact.taskId, "task-42");
+    assert.equal(artifact.outcome, "blocked");
+    assert.equal(artifact.failureClass, "logic_defect");
+    assert.equal(artifact.retryAction, "rework");
+    assert.equal(artifact.firstAttemptAt, "2024-01-01T00:00:00Z");
+    assert.ok(typeof artifact.decidedAt === "string" && artifact.decidedAt.length > 0);
+  });
+
+  it("populates policyApplied for a known failure class", () => {
+    const artifact = buildAttemptArtifact(
+      "run-1",
+      1,
+      null,
+      "error",
+      "environment",
+      { retryAction: "cooldown_retry" },
+      "2024-01-01T00:00:00Z",
+    );
+    assert.ok(artifact.policyApplied !== null, "policyApplied must be set for a known class");
+    assert.equal(artifact.policyApplied!.failureClass, "environment");
+    assert.equal(artifact.policyApplied!.action, "cooldown_retry");
+    assert.ok(typeof artifact.policyApplied!.escalateAfter === "number");
+  });
+
+  it("sets policyApplied to null for an unknown failure class", () => {
+    const artifact = buildAttemptArtifact(
+      "run-2",
+      0,
+      null,
+      "blocked",
+      "unknown_class",
+      null,
+      "2024-01-01T00:00:00Z",
+    );
+    assert.equal(artifact.policyApplied, null);
+  });
+
+  it("negative: handles null retryDecision and null failureClass gracefully", () => {
+    const artifact = buildAttemptArtifact(
+      "",
+      0,
+      null,
+      "done",
+      null,
+      null,
+      "",
+    );
+    assert.equal(artifact.schemaVersion, ATTEMPT_ARTIFACT_SCHEMA_VERSION);
+    assert.equal(artifact.retryAction, null);
+    assert.equal(artifact.failureClass, null);
+    assert.equal(artifact.policyApplied, null);
+    assert.equal(artifact.outcome, "done");
   });
 });

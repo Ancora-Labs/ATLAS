@@ -718,3 +718,114 @@ export function persistRetryMetric(config, decision) {
     // Non-fatal: metric persistence must never block orchestration
   }
 }
+
+// ── Typed attempt-policy contract ─────────────────────────────────────────────
+
+/**
+ * Typed per-failure-class attempt-policy contract.
+ * Resolved once per attempt and included in every AttemptArtifact for full
+ * traceability of what policy thresholds governed the retry decision.
+ */
+export interface AttemptPolicyContract {
+  failureClass: string;
+  attempts: number;
+  action: string;
+  cooldownMinutes?: number;
+  maxRetries?: number;
+  maxReworkAttempts?: number;
+  reassignBeforeAttempt?: number;
+  splitAfterAttempt?: number;
+  escalateAfter: number;
+  escalationTarget: string;
+  reworkQueue?: string;
+  verificationStep?: string;
+  resolvedAt: string;
+}
+
+/** Schema version for AttemptArtifact records. */
+export const ATTEMPT_ARTIFACT_SCHEMA_VERSION = 1 as const;
+
+/**
+ * Typed per-attempt outcome artifact produced deterministically after each attempt.
+ * Captures the outcome, failure class, retry decision, and the concrete policy
+ * that was applied so the learning loop can retrieve and compare class-specific history.
+ */
+export interface AttemptArtifact {
+  schemaVersion: typeof ATTEMPT_ARTIFACT_SCHEMA_VERSION;
+  runId: string;
+  attempt: number;
+  taskId: string | null;
+  failureClass: string | null;
+  retryAction: string | null;
+  policyApplied: AttemptPolicyContract | null;
+  decidedAt: string;
+  firstAttemptAt: string;
+  outcome: string;
+}
+
+/**
+ * Build a deterministic AttemptArtifact from the attempt's resolved retry decision.
+ *
+ * Produces a compact, typed record per attempt that:
+ *   - links attempt lineage via runId and attempt number
+ *   - captures the primary routing keys (failureClass, retryAction)
+ *   - carries the numeric thresholds actually applied (policyApplied)
+ *   - records the terminal worker status (outcome)
+ *
+ * @param runId          - short hex run identifier
+ * @param attempt        - zero-based attempt index
+ * @param taskId         - task identifier, or null
+ * @param outcome        - terminal worker status (done/partial/blocked/error)
+ * @param failureClass   - failure class from classifyFailure, or null
+ * @param retryDecision  - resolved retry decision from resolveRetryAction, or null
+ * @param firstAttemptAt - ISO timestamp of the first attempt in this lineage
+ * @returns AttemptArtifact conforming to ATTEMPT_ARTIFACT_SCHEMA_VERSION
+ */
+export function buildAttemptArtifact(
+  runId: string,
+  attempt: number,
+  taskId: string | null,
+  outcome: string,
+  failureClass: string | null,
+  retryDecision: { retryAction?: string; [key: string]: unknown } | null,
+  firstAttemptAt: string,
+): AttemptArtifact {
+  const decidedAt = new Date().toISOString();
+  let policyApplied: AttemptPolicyContract | null = null;
+
+  if (failureClass && Object.prototype.hasOwnProperty.call(DEFAULT_RETRY_POLICIES, failureClass)) {
+    try {
+      const policy = DEFAULT_RETRY_POLICIES[failureClass] as Record<string, unknown>;
+      policyApplied = {
+        failureClass,
+        attempts: attempt,
+        action:                   String(policy.action || ""),
+        cooldownMinutes:          typeof policy.cooldownMinutes === "number" ? policy.cooldownMinutes : undefined,
+        maxRetries:               typeof policy.maxRetries === "number" ? policy.maxRetries : undefined,
+        maxReworkAttempts:        typeof policy.maxReworkAttempts === "number" ? policy.maxReworkAttempts : undefined,
+        reassignBeforeAttempt:    typeof policy.reassignBeforeAttempt === "number" ? policy.reassignBeforeAttempt : undefined,
+        splitAfterAttempt:        typeof policy.splitAfterAttempt === "number" ? policy.splitAfterAttempt : undefined,
+        escalateAfter:            Number(policy.escalateAfter ?? 3),
+        escalationTarget:         String(policy.escalationTarget || "daemon_queue"),
+        reworkQueue:              typeof policy.reworkQueue === "string" ? policy.reworkQueue : undefined,
+        verificationStep:         typeof policy.verificationStep === "string" ? policy.verificationStep : undefined,
+        resolvedAt:               decidedAt,
+      };
+    } catch {
+      // policyApplied remains null if lookup fails — artifact is still useful
+    }
+  }
+
+  return {
+    schemaVersion:  ATTEMPT_ARTIFACT_SCHEMA_VERSION,
+    runId:          String(runId || ""),
+    attempt:        Number(attempt),
+    taskId:         taskId != null ? String(taskId) : null,
+    failureClass:   failureClass ?? null,
+    retryAction:    retryDecision?.retryAction ? String(retryDecision.retryAction) : null,
+    policyApplied,
+    decidedAt,
+    firstAttemptAt: String(firstAttemptAt || decidedAt),
+    outcome:        String(outcome || "unknown"),
+  };
+}
