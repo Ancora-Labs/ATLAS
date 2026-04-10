@@ -60,7 +60,7 @@ import { appendCapacityEntry } from "./capacity_scoreboard.js";
 import { computeCapabilityDelta } from "./delta_analytics.js";
 import { evaluateRetune } from "./strategy_retuner.js";
 import { compileLessonsToPolicies } from "./learning_policy_compiler.js";
-import { assignWorkersToPlans, enforceLaneDiversity, evaluateSpecializationAdmissionGate, buildLanePerformanceFromCycleTelemetry, buildReroutePenaltyLedger, SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES } from "./capability_pool.js";
+import { assignWorkersToPlans, enforceLaneDiversity, evaluateSpecializationAdmissionGate, computeTopologyFeasibility, buildLanePerformanceFromCycleTelemetry, buildReroutePenaltyLedger, SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES } from "./capability_pool.js";
 import { runDoctor } from "./doctor.js";
 import { validateAllPlans, validatePacketBatchAdmission, applyDispatchBoundaryHardCap, bindNamedVerificationTargets } from "./plan_contract_validator.js";
 import {
@@ -128,6 +128,7 @@ import {
 } from "./checkpoint_engine.js";
 import { assessRetryExpectedROI, rankModelsByTaskKindExpectedValue } from "./model_policy.js";
 import { loadHookPolicy, DEFAULT_HOOK_POLICY_PATH } from "./policy_engine.js";
+import { AGENT_CONTRACT_GOVERNANCE_REASON_CODE } from "./governance_contract.js";
 
 /**
  * Orchestrator health status enum.
@@ -926,6 +927,85 @@ export interface GovernanceBlockDecision {
 }
 
 /**
+ * Attempt to rebatch an oversized plan set by reassigning _batchIndex values
+ * so that no role-group batch exceeds `cap` ordered steps.
+ *
+ * Plans in the same original _batchIndex are processed role-by-role. Each role
+ * group is greedily repacked into sub-batches. When earlier batches split,
+ * subsequent batches shift their index upward to preserve global ordering.
+ *
+ * Mutates plans in place. Returns true when all groups now fit within cap
+ * (safe to dispatch), false when any single plan already exceeds cap (hard limit).
+ *
+ * @param plans — normalized plan objects with _batchIndex / _batchWorkerRole set
+ * @param cap   — max ordered steps per batch group
+ */
+function tryRebatchOversizedPlans(plans: any[], cap: number): boolean {
+  if (!Array.isArray(plans) || plans.length === 0) return true;
+
+  // Verify no individual plan exceeds the cap — that is a hard limit.
+  for (const plan of plans) {
+    const steps = Array.isArray(plan?.orderedSteps) ? plan.orderedSteps.length
+      : Array.isArray(plan?.acceptance_criteria) ? plan.acceptance_criteria.length
+      : 1;
+    if (steps > cap) return false;
+  }
+
+  // Pre-group plans by original batch index BEFORE modifying any values.
+  // This prevents later iterations from picking up in-place _batchIndex mutations.
+  const origGroupMap = new Map<number, any[]>();
+  for (const plan of plans) {
+    const orig = Number(plan._batchIndex) || 1;
+    if (!origGroupMap.has(orig)) origGroupMap.set(orig, []);
+    origGroupMap.get(orig)!.push(plan);
+  }
+
+  // Process batch groups in ascending order.
+  const origIndices = [...origGroupMap.keys()].sort((a, b) => a - b);
+  let cumulativeShift = 0;
+
+  for (const origBatch of origIndices) {
+    const batchPlans = origGroupMap.get(origBatch)!;
+    const assignedBatch = origBatch + cumulativeShift;
+
+    // Group plans within this batch by role.
+    const byRole = new Map<string, any[]>();
+    for (const plan of batchPlans) {
+      const role = String(plan._batchWorkerRole || plan.role || "unknown").toLowerCase();
+      if (!byRole.has(role)) byRole.set(role, []);
+      byRole.get(role)!.push(plan);
+    }
+
+    let maxSlotUsedInBatch = assignedBatch;
+
+    for (const rolePlans of byRole.values()) {
+      let currentSlot = assignedBatch;
+      let currentSteps = 0;
+
+      for (const plan of rolePlans) {
+        const steps = Array.isArray(plan?.orderedSteps) ? plan.orderedSteps.length
+          : Array.isArray(plan?.acceptance_criteria) ? plan.acceptance_criteria.length
+          : 1;
+
+        // Overflow: start a new sub-batch slot.
+        if (currentSteps > 0 && currentSteps + steps > cap) {
+          currentSlot++;
+          currentSteps = 0;
+        }
+
+        plan._batchIndex = currentSlot;
+        currentSteps += steps;
+        if (currentSlot > maxSlotUsedInBatch) maxSlotUsedInBatch = currentSlot;
+      }
+    }
+
+    cumulativeShift += maxSlotUsedInBatch - assignedBatch;
+  }
+
+  return true;
+}
+
+/**
  * Evaluate pre-dispatch governance gates without starting worker execution.
  * Exported for integration tests and any callers that need the dispatch decision
  * surface without running a full orchestration cycle.
@@ -1065,7 +1145,16 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       const agentContractResult = validateCriticalAgentContracts();
       if (!agentContractResult.allValid) {
         const firstViolation = agentContractResult.violations[0];
-        const detail = `agent_contract_invalid:slug=${firstViolation.slug};violations=${firstViolation.violations.join(",")};non_retryable=false`;
+        // Map violation field names to machine-readable AGENT_CONTRACT_GOVERNANCE_REASON_CODEs
+        const reasonCodes = (firstViolation.violations as string[]).map(v => {
+          if (v === "model_missing" || v === "model")       return AGENT_CONTRACT_GOVERNANCE_REASON_CODE.AGENT_MODEL_MISSING;
+          if (v === "tools_missing" || v === "tools")       return AGENT_CONTRACT_GOVERNANCE_REASON_CODE.AGENT_TOOLS_MISSING;
+          if (v === "description_missing" || v === "description") return AGENT_CONTRACT_GOVERNANCE_REASON_CODE.AGENT_DESCRIPTION_MISSING;
+          if (v === "file_missing" || v === "file")        return AGENT_CONTRACT_GOVERNANCE_REASON_CODE.AGENT_FILE_MISSING;
+          if (v === "frontmatter_missing" || v === "frontmatter") return AGENT_CONTRACT_GOVERNANCE_REASON_CODE.AGENT_FRONTMATTER_MISSING;
+          return AGENT_CONTRACT_GOVERNANCE_REASON_CODE.AGENT_SCHEMA_VIOLATION;
+        }).join(",");
+        const detail = `agent_contract_invalid:slug=${firstViolation.slug};reasonCodes=${reasonCodes};violations=${(firstViolation.violations as string[]).join(",")};non_retryable=false`;
         return {
           blocked: true,
           reason: `${BLOCK_REASON.CLOUD_AGENT_GOVERNANCE_POLICY_VIOLATION}:${detail}`,
@@ -1343,6 +1432,12 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       // assignWorkersToPlans is synchronous; call it with current plans to get fresh utilization.
       const poolSample = assignWorkersToPlans(normalizedPlans, config);
 
+      // Compute topology feasibility: when no plans route to a specialist, the
+      // gate must not block (infeasible topology — no amount of waiting will add
+      // specialist-eligible plans). This converts the gate into a soft-gate for
+      // monocultural plan sets where dispatch continuity is the correct choice.
+      const topologyFeasibility = computeTopologyFeasibility(normalizedPlans, config);
+
       // Read reroute history to bind admission threshold to reroute reason intensity.
       // Specialists rerouted for token-fill reasons lower the effective threshold;
       // performance-degraded reroutes raise it.  Missing file is non-fatal.
@@ -1361,6 +1456,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
         consecutiveBlockCycles,
         SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES,
         admissionReroutePenaltyLedger,
+        topologyFeasibility,
       );
 
       // Persist updated counter regardless of outcome so bypass counter resets on pass.
@@ -1441,20 +1537,33 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
         };
       }
       // Layer 2: role-group aggregated complexity.
+      // Soft-gate: when the role group is oversized but each individual plan fits
+      // within the cap, rebatch by reassigning _batchIndex values instead of
+      // blocking. This allows Athena-prebatched topologies to be split
+      // deterministically rather than rejected outright.
       const oversizeCheck = validatePacketBatchAdmission(Array.isArray(normalizedPlans) ? normalizedPlans : [], actionableCap);
       if (oversizeCheck.blocked) {
-        const blockReason = `${BLOCK_REASON.OVERSIZED_PACKET}:${oversizeCheck.reason}`;
-        return {
-          blocked: true,
-          reason: blockReason,
-          action: undefined,
-          dispatchBlockReason: blockReason,
-          graphResult,
-          cycleId,
-          budgetEligibility,
-          gateKey: "OVERSIZED_PACKET",
-          gateIndex: GATE_PRECEDENCE.OVERSIZED_PACKET,
-        };
+        // Attempt rebatch: greedily repack each oversized role group into
+        // sub-batches that fit within the cap, shifting subsequent batch indices.
+        const rebatchSucceeded = tryRebatchOversizedPlans(
+          Array.isArray(normalizedPlans) ? normalizedPlans : [],
+          actionableCap,
+        );
+        if (!rebatchSucceeded) {
+          const blockReason = `${BLOCK_REASON.OVERSIZED_PACKET}:${oversizeCheck.reason}`;
+          return {
+            blocked: true,
+            reason: blockReason,
+            action: undefined,
+            dispatchBlockReason: blockReason,
+            graphResult,
+            cycleId,
+            budgetEligibility,
+            gateKey: "OVERSIZED_PACKET",
+            gateIndex: GATE_PRECEDENCE.OVERSIZED_PACKET,
+          };
+        }
+        // Rebatch succeeded — plans now carry updated _batchIndex values; proceed.
       }
     }
   }

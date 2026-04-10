@@ -128,6 +128,28 @@ export const GOVERNANCE_ERROR_CODE = Object.freeze({
   CONTRACT_VERSION_MISMATCH: "CONTRACT_VERSION_MISMATCH"
 });
 
+/**
+ * Machine-readable reason codes for agent contract governance violations.
+ * Emitted by the governance gate when .github/agents/*.agent.md frontmatter
+ * fails schema validation at startup or pre-dispatch time.
+ *
+ *   AGENT_FILE_MISSING        — the .agent.md file does not exist on disk
+ *   AGENT_FRONTMATTER_MISSING — file exists but YAML frontmatter is absent
+ *   AGENT_MODEL_MISSING       — frontmatter present but `model` field missing/empty
+ *   AGENT_TOOLS_MISSING       — frontmatter present but `tools` array missing/empty
+ *   AGENT_DESCRIPTION_MISSING — frontmatter present but `description` field missing/empty
+ *   AGENT_SCHEMA_VIOLATION    — other structural schema violation in frontmatter
+ * @enum {string}
+ */
+export const AGENT_CONTRACT_GOVERNANCE_REASON_CODE = Object.freeze({
+  AGENT_FILE_MISSING:        "AGENT_FILE_MISSING",
+  AGENT_FRONTMATTER_MISSING: "AGENT_FRONTMATTER_MISSING",
+  AGENT_MODEL_MISSING:       "AGENT_MODEL_MISSING",
+  AGENT_TOOLS_MISSING:       "AGENT_TOOLS_MISSING",
+  AGENT_DESCRIPTION_MISSING: "AGENT_DESCRIPTION_MISSING",
+  AGENT_SCHEMA_VIOLATION:    "AGENT_SCHEMA_VIOLATION",
+});
+
 // ── Approval evidence schema ──────────────────────────────────────────────────
 
 /**

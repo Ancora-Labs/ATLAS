@@ -1579,23 +1579,20 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   });
 
-  it("blocks dispatch when a role group exceeds maxActionableStepsPerPacket", async () => {
+  it("rebatches plans into sub-batches when a role group exceeds maxActionableStepsPerPacket", async () => {
     const plans = [
       { role: "Evolution Worker", task: "Task A", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
       { role: "Evolution Worker", task: "Task B", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
       { role: "Evolution Worker", task: "Task C", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
     ];
-    const result = await evaluatePreDispatchGovernanceGate(config, plans, "oversize-gate-block");
-    assert.equal(result.blocked, true, "dispatch must be blocked when role group exceeds cap");
-    assert.ok(
-      result.reason?.startsWith(BLOCK_REASON.OVERSIZED_PACKET),
-      `reason must start with OVERSIZED_PACKET prefix; got: ${result.reason}`
-    );
-    assert.equal((result as any).gateKey, "OVERSIZED_PACKET", "gateKey must identify oversized packet gate");
-    assert.equal(result.gateIndex, 13, "gateIndex must be 13 (OVERSIZED_PACKET)");
+    const result = await evaluatePreDispatchGovernanceGate(config, plans, "oversize-gate-rebatch");
+    // Soft-gate: plans are rebatched rather than blocked when individual plans fit within cap.
+    assert.equal(result.blocked, false, "dispatch must not be blocked when rebatch succeeds — plans are redistributed");
+    // Plans should be redistributed: first 2 in slot 1, last 1 in slot 2.
+    assert.deepEqual(plans.map((p: any) => p._batchIndex), [1, 1, 2], "plans must be redistributed into sub-batches");
   });
 
-  it("blocks dispatch when ordered-step complexity exceeds cap even if plan count does not", async () => {
+  it("rebatches when ordered-step aggregate exceeds cap even if plan count does not", async () => {
     const plans = [
       {
         role: "Evolution Worker",
@@ -1619,13 +1616,11 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
     const result = await evaluatePreDispatchGovernanceGate(
       { ...config, planner: { maxActionableStepsPerPacket: 3 } },
       plans,
-      "oversize-gate-complexity",
+      "oversize-gate-rebatch-complexity",
     );
-    assert.equal(result.blocked, true, "dispatch must be blocked by ordered-step complexity overflow");
-    assert.ok(
-      result.reason?.startsWith(BLOCK_REASON.OVERSIZED_PACKET),
-      `reason must start with OVERSIZED_PACKET prefix; got: ${result.reason}`,
-    );
+    // Soft-gate: each individual plan (2 steps) fits within cap (3); rebatch distributes.
+    assert.equal(result.blocked, false, "dispatch must not be blocked when each individual plan fits and rebatch succeeds");
+    assert.deepEqual(plans.map((p: any) => p._batchIndex), [1, 2], "plans must be redistributed into separate slots");
   });
 
   it("binds named verification target before admission when verification is non-specific", async () => {
@@ -1668,13 +1663,13 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
     assert.equal(result.blocked, false, "dispatch must not be blocked when all role groups are within cap");
   });
 
-  it("NEGATIVE PATH: gate still enforces default ordered-step cap when maxActionableStepsPerPacket is not configured", async () => {
+  it("NEGATIVE PATH: rebatches using default OVERBUNDLE_STEPS_THRESHOLD when maxActionableStepsPerPacket is not configured", async () => {
     const configNoCapLimit = {
       paths: { stateDir: tmpDir },
       env: { copilotCliCommand: "__missing__", targetRepo: "CanerDoqdu/Box" },
       systemGuardian: { enabled: false },
       canary:          { enabled: false },
-      // no planner.maxActionableStepsPerPacket — gate must use OVERBUNDLE_STEPS_THRESHOLD fallback
+      // no planner.maxActionableStepsPerPacket — gate uses OVERBUNDLE_STEPS_THRESHOLD (9) fallback
     };
     const plans = Array.from({ length: 10 }, (_, i) => ({
       role: "Evolution Worker",
@@ -1686,23 +1681,22 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
       requestROI: 1.0,
     }));
     const result = await evaluatePreDispatchGovernanceGate(configNoCapLimit, plans, "oversize-gate-no-config");
-    assert.equal(result.blocked, true, "gate must block when default ordered-step cap is exceeded without explicit planner cap");
-    assert.ok(
-      result.reason?.startsWith(BLOCK_REASON.OVERSIZED_PACKET),
-      `reason must start with OVERSIZED_PACKET prefix; got: ${result.reason}`,
-    );
+    // Soft-gate: 10 plans rebatch into 9+1 sub-batches using OVERBUNDLE_STEPS_THRESHOLD=9
+    assert.equal(result.blocked, false, "gate must rebatch rather than block when using default threshold and plans fit individually");
+    const batchIndices = plans.map((p: any) => p._batchIndex);
+    assert.ok(batchIndices.includes(2), "plans exceeding default threshold must overflow into a second sub-batch");
   });
 
-  it("blocks with deterministic OVERSIZED_PACKET reason containing role and count", async () => {
+  it("no OVERSIZED_PACKET reason emitted when role group is rebatchable under the cap", async () => {
     const plans = [
       { role: "CI Worker", task: "Fix test A", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
       { role: "CI Worker", task: "Fix test B", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
       { role: "CI Worker", task: "Fix test C", verification_commands: ["npm test"], acceptance_criteria: ["pass"], capacityDelta: 0.1, requestROI: 1.0 },
     ];
     const result = await evaluatePreDispatchGovernanceGate(config, plans, "oversize-gate-reason");
-    assert.equal(result.blocked, true);
-    assert.ok(result.reason?.includes("ci worker"), `reason must contain role name; got: ${result.reason}`);
-    assert.ok(result.reason?.includes("3>2"), `reason must contain count and cap; got: ${result.reason}`);
+    // Soft-gate succeeds: no block, no OVERSIZED_PACKET reason.
+    assert.equal(result.blocked, false);
+    assert.equal(result.reason, null, "no block reason must be emitted when rebatch succeeds");
   });
 
   it("blocks via individual-plan complexity gate when a single plan exceeds the cap", async () => {
@@ -1738,8 +1732,8 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
     assert.equal(result.gateIndex, 13, "gateIndex must be 13 (OVERSIZED_PACKET)");
   });
 
-  it("NEGATIVE PATH: individual-plan gate does not fire when no single plan exceeds the cap", async () => {
-    // Two plans each at exactly the cap: individual check passes; role-group check fires.
+  it("NEGATIVE PATH: role-group soft-gate rebatches when aggregate exceeds cap even if individual plans do not", async () => {
+    // Two plans each at exactly the cap: individual check passes; role-group check fires rebatch.
     const plans = [
       {
         role: "Evolution Worker",
@@ -1759,17 +1753,12 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
       },
     ];
     const result = await evaluatePreDispatchGovernanceGate(config, plans, "oversize-role-group-fires");
-    assert.equal(result.blocked, true,
-      "role-group layer must still block when aggregate exceeds cap even if individual plans do not");
-    assert.ok(
-      result.reason?.startsWith(BLOCK_REASON.OVERSIZED_PACKET),
-      `reason must start with OVERSIZED_PACKET prefix; got: ${result.reason}`,
-    );
-    // The role-group layer (not the individual layer) must have fired.
-    assert.ok(
-      !result.reason?.includes("overbundle_hard_admission"),
-      `role-group layer must fire; individual-plan overbundle reason must NOT appear; got: ${result.reason}`,
-    );
+    // Soft-gate: role-group layer fires but rebatch succeeds — no block.
+    assert.equal(result.blocked, false,
+      "role-group layer must rebatch when aggregate exceeds cap even if individual plans do not");
+    // The role-group layer (not the individual layer) must have fired rebatch.
+    assert.deepEqual(plans.map((p: any) => p._batchIndex), [1, 2], "each plan must be placed in its own sub-batch slot");
+    assert.equal(result.reason, null, "no block reason must be emitted when rebatch succeeds");
   });
 });
 

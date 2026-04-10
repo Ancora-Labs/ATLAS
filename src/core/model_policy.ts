@@ -1666,6 +1666,93 @@ export const BENCHMARK_SUITE_TYPE = Object.freeze({
   EXPLORATORY: "exploratory_suite",
 });
 
+// ── Benchmark planning priors ─────────────────────────────────────────────────
+// Converts benchmark uncertainty and historical capacity gain into planning
+// priors that Prometheus uses to choose packet strictness, verification depth,
+// and decomposition strategy before dispatch — not only worker model routing.
+
+/**
+ * Planning priors derived from benchmark history and uncertainty.
+ * Applied in the Prometheus post-processing pipeline to adjust packet
+ * strictness thresholds and decomposition limits before dispatch.
+ */
+export interface PlanningPrior {
+  /** Multiplier for packet strictness thresholds (1.0 = baseline). > 1.0 = stricter. */
+  strictnessMultiplier: number;
+  /** Required verification depth signal for packet admission. */
+  verificationDepth: "shallow" | "standard" | "deep";
+  /** Signed adjustment to the decomposition plan cap (+N = more plans allowed). */
+  decompositionCapAdjustment: number;
+  /** Uncertainty level derived from benchmark history. */
+  uncertainty: "low" | "medium" | "high";
+  /** Sliding-window capacity gain used to derive this prior (null = no history). */
+  capacityGain: number | null;
+}
+
+/**
+ * Compute planning priors from benchmark ground-truth data and cycle history.
+ *
+ * Rules:
+ *   - No history (null gain / < 2 evaluated samples) → baseline strictness, high uncertainty
+ *   - Low gain (< 0.30) → +30% stricter thresholds, deep verification, cap -2
+ *   - Medium gain (0.30 – 0.70) → +10% stricter, standard verification, no cap change
+ *   - High gain (≥ 0.70) → −10% strictness (relax), shallow verification, cap +2
+ *
+ * Input shape mirrors the output of computeResearchCapacityGain() in cycle_analytics.ts
+ * so callers can compute the gain once and pass both values here.
+ *
+ * Never throws — returns baseline priors on any error.
+ *
+ * @param capacityGainResult — { capacityGain: number | null; evaluatedCount: number }
+ */
+export function computeBenchmarkPlanningPriors(
+  capacityGainResult: { capacityGain: number | null; evaluatedCount: number } | null | undefined
+): PlanningPrior {
+  const gain = typeof capacityGainResult?.capacityGain === "number"
+    ? capacityGainResult.capacityGain
+    : null;
+  const evaluated = Number(capacityGainResult?.evaluatedCount) || 0;
+
+  // Insufficient history — baseline priors, flag as high uncertainty.
+  if (gain === null || evaluated < 2) {
+    return {
+      strictnessMultiplier:     1.0,
+      verificationDepth:        "standard",
+      decompositionCapAdjustment: 0,
+      uncertainty:              "high",
+      capacityGain:             gain,
+    };
+  }
+
+  if (gain < 0.30) {
+    return {
+      strictnessMultiplier:     1.3,
+      verificationDepth:        "deep",
+      decompositionCapAdjustment: -2,
+      uncertainty:              "high",
+      capacityGain:             gain,
+    };
+  }
+
+  if (gain < 0.70) {
+    return {
+      strictnessMultiplier:     1.1,
+      verificationDepth:        "standard",
+      decompositionCapAdjustment: 0,
+      uncertainty:              "medium",
+      capacityGain:             gain,
+    };
+  }
+
+  return {
+    strictnessMultiplier:     0.9,
+    verificationDepth:        "shallow",
+    decompositionCapAdjustment: 2,
+    uncertainty:              "low",
+    capacityGain:             gain,
+  };
+}
+
 /** A benchmark sample after normalization including suite classification and error list. */
 export interface NormalizedBenchmarkSample extends BenchmarkSample {
   stepBudget?: number | null;

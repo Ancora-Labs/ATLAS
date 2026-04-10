@@ -2373,3 +2373,76 @@ export function computeCiRemediationStatus(
   return { required, satisfied, findingIds, completedCiFixWorkers };
 }
 
+// ── Historical lane difficulty priors ─────────────────────────────────────────
+// Aggregates per-lane completion rates and ROI from stored cycle analytics
+// records so Prometheus can select verification depth and decomposition
+// strategy on a per-lane basis before dispatching packets.
+
+/** Per-lane difficulty signal derived from historical cycle analytics. */
+export interface LaneDifficultyPrior {
+  /** Fraction of dispatched workers that completed successfully (0–1). */
+  completionRate: number;
+  /** ROI proxy: completed / max(1, failed). Higher is better. */
+  averageRoi: number;
+  /** Number of historical cycles that contributed to this estimate. */
+  sampleCount: number;
+  /** Difficulty classification derived from completionRate. */
+  difficulty: "easy" | "moderate" | "hard";
+}
+
+/**
+ * Aggregate per-lane difficulty priors from an array of cycle analytics records.
+ *
+ * Each record is expected to carry a `laneTelemetry` field (shape produced by
+ * computeLaneTelemetry inside computeCycleAnalytics).  Records missing
+ * `laneTelemetry` are silently skipped.
+ *
+ * Difficulty thresholds:
+ *   - completionRate ≥ 0.70 → easy
+ *   - completionRate ≥ 0.40 → moderate
+ *   - completionRate < 0.40 → hard
+ *
+ * Never throws — returns an empty map on any error.
+ *
+ * @param cycleRecords — array of analytics records (e.g. loaded from state/cycle_analytics.json)
+ */
+export function computeHistoricalLaneDifficultyPriors(
+  cycleRecords: unknown[]
+): Record<string, LaneDifficultyPrior> {
+  if (!Array.isArray(cycleRecords) || cycleRecords.length === 0) return {};
+
+  const accByLane = new Map<string, { completionRateSum: number; roiSum: number; sampleCount: number }>();
+
+  for (const record of cycleRecords) {
+    if (!record || typeof record !== "object") continue;
+    const laneTelemetry = (record as any).laneTelemetry;
+    if (!laneTelemetry || typeof laneTelemetry !== "object") continue;
+
+    for (const [lane, telemetry] of Object.entries(laneTelemetry)) {
+      if (!telemetry || typeof telemetry !== "object") continue;
+      const t = telemetry as any;
+      const completionRate = typeof t.completionRate === "number" ? t.completionRate : 0;
+      const roi = typeof t.roi === "number" ? t.roi : 0;
+
+      const current = accByLane.get(lane) ?? { completionRateSum: 0, roiSum: 0, sampleCount: 0 };
+      current.completionRateSum += completionRate;
+      current.roiSum += roi;
+      current.sampleCount += 1;
+      accByLane.set(lane, current);
+    }
+  }
+
+  const result: Record<string, LaneDifficultyPrior> = {};
+  for (const [lane, acc] of accByLane.entries()) {
+    const completionRate = Math.round((acc.completionRateSum / acc.sampleCount) * 1000) / 1000;
+    const averageRoi = Math.round((acc.roiSum / acc.sampleCount) * 1000) / 1000;
+    const difficulty: "easy" | "moderate" | "hard" =
+      completionRate >= 0.70 ? "easy" :
+      completionRate >= 0.40 ? "moderate" : "hard";
+
+    result[lane] = { completionRate, averageRoi, sampleCount: acc.sampleCount, difficulty };
+  }
+
+  return result;
+}
+

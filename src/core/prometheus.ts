@@ -99,7 +99,8 @@ export type { WaveTaskObject } from "./plan_contract_validator.js";
 
 import { warn, emitEvent } from "./logger.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
-import { computeBenchmarkIntegrityScore } from "./model_policy.js";
+import { computeBenchmarkIntegrityScore, computeBenchmarkPlanningPriors } from "./model_policy.js";
+import { computeResearchCapacityGain, computeHistoricalLaneDifficultyPriors } from "./cycle_analytics.js";
 
 // ── Span contract emitter ─────────────────────────────────────────────────────
 
@@ -4599,13 +4600,25 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
 
   // ── Load lane telemetry from previous cycle analytics for context injection ──
   let prevLaneTelemetry: Record<string, unknown> | null = null;
+  let prevAnalyticsRecords: unknown[] = [];
   try {
     const prevAnalytics = await readJson(path.join(stateDir, "cycle_analytics.json"), null);
     const raw = (prevAnalytics as any)?.lastCycle?.laneTelemetry;
     if (raw && typeof raw === "object" && !Array.isArray(raw)) {
       prevLaneTelemetry = raw as Record<string, unknown>;
     }
+    // Collect historical cycle records for lane difficulty priors.
+    if (Array.isArray((prevAnalytics as any)?.history)) {
+      prevAnalyticsRecords = (prevAnalytics as any).history;
+    } else if (prevAnalytics && typeof prevAnalytics === "object") {
+      prevAnalyticsRecords = [prevAnalytics];
+    }
   } catch { /* non-fatal — proceed without lane telemetry */ }
+
+  // Compute historical lane difficulty priors from previous cycle analytics.
+  // These signal which lanes have historically been harder (lower completion rate)
+  // so the density gate can be stricter for those lanes.
+  const laneDifficultyPriors = computeHistoricalLaneDifficultyPriors(prevAnalyticsRecords);
 
   const planningPolicy = buildPrometheusPlanningPolicy(config, prevLaneTelemetry);
   const diagnosticsFreshnessSection = await buildDiagnosticsFreshnessPromptSection(stateDir);
@@ -4765,6 +4778,11 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     );
   }
 
+  // ── Compute benchmark planning priors (co-loaded with routing telemetry) ─────
+  // Declared before the try block so the density gate below always has a valid
+  // value even when benchmarkData loading fails.
+  let planningPriors = computeBenchmarkPlanningPriors(null);
+
   try {
     const [benchmarkData, premiumUsageData] = await Promise.all([
       readBenchmarkGroundTruth(config),
@@ -4778,12 +4796,29 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
         `[PROMETHEUS] Injecting routing telemetry signals: benchmark=${benchmarkSection ? "yes" : "no"} outcomes=${routingOutcomeSection ? "yes" : "no"}`
       );
     }
+    // Derive planning priors from the same benchmarkData so we avoid a second disk read.
+    const benchmarkEntries = Array.isArray((benchmarkData as any)?.entries)
+      ? (benchmarkData as any).entries as unknown[]
+      : [];
+    const capacityGainResult = computeResearchCapacityGain(benchmarkEntries as any[]);
+    planningPriors = computeBenchmarkPlanningPriors(capacityGainResult);
+    if (planningPriors.uncertainty !== "low") {
+      await appendProgress(
+        config,
+        `[PROMETHEUS][PRIORS] Planning priors: uncertainty=${planningPriors.uncertainty} strictnessMultiplier=${planningPriors.strictnessMultiplier} verificationDepth=${planningPriors.verificationDepth}`
+      );
+    }
   } catch (signalErr) {
     await appendProgress(
       config,
       `[PROMETHEUS][WARN] Failed to load routing telemetry signals: ${String((signalErr as any)?.message || signalErr)}`
     );
   }
+
+  // planningPriors initialized inside the routing telemetry try block above.
+  // Declared here as baseline so the density gate below always has a valid value,
+  // even when benchmarkData loading fails.
+  // (If the try block above succeeded, planningPriors is already overwritten.)
 
   // ── Load accumulated topic memory ─────────────────────────────────────────
   let topicMemory = await loadTopicMemory(stateDir);
@@ -5813,22 +5848,31 @@ Mandatory requirements:
     rawParsedInput._packetDensificationPostBundle = postBundleDensity;
     if (postBundleDensity.thinCount > 0) {
       const rejectedThinPackets: Array<{ index: number; reason: string }> = [];
+      // Apply benchmark planning priors: stricter thresholds when uncertainty is high.
+      const strictness = planningPriors.strictnessMultiplier;
       const baseDensityThresholds = {
-        minTaskChars: PROMETHEUS_PROMPT_DENSITY_MIN.minTaskChars,
+        minTaskChars: Math.ceil(PROMETHEUS_PROMPT_DENSITY_MIN.minTaskChars * strictness),
         minTargetFiles: PROMETHEUS_PROMPT_DENSITY_MIN.minTargetFiles,
-        minAcceptanceCriteria: PROMETHEUS_PROMPT_DENSITY_MIN.minAcceptanceCriteria,
-        minExecutionTokens: PROMETHEUS_PROMPT_DENSITY_MIN.minExecutionTokens,
+        minAcceptanceCriteria: Math.ceil(PROMETHEUS_PROMPT_DENSITY_MIN.minAcceptanceCriteria * strictness),
+        minExecutionTokens: Math.ceil(PROMETHEUS_PROMPT_DENSITY_MIN.minExecutionTokens * strictness),
       };
       rawParsedInput.plans = rawParsedInput.plans.filter((plan: any, i: number) => {
         const metrics = computePacketDensityMetrics(plan);
         // Use lane-aware token floor: plans covering 5+ files must declare ≥8 k tokens.
         const targetFileCount = Array.isArray(plan.target_files) ? plan.target_files.length : 0;
         const laneThresholds = getPacketThresholdsForLane(targetFileCount);
+        // Apply historical lane difficulty prior: hard lanes get an additional
+        // strictness boost on top of the benchmark planning prior multiplier.
+        const planRole = String(plan._batchWorkerRole || plan.role || "").toLowerCase();
+        const lanePrior = laneDifficultyPriors[planRole];
+        const laneStrictness = lanePrior?.difficulty === "hard" ? 1.2
+          : lanePrior?.difficulty === "moderate" ? 1.1
+          : 1.0;
         const effectiveThresholds = {
-          minTaskChars: Math.max(baseDensityThresholds.minTaskChars, laneThresholds.minTaskChars),
+          minTaskChars: Math.max(baseDensityThresholds.minTaskChars, Math.ceil(laneThresholds.minTaskChars * laneStrictness)),
           minTargetFiles: Math.max(baseDensityThresholds.minTargetFiles, laneThresholds.minTargetFiles),
-          minAcceptanceCriteria: Math.max(baseDensityThresholds.minAcceptanceCriteria, laneThresholds.minAcceptanceCriteria),
-          minExecutionTokens: Math.max(baseDensityThresholds.minExecutionTokens, laneThresholds.minExecutionTokens),
+          minAcceptanceCriteria: Math.max(baseDensityThresholds.minAcceptanceCriteria, Math.ceil(laneThresholds.minAcceptanceCriteria * laneStrictness)),
+          minExecutionTokens: Math.max(baseDensityThresholds.minExecutionTokens, Math.ceil(laneThresholds.minExecutionTokens * laneStrictness)),
         };
         const thin = isThinPacketForAdmission(metrics, effectiveThresholds);
         if (!thin) return true;
@@ -5846,24 +5890,55 @@ Mandatory requirements:
           `[PROMETHEUS][DENSITY] Rejected ${rejectedThinPackets.length} thin packet(s) after auto-bundling`
         );
       }
-      // Safety valve: if all plans were rejected, restore them with a warning rather
-      // than producing 0 plans (which causes a trust-boundary deadlock and kills the cycle).
-      // Thin-packet enforcement is advisory when it would leave nothing to dispatch.
+      // Bounded lane-aware clamping: instead of restoring ALL rejected packets,
+      // sort by token richness and restore only the richest packets up to the
+      // lane-aware minimum token floor.  This avoids the deadlock while still
+      // enforcing triage — trivially thin packets are not re-admitted.
       if (rawParsedInput.plans.length === 0 && rejectedThinPackets.length > 0) {
         await appendProgress(
           config,
-          `[PROMETHEUS][DENSITY] All packets rejected — restoring ${rejectedThinPackets.length} packet(s) with thin-packet warning to avoid deadlock`
+          `[PROMETHEUS][DENSITY] All packets rejected — applying bounded lane-aware clamping to restore richest packet(s)`
         );
-        // Re-parse original plans from the pre-filter state; mark them as needing densification
-        // but allow dispatch so the cycle is not killed.
-        const bundledPlans = bundled.plans;
-        rawParsedInput.plans = bundledPlans.map((plan: any) => ({
-          ...plan,
-          _thinPacketWarning: plan._thinPacketRejected
-            ? plan._thinPacketReason
-            : undefined,
-          _thinPacketRejected: false,
-        }));
+        const bundledPlans: any[] = bundled.plans;
+        // Sort rejected packets by estimated execution tokens (descending) so we
+        // prefer richer work when capacity is constrained.
+        const sortedRejected = [...bundledPlans]
+          .map((plan: any) => {
+            const metrics = computePacketDensityMetrics(plan);
+            return { plan, tokenEstimate: metrics.estimatedExecutionTokens ?? 0 };
+          })
+          .sort((a, b) => b.tokenEstimate - a.tokenEstimate);
+
+        // Admit packets that meet at least the lane-aware minimum token floor,
+        // capping at the original count to prevent unintended expansion.
+        const restoredPlans: any[] = [];
+        for (const { plan } of sortedRejected) {
+          const targetFileCount = Array.isArray(plan.target_files) ? plan.target_files.length : 0;
+          const laneFloor = getPacketThresholdsForLane(targetFileCount).minExecutionTokens;
+          const metrics = computePacketDensityMetrics(plan);
+          const tokenEstimate = metrics.estimatedExecutionTokens ?? 0;
+          if (tokenEstimate >= laneFloor) {
+            restoredPlans.push({
+              ...plan,
+              _thinPacketWarning: plan._thinPacketRejected ? plan._thinPacketReason : undefined,
+              _thinPacketRejected: false,
+            });
+          }
+          // Limit restoration to original packet count.
+          if (restoredPlans.length >= bundledPlans.length) break;
+        }
+
+        // Fallback: if lane-floor clamping still produced nothing, admit the richest single plan.
+        if (restoredPlans.length === 0 && sortedRejected.length > 0) {
+          const { plan } = sortedRejected[0];
+          restoredPlans.push({
+            ...plan,
+            _thinPacketWarning: plan._thinPacketRejected ? plan._thinPacketReason : undefined,
+            _thinPacketRejected: false,
+          });
+        }
+
+        rawParsedInput.plans = restoredPlans;
       }
       // Record that the token/density floor enforcement ran this cycle.
       await recordCapabilityExecution(
@@ -5876,7 +5951,10 @@ Mandatory requirements:
     // ── Decomposition cap gate ────────────────────────────────────────────
     // Trim oversized batches before any per-packet validation so subsequent
     // gates operate on a bounded set and log output stays tractable.
-    const configuredDecompositionCap = Number(config?.runtime?.prometheusMaxDecompositionPlans ?? MAX_DECOMPOSITION_PLANS);
+    // Apply benchmark planning prior adjustment: high-gain history relaxes the cap
+    // (more plans allowed); high-uncertainty tightens it.
+    const baseCap = Number(config?.runtime?.prometheusMaxDecompositionPlans ?? MAX_DECOMPOSITION_PLANS);
+    const configuredDecompositionCap = Math.max(1, baseCap + planningPriors.decompositionCapAdjustment);
     const capResult = checkDecompositionCaps(rawParsedInput.plans, configuredDecompositionCap);
     if (capResult.capped) {
       rawParsedInput.plans = rawParsedInput.plans.slice(0, capResult.cappedCount);

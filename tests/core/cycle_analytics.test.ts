@@ -2188,3 +2188,63 @@ describe("computeCiRemediationStatus", () => {
     assert.equal(result.satisfied, false);
   });
 });
+
+// ── computeHistoricalLaneDifficultyPriors ─────────────────────────────────────
+import { computeHistoricalLaneDifficultyPriors } from "../../src/core/cycle_analytics.js";
+
+describe("computeHistoricalLaneDifficultyPriors", () => {
+  it("returns empty map for empty input", () => {
+    const result = computeHistoricalLaneDifficultyPriors([]);
+    assert.deepEqual(result, {});
+  });
+
+  it("returns empty map when records have no laneTelemetry", () => {
+    const result = computeHistoricalLaneDifficultyPriors([{ foo: "bar" }, null, 42]);
+    assert.deepEqual(result, {});
+  });
+
+  it("aggregates per-lane completionRate and roi across records", () => {
+    const records = [
+      {
+        laneTelemetry: {
+          implementation: { completionRate: 0.8, roi: 4.0 },
+          research:       { completionRate: 0.6, roi: 3.0 },
+        },
+      },
+      {
+        laneTelemetry: {
+          implementation: { completionRate: 0.6, roi: 2.0 },
+        },
+      },
+    ];
+    const result = computeHistoricalLaneDifficultyPriors(records);
+    assert.ok("implementation" in result);
+    assert.ok("research" in result);
+    assert.equal(result.implementation.sampleCount, 2);
+    // Avg completionRate for implementation: (0.8 + 0.6) / 2 = 0.7
+    assert.equal(result.implementation.completionRate, 0.7);
+    assert.equal(result.research.sampleCount, 1);
+    assert.equal(result.research.completionRate, 0.6);
+  });
+
+  it("classifies difficulty correctly based on completionRate", () => {
+    const records = [
+      {
+        laneTelemetry: {
+          easy:     { completionRate: 0.80, roi: 4.0 },
+          moderate: { completionRate: 0.50, roi: 2.0 },
+          hard:     { completionRate: 0.20, roi: 0.5 },
+        },
+      },
+    ];
+    const result = computeHistoricalLaneDifficultyPriors(records);
+    assert.equal(result.easy.difficulty,     "easy");
+    assert.equal(result.moderate.difficulty, "moderate");
+    assert.equal(result.hard.difficulty,     "hard");
+  });
+
+  it("negative path: handles null records gracefully without throwing", () => {
+    const result = computeHistoricalLaneDifficultyPriors([null, undefined, { laneTelemetry: null }] as any);
+    assert.deepEqual(result, {});
+  });
+});

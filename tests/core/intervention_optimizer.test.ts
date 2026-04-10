@@ -860,6 +860,47 @@ describe("buildBudgetFromConfig", () => {
     assert.equal(budget.byRole.backend, 4);
     assert.equal(budget.byRole.frontend, 3);
   });
+
+  it("sanitizes byWave entries using estimatedRequests field alias", () => {
+    // buildDeterministicRequestBudget in prometheus uses estimatedRequests,
+    // not count or budget — this validates the alias is accepted.
+    const requestBudget = {
+      hardCapTotal: 10,
+      byWave: [
+        { wave: 1, estimatedRequests: 6 },
+        { wave: 2, estimatedRequests: 4 },
+      ],
+    };
+    const budget = buildBudgetFromConfig(requestBudget, {});
+    // maxWorkersPerWave should reflect the max estimatedRequests across waves (6)
+    assert.equal(budget.maxWorkersPerWave, 6);
+  });
+
+  it("sanitizes byRole entries using estimatedRequests field alias", () => {
+    const requestBudget = {
+      hardCapTotal: 10,
+      byRole: [
+        { role: "evolution-worker", estimatedRequests: 5 },
+        { role: "observation-worker", estimatedRequests: 3 },
+      ],
+    };
+    const budget = buildBudgetFromConfig(requestBudget, {});
+    assert.ok(budget.byRole);
+    assert.equal(budget.byRole["evolution-worker"], 5);
+    assert.equal(budget.byRole["observation-worker"], 3);
+  });
+
+  it("negative path: estimatedRequests=0 does not populate byRole entry", () => {
+    const requestBudget = {
+      hardCapTotal: 10,
+      byRole: [
+        { role: "evolution-worker", estimatedRequests: 0 },
+      ],
+    };
+    const budget = buildBudgetFromConfig(requestBudget, {});
+    assert.ok(!budget.byRole || !budget.byRole["evolution-worker"],
+      "zero estimatedRequests should not produce a byRole entry");
+  });
 });
 
 // ── Full integration: runInterventionOptimizer with buildInterventionsFromPlan ─

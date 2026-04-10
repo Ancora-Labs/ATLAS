@@ -37,6 +37,7 @@ import {
   MEMORY_FLOOR_RELAX_AMOUNT,
   MEMORY_FLOOR_TIGHTEN_AMOUNT,
   QUALITY_FLOOR_DEFAULT,
+  computeBenchmarkPlanningPriors,
 } from "../../src/core/model_policy.js";
 
 describe("model_policy — complexity tiers", () => {
@@ -1675,5 +1676,54 @@ describe("computeBenchmarkIntegrityScore — negative paths", () => {
     const result = computeBenchmarkIntegrityScore(makeGroundTruth(recs));
     assert.equal(result.sampleCount, 2);
     assert.ok(result.integrityScore >= 0);
+  });
+});
+
+// ── computeBenchmarkPlanningPriors ────────────────────────────────────────────
+describe("computeBenchmarkPlanningPriors", () => {
+  it("returns baseline priors when input is null (no history)", () => {
+    const result = computeBenchmarkPlanningPriors(null);
+    assert.equal(result.strictnessMultiplier, 1.0);
+    assert.equal(result.verificationDepth, "standard");
+    assert.equal(result.decompositionCapAdjustment, 0);
+    assert.equal(result.uncertainty, "high");
+    assert.equal(result.capacityGain, null);
+  });
+
+  it("returns baseline priors when evaluatedCount < 2 (insufficient history)", () => {
+    const result = computeBenchmarkPlanningPriors({ capacityGain: 0.8, evaluatedCount: 1 });
+    assert.equal(result.uncertainty, "high");
+    assert.equal(result.strictnessMultiplier, 1.0);
+  });
+
+  it("returns stricter priors for low capacity gain (< 0.30)", () => {
+    const result = computeBenchmarkPlanningPriors({ capacityGain: 0.20, evaluatedCount: 5 });
+    assert.equal(result.uncertainty, "high");
+    assert.equal(result.strictnessMultiplier, 1.3);
+    assert.equal(result.verificationDepth, "deep");
+    assert.equal(result.decompositionCapAdjustment, -2);
+  });
+
+  it("returns moderate priors for medium capacity gain (0.30 – 0.69)", () => {
+    const result = computeBenchmarkPlanningPriors({ capacityGain: 0.50, evaluatedCount: 10 });
+    assert.equal(result.uncertainty, "medium");
+    assert.equal(result.strictnessMultiplier, 1.1);
+    assert.equal(result.verificationDepth, "standard");
+    assert.equal(result.decompositionCapAdjustment, 0);
+  });
+
+  it("returns relaxed priors for high capacity gain (>= 0.70)", () => {
+    const result = computeBenchmarkPlanningPriors({ capacityGain: 0.85, evaluatedCount: 20 });
+    assert.equal(result.uncertainty, "low");
+    assert.equal(result.strictnessMultiplier, 0.9);
+    assert.equal(result.verificationDepth, "shallow");
+    assert.equal(result.decompositionCapAdjustment, 2);
+  });
+
+  it("negative path: handles undefined input gracefully", () => {
+    const result = computeBenchmarkPlanningPriors(undefined);
+    assert.equal(result.uncertainty, "high");
+    assert.equal(result.strictnessMultiplier, 1.0);
+    assert.equal(result.capacityGain, null);
   });
 });

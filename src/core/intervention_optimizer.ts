@@ -1268,7 +1268,7 @@ export function buildBudgetFromConfig(requestBudget, config) {
   let maxWorkersPerWave = plannerMaxWorkersPerWave;
   if (Array.isArray(requestBudget?.byWave) && requestBudget.byWave.length > 0) {
     const maxWaveEntry = requestBudget.byWave.reduce(
-      (acc, w) => Math.max(acc, Number(w?.count ?? w?.budget ?? 0)),
+      (acc, w) => Math.max(acc, Number(w?.count ?? w?.budget ?? w?.estimatedRequests ?? 0)),
       0,
     );
     if (maxWaveEntry > 0) maxWorkersPerWave = maxWaveEntry;
@@ -1279,7 +1279,7 @@ export function buildBudgetFromConfig(requestBudget, config) {
   if (Array.isArray(requestBudget?.byRole)) {
     for (const entry of requestBudget.byRole) {
       const roleName = String(entry?.role ?? "");
-      const cap = Number(entry?.count ?? entry?.budget ?? 0);
+      const cap = Number(entry?.count ?? entry?.budget ?? entry?.estimatedRequests ?? 0);
       if (roleName && Number.isFinite(cap) && cap > 0) {
         byRole[roleName] = cap;
       }

@@ -68,6 +68,9 @@ export async function runDoctor(config) {
 
   for (const w of warnings) warn(w);
 
-  const ok = checks.node && checks.githubToken && checks.targetRepo && checks.stateDir;
+  // agentContracts is a critical check: the governance gate hard-blocks dispatch
+  // when agent frontmatter is invalid, so include it in the ok gate so that the
+  // preflight report accurately surfaces the violation before the gate fires.
+  const ok = checks.node && checks.githubToken && checks.targetRepo && checks.stateDir && checks.agentContracts;
   return { ok, checks, warnings };
 }

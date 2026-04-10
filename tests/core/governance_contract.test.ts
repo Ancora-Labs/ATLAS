@@ -702,3 +702,27 @@ describe("enforceGovernance", () => {
     assert.ok(result.blockReason.includes("INSUFFICIENT_DISTINCT_ROLES"));
   });
 });
+
+// ── AGENT_CONTRACT_GOVERNANCE_REASON_CODE ────────────────────────────────────
+import { AGENT_CONTRACT_GOVERNANCE_REASON_CODE } from "../../src/core/governance_contract.js";
+
+describe("AGENT_CONTRACT_GOVERNANCE_REASON_CODE", () => {
+  it("exports all 6 expected reason codes as frozen string constants", () => {
+    assert.equal(typeof AGENT_CONTRACT_GOVERNANCE_REASON_CODE, "object");
+    assert.equal(AGENT_CONTRACT_GOVERNANCE_REASON_CODE.AGENT_FILE_MISSING,        "AGENT_FILE_MISSING");
+    assert.equal(AGENT_CONTRACT_GOVERNANCE_REASON_CODE.AGENT_FRONTMATTER_MISSING, "AGENT_FRONTMATTER_MISSING");
+    assert.equal(AGENT_CONTRACT_GOVERNANCE_REASON_CODE.AGENT_MODEL_MISSING,       "AGENT_MODEL_MISSING");
+    assert.equal(AGENT_CONTRACT_GOVERNANCE_REASON_CODE.AGENT_TOOLS_MISSING,       "AGENT_TOOLS_MISSING");
+    assert.equal(AGENT_CONTRACT_GOVERNANCE_REASON_CODE.AGENT_DESCRIPTION_MISSING, "AGENT_DESCRIPTION_MISSING");
+    assert.equal(AGENT_CONTRACT_GOVERNANCE_REASON_CODE.AGENT_SCHEMA_VIOLATION,    "AGENT_SCHEMA_VIOLATION");
+  });
+
+  it("negative path: object is frozen — mutation attempts are silently ignored", () => {
+    // Frozen objects do not throw in non-strict mode but also do not mutate.
+    const original = AGENT_CONTRACT_GOVERNANCE_REASON_CODE.AGENT_FILE_MISSING;
+    try {
+      (AGENT_CONTRACT_GOVERNANCE_REASON_CODE as any).AGENT_FILE_MISSING = "mutated";
+    } catch { /* strict mode may throw — that is also acceptable */ }
+    assert.equal(AGENT_CONTRACT_GOVERNANCE_REASON_CODE.AGENT_FILE_MISSING, original);
+  });
+});

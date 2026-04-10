@@ -175,6 +175,123 @@ describe("orchestrator governance gate — specialization admission", () => {
     }
   });
 
+  it("does not block when a serialized same-lane batch already bypassed lane diversity", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-gate-spec-serialized-"));
+    try {
+      const config = {
+        paths: { stateDir },
+        env: { targetRepo: "CanerDoqdu/Box" },
+        canary: { enabled: false },
+        systemGuardian: { enabled: false },
+        governanceFreeze: { enabled: false, manualOverrideActive: false },
+        workerPool: {
+          minLanes: 2,
+          specializationTargets: { minSpecializedShare: 0.5 },
+        },
+      };
+      const plans = [
+        {
+          id: "P-serialized-1",
+          task: "Fix packet densification backfill",
+          role: "evolution-worker",
+          target_files: ["src/core/prometheus.ts"],
+          verification_commands: ["npm test -- tests/core/prometheus_density_gate.test.ts"],
+          acceptance_criteria: ["token floors clamp correctly"],
+          dependsOn: [],
+        },
+        {
+          id: "P-serialized-2",
+          task: "Preserve CI-first dispatch under lane-diversity constraints",
+          role: "evolution-worker",
+          target_files: ["src/core/prometheus.ts"],
+          verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+          acceptance_criteria: ["dispatch continuity remains intact"],
+          dependsOn: [],
+        },
+      ];
+
+      const result = await evaluatePreDispatchGovernanceGate(config, plans, "spec-serialized-topology");
+      assert.equal(result.blocked, false);
+      assert.equal(result.reason, null);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not block on oversized packet when an Athena batch can be deterministically rebatched under the cap", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-gate-oversized-rebatch-"));
+    try {
+      const config = {
+        paths: { stateDir, progressFile: path.join(stateDir, "progress.txt") },
+        env: { targetRepo: "CanerDoqdu/Box" },
+        canary: { enabled: false },
+        systemGuardian: { enabled: false },
+        governanceFreeze: { enabled: false, manualOverrideActive: false },
+        workerPool: {
+          minLanes: 2,
+          specializationTargets: { minSpecializedShare: 0 },
+        },
+        planner: { maxActionableStepsPerPacket: 9 },
+      };
+      const plans = [
+        {
+          id: "P-over-1",
+          task: "Fix packet densification backfill",
+          role: "evolution-worker",
+          _batchIndex: 1,
+          _batchWorkerRole: "evolution-worker",
+          _batchWave: 1,
+          target_files: ["src/core/prometheus.ts"],
+          verification_commands: ["npm test -- tests/core/prometheus_density_gate.test.ts"],
+          acceptance_criteria: ["a1", "a2", "a3", "a4"],
+          dependsOn: [],
+        },
+        {
+          id: "P-over-2",
+          task: "Preserve CI-first dispatch under lane-diversity constraints",
+          role: "evolution-worker",
+          _batchIndex: 1,
+          _batchWorkerRole: "evolution-worker",
+          _batchWave: 1,
+          target_files: ["src/core/prometheus.ts"],
+          verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+          acceptance_criteria: ["b1", "b2", "b3"],
+          dependsOn: [],
+        },
+        {
+          id: "P-over-3",
+          task: "Sanitize strategic fields and enforce requestBudget shape integrity",
+          role: "evolution-worker",
+          _batchIndex: 1,
+          _batchWorkerRole: "evolution-worker",
+          _batchWave: 1,
+          target_files: ["src/core/prometheus.ts"],
+          verification_commands: ["npm test -- tests/core/prometheus_parse.test.ts"],
+          acceptance_criteria: ["c1", "c2", "c3", "c4"],
+          dependsOn: [],
+        },
+        {
+          id: "P-over-4",
+          task: "Add parser failureKind taxonomy and strictness coupling",
+          role: "observation-worker",
+          _batchIndex: 2,
+          _batchWorkerRole: "observation-worker",
+          _batchWave: 3,
+          target_files: ["src/core/prometheus.ts"],
+          verification_commands: ["npm test -- tests/core/prometheus_parse.test.ts"],
+          acceptance_criteria: ["q1"],
+          dependsOn: [],
+        },
+      ];
+
+      const result = await evaluatePreDispatchGovernanceGate(config, plans, "oversized-rebatch-pass");
+      assert.equal(result.blocked, false);
+      assert.deepEqual(plans.map((plan) => plan._batchIndex), [1, 1, 2, 3]);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("BLOCK_REASON.SPECIALIZATION_ADMISSION_GATE is a stable non-empty string", () => {
     assert.equal(typeof BLOCK_REASON.SPECIALIZATION_ADMISSION_GATE, "string");
     assert.ok((BLOCK_REASON.SPECIALIZATION_ADMISSION_GATE as string).length > 0);
