@@ -100,6 +100,7 @@ export type { WaveTaskObject } from "./plan_contract_validator.js";
 import { warn, emitEvent } from "./logger.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
 import { computeBenchmarkIntegrityScore, computeBenchmarkPlanningPriors } from "./model_policy.js";
+import type { RetryViolationSignal } from "./model_policy.js";
 import { computeResearchCapacityGain, computeHistoricalLaneDifficultyPriors } from "./cycle_analytics.js";
 
 // ── Span contract emitter ─────────────────────────────────────────────────────
@@ -4850,6 +4851,21 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   // value even when benchmarkData loading fails.
   let planningPriors = computeBenchmarkPlanningPriors(null);
 
+  // Pre-load prior-cycle violation feedback outside the main try/catch so it is
+  // available even when benchmarkData loading partially fails.
+  let priorCycleViolationSignal: RetryViolationSignal | null = null;
+  try {
+    const prevAnalytics = await readJson(path.join(stateDir, "cycle_analytics.json"), null);
+    const vf = prevAnalytics?.lastCycle?.violationFeedback ?? prevAnalytics?.violationFeedback ?? null;
+    if (vf && typeof vf === "object") {
+      priorCycleViolationSignal = {
+        retryRate:             typeof vf.retryRate             === "number" ? vf.retryRate             : null,
+        contractViolationRate: typeof vf.contractViolationRate === "number" ? vf.contractViolationRate : null,
+        rerouteRate:           typeof vf.rerouteRate           === "number" ? vf.rerouteRate           : null,
+      };
+    }
+  } catch { /* non-fatal — proceed without prior-cycle signal */ }
+
   try {
     const [benchmarkData, premiumUsageData] = await Promise.all([
       readBenchmarkGroundTruth(config),
@@ -4864,15 +4880,17 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
       );
     }
     // Derive planning priors from the same benchmarkData so we avoid a second disk read.
+    // Include prior-cycle violation/retry/reroute signal so observed pressure adjusts
+    // strictness on top of the capacity-gain baseline.
     const benchmarkEntries = Array.isArray((benchmarkData as any)?.entries)
       ? (benchmarkData as any).entries as unknown[]
       : [];
     const capacityGainResult = computeResearchCapacityGain(benchmarkEntries as any[]);
-    planningPriors = computeBenchmarkPlanningPriors(capacityGainResult);
-    if (planningPriors.uncertainty !== "low") {
+    planningPriors = computeBenchmarkPlanningPriors(capacityGainResult, priorCycleViolationSignal);
+    if (planningPriors.uncertainty !== "low" || planningPriors.retryViolationAdjustment > 0) {
       await appendProgress(
         config,
-        `[PROMETHEUS][PRIORS] Planning priors: uncertainty=${planningPriors.uncertainty} strictnessMultiplier=${planningPriors.strictnessMultiplier} verificationDepth=${planningPriors.verificationDepth}`
+        `[PROMETHEUS][PRIORS] Planning priors: uncertainty=${planningPriors.uncertainty} strictnessMultiplier=${planningPriors.strictnessMultiplier} verificationDepth=${planningPriors.verificationDepth} retryViolationAdj=${planningPriors.retryViolationAdjustment}`
       );
     }
   } catch (signalErr) {
@@ -4886,7 +4904,6 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   // Declared here as baseline so the density gate below always has a valid value,
   // even when benchmarkData loading fails.
   // (If the try block above succeeded, planningPriors is already overwritten.)
-
   // ── Load accumulated topic memory ─────────────────────────────────────────
   let topicMemory = await loadTopicMemory(stateDir);
   let topicMemorySection = "";

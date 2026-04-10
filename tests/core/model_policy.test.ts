@@ -1688,6 +1688,7 @@ describe("computeBenchmarkPlanningPriors", () => {
     assert.equal(result.decompositionCapAdjustment, 0);
     assert.equal(result.uncertainty, "high");
     assert.equal(result.capacityGain, null);
+    assert.equal(result.retryViolationAdjustment, 0);
   });
 
   it("returns baseline priors when evaluatedCount < 2 (insufficient history)", () => {
@@ -1725,5 +1726,83 @@ describe("computeBenchmarkPlanningPriors", () => {
     assert.equal(result.uncertainty, "high");
     assert.equal(result.strictnessMultiplier, 1.0);
     assert.equal(result.capacityGain, null);
+  });
+
+  // ── retryViolationSignal overlay ──────────────────────────────────────────
+  it("adds +0.15 strictness when contractViolationRate > 0.20", () => {
+    const result = computeBenchmarkPlanningPriors(
+      { capacityGain: 0.50, evaluatedCount: 10 },
+      { retryRate: null, contractViolationRate: 0.30, rerouteRate: null },
+    );
+    // base = 1.1, violation adj = +0.15 → 1.25
+    assert.equal(result.strictnessMultiplier, 1.25);
+    assert.equal(result.retryViolationAdjustment, 0.15);
+    assert.equal(result.verificationDepth, "standard");
+  });
+
+  it("adds +0.10 strictness when retryRate > 0.30", () => {
+    const result = computeBenchmarkPlanningPriors(
+      { capacityGain: 0.50, evaluatedCount: 10 },
+      { retryRate: 0.50, contractViolationRate: null, rerouteRate: null },
+    );
+    // base = 1.1, retry adj = +0.10 → 1.2
+    assert.equal(result.strictnessMultiplier, 1.2);
+    assert.equal(result.retryViolationAdjustment, 0.10);
+  });
+
+  it("escalates verificationDepth when rerouteRate > 0.30 (shallow → standard)", () => {
+    const result = computeBenchmarkPlanningPriors(
+      { capacityGain: 0.85, evaluatedCount: 20 },
+      { retryRate: null, contractViolationRate: null, rerouteRate: 0.40 },
+    );
+    assert.equal(result.verificationDepth, "standard");   // escalated from shallow
+    assert.equal(result.strictnessMultiplier, 0.9);       // no strictness change
+    assert.equal(result.retryViolationAdjustment, 0);
+  });
+
+  it("escalates verificationDepth when rerouteRate > 0.30 (standard → deep)", () => {
+    const result = computeBenchmarkPlanningPriors(
+      { capacityGain: 0.50, evaluatedCount: 10 },
+      { retryRate: null, contractViolationRate: null, rerouteRate: 0.50 },
+    );
+    assert.equal(result.verificationDepth, "deep");       // escalated from standard
+  });
+
+  it("compounds both violation and retry adjustments", () => {
+    const result = computeBenchmarkPlanningPriors(
+      { capacityGain: 0.50, evaluatedCount: 10 },
+      { retryRate: 0.40, contractViolationRate: 0.25, rerouteRate: null },
+    );
+    // base = 1.1, violation +0.15, retry +0.10 → 1.35
+    assert.equal(result.strictnessMultiplier, 1.35);
+    assert.equal(result.retryViolationAdjustment, 0.25);
+  });
+
+  it("does not apply overlay when all rates are null", () => {
+    const result = computeBenchmarkPlanningPriors(
+      { capacityGain: 0.50, evaluatedCount: 10 },
+      { retryRate: null, contractViolationRate: null, rerouteRate: null },
+    );
+    assert.equal(result.strictnessMultiplier, 1.1);
+    assert.equal(result.retryViolationAdjustment, 0);
+  });
+
+  it("does not apply overlay when rates are below thresholds", () => {
+    const result = computeBenchmarkPlanningPriors(
+      { capacityGain: 0.50, evaluatedCount: 10 },
+      { retryRate: 0.10, contractViolationRate: 0.05, rerouteRate: 0.20 },
+    );
+    assert.equal(result.strictnessMultiplier, 1.1);
+    assert.equal(result.retryViolationAdjustment, 0);
+    assert.equal(result.verificationDepth, "standard");
+  });
+
+  it("negative path: handles null retryViolationSignal gracefully", () => {
+    const result = computeBenchmarkPlanningPriors(
+      { capacityGain: 0.50, evaluatedCount: 10 },
+      null,
+    );
+    assert.equal(result.strictnessMultiplier, 1.1);
+    assert.equal(result.retryViolationAdjustment, 0);
   });
 });

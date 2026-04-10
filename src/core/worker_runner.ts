@@ -1710,6 +1710,37 @@ export function isNonRetryablePolicyBlockReason(reason: unknown): boolean {
 }
 
 /**
+ * Extract a standardized violation summary from a completed worker result object.
+ *
+ * Callers (e.g. the orchestrator) use this to build per-cycle contract-violation
+ * counters without duplicating the extraction logic at every call site.
+ *
+ * Returns a plain object with three boolean flags:
+ *   closureBoundaryViolation — dispatchContract.closureBoundaryViolation was true
+ *   hookTelemetryViolation   — dispatchBlockReason starts with "hook_telemetry_inconsistent"
+ *   isDispatchBlocked        — any non-null dispatchBlockReason was set
+ */
+export function extractWorkerViolationSummary(workerResult: unknown): {
+  closureBoundaryViolation: boolean;
+  hookTelemetryViolation: boolean;
+  isDispatchBlocked: boolean;
+} {
+  if (!workerResult || typeof workerResult !== "object") {
+    return { closureBoundaryViolation: false, hookTelemetryViolation: false, isDispatchBlocked: false };
+  }
+  const r = workerResult as Record<string, unknown>;
+  const dispatchContract = r.dispatchContract && typeof r.dispatchContract === "object"
+    ? r.dispatchContract as Record<string, unknown>
+    : null;
+  const blockReason = typeof r.dispatchBlockReason === "string" ? r.dispatchBlockReason : "";
+  return {
+    closureBoundaryViolation: dispatchContract?.closureBoundaryViolation === true,
+    hookTelemetryViolation:   blockReason.startsWith("hook_telemetry_inconsistent"),
+    isDispatchBlocked:        blockReason.length > 0,
+  };
+}
+
+/**
  * Build a deterministic WorkerRunContract for a dispatch by merging box.config.json
  * defaults with optional per-instruction overrides. Provides bounded execution bounds
  * (maxTurns, sessionInputPolicy) and tracing metadata for every worker invocation.

@@ -6,6 +6,7 @@ import os from "node:os";
 import {
   parseWorkerResponse,
   deriveDeterministicCleanTreeEvidence,
+  resolveCleanTreeEvidenceTargets,
   detectRepoContamination,
   attemptBranchCleanlinessRecovery,
   shouldEnableFullToolAccess,
@@ -15,6 +16,7 @@ import {
   computeMemoryHitRatio,
   isTerminalWorkerStatus,
   shouldResolveRecoveredWorkerEscalations,
+  extractWorkerViolationSummary,
 } from "../../src/core/worker_runner.js";
 import { isProcessAlive } from "../../src/core/daemon_control.js";
 import { buildRoutingROISummary } from "../../src/core/cycle_analytics.js";
@@ -203,6 +205,48 @@ describe("deriveDeterministicCleanTreeEvidence", () => {
     );
     assert.equal(result.mode, "none");
     assert.deepEqual(result.lines, []);
+  });
+});
+
+describe("resolveCleanTreeEvidenceTargets", () => {
+  it("prefers BOX_FILES_TOUCHED over broad instruction targetFiles", () => {
+    const result = resolveCleanTreeEvidenceTargets(
+      {
+        filesTouched: [
+          "src/core/doctor.ts",
+          "src/core/orchestrator.ts",
+        ],
+      },
+      {
+        targetFiles: [
+          "src/core/doctor.ts",
+          "src/core/orchestrator.ts",
+          "tests/core/orchestrator_pipeline_progress.test.ts",
+        ],
+      },
+    );
+
+    assert.deepEqual(result, [
+      "src/core/doctor.ts",
+      "src/core/orchestrator.ts",
+    ]);
+  });
+
+  it("falls back to instruction targetFiles when filesTouched is empty", () => {
+    const result = resolveCleanTreeEvidenceTargets(
+      { filesTouched: [] },
+      {
+        targetFiles: [
+          "src/core/orchestrator.ts",
+          "tests/core/orchestrator_runtime_contracts.test.ts",
+        ],
+      },
+    );
+
+    assert.deepEqual(result, [
+      "src/core/orchestrator.ts",
+      "tests/core/orchestrator_runtime_contracts.test.ts",
+    ]);
   });
 });
 
@@ -731,5 +775,69 @@ describe("buildWorkerRunContract", () => {
   it("sessionInputPolicy propagates valid string values", () => {
     const contract = buildWorkerRunContract({ workerRunContract: { sessionInputPolicy: "no_tools" } }, {});
     assert.equal(contract.sessionInputPolicy, "no_tools");
+  });
+});
+
+// ── extractWorkerViolationSummary ────────────────────────────────────────────
+
+describe("extractWorkerViolationSummary", () => {
+  it("returns all-false for null input", () => {
+    const result = extractWorkerViolationSummary(null);
+    assert.equal(result.closureBoundaryViolation, false);
+    assert.equal(result.hookTelemetryViolation, false);
+    assert.equal(result.isDispatchBlocked, false);
+  });
+
+  it("returns all-false for non-object input", () => {
+    const result = extractWorkerViolationSummary("bad-string");
+    assert.equal(result.closureBoundaryViolation, false);
+    assert.equal(result.hookTelemetryViolation, false);
+    assert.equal(result.isDispatchBlocked, false);
+  });
+
+  it("returns all-false for empty object", () => {
+    const result = extractWorkerViolationSummary({});
+    assert.equal(result.closureBoundaryViolation, false);
+    assert.equal(result.hookTelemetryViolation, false);
+    assert.equal(result.isDispatchBlocked, false);
+  });
+
+  it("detects closureBoundaryViolation from dispatchContract", () => {
+    const result = extractWorkerViolationSummary({
+      dispatchContract: { closureBoundaryViolation: true },
+    });
+    assert.equal(result.closureBoundaryViolation, true);
+    assert.equal(result.hookTelemetryViolation, false);
+    assert.equal(result.isDispatchBlocked, false);
+  });
+
+  it("does not set closureBoundaryViolation when false in dispatchContract", () => {
+    const result = extractWorkerViolationSummary({
+      dispatchContract: { closureBoundaryViolation: false },
+    });
+    assert.equal(result.closureBoundaryViolation, false);
+  });
+
+  it("detects hookTelemetryViolation from dispatchBlockReason prefix", () => {
+    const result = extractWorkerViolationSummary({
+      dispatchBlockReason: "hook_telemetry_inconsistent:hash_mismatch",
+    });
+    assert.equal(result.hookTelemetryViolation, true);
+    assert.equal(result.isDispatchBlocked, true);
+  });
+
+  it("sets isDispatchBlocked for any non-empty dispatchBlockReason", () => {
+    const result = extractWorkerViolationSummary({
+      dispatchBlockReason: "some_other_block_reason",
+    });
+    assert.equal(result.hookTelemetryViolation, false);
+    assert.equal(result.isDispatchBlocked, true);
+  });
+
+  it("negative path: ignores non-object dispatchContract", () => {
+    const result = extractWorkerViolationSummary({
+      dispatchContract: "not-an-object",
+    });
+    assert.equal(result.closureBoundaryViolation, false);
   });
 });

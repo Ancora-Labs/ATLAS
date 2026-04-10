@@ -1672,6 +1672,22 @@ export const BENCHMARK_SUITE_TYPE = Object.freeze({
 // and decomposition strategy before dispatch — not only worker model routing.
 
 /**
+ * Runtime violation and retry signal derived from the previous cycle's observed
+ * outcomes.  Fed into computeBenchmarkPlanningPriors so that high retry / violation
+ * pressure tightens planning strictness independently of benchmark capacity gain.
+ *
+ * All rate fields are in the range [0, 1]; null means no data available.
+ */
+export interface RetryViolationSignal {
+  /** Fraction of dispatched workers that triggered transient retries (0–1). */
+  retryRate: number | null;
+  /** Fraction of dispatched workers with contract violations (closureBoundary + hookTelemetry). */
+  contractViolationRate: number | null;
+  /** Fraction of dispatched workers that were rerouted away from their planned role (0–1). */
+  rerouteRate: number | null;
+}
+
+/**
  * Planning priors derived from benchmark history and uncertainty.
  * Applied in the Prometheus post-processing pipeline to adjust packet
  * strictness thresholds and decomposition limits before dispatch.
@@ -1687,16 +1703,27 @@ export interface PlanningPrior {
   uncertainty: "low" | "medium" | "high";
   /** Sliding-window capacity gain used to derive this prior (null = no history). */
   capacityGain: number | null;
+  /**
+   * Additive adjustment applied on top of the benchmark multiplier due to observed
+   * retry / contract-violation / reroute pressure from the previous cycle.
+   * 0.0 when no retry-violation signal was provided or all rates were low.
+   */
+  retryViolationAdjustment: number;
 }
 
 /**
  * Compute planning priors from benchmark ground-truth data and cycle history.
  *
- * Rules:
+ * Rules (benchmark-based):
  *   - No history (null gain / < 2 evaluated samples) → baseline strictness, high uncertainty
  *   - Low gain (< 0.30) → +30% stricter thresholds, deep verification, cap -2
  *   - Medium gain (0.30 – 0.70) → +10% stricter, standard verification, no cap change
  *   - High gain (≥ 0.70) → −10% strictness (relax), shallow verification, cap +2
+ *
+ * Rules (retry/violation overlay, additive on top of benchmark multiplier):
+ *   - contractViolationRate > 0.20 → +0.15 strictness
+ *   - retryRate > 0.30             → +0.10 strictness
+ *   - rerouteRate > 0.30           → escalate verificationDepth by one level
  *
  * Input shape mirrors the output of computeResearchCapacityGain() in cycle_analytics.ts
  * so callers can compute the gain once and pass both values here.
@@ -1704,52 +1731,82 @@ export interface PlanningPrior {
  * Never throws — returns baseline priors on any error.
  *
  * @param capacityGainResult — { capacityGain: number | null; evaluatedCount: number }
+ * @param retryViolationSignal — optional observed retry/violation rates from prior cycle
  */
 export function computeBenchmarkPlanningPriors(
-  capacityGainResult: { capacityGain: number | null; evaluatedCount: number } | null | undefined
+  capacityGainResult: { capacityGain: number | null; evaluatedCount: number } | null | undefined,
+  retryViolationSignal?: RetryViolationSignal | null,
 ): PlanningPrior {
   const gain = typeof capacityGainResult?.capacityGain === "number"
     ? capacityGainResult.capacityGain
     : null;
   const evaluated = Number(capacityGainResult?.evaluatedCount) || 0;
 
-  // Insufficient history — baseline priors, flag as high uncertainty.
+  // ── Benchmark-based base prior ─────────────────────────────────────────────
+  let baseStrictness: number;
+  let baseDepth: "shallow" | "standard" | "deep";
+  let baseCapAdj: number;
+  let uncertainty: "low" | "medium" | "high";
+
   if (gain === null || evaluated < 2) {
-    return {
-      strictnessMultiplier:     1.0,
-      verificationDepth:        "standard",
-      decompositionCapAdjustment: 0,
-      uncertainty:              "high",
-      capacityGain:             gain,
-    };
+    baseStrictness = 1.0;
+    baseDepth      = "standard";
+    baseCapAdj     = 0;
+    uncertainty    = "high";
+  } else if (gain < 0.30) {
+    baseStrictness = 1.3;
+    baseDepth      = "deep";
+    baseCapAdj     = -2;
+    uncertainty    = "high";
+  } else if (gain < 0.70) {
+    baseStrictness = 1.1;
+    baseDepth      = "standard";
+    baseCapAdj     = 0;
+    uncertainty    = "medium";
+  } else {
+    baseStrictness = 0.9;
+    baseDepth      = "shallow";
+    baseCapAdj     = 2;
+    uncertainty    = "low";
   }
 
-  if (gain < 0.30) {
-    return {
-      strictnessMultiplier:     1.3,
-      verificationDepth:        "deep",
-      decompositionCapAdjustment: -2,
-      uncertainty:              "high",
-      capacityGain:             gain,
-    };
+  // ── Retry / violation overlay ──────────────────────────────────────────────
+  // Each observed pressure signal adds an independent strictness increment so
+  // that multiple concurrent pressures compound correctly (max +0.25 additive).
+  let rvAdj = 0;
+  let depthEscalated = false;
+
+  if (retryViolationSignal && typeof retryViolationSignal === "object") {
+    const vr = typeof retryViolationSignal.contractViolationRate === "number"
+      ? retryViolationSignal.contractViolationRate
+      : null;
+    const rr = typeof retryViolationSignal.retryRate === "number"
+      ? retryViolationSignal.retryRate
+      : null;
+    const rer = typeof retryViolationSignal.rerouteRate === "number"
+      ? retryViolationSignal.rerouteRate
+      : null;
+
+    if (vr !== null && vr > 0.20) rvAdj += 0.15;
+    if (rr !== null && rr > 0.30)  rvAdj += 0.10;
+    if (rer !== null && rer > 0.30) {
+      // Escalate verification depth one level (shallow→standard, standard→deep).
+      depthEscalated = true;
+    }
   }
 
-  if (gain < 0.70) {
-    return {
-      strictnessMultiplier:     1.1,
-      verificationDepth:        "standard",
-      decompositionCapAdjustment: 0,
-      uncertainty:              "medium",
-      capacityGain:             gain,
-    };
-  }
+  const finalStrictness = Math.round((baseStrictness + rvAdj) * 1000) / 1000;
+  const finalDepth: "shallow" | "standard" | "deep" = depthEscalated
+    ? (baseDepth === "shallow" ? "standard" : "deep")
+    : baseDepth;
 
   return {
-    strictnessMultiplier:     0.9,
-    verificationDepth:        "shallow",
-    decompositionCapAdjustment: 2,
-    uncertainty:              "low",
-    capacityGain:             gain,
+    strictnessMultiplier:       finalStrictness,
+    verificationDepth:          finalDepth,
+    decompositionCapAdjustment: baseCapAdj,
+    uncertainty,
+    capacityGain:               gain,
+    retryViolationAdjustment:   Math.round(rvAdj * 1000) / 1000,
   };
 }
 

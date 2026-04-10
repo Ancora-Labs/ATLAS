@@ -102,6 +102,36 @@ function sanitizeWorkerResult(w: unknown): { roleName: string; status: string } 
   };
 }
 
+// ── Violation feedback interface ──────────────────────────────────────────────
+
+/**
+ * Aggregated contract-violation, retry, and reroute counters derived from a
+ * single cycle's worker results.  Persisted inside the cycle analytics record so
+ * Prometheus can read them on the next cycle and feed them into planning priors.
+ *
+ * Rates (0–1) are null when no workers were dispatched.
+ */
+export interface ViolationFeedback {
+  /** Workers that triggered at least one transient retry this cycle. */
+  retryCount: number;
+  /** Workers whose dispatchContract reported closureBoundaryViolation=true. */
+  closureBoundaryViolations: number;
+  /** Workers whose dispatchBlockReason begins with "hook_telemetry_inconsistent". */
+  hookTelemetryViolations: number;
+  /** Workers with any non-null dispatchBlockReason (all block categories). */
+  dispatchBlockedWorkers: number;
+  /** Workers rerouted away from their planned specialist role. */
+  specialistRerouteCount: number;
+  /** Roles that were rerouted (ordered, may contain duplicates across waves). */
+  reroutedRoles: string[];
+  /** retryCount / dispatched (null when dispatched = 0). */
+  retryRate: number | null;
+  /** (closureBoundaryViolations + hookTelemetryViolations) / dispatched. */
+  contractViolationRate: number | null;
+  /** specialistRerouteCount / dispatched. */
+  rerouteRate: number | null;
+}
+
 // ── Enums ──────────────────────────────────────────────────────────────────────
 
 /** Pipeline phase at the time analytics were generated. */
@@ -1055,6 +1085,12 @@ export function computeCycleAnalytics(config, {
   executionAdjustedPremiumEfficiency = null,
   capabilityExecutionSummary = null,
   benchmarkGroundTruth = null,
+  // ── Violation feedback inputs ─────────────────────────────────────────────
+  // Passed by the orchestrator after the dispatch loop so that per-cycle
+  // retry/violation/reroute pressure is persisted alongside other KPIs.
+  retryCount = 0,
+  contractViolationCounters = null,
+  rerouteMetrics = null,
 }: any = {}) {
   const missingData = [];
   const stageTimestamps = pipelineProgress?.stageTimestamps || null;
@@ -1383,6 +1419,43 @@ export function computeCycleAnalytics(config, {
     isFullyCovered: missingCanonicalEventCount === 0 || nullEventsTerminalBlockReason !== null,
   };
 
+  // ── Violation feedback: aggregate retry/violation/reroute into planning signal ──
+  // Normalized from the caller-supplied counters so Prometheus can read prior-cycle
+  // pressure directly from cycle_analytics.json rather than re-aggregating raw logs.
+  const safeRetryCount = typeof retryCount === "number" && retryCount >= 0 ? Math.floor(retryCount) : 0;
+  const closureBoundaryViolations = typeof contractViolationCounters?.closureBoundaryViolations === "number"
+    ? Math.floor(contractViolationCounters.closureBoundaryViolations)
+    : 0;
+  const hookTelemetryViolations = typeof contractViolationCounters?.hookTelemetryViolations === "number"
+    ? Math.floor(contractViolationCounters.hookTelemetryViolations)
+    : 0;
+  const dispatchBlockedWorkers = typeof contractViolationCounters?.dispatchBlockedWorkers === "number"
+    ? Math.floor(contractViolationCounters.dispatchBlockedWorkers)
+    : 0;
+  const specialistRerouteCount = typeof rerouteMetrics?.specialistRerouteCount === "number"
+    ? Math.floor(rerouteMetrics.specialistRerouteCount)
+    : 0;
+  const reroutedRoles = Array.isArray(rerouteMetrics?.reroutedRoles)
+    ? rerouteMetrics.reroutedRoles.map(String)
+    : [];
+
+  const dispatched = typeof funnelCounts?.dispatched === "number" && funnelCounts.dispatched > 0
+    ? funnelCounts.dispatched
+    : null;
+  const totalViolations = closureBoundaryViolations + hookTelemetryViolations;
+
+  const violationFeedback: ViolationFeedback = {
+    retryCount:               safeRetryCount,
+    closureBoundaryViolations,
+    hookTelemetryViolations,
+    dispatchBlockedWorkers,
+    specialistRerouteCount,
+    reroutedRoles,
+    retryRate:               dispatched !== null ? Math.round((safeRetryCount / dispatched) * 1000) / 1000 : null,
+    contractViolationRate:   dispatched !== null ? Math.round((totalViolations / dispatched) * 1000) / 1000 : null,
+    rerouteRate:             dispatched !== null ? Math.round((specialistRerouteCount / dispatched) * 1000) / 1000 : null,
+  };
+
   return {
     cycleId,
     generatedAt: new Date().toISOString(),
@@ -1413,6 +1486,7 @@ export function computeCycleAnalytics(config, {
     benchmarkAnalytics: benchmarkGroundTruth != null
       ? computeBenchmarkIntegrityScore(benchmarkGroundTruth)
       : null,
+    violationFeedback,
   };
 }
 

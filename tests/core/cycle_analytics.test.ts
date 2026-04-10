@@ -45,6 +45,7 @@ import {
   LEGACY_EVOLUTION_PROGRESS_FILE,
   LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION,
 } from "../../src/core/cycle_analytics.js";
+import type { ViolationFeedback } from "../../src/core/cycle_analytics.js";
 import { recordCapabilityExecution } from "../../src/core/state_tracker.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -2248,3 +2249,90 @@ describe("computeHistoricalLaneDifficultyPriors", () => {
     assert.deepEqual(result, {});
   });
 });
+
+// ── violationFeedback in computeCycleAnalytics ─────────────────────────────────
+
+describe("computeCycleAnalytics — violationFeedback field", () => {
+  const config = makeConfig("state");
+
+  it("violationFeedback is always present in returned record", () => {
+    const record = computeCycleAnalytics(config, {});
+    assert.ok(record.violationFeedback, "violationFeedback must exist");
+    assert.equal(typeof record.violationFeedback.retryCount, "number");
+    assert.equal(typeof record.violationFeedback.closureBoundaryViolations, "number");
+    assert.equal(typeof record.violationFeedback.hookTelemetryViolations, "number");
+    assert.equal(typeof record.violationFeedback.dispatchBlockedWorkers, "number");
+    assert.equal(typeof record.violationFeedback.specialistRerouteCount, "number");
+    assert.ok(Array.isArray(record.violationFeedback.reroutedRoles));
+  });
+
+  it("violationFeedback defaults to zero counters with no inputs", () => {
+    const record = computeCycleAnalytics(config, {});
+    const vf = record.violationFeedback as ViolationFeedback;
+    assert.equal(vf.retryCount, 0);
+    assert.equal(vf.closureBoundaryViolations, 0);
+    assert.equal(vf.hookTelemetryViolations, 0);
+    assert.equal(vf.dispatchBlockedWorkers, 0);
+    assert.equal(vf.specialistRerouteCount, 0);
+    assert.deepEqual(vf.reroutedRoles, []);
+    assert.equal(vf.retryRate, null);
+    assert.equal(vf.contractViolationRate, null);
+    assert.equal(vf.rerouteRate, null);
+  });
+
+  it("passes through contractViolationCounters from caller", () => {
+    const record = computeCycleAnalytics(config, {
+      contractViolationCounters: { closureBoundaryViolations: 2, hookTelemetryViolations: 1, dispatchBlockedWorkers: 3 },
+      funnelCounts: { generated: 5, approved: 5, dispatched: 5, completed: 2 },
+    });
+    const vf = record.violationFeedback as ViolationFeedback;
+    assert.equal(vf.closureBoundaryViolations, 2);
+    assert.equal(vf.hookTelemetryViolations, 1);
+    assert.equal(vf.dispatchBlockedWorkers, 3);
+    // contractViolationRate = (2+1)/5 = 0.6
+    assert.equal(vf.contractViolationRate, 0.6);
+  });
+
+  it("passes through rerouteMetrics from caller", () => {
+    const record = computeCycleAnalytics(config, {
+      rerouteMetrics: { specialistRerouteCount: 2, reroutedRoles: ["research-worker", "evolution-worker"] },
+      funnelCounts: { generated: 4, approved: 4, dispatched: 4, completed: 2 },
+    });
+    const vf = record.violationFeedback as ViolationFeedback;
+    assert.equal(vf.specialistRerouteCount, 2);
+    assert.deepEqual(vf.reroutedRoles, ["research-worker", "evolution-worker"]);
+    assert.equal(vf.rerouteRate, 0.5);
+  });
+
+  it("passes through retryCount and computes retryRate", () => {
+    const record = computeCycleAnalytics(config, {
+      retryCount: 3,
+      funnelCounts: { generated: 6, approved: 6, dispatched: 6, completed: 3 },
+    });
+    const vf = record.violationFeedback as ViolationFeedback;
+    assert.equal(vf.retryCount, 3);
+    assert.equal(vf.retryRate, 0.5);
+  });
+
+  it("rates are null when dispatched count is missing", () => {
+    const record = computeCycleAnalytics(config, {
+      retryCount: 2,
+      contractViolationCounters: { closureBoundaryViolations: 1, hookTelemetryViolations: 0, dispatchBlockedWorkers: 1 },
+    });
+    const vf = record.violationFeedback as ViolationFeedback;
+    assert.equal(vf.retryRate, null);
+    assert.equal(vf.contractViolationRate, null);
+    assert.equal(vf.rerouteRate, null);
+  });
+
+  it("negative path: ignores non-numeric contractViolationCounters fields", () => {
+    const record = computeCycleAnalytics(config, {
+      contractViolationCounters: { closureBoundaryViolations: "bad", hookTelemetryViolations: null, dispatchBlockedWorkers: undefined },
+    });
+    const vf = record.violationFeedback as ViolationFeedback;
+    assert.equal(vf.closureBoundaryViolations, 0);
+    assert.equal(vf.hookTelemetryViolations, 0);
+    assert.equal(vf.dispatchBlockedWorkers, 0);
+  });
+});
+

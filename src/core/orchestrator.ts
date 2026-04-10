@@ -5089,6 +5089,9 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   let waveBatchCount = 0;                          // batches dispatched in current wave
   const cycleRetryTelemetry = await loadRetryTelemetryContext(config);
   const dispatchArtifactCycleId = normalizeCycleId((await readPipelineProgress(config).catch(() => null))?.startedAt || cycleStartedAt);
+  // Accumulate transient retries across all batches so cycle_analytics can surface
+  // real retry pressure rather than the synthetic 0 constant used previously.
+  let cycleTransientRetries = 0;
 
   for (const batch of workerBatches) {
     // ── Cooperative cancellation checkpoint ─────────────────────────────────
@@ -5291,6 +5294,9 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       } catch { /* non-fatal — ROI logging must never block orchestration */ }
       return;
     }
+
+    // Accumulate transient retries from this batch into the cycle-level counter.
+    cycleTransientRetries += transientRetries;
 
     markPremiumOutcome(workerPremiumEvent.eventId, isAnalyticsCompletedWorkerStatus(String(workerResult?.status || "unknown")));
 
@@ -5588,6 +5594,27 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
             })
       : null;
 
+    // ── Violation / reroute feedback for planning priors ────────────────────
+    // Aggregate contract-violation and reroute signals from this cycle's worker
+    // results so Prometheus can read them from cycle_analytics.json next cycle.
+    const cycleContractViolationCounters = {
+      closureBoundaryViolations: allWorkerResults.filter(r => r.closureBoundaryViolation === true).length,
+      hookTelemetryViolations:   allWorkerResults.filter(r =>
+        typeof r.dispatchBlockReason === "string" &&
+        r.dispatchBlockReason.startsWith("hook_telemetry_inconsistent")
+      ).length,
+      dispatchBlockedWorkers: allWorkerResults.filter(r => r.dispatchBlockReason != null).length,
+    };
+    const cycleRerouteReasons = Array.isArray(workerBatches) && workerBatches.length > 0
+      ? ((workerBatches[0] as any)?.specialistRerouteReasons ?? [])
+      : [];
+    const cycleRerouteMetrics = {
+      specialistRerouteCount: Array.isArray(cycleRerouteReasons) ? cycleRerouteReasons.length : 0,
+      reroutedRoles: Array.isArray(cycleRerouteReasons)
+        ? cycleRerouteReasons.map((r: any) => String(r?.role || ""))
+        : [],
+    };
+
     const analyticsRecord = computeCycleAnalytics(config, {
       sloRecord,
       pipelineProgress: progressForAnalytics,
@@ -5612,6 +5639,9 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       rawPremiumEfficiency: _rawPremiumEfficiency,
       executionAdjustedPremiumEfficiency: _executionAdjustedPremiumEfficiency,
       memoryHitLog: await readJson(path.join(stateDir, "memory_hit_log.json"), []),
+      retryCount:                 cycleTransientRetries,
+      contractViolationCounters:  cycleContractViolationCounters,
+      rerouteMetrics:             cycleRerouteMetrics,
     });
     await persistCycleAnalytics(config, analyticsRecord);
 
@@ -5897,7 +5927,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       && sloState.lastCycle.sloBreaches.length > 0;
 
     const cycleData = {
-      retryCount:              0,                          // no per-cycle retry counter yet; 0 is safe
+      retryCount:              cycleTransientRetries,            // real accumulated transient-retry count this cycle
       totalTasks:              Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans.length : 0,
       blockedTasks:            0,                          // blocking is tracked per-worker, not aggregated here
       jesusDirectiveAgeMs:     Math.max(0, jesusDirectiveAgeMs),
