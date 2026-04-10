@@ -40,7 +40,12 @@ import {
   checkPlanPremortemGate,
   computePlanBatchFingerprint,
   sanitizeAthenaReviewFieldForPersistence,
+  isClosureBoundaryViolation,
+  CLOSURE_BOUNDARY_VIOLATION_REASON,
+  buildPostmortemClosureRetryPrompt,
 } from "../../src/core/athena_reviewer.js";
+
+import { checkWorkerOutputClosureFields } from "../../src/core/worker_runner.js";
 
 import {
   DECISION_QUALITY_WEIGHTS,
@@ -1559,5 +1564,184 @@ describe("fastPathCounts.gateBlockRiskAtApproval — cycle analytics", () => {
       null,
       "unknown risk level values must be rejected as null",
     );
+  });
+});
+
+// ── Closure boundary enforcement (Task 1 — completion-boundary enforcement) ──
+
+describe("isClosureBoundaryViolation — positive path", () => {
+  it("returns false for a postmortem with no closureBoundaryViolation flag", () => {
+    const pm = { recommendation: "proceed", closureFieldsValid: true };
+    assert.equal(isClosureBoundaryViolation(pm), false);
+  });
+
+  it("returns false for a postmortem with closureBoundaryViolation=false", () => {
+    const pm = { closureBoundaryViolation: false };
+    assert.equal(isClosureBoundaryViolation(pm), false);
+  });
+
+  it("returns false for null input", () => {
+    assert.equal(isClosureBoundaryViolation(null), false);
+  });
+});
+
+describe("isClosureBoundaryViolation — negative paths", () => {
+  it("returns true when closureBoundaryViolation=true is set on postmortem", () => {
+    const pm = {
+      closureBoundaryViolation: true,
+      closureBoundaryViolationReason: CLOSURE_BOUNDARY_VIOLATION_REASON.RETRY_FAILED,
+      recommendation: "escalate",
+    };
+    assert.equal(isClosureBoundaryViolation(pm), true,
+      "postmortem with closureBoundaryViolation=true must be detected as a boundary violation");
+  });
+
+  it("CLOSURE_BOUNDARY_VIOLATION_REASON is frozen with expected keys", () => {
+    assert.equal(CLOSURE_BOUNDARY_VIOLATION_REASON.RETRY_FAILED, "RETRY_FAILED");
+    assert.equal(CLOSURE_BOUNDARY_VIOLATION_REASON.RETRY_CALL_FAILED, "RETRY_CALL_FAILED");
+    assert.ok(Object.isFrozen(CLOSURE_BOUNDARY_VIOLATION_REASON));
+  });
+});
+
+describe("buildPostmortemClosureRetryPrompt", () => {
+  it("includes the missing field names in the retry prompt", () => {
+    const basePrompt = "## Original Athena postmortem prompt";
+    const closureValidation = {
+      valid: false,
+      reason: "EMPTY_FIELD" as const,
+      emptyFields: ["expectedOutcome", "actualOutcome"],
+    };
+    const partial = { expectedOutcome: "", actualOutcome: "", deviation: "none" };
+    const prompt = buildPostmortemClosureRetryPrompt(basePrompt, closureValidation, partial);
+    assert.ok(prompt.includes(basePrompt), "base prompt must be included");
+    assert.ok(/expectedOutcome/i.test(prompt), "missing field expectedOutcome must appear in retry prompt");
+    assert.ok(/actualOutcome/i.test(prompt),   "missing field actualOutcome must appear in retry prompt");
+    assert.ok(/RETRY/i.test(prompt), "prompt must include RETRY keyword to signal correction");
+  });
+
+  it("includes partial values from the first attempt", () => {
+    const basePrompt = "## base";
+    const closureValidation = {
+      valid: false,
+      reason: "MISSING_FIELD" as const,
+      emptyFields: ["deviation"],
+    };
+    const partial = { expectedOutcome: "Build the feature", actualOutcome: "Feature built", deviation: "" };
+    const prompt = buildPostmortemClosureRetryPrompt(basePrompt, closureValidation, partial);
+    assert.ok(prompt.includes("Build the feature"), "partial expectedOutcome must be shown in retry prompt");
+    assert.ok(prompt.includes("Feature built"), "partial actualOutcome must be shown in retry prompt");
+  });
+});
+
+// ── checkWorkerOutputClosureFields (completion-boundary enforcement) ──────────
+
+describe("checkWorkerOutputClosureFields — positive path", () => {
+  it("returns valid=true when all three closure markers are present", () => {
+    const output = [
+      "BOX_STATUS=done",
+      "BOX_MERGED_SHA=abc123",
+      "CLEAN_TREE_STATUS=clean",
+      "BOX_EXPECTED_OUTCOME=Add closure validation to the postmortem path.",
+      "BOX_ACTUAL_OUTCOME=Closure validation added; all tests pass.",
+      "BOX_DEVIATION=none",
+    ].join("\n");
+    const r = checkWorkerOutputClosureFields(output);
+    assert.equal(r.valid, true);
+    assert.deepEqual(r.missingFields, []);
+  });
+
+  it("accepts deviation=minor", () => {
+    const output = "BOX_EXPECTED_OUTCOME=X\nBOX_ACTUAL_OUTCOME=Y\nBOX_DEVIATION=minor";
+    const r = checkWorkerOutputClosureFields(output);
+    assert.equal(r.valid, true);
+  });
+
+  it("accepts deviation=major", () => {
+    const output = "BOX_EXPECTED_OUTCOME=X\nBOX_ACTUAL_OUTCOME=Y\nBOX_DEVIATION=major";
+    const r = checkWorkerOutputClosureFields(output);
+    assert.equal(r.valid, true);
+  });
+});
+
+describe("checkWorkerOutputClosureFields — negative paths", () => {
+  it("returns valid=false and lists BOX_EXPECTED_OUTCOME when missing", () => {
+    const output = "BOX_ACTUAL_OUTCOME=Y\nBOX_DEVIATION=none";
+    const r = checkWorkerOutputClosureFields(output);
+    assert.equal(r.valid, false);
+    assert.ok(r.missingFields.includes("BOX_EXPECTED_OUTCOME"));
+  });
+
+  it("returns valid=false and lists BOX_ACTUAL_OUTCOME when missing", () => {
+    const output = "BOX_EXPECTED_OUTCOME=X\nBOX_DEVIATION=none";
+    const r = checkWorkerOutputClosureFields(output);
+    assert.equal(r.valid, false);
+    assert.ok(r.missingFields.includes("BOX_ACTUAL_OUTCOME"));
+  });
+
+  it("returns valid=false when BOX_DEVIATION is absent", () => {
+    const output = "BOX_EXPECTED_OUTCOME=X\nBOX_ACTUAL_OUTCOME=Y";
+    const r = checkWorkerOutputClosureFields(output);
+    assert.equal(r.valid, false);
+    assert.ok(r.missingFields.includes("BOX_DEVIATION"));
+  });
+
+  it("returns valid=false when BOX_DEVIATION has an invalid value", () => {
+    const output = "BOX_EXPECTED_OUTCOME=X\nBOX_ACTUAL_OUTCOME=Y\nBOX_DEVIATION=catastrophic";
+    const r = checkWorkerOutputClosureFields(output);
+    assert.equal(r.valid, false,
+      "BOX_DEVIATION must be exactly none|minor|major — unknown values must fail");
+    assert.ok(r.missingFields.includes("BOX_DEVIATION"));
+  });
+
+  it("returns valid=false and all three fields missing for empty output", () => {
+    const r = checkWorkerOutputClosureFields("");
+    assert.equal(r.valid, false);
+    assert.equal(r.missingFields.length, 3,
+      "all three closure fields must be reported missing for empty output");
+  });
+});
+
+describe("runAthenaPostmortem — closure boundary enforcement (fail-close path)", () => {
+  it("sets closureBoundaryViolation=true and recommendation=escalate when AI binary is missing and forceAiPostmortem causes fallback", async () => {
+    // The binary-missing path produces a fallback postmortem; the fallback
+    // populates closure fields explicitly, so closureBoundaryViolation stays false.
+    // This verifies the fallback path does NOT violate the boundary.
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-closure-boundary-"));
+    try {
+      const config = {
+        paths: {
+          stateDir,
+          progressFile: path.join(stateDir, "progress.log"),
+          policyFile: path.join(stateDir, "policy.json"),
+        },
+        env: {
+          targetRepo: "Ancora-Labs/Box",
+          copilotCliCommand: "__missing_copilot_binary__",
+        },
+        roleRegistry: {
+          qualityReviewer: { name: "Athena", model: "test-model" },
+        },
+        athena: { forceAiPostmortem: true },
+      };
+      const workerResult = {
+        roleName: "quality-worker",
+        status: "done",
+        summary: "Worker completed.",
+        verificationPassed: true,
+        verificationEvidence: { build: "pass", tests: "pass", lint: "pass" },
+      };
+      const originalPlan = { task: "Test closure boundary enforcement", riskLevel: "low" };
+      const result: any = await runAthenaPostmortem(config as any, workerResult as any, originalPlan as any);
+
+      // Fallback postmortem path — closure fields are populated explicitly so no violation
+      assert.equal(result.reviewStatus, POSTMORTEM_REVIEW_STATUS.DEGRADED_REVIEW_REQUIRED,
+        "AI binary missing → fallback path → DEGRADED_REVIEW_REQUIRED");
+      assert.equal(result.closureFieldsValid, true,
+        "fallback postmortem has explicit closure fields — closureFieldsValid must be true");
+      assert.notEqual(result.closureBoundaryViolation, true,
+        "fallback with populated closure fields must NOT carry closureBoundaryViolation=true");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });
