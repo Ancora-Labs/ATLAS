@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   normalizePrometheusParsedOutput,
   normalizeExecutionStrategyWaveTasks,
+  applyAdmissionPacketHardFilter,
   applyPlanningRubric,
   RIGIDITY_PENALTY,
   filterResolvedCarryForwardItems,
@@ -62,6 +63,7 @@ import {
   sanitizePlanningFieldForPersistence,
   STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH,
   isStrategicFieldToolTraceContaminated,
+  normalizeTextForContaminationCheck,
   PROCESS_NARRATION_LEXICAL_PATTERNS,
   SEMANTIC_TOOL_TRACE_PATTERNS,
   hasPrometheusRuntimeContractSignals,
@@ -3062,6 +3064,92 @@ describe("enforceParserContractBeforeNormalization", () => {
     assert.equal(result.retried, false);
     assert.equal(called, 0);
   });
+
+  it("rejects keyFindings of non-string type (array) at generation boundary — triggers retry", async () => {
+    const arrayKeyFindings = {
+      projectHealth: "healthy",
+      requestBudget: { estimatedPremiumRequestsTotal: 1 },
+      generatedAt: "2026-04-04T12:00:00.000Z",
+      // Array instead of string — must be treated as an invalid schema type.
+      keyFindings: ["Finding 1: dispatch bottleneck", "Finding 2: missing AC"],
+      strategicNarrative: "Strategic narrative — dispatch reliability must be improved.",
+      plans: [{ task: "Fix dispatch", acceptance_criteria: ["tests pass"] }],
+    };
+    let diffSeen = "";
+    const result = await enforceParserContractBeforeNormalization(arrayKeyFindings, {
+      onRetryDiff(diff: string) { diffSeen = diff; },
+      async buildRetryCandidate() { return null; },
+    });
+    assert.equal(result.ok, false, "non-string keyFindings must fail contract gate");
+    assert.equal(result.retried, true);
+    assert.ok(
+      diffSeen.includes("keyFindings"),
+      `retry diff must mention keyFindings; got: ${diffSeen}`,
+    );
+  });
+
+  it("rejects payload where all plans lack acceptance_criteria at generation boundary", async () => {
+    const noAC = {
+      projectHealth: "degraded",
+      requestBudget: { estimatedPremiumRequestsTotal: 2 },
+      generatedAt: "2026-04-04T12:00:00.000Z",
+      keyFindings: "Worker dispatch is blocked due to missing CI evidence.",
+      strategicNarrative: "Address CI reliability before next dispatch wave.",
+      plans: [
+        { task: "Fix CI pipeline", acceptance_criteria: [] },
+        { task: "Add premortem", acceptance_criteria: ["", "  "] },
+      ],
+    };
+    let diffSeen = "";
+    const result = await enforceParserContractBeforeNormalization(noAC, {
+      onRetryDiff(diff: string) { diffSeen = diff; },
+      async buildRetryCandidate() { return null; },
+    });
+    assert.equal(result.ok, false, "all-empty acceptance_criteria across plans must fail contract gate");
+    assert.equal(result.retried, true);
+    assert.ok(
+      diffSeen.includes("acceptance_criteria"),
+      `retry diff must mention acceptance_criteria; got: ${diffSeen}`,
+    );
+  });
+
+  it("passes when at least one plan has a non-empty acceptance_criteria item", async () => {
+    const oneWithAC = {
+      projectHealth: "healthy",
+      requestBudget: { estimatedPremiumRequestsTotal: 2 },
+      generatedAt: "2026-04-04T12:00:00.000Z",
+      keyFindings: "CI pipeline passes after patch; dispatch is unblocked.",
+      strategicNarrative: "Continue monitoring dispatch latency after wave-1 ships.",
+      plans: [
+        { task: "Fix CI", acceptance_criteria: [] },
+        { task: "Add tests", acceptance_criteria: ["All targeted tests pass"] },
+      ],
+    };
+    let called = 0;
+    const result = await enforceParserContractBeforeNormalization(oneWithAC, {
+      async buildRetryCandidate() { called += 1; return null; },
+    });
+    assert.equal(result.ok, true, "at least one plan with AC must pass the boundary gate");
+    assert.equal(result.retried, false);
+    assert.equal(called, 0);
+  });
+
+  it("passes with zero plans (no acceptance_criteria obligation when plans array is empty)", async () => {
+    const noPlans = {
+      projectHealth: "healthy",
+      requestBudget: { estimatedPremiumRequestsTotal: 0 },
+      generatedAt: "2026-04-04T12:00:00.000Z",
+      keyFindings: "Repository is in good health; no actionable plans this cycle.",
+      strategicNarrative: "Continue monitoring and defer non-critical improvements.",
+      plans: [],
+    };
+    let called = 0;
+    const result = await enforceParserContractBeforeNormalization(noPlans, {
+      async buildRetryCandidate() { called += 1; return null; },
+    });
+    assert.equal(result.ok, true, "zero plans must not trigger acceptance_criteria boundary violation");
+    assert.equal(called, 0);
+  });
 });
 
 describe("ensurePersistedAnalysisTimestamps", () => {
@@ -4859,6 +4947,79 @@ describe("stale-diagnostics live admission gate — tagStaleDiagnosticsBackedPla
     }
   });
 });
+
+describe("applyAdmissionPacketHardFilter", () => {
+  function makePlan(overrides: Record<string, unknown> = {}) {
+    return {
+      task: "Repair planner evidence coupling",
+      role: "evolution-worker",
+      wave: 1,
+      verification: "npm test",
+      dependencies: [],
+      acceptance_criteria: ["planner emits actionable work"],
+      implementationEvidence: ["src/core/prometheus.ts"],
+      capacityDelta: 0.2,
+      requestROI: 1.5,
+      capacityFirstReason: "Improves premium request yield by reducing wasted planning cycles",
+      ...overrides,
+    };
+  }
+
+  function makeAdmissionViolationResult(planIndex: number) {
+    return {
+      planIndex,
+      valid: false,
+      violations: [
+        {
+          code: PACKET_VIOLATION_CODE.MISSING_IMPLEMENTATION_EVIDENCE,
+          severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+        },
+      ],
+    };
+  }
+
+  it("filters only the invalid subset when valid alternatives remain", () => {
+    const plans = [
+      makePlan({ task: "Keep healthy plan" }),
+      makePlan({ task: "Drop weak plan", implementationEvidence: [], capacityFirstReason: "" }),
+    ];
+    const contractResult = {
+      results: [
+        { planIndex: 0, valid: true, violations: [] },
+        makeAdmissionViolationResult(1),
+      ],
+    };
+
+    const result = applyAdmissionPacketHardFilter(plans, contractResult);
+
+    assert.equal(result.warnedOnly, false);
+    assert.equal(result.filteredCount, 1);
+    assert.deepEqual(result.rejectedPlanIndices, [1]);
+    assert.equal(plans.length, 1);
+    assert.equal(plans[0].task, "Keep healthy plan");
+  });
+
+  it("preserves all plans when the hard filter would otherwise zero the cycle", () => {
+    const plans = [
+      makePlan({ task: "Weak plan A", implementationEvidence: [], capacityFirstReason: "" }),
+      makePlan({ task: "Weak plan B", implementationEvidence: [], capacityFirstReason: "" }),
+    ];
+    const contractResult = {
+      results: [
+        makeAdmissionViolationResult(0),
+        makeAdmissionViolationResult(1),
+      ],
+    };
+
+    const result = applyAdmissionPacketHardFilter(plans, contractResult);
+
+    assert.equal(result.warnedOnly, true);
+    assert.equal(result.filteredCount, 0);
+    assert.deepEqual(result.rejectedPlanIndices, [1, 0]);
+    assert.equal(plans.length, 2, "all plans must be preserved for Athena review");
+  });
+});
+
 import {
   estimateTokenCost,
 } from "../../src/core/prompt_compiler.js";
@@ -5051,6 +5212,75 @@ describe("PROCESS_NARRATION_LEXICAL_PATTERNS and SEMANTIC_TOOL_TRACE_PATTERNS", 
     assert.ok(Array.isArray(SEMANTIC_TOOL_TRACE_PATTERNS));
     assert.ok(SEMANTIC_TOOL_TRACE_PATTERNS.length > 0);
     assert.ok(Object.isFrozen(SEMANTIC_TOOL_TRACE_PATTERNS));
+  });
+});
+
+// ── normalizeTextForContaminationCheck — Unicode NFKC normalization ────────────
+
+describe("normalizeTextForContaminationCheck — Unicode NFKC normalization", () => {
+  it("returns the original ASCII string unchanged", () => {
+    assert.equal(normalizeTextForContaminationCheck("Let me analyze"), "Let me analyze");
+  });
+
+  it("collapses fullwidth Latin characters to ASCII equivalents", () => {
+    // Fullwidth "Ｉ" (U+FF29) normalizes to ASCII "I" under NFKC.
+    const fullwidth = "\uFF29 will now scan";
+    const normalized = normalizeTextForContaminationCheck(fullwidth);
+    assert.ok(normalized.startsWith("I"), "fullwidth I must collapse to ASCII I after NFKC");
+  });
+
+  it("collapses Mathematical Bold Latin characters to ASCII (homoglyph bypass vector)", () => {
+    // Mathematical Bold Capital L U+1D40B normalizes to "L" under NFKC.
+    const mathBold = "\u{1D40B}et me analyze";
+    const normalized = normalizeTextForContaminationCheck(mathBold);
+    assert.ok(
+      normalized.startsWith("L"),
+      "Mathematical Bold 'L' must collapse to ASCII 'L' after NFKC normalization",
+    );
+  });
+
+  it("returns empty string for empty input", () => {
+    assert.equal(normalizeTextForContaminationCheck(""), "");
+  });
+
+  it("does not throw for null/undefined input (safe coercion)", () => {
+    assert.doesNotThrow(() => normalizeTextForContaminationCheck(null as any));
+    assert.doesNotThrow(() => normalizeTextForContaminationCheck(undefined as any));
+  });
+});
+
+// ── isStrategicFieldToolTraceContaminated — Unicode-safe narration detection ──
+
+describe("isStrategicFieldToolTraceContaminated — Unicode-safe narration detection", () => {
+  it("detects narration via fullwidth I (Unicode homoglyph bypass attempt)", () => {
+    // Fullwidth "Ｉ" (U+FF29) followed by " will now scan" — after NFKC this reads
+    // "I will now scan" and must be rejected.
+    const homoglyphNarration = "\uFF29 will now scan the repository";
+    assert.equal(
+      isStrategicFieldToolTraceContaminated(homoglyphNarration),
+      true,
+      "Fullwidth 'I' homoglyph narration must be rejected after NFKC normalization",
+    );
+  });
+
+  it("does NOT reject clean ASCII strategic content after NFKC pass", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated(
+        "Dependency resolution bottleneck detected in wave-2 dispatch; three plans lack premortem."
+      ),
+      false,
+      "Clean strategic content must not be contaminated after normalization",
+    );
+  });
+
+  it("negative path: does NOT reject text with fullwidth chars that are not narration", () => {
+    // Fullwidth digits / punctuation in a measurement string must not trigger narration.
+    const measurement = "Latency improved by ２０% after applying the patch";
+    assert.equal(
+      isStrategicFieldToolTraceContaminated(measurement),
+      false,
+      "Fullwidth digits in a measurement context must not be flagged as contamination",
+    );
   });
 });
 
