@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Worker Runner — Single-Prompt Worker Sessions
  *
  * Each worker (King David, Esther, Aaron, etc.) has a conversation thread.
@@ -14,7 +14,6 @@
  */
 
 import path from "node:path";
-import { createHash as _createHashForEnvelope } from "node:crypto";
 import fs from "node:fs/promises";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { spawnAsync, writeJson } from "./fs_utils.js";
@@ -55,109 +54,6 @@ import { emitEvent } from "./logger.js";
 import { CancelledError } from "./daemon_control.js";
 import type { CancellationToken } from "./daemon_control.js";
 
-/**
- * Deterministic assignment envelope for cloud agent (issue/PR-based) execution.
- * Built by buildAssignmentEnvelope and included in the worker prompt header when
- * cloudAssignment.enabled=true so the worker knows the target GitHub context.
- */
-export interface AssignmentEnvelope {
-  /** Assignment mode identifier — always "cloud" when this envelope is present. */
-  mode: "cloud";
-  /** GitHub issue number associated with this task assignment, if any. */
-  issueNumber: number | null;
-  /** GitHub PR number associated with this task assignment, if any. */
-  prNumber: number | null;
-  /** ISO 8601 timestamp when the envelope was built. */
-  envelopeBuiltAt: string;
-  /** Target repository (owner/repo) this assignment belongs to. */
-  targetRepo: string | null;
-  /** Deterministic assignment ID derived from task and envelope context. */
-  assignmentId: string;
-}
-
-/**
- * Build a deterministic cloud assignment envelope from config and task metadata.
- *
- * Returns null when cloudAssignment.enabled is false or absent so callers can
- * gate cloud-mode behavior with a simple null-check.
- */
-export function buildAssignmentEnvelope(
-  config: { env?: Record<string, unknown>; cloudAssignment?: Record<string, unknown> },
-  taskId: string,
-): AssignmentEnvelope | null {
-  const ca = config?.cloudAssignment as Record<string, unknown> | undefined;
-  if (!ca?.enabled) return null;
-  const issueNumber = Number.isFinite(Number(ca?.issueNumber)) && Number(ca?.issueNumber) > 0
-    ? Number(ca.issueNumber)
-    : null;
-  const prNumber = Number.isFinite(Number(ca?.prNumber)) && Number(ca?.prNumber) > 0
-    ? Number(ca.prNumber)
-    : null;
-  const targetRepo = typeof (config?.env as any)?.targetRepo === "string"
-    ? (config.env as any).targetRepo
-    : null;
-  // assignmentId: deterministic hash of targetRepo + taskId + issue/pr context
-  const rawId = `${targetRepo ?? ""}::${taskId}::issue=${issueNumber ?? ""}:pr=${prNumber ?? ""}`;
-  const assignmentId = _createHashForEnvelope("sha256").update(rawId).digest("hex").slice(0, 16);
-  return {
-    mode: "cloud",
-    issueNumber,
-    prNumber,
-    envelopeBuiltAt: new Date().toISOString(),
-    targetRepo,
-    assignmentId,
-  };
-}
-
-/**
- * Poll for cloud assignment completion (issue closed or PR merged/closed).
- *
- * Uses the GitHub CLI (gh) to check status. Returns true when the assignment is
- * complete, false on timeout or when gh is unavailable (fail-open).
- *
- * @param envelope  The AssignmentEnvelope built at dispatch time.
- * @param maxWaitMs Maximum time to wait before returning false.
- * @param pollMs    Poll interval in milliseconds.
- */
-export async function waitForCloudAssignmentCompletion(
-  envelope: AssignmentEnvelope,
-  maxWaitMs = 300_000,
-  pollMs = 15_000,
-): Promise<boolean> {
-  if (!envelope.targetRepo) return false;
-  const deadline = Date.now() + maxWaitMs;
-  while (Date.now() < deadline) {
-    try {
-      if (envelope.issueNumber != null) {
-        const result = await spawnAsync("gh", [
-          "issue", "view", String(envelope.issueNumber),
-          "--repo", envelope.targetRepo,
-          "--json", "state",
-          "--jq", ".state",
-        ], {}) as { stdout: string };
-        if (result.stdout.trim().toLowerCase() === "closed") return true;
-      } else if (envelope.prNumber != null) {
-        const result = await spawnAsync("gh", [
-          "pr", "view", String(envelope.prNumber),
-          "--repo", envelope.targetRepo,
-          "--json", "state",
-          "--jq", ".state",
-        ], {}) as { stdout: string };
-        const st = result.stdout.trim().toLowerCase();
-        if (st === "merged" || st === "closed") return true;
-      } else {
-        // No issue or PR to poll — cannot determine completion
-        return false;
-      }
-    } catch (err) {
-      // gh unavailable or command failed — fail-open
-      console.error("[waitForCloudAssignmentCompletion] gh poll error:", err);
-      return false;
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
-  }
-  return false;
-}
 type WorkerRunnerConfig = {
   env?: Record<string, string | undefined>;
   paths?: {
@@ -1203,19 +1099,6 @@ function buildConversationContext(history, instruction: WorkerInstruction, sessi
     parts.push("");
   }
 
-  // ── Cloud assignment context injection ────────────────────────────────
-  // When cloudAssignment.enabled=true, prepend the assignment envelope so the
-  // worker knows the target GitHub issue/PR and assignment ID.
-  const _cloudEnvelope = buildAssignmentEnvelope(config, String(instruction.taskId || workerKind || "task"));
-  if (_cloudEnvelope != null) {
-    parts.push("## CLOUD ASSIGNMENT CONTEXT");
-    parts.push(`Assignment ID: ${_cloudEnvelope.assignmentId}`);
-    parts.push(`Target Repo: ${_cloudEnvelope.targetRepo ?? "(not set)"}`);
-    if (_cloudEnvelope.issueNumber != null) parts.push(`Issue: #${_cloudEnvelope.issueNumber}`);
-    if (_cloudEnvelope.prNumber != null) parts.push(`PR: #${_cloudEnvelope.prNumber}`);
-    parts.push(`Envelope Built At: ${_cloudEnvelope.envelopeBuiltAt}`);
-    parts.push("");
-  }
   // Inject knowledge memory lessons relevant to this worker.
   // Trust classification + ranked filtering is applied before injection:
   //   HIGH trust (system/deterministic): always included, shown first.

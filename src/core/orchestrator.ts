@@ -1,4 +1,4 @@
-﻿/**
+/**
  * BOX Orchestrator — Athena-Gated Loop Architecture
  *
  * Flow per cycle:
@@ -31,7 +31,7 @@ import {
   hasFiniteAthenaOverallScore,
   extractCrossCycleDispatchPrerequisiteFromDependency,
 } from "./athena_reviewer.js";
-import { runWorkerConversation, isAnalyticsCompletedWorkerStatus, isTerminalWorkerStatus, buildAssignmentEnvelope, waitForCloudAssignmentCompletion } from "./worker_runner.js";
+import { runWorkerConversation, isAnalyticsCompletedWorkerStatus, isTerminalWorkerStatus } from "./worker_runner.js";
 import { runSelfImprovementCycle, shouldTriggerSelfImprovement } from "./self_improvement.js";
 import { collectEvolutionMetrics } from "./evolution_metrics.js";
 import { capturePreWorkBaseline, runProjectCompletion, isProjectAlreadyCompleted } from "./project_lifecycle.js";
@@ -62,7 +62,7 @@ import { evaluateRetune } from "./strategy_retuner.js";
 import { compileLessonsToPolicies } from "./learning_policy_compiler.js";
 import { assignWorkersToPlans, enforceLaneDiversity, evaluateSpecializationAdmissionGate, buildLanePerformanceFromCycleTelemetry, buildReroutePenaltyLedger, SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES } from "./capability_pool.js";
 import { runDoctor } from "./doctor.js";
-import { validateAllPlans, validatePacketBatchAdmission, applyDispatchBoundaryHardCap, bindNamedVerificationTargets, hasActiveCiRepairPlan, allPlansAreCiRepair, isCiCriticalMandatoryFinding } from "./plan_contract_validator.js";
+import { validateAllPlans, validatePacketBatchAdmission, applyDispatchBoundaryHardCap, bindNamedVerificationTargets } from "./plan_contract_validator.js";
 import {
   resolveDependencyGraph,
   computeReadinessGate,
@@ -88,7 +88,6 @@ import {
   saveLedgerFull,
   shouldBlockOnDebt,
   autoCloseVerifiedDebt,
-  reconcileReplayClosedDebtLineage,
   reconcileReplayClosureBacklog,
   MANDATORY_REPLAY_LINEAGE_IDS,
 } from "./carry_forward_ledger.js";
@@ -161,7 +160,6 @@ export const ORCHESTRATOR_STATUS = Object.freeze({
  *  10. DEPENDENCY_READINESS  — validates dependency confidence metadata
  *  11. ROLLING_COMPLETION_YIELD — throttles when recent yield is too low
  *  12. SPECIALIZATION_ADMISSION — specialist share below adaptive lane target
- *  7.5 CI_CLOSURE_REQUIRED  — active CI-critical findings require wave-1 ci-fix before other dispatch
  *  13. OVERSIZED_PACKET      — per-role plan group exceeds actionable-steps cap
  */
 export const GATE_PRECEDENCE = Object.freeze({
@@ -174,8 +172,6 @@ export const GATE_PRECEDENCE = Object.freeze({
   GOVERNANCE_CANARY:           5,
   CARRY_FORWARD_DEBT:          6,
   MANDATORY_DRIFT_DEBT:        7,
-  /** Active CI-critical findings with no wave-1 ci-fix plan — block non-CI dispatch. */
-  CI_CLOSURE_REQUIRED:         7.5,
   PLAN_EVIDENCE_COUPLING:      8,
   /** Cross-cycle prerequisite metadata is present but has no confirmation token. */
   CROSS_CYCLE_PREREQUISITE:    9,
@@ -219,8 +215,6 @@ export const BLOCK_REASON = Object.freeze({
   ROLLING_YIELD_THROTTLE:         "rolling_yield_throttle",
   /** Specialist share is below the adaptive lane utilization target. */
   SPECIALIZATION_ADMISSION_GATE:  "specialization_admission_gate_failed",
-  /** Active CI-critical findings exist but no wave-1 ci-fix plan is present — block non-CI dispatch. */
-  PENDING_CI_REPAIR:              "pending_ci_repair",
   /** Per-role plan group exceeds the configured actionable-steps cap — decompose before dispatch. */
   OVERSIZED_PACKET:               "packet_exceeds_actionable_steps_cap",
 });
@@ -614,163 +608,6 @@ function normalizeImplementationStatus(rawStatus: unknown): string {
   return PLAN_IMPLEMENTATION_STATUS.UNKNOWN;
 }
 
-export function isResumePreferredTimeoutOutcome(workerResult: any): boolean {
-  const status = String(workerResult?.status || "").toLowerCase().trim();
-  const reasonCode = String(workerResult?.reasonCode || "").toUpperCase().trim();
-  const retryClass = String(workerResult?.retryClass || "").toLowerCase().trim();
-  return status === "error" && reasonCode === "PROCESS_TIMEOUT" && retryClass === "cooldown";
-}
-
-export function shouldBypassLaneDiversityHardGate(input: {
-  plans?: any[];
-  minLanes?: number;
-  capabilityPoolResult?: { activeLaneCount?: number; diversityCheck?: { activeLaneCount?: number } | null } | null;
-  laneConflicts?: any[];
-}): { bypass: boolean; reason: string | null } {
-  const plans = Array.isArray(input?.plans) ? input.plans : [];
-  const minLanes = Number.isFinite(Number(input?.minLanes)) ? Math.max(1, Number(input?.minLanes)) : 2;
-  const activeLaneCount = Number(
-    input?.capabilityPoolResult?.activeLaneCount
-    ?? input?.capabilityPoolResult?.diversityCheck?.activeLaneCount
-    ?? 0
-  );
-  const laneConflicts = Array.isArray(input?.laneConflicts) ? input.laneConflicts : [];
-
-  if (plans.length < minLanes) {
-    return { bypass: true, reason: "plan_count_below_min_lanes" };
-  }
-  if (activeLaneCount >= minLanes) {
-    return { bypass: false, reason: null };
-  }
-  if (laneConflicts.length > 0) {
-    return {
-      bypass: true,
-      reason: "same_lane_conflicts_will_serialize_into_distinct_batches",
-    };
-  }
-  return { bypass: false, reason: null };
-}
-
-export function shouldBypassSpecializationAdmissionGate(input: {
-  capabilityPoolResult?: {
-    activeLaneCount?: number;
-    diversityCheck?: { activeLaneCount?: number } | null;
-    specializationUtilization?: { specializedShare?: number; specializedDeficit?: number } | null;
-  } | null;
-  laneDiversityBypassReason?: string | null;
-}): { bypass: boolean; reason: string | null } {
-  const activeLaneCount = Number(
-    input?.capabilityPoolResult?.activeLaneCount
-    ?? input?.capabilityPoolResult?.diversityCheck?.activeLaneCount
-    ?? 0
-  );
-  const specializedShare = Number(input?.capabilityPoolResult?.specializationUtilization?.specializedShare || 0);
-  const specializedDeficit = Number(input?.capabilityPoolResult?.specializationUtilization?.specializedDeficit || 0);
-  const laneDiversityBypassReason = String(input?.laneDiversityBypassReason || "").trim();
-
-  if (laneDiversityBypassReason !== "same_lane_conflicts_will_serialize_into_distinct_batches") {
-    return { bypass: false, reason: null };
-  }
-  if (activeLaneCount !== 1) {
-    return { bypass: false, reason: null };
-  }
-  if (specializedShare > 0 || specializedDeficit <= 0) {
-    return { bypass: false, reason: null };
-  }
-
-  return {
-    bypass: true,
-    reason: "serialized_same_lane_batch_topology_makes_specialization_target_infeasible",
-  };
-}
-
-export function rebatchOversizedAthenaPlanGroupsForAdmission(
-  plans: any[],
-  cap: number,
-): { rewrote: boolean; splitGroups: number; batchCount: number; blockedReason: string | null } {
-  if (!Array.isArray(plans) || plans.length === 0) {
-    return { rewrote: false, splitGroups: 0, batchCount: 0, blockedReason: null };
-  }
-
-  const maxSteps = Math.max(1, Math.floor(Number.isFinite(cap) ? cap : OVERBUNDLE_STEPS_THRESHOLD));
-  const indexedPlans = plans
-    .map((plan, index) => ({ plan, index, batchIndex: Number((plan as any)?._batchIndex) }))
-    .filter((entry) => Number.isFinite(entry.batchIndex) && entry.batchIndex > 0);
-
-  if (indexedPlans.length !== plans.length) {
-    return { rewrote: false, splitGroups: 0, batchCount: 0, blockedReason: null };
-  }
-
-  const grouped = new Map<number, Array<{ plan: any; index: number }>>();
-  for (const entry of indexedPlans) {
-    const normalizedBatchIndex = Math.floor(entry.batchIndex);
-    if (!grouped.has(normalizedBatchIndex)) grouped.set(normalizedBatchIndex, []);
-    grouped.get(normalizedBatchIndex)!.push({ plan: entry.plan, index: entry.index });
-  }
-
-  const sortedBatchIndexes = [...grouped.keys()].sort((a, b) => a - b);
-  const chunkDescriptors: Array<{ plans: any[]; role: string; wave: number }> = [];
-  let splitGroups = 0;
-
-  for (const batchIndex of sortedBatchIndexes) {
-    const entries = (grouped.get(batchIndex) || []).sort((a, b) => a.index - b.index);
-    const sourcePlans = entries.map((entry) => entry.plan);
-    const batchRole = String(
-      (sourcePlans[0] as any)?._batchWorkerRole
-      || (sourcePlans[0] as any)?.role
-      || "evolution-worker"
-    ).trim() || "evolution-worker";
-    const batchWave = Number((sourcePlans[0] as any)?._batchWave || (sourcePlans[0] as any)?.wave || 1);
-
-    const chunks: any[][] = [];
-    let currentChunk: any[] = [];
-    let currentCost = 0;
-
-    for (const plan of sourcePlans) {
-      const cost = getPlanOrderedStepComplexity(plan);
-      if (cost > maxSteps) {
-        return {
-          rewrote: false,
-          splitGroups,
-          batchCount: chunkDescriptors.length,
-          blockedReason: `ordered_step_complexity_unsplittable:${batchRole}[batch ${batchIndex}]:${cost}>${maxSteps}`,
-        };
-      }
-      if (currentChunk.length > 0 && currentCost + cost > maxSteps) {
-        chunks.push(currentChunk);
-        currentChunk = [plan];
-        currentCost = cost;
-      } else {
-        currentChunk.push(plan);
-        currentCost += cost;
-      }
-    }
-
-    if (currentChunk.length > 0) chunks.push(currentChunk);
-    if (chunks.length > 1) splitGroups += 1;
-    for (const chunk of chunks) {
-      chunkDescriptors.push({ plans: chunk, role: batchRole, wave: batchWave });
-    }
-  }
-
-  if (splitGroups === 0) {
-    return { rewrote: false, splitGroups: 0, batchCount: chunkDescriptors.length, blockedReason: null };
-  }
-
-  const totalBatches = chunkDescriptors.length;
-  for (const [batchOrdinal, descriptor] of chunkDescriptors.entries()) {
-    for (const plan of descriptor.plans) {
-      (plan as any)._batchIndex = batchOrdinal + 1;
-      (plan as any)._batchTotal = totalBatches;
-      (plan as any)._batchWorkerRole = String((plan as any)?._batchWorkerRole || descriptor.role || (plan as any)?.role || "evolution-worker");
-      (plan as any)._batchWave = Number((plan as any)?._batchWave || descriptor.wave || (plan as any)?.wave || 1);
-      (plan as any)._admissionRebatchApplied = true;
-    }
-  }
-
-  return { rewrote: true, splitGroups, batchCount: totalBatches, blockedReason: null };
-}
-
 function normalizeTopicLabel(value: unknown): string {
   return String(value || "")
     .toLowerCase()
@@ -807,56 +644,9 @@ function topicMatchInSet(topic: string, linkedTopics: Set<string>): boolean {
   return false;
 }
 
-type BenchmarkAutoResolutionOptions = {
-  verifiedDoneWorkers: number;
-  workerBatches: any[];
-  workerResults?: any[];
-  atIso: string;
-};
-
-function collectBenchmarkLinkageTopicsFromWorkerResults(workerResults: any[]): Set<string> {
-  const topics = new Set<string>();
-  for (const row of Array.isArray(workerResults) ? workerResults : []) {
-    const linked = Array.isArray(row?.synthesisSources)
-      ? row.synthesisSources
-      : Array.isArray(row?.synthesis_sources)
-        ? row.synthesis_sources
-        : [];
-    for (const item of linked) {
-      const topic = normalizeTopicLabel(item);
-      if (topic) topics.add(topic);
-    }
-  }
-  return topics;
-}
-
-function hasStrongBenchmarkResolutionEvidence(topic: string, workerResults: any[]): boolean {
-  if (!topic) return false;
-  for (const row of Array.isArray(workerResults) ? workerResults : []) {
-    const status = String(row?.status || "").toLowerCase().trim();
-    if (status !== "done" && status !== "success") continue;
-    const linked = Array.isArray(row?.synthesisSources)
-      ? row.synthesisSources
-      : Array.isArray(row?.synthesis_sources)
-        ? row.synthesis_sources
-        : [];
-    const linkedTopics = new Set<string>(
-      (linked
-        .map((item: unknown) => normalizeTopicLabel(item))
-        .filter(Boolean) as string[]),
-    );
-    if (!topicMatchInSet(topic, linkedTopics)) continue;
-
-    const hasVerificationEvidence = row?.dispatchContract?.doneWorkerWithVerificationReportEvidence === true
-      || hasVerificationReportEvidence(String(row?.verificationEvidence || row?.fullOutput || ""));
-    if (hasVerificationEvidence) return true;
-  }
-  return false;
-}
-
-export function autoResolveBenchmarkRecommendations(
+function autoResolveBenchmarkRecommendations(
   benchmarkEntries: any[],
-  opts: BenchmarkAutoResolutionOptions,
+  opts: { verifiedDoneWorkers: number; workerBatches: any[]; atIso: string }
 ): { entries: any[]; resolvedCount: number; usedFallback: boolean } {
   if (!Array.isArray(benchmarkEntries) || benchmarkEntries.length === 0) {
     return { entries: benchmarkEntries, resolvedCount: 0, usedFallback: false };
@@ -869,7 +659,6 @@ export function autoResolveBenchmarkRecommendations(
   }
 
   const linkedTopics = collectBenchmarkLinkageTopicsFromBatches(opts.workerBatches);
-  const workerResultTopics = collectBenchmarkLinkageTopicsFromWorkerResults(opts.workerResults || []);
   const pendingIndexes = recs
     .map((rec: any, idx: number) => ({ rec, idx }))
     .filter(({ rec }) => {
@@ -885,18 +674,14 @@ export function autoResolveBenchmarkRecommendations(
 
   for (const { rec, idx } of pendingIndexes) {
     const topic = normalizeTopicLabel(rec?.topic || rec?.summary || rec?.id || "");
-    const matchedTopic = topicMatchInSet(topic, linkedTopics) || topicMatchInSet(topic, workerResultTopics);
-    if (!matchedTopic) continue;
-    const strongEvidence = hasStrongBenchmarkResolutionEvidence(topic, opts.workerResults || []);
+    if (!topicMatchInSet(topic, linkedTopics)) continue;
     const prevEvidence = String(rec?.evidence || "").trim();
     nextRecs[idx] = {
       ...rec,
-      implementationStatus: strongEvidence
-        ? PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_CORRECTLY
-        : PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_PARTIALLY,
+      implementationStatus: "implemented",
       evidence: prevEvidence
-        ? `${prevEvidence}; auto-resolved@${opts.atIso}: ${strongEvidence ? "linked synthesis_sources + verification evidence" : "linked synthesis_sources match"}`
-        : `auto-resolved@${opts.atIso}: ${strongEvidence ? "linked synthesis_sources + verification evidence" : "linked synthesis_sources match"}`,
+        ? `${prevEvidence}; auto-resolved@${opts.atIso}: linked synthesis_sources match`
+        : `auto-resolved@${opts.atIso}: linked synthesis_sources match`,
     };
     resolvedCount += 1;
   }
@@ -910,7 +695,7 @@ export function autoResolveBenchmarkRecommendations(
       const prevEvidence = String(rec?.evidence || "").trim();
       nextRecs[idx] = {
         ...rec,
-        implementationStatus: PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_PARTIALLY,
+        implementationStatus: "implemented",
         evidence: prevEvidence
           ? `${prevEvidence}; auto-resolved@${opts.atIso}: verified worker completion fallback (missing synthesis_sources linkage)`
           : `auto-resolved@${opts.atIso}: verified worker completion fallback (missing synthesis_sources linkage)`,
@@ -961,68 +746,6 @@ function extractEvidencePaths(evidence: unknown): string[] {
       return m ? m[0].replace(/[),.;:]+$/, "") : "";
     })
     .filter(Boolean);
-}
-
-export function promotePrometheusAnalysisFromWorkerEvidence(
-  analysis: any,
-  workerResults: any[],
-  atIso: string,
-): { analysis: any; promotedCount: number } {
-  const plans = Array.isArray(analysis?.plans) ? analysis.plans : [];
-  if (plans.length === 0) {
-    return { analysis, promotedCount: 0 };
-  }
-
-  const nextPlans = [...plans];
-  let promotedCount = 0;
-
-  for (let index = 0; index < nextPlans.length; index += 1) {
-    const plan = nextPlans[index];
-    const currentStatus = normalizeImplementationStatus(plan?.implementationStatus);
-    if (currentStatus === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_CORRECTLY) continue;
-
-    const planIdentity = normalizePlanIdentity(plan?.task || plan?.title || plan?.task_id || plan?.id);
-    if (!planIdentity) continue;
-
-    const matchedWorker = (Array.isArray(workerResults) ? workerResults : []).find((row) => {
-      const status = String(row?.status || "").toLowerCase().trim();
-      if (status !== "done" && status !== "success") return false;
-      const tasks = Array.isArray(row?.planTasks) ? row.planTasks : [];
-      return tasks.some((task: unknown) => normalizePlanIdentity(task) === planIdentity);
-    });
-    if (!matchedWorker) continue;
-
-    const hasVerificationEvidence = matchedWorker?.dispatchContract?.doneWorkerWithVerificationReportEvidence === true
-      || hasVerificationReportEvidence(String(matchedWorker?.verificationEvidence || matchedWorker?.fullOutput || ""));
-    if (!hasVerificationEvidence) continue;
-
-    const existingEvidence = Array.isArray(plan?.implementationEvidence)
-      ? plan.implementationEvidence.map((item: unknown) => String(item || "").trim()).filter(Boolean)
-      : [];
-    const fileEvidence = Array.isArray(matchedWorker?.filesTouched)
-      ? matchedWorker.filesTouched.map((item: unknown) => String(item || "").trim()).filter(Boolean)
-      : [];
-    const mergedEvidence = [...new Set([
-      ...existingEvidence,
-      ...fileEvidence,
-      `runtime-evidence@${atIso}: ${String(matchedWorker?.roleName || "worker")}`,
-    ])];
-
-    nextPlans[index] = {
-      ...plan,
-      implementationStatus: PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_CORRECTLY,
-      implementationEvidence: mergedEvidence,
-    };
-    promotedCount += 1;
-  }
-
-  return {
-    analysis: {
-      ...(analysis && typeof analysis === "object" ? analysis : {}),
-      plans: nextPlans,
-    },
-    promotedCount,
-  };
 }
 
 type PlanNoveltyFilterResult = {
@@ -1337,10 +1060,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       warn(`[orchestrator] cloud-agent governance profile gate failed (non-fatal): ${String(cloudAgentErr?.message || cloudAgentErr)}`);
     }
 
-    // ── Agent frontmatter contract gate ────────────────────────────────────
-    // Critical agents (prometheus, athena) must have valid frontmatter contracts
-    // before dispatch can proceed. A missing model or tools field indicates the
-    // agent will fall back to an uncontrolled default — block deterministically.
+    // Agent contract validation: prometheus and athena must have valid frontmatter
     try {
       const agentContractResult = validateCriticalAgentContracts();
       if (!agentContractResult.allValid) {
@@ -1487,45 +1207,6 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
     }
   }
 
-  // ── CI closure gate ───────────────────────────────────────────────────────
-  // Block dispatch of non-CI plans when the prometheus analysis contains active
-  // CI-critical mandatory findings.  CI repair packets (taskKind=ci-fix, wave 1)
-  // are exempt so the repair work can always be dispatched.
-  // Fail-open: missing prometheus file or read errors never block.
-  try {
-    if (Array.isArray(normalizedPlans) && normalizedPlans.length > 0 && !allPlansAreCiRepair(normalizedPlans)) {
-      const prometheusPath = path.join(stateDir, "prometheus_analysis.json");
-      let activeCiFindings: unknown[] = [];
-      try {
-        const analysis = await readJsonSafe(prometheusPath);
-        const findings = Array.isArray(analysis?.data?.mandatoryHealthAuditFindings)
-          ? analysis.data.mandatoryHealthAuditFindings
-          : [];
-        activeCiFindings = findings.filter(isCiCriticalMandatoryFinding);
-      } catch { /* fail-open */ }
-      if (activeCiFindings.length > 0 && !hasActiveCiRepairPlan(normalizedPlans)) {
-        const findingIds = activeCiFindings
-          .map((f: any) => String(f?.id || f?.area || "unknown"))
-          .slice(0, 3)
-          .join(", ");
-        const blockReason = `${BLOCK_REASON.PENDING_CI_REPAIR}:${activeCiFindings.length} active CI-critical finding(s) require wave-1 ci-fix before non-CI dispatch (${findingIds})`;
-        return {
-          blocked: true,
-          reason: blockReason,
-          action: undefined,
-          dispatchBlockReason: blockReason,
-          graphResult,
-          cycleId,
-          budgetEligibility,
-          gateKey: "CI_CLOSURE_REQUIRED",
-          gateIndex: GATE_PRECEDENCE.CI_CLOSURE_REQUIRED,
-        };
-      }
-    }
-  } catch (ciGateErr) {
-    warn(`[orchestrator] CI closure gate failed (non-fatal): ${String((ciGateErr as any)?.message || ciGateErr)}`);
-  }
-
   // ── Plan evidence coupling gate ───────────────────────────────────────────
   // Each plan entering dispatch must carry at least one verification command
   // and at least one acceptance criterion — this ensures automated completion
@@ -1661,13 +1342,6 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
 
       // assignWorkersToPlans is synchronous; call it with current plans to get fresh utilization.
       const poolSample = assignWorkersToPlans(normalizedPlans, config);
-      const specializationLaneConflicts = detectLaneConflicts(poolSample.assignments);
-      const laneDiversityBypass = shouldBypassLaneDiversityHardGate({
-        plans: normalizedPlans,
-        minLanes: config?.workerPool?.minLanes || 2,
-        capabilityPoolResult: poolSample,
-        laneConflicts: specializationLaneConflicts,
-      });
 
       // Read reroute history to bind admission threshold to reroute reason intensity.
       // Specialists rerouted for token-fill reasons lower the effective threshold;
@@ -1688,21 +1362,9 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
         SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES,
         admissionReroutePenaltyLedger,
       );
-      const specializationBypass = shouldBypassSpecializationAdmissionGate({
-        capabilityPoolResult: poolSample,
-        laneDiversityBypassReason: laneDiversityBypass.reason,
-      });
-      const finalAdmissionResult = specializationBypass.bypass
-        ? {
-            ...admissionResult,
-            blocked: false,
-            reason: `specialization_admission_gate_bypassed:${specializationBypass.reason}`,
-            consecutiveBlockCycles: 0,
-          }
-        : admissionResult;
 
       // Persist updated counter regardless of outcome so bypass counter resets on pass.
-      const newCount = finalAdmissionResult.blocked ? finalAdmissionResult.consecutiveBlockCycles : 0;
+      const newCount = admissionResult.blocked ? admissionResult.consecutiveBlockCycles : 0;
       try {
         await fs.mkdir(path.dirname(gateStatePath), { recursive: true });
         await fs.writeFile(gateStatePath, JSON.stringify({ consecutiveBlockCycles: newCount, updatedAt: new Date().toISOString() }), "utf8");
@@ -1710,29 +1372,26 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
         warn(`[orchestrator] specialization gate state write failed (non-fatal): ${String(writeErr?.message || writeErr)}`);
       }
 
-      if (finalAdmissionResult.blocked) {
+      if (admissionResult.blocked) {
         return {
           blocked: true,
-          reason: finalAdmissionResult.reason,
+          reason: admissionResult.reason,
           action: undefined,
-          dispatchBlockReason: finalAdmissionResult.reason,
+          dispatchBlockReason: admissionResult.reason,
           graphResult,
           cycleId,
           budgetEligibility,
           gateKey: "SPECIALIZATION_ADMISSION",
           gateIndex: GATE_PRECEDENCE.SPECIALIZATION_ADMISSION,
         };
-      } else if (finalAdmissionResult.reason && finalAdmissionResult.reason.includes("bypassed_fallback")) {
-        warn(`[orchestrator] specialization admission gate bypassed (bounded fallback): ${finalAdmissionResult.reason}`);
-      } else if (finalAdmissionResult.reason && finalAdmissionResult.reason.includes("serialized_same_lane_batch_topology_makes_specialization_target_infeasible")) {
-        warn(`[orchestrator] specialization admission gate bypassed (serialized same-lane topology): ${finalAdmissionResult.reason}`);
+      } else if (admissionResult.reason && admissionResult.reason.includes("bypassed_fallback")) {
+        warn(`[orchestrator] specialization admission gate bypassed (bounded fallback): ${admissionResult.reason}`);
       }
       // Record that specialization admission control was evaluated this cycle.
       await recordCapabilityExecution(
         config,
         "specialization-admission-control",
-        `blocked=${finalAdmissionResult.blocked} reason=${String(finalAdmissionResult.reason || "pass").slice(0, 120)}`,
-        { gateId: "SPECIALIZATION_ADMISSION", outcome: finalAdmissionResult.blocked ? "blocked" : "pass" },
+        `blocked=${admissionResult.blocked} reason=${String(admissionResult.reason || "pass").slice(0, 120)}`,
       );
     } catch (specErr) {
       warn(`[orchestrator] specialization admission gate failed (non-fatal): ${String(specErr?.message || specErr)}`);
@@ -1780,27 +1439,6 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
           gateKey: "OVERSIZED_PACKET",
           gateIndex: GATE_PRECEDENCE.OVERSIZED_PACKET,
         };
-      }
-      const admissionRebatch = rebatchOversizedAthenaPlanGroupsForAdmission(normalizedPlans, actionableCap);
-      if (admissionRebatch.blockedReason) {
-        const blockReason = `${BLOCK_REASON.OVERSIZED_PACKET}:${admissionRebatch.blockedReason}`;
-        return {
-          blocked: true,
-          reason: blockReason,
-          action: undefined,
-          dispatchBlockReason: blockReason,
-          graphResult,
-          cycleId,
-          budgetEligibility,
-          gateKey: "OVERSIZED_PACKET",
-          gateIndex: GATE_PRECEDENCE.OVERSIZED_PACKET,
-        };
-      }
-      if (admissionRebatch.rewrote) {
-        await appendProgress(
-          config,
-          `[OVERSIZED_PACKET] Rebatched ${admissionRebatch.splitGroups} oversized Athena batch group(s) into ${admissionRebatch.batchCount} admission-safe batch(es)`
-        );
       }
       // Layer 2: role-group aggregated complexity.
       const oversizeCheck = validatePacketBatchAdmission(Array.isArray(normalizedPlans) ? normalizedPlans : [], actionableCap);
@@ -3251,19 +2889,6 @@ async function dispatchWorker(config, plan) {
     targetFiles,
   });
 
-  // ── Cloud assignment completion synchronization ────────────────────────
-  // When cloudAssignment.enabled=true, poll until the assigned issue/PR is
-  // closed/merged before the orchestrator considers the task done.
-  if (config?.cloudAssignment?.enabled) {
-    const _taskIdForEnvelope = String((plan as any)?.id || roleName || "task");
-    const _envelope = buildAssignmentEnvelope(config, _taskIdForEnvelope);
-    if (_envelope != null) {
-      const _pollMs = Number((config as any).cloudAssignment.pollIntervalMs) || 15_000;
-      const _maxWaitMs = Number((config as any).cloudAssignment.maxWaitMs) || 300_000;
-      await waitForCloudAssignmentCompletion(_envelope, _maxWaitMs, _pollMs);
-    }
-  }
-
   const workerResult = {
     roleName,
     status: result?.status || "unknown",
@@ -4509,7 +4134,6 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
 
   // ── Capability pool: assign workers based on task capability matching ──────
   let capabilityPoolResult = null;
-  let detectedLaneConflicts: any[] = [];
   try {
     const poolResult = assignWorkersToPlans(plans, config, lanePerformanceFromCycle);
     capabilityPoolResult = poolResult;
@@ -4539,7 +4163,6 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     // Warn when plans within the same lane target overlapping files — these
     // should ideally run in separate waves to avoid concurrent write conflicts.
     const conflicts = detectLaneConflicts(poolResult.assignments);
-    detectedLaneConflicts = conflicts;
     if (conflicts.length > 0) {
       await appendProgress(config,
         `[CAPABILITY_POOL] ${conflicts.length} lane conflict(s) detected — conflicting plans will be separated into distinct batches`
@@ -4586,18 +4209,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   // Errors in the gate itself are fail-closed: they block dispatch.
   {
     const diversityMinLanes: number = config?.workerPool?.minLanes || 2;
-    const diversityBypass = shouldBypassLaneDiversityHardGate({
-      plans,
-      minLanes: diversityMinLanes,
-      capabilityPoolResult,
-      laneConflicts: detectedLaneConflicts,
-    });
-    if (diversityBypass.bypass && diversityBypass.reason === "same_lane_conflicts_will_serialize_into_distinct_batches") {
-      await appendProgress(
-        config,
-        `[LANE_DIVERSITY] Hard gate bypassed — same-lane conflicts will serialize into distinct batches`,
-      );
-    } else if (plans.length >= diversityMinLanes) {
+    if (plans.length >= diversityMinLanes) {
       let diversityBlocked = false;
       let diversityMsg = "";
       try {
@@ -5893,7 +5505,6 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       const autoResolution = autoResolveBenchmarkRecommendations(benchmarkEntries, {
         verifiedDoneWorkers: _verifiedDoneWorkers,
         workerBatches,
-        workerResults: allWorkerResults,
         atIso: new Date().toISOString(),
       });
       benchmarkEntries = autoResolution.entries;
@@ -6191,14 +5802,6 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     if (closedByEvidence > 0) {
       await appendProgress(config,
         `[CARRY_FORWARD] ${closedByEvidence} debt item(s) auto-closed by replay closure evidence contract`
-      );
-    }
-
-    const closedByReplayLineage = reconcileReplayClosedDebtLineage(updatedLedger);
-    if (closedByReplayLineage > 0) {
-      await appendProgress(
-        config,
-        `[CARRY_FORWARD] ${closedByReplayLineage} duplicate debt item(s) auto-closed by replay-closed lineage reconciliation`,
       );
     }
 
