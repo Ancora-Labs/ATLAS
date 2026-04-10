@@ -6402,6 +6402,13 @@ async function mainLoop(config) {
       warn(`[orchestrator] escalation queue read error (non-fatal): ${String(err?.message || err)}`);
     }
 
+    // Stale automated-PR guard: audit BOX-owned PRs and record triage decisions.
+    try {
+      await runStaleAutomatedPrGuard(config);
+    } catch (err) {
+      warn(`[orchestrator] stale PR guard error (non-fatal): ${String(err?.message || err)}`);
+    }
+
     if (totalPlans > 0) {
       const { completed, pending } = await countCompletedPlans(config, prometheusAnalysis.plans);
 
@@ -6745,5 +6752,190 @@ export async function hydrateDispatchContextWithCiEvidence(
   } catch (err) {
     warn(`[orchestrator] CI context hydration failed (non-fatal): ${String(err?.message || err)}`);
     return baseContext;
+  }
+}
+
+// ── Stale automated-PR guard ─────────────────────────────────────────────────
+
+/** Branch prefixes that identify BOX-owned automated PRs subject to triage. */
+const STALE_PR_GUARD_BRANCH_PREFIXES = ["recovery/", "evolution/", "box/", "wave", "pr-", "qa/", "scan/"];
+
+/** Minimum age in milliseconds before a PR is considered stale for guard purposes (3 days). */
+const STALE_PR_GUARD_AGE_MS = 3 * 24 * 60 * 60 * 1000;
+
+/** Title patterns that mark a PR as automated. */
+const STALE_PR_GUARD_TITLE_PATTERNS = [
+  /api[:\s-]*blocked/i,
+  /automated\s+commit/i,
+  /auto[-\s]?recovery/i,
+  /\[auto\]/i,
+];
+
+function _isAutomatedPrBranch(branch: string, title: string): boolean {
+  return (
+    STALE_PR_GUARD_BRANCH_PREFIXES.some((p) => branch.startsWith(p)) ||
+    STALE_PR_GUARD_TITLE_PATTERNS.some((re) => re.test(title))
+  );
+}
+
+function _classifyAutomationClass(branch: string, title: string): string {
+  const t = title.toLowerCase();
+  if (branch.startsWith("recovery/")) return "api-blocked-recovery";
+  if (branch.startsWith("evolution/")) return "evolution-worker";
+  if (/api[:\s-]*blocked/.test(t)) return "api-blocked-recovery";
+  if (branch.startsWith("box/")) return "box-automation";
+  if (branch.startsWith("qa/")) return "qa-automation";
+  return "unknown-automation";
+}
+
+/** Deterministic MERGE/CLOSE decision based on CI + diff evidence. */
+function _makeStaleGuardDecision(
+  ci: { allChecksPassed: boolean; failingChecks: number; pendingChecks: number; totalChecks: number; passingChecks: number },
+  diff: { hasSubstantiveChanges: boolean },
+  ageMs: number,
+): { decision: "MERGE" | "CLOSE"; rationale: string } {
+  if (ci.failingChecks > 0) {
+    return { decision: "CLOSE", rationale: `CI has ${ci.failingChecks} failing check(s). Cannot merge failing code.` };
+  }
+  if (ci.totalChecks === 0 || (ci.pendingChecks > 0 && ageMs > STALE_PR_GUARD_AGE_MS)) {
+    const days = Math.round(ageMs / (24 * 60 * 60 * 1000));
+    return { decision: "CLOSE", rationale: `No CI checks found (or all pending) and PR is ${days} day(s) old. Stale with no evidence of correctness.` };
+  }
+  if (ci.allChecksPassed && diff.hasSubstantiveChanges) {
+    return { decision: "MERGE", rationale: `CI checks all pass (${ci.passingChecks}/${ci.totalChecks}). Diff contains substantive production changes. Safe to merge automatically.` };
+  }
+  return { decision: "CLOSE", rationale: `CI passes but diff has no substantive changes (no-op automated commit). Closing to keep PR list clean.` };
+}
+
+/**
+ * Stale automated-PR guard — audits open BOX-owned PRs and records a
+ * deterministic MERGE or CLOSE decision with CI + diff evidence.
+ *
+ * Each triaged PR writes a record to state/pr_triage_<number>.json.
+ * Actual merge/close actions are NOT performed here; this is an audit + record
+ * pass only. Use scripts/pr_triage_automation.mjs with --execute for mutations.
+ *
+ * Integration: called once per daemon loop iteration as a hygiene step.
+ */
+export async function runStaleAutomatedPrGuard(config: any): Promise<void> {
+  const repo = config?.env?.targetRepo;
+  const token = config?.env?.githubToken;
+  if (!repo || !token) return;
+
+  const stateDir = config?.paths?.stateDir || "state";
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "BOX/1.0",
+  };
+  const base = `https://api.github.com/repos/${repo}`;
+
+  let openPrs: any[];
+  try {
+    const res = await fetch(`${base}/pulls?state=open&per_page=100`, { headers });
+    if (!res.ok) return;
+    const body = await res.json();
+    openPrs = Array.isArray(body) ? body : [];
+  } catch (err) {
+    warn(`[stale_pr_guard] Failed to list open PRs (non-fatal): ${String((err as any)?.message || err)}`);
+    return;
+  }
+
+  const automatedPrs = openPrs.filter((pr: any) => {
+    const branch = String(pr?.head?.ref || "");
+    const title = String(pr?.title || "");
+    return _isAutomatedPrBranch(branch, title);
+  });
+
+  if (automatedPrs.length === 0) return;
+
+  for (const pr of automatedPrs) {
+    const prNumber = Number(pr.number);
+    const branch = String(pr?.head?.ref || "");
+    const title = String(pr?.title || "");
+    const createdAt = String(pr?.created_at || "");
+    const ageMs = createdAt ? Date.now() - new Date(createdAt).getTime() : 0;
+
+    // Fetch CI check-runs
+    let ci = { allChecksPassed: false, totalChecks: 0, failingChecks: 0, passingChecks: 0, pendingChecks: 0, checkNames: [] as string[] };
+    try {
+      const sha = String(pr?.head?.sha || "");
+      if (sha) {
+        const runsRes = await fetch(`${base}/commits/${sha}/check-runs?per_page=50`, { headers });
+        if (runsRes.ok) {
+          const runsBody = await runsRes.json() as Record<string, unknown>;
+          const runs: any[] = Array.isArray((runsBody as any)?.check_runs) ? (runsBody as any).check_runs : [];
+          const total = runs.length;
+          const failing = runs.filter((r) => String(r?.conclusion || "").toLowerCase() === "failure").length;
+          const passing = runs.filter((r) => ["success", "neutral"].includes(String(r?.conclusion || "").toLowerCase())).length;
+          const pending = runs.filter((r) => r?.status === "in_progress" || r?.status === "queued").length;
+          ci = {
+            allChecksPassed: total > 0 && failing === 0 && pending === 0,
+            totalChecks: total,
+            failingChecks: failing,
+            passingChecks: passing,
+            pendingChecks: pending,
+            checkNames: runs.map((r) => String(r?.name || "")).filter(Boolean),
+          };
+        }
+      }
+    } catch (err) {
+      warn(`[stale_pr_guard] CI fetch failed for PR #${prNumber} (non-fatal): ${String((err as any)?.message || err)}`);
+    }
+
+    // Fetch diff file list
+    let diff = { filesChanged: [] as string[], hasSubstantiveChanges: false, summary: "diff unavailable" };
+    try {
+      const filesRes = await fetch(`${base}/pulls/${prNumber}/files?per_page=100`, { headers });
+      if (filesRes.ok) {
+        const filesBody = await filesRes.json();
+        const files: string[] = Array.isArray(filesBody)
+          ? filesBody.map((f: any) => String(f?.filename || "")).filter(Boolean)
+          : [];
+        const hasSubstantiveChanges = files.some((f) => /\.(ts|js|mjs|cjs|json|yml|yaml)$/.test(f));
+        diff = {
+          filesChanged: files,
+          hasSubstantiveChanges,
+          summary: files.length > 0
+            ? `${files.length} file(s): ${files.slice(0, 5).join(", ")}${files.length > 5 ? " …" : ""}`
+            : "no files changed",
+        };
+      }
+    } catch (err) {
+      warn(`[stale_pr_guard] Diff fetch failed for PR #${prNumber} (non-fatal): ${String((err as any)?.message || err)}`);
+    }
+
+    const { decision, rationale } = _makeStaleGuardDecision(ci, diff, ageMs);
+    const now = new Date().toISOString();
+
+    const record = {
+      schemaVersion: 1,
+      triageTimestamp: now,
+      pr: {
+        number: prNumber,
+        title,
+        state: "OPEN",
+        branch,
+        createdAt,
+        mergedAt: null,
+        isAutomatedPr: true,
+        automationClass: _classifyAutomationClass(branch, title),
+      },
+      ci,
+      diff,
+      decision,
+      rationale,
+      decidedBy: "runStaleAutomatedPrGuard",
+      decidedAt: now,
+    };
+
+    try {
+      const recordPath = path.join(stateDir, `pr_triage_${prNumber}.json`);
+      await writeJson(recordPath, record);
+      await appendProgress(config, `[STALE_PR_GUARD] PR #${prNumber} (${branch}) → ${decision}: ${rationale}`);
+    } catch (err) {
+      warn(`[stale_pr_guard] Failed to write triage record for PR #${prNumber}: ${String((err as any)?.message || err)}`);
+    }
   }
 }

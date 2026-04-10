@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "triageTimestamp": "2026-04-10T17:20:14.633Z",
+  "pr": {
+    "number": 268,
+    "title": "[quality-worker] api-blocked recovery — automated commit",
+    "state": "OPEN",
+    "branch": "recovery/quality-worker-1775718158258",
+    "createdAt": "2026-04-09T07:02:43Z",
+    "mergedAt": null,
+    "isAutomatedPr": true,
+    "automationClass": "api-blocked-recovery"
+  },
+  "ci": {
+    "allChecksPassed": true,
+    "totalChecks": 1,
+    "failingChecks": 0,
+    "passingChecks": 1,
+    "pendingChecks": 0,
+    "checkNames": ["CI/Lint & Test (Node 20) (pull_request)"]
+  },
+  "diff": {
+    "filesChanged": [
+      "box.config.json",
+      "src/core/capability_pool.ts",
+      "src/core/orchestrator.ts",
+      "src/core/plan_contract_validator.ts"
+    ],
+    "hasSubstantiveChanges": true,
+    "summary": "Adds explicit role preservation in selectWorkerForPlan, CI evidence extraction from plan packets via _readCiEvidenceFromPlan, CI critical area pattern detection in plan_contract_validator, and config toggles for jesusDisableTier1 and researchScoutDisableCache"
+  },
+  "decision": "MERGE",
+  "rationale": "CI checks all pass (1/1 green). Diff contains substantive production improvements: capability_pool worker role/lane preservation, orchestrator CI evidence extraction, plan_contract_validator CI critical finding detection, and non-breaking config additions. No duplicate merged PRs found with matching title. Safe to merge automatically.",
+  "decidedBy": "pr_triage_automation",
+  "decidedAt": "2026-04-10T17:20:14.633Z"
+}
