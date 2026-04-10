@@ -193,6 +193,14 @@ export async function updatePipelineProgress(config, stepId, detail, extra) {
       }
     }
     payload.completedAt = payload.updatedAt;
+    // Persist an explicit terminal block reason when the cycle ends without all canonical
+    // events present. This prevents silent null-event persistence.
+    // The spread at the top of payload may have included a raw terminalBlockReason — normalize it here.
+    delete (payload as any).terminalBlockReason;
+    if (extraObj.terminalBlockReason && typeof extraObj.terminalBlockReason === "string") {
+      const trimmed = extraObj.terminalBlockReason.trim();
+      if (trimmed) (payload as any).terminalBlockReason = trimmed;
+    }
   }
 
   await writeJson(progressPath(config), payload);
@@ -386,7 +394,11 @@ export const PIPELINE_PROGRESS_SCHEMA = Object.freeze({
   percentRange: [0, 100],
   stepStatusEnum: Object.freeze(["done", "active", "pending"]),
   /** completedAt is present only when stage === "cycle_complete" */
-  conditionalFields: Object.freeze({ completedAt: "cycle_complete" }),
+  conditionalFields: Object.freeze({
+    completedAt:         "cycle_complete",
+    /** terminalBlockReason is present on cycle_complete when canonical events are null (early exit) */
+    terminalBlockReason: "cycle_complete_with_null_events",
+  }),
   /** stageTimestamps accumulates ISO entry times for SLO-relevant stages */
   sloTimestampStages: SLO_TIMESTAMP_STAGES,
   /** maximum retained run segment rollover records */

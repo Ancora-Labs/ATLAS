@@ -33,6 +33,12 @@ const MAX_ENTRIES = 100;
  * @property {boolean} [specializedShareTargetMet] — whether the adaptive specialization target was met this cycle.
  * @property {number} [configuredMinSpecializedShare] — configured (pre-adaptation) minimum specialized share from workerPool policy (0–1).
  * @property {number} [specialistRerouteCount] — count of workers rerouted from specialist lane to evolution-worker this cycle.
+ * @property {number} [infeasibleTopologyBypassCount] — count of admission gate bypasses this cycle that were caused by
+ *   INFEASIBLE_TOPOLOGY (no specialist-eligible plans in the task mix). This is a structural signal — it is NOT evidence
+ *   of specialist under-utilization and must NOT be added to trueUnderutilizationCount.
+ * @property {number} [trueUnderutilizationCount] — count of admission gate blocks or bypassed_fallback events this cycle
+ *   where specialist-eligible plans existed but the specialized_share fell below the adaptive threshold.
+ *   Contrasts with infeasibleTopologyBypassCount: here the structure was feasible but specialists weren't deployed enough.
  * @property {object} [laneTelemetry] — per-lane capacity distribution snapshot from cycle analytics.
  * @property {object} [optimizerUsage] — optimizer resource usage for the cycle.
  */

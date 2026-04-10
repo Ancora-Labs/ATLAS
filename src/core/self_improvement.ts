@@ -47,6 +47,7 @@ import {
   classifyMemoryTrust,
   filterMemoryEntriesByTrust,
   isPrivilegedMemoryRequester,
+  rerankMemoryByTrust,
 } from "./trust_boundary.js";
 import {
   WORKER_CYCLE_ARTIFACTS_FILE,
@@ -278,18 +279,194 @@ export async function scoreAndStorePremortemQuality(config, prometheusAnalysis) 
 
 // ── Knowledge Memory ─────────────────────────────────────────────────────────
 
+/** Schema version for the v2 partitioned knowledge memory format. */
+export const KNOWLEDGE_MEMORY_SCHEMA_VERSION = 2;
+
+/** Number of lessons kept in the working partition; older ones are promoted to episodic. */
+const WORKING_PARTITION_MAX_LESSONS = 20;
+
+/** Named partitions for the v2 knowledge memory. */
+export const MEMORY_PARTITION = Object.freeze({
+  WORKING:  "working",
+  EPISODIC: "episodic",
+  POLICY:   "policy",
+} as const);
+
+/**
+ * Migrate a v1 (flat) knowledge memory object to v2 (partitioned) format.
+ *
+ * Migration rules:
+ *   - Last WORKING_PARTITION_MAX_LESSONS lessons → working.lessons
+ *   - Remaining older lessons → episodic.lessons
+ *   - configTunings + promptHints → working
+ *   - policy.rules initialized to []
+ *   - lastUpdated preserved
+ */
+export function migrateKnowledgeMemoryV1ToV2(v1: any): any {
+  const lessons: any[] = Array.isArray(v1?.lessons) ? v1.lessons : [];
+  const split = Math.max(0, lessons.length - WORKING_PARTITION_MAX_LESSONS);
+  const episodicLessons = lessons.slice(0, split);
+  const workingLessons  = lessons.slice(split);
+  return {
+    schemaVersion: KNOWLEDGE_MEMORY_SCHEMA_VERSION,
+    working: {
+      lessons:      workingLessons,
+      configTunings: Array.isArray(v1?.configTunings) ? v1.configTunings : [],
+      promptHints:  Array.isArray(v1?.promptHints)   ? v1.promptHints   : [],
+      updatedAt:    v1?.lastUpdated ?? null,
+    },
+    episodic: {
+      lessons:   episodicLessons,
+      retainedAt: v1?.lastUpdated ?? null,
+    },
+    policy: {
+      rules:     [],
+      updatedAt: null,
+    },
+    lastUpdated: v1?.lastUpdated ?? null,
+  };
+}
+
 async function loadKnowledgeMemory(stateDir) {
-  return readJson(path.join(stateDir, "knowledge_memory.json"), {
+  const raw = await readJson(path.join(stateDir, "knowledge_memory.json"), {
     lessons: [],
     configTunings: [],
     promptHints: [],
     lastUpdated: null
   });
+  // Auto-migrate v1 → v2 on load
+  if (!raw.schemaVersion || raw.schemaVersion < KNOWLEDGE_MEMORY_SCHEMA_VERSION) {
+    return migrateKnowledgeMemoryV1ToV2(raw);
+  }
+  return raw;
 }
 
 async function saveKnowledgeMemory(stateDir, memory) {
   memory.lastUpdated = new Date().toISOString();
+  if (!memory.schemaVersion || memory.schemaVersion < KNOWLEDGE_MEMORY_SCHEMA_VERSION) {
+    // Ensure we never write a v1 structure back out
+    const migrated = migrateKnowledgeMemoryV1ToV2(memory);
+    migrated.lastUpdated = memory.lastUpdated;
+    await writeJson(path.join(stateDir, "knowledge_memory.json"), migrated);
+    return;
+  }
   await writeJson(path.join(stateDir, "knowledge_memory.json"), memory);
+}
+
+/**
+ * Return all lessons from a knowledge memory object, regardless of schema version.
+ * Unions working.lessons + episodic.lessons (v2) or flat lessons (v1).
+ */
+function getKnowledgeMemoryAllLessons(km: any): any[] {
+  if (km?.schemaVersion >= KNOWLEDGE_MEMORY_SCHEMA_VERSION) {
+    return [
+      ...(Array.isArray(km.working?.lessons)  ? km.working.lessons  : []),
+      ...(Array.isArray(km.episodic?.lessons) ? km.episodic.lessons : []),
+    ];
+  }
+  return Array.isArray(km?.lessons) ? km.lessons : [];
+}
+
+/**
+ * Push a new lesson into the active (working) partition, capping at maxLessons.
+ * Falls back to flat .lessons for v1 objects.
+ */
+function pushKnowledgeMemoryLesson(km: any, lesson: any, maxLessons: number): void {
+  if (km?.schemaVersion >= KNOWLEDGE_MEMORY_SCHEMA_VERSION) {
+    if (!Array.isArray(km.working.lessons)) km.working.lessons = [];
+    km.working.lessons.push(lesson);
+    if (km.working.lessons.length > maxLessons) {
+      // Promote oldest lesson to episodic before trimming
+      const oldest = km.working.lessons.shift();
+      if (oldest) {
+        if (!Array.isArray(km.episodic.lessons)) km.episodic.lessons = [];
+        km.episodic.lessons.push(oldest);
+      }
+    }
+  } else {
+    if (!Array.isArray(km.lessons)) km.lessons = [];
+    km.lessons.push(lesson);
+    if (km.lessons.length > maxLessons) km.lessons = km.lessons.slice(-maxLessons);
+  }
+}
+
+/**
+ * Set prompt hints in the active (working) partition.
+ * Falls back to flat .promptHints for v1 objects.
+ */
+function setKnowledgeMemoryPromptHints(km: any, hints: any[]): void {
+  if (km?.schemaVersion >= KNOWLEDGE_MEMORY_SCHEMA_VERSION) {
+    if (!km.working) km.working = { lessons: [], configTunings: [], promptHints: [], updatedAt: null };
+    km.working.promptHints = hints;
+  } else {
+    km.promptHints = hints;
+  }
+}
+type RetrieveMemoryForContextOptions = {
+  /** Maximum total entries returned across all partitions. Default: 20. */
+  topK?: number;
+  /** Include low-trust entries (requires privilegedCaller=true). Default: false. */
+  includeLowTrust?: boolean;
+  /** Whether the caller is a privileged memory requester. Default: false. */
+  privilegedCaller?: boolean;
+  /**
+   * Which partitions to fuse. Default: all.
+   * Accepted values: "working", "episodic", "policy".
+   */
+  partitions?: string[];
+};
+
+/**
+ * Fused, trust-weighted memory retrieval across all partitions for a given context key.
+ *
+ * Combines lessons/hints from requested partitions, normalizes trust metadata, then
+ * returns the top-K trust-reranked entries. This is the single retrieval entry-point
+ * for all provider contexts (Prometheus, Jesus, Athena).
+ *
+ * @param stateDir   — state directory path (from config.paths.stateDir)
+ * @param contextKey — hints at which partition is most relevant (informational only)
+ * @param opts       — filtering and topK options
+ */
+export async function retrieveMemoryForContext(
+  stateDir: string,
+  contextKey: string,
+  opts: RetrieveMemoryForContextOptions = {},
+): Promise<Array<any>> {
+  const topK = typeof opts.topK === "number" && opts.topK > 0 ? opts.topK : 20;
+  const activePartitions = Array.isArray(opts.partitions) && opts.partitions.length > 0
+    ? opts.partitions
+    : [MEMORY_PARTITION.WORKING, MEMORY_PARTITION.EPISODIC, MEMORY_PARTITION.POLICY];
+
+  let km: any;
+  try {
+    km = await loadKnowledgeMemory(stateDir);
+  } catch (err) {
+    warn(`[retrieveMemoryForContext] Failed to load knowledge memory: ${err?.message ?? err}`);
+    return [];
+  }
+
+  const allEntries: any[] = [];
+
+  if (activePartitions.includes(MEMORY_PARTITION.WORKING)) {
+    const w = km.working || km; // graceful fallback for residual v1 shapes during migration
+    allEntries.push(...(Array.isArray(w.lessons)      ? w.lessons      : []));
+    allEntries.push(...(Array.isArray(w.promptHints)  ? w.promptHints  : []));
+    allEntries.push(...(Array.isArray(w.configTunings) ? w.configTunings : []));
+  }
+  if (activePartitions.includes(MEMORY_PARTITION.EPISODIC)) {
+    const e = km.episodic || {};
+    allEntries.push(...(Array.isArray(e.lessons) ? e.lessons : []));
+  }
+  if (activePartitions.includes(MEMORY_PARTITION.POLICY)) {
+    const p = km.policy || {};
+    allEntries.push(...(Array.isArray(p.rules) ? p.rules : []));
+  }
+
+  return rerankMemoryByTrust(allEntries, {
+    includeLowTrust: opts.includeLowTrust,
+    privilegedCaller: opts.privilegedCaller,
+    topK,
+  });
 }
 
 function attachMemoryTrustMetadata(entry: any, opts: { source: string; sourceType?: string; isUserMediated?: boolean; reason?: string }) {
@@ -818,7 +995,7 @@ export async function collectCycleOutcomes(config) {
 async function analyzeWithAI(config, outcomes, knowledgeMemory) {
   const command = config.env?.copilotCliCommand || "copilot";
   const requestedBy = String(config?.runtime?.selfImprovementRequestedBy || "self-improvement");
-  const trustedLessons = filterMemoryEntriesByTrust(knowledgeMemory.lessons || [], {
+  const trustedLessons = filterMemoryEntriesByTrust(getKnowledgeMemoryAllLessons(knowledgeMemory), {
     includeLowTrust: config?.runtime?.selfImprovementIncludeLowTrustMemory === true,
     privilegedCaller: isPrivilegedMemoryRequester(requestedBy),
   });
@@ -2047,6 +2224,7 @@ export async function runSelfImprovementCycle(config) {
 
   // 4. Store lessons in knowledge memory
   const newLessons = Array.isArray(analysis.lessons) ? analysis.lessons : [];
+  const maxLessons = siConfig.maxReports || 200;
   for (const lesson of newLessons) {
     const enrichedLesson = attachMemoryTrustMetadata({
       ...lesson,
@@ -2057,18 +2235,12 @@ export async function runSelfImprovementCycle(config) {
       isUserMediated: false,
       reason: String(lesson?.lesson || ""),
     });
-    knowledgeMemory.lessons.push(enrichedLesson);
-  }
-
-  // Cap knowledge memory size
-  const maxLessons = siConfig.maxReports || 200;
-  if (knowledgeMemory.lessons.length > maxLessons) {
-    knowledgeMemory.lessons = knowledgeMemory.lessons.slice(-maxLessons);
+    pushKnowledgeMemoryLesson(knowledgeMemory, enrichedLesson, maxLessons);
   }
 
   // Store prompt hints for next cycle
   if (Array.isArray(analysis.promptHints)) {
-    knowledgeMemory.promptHints = analysis.promptHints.map((hint) =>
+    setKnowledgeMemoryPromptHints(knowledgeMemory, analysis.promptHints.map((hint) =>
       attachMemoryTrustMetadata({
         ...hint,
         addedAt: new Date().toISOString(),
@@ -2078,7 +2250,7 @@ export async function runSelfImprovementCycle(config) {
         isUserMediated: true,
         reason: String(hint?.reason || hint?.hint || ""),
       })
-    );
+    ));
   }
 
   // Store capability gaps — these feed back into Jesus's health audit

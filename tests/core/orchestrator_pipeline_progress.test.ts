@@ -3010,3 +3010,70 @@ describe("boundary checkpoints", () => {
     assert.equal(parsed.checkpoint_ns, "dispatch");
   });
 });
+
+// ── pipeline_progress terminalBlockReason contract (Task 1) ─────────────────
+
+import { updatePipelineProgress, PIPELINE_PROGRESS_SCHEMA } from "../../src/core/pipeline_progress.js";
+
+describe("pipeline_progress — terminalBlockReason contract (Task 1 cycle-truth)", () => {
+  it("PIPELINE_PROGRESS_SCHEMA.conditionalFields includes terminalBlockReason", () => {
+    assert.ok(
+      "terminalBlockReason" in PIPELINE_PROGRESS_SCHEMA.conditionalFields,
+      "PIPELINE_PROGRESS_SCHEMA.conditionalFields must document terminalBlockReason"
+    );
+    assert.equal(
+      PIPELINE_PROGRESS_SCHEMA.conditionalFields["terminalBlockReason"],
+      "cycle_complete_with_null_events"
+    );
+  });
+
+  it("updatePipelineProgress persists terminalBlockReason on cycle_complete when supplied", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "box-pp-tbr-"));
+    try {
+      const cfg = { paths: { stateDir: dir } };
+      // First set startedAt by going through jesus_awakening
+      await updatePipelineProgress(cfg, "jesus_awakening", "cycle starting");
+      // Now complete the cycle with an explicit terminal block reason
+      await updatePipelineProgress(cfg, "cycle_complete", "terminated early", {
+        terminalBlockReason: "governance_freeze_active: safety gate",
+      });
+      const data = await readPipelineProgress(cfg);
+      assert.equal(data.stage, "cycle_complete");
+      assert.equal(
+        data.terminalBlockReason,
+        "governance_freeze_active: safety gate",
+        "terminalBlockReason must be persisted when supplied on cycle_complete"
+      );
+      assert.ok(data.completedAt, "completedAt must still be set");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("updatePipelineProgress does not persist terminalBlockReason when not supplied", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "box-pp-notbr-"));
+    try {
+      const cfg = { paths: { stateDir: dir } };
+      await updatePipelineProgress(cfg, "cycle_complete", "normal completion");
+      const data = await readPipelineProgress(cfg);
+      assert.equal(data.stage, "cycle_complete");
+      assert.ok(!data.terminalBlockReason, "terminalBlockReason must not be present when not supplied");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("negative path: terminalBlockReason with empty string is not persisted", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "box-pp-emptbr-"));
+    try {
+      const cfg = { paths: { stateDir: dir } };
+      await updatePipelineProgress(cfg, "cycle_complete", "normal completion", {
+        terminalBlockReason: "   ",
+      });
+      const data = await readPipelineProgress(cfg);
+      assert.ok(!data.terminalBlockReason, "empty/whitespace terminalBlockReason must not be persisted");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});

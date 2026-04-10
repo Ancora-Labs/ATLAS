@@ -37,6 +37,7 @@ import {
   CYCLE_HEALTH_SCHEMA,
   HEALTH_SCORE,
   CANONICAL_EVENT_NAMES,
+  CYCLE_TRUTH_TERMINAL_BLOCK_REASON,
   buildModelRoutingTelemetry,
   MIN_TELEMETRY_SAMPLE_THRESHOLD,
   migrateLegacyEvolutionProgressToCompletedTaskIds,
@@ -2025,5 +2026,102 @@ describe("computeCycleAnalytics — benchmarkAnalytics field", () => {
     // An empty entries array produces a zero-signal BenchmarkIntegrityResult
     assert.ok(result.benchmarkAnalytics !== undefined, "benchmarkAnalytics must be defined");
     assert.equal(result.benchmarkAnalytics.sampleCount, 0);
+  });
+});
+
+// ── cycleTruthContract — canonical cycle-truth binding (Task 1) ───────────────
+
+describe("computeCycleAnalytics — cycleTruthContract (cycle-truth contract)", () => {
+  const config = { paths: { stateDir: "state" } };
+
+  it("cycleTruthContract is present on all records", () => {
+    const result = computeCycleAnalytics(config, { phase: CYCLE_PHASE.COMPLETED });
+    assert.ok(result.cycleTruthContract, "cycleTruthContract must be present");
+    assert.ok("missingCanonicalEventCount" in result.cycleTruthContract);
+    assert.ok("nullEventsTerminalBlockReason" in result.cycleTruthContract);
+    assert.ok("isFullyCovered" in result.cycleTruthContract);
+  });
+
+  it("cycleTruthContract.isFullyCovered is true when all canonical events are present", () => {
+    const result = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.COMPLETED,
+      pipelineProgress: makePipelineProgress({ stageTimestamps: validTimestamps() }),
+    });
+    assert.equal(result.cycleTruthContract.missingCanonicalEventCount, 0);
+    assert.equal(result.cycleTruthContract.nullEventsTerminalBlockReason, null);
+    assert.equal(result.cycleTruthContract.isFullyCovered, true);
+  });
+
+  it("cycleTruthContract classifies dispatch_blocked when dispatchBlockReason is set and canonical events are null", () => {
+    const result = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.COMPLETED,
+      pipelineProgress: makePipelineProgress({ stageTimestamps: {} }),
+      dispatchBlockReason: "specialization_admission_gate_failed: deficit=2",
+    });
+    assert.ok(result.cycleTruthContract.missingCanonicalEventCount > 0);
+    assert.equal(result.cycleTruthContract.nullEventsTerminalBlockReason, CYCLE_TRUTH_TERMINAL_BLOCK_REASON.DISPATCH_BLOCKED);
+    assert.equal(result.cycleTruthContract.isFullyCovered, true, "covered because block reason is explicit");
+  });
+
+  it("cycleTruthContract classifies governance_blocked for governance-related block reasons", () => {
+    const result = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.COMPLETED,
+      pipelineProgress: makePipelineProgress({ stageTimestamps: {} }),
+      dispatchBlockReason: "governance_freeze_active: safety gate",
+    });
+    assert.equal(result.cycleTruthContract.nullEventsTerminalBlockReason, CYCLE_TRUTH_TERMINAL_BLOCK_REASON.GOVERNANCE_BLOCKED);
+    assert.equal(result.cycleTruthContract.isFullyCovered, true);
+  });
+
+  it("cycleTruthContract classifies no_plans_generated when outcome is NO_PLANS", () => {
+    const result = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.INCOMPLETE,
+      pipelineProgress: makePipelineProgress({ stageTimestamps: {} }),
+      planCount: 0,
+    });
+    // INCOMPLETE phase with planCount=0 produces NO_PLANS status
+    assert.equal(result.outcomes.status, CYCLE_OUTCOME_STATUS.NO_PLANS);
+    // INCOMPLETE phase does not trigger the COMPLETED-phase null-events contract
+    assert.equal(result.cycleTruthContract.nullEventsTerminalBlockReason, null);
+  });
+
+  it("cycleTruthContract classifies unspecified_early_exit when no explicit reason is available", () => {
+    const result = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.COMPLETED,
+      pipelineProgress: makePipelineProgress({ stageTimestamps: {} }),
+      // no dispatchBlockReason, no matching outcome status
+    });
+    assert.ok(result.cycleTruthContract.missingCanonicalEventCount > 0);
+    assert.equal(result.cycleTruthContract.nullEventsTerminalBlockReason, CYCLE_TRUTH_TERMINAL_BLOCK_REASON.UNSPECIFIED_EARLY_EXIT);
+    assert.equal(result.cycleTruthContract.isFullyCovered, true, "unspecified is still explicit — coverage met");
+  });
+
+  it("cycleTruthContract is in CYCLE_ANALYTICS_SCHEMA required fields", () => {
+    assert.ok(
+      CYCLE_ANALYTICS_SCHEMA.cycleRecord.required.includes("cycleTruthContract"),
+      "cycleTruthContract must be in schema required list"
+    );
+  });
+
+  it("CYCLE_TRUTH_TERMINAL_BLOCK_REASON contains expected codes", () => {
+    const expected = ["dispatch_blocked", "governance_blocked", "no_plans_generated", "plan_not_approved", "unspecified_early_exit"];
+    for (const code of expected) {
+      assert.ok(
+        Object.values(CYCLE_TRUTH_TERMINAL_BLOCK_REASON).includes(code),
+        `missing terminal block reason code: ${code}`
+      );
+    }
+  });
+
+  it("negative path: null canonical events without a terminal block reason yields isFullyCovered=false only when phase!=COMPLETED", () => {
+    // In FAILED phase, we still check the null-event path
+    const result = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.FAILED,
+      pipelineProgress: makePipelineProgress({ stageTimestamps: {} }),
+    });
+    // FAILED phase doesn't trigger the COMPLETED-path block reason classification
+    assert.equal(result.cycleTruthContract.nullEventsTerminalBlockReason, null);
+    // isFullyCovered is false because events are missing and no reason was set
+    assert.equal(result.cycleTruthContract.isFullyCovered, false);
   });
 });

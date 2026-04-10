@@ -682,6 +682,13 @@ export const SPECIALIST_REROUTE_REASON_CODE = Object.freeze({
    * the resulting sub-batch is too thin to justify a standalone specialist spawn.
    */
   DEPENDENCY_ISOLATION: "dependency_isolation",
+  /**
+   * The plan set topology contains no tasks for which a specialist worker would
+   * be selected over the evolution-worker fallback. This is a structural property
+   * of the incoming plan mix — not a utilization failure. The admission gate must
+   * bypass (not block) so the orchestrator never deadlocks on structural absence.
+   */
+  INFEASIBLE_TOPOLOGY:  "infeasible_topology",
 } as const);
 
 export type SpecialistRerouteReasonCode =
@@ -807,11 +814,14 @@ export type ReroutePenaltyLedger = Record<string, Record<string, number>>;
  *   aggressively so work drains to evolution-worker until specialist recovers.
  * - DEPENDENCY_ISOLATION (0.03): wave-constraint artifact; minimal penalty
  *   because isolation is structural, not indicative of poor specialist perf.
+ * - INFEASIBLE_TOPOLOGY (0.00): structural property of the plan mix — no
+ *   penalty applied because the topology determines the outcome, not lane health.
  */
 export const REROUTE_REASON_WEIGHT = Object.freeze({
   [SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD]: 0.05,
   [SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED]: 0.10,
   [SPECIALIST_REROUTE_REASON_CODE.DEPENDENCY_ISOLATION]: 0.03,
+  [SPECIALIST_REROUTE_REASON_CODE.INFEASIBLE_TOPOLOGY]:  0.00,
 } as const);
 
 /**
@@ -907,6 +917,43 @@ export function computeAdmissionThresholdFromRerouteIntensity(
 }
 
 /**
+ * Determine whether the plan set contains at least one task for which a specialist
+ * worker (any lane worker other than "evolution-worker") would be selected.
+ *
+ * A topology is "infeasible" for specialization when every plan maps to the
+ * evolution-worker fallback — meaning the deficit is structural (the task mix has
+ * no capability-matched specialist slots), not a utilization problem.
+ *
+ * Purpose: callers (evaluateSpecializationAdmissionGate) use this to distinguish
+ *   INFEASIBLE_TOPOLOGY (no specialist eligible plans → bypass silently)
+ *   from TRUE_UNDER_UTILIZATION (specialist eligible plans exist → may block).
+ *
+ * @param plans  — array of plan objects
+ * @param config — BOX config for custom capability mappings
+ * @returns { feasible, specialistEligibleCount, totalCount }
+ */
+export function computeTopologyFeasibility(
+  plans: object[],
+  config?: object,
+): { feasible: boolean; specialistEligibleCount: number; totalCount: number } {
+  if (!Array.isArray(plans) || plans.length === 0) {
+    return { feasible: false, specialistEligibleCount: 0, totalCount: 0 };
+  }
+  let specialistEligibleCount = 0;
+  for (const plan of plans) {
+    const selection = selectWorkerForPlan(plan, config);
+    if (selection.role !== "evolution-worker") {
+      specialistEligibleCount++;
+    }
+  }
+  return {
+    feasible: specialistEligibleCount > 0,
+    specialistEligibleCount,
+    totalCount: plans.length,
+  };
+}
+
+/**
  * Evaluate whether the current assignment pool satisfies the specialization
  * admission gate.
  *
@@ -941,9 +988,25 @@ export function evaluateSpecializationAdmissionGate(
   consecutiveBlockCycles: number = 0,
   maxBlockCycles: number = SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES,
   reroutePenaltyLedger?: ReroutePenaltyLedger,
-): { blocked: boolean; reason: string; consecutiveBlockCycles: number; effectiveAdaptiveMin: number } {
+  topologyFeasibility?: { feasible: boolean; specialistEligibleCount: number; totalCount: number },
+): { blocked: boolean; reason: string; consecutiveBlockCycles: number; effectiveAdaptiveMin: number; bypassType?: string } {
   if (!specializationUtilization) {
     return { blocked: false, reason: "", consecutiveBlockCycles: 0, effectiveAdaptiveMin: 0 };
+  }
+
+  // ── Infeasible topology fast-path: bypass without blocking ─────────────────
+  // When the plan set contains no tasks that would route to a specialist worker,
+  // the admission gate must not block dispatch. The deficit is a structural
+  // property of the incoming task mix, not a specialist under-utilization signal.
+  // Reporting bypassType="infeasible_topology" makes the bypass machine-readable.
+  if (topologyFeasibility && !topologyFeasibility.feasible) {
+    return {
+      blocked: false,
+      reason: `infeasible_topology_bypass: no specialist-eligible plans (${topologyFeasibility.totalCount} plans, 0 specialist-eligible)`,
+      consecutiveBlockCycles: 0,
+      effectiveAdaptiveMin: 0,
+      bypassType: "infeasible_topology",
+    };
   }
 
   // Bind admission threshold to reroute reason intensity: the effective threshold
@@ -966,6 +1029,7 @@ export function evaluateSpecializationAdmissionGate(
       reason: `specialization_admission_gate_bypassed_fallback: consecutive_blocks=${consecutiveBlockCycles} >= max=${safeMaxBlock}`,
       consecutiveBlockCycles,
       effectiveAdaptiveMin,
+      bypassType: "bounded_fallback",
     };
   }
 
@@ -979,5 +1043,6 @@ export function evaluateSpecializationAdmissionGate(
     reason: `${SPECIALIZATION_ADMISSION_BLOCK_REASON}: specialized_share=${pct}% < effective_target=${minPct}%${intensityNote} deficit=${specializationUtilization.specializedDeficit}`,
     consecutiveBlockCycles: consecutiveBlockCycles + 1,
     effectiveAdaptiveMin,
+    bypassType: "true_under_utilization",
   };
 }

@@ -46,6 +46,23 @@ export const JESUS_WARNING_CODE = Object.freeze({
   LATENCY_FALLBACK_ACTIVATED: "JESUS_LATENCY_FALLBACK_ACTIVATED",
 });
 
+export function formatJesusTierEscalationMessage(
+  previousTier: { label?: string; timeoutMs?: number; model?: string },
+  nextTier: { label?: string; timeoutMs?: number; model?: string },
+  routingReason: string,
+): string {
+  const previousLabel = String(previousTier?.label || "T?");
+  const nextLabel = String(nextTier?.label || "T?");
+  const previousTimeoutSec = Math.floor(Math.max(0, Number(previousTier?.timeoutMs || 0)) / 1000);
+  const nextTimeoutSec = Math.floor(Math.max(0, Number(nextTier?.timeoutMs || 0)) / 1000);
+  const nextModel = String(nextTier?.model || "unknown");
+  const isFallbackActivation = routingReason === ROUTING_REASON.JESUS_LATENCY_FALLBACK;
+  if (isFallbackActivation) {
+    return `[JESUS] ${previousLabel} reached its ${previousTimeoutSec}s tier budget — activating ${nextLabel} (timeout=${nextTimeoutSec}s model=${nextModel} reason=${routingReason})`;
+  }
+  return `[JESUS] ${previousLabel} timed out after ${previousTimeoutSec}s — escalating to ${nextLabel} (timeout=${nextTimeoutSec}s model=${nextModel} reason=${routingReason})`;
+}
+
 export function shouldWarnJesusDecisionLatency(elapsedMs: number, warningThresholdMs: number): boolean {
   const safeElapsedMs = Number.isFinite(elapsedMs) ? Number(elapsedMs) : 0;
   const safeThresholdMs = Number.isFinite(warningThresholdMs) ? Number(warningThresholdMs) : 900_000;
@@ -330,7 +347,14 @@ export async function runSystemHealthAudit(config, githubState, AthenaCoordinati
   try {
     const stateDir = config.paths?.stateDir || "state";
     const km = await readJson(path.join(stateDir, "knowledge_memory.json"), {});
-    const criticalLessons = (km.lessons || []).filter(l => l.severity === "critical").slice(-3);
+    // Support v1 (flat .lessons) and v2 (partitioned .working.lessons + .episodic.lessons)
+    const workingLessons  = Array.isArray(km.working?.lessons)  ? km.working.lessons  : [];
+    const episodicLessons = Array.isArray(km.episodic?.lessons) ? km.episodic.lessons : [];
+    const flatLessons     = Array.isArray(km.lessons)           ? km.lessons          : [];
+    const allLessons = km.schemaVersion >= 2
+      ? [...workingLessons, ...episodicLessons]
+      : flatLessons;
+    const criticalLessons = allLessons.filter(l => l.severity === "critical").slice(-3);
     const capGaps = Array.isArray(km.capabilityGaps) ? km.capabilityGaps.slice(-5) : [];
     const sourceIndex = await loadSourceEvidenceIndex(process.cwd());
     const capabilityExecutionSummary = await loadCapabilityExecutionSummary(config);
@@ -982,10 +1006,14 @@ ${workersList}`;
           ? true
           : hasReachedJesusSoftTimeout(elapsedMsAtEscalation, jesusSoftTimeoutMs);
         const routingReason = tier.model !== jesusModel ? ROUTING_REASON.JESUS_LATENCY_FALLBACK : "JESUS_LATENCY_ESCALATION";
-        await appendProgress(config,
-          `[JESUS] ${prevTier.label} timed out after ${Math.floor(prevTier.timeoutMs / 1000)}s — escalating to ${tier.label} (timeout=${Math.floor(tier.timeoutMs / 1000)}s model=${tier.model} reason=${routingReason})`
+        await appendProgress(config, formatJesusTierEscalationMessage(prevTier, tier, routingReason));
+        chatLog(
+          stateDir,
+          jesusName,
+          tier.model !== jesusModel
+            ? `[LIVE] tier=${prevTier.label} reached tier budget — activating ${tier.label}`
+            : `[LIVE] tier=${prevTier.label} timed out — escalating to ${tier.label}`
         );
-        chatLog(stateDir, jesusName, `[LIVE] tier=${prevTier.label} timed out — escalating to ${tier.label}`);
         emitEvent(EVENTS.ORCHESTRATION_ALERT_EMITTED, EVENT_DOMAIN.ORCHESTRATION, latencyWarningCorrelationId, {
           severity: "warning",
           source: "jesus_supervisor",
@@ -1092,9 +1120,10 @@ ${workersList}`;
   }
 
   const rawOut = String(rawResult?.stdout || rawResult?.stderr || "");
+  const finalTierTimeoutMs = Math.max(1, Number(tiers.find((tier) => tier.label === finalTierLabel)?.timeoutMs || jesusTimeoutMs));
   const aiResult = rawResult?.status === 0
     ? parseAgentOutput(rawOut)
-    : { ok: false, raw: rawOut, parsed: null, thinking: "", error: rawResult?.timedOut ? `timed out after ${Math.floor(jesusTimeoutMs / 1000)}s` : `exited ${rawResult?.status}` };
+    : { ok: false, raw: rawOut, parsed: null, thinking: "", error: rawResult?.timedOut ? `timed out after ${Math.floor(finalTierTimeoutMs / 1000)}s` : `exited ${rawResult?.status}` };
 
   if (!aiResult.ok || !aiResult.parsed) {
     await appendProgress(config, `[JESUS] AI call failed — ${(aiResult as any).error || "no JSON"}`);

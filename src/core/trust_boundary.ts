@@ -737,3 +737,36 @@ export function buildMemoryHitRecord(opts: {
   };
 }
 
+// ── Trust-weighted re-ranker (Task 3) ─────────────────────────────────────────
+
+type RerankMemoryByTrustOptions = FilterMemoryEntriesOptions & {
+  /** Max entries to return after filtering and sorting. Default: unlimited. */
+  topK?: number;
+};
+
+/**
+ * Filter entries by trust level and return the top-K trust-ranked results.
+ *
+ * This is the canonical entry-point for fused memory retrieval from partitioned
+ * knowledge memory. It:
+ *   1. Normalizes trust metadata on each entry.
+ *   2. Drops LOW-trust entries unless `includeLowTrust && privilegedCaller`.
+ *   3. Sorts remaining entries HIGH → MEDIUM (→ LOW if included).
+ *   4. Returns at most `topK` entries (all if topK not set).
+ *
+ * Callers: `retrieveMemoryForContext` in self_improvement.ts, and any provider
+ * (Prometheus, Jesus, Athena) that needs trust-weighted memory injection.
+ *
+ * @param entries  — entries from any memory partition (flat union)
+ * @param opts     — filter + topK options
+ * @returns  Array of trust-annotated entries, sorted high→low trust, capped at topK.
+ */
+export function rerankMemoryByTrust<T>(
+  entries: T[],
+  opts: RerankMemoryByTrustOptions = {},
+): Array<T & { trust: MemoryTrustMetadata }> {
+  const { selected } = filterMemoryEntriesByTrust(entries, opts);
+  const topK = typeof opts.topK === "number" && opts.topK > 0 ? opts.topK : undefined;
+  return topK !== undefined ? selected.slice(0, topK) : selected;
+}
+

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * BOX Cycle Analytics
  *
  * Generates cycle_analytics.json per orchestration loop with normalized KPIs,
@@ -110,6 +110,27 @@ export const CYCLE_PHASE = Object.freeze({
   INCOMPLETE: "incomplete",
 });
 
+/**
+ * Reason codes emitted in cycleTruthContract.nullEventsTerminalBlockReason
+ * when a cycle reaches COMPLETED phase but one or more canonical events are absent.
+ *
+ * This makes every early-exit visible and machine-readable. Consumers MUST
+ * inspect this field when cycleTruthContract.isFullyCovered is false.
+ *
+ * dispatch_blocked       — dispatchBlockReason is set; a gate stopped worker dispatch
+ * governance_blocked     — a governance/freeze gate halted the cycle before dispatch
+ * no_plans_generated     — Prometheus produced zero plans (NO_PLANS outcome)
+ * plan_not_approved      — Athena rejected the plan set (REJECTED outcome)
+ * unspecified_early_exit — cycle ended early without an explicit reason on record
+ */
+export const CYCLE_TRUTH_TERMINAL_BLOCK_REASON = Object.freeze({
+  DISPATCH_BLOCKED:       "dispatch_blocked",
+  GOVERNANCE_BLOCKED:     "governance_blocked",
+  NO_PLANS_GENERATED:     "no_plans_generated",
+  PLAN_NOT_APPROVED:      "plan_not_approved",
+  UNSPECIFIED_EARLY_EXIT: "unspecified_early_exit",
+});
+
 /** Aggregate outcome status for the cycle. */
 export const CYCLE_OUTCOME_STATUS = Object.freeze({
   SUCCESS: "success",
@@ -186,6 +207,7 @@ export const CYCLE_ANALYTICS_SCHEMA = Object.freeze({
       "canonicalEvents",
       "missingData",
       "runtimeContractProbe",
+      "cycleTruthContract",
       "structuralAnalytics",
       "laneTelemetry",
       "stageTransitions",
@@ -835,11 +857,19 @@ function normalizeCapabilityExecutionSummary(summary: unknown) {
   const freshnessWindowMs = Number.isFinite(freshnessWindowMsRaw) && freshnessWindowMsRaw > 0
     ? Math.floor(freshnessWindowMsRaw)
     : null;
+  const recentTraces = Array.isArray(src.recentTraces) ? src.recentTraces : [];
+  // Build role breakdown from structured trace fields (traces written by updated recordCapabilityExecution)
+  const roleBreakdown: Record<string, number> = {};
+  for (const trace of recentTraces) {
+    const r = typeof (trace as any)?.role === "string" ? (trace as any).role.trim() : null;
+    if (r) roleBreakdown[r] = (roleBreakdown[r] || 0) + 1;
+  }
   return {
     freshnessWindowMs,
     observedCapabilityCount,
     observedCapabilities,
     lastObservedAt: typeof src.lastObservedAt === "string" ? src.lastObservedAt : null,
+    roleBreakdown: Object.keys(roleBreakdown).length > 0 ? roleBreakdown : undefined,
   };
 }
 
@@ -1295,6 +1325,38 @@ export function computeCycleAnalytics(config, {
     });
   }
 
+  // ── Cycle-truth contract: null canonical events require an explicit terminal block reason ──
+  // When phase=COMPLETED but canonical events are missing, we classify the exit reason
+  // so the record is always either fully covered (all events present) or explicitly annotated.
+  // This prevents silent null-event persistence that makes postmortems inconclusive.
+  const missingCanonicalEventCount = canonicalEvents.filter(e => !e.present).length;
+  let nullEventsTerminalBlockReason: string | null = null;
+  if (missingCanonicalEventCount > 0 && phase === CYCLE_PHASE.COMPLETED) {
+    const blockReason = typeof outcomes.dispatchBlockReason === "string" && outcomes.dispatchBlockReason.trim()
+      ? outcomes.dispatchBlockReason.trim()
+      : null;
+    if (blockReason) {
+      const lower = blockReason.toLowerCase();
+      nullEventsTerminalBlockReason = (lower.includes("governance") || lower.includes("freeze"))
+        ? CYCLE_TRUTH_TERMINAL_BLOCK_REASON.GOVERNANCE_BLOCKED
+        : CYCLE_TRUTH_TERMINAL_BLOCK_REASON.DISPATCH_BLOCKED;
+    } else if (boundOutcomeStatus === CYCLE_OUTCOME_STATUS.NO_PLANS) {
+      nullEventsTerminalBlockReason = CYCLE_TRUTH_TERMINAL_BLOCK_REASON.NO_PLANS_GENERATED;
+    } else if (boundOutcomeStatus === CYCLE_OUTCOME_STATUS.REJECTED) {
+      nullEventsTerminalBlockReason = CYCLE_TRUTH_TERMINAL_BLOCK_REASON.PLAN_NOT_APPROVED;
+    } else {
+      nullEventsTerminalBlockReason = CYCLE_TRUTH_TERMINAL_BLOCK_REASON.UNSPECIFIED_EARLY_EXIT;
+    }
+  }
+
+  const cycleTruthContract = {
+    missingCanonicalEventCount,
+    nullEventsTerminalBlockReason,
+    // isFullyCovered: true when the record is either fully event-sourced or has an
+    // explicit terminal block reason — false is a data-quality signal for postmortems.
+    isFullyCovered: missingCanonicalEventCount === 0 || nullEventsTerminalBlockReason !== null,
+  };
+
   return {
     cycleId,
     generatedAt: new Date().toISOString(),
@@ -1309,6 +1371,7 @@ export function computeCycleAnalytics(config, {
     canonicalEvents,
     missingData,
     runtimeContractProbe,
+    cycleTruthContract,
     structuralAnalytics,
     laneTelemetry,
     optimizerUsage: optimizerUsage ?? null,
@@ -1892,7 +1955,7 @@ export const BENCHMARK_SCHEMA = Object.freeze({
   required: ["schemaVersion", "updatedAt", "entries"],
   entryRequired: ["cycleId", "evaluatedAt", "schemaVersion", "recommendations"],
   recommendationStatusEnum: Object.freeze([
-    "pending", "in-progress", "implemented", "failed", "retired",
+    "pending", "in-progress", "implemented", "implemented_correctly", "implemented_partially", "failed", "retired",
   ]),
 });
 
