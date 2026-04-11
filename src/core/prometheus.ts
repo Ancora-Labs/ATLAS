@@ -62,6 +62,8 @@ import {
   isCiCriticalMandatoryFinding,
   extractCiEvidenceFromMandatoryFinding,
   isCiBreakFinding,
+  isSystemLearningCiDebtFinding,
+  SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS,
   type WaveTaskObject,
 } from "./plan_contract_validator.js";
 import {
@@ -667,7 +669,7 @@ export function enforceCiRepairPacketForMandatoryFindings(
  */
 export function normalizeStaleCiBreakFindings(
   payload: unknown,
-  _nowMs: number = Date.now(),
+  nowMs: number = Date.now(),
 ): { payload: unknown; suppressedCount: number; suppressedReasons: string[] } {
   if (!payload || typeof payload !== "object") {
     return { payload, suppressedCount: 0, suppressedReasons: [] };
@@ -683,15 +685,44 @@ export function normalizeStaleCiBreakFindings(
     return { payload, suppressedCount: 0, suppressedReasons: [] };
   }
 
+  // Compute audit age so system-learning CI-debt suppression can apply an age gate.
+  // Suppression is only applied when the audit is fresh (within the max-age window)
+  // to ensure the CI-success annotation is still reliable.
+  const auditedAtMs = auditedAt ? Date.parse(auditedAt) : NaN;
+  const auditAgeMs = Number.isFinite(auditedAtMs) ? nowMs - auditedAtMs : Infinity;
+  const auditIsFresh = auditAgeMs <= SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS;
+
   const suppressedReasons: string[] = [];
   const normalizedFindings = findings.filter((f: unknown) => {
-    if (!isCiBreakFinding(f)) return true; // non-CI-break findings always pass through
+    if (!f || typeof f !== "object") return true;
     const entry = f as Record<string, unknown>;
-    suppressedReasons.push(
-      `stale_ci_break_suppressed:area=ci:capabilityNeeded=${String(entry.capabilityNeeded || "")}` +
-      `:latestMainCiConclusion=success:auditedAt=${auditedAt}`,
-    );
-    return false;
+
+    // Gate 1: suppress canonical area=ci findings (ci-fix / ci-setup) — existing behaviour.
+    if (isCiBreakFinding(f)) {
+      suppressedReasons.push(
+        `stale_ci_break_suppressed:area=ci:capabilityNeeded=${String(entry.capabilityNeeded || "")}` +
+        `:latestMainCiConclusion=success:auditedAt=${auditedAt}`,
+      );
+      return false;
+    }
+
+    // Gate 2: suppress system-learning findings that encode CI debt when the finding
+    // was explicitly annotated by Jesus with a CI-success signal AND the audit is still
+    // fresh enough that the CI-success evidence is reliable.
+    if (
+      isSystemLearningCiDebtFinding(f) &&
+      String(entry.latestMainCiConclusion || "").trim().toLowerCase() === "success" &&
+      auditIsFresh
+    ) {
+      suppressedReasons.push(
+        `stale_system_learning_ci_debt_suppressed:area=system-learning` +
+        `:findingCiConclusion=success:payloadCiConclusion=success` +
+        `:auditedAt=${auditedAt}:auditAgeMs=${Math.round(auditAgeMs)}`,
+      );
+      return false;
+    }
+
+    return true;
   });
 
   if (suppressedReasons.length === 0) {
@@ -712,7 +743,7 @@ export function normalizeStaleCiBreakFindings(
 }
 
 // Export the freshness max-age constant so callers (tests, prometheus prompt) can reference it.
-export { CI_BREAK_FINDING_FRESHNESS_MAX_AGE_MS } from "./plan_contract_validator.js";
+export { CI_BREAK_FINDING_FRESHNESS_MAX_AGE_MS, SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS, isSystemLearningCiDebtFinding } from "./plan_contract_validator.js";
 
 function sanitizePromptLine(value: unknown, maxLen = 220): string {
   const compact = String(value || "")

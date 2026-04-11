@@ -364,3 +364,68 @@ describe("orchestrator runtime contracts - adaptive inter-batch cooldown", () =>
     assert.equal(result.reason, "no_remaining_batches");
   });
 });
+
+// ── extractSessionsFromCycleRecord — canonical session loading behavior ────────
+
+import {
+  extractSessionsFromCycleRecord,
+  migrateWorkerCycleArtifacts,
+  selectWorkerCycleRecord,
+} from "../../src/core/cycle_analytics.js";
+
+describe("orchestrator — canonical session loading behavior (extractSessionsFromCycleRecord)", () => {
+  it("returns null for missing canonical artifacts (signals legacy fallback required)", () => {
+    const sessions = extractSessionsFromCycleRecord(null);
+    assert.equal(sessions, null);
+  });
+
+  it("returns null for canonical record without workerSessions key", () => {
+    assert.equal(extractSessionsFromCycleRecord({ cycleId: "c1", status: "active" }), null);
+  });
+
+  it("returns sessions from a valid canonical record", () => {
+    const record = {
+      workerSessions: {
+        coder: { status: "working", startedAt: new Date().toISOString() },
+      },
+      workerActivity: {},
+    };
+    const sessions = extractSessionsFromCycleRecord(record);
+    assert.ok(sessions, "sessions must not be null for valid record");
+    assert.ok("coder" in sessions, "coder session must be present");
+  });
+
+  it("full canonical path: migrate → select → extract yields sessions consistent with recoverStaleWorkerSessions input", () => {
+    const cycleId = new Date().toISOString();
+    const rawArtifacts = {
+      schemaVersion: 1,
+      updatedAt: cycleId,
+      latestCycleId: cycleId,
+      cycles: {
+        [cycleId]: {
+          cycleId,
+          status: "active",
+          updatedAt: cycleId,
+          workerSessions: {
+            coder: { status: "working", startedAt: cycleId },
+          },
+          workerActivity: { coder: [] },
+          completedTaskIds: [],
+        },
+      },
+    };
+    const migrated = migrateWorkerCycleArtifacts(rawArtifacts);
+    assert.ok(migrated.ok && migrated.data, "migration must succeed for valid artifacts");
+    const { record } = selectWorkerCycleRecord(migrated.data!, cycleId);
+    const sessions = extractSessionsFromCycleRecord(record);
+    assert.ok(sessions, "canonical path must yield sessions");
+    assert.ok("coder" in sessions!, "coder must be present after full canonical path");
+    const coderSessions = sessions!.coder as any;
+    assert.equal(coderSessions.status, "working");
+    assert.ok(Array.isArray(coderSessions._activityLog), "_activityLog must be present");
+
+    // Verify the extracted sessions can feed recoverStaleWorkerSessions (structural compatibility).
+    const recovered = recoverStaleWorkerSessions(sessions!);
+    assert.ok(typeof recovered === "object" && recovered !== null, "recovered must be an object");
+  });
+});

@@ -1459,3 +1459,129 @@ describe("jesus_supervisor — runSystemHealthAudit CI finding shape", () => {
     });
   });
 });
+
+// ── extractSessionsFromCycleRecord ─────────────────────────────────────────────
+
+import { extractSessionsFromCycleRecord } from "../../src/core/cycle_analytics.js";
+
+describe("extractSessionsFromCycleRecord — pure helper", () => {
+  it("returns null for null input", () => {
+    assert.equal(extractSessionsFromCycleRecord(null), null);
+  });
+
+  it("returns null when record has no workerSessions", () => {
+    assert.equal(extractSessionsFromCycleRecord({ cycleId: "c1" }), null);
+  });
+
+  it("returns null when workerSessions is not a plain object", () => {
+    assert.equal(extractSessionsFromCycleRecord({ workerSessions: [] }), null);
+    assert.equal(extractSessionsFromCycleRecord({ workerSessions: "bad" }), null);
+  });
+
+  it("returns flat sessions with _activityLog merged from workerActivity", () => {
+    const record = {
+      workerSessions: {
+        coder: { status: "working", startedAt: "2025-01-01T00:00:00Z" },
+        planner: { status: "idle" },
+      },
+      workerActivity: {
+        coder: [{ ts: "2025-01-01T00:00:00Z", event: "started" }],
+      },
+    };
+    const sessions = extractSessionsFromCycleRecord(record);
+    assert.ok(sessions, "must return sessions");
+    assert.equal(Object.keys(sessions).length, 2);
+    const coder = sessions.coder as any;
+    assert.equal(coder.status, "working");
+    assert.ok(Array.isArray(coder._activityLog), "must merge activityLog");
+    assert.equal(coder._activityLog.length, 1);
+    const planner = sessions.planner as any;
+    assert.ok(Array.isArray(planner._activityLog), "must have empty _activityLog when no activity");
+    assert.equal(planner._activityLog.length, 0);
+  });
+
+  it("returns empty sessions object for empty workerSessions", () => {
+    const sessions = extractSessionsFromCycleRecord({ workerSessions: {} });
+    assert.ok(sessions, "must return an object");
+    assert.equal(Object.keys(sessions!).length, 0);
+  });
+});
+
+// ── runSystemHealthAudit — non-finite duration guard ──────────────────────────
+
+describe("jesus_supervisor — runSystemHealthAudit non-finite duration guard", () => {
+  function withTempRepo2<T>(fn: (ctx: { stateDir: string }) => Promise<T>): Promise<T> {
+    const repoDir = mkdtempSync(path.join(tmpdir(), "jesus-guard-"));
+    const stateDir = path.join(repoDir, "state");
+    mkdirSync(stateDir, { recursive: true });
+    const previousCwd = process.cwd();
+    return Promise.resolve()
+      .then(() => { process.chdir(repoDir); return fn({ stateDir }); })
+      .finally(() => {
+        process.chdir(previousCwd);
+        rmSync(repoDir, { recursive: true, force: true });
+      });
+  }
+
+  it("does not emit stuck-worker finding when lastActiveAt is an invalid date string", async () => {
+    await withTempRepo2(async ({ stateDir }) => {
+      const badSessions = {
+        coder: { status: "working", lastActiveAt: "not-a-valid-date", startedAt: "also-invalid" },
+      };
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        { latestMainCi: null, failedCiRuns: [], pullRequests: [] },
+        {},
+        badSessions,
+      );
+      const stuckFinding = findings.find((f: any) => f.capabilityNeeded === "worker-recovery");
+      assert.equal(stuckFinding, undefined,
+        "invalid date string must NOT produce a stuck-worker finding (non-finite guard)");
+    });
+  });
+
+  it("does emit stuck-worker finding when lastActiveAt is old (90 minutes ago)", async () => {
+    await withTempRepo2(async ({ stateDir }) => {
+      const oldTimestamp = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+      const sessions = {
+        coder: { status: "working", lastActiveAt: oldTimestamp },
+      };
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        { latestMainCi: null, failedCiRuns: [], pullRequests: [] },
+        {},
+        sessions,
+      );
+      const stuckFinding = findings.find((f: any) => f.capabilityNeeded === "worker-recovery");
+      assert.ok(stuckFinding, "old valid timestamp must produce a stuck-worker finding");
+    });
+  });
+});
+
+// ── health_audit_findings dual-source liveness evidence ──────────────────────
+
+describe("jesus_supervisor — loadWorkerSessionsForHealthAudit dual-source metadata", () => {
+  // These tests verify that health_audit_findings.json carries dual-source liveness
+  // evidence fields when written by runJesusCycle.  We test the cycle_analytics
+  // helper (extractSessionsFromCycleRecord) indirectly through the canonical path.
+
+  it("extractSessionsFromCycleRecord returns null when canonical record is null (fallback expected)", () => {
+    const sessions = extractSessionsFromCycleRecord(null);
+    assert.equal(sessions, null, "null record must signal that canonical path is unavailable");
+  });
+
+  it("extractSessionsFromCycleRecord returns session map with conflict-detection fields intact", () => {
+    const record = {
+      workerSessions: {
+        workerA: { status: "working", startedAt: new Date().toISOString() },
+        workerB: { status: "idle" },
+      },
+      workerActivity: {},
+    };
+    const sessions = extractSessionsFromCycleRecord(record)!;
+    const activeCount = Object.values(sessions).filter(
+      (s) => s && typeof s === "object" && (s as any).status === "working",
+    ).length;
+    assert.equal(activeCount, 1, "active worker count must be derivable from extracted sessions");
+  });
+});

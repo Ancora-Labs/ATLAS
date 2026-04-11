@@ -241,6 +241,27 @@ export function isCiBreakFinding(finding: unknown): boolean {
   return capability === "ci-fix" || capability === "ci-setup";
 }
 
+/**
+ * Maximum age in ms for the health-audit snapshot beyond which a system-learning
+ * CI-debt finding's per-finding CI-success annotation is considered unreliable.
+ * Matches CI_BREAK_FINDING_FRESHNESS_MAX_AGE_MS (2 h) for consistency.
+ */
+export const SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS = CI_BREAK_FINDING_FRESHNESS_MAX_AGE_MS;
+
+/**
+ * Return true when a finding is a system-learning entry that encodes CI-breaking
+ * debt (text matches the CI-debt pattern).  Used by normalizeStaleCiBreakFindings
+ * to identify findings eligible for freshness-based suppression when CI is healthy.
+ */
+export function isSystemLearningCiDebtFinding(finding: unknown): boolean {
+  if (!finding || typeof finding !== "object") return false;
+  const entry = finding as Record<string, unknown>;
+  const area = String(entry.area || "").trim().toLowerCase();
+  if (area !== "system-learning") return false;
+  const text = `${String(entry.finding || "")} ${String(entry.remediation || "")}`;
+  return CI_SYSTEM_LEARNING_DEBT_PATTERN.test(text);
+}
+
 export function isCiCriticalMandatoryFinding(finding: unknown): boolean {
   if (!finding || typeof finding !== "object") return false;
   const entry = finding as Record<string, unknown>;

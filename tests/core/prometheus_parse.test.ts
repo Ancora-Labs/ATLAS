@@ -72,6 +72,8 @@ import {
   RolePlanCompletenessError,
   normalizeStaleCiBreakFindings,
   CI_BREAK_FINDING_FRESHNESS_MAX_AGE_MS,
+  SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS,
+  isSystemLearningCiDebtFinding,
   selectBestCandidatePlans,
   MAX_CANDIDATE_SETS,
   CANDIDATE_TIE_THRESHOLD,
@@ -6038,16 +6040,21 @@ describe("normalizeStaleCiBreakFindings", () => {
     assert.equal(normalized.findings.length, 1, "only system-learning finding remains");
   });
 
-  it("retains system-learning finding that carries per-finding latestMainCiConclusion=success (freshness annotation pass-through)", () => {
+  it("suppresses system-learning finding that carries per-finding latestMainCiConclusion=success when audit is fresh and CI is healthy", () => {
     // When runSystemHealthAudit annotates a system-improvement finding with the live
-    // CI conclusion, normalizeStaleCiBreakFindings must NOT suppress it — suppression
-    // applies only to area=ci findings via isCiBreakFinding.
+    // CI conclusion, normalizeStaleCiBreakFindings SHOULD suppress it when:
+    //   1) The finding text encodes CI-breaking debt (matches CI_SYSTEM_LEARNING_DEBT_PATTERN)
+    //   2) The per-finding latestMainCiConclusion === "success"
+    //   3) The payload latestMainCiConclusion === "success"
+    //   4) The audit snapshot is fresh (within SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS)
+    // This prevents Prometheus from escalating stale CI-break lessons when CI is healthy.
     const annotatedSystemLearningFinding = {
       area: "system-learning",
       severity: "warning",
       capabilityNeeded: "system-improvement",
-      finding: "Self-improvement flagged CI has been broken",
-      remediation: "Address in next cycle",
+      // Text must match CI_SYSTEM_LEARNING_DEBT_PATTERN: "CI-broken" triggers the pattern.
+      finding: "CI-broken tests accumulating as system-learning debt",
+      remediation: "ci-fix required in next cycle",
       latestMainCiConclusion: "success",
     };
     const payload = {
@@ -6056,12 +6063,108 @@ describe("normalizeStaleCiBreakFindings", () => {
       latestMainCiConclusion: "success",
     };
     const result = normalizeStaleCiBreakFindings(payload);
-    assert.equal(result.suppressedCount, 0,
-      "system-improvement finding with per-finding latestMainCiConclusion must NOT be suppressed by normalizeStaleCiBreakFindings");
+    assert.equal(result.suppressedCount, 1,
+      "system-learning CI-debt finding with per-finding CI-success annotation must be suppressed when audit is fresh");
     const normalized = result.payload as any;
-    assert.equal(normalized.findings.length, 1, "annotated system-learning finding must be retained");
-    assert.equal(normalized.findings[0].latestMainCiConclusion, "success",
-      "per-finding latestMainCiConclusion annotation must be preserved through normalization");
+    assert.equal(normalized.findings.length, 0, "suppressed finding must be removed");
+    assert.ok(
+      Array.isArray(normalized._staleCiBreakSuppressedReasons) &&
+      normalized._staleCiBreakSuppressedReasons[0].includes("stale_system_learning_ci_debt_suppressed"),
+      "suppression reason must indicate system-learning CI-debt suppression",
+    );
+  });
+
+  it("retains system-learning CI-debt finding when audit is stale beyond max age", () => {
+    // Age gate: if the audit snapshot is too old, the CI-success annotation is unreliable
+    // and the finding should NOT be suppressed.
+    const staleAuditMs = Date.now() - SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS - 1000;
+    const annotatedFinding = {
+      area: "system-learning",
+      severity: "warning",
+      capabilityNeeded: "system-improvement",
+      finding: "CI-broken tests accumulating as system-learning debt",
+      remediation: "ci-fix required",
+      latestMainCiConclusion: "success",
+    };
+    const payload = {
+      findings: [annotatedFinding],
+      auditedAt: new Date(staleAuditMs).toISOString(),
+      latestMainCiConclusion: "success",
+    };
+    const nowMs = Date.now();
+    const result = normalizeStaleCiBreakFindings(payload, nowMs);
+    assert.equal(result.suppressedCount, 0,
+      "stale audit must NOT trigger suppression of system-learning CI-debt finding");
+    const retained = result.payload as any;
+    assert.equal(retained.findings.length, 1, "finding must be retained when audit is stale");
+  });
+
+  it("retains system-learning CI-debt finding when payload CI conclusion is not success", () => {
+    // Even with per-finding annotation, if the payload CI conclusion is not success
+    // (fail-safe: CI was failing at audit time), no suppression should occur.
+    const annotatedFinding = {
+      area: "system-learning",
+      severity: "warning",
+      capabilityNeeded: "system-improvement",
+      finding: "CI-broken tests accumulating as system-learning debt",
+      remediation: "ci-fix required",
+      latestMainCiConclusion: "success",
+    };
+    const payload = {
+      findings: [annotatedFinding],
+      auditedAt: new Date().toISOString(),
+      latestMainCiConclusion: "failure",
+    };
+    const result = normalizeStaleCiBreakFindings(payload);
+    assert.equal(result.suppressedCount, 0,
+      "must not suppress when payload latestMainCiConclusion is not success");
+  });
+
+  it("retains system-learning finding without CI-debt text even with all other conditions met", () => {
+    // Only findings that match CI_SYSTEM_LEARNING_DEBT_PATTERN should be eligible.
+    const nonCiDebtFinding = {
+      area: "system-learning",
+      severity: "warning",
+      capabilityNeeded: "system-improvement",
+      finding: "Improve documentation and test coverage",
+      remediation: "Add more tests",
+      latestMainCiConclusion: "success",
+    };
+    const payload = {
+      findings: [nonCiDebtFinding],
+      auditedAt: new Date().toISOString(),
+      latestMainCiConclusion: "success",
+    };
+    const result = normalizeStaleCiBreakFindings(payload);
+    assert.equal(result.suppressedCount, 0,
+      "system-learning finding without CI-debt text must not be suppressed");
+  });
+
+  it("SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS equals CI_BREAK_FINDING_FRESHNESS_MAX_AGE_MS (both 2 hours)", () => {
+    assert.equal(SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS, CI_BREAK_FINDING_FRESHNESS_MAX_AGE_MS);
+    assert.equal(SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS, 2 * 60 * 60 * 1000);
+  });
+
+  it("isSystemLearningCiDebtFinding correctly identifies CI-debt system-learning findings", () => {
+    assert.equal(isSystemLearningCiDebtFinding({
+      area: "system-learning",
+      finding: "CI-broken tests accumulating",
+      remediation: "ci-fix required",
+    }), true, "should identify CI-debt system-learning finding");
+
+    assert.equal(isSystemLearningCiDebtFinding({
+      area: "system-learning",
+      finding: "Improve code style",
+      remediation: "Lint more",
+    }), false, "should NOT identify non-CI-debt system-learning finding");
+
+    assert.equal(isSystemLearningCiDebtFinding({
+      area: "ci",
+      capabilityNeeded: "ci-fix",
+      finding: "CI broken",
+    }), false, "should NOT identify area=ci finding as system-learning");
+
+    assert.equal(isSystemLearningCiDebtFinding(null), false, "null must return false");
   });
 });
 

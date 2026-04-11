@@ -509,6 +509,37 @@ export function selectWorkerCycleRecord(
 }
 
 /**
+ * Extract a flat sessions map from a canonical cycle record, merging the
+ * workerActivity log into each entry as `_activityLog` so consumers can
+ * detect terminal statuses without importing orchestrator logic.
+ *
+ * Pure function — no I/O.  Returns null when the record has no sessions.
+ */
+export function extractSessionsFromCycleRecord(
+  record: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!record) return null;
+  const sessions = record.workerSessions;
+  if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) return null;
+  const workerActivity =
+    record.workerActivity && typeof record.workerActivity === "object" && !Array.isArray(record.workerActivity)
+      ? (record.workerActivity as Record<string, unknown>)
+      : {};
+  const result: Record<string, unknown> = {};
+  for (const [role, session] of Object.entries(sessions as Record<string, unknown>)) {
+    if (session && typeof session === "object" && !Array.isArray(session)) {
+      const log = Array.isArray((workerActivity as Record<string, unknown[]>)[role])
+        ? (workerActivity as Record<string, unknown[]>)[role]
+        : [];
+      result[role] = { ...(session as Record<string, unknown>), _activityLog: log };
+    } else {
+      result[role] = session;
+    }
+  }
+  return result;
+}
+
+/**
  * Compatibility migration for legacy evolution_progress-style task maps.
  * Converts legacy { tasks:{ id:{status} } } payloads into canonical
  * completedTaskIds used by worker_cycle_artifacts v1 consumers.

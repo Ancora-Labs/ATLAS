@@ -33,8 +33,14 @@ import {
   appendCalibrationHistory,
 } from "./jesus_calibration.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, JESUS_SOFT_TIMEOUT_POLICY_CONTRACT, SPAN_CONTRACT } from "./event_schema.js";
-import { computeQueueViability } from "./pipeline_progress.js";
+import { computeQueueViability, readPipelineProgress } from "./pipeline_progress.js";
 import { resolveJesusFallbackModel, ROUTING_REASON } from "./model_policy.js";
+import {
+  WORKER_CYCLE_ARTIFACTS_FILE,
+  migrateWorkerCycleArtifacts,
+  selectWorkerCycleRecord,
+  extractSessionsFromCycleRecord,
+} from "./cycle_analytics.js";
 
 // ── CI system-learning debt detection ────────────────────────────────────────
 
@@ -342,6 +348,9 @@ export async function runSystemHealthAudit(config, githubState, AthenaCoordinati
       // lastActiveAt nor startedAt is present to avoid Infinity false positives.
       if (lastActive === null) continue;
       const minutesSinceActive = (Date.now() - lastActive) / 60000;
+      // Guard against NaN (invalid date string) or Infinity (Date parsing failure).
+      // Non-finite values would produce false positives or crash toFixed().
+      if (!Number.isFinite(minutesSinceActive)) continue;
       if (minutesSinceActive > 60) {
         workerIssues.push(`${role}: stuck working for ${minutesSinceActive.toFixed(0)}m`);
       }
@@ -738,6 +747,112 @@ function buildCapacityDeltaReport(d, healthFindings, kpis) {
 
   return { topBottlenecks, projectedGains, commandedInterventions };
 }
+
+// ── Canonical session loader ────────────────────────────────────────────────
+
+/**
+ * Load worker sessions preferring the canonical worker_cycle_artifacts.json
+ * (keyed to the active pipeline cycle) and only falling back to the legacy
+ * worker_sessions.json when the canonical file is missing or unparseable.
+ *
+ * Returns structured evidence so callers can persist dual-source metadata and
+ * detect source conflicts downstream.
+ */
+async function loadWorkerSessionsForHealthAudit(
+  config: unknown,
+  stateDir: string,
+): Promise<{
+  sessions: Record<string, unknown>;
+  source: "canonical" | "legacy" | "empty";
+  cycleId: string | null;
+  canonicalSessionsAvailable: boolean;
+  legacySessionsAvailable: boolean;
+  workerSessionSourceConflict: boolean;
+  conflictReason: string | null;
+}> {
+  // Read canonical worker_cycle_artifacts and legacy sessions in parallel.
+  const artifactsPath = path.join(stateDir, WORKER_CYCLE_ARTIFACTS_FILE);
+  const legacyPath = path.join(stateDir, "worker_sessions.json");
+  const [artifactsRaw, legacyRaw] = await Promise.all([
+    readJsonSafe(artifactsPath),
+    readJsonSafe(legacyPath),
+  ]);
+
+  const legacySessions = (legacyRaw && typeof legacyRaw === "object" && !Array.isArray(legacyRaw))
+    ? (legacyRaw as Record<string, unknown>)
+    : null;
+  const legacyAvailable = legacySessions !== null && Object.keys(legacySessions).length > 0;
+
+  // Attempt canonical resolution.
+  if (artifactsRaw && typeof artifactsRaw === "object") {
+    try {
+      const migrated = migrateWorkerCycleArtifacts(artifactsRaw);
+      if (migrated.ok && migrated.data) {
+        // Determine preferred cycle from active pipeline.
+        let preferredCycleId: string | null = null;
+        try {
+          const progress = await readPipelineProgress(config as Parameters<typeof readPipelineProgress>[0]);
+          preferredCycleId = progress?.startedAt ?? null;
+        } catch {
+          // pipeline progress unreadable — fall through with null preferred cycle
+        }
+        const { cycleId, record } = selectWorkerCycleRecord(migrated.data, preferredCycleId ?? undefined);
+        const canonicalSessions = extractSessionsFromCycleRecord(record);
+
+        if (canonicalSessions && Object.keys(canonicalSessions).length > 0) {
+          // Conflict detection: canonical and legacy disagree on active worker count.
+          const canonicalActive = Object.values(canonicalSessions).filter(
+            (s) => s && typeof s === "object" && (s as Record<string, unknown>).status === "working",
+          ).length;
+          const legacyActive = legacySessions
+            ? Object.values(legacySessions).filter(
+                (s) => s && typeof s === "object" && (s as Record<string, unknown>).status === "working",
+              ).length
+            : 0;
+          const conflict = legacyAvailable && canonicalActive !== legacyActive;
+          const conflictReason = conflict
+            ? `canonical_active=${canonicalActive} vs legacy_active=${legacyActive}`
+            : null;
+
+          return {
+            sessions: canonicalSessions,
+            source: "canonical",
+            cycleId,
+            canonicalSessionsAvailable: true,
+            legacySessionsAvailable: legacyAvailable,
+            workerSessionSourceConflict: conflict,
+            conflictReason,
+          };
+        }
+      }
+    } catch {
+      // Canonical read failed — fall through to legacy
+    }
+  }
+
+  // Fallback: legacy worker_sessions.json
+  if (legacySessions && Object.keys(legacySessions).length > 0) {
+    return {
+      sessions: legacySessions,
+      source: "legacy",
+      cycleId: null,
+      canonicalSessionsAvailable: false,
+      legacySessionsAvailable: true,
+      workerSessionSourceConflict: false,
+      conflictReason: null,
+    };
+  }
+
+  return {
+    sessions: {},
+    source: "empty",
+    cycleId: null,
+    canonicalSessionsAvailable: false,
+    legacySessionsAvailable: false,
+    workerSessionSourceConflict: false,
+    conflictReason: null,
+  };
+}
 
 export async function runJesusCycle(config) {
   const stateDir = config.paths?.stateDir || "state";
@@ -756,19 +871,21 @@ export async function runJesusCycle(config) {
     AthenaCoordination,
     prometheusAnalysis,
     githubState,
-    sessions
+    sessionLoadResult
   ] = await Promise.all([
     readJson(path.join(stateDir, "jesus_directive.json"), {}),
     readJson(path.join(stateDir, "athena_coordination.json"), {}),
     readJson(path.join(stateDir, "prometheus_analysis.json"), {}),
     fetchGitHubState(config),
-    readJson(path.join(stateDir, "worker_sessions.json"), {})
+    loadWorkerSessionsForHealthAudit(config, stateDir)
   ]);
+
+  const sessions = sessionLoadResult.sessions;
 
   chatLog(
     stateDir,
     jesusName,
-    `[LIVE] state loaded issues=${githubState.issues.length} prs=${githubState.pullRequests.length} failedCI=${githubState.failedCiRuns.length} activeSessions=${Object.keys(sessions).filter(k => sessions[k]?.status === "working").length}`
+    `[LIVE] state loaded issues=${githubState.issues.length} prs=${githubState.pullRequests.length} failedCI=${githubState.failedCiRuns.length} activeSessions=${Object.keys(sessions).filter(k => (sessions[k] as Record<string, unknown>)?.status === "working").length}`
   );
 
   // ── Hierarchical Health Audit — detect what lower layers missed ──────────
@@ -786,6 +903,14 @@ export async function runJesusCycle(config) {
       auditedAt: new Date().toISOString(),
       latestMainCiConclusion: githubState.latestMainCi?.conclusion ?? null,
       latestMainCiUpdatedAt: githubState.latestMainCi?.updatedAt ?? null,
+      // Dual-source liveness evidence (Task 3): downstream planners use these
+      // fields to trust worker-health findings only when source-consistent and fresh.
+      workerLivenessSource: sessionLoadResult.source,
+      canonicalCycleId: sessionLoadResult.cycleId,
+      canonicalSessionsAvailable: sessionLoadResult.canonicalSessionsAvailable,
+      legacySessionsAvailable: sessionLoadResult.legacySessionsAvailable,
+      workerSessionSourceConflict: sessionLoadResult.workerSessionSourceConflict,
+      workerSessionSourceConflictReason: sessionLoadResult.conflictReason ?? null,
     };
 
     if (healthFindings.length > 0) {
@@ -812,7 +937,7 @@ export async function runJesusCycle(config) {
 
   // ── Strategic Calibration — compare previous directive expectations vs reality ──
   // This runs every cycle (before AI call) to build a feedback loop on decision quality.
-  const activeSessions = Object.keys(sessions).filter(k => sessions[k]?.status === "working").length;
+  const activeSessions = Object.keys(sessions).filter(k => (sessions[k] as Record<string, unknown>)?.status === "working").length;
   const lastCycleAt = lastDirective?.decidedAt ? new Date(lastDirective.decidedAt).toLocaleString() : "never";
   const prometheusLastRunAt = prometheusAnalysis?.analyzedAt ? new Date(prometheusAnalysis.analyzedAt).toLocaleString() : "never";
 
