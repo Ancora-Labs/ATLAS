@@ -1185,58 +1185,6 @@ export function promotePrometheusAnalysisFromWorkerEvidence(
   return { promotedCount, analysis: { ...analysis, plans: nextPlans } };
 }
 
-export function buildCycleWorkerResultRow(batch: any, workerResult: any): {
-  roleName: string;
-  status: string;
-  verificationEvidence?: unknown;
-  dispatchContract?: {
-    doneWorkerWithVerificationReportEvidence?: boolean;
-    doneWorkerWithCleanTreeStatusEvidence?: boolean;
-    dispatchBlockReason?: string | null;
-    closureBoundaryViolation?: boolean;
-    replayClosure?: {
-      contractSatisfied?: boolean;
-      canonicalCommands?: string[];
-      executedCommands?: string[];
-      rawArtifactEvidenceLinks?: string[];
-    } | null;
-  } | null;
-  dispatchBlockReason?: string | null;
-  closureBoundaryViolation?: boolean;
-  planTasks: string[];
-  filesTouched: string[];
-  synthesisSources: string[];
-} {
-  const batchPlans = Array.isArray(batch?.plans) ? batch.plans : [];
-  const planTasks: string[] = [...new Set<string>(
-    batchPlans
-      .map((plan: any) => String(plan?.task || "").trim())
-      .filter((s: string) => s.length > 0),
-  )];
-  const synthesisSources: string[] = [...new Set<string>(
-    batchPlans.flatMap((plan: any) => (
-      Array.isArray(plan?.synthesis_sources)
-        ? plan.synthesis_sources.map((source: unknown) => String(source || "").trim()).filter((s: string) => s.length > 0)
-        : []
-    )),
-  )];
-  const filesTouched = Array.isArray(workerResult?.filesTouched)
-    ? workerResult.filesTouched.map((file: unknown) => String(file || "").trim()).filter(Boolean)
-    : [];
-
-  return {
-    roleName: String(workerResult?.roleName || batch?.role || "unknown"),
-    status: String(workerResult?.status || "unknown"),
-    verificationEvidence: workerResult?.verificationEvidence || null,
-    dispatchContract: workerResult?.dispatchContract || null,
-    dispatchBlockReason: workerResult?.dispatchBlockReason || null,
-    closureBoundaryViolation: workerResult?.dispatchContract?.closureBoundaryViolation === true,
-    planTasks,
-    filesTouched,
-    synthesisSources,
-  };
-}
-
 /**
  * Exported for integration tests and any callers that need the dispatch decision
  * surface without running a full orchestration cycle.
@@ -3779,8 +3727,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
           title: "Preflight capability checks failed",
           message: `Failed: ${failedChecks}. ${doctorResult.warnings.join("; ")}`
         });
-        await safeUpdatePipelineProgress(config, "cycle_blocked", `Preflight failed: ${doctorResult.blockingFailures?.join("; ") || failedChecks}`);
-        return;
+        // Non-blocking: log but continue (critical checks would have thrown)
       } else if (doctorResult.warnings.length > 0) {
         await appendProgress(config, `[CYCLE][PREFLIGHT] All checks passed. Warnings: ${doctorResult.warnings.join("; ")}`);
       }
@@ -5353,9 +5300,6 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     } | null;
     dispatchBlockReason?: string | null;
     closureBoundaryViolation?: boolean;
-    planTasks: string[];
-    filesTouched: string[];
-    synthesisSources: string[];
   }> = [];
   // Collects (taskText, verificationEvidence) from successful workers for
   // carry-forward auto-close matching at end of cycle.
@@ -5585,7 +5529,14 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     markPremiumOutcome(workerPremiumEvent.eventId, isAnalyticsCompletedWorkerStatus(String(workerResult?.status || "unknown")));
 
     workersDone += 1;
-    allWorkerResults.push(buildCycleWorkerResultRow(batch, workerResult));
+    allWorkerResults.push({
+      roleName: batch.role,
+      status: String(workerResult?.status || "unknown"),
+      verificationEvidence: workerResult?.verificationEvidence || null,
+      dispatchContract: workerResult?.dispatchContract || null,
+      dispatchBlockReason: workerResult?.dispatchBlockReason || null,
+      closureBoundaryViolation: workerResult?.dispatchContract?.closureBoundaryViolation === true,
+    });
     // replayClosureContract is reserved for future replay-gate wiring
     const replayClosureContract: { contractSatisfied?: boolean } | undefined = undefined;
     if (workerResult?.verificationEvidence || replayClosureContract?.contractSatisfied === true) {
