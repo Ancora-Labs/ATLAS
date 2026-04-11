@@ -103,7 +103,7 @@ export type { WaveTaskObject } from "./plan_contract_validator.js";
 
 import { warn, emitEvent } from "./logger.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
-import { computeBenchmarkIntegrityScore, computeBenchmarkPlanningPriors } from "./model_policy.js";
+import { computeBenchmarkIntegrityScore, computeBenchmarkPlanningPriors, computeProvenanceRoutingDelta } from "./model_policy.js";
 import type { RetryViolationSignal } from "./model_policy.js";
 import { computeResearchCapacityGain, computeHistoricalLaneDifficultyPriors } from "./cycle_analytics.js";
 
@@ -7352,6 +7352,10 @@ export function buildBenchmarkSection(benchmarkData: any): string {
   // Compute integrity score to surface data quality alongside statuses
   const integrity = computeBenchmarkIntegrityScore(benchmarkData);
 
+  // Compute provenance routing delta so Prometheus knows which tasks to skip
+  const routingDelta = computeProvenanceRoutingDelta(benchmarkData);
+  const skipSet = new Set(routingDelta.skip);
+
   const lines = latest.recommendations.map((rec: any) => {
     const status = String(rec.implementationStatus || "pending").toUpperCase();
     const score = typeof rec.benchmarkScore === "number"
@@ -7362,14 +7366,20 @@ export function buildBenchmarkSection(benchmarkData: any): string {
       : "";
     const summary = String(rec.summary || "").slice(0, 120);
     const topic   = String(rec.topic || rec.id || "?");
-    return `  - [${status}${score}${gain}] ${topic} — ${summary}`;
+    const recId   = String(rec.id || "");
+    // Annotate with routing decision so Prometheus can skip CI-closed work
+    const routingTag = skipSet.has(recId) ? " [SKIP:ci-closed]" : "";
+    return `  - [${status}${score}${gain}${routingTag}] ${topic} — ${summary}`;
   }).join("\n");
 
   const cycleLabel = latest.cycleId ? ` (cycle ${latest.cycleId})` : "";
   const integrityLabel = integrity.sampleCount > 0
     ? ` | integrity=${integrity.integrityScore.toFixed(2)} unresolved=${(integrity.unresolvedRatio * 100).toFixed(0)}% contradictions=${integrity.contradictionCount}`
     : "";
-  return `\n\n## RESEARCH BENCHMARK STATUS${cycleLabel}${integrityLabel}\nPrior research recommendation tracking — avoid re-proposing implemented items; prioritize pending ones:\n${lines}`;
+  const deltaLabel = routingDelta.provenanceCompleteCount > 0
+    ? ` | routing-delta: ${routingDelta.provenanceSummary}`
+    : "";
+  return `\n\n## RESEARCH BENCHMARK STATUS${cycleLabel}${integrityLabel}${deltaLabel}\nPrior research recommendation tracking — avoid re-proposing implemented items; [SKIP:ci-closed] items are CI-closed and must not be re-planned; prioritize pending ones:\n${lines}`;
 }
 
 export function buildRoutingOutcomeSection(premiumUsageData: any): string {

@@ -731,3 +731,95 @@ describe("persistBenchmarkEntry — category frontiers persistence", () => {
     );
   });
 });
+
+// ── Provenance fields in ResearchRecommendation ───────────────────────────────
+
+import {
+  extractRecommendationsList,
+  isProvenanceComplete,
+  PROVENANCE_COMPLETE_REQUIRED_FIELDS,
+  IMPLEMENTATION_STATUS,
+} from "../../src/core/research_synthesizer.js";
+
+describe("extractRecommendationsList — provenance fields", () => {
+  it("includes all provenance fields with null defaults", () => {
+    const topics = [{ topic: "CI routing", netFindings: ["Use benchmark signals"] }];
+    const recs = extractRecommendationsList(topics);
+    assert.equal(recs.length, 1);
+    const rec = recs[0];
+    assert.equal(rec.source_url, null, "source_url defaults to null");
+    assert.equal(rec.submission_id, null, "submission_id defaults to null");
+    assert.equal(rec.model_tag, null, "model_tag defaults to null");
+    assert.equal(rec.attempt_count, null, "attempt_count defaults to null");
+    assert.equal(rec.prId, null, "prId defaults to null");
+    assert.equal(rec.mergedSha, null, "mergedSha defaults to null");
+    assert.equal(rec.ciClosed, null, "ciClosed defaults to null");
+  });
+
+  it("sets implementationStatus to pending for new recommendations", () => {
+    const topics = [{ topic: "Test topic" }];
+    const recs = extractRecommendationsList(topics);
+    assert.equal(recs[0].implementationStatus, IMPLEMENTATION_STATUS.PENDING);
+  });
+
+  it("returns empty array for empty input", () => {
+    assert.deepEqual(extractRecommendationsList([]), []);
+  });
+
+  it("returns empty array for non-array input (negative path)", () => {
+    assert.deepEqual(extractRecommendationsList(null as any), []);
+  });
+});
+
+describe("isProvenanceComplete", () => {
+  const makeRec = (overrides: object = {}) => ({
+    id: "rec-test-0",
+    topic: "test",
+    summary: "",
+    implementationStatus: "implemented",
+    benchmarkScore: null,
+    capacityGain: null,
+    evidence: "",
+    source_url: null,
+    submission_id: null,
+    model_tag: null,
+    attempt_count: null,
+    prId: null,
+    mergedSha: null,
+    ciClosed: null,
+    ...overrides,
+  });
+
+  it("returns true when mergedSha is non-empty and ciClosed is true", () => {
+    const rec = makeRec({ mergedSha: "abc123def456", ciClosed: true });
+    assert.equal(isProvenanceComplete(rec), true);
+  });
+
+  it("returns false when mergedSha is null (negative path)", () => {
+    const rec = makeRec({ mergedSha: null, ciClosed: true });
+    assert.equal(isProvenanceComplete(rec), false);
+  });
+
+  it("returns false when ciClosed is false (negative path)", () => {
+    const rec = makeRec({ mergedSha: "abc123def456", ciClosed: false });
+    assert.equal(isProvenanceComplete(rec), false);
+  });
+
+  it("returns false when ciClosed is null (negative path)", () => {
+    const rec = makeRec({ mergedSha: "abc123def456", ciClosed: null });
+    assert.equal(isProvenanceComplete(rec), false);
+  });
+
+  it("returns false when mergedSha is empty string (negative path)", () => {
+    const rec = makeRec({ mergedSha: "", ciClosed: true });
+    assert.equal(isProvenanceComplete(rec), false);
+  });
+});
+
+describe("PROVENANCE_COMPLETE_REQUIRED_FIELDS", () => {
+  it("is a frozen array containing mergedSha and ciClosed", () => {
+    assert.ok(Object.isFrozen(PROVENANCE_COMPLETE_REQUIRED_FIELDS));
+    assert.ok(PROVENANCE_COMPLETE_REQUIRED_FIELDS.includes("mergedSha"));
+    assert.ok(PROVENANCE_COMPLETE_REQUIRED_FIELDS.includes("ciClosed"));
+  });
+});

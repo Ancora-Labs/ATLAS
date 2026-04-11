@@ -1891,3 +1891,91 @@ describe("computePerInstanceNormalization — instance score vs frontier", () =>
     assert.equal(result, null, "NaN instance score → null");
   });
 });
+
+// ── computeProvenanceRoutingDelta ─────────────────────────────────────────────
+
+import { computeProvenanceRoutingDelta } from "../../src/core/model_policy.js";
+
+describe("computeProvenanceRoutingDelta — skip vs execute routing", () => {
+  const makeGroundTruth = (recs: object[]) => ({
+    entries: [{ cycleId: "test-cycle", recommendations: recs }],
+  });
+
+  it("routes CI-closed implemented records to skip queue", () => {
+    const gt = makeGroundTruth([
+      {
+        id: "rec-a",
+        implementationStatus: "implemented",
+        mergedSha: "abc123def456abc123def456abc123def456abc1",
+        ciClosed: true,
+      },
+    ]);
+    const delta = computeProvenanceRoutingDelta(gt);
+    assert.deepEqual(delta.skip, ["rec-a"]);
+    assert.deepEqual(delta.execute, []);
+    assert.equal(delta.provenanceCompleteCount, 1);
+  });
+
+  it("routes pending records to execute queue", () => {
+    const gt = makeGroundTruth([
+      { id: "rec-b", implementationStatus: "pending", mergedSha: null, ciClosed: null },
+    ]);
+    const delta = computeProvenanceRoutingDelta(gt);
+    assert.deepEqual(delta.execute, ["rec-b"]);
+    assert.deepEqual(delta.skip, []);
+    assert.equal(delta.provenanceCompleteCount, 0);
+  });
+
+  it("routes implemented-but-not-CI-closed records to execute (negative path)", () => {
+    const gt = makeGroundTruth([
+      { id: "rec-c", implementationStatus: "implemented", mergedSha: "abc123", ciClosed: false },
+    ]);
+    const delta = computeProvenanceRoutingDelta(gt);
+    assert.deepEqual(delta.execute, ["rec-c"], "no ciClosed → must execute");
+    assert.deepEqual(delta.skip, []);
+  });
+
+  it("routes implemented-with-empty-mergedSha to execute (negative path)", () => {
+    const gt = makeGroundTruth([
+      { id: "rec-d", implementationStatus: "implemented", mergedSha: "", ciClosed: true },
+    ]);
+    const delta = computeProvenanceRoutingDelta(gt);
+    assert.deepEqual(delta.execute, ["rec-d"], "empty mergedSha → must execute");
+  });
+
+  it("handles mixed set correctly (some skip, some execute)", () => {
+    const gt = makeGroundTruth([
+      { id: "rec-e", implementationStatus: "implemented", mergedSha: "sha1sha1sha1sha1sha1sha1sha1sha1sha1sha1", ciClosed: true },
+      { id: "rec-f", implementationStatus: "pending", mergedSha: null, ciClosed: null },
+      { id: "rec-g", implementationStatus: "implemented", mergedSha: "sha2sha2sha2sha2sha2sha2sha2sha2sha2sha2", ciClosed: true },
+    ]);
+    const delta = computeProvenanceRoutingDelta(gt);
+    assert.deepEqual(delta.skip, ["rec-e", "rec-g"]);
+    assert.deepEqual(delta.execute, ["rec-f"]);
+    assert.equal(delta.provenanceCompleteCount, 2);
+    assert.ok(delta.provenanceSummary.includes("execute=1"), "summary includes execute count");
+    assert.ok(delta.provenanceSummary.includes("skip=2"), "summary includes skip count");
+  });
+
+  it("returns empty arrays for null input (fail-open, negative path)", () => {
+    const delta = computeProvenanceRoutingDelta(null);
+    assert.deepEqual(delta.execute, []);
+    assert.deepEqual(delta.skip, []);
+    assert.equal(delta.provenanceCompleteCount, 0);
+  });
+
+  it("returns empty arrays when entries array is empty", () => {
+    const delta = computeProvenanceRoutingDelta({ entries: [] });
+    assert.deepEqual(delta.execute, []);
+    assert.deepEqual(delta.skip, []);
+  });
+
+  it("skips recommendations without an id (does not throw)", () => {
+    const gt = makeGroundTruth([
+      { implementationStatus: "implemented", mergedSha: "sha1sha1sha1sha1sha1sha1sha1sha1sha1sha1", ciClosed: true },
+      { id: "rec-valid", implementationStatus: "pending", mergedSha: null, ciClosed: null },
+    ]);
+    const delta = computeProvenanceRoutingDelta(gt);
+    assert.deepEqual(delta.execute, ["rec-valid"], "entry without id is skipped silently");
+  });
+});

@@ -2070,3 +2070,83 @@ export function computePerInstanceNormalization(
   if (typeof instanceScore !== "number" || !Number.isFinite(instanceScore)) return null;
   return Math.min(1, Math.max(0, Math.round((instanceScore / frontierScore) * 10000) / 10000));
 }
+
+// ── Provenance-based request-routing delta ────────────────────────────────────
+//
+// After CI-closure stabilization a recommendation that has been merged (non-empty
+// mergedSha) with CI green (ciClosed === true) should be SKIPPED in subsequent
+// planning cycles to avoid redundant re-implementation.
+//
+// A task that is merely "implemented" without a closed CI signal stays in the
+// execute queue — the implementation may still need verification or follow-up.
+
+/** Output of computeProvenanceRoutingDelta. */
+export interface ProvenanceRoutingDelta {
+  /** Recommendation IDs that should be dispatched for execution (not yet CI-closed). */
+  execute: string[];
+  /** Recommendation IDs that should be skipped (CI-closed, provenance complete). */
+  skip: string[];
+  /** Number of recommendations with full provenance (mergedSha + ciClosed). */
+  provenanceCompleteCount: number;
+  /** Compact human-readable summary for logging. */
+  provenanceSummary: string;
+}
+
+/**
+ * Compute a routing delta from benchmark ground-truth provenance data.
+ *
+ * Examines the most-recent cycle entry in benchmarkGroundTruth.entries and
+ * classifies each recommendation as either "execute" or "skip" based on
+ * CI-closure stabilization:
+ *
+ *   skip condition:  implementationStatus === "implemented" (or "implemented_correctly")
+ *                    AND mergedSha is non-empty
+ *                    AND ciClosed === true
+ *
+ * All other recommendations go to the execute queue.
+ *
+ * Returns empty arrays when no benchmark data is available (fail-open).
+ * Never throws.
+ *
+ * @param benchmarkGroundTruth — parsed benchmark_ground_truth.json content
+ */
+export function computeProvenanceRoutingDelta(
+  benchmarkGroundTruth: any,
+): ProvenanceRoutingDelta {
+  try {
+    const entries = Array.isArray(benchmarkGroundTruth?.entries)
+      ? benchmarkGroundTruth.entries
+      : [];
+    const latest = entries.length > 0 ? entries[0] : null;
+    const recs = Array.isArray(latest?.recommendations) ? latest.recommendations : [];
+
+    const execute: string[] = [];
+    const skip: string[] = [];
+
+    for (const rec of recs) {
+      if (!rec || typeof rec !== "object") continue;
+      const id = String((rec as any).id || "").trim();
+      if (!id) continue;
+
+      const status = String((rec as any).implementationStatus || "pending").toLowerCase().trim();
+      const mergedSha = String((rec as any).mergedSha || "").trim();
+      const ciClosed = Boolean((rec as any).ciClosed);
+
+      const isImplemented = status === "implemented" || status === "implemented_correctly";
+
+      if (isImplemented && mergedSha.length > 0 && ciClosed) {
+        skip.push(id);
+      } else {
+        execute.push(id);
+      }
+    }
+
+    const provenanceCompleteCount = skip.length;
+    const provenanceSummary =
+      `execute=${execute.length} skip=${skip.length} provenance-complete=${provenanceCompleteCount}`;
+
+    return { execute, skip, provenanceCompleteCount, provenanceSummary };
+  } catch {
+    return { execute: [], skip: [], provenanceCompleteCount: 0, provenanceSummary: "error" };
+  }
+}

@@ -1183,6 +1183,41 @@ export interface ResearchRecommendation {
   benchmarkScore: number | null;
   capacityGain: number | null;
   evidence: string;
+  // ── Provenance fields — populated when a recommendation reaches CI closure ──
+  /** Source URL where the benchmark result or implementation evidence was published. */
+  source_url: string | null;
+  /** Unique submission ID from the external benchmark system. */
+  submission_id: string | null;
+  /** Model tag/identifier that produced the implementation. */
+  model_tag: string | null;
+  /** Number of attempts taken to reach implementation. */
+  attempt_count: number | null;
+  /** Pull-request URL or identifier for the implementing change. */
+  prId: string | null;
+  /** Merged commit SHA — non-empty when the PR was successfully merged. */
+  mergedSha: string | null;
+  /** True when CI checks closed green after merge (enables skip routing). */
+  ciClosed: boolean | null;
+}
+
+/**
+ * Required provenance fields for a recommendation to be considered
+ * "provenance-complete" for CI-closure-based skip routing.
+ */
+export const PROVENANCE_COMPLETE_REQUIRED_FIELDS: ReadonlyArray<keyof ResearchRecommendation> =
+  Object.freeze(["mergedSha", "ciClosed"] as const);
+
+/**
+ * Return true when the given recommendation has a non-empty mergedSha AND
+ * ciClosed === true — the two conditions required for skip routing after
+ * CI-closure stabilization.
+ *
+ * A recommendation that is merely "implemented" without closed CI is not
+ * considered provenance-complete; it still flows to the execute queue.
+ */
+export function isProvenanceComplete(rec: ResearchRecommendation): boolean {
+  const sha = String(rec?.mergedSha || "").trim();
+  return sha.length > 0 && rec?.ciClosed === true;
 }
 
 /**
@@ -1222,6 +1257,13 @@ export function extractRecommendationsList(
       benchmarkScore: null,
       capacityGain: null,
       evidence: "",
+      source_url: null,
+      submission_id: null,
+      model_tag: null,
+      attempt_count: null,
+      prId: null,
+      mergedSha: null,
+      ciClosed: null,
     };
   });
 }

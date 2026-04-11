@@ -1,29 +1,180 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-04-11T08:22:22.525Z",
+  "updatedAt": "2026-04-11T12:17:19.776Z",
   "entries": [
     {
-      "cycleId": "2026-04-11T08:00:41.643Z",
-      "evaluatedAt": "2026-04-11T08:22:22.524Z",
+      "cycleId": "2026-04-11T12:06:31.996Z",
+      "evaluatedAt": "2026-04-11T12:17:19.774Z",
       "schemaVersion": 1,
       "recommendations": [
         {
-          "id": "rec-copilot-cloud-agent-control-plane-patter-0",
+          "id": "rec-model-session-control-plane-and-durable--0",
+          "topic": "Model/session control plane and durable memory primitives",
+          "summary": "1. **File change**: `src/core/worker_runner.ts` (primary), plus model config wiring in `src/core/prometheus.ts`.\n2. **Behavior change**: Introduce a typed BOX `ModelSettings` resolver with deterministic overlay semantics (explicitly set `parallel_tool_calls`, `store`, retry/backoff), and apply per-t",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-benchmark-driven-planning-and-routing-ta-1",
+          "topic": "Benchmark-driven planning and routing targets",
+          "summary": "1. **File change**: `src/core/prometheus.ts`.\n2. **Behavior change**: Add SWE-bench-aware model routing policy using split-specific targets (`Verified`, `Lite`, `Multilingual`, `Multimodal`) and cost-aware tie-breaking (`instance_cost`), with explicit scaffold-version normalization.\n3. **Verifiable ",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-governance-policy-precedence-and-auditab-2",
+          "topic": "Governance policy precedence and auditability",
+          "summary": "1. **File change**: `src/core/worker_runner.ts` and `src/core/jesus_supervisor.ts`.\n2. **Behavior change**: Implement hierarchical policy resolver with per-policy conflict strategy (`most_restrictive` vs `least_restrictive`) and explicit scope source (`enterprise`, `org`, `run`).\n3. **Verifiable out",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-self-improvement-loops-and-multi-agent-o-3",
+          "topic": "Self-improvement loops and multi-agent orchestration patterns",
+          "summary": "1. **File change**: `src/core/worker_runner.ts` and `src/core/athena.ts`.\n2. **Behavior change**: Add structured reflection generation after failed runs/rejections, store in persistent reflection memory, and inject top-k task-signature-matched reflections into retry prompts before next worker attemp",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-copilot-cloud-agent-control-plane-ci-clo-4",
           "topic": "Copilot Cloud Agent Control Plane Patterns for BOX Execution",
-          "summary": "1. **File(s)**: `src/core/prometheus.ts`, `src/core/worker_runner.ts`, `src/core/athena.ts`  \n2. **Specific behavior change**: Split execution into two explicit phases: Prometheus emits a `plan_only` artifact; worker_runner refuses code execution until `approved_plan=true`; Athena reviews branch dif",
+          "summary": "Split execution into plan_only and execution phases; worker_runner refuses code execution until approved_plan=true; Athena reviews branch diffs before merge.",
+          "implementationStatus": "implemented",
+          "benchmarkScore": 0.82,
+          "capacityGain": 0.15,
+          "evidence": "PR #268 merged; CI green on all required checks",
+          "source_url": "https://github.com/Ancora-Labs/Box/pull/268",
+          "submission_id": "box-ci-268",
+          "model_tag": "claude-sonnet-4-6",
+          "attempt_count": 1,
+          "prId": "https://github.com/Ancora-Labs/Box/pull/268",
+          "mergedSha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+          "ciClosed": true
+        },
+        {
+          "id": "rec-multi-agent-team-runtime-contracts-ci-cl-5",
+          "topic": "Multi-Agent Team Runtime Contracts (AutoGen)",
+          "summary": "Critic-loop review contract with deterministic stop token; max-iteration/cancellation fallback; persist stop_reason and streamed message events into task telemetry.",
+          "implementationStatus": "implemented",
+          "benchmarkScore": 0.78,
+          "capacityGain": 0.12,
+          "evidence": "PR #271 merged; CI green on all required checks",
+          "source_url": "https://github.com/Ancora-Labs/Box/pull/271",
+          "submission_id": "box-ci-271",
+          "model_tag": "claude-sonnet-4-6",
+          "attempt_count": 2,
+          "prId": "https://github.com/Ancora-Labs/Box/pull/271",
+          "mergedSha": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+          "ciClosed": true
+        }
+      ]
+    },
+    {
+      "cycleId": "2026-04-11T10:07:20.054Z",
+      "evaluatedAt": "2026-04-11T10:29:09.593Z",
+      "schemaVersion": 1,
+      "recommendations": [
+        {
+          "id": "rec-copilot-cli-deterministic-execution-and--0",
+          "topic": "Copilot CLI Deterministic Execution and Governance",
+          "summary": "1. **Which BOX file changes**: `src/core/worker_runner.ts` and `src/core/verification_gate.ts`.\n2. **Specific behavior change**: force worker launches to always include `--output-format=json --no-ask-user`, parse output as JSONL, and inject a deterministic `preToolUse` hook profile that enforces all",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
           "evidence": ""
         },
         {
-          "id": "rec-multi-agent-team-runtime-contracts-autog-1",
-          "topic": "Multi-Agent Team Runtime Contracts (AutoGen)",
-          "summary": "1. **File(s)**: `src/core/athena.ts`, `src/core/worker_runner.ts`  \n2. **Specific behavior change**: Implement critic-loop review contract with deterministic stop token and max-iteration/cancellation fallback; persist `stop_reason` and streamed message events into task telemetry.  \n3. **Verifiable o",
+          "id": "rec-multi-agent-runtime-reliability-patterns-1",
+          "topic": "Multi-Agent Runtime Reliability Patterns for BOX Worker Loops",
+          "summary": "1. **Which BOX file changes**: `src/core/worker_runner.ts`.\n2. **Specific behavior change**: implement a retry-policy module with normalized error context, hard-veto semantics, provider-advice separation, and composable `all/any` policy combinators for model/tool calls.\n3. **Verifiable outcome**: re",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
           "evidence": ""
+        },
+        {
+          "id": "rec-external-benchmark-calibration-for-box-s-2",
+          "topic": "External Benchmark Calibration for BOX Self-Improvement Targets",
+          "summary": "1. **Which BOX file changes**: `src/core/prometheus.ts`.\n2. **Specific behavior change**: add benchmark ingestion with provenance keys (`source_url`, `submission_id`, `model_tag`, `attempt_count`) and track BOX-vs-benchmark deltas by repository and year slices.\n3. **Verifiable outcome**: Prometheus ",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "cycleId": "2026-04-11T08:00:41.643Z",
+      "evaluatedAt": "2026-04-11T09:26:29.954Z",
+      "schemaVersion": 1,
+      "recommendations": [
+        {
+          "id": "rec-copilot-cloud-agent-control-plane-patter-0",
+          "topic": "Copilot Cloud Agent Control Plane Patterns for BOX Execution",
+          "summary": "1. **File(s)**: `src/core/prometheus.ts`, `src/core/worker_runner.ts`, `src/core/athena.ts`  \n2. **Specific behavior change**: Split execution into two explicit phases: Prometheus emits a `plan_only` artifact; worker_runner refuses code execution until `approved_plan=true`; Athena reviews branch dif",
+          "implementationStatus": "implemented",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "auto-resolved@2026-04-11T09:26:29.952Z: verified worker completion fallback (missing synthesis_sources linkage)",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-multi-agent-team-runtime-contracts-autog-1",
+          "topic": "Multi-Agent Team Runtime Contracts (AutoGen)",
+          "summary": "1. **File(s)**: `src/core/athena.ts`, `src/core/worker_runner.ts`  \n2. **Specific behavior change**: Implement critic-loop review contract with deterministic stop token and max-iteration/cancellation fallback; persist `stop_reason` and streamed message events into task telemetry.  \n3. **Verifiable o",
+          "implementationStatus": "implemented",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "auto-resolved@2026-04-11T09:26:29.952Z: verified worker completion fallback (missing synthesis_sources linkage)",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
         },
         {
           "id": "rec-durable-state-self-improvement-planning--2",
@@ -32,7 +183,14 @@
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
-          "evidence": ""
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
         }
       ]
     },
