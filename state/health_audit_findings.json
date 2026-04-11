@@ -15,20 +15,14 @@
       "capabilityNeeded": "system-improvement"
     }
   ],
-  "auditedAt": "2026-04-11T07:11:52.717Z",
+  "auditedAt": "2026-04-11T08:00:43.677Z",
   "latestMainCiConclusion": "success",
-  "latestMainCiUpdatedAt": "2026-04-11T07:09:52Z",
-  "workerLivenessSource": "legacy",
-  "canonicalCycleId": null,
-  "canonicalSessionsAvailable": false,
-  "legacySessionsAvailable": true,
-  "workerSessionSourceConflict": false,
-  "workerSessionSourceConflictReason": null,
+  "latestMainCiUpdatedAt": "2026-04-11T07:54:38Z",
   "capabilityExecutionSummary": {
     "freshnessWindowMs": 86400000,
     "traceCount": 200,
-    "recentTraceCount": 118,
-    "staleTraceCount": 82,
+    "recentTraceCount": 131,
+    "staleTraceCount": 69,
     "observedCapabilityCount": 16,
     "observedCapabilities": [
       "output-fidelity-gate",
@@ -48,24 +42,24 @@
       "governance-gate-evaluation",
       "worker-dispatch-invocation"
     ],
-    "lastObservedAt": "2026-04-11T06:58:31.771Z",
+    "lastObservedAt": "2026-04-11T07:31:14.760Z",
     "lastInvokedAtByCapability": {
-      "output-fidelity-gate": "2026-04-11T06:27:41.884Z",
-      "jesus-findings-to-plan-requirements": "2026-04-11T06:27:41.892Z",
+      "output-fidelity-gate": "2026-04-11T07:28:14.804Z",
+      "jesus-findings-to-plan-requirements": "2026-04-11T07:28:14.813Z",
       "ci-failure-log-injection": "2026-04-10T14:00:15.746Z",
-      "execution-strategy-role-plan-validation": "2026-04-11T06:27:41.901Z",
-      "packet-granularity-governor": "2026-04-11T06:27:41.908Z",
+      "execution-strategy-role-plan-validation": "2026-04-11T07:28:14.826Z",
+      "packet-granularity-governor": "2026-04-11T07:28:14.834Z",
       "prometheus-token-budget-floor": "2026-04-10T18:58:01.470Z",
-      "prometheus-plan-structural-lint": "2026-04-11T06:27:41.918Z",
-      "pre-athena-plan-structural-validation": "2026-04-11T06:27:41.928Z",
-      "athena-review-entry": "2026-04-11T06:27:41.999Z",
-      "athena-review-exit": "2026-04-11T06:30:04.797Z",
-      "athena-gate-pre-check": "2026-04-11T06:30:04.804Z",
-      "athena-gate-feasibility-check": "2026-04-11T06:30:04.811Z",
+      "prometheus-plan-structural-lint": "2026-04-11T07:28:14.844Z",
+      "pre-athena-plan-structural-validation": "2026-04-11T07:28:14.855Z",
+      "athena-review-entry": "2026-04-11T07:28:14.900Z",
+      "athena-review-exit": "2026-04-11T07:31:14.639Z",
+      "athena-gate-pre-check": "2026-04-11T07:31:14.647Z",
+      "athena-gate-feasibility-check": "2026-04-11T07:31:14.657Z",
       "dispatch-block-reason-reporting": "2026-04-10T09:33:54.674Z",
-      "specialization-admission-control": "2026-04-11T06:30:04.839Z",
-      "governance-gate-evaluation": "2026-04-11T06:30:04.846Z",
-      "worker-dispatch-invocation": "2026-04-11T06:58:31.771Z"
+      "specialization-admission-control": "2026-04-11T07:31:14.677Z",
+      "governance-gate-evaluation": "2026-04-11T07:31:14.685Z",
+      "worker-dispatch-invocation": "2026-04-11T07:31:14.760Z"
     },
     "recentTraces": [
       {
@@ -663,6 +657,71 @@
         "capability": "worker-dispatch-invocation",
         "observedAt": "2026-04-11T06:58:31.771Z",
         "context": "role=infrastructure-worker batch=2/2"
+      },
+      {
+        "capability": "output-fidelity-gate",
+        "observedAt": "2026-04-11T07:28:14.804Z",
+        "context": "contaminated=false retried=false"
+      },
+      {
+        "capability": "jesus-findings-to-plan-requirements",
+        "observedAt": "2026-04-11T07:28:14.813Z",
+        "context": "mapped=2 excluded=0"
+      },
+      {
+        "capability": "execution-strategy-role-plan-validation",
+        "observedAt": "2026-04-11T07:28:14.826Z",
+        "context": "required=0 missing=0 injected=0 retried=false"
+      },
+      {
+        "capability": "packet-granularity-governor",
+        "observedAt": "2026-04-11T07:28:14.834Z",
+        "context": "thinCount=0 total=5"
+      },
+      {
+        "capability": "prometheus-plan-structural-lint",
+        "observedAt": "2026-04-11T07:28:14.844Z",
+        "context": "plans=5 invalid=0 passRate=1"
+      },
+      {
+        "capability": "pre-athena-plan-structural-validation",
+        "observedAt": "2026-04-11T07:28:14.855Z",
+        "context": "plans=5 passRate=1"
+      },
+      {
+        "capability": "athena-review-entry",
+        "observedAt": "2026-04-11T07:28:14.900Z",
+        "context": "planCount=5 cycleReqs=4"
+      },
+      {
+        "capability": "athena-review-exit",
+        "observedAt": "2026-04-11T07:31:14.639Z",
+        "context": "approved=true autoApproved=false overallScore=7"
+      },
+      {
+        "capability": "athena-gate-pre-check",
+        "observedAt": "2026-04-11T07:31:14.647Z",
+        "context": "gateBlockRisk=low autoApproved=false"
+      },
+      {
+        "capability": "athena-gate-feasibility-check",
+        "observedAt": "2026-04-11T07:31:14.657Z",
+        "context": "gateBlockRisk=low"
+      },
+      {
+        "capability": "specialization-admission-control",
+        "observedAt": "2026-04-11T07:31:14.677Z",
+        "context": "blocked=false reason=pass"
+      },
+      {
+        "capability": "governance-gate-evaluation",
+        "observedAt": "2026-04-11T07:31:14.685Z",
+        "context": "blocked=false planCount=5"
+      },
+      {
+        "capability": "worker-dispatch-invocation",
+        "observedAt": "2026-04-11T07:31:14.760Z",
+        "context": "role=infrastructure-worker batch=1/3"
       }
     ]
   },
@@ -1262,6 +1321,71 @@
       "capability": "worker-dispatch-invocation",
       "observedAt": "2026-04-11T06:58:31.771Z",
       "context": "role=infrastructure-worker batch=2/2"
+    },
+    {
+      "capability": "output-fidelity-gate",
+      "observedAt": "2026-04-11T07:28:14.804Z",
+      "context": "contaminated=false retried=false"
+    },
+    {
+      "capability": "jesus-findings-to-plan-requirements",
+      "observedAt": "2026-04-11T07:28:14.813Z",
+      "context": "mapped=2 excluded=0"
+    },
+    {
+      "capability": "execution-strategy-role-plan-validation",
+      "observedAt": "2026-04-11T07:28:14.826Z",
+      "context": "required=0 missing=0 injected=0 retried=false"
+    },
+    {
+      "capability": "packet-granularity-governor",
+      "observedAt": "2026-04-11T07:28:14.834Z",
+      "context": "thinCount=0 total=5"
+    },
+    {
+      "capability": "prometheus-plan-structural-lint",
+      "observedAt": "2026-04-11T07:28:14.844Z",
+      "context": "plans=5 invalid=0 passRate=1"
+    },
+    {
+      "capability": "pre-athena-plan-structural-validation",
+      "observedAt": "2026-04-11T07:28:14.855Z",
+      "context": "plans=5 passRate=1"
+    },
+    {
+      "capability": "athena-review-entry",
+      "observedAt": "2026-04-11T07:28:14.900Z",
+      "context": "planCount=5 cycleReqs=4"
+    },
+    {
+      "capability": "athena-review-exit",
+      "observedAt": "2026-04-11T07:31:14.639Z",
+      "context": "approved=true autoApproved=false overallScore=7"
+    },
+    {
+      "capability": "athena-gate-pre-check",
+      "observedAt": "2026-04-11T07:31:14.647Z",
+      "context": "gateBlockRisk=low autoApproved=false"
+    },
+    {
+      "capability": "athena-gate-feasibility-check",
+      "observedAt": "2026-04-11T07:31:14.657Z",
+      "context": "gateBlockRisk=low"
+    },
+    {
+      "capability": "specialization-admission-control",
+      "observedAt": "2026-04-11T07:31:14.677Z",
+      "context": "blocked=false reason=pass"
+    },
+    {
+      "capability": "governance-gate-evaluation",
+      "observedAt": "2026-04-11T07:31:14.685Z",
+      "context": "blocked=false planCount=5"
+    },
+    {
+      "capability": "worker-dispatch-invocation",
+      "observedAt": "2026-04-11T07:31:14.760Z",
+      "context": "role=infrastructure-worker batch=1/3"
     }
   ],
   "capabilityInvocationStatus": [
@@ -1273,27 +1397,27 @@
     {
       "capability": "jesus-findings-to-plan-requirements",
       "status": "invoked",
-      "lastInvokedAt": "2026-04-11T06:27:41.892Z"
+      "lastInvokedAt": "2026-04-11T07:28:14.813Z"
     },
     {
       "capability": "athena-gate-pre-check",
       "status": "invoked",
-      "lastInvokedAt": "2026-04-11T06:30:04.804Z"
+      "lastInvokedAt": "2026-04-11T07:31:14.647Z"
     },
     {
       "capability": "athena-gate-feasibility-check",
       "status": "invoked",
-      "lastInvokedAt": "2026-04-11T06:30:04.811Z"
+      "lastInvokedAt": "2026-04-11T07:31:14.657Z"
     },
     {
       "capability": "prometheus-plan-structural-lint",
       "status": "invoked",
-      "lastInvokedAt": "2026-04-11T06:27:41.918Z"
+      "lastInvokedAt": "2026-04-11T07:28:14.844Z"
     },
     {
       "capability": "pre-athena-plan-structural-validation",
       "status": "invoked",
-      "lastInvokedAt": "2026-04-11T06:27:41.928Z"
+      "lastInvokedAt": "2026-04-11T07:28:14.855Z"
     },
     {
       "capability": "prometheus-token-budget-floor",
@@ -1308,17 +1432,17 @@
     {
       "capability": "packet-granularity-governor",
       "status": "invoked",
-      "lastInvokedAt": "2026-04-11T06:27:41.908Z"
+      "lastInvokedAt": "2026-04-11T07:28:14.834Z"
     },
     {
       "capability": "output-fidelity-gate",
       "status": "invoked",
-      "lastInvokedAt": "2026-04-11T06:27:41.884Z"
+      "lastInvokedAt": "2026-04-11T07:28:14.804Z"
     },
     {
       "capability": "specialization-admission-control",
       "status": "invoked",
-      "lastInvokedAt": "2026-04-11T06:30:04.839Z"
+      "lastInvokedAt": "2026-04-11T07:31:14.677Z"
     }
   ]
 }

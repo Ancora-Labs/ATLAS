@@ -13,6 +13,7 @@ import {
   loadLedgerMeta,
   saveLedgerFull,
   autoCloseVerifiedDebt,
+  reconcileReplayClosedDebtLineage,
   reconcileReplayClosureBacklog,
   MANDATORY_REPLAY_LINEAGE_IDS,
   prioritizeStaleDebts,
@@ -518,6 +519,64 @@ describe("reconcileReplayClosureBacklog", () => {
     const reconciled = reconcileReplayClosureBacklog(backlog, []);
     assert.deepEqual(MANDATORY_REPLAY_LINEAGE_IDS, ["CF-001", "CF-002", "CF-003", "CF-004", "CF-005"]);
     assert.equal(reconciled.items[1].status, "closed_via_replay_contract");
+  });
+});
+
+describe("reconcileReplayClosedDebtLineage", () => {
+  function makeReplayClosedEntry(lesson: string, id: string) {
+    return {
+      id,
+      lesson,
+      fingerprint: computeFingerprint(lesson),
+      owner: "evolution-worker",
+      openedCycle: 1,
+      dueCycle: 4,
+      severity: "warning",
+      closedAt: "2026-01-01T00:00:00.000Z",
+      closureEvidence: "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/abc1234, inline://clean-tree-status, inline://npm-test-output-block]",
+      cyclesOpen: 0,
+    };
+  }
+
+  function makeOpenEntry(lesson: string, id: string) {
+    return {
+      id,
+      lesson,
+      fingerprint: computeFingerprint(lesson),
+      owner: "evolution-worker",
+      openedCycle: 25,
+      dueCycle: 28,
+      severity: "warning",
+      closedAt: null,
+      closureEvidence: null,
+      cyclesOpen: 0,
+    };
+  }
+
+  it("closes later duplicate entries when an earlier replay-closed lineage exists", () => {
+    const lesson = "Implement a code-level gate in the worker runtime that blocks emission of BOX_STATUS=done unless the output buffer contains a verbatim block with both raw npm test stdout and a git SHA.";
+    const ledger = [
+      makeReplayClosedEntry(lesson, "debt-1-8"),
+      makeOpenEntry(lesson, "debt-25-30"),
+    ];
+
+    const count = reconcileReplayClosedDebtLineage(ledger);
+
+    assert.equal(count, 1);
+    assert.ok(ledger[1].closedAt, "duplicate open entry must be closed");
+    assert.match(String(ledger[1].closureEvidence || ""), /replay-closure:v1/);
+  });
+
+  it("does not close unrelated open entries without replay-closed fingerprint matches", () => {
+    const ledger = [
+      makeReplayClosedEntry("Workers using node --test tests/** glob patterns instead of npm test", "debt-1-3"),
+      makeOpenEntry("Completely different unresolved planner issue", "debt-25-99"),
+    ];
+
+    const count = reconcileReplayClosedDebtLineage(ledger);
+
+    assert.equal(count, 0);
+    assert.equal(ledger[1].closedAt, null);
   });
 });
 

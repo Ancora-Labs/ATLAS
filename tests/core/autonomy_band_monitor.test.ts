@@ -459,37 +459,37 @@ describe("evaluateInBandThresholds — rawPremiumEfficiency (new field)", () => 
 });
 
 describe("evaluateInBandThresholds — executionAdjustedPremiumEfficiency (new field)", () => {
-  it("uses executionAdjustedPremiumEfficiency over legacy fields when present (execution_adjusted variant)", () => {
+  it("prefers premiumEfficiencyAdjusted over executionAdjustedPremiumEfficiency for execution_adjusted variant", () => {
     const history = makeHistory(35, {
       completionRate: 0.90,
       premiumEfficiency: 0.30,
-      premiumEfficiencyAdjusted: 0.40,  // below threshold
-      executionAdjustedPremiumEfficiency: 0.75,  // above threshold — wins
+      premiumEfficiencyAdjusted: 0.40,
+      executionAdjustedPremiumEfficiency: 0.75,
       athenaRejectRate: 0.05,
     });
     const thresholds: Thresholds = { ...DEFAULT_THRESHOLDS, premiumEfficiencyGateVariant: "execution_adjusted" };
     const checks = evaluateInBandThresholds(history, thresholds);
-    assert.ok(checks.premiumEfficiencyMet, "executionAdjustedPremiumEfficiency=0.75 should meet threshold");
+    assert.ok(!checks.premiumEfficiencyMet, "premiumEfficiencyAdjusted=0.40 should win and fail threshold");
   });
 
-  it("falls back to premiumEfficiencyAdjusted when executionAdjustedPremiumEfficiency is null", () => {
+  it("falls back to executionAdjustedPremiumEfficiency when premiumEfficiencyAdjusted is null", () => {
     const history = makeHistory(35, {
       completionRate: 0.90,
       premiumEfficiency: 0.30,
-      premiumEfficiencyAdjusted: 0.70,
-      executionAdjustedPremiumEfficiency: null,
+      premiumEfficiencyAdjusted: null,
+      executionAdjustedPremiumEfficiency: 0.70,
       athenaRejectRate: 0.05,
     });
     const thresholds: Thresholds = { ...DEFAULT_THRESHOLDS, premiumEfficiencyGateVariant: "execution_adjusted" };
     const checks = evaluateInBandThresholds(history, thresholds);
-    assert.ok(checks.premiumEfficiencyMet, "should fall back to premiumEfficiencyAdjusted=0.70 when new field is null");
+    assert.ok(checks.premiumEfficiencyMet, "should fall back to executionAdjustedPremiumEfficiency=0.70 when premiumEfficiencyAdjusted is null");
   });
 
   it("negative path: executionAdjustedPremiumEfficiency below threshold fails gate", () => {
     const history = makeHistory(35, {
       completionRate: 0.90,
       premiumEfficiency: 0.90,
-      premiumEfficiencyAdjusted: 0.90,
+      premiumEfficiencyAdjusted: null,
       executionAdjustedPremiumEfficiency: 0.45,  // below 0.60 threshold
       athenaRejectRate: 0.05,
     });

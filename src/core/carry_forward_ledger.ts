@@ -347,6 +347,35 @@ export function autoCloseVerifiedDebt(
   return closedCount;
 }
 
+export function reconcileReplayClosedDebtLineage(ledger: any[]): number {
+  if (!Array.isArray(ledger) || ledger.length === 0) return 0;
+
+  const closedReplayEvidenceByFingerprint = new Map<string, string>();
+  for (const entry of ledger) {
+    if (!entry?.closedAt) continue;
+    if (!hasReplayClosureEvidence(entry?.closureEvidence)) continue;
+    const fingerprint = entry.fingerprint || computeFingerprint(String(entry.lesson || ""));
+    if (!fingerprint || closedReplayEvidenceByFingerprint.has(fingerprint)) continue;
+    closedReplayEvidenceByFingerprint.set(fingerprint, String(entry.closureEvidence || ""));
+  }
+
+  if (closedReplayEvidenceByFingerprint.size === 0) return 0;
+
+  let closedCount = 0;
+  for (const entry of ledger) {
+    if (entry?.closedAt) continue;
+    const fingerprint = entry.fingerprint || computeFingerprint(String(entry.lesson || ""));
+    if (!fingerprint) continue;
+    const evidence = closedReplayEvidenceByFingerprint.get(fingerprint);
+    if (!evidence) continue;
+    entry.closedAt = new Date().toISOString();
+    entry.closureEvidence = evidence.slice(0, 500);
+    closedCount++;
+  }
+
+  return closedCount;
+}
+
 export function reconcileReplayClosureBacklog(backlog: any, ledger: any[]) {
   const sourceItems = Array.isArray(backlog?.items) ? backlog.items : [];
   const normalizedLedger = Array.isArray(ledger) ? ledger : [];

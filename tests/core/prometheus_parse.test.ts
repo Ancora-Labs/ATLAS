@@ -77,6 +77,9 @@ import {
   selectBestCandidatePlans,
   MAX_CANDIDATE_SETS,
   CANDIDATE_TIE_THRESHOLD,
+  computeMandatoryFindingsPreflight,
+  MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS,
+  MANDATORY_FINDINGS_PREFLIGHT_STATUS,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments, CANDIDATE_GENERATION_SECTION } from "../../src/core/prompt_compiler.js";
 import {
@@ -1970,7 +1973,7 @@ describe("checkPacketCompleteness — generation-boundary gate", () => {
       wave: 1,
       capacityDelta: 0.15,
       requestROI: 2.5,
-      verification_commands: ["npm test"],
+      verification_commands: ["tests/core/prometheus_parse.test.ts"],
       ...overrides,
     };
   }
@@ -1981,67 +1984,76 @@ describe("checkPacketCompleteness — generation-boundary gate", () => {
     assert.deepEqual(result.reasons, []);
   });
 
-  it("returns recoverable=false with no_task_identity when task/title/task_id/id are all absent", () => {
+  it("returns recoverable=false with missing task identity, ROI, and verification coupling when raw packet is skeletal", () => {
     const result = checkPacketCompleteness({ capacityDelta: 0.1, requestROI: 1.5 });
     assert.equal(result.recoverable, false);
     assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.NO_TASK_IDENTITY));
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING));
   });
 
-  it("returns recoverable=true when capacityDelta is absent (normalization synthesizes default)", () => {
+  it("returns recoverable=false when capacityDelta is absent", () => {
     const plan = validRawPlan();
     delete (plan as any).capacityDelta;
     const result = checkPacketCompleteness(plan);
-    assert.equal(result.recoverable, true);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_CAPACITY_DELTA));
   });
 
-  it("returns recoverable=true when capacityDelta is out of range (normalization synthesizes default)", () => {
+  it("returns recoverable=false when capacityDelta is out of range", () => {
     const result = checkPacketCompleteness(validRawPlan({ capacityDelta: 2.0 }));
-    assert.equal(result.recoverable, true);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_CAPACITY_DELTA));
   });
 
-  it("returns recoverable=true when capacityDelta is non-finite (normalization synthesizes default)", () => {
+  it("returns recoverable=false when capacityDelta is non-finite", () => {
     const result = checkPacketCompleteness(validRawPlan({ capacityDelta: NaN }));
-    assert.equal(result.recoverable, true);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_CAPACITY_DELTA));
   });
 
-  it("returns recoverable=true when requestROI is absent (normalization synthesizes default)", () => {
+  it("returns recoverable=false when requestROI is absent", () => {
     const plan = validRawPlan();
     delete (plan as any).requestROI;
     const result = checkPacketCompleteness(plan);
-    assert.equal(result.recoverable, true);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_REQUEST_ROI));
   });
 
-  it("returns recoverable=true when requestROI is zero (normalization synthesizes default)", () => {
+  it("returns recoverable=false when requestROI is zero", () => {
     const result = checkPacketCompleteness(validRawPlan({ requestROI: 0 }));
-    assert.equal(result.recoverable, true);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_REQUEST_ROI));
   });
 
-  it("returns recoverable=true when requestROI is negative (normalization synthesizes default)", () => {
+  it("returns recoverable=false when requestROI is negative", () => {
     const result = checkPacketCompleteness(validRawPlan({ requestROI: -1 }));
-    assert.equal(result.recoverable, true);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_REQUEST_ROI));
   });
 
-  it("accepts non-empty verification text when verification_commands is absent", () => {
-    const plan = validRawPlan({ verification: "npm test" });
+  it("accepts specific verification text when verification_commands is absent", () => {
+    const plan = validRawPlan({ verification: "tests/core/prometheus_parse.test.ts" });
     delete (plan as any).verification_commands;
     const result = checkPacketCompleteness(plan);
     assert.equal(result.recoverable, true);
-    assert.equal(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING), false);
+    assert.deepEqual(result.reasons, []);
   });
 
-  it("keeps packet recoverable when verification_commands is absent and verification is blank", () => {
+  it("returns recoverable=false when verification_commands is absent and verification is blank", () => {
     const plan = validRawPlan({ verification: "   " });
     delete (plan as any).verification_commands;
     const result = checkPacketCompleteness(plan);
-    assert.equal(result.recoverable, true);
-    assert.equal(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING), false);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING));
   });
 
-  it("only reports no_task_identity when task is missing (capacityDelta/requestROI handled by normalization)", () => {
-    const result = checkPacketCompleteness({ wave: 1 }); // no task — only unrecoverable condition
+  it("reports all unrecoverable raw-field reasons when task is missing", () => {
+    const result = checkPacketCompleteness({ wave: 1 });
     assert.equal(result.recoverable, false);
     assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.NO_TASK_IDENTITY));
-    assert.equal(result.reasons.length, 1);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_CAPACITY_DELTA));
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_REQUEST_ROI));
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING));
   });
 
   it("accepts title as task identity fallback", () => {
@@ -2074,45 +2086,51 @@ describe("checkPacketCompleteness — generation-boundary gate", () => {
     assert.equal(result.recoverable, true);
   });
 
-  it("negative path: only task identity is checked at raw stage", () => {
-    // No task identity → single reason (capacityDelta/requestROI not checked here)
+  it("negative path: raw stage can report multiple unrecoverable reasons together", () => {
     const result = checkPacketCompleteness({ capacityDelta: 999, requestROI: 2.0 });
     assert.equal(result.recoverable, false);
     assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.NO_TASK_IDENTITY));
-    assert.equal(result.reasons.length, 1);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_CAPACITY_DELTA));
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING));
   });
 
-  // ── Raw packet stage: verification coupling is synthesized downstream ─────
+  // ── Raw packet stage: verification coupling is mandatory ─────────────────
 
-  it("returns recoverable=true when verification_commands is absent", () => {
+  it("returns recoverable=false when verification_commands is absent", () => {
     const plan = validRawPlan();
     delete (plan as any).verification_commands;
     const result = checkPacketCompleteness(plan);
-    assert.equal(result.recoverable, true);
-    assert.equal(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING), false);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING));
   });
 
-  it("returns recoverable=true when verification_commands is empty array", () => {
+  it("returns recoverable=false when verification_commands is empty array", () => {
     const result = checkPacketCompleteness(validRawPlan({ verification_commands: [] }));
-    assert.equal(result.recoverable, true);
-    assert.equal(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING), false);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING));
   });
 
-  it("returns recoverable=true when all verification_commands are empty strings", () => {
+  it("returns recoverable=false when all verification_commands are empty strings", () => {
     const result = checkPacketCompleteness(validRawPlan({ verification_commands: ["", "  "] }));
-    assert.equal(result.recoverable, true);
-    assert.equal(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING), false);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING));
   });
 
   it("returns recoverable=true when verification_commands has one non-empty command", () => {
-    const result = checkPacketCompleteness(validRawPlan({ verification_commands: ["npm test"] }));
+    const result = checkPacketCompleteness(validRawPlan({ verification_commands: ["tests/core/prometheus_parse.test.ts"] }));
     assert.equal(result.recoverable, true);
     assert.deepEqual(result.reasons, []);
   });
 
-  it("negative path: packet with all unrecoverable fields does not add missing coupling at raw stage", () => {
+  it("negative path: packet with all unrecoverable fields includes missing verification coupling", () => {
     const result = checkPacketCompleteness({ wave: 1 }); // missing everything
-    assert.equal(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING), false);
+    assert.equal(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING), true);
+  });
+
+  it("returns recoverable=false when verification_commands contain only non-specific CLI commands", () => {
+    const result = checkPacketCompleteness(validRawPlan({ verification_commands: ["npm test", "pnpm vitest"] }));
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING));
   });
 });
 
@@ -6321,5 +6339,139 @@ describe("selectBestCandidateSet — deterministic candidate selection", () => {
     const r1 = selectBestCandidateSet([setA, setB]);
     const r2 = selectBestCandidateSet([setA, setB]);
     assert.deepEqual(r1.bestCandidates, r2.bestCandidates, "deterministic on repeat calls");
+  });
+});
+
+// ── computeMandatoryFindingsPreflight — pre-planning truth preflight gate ─────
+
+describe("computeMandatoryFindingsPreflight", () => {
+  const now = Date.now();
+
+  const ciBreakFinding = {
+    id: "ci-fix",
+    area: "ci",
+    severity: "critical" as const,
+    finding: "CI on main is failing",
+    remediation: "Fix CI",
+    capabilityNeeded: "ci-fix",
+  };
+
+  const ciSetupFinding = {
+    id: "ci-setup",
+    area: "ci",
+    severity: "warning" as const,
+    finding: "CI not configured",
+    remediation: "Add workflow",
+    capabilityNeeded: "ci-setup",
+  };
+
+  const capGapFinding = {
+    id: "api-design",
+    area: "api-design",
+    severity: "warning" as const,
+    finding: "No structured schema for plans",
+    remediation: "Add JSON schema validation",
+    capabilityNeeded: "api-design",
+  };
+
+  it("trusts all findings when auditedAt is fresh (within 24h)", () => {
+    const freshAuditedAt = new Date(now - 1 * 60 * 60 * 1000).toISOString(); // 1h ago
+    const payload = { auditedAt: freshAuditedAt };
+    const result = computeMandatoryFindingsPreflight([ciBreakFinding, capGapFinding], payload, now);
+
+    assert.equal(result.preflightStatus, MANDATORY_FINDINGS_PREFLIGHT_STATUS.TRUSTED);
+    assert.equal(result.trustedFindings.length, 2);
+    assert.equal(result.quarantinedCount, 0);
+    assert.equal(result.sourceFresh, true);
+    assert.ok(Number.isFinite(result.sourceAgeMs));
+    assert.ok(result.sourceAgeMs < MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS);
+  });
+
+  it("quarantines CI-break findings when auditedAt is stale (older than 24h)", () => {
+    const staleAuditedAt = new Date(now - 25 * 60 * 60 * 1000).toISOString(); // 25h ago
+    const payload = { auditedAt: staleAuditedAt };
+    const result = computeMandatoryFindingsPreflight([ciBreakFinding, capGapFinding], payload, now);
+
+    assert.equal(result.preflightStatus, MANDATORY_FINDINGS_PREFLIGHT_STATUS.DEGRADED,
+      "degraded when some CI findings quarantined but non-CI findings trusted");
+    assert.equal(result.quarantinedCount, 1, "only the CI-break finding is quarantined");
+    assert.equal(result.trustedFindings.length, 1, "non-CI capability gap remains trusted");
+    assert.equal(result.trustedFindings[0].id, "api-design");
+    assert.equal(result.quarantinedFindings[0].id, "ci-fix");
+    assert.equal(result.sourceFresh, false);
+  });
+
+  it("quarantines ALL findings (quarantined status) when all are CI-related and stale", () => {
+    const staleAuditedAt = new Date(now - 30 * 60 * 60 * 1000).toISOString(); // 30h ago
+    const payload = { auditedAt: staleAuditedAt };
+    const result = computeMandatoryFindingsPreflight([ciBreakFinding, ciSetupFinding], payload, now);
+
+    assert.equal(result.preflightStatus, MANDATORY_FINDINGS_PREFLIGHT_STATUS.QUARANTINED);
+    assert.equal(result.quarantinedCount, 2);
+    assert.equal(result.trustedFindings.length, 0);
+  });
+
+  it("quarantines CI-related findings when auditedAt is absent (Infinity age)", () => {
+    const payload = {}; // no auditedAt
+    const result = computeMandatoryFindingsPreflight([ciBreakFinding, capGapFinding], payload, now);
+
+    assert.equal(result.sourceFresh, false);
+    assert.equal(result.sourceAgeMs, Infinity);
+    assert.equal(result.quarantinedCount, 1, "CI finding must be quarantined when no auditedAt");
+    assert.equal(result.trustedFindings[0].id, "api-design", "non-CI gap remains trusted");
+  });
+
+  it("quarantines CI-related findings when auditedAt is invalid ISO string", () => {
+    const payload = { auditedAt: "not-a-date" };
+    const result = computeMandatoryFindingsPreflight([ciBreakFinding], payload, now);
+
+    assert.equal(result.sourceFresh, false);
+    assert.equal(result.sourceAgeMs, Infinity);
+    assert.equal(result.quarantinedCount, 1);
+  });
+
+  it("returns trusted for all non-CI findings even when source is stale", () => {
+    const staleAuditedAt = new Date(now - 48 * 60 * 60 * 1000).toISOString(); // 2 days ago
+    const payload = { auditedAt: staleAuditedAt };
+    const result = computeMandatoryFindingsPreflight([capGapFinding], payload, now);
+
+    assert.equal(result.preflightStatus, MANDATORY_FINDINGS_PREFLIGHT_STATUS.TRUSTED,
+      "no CI findings to quarantine → trusted status even with stale source");
+    assert.equal(result.trustedFindings.length, 1);
+    assert.equal(result.quarantinedCount, 0);
+    assert.equal(result.sourceFresh, false);
+  });
+
+  it("returns trusted with empty findings array regardless of source age", () => {
+    const payload = {};
+    const result = computeMandatoryFindingsPreflight([], payload, now);
+
+    assert.equal(result.preflightStatus, MANDATORY_FINDINGS_PREFLIGHT_STATUS.TRUSTED);
+    assert.equal(result.trustedFindings.length, 0);
+    assert.equal(result.quarantinedCount, 0);
+  });
+
+  it("includes machine-readable quarantine reasons per quarantined finding", () => {
+    const staleAuditedAt = new Date(now - 26 * 60 * 60 * 1000).toISOString();
+    const payload = { auditedAt: staleAuditedAt };
+    const result = computeMandatoryFindingsPreflight([ciBreakFinding], payload, now);
+
+    assert.equal(result.quarantineReasons.length, 1);
+    assert.ok(result.quarantineReasons[0].includes("mandatory_finding_quarantined"), "reason must be machine-readable");
+    assert.ok(result.quarantineReasons[0].includes("ci-fix"), "reason must identify the finding");
+    assert.ok(result.quarantineReasons[0].includes("stale_ci_evidence"), "reason must name the quarantine cause");
+  });
+
+  it("MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS is 24 hours", () => {
+    assert.equal(MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS, 24 * 60 * 60 * 1000);
+  });
+
+  it("negative path: at-boundary (exactly at threshold) is still treated as stale", () => {
+    // sourceAgeMs === MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS + 1 is over threshold
+    const atBoundaryMs = now - MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS - 1;
+    const payload = { auditedAt: new Date(atBoundaryMs).toISOString() };
+    const result = computeMandatoryFindingsPreflight([ciBreakFinding], payload, now);
+    assert.equal(result.sourceFresh, false, "just-over-threshold must not be considered fresh");
+    assert.equal(result.quarantinedCount, 1);
   });
 });

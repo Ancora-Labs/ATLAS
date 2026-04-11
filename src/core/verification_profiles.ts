@@ -281,7 +281,11 @@ export function buildVerificationChecklist(workerKind) {
   lines.push("## POST-MERGE VERIFICATION ARTIFACT (MANDATORY)");
   lines.push("After merging your PR, you MUST include the following in your output (exact format required by the gate):");
   lines.push("1. BOX_MERGED_SHA=<7-40 char hex commit SHA>   — run: git rev-parse HEAD");
-  lines.push("2. CLEAN_TREE_STATUS=clean                     — run: git status --porcelain (must be empty output)");
+  lines.push("2. CLEAN_TREE_STATUS=clean                     — run: git status --porcelain when the whole repo is clean");
+  lines.push("   OR, for shared dirty worktrees caused by unrelated tasks:");
+  lines.push("   CLEAN_TREE_STATUS=dirty-other-tasks-only");
+  lines.push("   TASK_SCOPED_CLEAN_STATUS=clean");
+  lines.push("   TASK_SCOPED_CLEAN_TARGETS=<comma-separated task files>   — prove with: git status --porcelain -- <task files>");
   lines.push("3. A raw npm test block using these exact markers:");
   lines.push("");
   lines.push("===NPM TEST OUTPUT START===");

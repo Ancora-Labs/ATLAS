@@ -757,7 +757,7 @@ function buildInstruction(task, athenaHints = null) {
     `  - Output BOX_FILES_TOUCHED=<comma-separated list of changed files>`,
     `  - Output BOX_BRANCH=<branch-name> if you create/switch a branch`,
     `  - Include a canonical VERIFICATION_REPORT block with pass/fail/n/a values`,
-    `  - Include BOX_MERGED_SHA=<sha>, CLEAN_TREE_STATUS=clean, and the ===NPM TEST OUTPUT START/END=== block`
+    `  - Include BOX_MERGED_SHA=<sha>, and either CLEAN_TREE_STATUS=clean or CLEAN_TREE_STATUS=dirty-other-tasks-only + TASK_SCOPED_CLEAN_STATUS=clean + TASK_SCOPED_CLEAN_TARGETS=<files>, plus the ===NPM TEST OUTPUT START/END=== block`
   ].join("\n");
 
   return {

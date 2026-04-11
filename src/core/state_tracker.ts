@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+﻿import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureParent, readJson, writeJson } from "./fs_utils.js";
 import { emitEvent } from "./logger.js";
@@ -907,6 +907,14 @@ export interface CapabilityExecutionTrace {
   observedAt: string;
   /** Free-form context string (truncated to 500 chars on write). */
   context: string;
+  /** Role that triggered this capability execution (e.g. 'evolution-worker'). */
+  role?: string;
+  /** Wave number within the plan this capability was executed for. */
+  wave?: number | null;
+  /** Governance gate identifier that was active when this capability ran. */
+  gateId?: string | null;
+  /** Outcome of the governance gate or capability execution step. */
+  outcome?: string | null;
 }
 
 export interface CapabilityExecutionSummary {
@@ -932,10 +940,22 @@ export interface CapabilityExecutionSummary {
  * @param capability — canonical capability identifier (e.g. "ci-failure-log-injection")
  * @param context    — human-readable context for observability
  */
+export interface CapabilityTraceMetadata {
+  /** Role that triggered this capability execution (e.g. 'evolution-worker'). */
+  role?: string;
+  /** Wave number within the plan this capability was executed for. */
+  wave?: number | null;
+  /** Governance gate identifier that was active when this capability ran. */
+  gateId?: string | null;
+  /** Outcome of the governance gate or capability execution step. */
+  outcome?: string | null;
+}
+
 export async function recordCapabilityExecution(
   config: { paths: { stateDir: string } },
   capability: string,
   context: string,
+  meta?: CapabilityTraceMetadata,
 ): Promise<void> {
   const stateDir = config?.paths?.stateDir || "state";
   const filePath = path.join(stateDir, "capability_execution_traces.json");
@@ -949,6 +969,10 @@ export async function recordCapabilityExecution(
       capability: String(capability || "").trim().toLowerCase(),
       observedAt: new Date().toISOString(),
       context: String(context || "").slice(0, 500),
+      ...(meta?.role != null && { role: String(meta.role).slice(0, 80) }),
+      ...(meta?.wave != null && { wave: Number.isFinite(Number(meta.wave)) ? Number(meta.wave) : null }),
+      ...(meta?.gateId != null && { gateId: String(meta.gateId).slice(0, 80) }),
+      ...(meta?.outcome != null && { outcome: String(meta.outcome).slice(0, 80) }),
     };
     const updated = [...existing, record].slice(-200);
     await writeJson(filePath, { traces: updated });
@@ -1010,11 +1034,18 @@ export async function loadCapabilityExecutionSummary(
       };
     }
 
-    const normalizedRecent = recent.map((t) => ({
-      capability: String(t?.capability || "").trim().toLowerCase(),
-      observedAt: String(t?.observedAt || ""),
-      context: String(t?.context || ""),
-    }));
+    const normalizedRecent = recent.map((t) => {
+      const base: CapabilityExecutionTrace = {
+        capability: String(t?.capability || "").trim().toLowerCase(),
+        observedAt: String(t?.observedAt || ""),
+        context: String(t?.context || ""),
+      };
+      if (t?.role != null) base.role = String(t.role).slice(0, 80);
+      if (t?.wave != null) base.wave = Number.isFinite(Number(t.wave)) ? Number(t.wave) : null;
+      if (t?.gateId != null) base.gateId = String(t.gateId).slice(0, 80);
+      if (t?.outcome != null) base.outcome = String(t.outcome).slice(0, 80);
+      return base;
+    });
     const observedCapabilities = [...new Set(
       normalizedRecent
         .map((t) => t.capability)

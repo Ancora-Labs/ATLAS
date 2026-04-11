@@ -407,6 +407,26 @@ describe("artifact gate — hard-block integration across done-emission paths", 
     assert.equal(artifact.hasUnfilledPlaceholder, false);
   });
 
+  it("worker runtime path: task-scoped clean-tree evidence clears artifact gate in shared dirty repo", () => {
+    const workerOutput = [
+      "BOX_MERGED_SHA=abc1234",
+      "CLEAN_TREE_STATUS=dirty-other-tasks-only",
+      "TASK_SCOPED_CLEAN_STATUS=clean",
+      "TASK_SCOPED_CLEAN_TARGETS=src/core/slo_checker.ts, src/core/orchestrator.ts",
+      "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass",
+      "===NPM TEST OUTPUT START===",
+      "# tests 20 # pass 20 # fail 0",
+      "===NPM TEST OUTPUT END===",
+      "BOX_PR_URL=https://github.com/org/repo/pull/55",
+      "BOX_STATUS=done",
+    ].join("\n");
+    const artifact = checkPostMergeArtifact(workerOutput, {
+      expectedTargetFiles: ["src/core/slo_checker.ts", "src/core/orchestrator.ts"],
+    });
+    assert.equal(artifact.hasArtifact, true, "task-scoped clean evidence must pass artifact gate");
+    assert.equal(artifact.hasTaskScopedCleanTreeEvidence, true);
+  });
+
   it("unfilled placeholder blocks done regardless of SHA + test presence", () => {
     const workerOutput = [
       "Merged abc1234 into main",

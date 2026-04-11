@@ -363,14 +363,15 @@ export function evaluateInBandThresholds(
   const completionRateMet = avgCompletion !== null && avgCompletion >= thresholds.completionRateMin;
 
   // Use the gate-selected variant for the direct threshold check (mirrors composite score input).
-  // Prefer new explicit metrics when available; fall back to backward-compat fields.
+  // For execution_adjusted, prefer the all-agents adjusted metric first so
+  // leadership/orchestration successes are not treated as pure denominator cost.
   const efficiencies = window.map(s => {
     if (gateVariant === "execution_adjusted") {
-      if (s.executionAdjustedPremiumEfficiency !== null && s.executionAdjustedPremiumEfficiency !== undefined && Number.isFinite(s.executionAdjustedPremiumEfficiency)) {
-        return s.executionAdjustedPremiumEfficiency;
-      }
       if (s.premiumEfficiencyAdjusted !== null && s.premiumEfficiencyAdjusted !== undefined && Number.isFinite(s.premiumEfficiencyAdjusted)) {
         return s.premiumEfficiencyAdjusted;
+      }
+      if (s.executionAdjustedPremiumEfficiency !== null && s.executionAdjustedPremiumEfficiency !== undefined && Number.isFinite(s.executionAdjustedPremiumEfficiency)) {
+        return s.executionAdjustedPremiumEfficiency;
       }
       return s.premiumEfficiency;
     }
@@ -478,22 +479,23 @@ export function evaluateRegressionTriggers(
 function sampleToDimensions(sample: CycleSample, gateVariant: "raw" | "execution_adjusted" = "raw") {
   // Prefer new explicit metrics when available; fall back to backward-compat fields for old records.
   // "raw" variant: use rawPremiumEfficiency (verifiedDone/total) when present, else premiumEfficiency.
-  // "execution_adjusted" variant: use executionAdjustedPremiumEfficiency when present, else
-  // premiumEfficiencyAdjusted, else premiumEfficiency.
+  // "execution_adjusted" variant: use premiumEfficiencyAdjusted first so all
+  // settled premium agent successes contribute, then fall back to the newer
+  // worker-only executionAdjustedPremiumEfficiency, else premiumEfficiency.
   let efficiencyValue: number | null | undefined;
   if (gateVariant === "execution_adjusted") {
     if (
-      sample.executionAdjustedPremiumEfficiency !== null &&
-      sample.executionAdjustedPremiumEfficiency !== undefined &&
-      Number.isFinite(sample.executionAdjustedPremiumEfficiency)
-    ) {
-      efficiencyValue = sample.executionAdjustedPremiumEfficiency;
-    } else if (
       sample.premiumEfficiencyAdjusted !== null &&
       sample.premiumEfficiencyAdjusted !== undefined &&
       Number.isFinite(sample.premiumEfficiencyAdjusted)
     ) {
       efficiencyValue = sample.premiumEfficiencyAdjusted;
+    } else if (
+      sample.executionAdjustedPremiumEfficiency !== null &&
+      sample.executionAdjustedPremiumEfficiency !== undefined &&
+      Number.isFinite(sample.executionAdjustedPremiumEfficiency)
+    ) {
+      efficiencyValue = sample.executionAdjustedPremiumEfficiency;
     } else {
       efficiencyValue = sample.premiumEfficiency;
     }
@@ -901,6 +903,75 @@ export async function evaluateAutonomyBand(
   await writeBandStatus(config, status);
 
   return status;
+}
+
+export async function recomputeAutonomyBandStatus(
+  config: Record<string, unknown>,
+  options: {
+    history?: CycleSample[];
+    preserveStateTimestamps?: boolean;
+    write?: boolean;
+  } = {},
+): Promise<BandStatus> {
+  const thresholds = resolveThresholds(config);
+  const existing = await readBandStatus(config);
+  const history = Array.isArray(options.history)
+    ? options.history.slice(-MAX_HISTORY)
+    : (Array.isArray(existing.history) ? existing.history.slice(-MAX_HISTORY) : []);
+
+  if (history.length === 0) {
+    const empty = createInitialStatus();
+    empty.shadowMode = ((config?.runtime as Record<string, unknown> | undefined)?.autonomyBand as Record<string, unknown> | undefined)?.shadowMode !== false;
+    if (options.write !== false) {
+      await writeBandStatus(config, empty);
+    }
+    return empty;
+  }
+
+  const latestSample = history[history.length - 1];
+  const dimensions = sampleToDimensions(latestSample, thresholds.premiumEfficiencyGateVariant ?? "raw");
+  const compositeScoreWindow = history
+    .map((sample) => computeCompositeScore(sampleToDimensions(sample, thresholds.premiumEfficiencyGateVariant ?? "raw")))
+    .filter((value): value is number => value !== null);
+  const compositeScore = compositeScoreWindow.length > 0 ? compositeScoreWindow[compositeScoreWindow.length - 1] : null;
+  const thresholdChecks = evaluateInBandThresholds(history, thresholds);
+  const regressionChecks = evaluateRegressionTriggers(history, thresholds);
+  const previousState = options.preserveStateTimestamps === true ? existing.state : null;
+  const computedState = computeNextState(existing.state, history, thresholds).nextState;
+  const executionGate = computeExecutionPhase(computedState, history, thresholds);
+
+  const nextStatus: BandStatus = {
+    schemaVersion: AUTONOMY_BAND_SCHEMA_VERSION,
+    state: computedState,
+    previousState: previousState === computedState ? existing.previousState : previousState,
+    stateChangedAt: previousState === computedState
+      ? existing.stateChangedAt
+      : new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    cycleCount: history.length,
+    compositeScore,
+    compositeScoreWindow: compositeScoreWindow.slice(-thresholds.stabilizingWindow),
+    dimensions,
+    thresholdChecks,
+    regressionChecks,
+    shadowMode: ((config?.runtime as Record<string, unknown> | undefined)?.autonomyBand as Record<string, unknown> | undefined)?.shadowMode !== false,
+    executionPhase: executionGate.phase,
+    executionGate: {
+      exploitationReady: executionGate.exploitationReady,
+      reason: executionGate.reason,
+      varianceNormalizationApplied: executionGate.varianceNormalizationApplied,
+      completionVarianceRaw: executionGate.completionVarianceRaw,
+      completionVarianceEligible: executionGate.completionVarianceEligible,
+      completionVarianceBootstrapFiltered: executionGate.completionVarianceBootstrapFiltered,
+    },
+    history,
+  };
+
+  if (options.write !== false) {
+    await writeBandStatus(config, nextStatus);
+  }
+
+  return nextStatus;
 }
 
 // ── Config resolution ────────────────────────────────────────────────────────

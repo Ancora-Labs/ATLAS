@@ -106,6 +106,24 @@ describe("worker_runner artifact hard-block gate", () => {
     assert.equal(artifact.hasArtifact, true);
   });
 
+  it("checkPostMergeArtifact: accepts shared dirty worktree evidence when scoped targets are declared", () => {
+    const output = [
+      "BOX_MERGED_SHA=abc1234",
+      "CLEAN_TREE_STATUS=dirty-other-tasks-only",
+      "TASK_SCOPED_CLEAN_STATUS=clean",
+      "TASK_SCOPED_CLEAN_TARGETS=src/core/slo_checker.ts, src/core/orchestrator.ts",
+      "VERIFICATION_REPORT: BUILD=pass; TESTS=pass",
+      "===NPM TEST OUTPUT START===",
+      "# tests 12 # pass 12 # fail 0",
+      "===NPM TEST OUTPUT END===",
+    ].join("\n");
+    const artifact = checkPostMergeArtifact(output, {
+      expectedTargetFiles: ["src/core/slo_checker.ts", "src/core/orchestrator.ts"],
+    });
+    assert.equal(artifact.hasTaskScopedCleanTreeEvidence, true);
+    assert.equal(artifact.hasArtifact, true);
+  });
+
   it("ARTIFACT_GAP exports are non-empty deterministic strings (shared gap registry)", () => {
     assert.ok(typeof ARTIFACT_GAP.MISSING_SHA === "string" && ARTIFACT_GAP.MISSING_SHA.length > 0);
     assert.ok(typeof ARTIFACT_GAP.MISSING_TEST_OUTPUT === "string" && ARTIFACT_GAP.MISSING_TEST_OUTPUT.length > 0);

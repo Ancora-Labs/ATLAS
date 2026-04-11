@@ -89,7 +89,23 @@
       "resolvedAt": "2026-04-04T11:49:57.288Z",
       "resolutionSummary": "Resolved by closure workflow (RETRY_WITH_ACCESS_RECHECK) for ACCESS_BLOCKED",
       "resolvedBy": "system:escalation-closure-workflow"
+    },
+    {
+      "schemaVersion": 1,
+      "role": "evolution-worker",
+      "taskFingerprint": "ecc8ff11cc931b91",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo",
+      "blockingReasonClass": "WORKER_ERROR",
+      "attempts": 0,
+      "nextAction": "RETRY",
+      "summary": "Timeout: [BOX] Process killed after 5400s timeout",
+      "prUrl": null,
+      "resolved": true,
+      "createdAt": "2026-04-09T11:16:39.328Z",
+      "resolvedAt": "2026-04-09T12:15:26.254Z",
+      "resolutionSummary": "Worker recovered after runtime failure with status=done",
+      "resolvedBy": "worker:evolution-worker"
     }
   ],
-  "updatedAt": "2026-04-04T11:49:57.288Z"
+  "updatedAt": "2026-04-09T12:15:26.254Z"
 }

@@ -37,7 +37,9 @@ import {
   OUTCOME_DEGRADED_REASON,
   computeWeightedDecisionScore,
   DECISION_QUALITY_WEIGHTS,
+  KNOWLEDGE_MEMORY_SCHEMA_VERSION,
   runSelfImprovementCycle,
+  upsertKnowledgeMemoryLesson,
 } from "../../src/core/self_improvement.js";
 import { DECISION_QUALITY_LABEL } from "../../src/core/athena_reviewer.js";
 import {
@@ -83,6 +85,73 @@ const PROMETHEUS_ANALYSIS = {
   },
   requestBudget: { estimatedPremiumRequestsTotal: 2, hardCapTotal: 10, errorMarginPercent: 20, confidenceLevel: "medium" }
 };
+
+describe("upsertKnowledgeMemoryLesson", () => {
+  it("merges duplicate working-partition lessons instead of appending a second copy", () => {
+    const km = {
+      schemaVersion: KNOWLEDGE_MEMORY_SCHEMA_VERSION,
+      working: {
+        lessons: [
+          {
+            lesson: "Planner packets lacked deterministic verification targets",
+            severity: "warning",
+            addedAt: "2026-04-10T10:00:00.000Z",
+            recurrenceCount: 1,
+          },
+        ],
+        configTunings: [],
+        promptHints: [],
+        updatedAt: null,
+      },
+      episodic: { lessons: [], retainedAt: null },
+      policy: { rules: [], updatedAt: null },
+      lastUpdated: null,
+    };
+
+    upsertKnowledgeMemoryLesson(km, {
+      lesson: "Planner packets lacked deterministic verification targets.",
+      severity: "critical",
+      addedAt: "2026-04-11T10:00:00.000Z",
+    }, 20);
+
+    assert.equal(km.working.lessons.length, 1);
+    assert.equal(km.working.lessons[0].recurrenceCount, 2);
+    assert.equal(km.working.lessons[0].severity, "critical");
+    assert.equal(km.working.lessons[0].firstSeenAt, "2026-04-10T10:00:00.000Z");
+    assert.equal(km.working.lessons[0].lastSeenAt, "2026-04-11T10:00:00.000Z");
+  });
+
+  it("promotes a recurring episodic lesson back into working memory without duplication", () => {
+    const km = {
+      schemaVersion: KNOWLEDGE_MEMORY_SCHEMA_VERSION,
+      working: { lessons: [], configTunings: [], promptHints: [], updatedAt: null },
+      episodic: {
+        lessons: [
+          {
+            lesson: "Auth probe must fail closed before planning",
+            severity: "warning",
+            addedAt: "2026-04-09T10:00:00.000Z",
+            recurrenceCount: 2,
+          },
+        ],
+        retainedAt: null,
+      },
+      policy: { rules: [], updatedAt: null },
+      lastUpdated: null,
+    };
+
+    upsertKnowledgeMemoryLesson(km, {
+      lesson: "Auth probe must fail closed before planning",
+      severity: "warning",
+      addedAt: "2026-04-11T11:00:00.000Z",
+    }, 20);
+
+    assert.equal(km.episodic.lessons.length, 0);
+    assert.equal(km.working.lessons.length, 1);
+    assert.equal(km.working.lessons[0].recurrenceCount, 3);
+    assert.equal(km.working.lessons[0].lastSeenAt, "2026-04-11T11:00:00.000Z");
+  });
+});
 
 /** Minimal valid evolution_progress.json with two completed tasks. */
 const EVOLUTION_PROGRESS = {
@@ -624,14 +693,58 @@ describe("collectCycleOutcomes — canonical worker-cycle artifact invalid", () 
   });
 
   it("falls back without explicit canonical degradedReason when canonical artifact is invalid", () => {
-    assert.equal(result.degraded, false);
-    assert.equal(result.degradedReason, null);
+    assert.equal(result.degraded, true);
+    assert.equal(result.degradedReason, OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_INVALID);
   });
 
-  it("falls back to legacy completed tasks and metrics source while canonical migration is unavailable", () => {
-    assert.equal(result.completedCount, 1, "fallback should still count completed tasks from evolution_progress");
-    assert.ok(result.metricsSource.includes("evolution_progress_fallback"));
-    assert.ok(!result.metricsSource.includes("worker_cycle_artifacts"));
+  it("refuses legacy completed-task fallback when canonical truth is invalid", () => {
+    assert.equal(result.completedCount, 0, "invalid canonical artifact must not reuse legacy completed tasks");
+    assert.ok(!result.metricsSource.includes("evolution_progress_fallback"));
+    assert.ok(result.metricsSource.includes("worker_cycle_artifacts_invalid"));
+    assert.equal(result.metricsSource, "prometheus_analysis+worker_cycle_artifacts_invalid");
+  });
+});
+
+describe("collectCycleOutcomes — canonical worker-cycle artifact present but unusable", () => {
+  let tmpDir;
+  let result;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-si-unusable-canonical-"));
+    await writeTestJson(tmpDir, "prometheus_analysis.json", PROMETHEUS_ANALYSIS);
+    await writeTestJson(tmpDir, "evolution_progress.json", EVOLUTION_PROGRESS);
+    await writeTestJson(tmpDir, "worker_sessions.json", WORKER_SESSIONS);
+    await writeTestJson(tmpDir, WORKER_CYCLE_ARTIFACTS_FILE, {
+      schemaVersion: 1,
+      updatedAt: new Date().toISOString(),
+      latestCycleId: "cycle-missing",
+      cycles: {},
+    });
+    await writeTestJson(tmpDir, "pipeline_progress.json", {
+      stage: "cycle_complete",
+      startedAt: "cycle-missing",
+      updatedAt: new Date().toISOString(),
+      percent: 100,
+      detail: "done",
+      steps: [],
+      stageLabel: "Cycle complete",
+    });
+    result = await collectCycleOutcomes(makeConfig(tmpDir));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("degrades with CANONICAL_ARTIFACT_INVALID when canonical artifact has no usable cycle", () => {
+    assert.equal(result.degraded, true);
+    assert.equal(result.degradedReason, OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_INVALID);
+  });
+
+  it("does not fall back to legacy completion truth when canonical cycle selection fails", () => {
+    assert.equal(result.completedCount, 0);
+    assert.ok(!result.metricsSource.includes("evolution_progress_fallback"));
+    assert.ok(result.metricsSource.includes("worker_cycle_artifacts_invalid"));
   });
 });
 

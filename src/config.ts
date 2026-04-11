@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+﻿import fs from "node:fs/promises";
 import path from "node:path";
 import dotenv from "dotenv";
 import type { Config } from "./types/index.js";
@@ -96,7 +96,12 @@ export async function loadConfig(): Promise<Config> {
     maxPlansPerDependencyBatch: process.env.BOX_MAX_PLANS_PER_DEPENDENCY_BATCH?.trim() || null,
     // Dashboard bearer token — required for POST mutation endpoints on the live dashboard.
     // Must be a long random string. If unset, mutation endpoints return 403.
-    dashboardToken: process.env.BOX_DASHBOARD_TOKEN?.trim() || null
+    dashboardToken: process.env.BOX_DASHBOARD_TOKEN?.trim() || null,
+    cloudAssignmentEnabled: process.env.BOX_CLOUD_ASSIGNMENT_ENABLED?.trim() || null,
+    cloudAssignmentIssue: process.env.BOX_CLOUD_ASSIGNMENT_ISSUE?.trim() || null,
+    cloudAssignmentPr: process.env.BOX_CLOUD_ASSIGNMENT_PR?.trim() || null,
+    cloudAssignmentPollIntervalMs: process.env.BOX_CLOUD_ASSIGNMENT_POLL_INTERVAL_MS?.trim() || null,
+    cloudAssignmentMaxWaitMs: process.env.BOX_CLOUD_ASSIGNMENT_MAX_WAIT_MS?.trim() || null
   };
 
   const parsedAllowedModels = env.copilotAllowedModels
@@ -368,6 +373,30 @@ export async function loadConfig(): Promise<Config> {
       : Number(fileConfig?.systemGuardian?.staleWorkerMinutes ?? 20)
   };
 
+  const cloudAssignment = {
+    ...(fileConfig.cloudAssignment ?? {}),
+    /** When true, BOX uses issue/PR-based dispatch (cloud agent assignment mode). */
+    enabled: env.cloudAssignmentEnabled
+      ? ["1", "true", "yes", "on"].includes(env.cloudAssignmentEnabled.toLowerCase())
+      : Boolean(fileConfig?.cloudAssignment?.enabled ?? false),
+    /** GitHub issue number to assign the worker task to (cloud mode). */
+    issueNumber: env.cloudAssignmentIssue
+      ? Number(env.cloudAssignmentIssue)
+      : (fileConfig?.cloudAssignment?.issueNumber != null ? Number(fileConfig.cloudAssignment.issueNumber) : null),
+    /** GitHub PR number to assign the worker task to (cloud mode). */
+    prNumber: env.cloudAssignmentPr
+      ? Number(env.cloudAssignmentPr)
+      : (fileConfig?.cloudAssignment?.prNumber != null ? Number(fileConfig.cloudAssignment.prNumber) : null),
+    /** How often (ms) to poll for completion when waiting for a cloud assignment. */
+    pollIntervalMs: env.cloudAssignmentPollIntervalMs
+      ? Number(env.cloudAssignmentPollIntervalMs)
+      : Number(fileConfig?.cloudAssignment?.pollIntervalMs ?? 15000),
+    /** Maximum wait time (ms) before declaring a cloud assignment timed out. */
+    maxWaitMs: env.cloudAssignmentMaxWaitMs
+      ? Number(env.cloudAssignmentMaxWaitMs)
+      : Number(fileConfig?.cloudAssignment?.maxWaitMs ?? 3600000),
+  };
+
   // Propagate resolved token into process.env so CopilotReviewer child processes inherit it
   if (env.copilotGithubToken && !process.env.COPILOT_GITHUB_TOKEN) {
     process.env.COPILOT_GITHUB_TOKEN = env.copilotGithubToken;
@@ -385,6 +414,7 @@ export async function loadConfig(): Promise<Config> {
     git,
     runtime,
     env,
+    cloudAssignment,
     paths: {
       progressFile: path.join(rootDir, fileConfig.progressFile || "state/progress.txt"),
       policyFile: path.join(rootDir, fileConfig.policyFile || "policy.json"),

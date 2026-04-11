@@ -367,27 +367,122 @@ function getKnowledgeMemoryAllLessons(km: any): any[] {
   return Array.isArray(km?.lessons) ? km.lessons : [];
 }
 
+function normalizeKnowledgeLessonText(value: unknown): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getKnowledgeLessonText(lesson: any): string {
+  return String(lesson?.lesson || lesson?.lessonLearned || "").trim();
+}
+
+function getKnowledgeLessonSeverityRank(value: unknown): number {
+  const severity = String(value || "").trim().toLowerCase();
+  if (severity === "critical") return 3;
+  if (severity === "warning" || severity === "medium") return 2;
+  if (severity === "info" || severity === "low") return 1;
+  return 0;
+}
+
+function mergeKnowledgeLessonRecords(existing: any, incoming: any): any {
+  const existingRecurrence = Number(existing?.recurrenceCount);
+  const recurrenceBase = Number.isFinite(existingRecurrence) && existingRecurrence > 0
+    ? existingRecurrence
+    : 1;
+  const existingSeverity = getKnowledgeLessonSeverityRank(existing?.severity);
+  const incomingSeverity = getKnowledgeLessonSeverityRank(incoming?.severity);
+  const keepIncomingSeverity = incomingSeverity >= existingSeverity && String(incoming?.severity || "").trim().length > 0;
+  const firstSeenAt = existing?.firstSeenAt || existing?.addedAt || incoming?.firstSeenAt || incoming?.addedAt || null;
+  const lastSeenAt = incoming?.addedAt || incoming?.lastSeenAt || new Date().toISOString();
+  return {
+    ...existing,
+    ...incoming,
+    lesson: getKnowledgeLessonText(incoming) || getKnowledgeLessonText(existing),
+    source: String(existing?.source || incoming?.source || "self-improvement"),
+    category: String(existing?.category || incoming?.category || ""),
+    severity: keepIncomingSeverity ? incoming?.severity : existing?.severity,
+    addedAt: existing?.addedAt || incoming?.addedAt || lastSeenAt,
+    firstSeenAt,
+    lastSeenAt,
+    recurrenceCount: recurrenceBase + 1,
+  };
+}
+
+export function upsertKnowledgeMemoryLesson(km: any, lesson: any, maxLessons: number): void {
+  const lessonKey = normalizeKnowledgeLessonText(getKnowledgeLessonText(lesson));
+  if (!lessonKey) return;
+
+  if (km?.schemaVersion >= KNOWLEDGE_MEMORY_SCHEMA_VERSION) {
+    if (!km.working) km.working = { lessons: [], configTunings: [], promptHints: [], updatedAt: null };
+    if (!km.episodic) km.episodic = { lessons: [], retainedAt: null };
+    if (!Array.isArray(km.working.lessons)) km.working.lessons = [];
+    if (!Array.isArray(km.episodic.lessons)) km.episodic.lessons = [];
+
+    const workingIndex = km.working.lessons.findIndex((entry: any) =>
+      normalizeKnowledgeLessonText(getKnowledgeLessonText(entry)) === lessonKey
+    );
+    if (workingIndex >= 0) {
+      km.working.lessons[workingIndex] = mergeKnowledgeLessonRecords(km.working.lessons[workingIndex], lesson);
+      return;
+    }
+
+    const episodicIndex = km.episodic.lessons.findIndex((entry: any) =>
+      normalizeKnowledgeLessonText(getKnowledgeLessonText(entry)) === lessonKey
+    );
+    if (episodicIndex >= 0) {
+      const merged = mergeKnowledgeLessonRecords(km.episodic.lessons[episodicIndex], lesson);
+      km.episodic.lessons.splice(episodicIndex, 1);
+      km.working.lessons.push(merged);
+    } else {
+      km.working.lessons.push({
+        ...lesson,
+        lesson: getKnowledgeLessonText(lesson),
+        firstSeenAt: lesson?.firstSeenAt || lesson?.addedAt || null,
+        lastSeenAt: lesson?.lastSeenAt || lesson?.addedAt || null,
+        recurrenceCount: Number.isFinite(Number(lesson?.recurrenceCount)) && Number(lesson.recurrenceCount) > 0
+          ? Number(lesson.recurrenceCount)
+          : 1,
+      });
+    }
+
+    if (km.working.lessons.length > maxLessons) {
+      const oldest = km.working.lessons.shift();
+      if (oldest) {
+        km.episodic.lessons.push(oldest);
+      }
+    }
+    return;
+  }
+
+  if (!Array.isArray(km.lessons)) km.lessons = [];
+  const existingIndex = km.lessons.findIndex((entry: any) =>
+    normalizeKnowledgeLessonText(getKnowledgeLessonText(entry)) === lessonKey
+  );
+  if (existingIndex >= 0) {
+    km.lessons[existingIndex] = mergeKnowledgeLessonRecords(km.lessons[existingIndex], lesson);
+  } else {
+    km.lessons.push({
+      ...lesson,
+      lesson: getKnowledgeLessonText(lesson),
+      firstSeenAt: lesson?.firstSeenAt || lesson?.addedAt || null,
+      lastSeenAt: lesson?.lastSeenAt || lesson?.addedAt || null,
+      recurrenceCount: Number.isFinite(Number(lesson?.recurrenceCount)) && Number(lesson.recurrenceCount) > 0
+        ? Number(lesson.recurrenceCount)
+        : 1,
+    });
+  }
+  if (km.lessons.length > maxLessons) km.lessons = km.lessons.slice(-maxLessons);
+}
+
 /**
  * Push a new lesson into the active (working) partition, capping at maxLessons.
  * Falls back to flat .lessons for v1 objects.
  */
 function pushKnowledgeMemoryLesson(km: any, lesson: any, maxLessons: number): void {
-  if (km?.schemaVersion >= KNOWLEDGE_MEMORY_SCHEMA_VERSION) {
-    if (!Array.isArray(km.working.lessons)) km.working.lessons = [];
-    km.working.lessons.push(lesson);
-    if (km.working.lessons.length > maxLessons) {
-      // Promote oldest lesson to episodic before trimming
-      const oldest = km.working.lessons.shift();
-      if (oldest) {
-        if (!Array.isArray(km.episodic.lessons)) km.episodic.lessons = [];
-        km.episodic.lessons.push(oldest);
-      }
-    }
-  } else {
-    if (!Array.isArray(km.lessons)) km.lessons = [];
-    km.lessons.push(lesson);
-    if (km.lessons.length > maxLessons) km.lessons = km.lessons.slice(-maxLessons);
-  }
+  upsertKnowledgeMemoryLesson(km, lesson, maxLessons);
 }
 
 /**
@@ -728,90 +823,92 @@ export async function collectCycleOutcomes(config) {
     warn("[self-improvement] canonical worker-cycle artifact invalid; using compatibility fallback path");
   }
 
-  // Compatibility fallback for legacy files when canonical cycle artifacts are absent.
-  // Read-only with explicit warning telemetry (schema-versioned migration path).
-  // Explicit canonical degradedReason is only emitted when the canonical artifact is absent.
+  // Compatibility fallback for legacy files is allowed only when the canonical
+  // artifact is absent. If the canonical artifact exists but is invalid or has
+  // no usable cycle record, fail closed instead of reviving legacy completion
+  // truth for the active cycle.
   let workerSessionsStaleSignal: string | null = null;
   if (!usingCanonicalWorkerArtifacts) {
     if (canonicalArtifactState === "invalid") {
-      warn("[self-improvement] canonical worker-cycle artifact invalid; falling back to evolution_progress/worker_sessions compatibility path");
+      warn("[self-improvement] canonical worker-cycle artifact invalid; refusing legacy completion fallback for active-cycle truth");
     } else if (canonicalArtifactState === "present_unusable") {
-      warn("[self-improvement] canonical worker-cycle artifact present but unusable for this cycle; falling back to evolution_progress/worker_sessions compatibility path");
+      warn("[self-improvement] canonical worker-cycle artifact present but unusable for this cycle; refusing legacy completion fallback for active-cycle truth");
     } else {
       warn("[self-improvement] canonical worker-cycle artifact absent; falling back to evolution_progress/worker_sessions compatibility path");
     }
 
-    // Mark degraded reason only when canonical artifact is absent (explicit signal).
-    if (!degraded && canonicalArtifactState === "absent") {
+    if (!degraded) {
       degraded = true;
-      degradedReason = OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_ABSENT;
+      degradedReason = canonicalArtifactState === "absent"
+        ? OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_ABSENT
+        : OUTCOME_DEGRADED_REASON.CANONICAL_ARTIFACT_INVALID;
     }
 
-    // Lazily read legacy files — only reached when canonical artifact is absent.
-    // LEGACY_EVOLUTION_PROGRESS_FILE is a compatibility read-only path;
-    // the implicit schema version is LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION (v0).
-    const [evolutionResult, workerSessionsResult] = await Promise.all([
-      readJsonSafe(path.join(stateDir, LEGACY_EVOLUTION_PROGRESS_FILE)),
-      readJsonSafe(path.join(stateDir, "worker_sessions.json")),
-    ]);
+    if (canonicalArtifactState === "absent") {
+      // Lazily read legacy files only when the canonical artifact is truly absent.
+      // LEGACY_EVOLUTION_PROGRESS_FILE is a compatibility read-only path;
+      // the implicit schema version is LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION (v0).
+      const [evolutionResult, workerSessionsResult] = await Promise.all([
+        readJsonSafe(path.join(stateDir, LEGACY_EVOLUTION_PROGRESS_FILE)),
+        readJsonSafe(path.join(stateDir, "worker_sessions.json")),
+      ]);
 
-    if (!evolutionResult.ok) {
-      warn(`[self-improvement] legacy ${LEGACY_EVOLUTION_PROGRESS_FILE} unavailable: reason=${evolutionResult.reason}`);
-    } else {
-      const migration = migrateLegacyEvolutionProgressToCompletedTaskIds(evolutionResult.data);
-      if (!migration.ok) {
-        warn(
-          `[self-improvement] legacy ${LEGACY_EVOLUTION_PROGRESS_FILE} migration failed: reason=${migration.reason} fromVersion=${String(migration.fromVersion ?? LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION)}`
-        );
+      if (!evolutionResult.ok) {
+        warn(`[self-improvement] legacy ${LEGACY_EVOLUTION_PROGRESS_FILE} unavailable: reason=${evolutionResult.reason}`);
       } else {
-        if (migration.reason !== "already_current") {
-          // Explicit schema-versioned migration telemetry: fromVersion reflects the
-          // legacy format (LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION=0 when no schemaVersion field).
+        const migration = migrateLegacyEvolutionProgressToCompletedTaskIds(evolutionResult.data);
+        if (!migration.ok) {
           warn(
-            `[self-improvement] compatibility fallback: migrating ${LEGACY_EVOLUTION_PROGRESS_FILE} fromVersion=${String(migration.fromVersion ?? LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION)} toVersion=${migration.toVersion} format=legacy_task_map`
+            `[self-improvement] legacy ${LEGACY_EVOLUTION_PROGRESS_FILE} migration failed: reason=${migration.reason} fromVersion=${String(migration.fromVersion ?? LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION)}`
           );
+        } else {
+          if (migration.reason !== "already_current") {
+            warn(
+              `[self-improvement] compatibility fallback: migrating ${LEGACY_EVOLUTION_PROGRESS_FILE} fromVersion=${String(migration.fromVersion ?? LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION)} toVersion=${migration.toVersion} format=legacy_task_map`
+            );
+          }
+          completedTasks = migration.completedTaskIds;
         }
-        completedTasks = migration.completedTaskIds;
       }
-    }
 
-    // worker_sessions is required for per-worker outcome telemetry in fallback mode.
-    if (!workerSessionsResult.ok) {
-      workerSessionsStaleSignal = workerSessionsResult.reason === READ_JSON_REASON.MISSING
-        ? "ABSENT"
-        : "INVALID";
-    } else if (
-      !workerSessionsResult.data ||
-      typeof workerSessionsResult.data !== "object" ||
-      Array.isArray(workerSessionsResult.data)
-    ) {
-      workerSessionsStaleSignal = "INVALID_STRUCTURE";
-    } else {
-      workerSessions = workerSessionsResult.data as Record<string, any>;
-    }
-
-    let hasWorkerActivityArtifacts = false;
-    try {
-      const stateEntries = await fs.readdir(stateDir, { withFileTypes: true });
-      hasWorkerActivityArtifacts = stateEntries.some(
-        (entry) =>
-          entry.isFile() &&
-          /^worker_.+\.json$/i.test(entry.name) &&
-          entry.name.toLowerCase() !== "worker_sessions.json"
-      );
-    } catch (err: any) {
-      if (err?.code !== "ENOENT") {
-        warn(`[self-improvement] failed to inspect worker artifact staleness: ${String(err?.message || err)}`);
+      // worker_sessions is required for per-worker outcome telemetry in fallback mode.
+      if (!workerSessionsResult.ok) {
+        workerSessionsStaleSignal = workerSessionsResult.reason === READ_JSON_REASON.MISSING
+          ? "ABSENT"
+          : "INVALID";
+      } else if (
+        !workerSessionsResult.data ||
+        typeof workerSessionsResult.data !== "object" ||
+        Array.isArray(workerSessionsResult.data)
+      ) {
+        workerSessionsStaleSignal = "INVALID_STRUCTURE";
+      } else {
+        workerSessions = workerSessionsResult.data as Record<string, any>;
       }
-    }
-    if (!workerSessionsStaleSignal && Object.keys(workerSessions).length === 0 && hasWorkerActivityArtifacts) {
-      workerSessionsStaleSignal = "EMPTY_WITH_ACTIVITY_ARTIFACTS";
-    }
 
-    if (workerSessionsStaleSignal) {
-      warn(
-        `[self-improvement] worker session artifacts stale: signal=${workerSessionsStaleSignal} stateDir=${stateDir}`
-      );
+      let hasWorkerActivityArtifacts = false;
+      try {
+        const stateEntries = await fs.readdir(stateDir, { withFileTypes: true });
+        hasWorkerActivityArtifacts = stateEntries.some(
+          (entry) =>
+            entry.isFile() &&
+            /^worker_.+\.json$/i.test(entry.name) &&
+            entry.name.toLowerCase() !== "worker_sessions.json"
+        );
+      } catch (err: any) {
+        if (err?.code !== "ENOENT") {
+          warn(`[self-improvement] failed to inspect worker artifact staleness: ${String(err?.message || err)}`);
+        }
+      }
+      if (!workerSessionsStaleSignal && Object.keys(workerSessions).length === 0 && hasWorkerActivityArtifacts) {
+        workerSessionsStaleSignal = "EMPTY_WITH_ACTIVITY_ARTIFACTS";
+      }
+
+      if (workerSessionsStaleSignal) {
+        warn(
+          `[self-improvement] worker session artifacts stale: signal=${workerSessionsStaleSignal} stateDir=${stateDir}`
+        );
+      }
     }
   } else {
     workerSessionsStaleSignal = null;
@@ -822,6 +919,8 @@ export async function collectCycleOutcomes(config) {
   if (prometheusResult.ok) sourceFiles.push("prometheus_analysis");
   if (usingCanonicalWorkerArtifacts) {
     sourceFiles.push("worker_cycle_artifacts");
+  } else if (canonicalArtifactState !== "absent") {
+    sourceFiles.push("worker_cycle_artifacts_invalid");
   } else {
     sourceFiles.push(workerSessionsStaleSignal ? "worker_sessions_stale" : "worker_sessions");
     sourceFiles.push("evolution_progress_fallback");
@@ -2403,10 +2502,7 @@ export async function runSelfImprovementCycle(config) {
               isUserMediated: false,
               reason: String(lesson?.lesson || ""),
             });
-            knowledgeMemory.lessons.push(enrichedLesson);
-          }
-          if (knowledgeMemory.lessons.length > (siConfig.maxReports || 200)) {
-            knowledgeMemory.lessons = knowledgeMemory.lessons.slice(-(siConfig.maxReports || 200));
+            upsertKnowledgeMemoryLesson(knowledgeMemory, enrichedLesson, siConfig.maxReports || 200);
           }
           await saveKnowledgeMemory(stateDir, knowledgeMemory);
         }

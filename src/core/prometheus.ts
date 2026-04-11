@@ -57,6 +57,7 @@ import {
   computePacketDensityMetrics,
   isThinPacketForAdmission,
   getPacketThresholdsForLane,
+  resolveNamedVerificationTarget,
   scanParsedOutputForProcessThought,
   OUTPUT_FIDELITY_GATE_FAIL_REASON,
   isCiCriticalMandatoryFinding,
@@ -744,6 +745,149 @@ export function normalizeStaleCiBreakFindings(
 
 // Export the freshness max-age constant so callers (tests, prometheus prompt) can reference it.
 export { CI_BREAK_FINDING_FRESHNESS_MAX_AGE_MS, SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS, isSystemLearningCiDebtFinding } from "./plan_contract_validator.js";
+
+// ── Mandatory findings preflight truth gate ───────────────────────────────────
+
+/**
+ * Maximum age (ms) for the health_audit_findings.json payload before CI-specific
+ * mandatory findings are quarantined.  After this threshold the source is
+ * considered untrusted for CI evidence — CI may have been fixed since the audit.
+ *
+ * Non-CI findings (capability gaps, architecture debt) are structural and remain
+ * trusted regardless of payload age.
+ *
+ * Exported so tests and callers can reference the constant without reading files.
+ */
+export const MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/** Preflight truth status values returned by computeMandatoryFindingsPreflight. */
+export const MANDATORY_FINDINGS_PREFLIGHT_STATUS = Object.freeze({
+  /** All findings are trusted — source is fresh and no quarantine applied. */
+  TRUSTED: "trusted",
+  /** Some CI-related findings were quarantined; non-CI findings remain trusted. */
+  DEGRADED: "degraded",
+  /** All findings were quarantined (source is too stale to trust any CI evidence). */
+  QUARANTINED: "quarantined",
+} as const);
+
+/** Result returned by computeMandatoryFindingsPreflight. */
+export interface MandatoryFindingsPreflightResult {
+  /** Findings confirmed as trusted and safe to inject into planning. */
+  trustedFindings: MandatoryHealthAuditFinding[];
+  /** Findings quarantined due to stale/untrusted source. */
+  quarantinedFindings: MandatoryHealthAuditFinding[];
+  /** Count of quarantined findings. */
+  quarantinedCount: number;
+  /** Machine-readable reasons, one per quarantined finding. */
+  quarantineReasons: string[];
+  /** Whether the source payload timestamp is within the freshness window. */
+  sourceFresh: boolean;
+  /**
+   * Age of the source payload in ms from nowMs, or Infinity when auditedAt is
+   * absent or unparseable.
+   */
+  sourceAgeMs: number;
+  /** Summary status for telemetry and orchestrator admission logging. */
+  preflightStatus: "trusted" | "degraded" | "quarantined";
+}
+
+/**
+ * Deterministic pre-planning truth preflight for mandatory health-audit findings.
+ *
+ * Quarantines CI-related mandatory findings (area="ci" or system-learning CI debt)
+ * when the source payload is too old or lacks a parseable `auditedAt` timestamp.
+ * Non-CI findings (capability gaps, architecture debt) are structural and remain
+ * trusted regardless of payload age.
+ *
+ * This prevents stale CI-break evidence from forcing Prometheus to waste premium
+ * requests on tasks that CI may have already resolved since the last audit write.
+ *
+ * Pure function — no I/O.  Callers pass pre-loaded findings and raw payload;
+ * file access is the caller's responsibility.
+ *
+ * @param findings   — already-extracted mandatory findings (post normalization)
+ * @param rawPayload — raw health_audit_findings.json content for auditedAt check
+ * @param nowMs      — current epoch ms (defaults to Date.now())
+ * @returns MandatoryFindingsPreflightResult
+ */
+export function computeMandatoryFindingsPreflight(
+  findings: MandatoryHealthAuditFinding[],
+  rawPayload: unknown,
+  nowMs: number = Date.now(),
+): MandatoryFindingsPreflightResult {
+  const safeFindings = Array.isArray(findings) ? findings : [];
+
+  // Determine source freshness from auditedAt timestamp in the raw payload.
+  const auditedAt = String(
+    (rawPayload && typeof rawPayload === "object") ? (rawPayload as Record<string, unknown>).auditedAt || "" : ""
+  ).trim();
+
+  let sourceAgeMs = Infinity;
+  let sourceFresh = false;
+
+  if (auditedAt) {
+    const auditedAtMs = Date.parse(auditedAt);
+    if (Number.isFinite(auditedAtMs)) {
+      sourceAgeMs = nowMs - auditedAtMs;
+      sourceFresh = sourceAgeMs <= MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS;
+    }
+  }
+
+  // When source is fresh, all findings are trusted.
+  if (sourceFresh) {
+    return {
+      trustedFindings: safeFindings,
+      quarantinedFindings: [],
+      quarantinedCount: 0,
+      quarantineReasons: [],
+      sourceFresh: true,
+      sourceAgeMs,
+      preflightStatus: MANDATORY_FINDINGS_PREFLIGHT_STATUS.TRUSTED,
+    };
+  }
+
+  // Source is stale or missing timestamp — quarantine CI-related findings only.
+  // Non-CI findings (capability gaps, architecture debt) are structural and not
+  // time-sensitive in the same way: they remain valid planning input.
+  const trustedFindings: MandatoryHealthAuditFinding[] = [];
+  const quarantinedFindings: MandatoryHealthAuditFinding[] = [];
+  const quarantineReasons: string[] = [];
+
+  const ageLabel = Number.isFinite(sourceAgeMs) && sourceAgeMs !== Infinity
+    ? `ageMs=${Math.round(sourceAgeMs)}`
+    : "auditedAt_missing";
+  const sourceLabel = auditedAt ? `auditedAt=${auditedAt}` : "auditedAt_absent";
+
+  for (const finding of safeFindings) {
+    if (isCiBreakFinding(finding) || isSystemLearningCiDebtFinding(finding)) {
+      quarantinedFindings.push(finding);
+      quarantineReasons.push(
+        `mandatory_finding_quarantined:id=${finding.id}:area=${finding.area}` +
+        `:reason=stale_ci_evidence:${ageLabel}:${sourceLabel}` +
+        `:threshold=${MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS}ms`,
+      );
+    } else {
+      trustedFindings.push(finding);
+    }
+  }
+
+  const preflightStatus =
+    quarantinedFindings.length === 0
+      ? MANDATORY_FINDINGS_PREFLIGHT_STATUS.TRUSTED
+      : trustedFindings.length === 0
+        ? MANDATORY_FINDINGS_PREFLIGHT_STATUS.QUARANTINED
+        : MANDATORY_FINDINGS_PREFLIGHT_STATUS.DEGRADED;
+
+  return {
+    trustedFindings,
+    quarantinedFindings,
+    quarantinedCount: quarantinedFindings.length,
+    quarantineReasons,
+    sourceFresh: false,
+    sourceAgeMs,
+    preflightStatus,
+  };
+}
 
 function sanitizePromptLine(value: unknown, maxLen = 220): string {
   const compact = String(value || "")
@@ -2002,8 +2146,10 @@ export function checkHighRiskPacketConfidence(rawPlan: any): { requiresRejection
  * Unrecoverable conditions:
  *  1. No task identity  — all of task/title/task_id/id are absent or empty.
  *     Normalization falls back to "Task-N" which carries no semantic meaning.
- * Fields like capacityDelta, requestROI, and verification are NOT treated as
- * unrecoverable because normalizePlanFromTask() synthesizes sensible defaults.
+ *  2. Missing/invalid capacityDelta — raw packet must declare measurable impact.
+ *  3. Missing/invalid requestROI    — raw packet must declare request economics.
+ *  4. Missing verification coupling — no specific named verification target can
+ *     be resolved from verification or verification_commands.
  *
  * Reason codes are values from the canonical PACKET_VIOLATION_CODE taxonomy
  * (plan_contract_validator.ts) so they are identical to codes emitted by the
@@ -2025,8 +2171,27 @@ export function checkPacketCompleteness(rawPlan: any): { recoverable: boolean; r
     reasons.push(PACKET_VIOLATION_CODE.NO_TASK_IDENTITY);
   }
 
-  // capacityDelta and requestROI are NOT checked here because
-  // normalizePlanFromTask() synthesizes defaults (0.1 and 1.0 respectively).
+  if (!("capacityDelta" in rawPlan)) {
+    reasons.push(PACKET_VIOLATION_CODE.MISSING_CAPACITY_DELTA);
+  } else {
+    const capacityDelta = Number(rawPlan.capacityDelta);
+    if (!Number.isFinite(capacityDelta) || capacityDelta < -1 || capacityDelta > 1) {
+      reasons.push(PACKET_VIOLATION_CODE.INVALID_CAPACITY_DELTA);
+    }
+  }
+
+  if (!("requestROI" in rawPlan)) {
+    reasons.push(PACKET_VIOLATION_CODE.MISSING_REQUEST_ROI);
+  } else {
+    const requestROI = Number(rawPlan.requestROI);
+    if (!Number.isFinite(requestROI) || requestROI <= 0) {
+      reasons.push(PACKET_VIOLATION_CODE.INVALID_REQUEST_ROI);
+    }
+  }
+
+  if (resolveNamedVerificationTarget(rawPlan) === null) {
+    reasons.push(PACKET_VIOLATION_CODE.MISSING_VERIFICATION_COUPLING);
+  }
 
   return { recoverable: reasons.length === 0, reasons };
 }
@@ -4853,6 +5018,7 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   let researchSynthesisData: unknown = null;
   let mandatoryFindings: MandatoryHealthAuditFinding[] = [];
   let mandatoryTasksSection = "";
+  let mandatoryFindingsPreflightResult: MandatoryFindingsPreflightResult | null = null;
   let benchmarkSection = "";
   let routingOutcomeSection = "";
   try {
@@ -4988,7 +5154,29 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
         `[PROMETHEUS][FRESHNESS] Suppressed ${ciBreakSuppressedCount} stale CI-break finding(s) — main-branch CI was healthy at audit time (latestMainCiConclusion=success)`,
       );
     }
-    mandatoryFindings = extractMandatoryHealthAuditFindings(normalizedHealthPayload);
+    const allExtractedFindings = extractMandatoryHealthAuditFindings(normalizedHealthPayload);
+
+    // ── Pre-planning truth preflight ─────────────────────────────────────────
+    // Quarantine CI-related findings when the source payload is too old or lacks
+    // a parseable auditedAt timestamp.  Non-CI findings (capability gaps,
+    // architecture debt) are structural and remain trusted regardless of age.
+    // This prevents stale CI-break evidence from driving unnecessary premium requests.
+    mandatoryFindingsPreflightResult = computeMandatoryFindingsPreflight(
+      allExtractedFindings,
+      normalizedHealthPayload,
+    );
+    if (mandatoryFindingsPreflightResult.quarantinedCount > 0) {
+      await appendProgress(
+        config,
+        `[PROMETHEUS][PREFLIGHT_TRUTH] Quarantined ${mandatoryFindingsPreflightResult.quarantinedCount} stale CI finding(s) — ` +
+        `preflightStatus=${mandatoryFindingsPreflightResult.preflightStatus} ` +
+        `sourceAgeMs=${Number.isFinite(mandatoryFindingsPreflightResult.sourceAgeMs) ? Math.round(mandatoryFindingsPreflightResult.sourceAgeMs) : "unknown"} ` +
+        `threshold=${MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS}ms`,
+      );
+    }
+
+    // Only inject trusted (non-quarantined) findings into the planning prompt.
+    mandatoryFindings = mandatoryFindingsPreflightResult.trustedFindings;
     mandatoryTasksSection = buildMandatoryTasksPromptSection(mandatoryFindings);
     if (mandatoryFindings.length > 0) {
       await appendProgress(
@@ -6712,6 +6900,7 @@ Mandatory requirements:
       findingCount: mandatoryFindings.length,
       findings: mandatoryFindings,
       coverageGate: parsed._mandatoryTaskCoverageGate || null,
+      preflightResult: mandatoryFindingsPreflightResult,
     },
   });
 

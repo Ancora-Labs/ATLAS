@@ -3,7 +3,29 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { runDoctor } from "../../src/core/doctor.js";
+import { buildCopilotAuthFingerprint, classifyCopilotAuthInputs, runDoctor, shouldReuseCopilotAuthProbe } from "../../src/core/doctor.js";
+
+async function writeCachedProbe(stateDir: string, input: { copilotToken: string; cliPath?: string }) {
+  const fingerprint = buildCopilotAuthFingerprint({
+    copilotToken: input.copilotToken,
+    ghAuthActive: false,
+    ghActiveAccount: null,
+  });
+  await fs.writeFile(
+    path.join(stateDir, "copilot_auth_probe.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      checkedAt: new Date().toISOString(),
+      ok: true,
+      fingerprint,
+      cliPath: input.cliPath || "node",
+      source: "env",
+      tokenType: "github_pat",
+      message: "copilot_auth_probe_ok",
+    }, null, 2),
+    "utf8",
+  );
+}
 
 describe("doctor", () => {
   let originalTargetRepo: string | undefined;
@@ -22,9 +44,15 @@ describe("doctor", () => {
 
   it("returns checks object and warning list", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-doctor-"));
+    await writeCachedProbe(tmpDir, { copilotToken: "github_pat_test_valid" });
     const result = await runDoctor({
       paths: { stateDir: tmpDir },
-      env: { githubToken: "x", targetRepo: "CanerDoqdu/Box", copilotCliCommand: "node" }
+      env: {
+        githubToken: "x",
+        targetRepo: "CanerDoqdu/Box",
+        copilotCliCommand: "node",
+        copilotGithubToken: "github_pat_test_valid",
+      }
     });
     assert.equal(typeof result.ok, "boolean");
     assert.equal(typeof result.checks.node, "boolean");
@@ -36,7 +64,7 @@ describe("doctor", () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-doctor-"));
     const result = await runDoctor({
       paths: { stateDir: tmpDir },
-      env: { githubToken: "", targetRepo: "", copilotCliCommand: "node" }
+      env: { githubToken: "", targetRepo: "", copilotCliCommand: "node", copilotGithubToken: "" }
     });
     assert.equal(result.ok, false);
     assert.ok(result.warnings.some((w: string) => w.includes("GitHub integration not ready")));
@@ -45,9 +73,15 @@ describe("doctor", () => {
 
   it("includes agentContracts in the checks object", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-doctor-"));
+    await writeCachedProbe(tmpDir, { copilotToken: "github_pat_test_valid" });
     const result = await runDoctor({
       paths: { stateDir: tmpDir },
-      env: { githubToken: "x", targetRepo: "CanerDoqdu/Box", copilotCliCommand: "node" }
+      env: {
+        githubToken: "x",
+        targetRepo: "CanerDoqdu/Box",
+        copilotCliCommand: "node",
+        copilotGithubToken: "github_pat_test_valid",
+      }
     });
     assert.ok("agentContracts" in result.checks, "checks must include agentContracts field");
     assert.equal(typeof result.checks.agentContracts, "boolean");
@@ -56,21 +90,61 @@ describe("doctor", () => {
 
   it("negative path: ok=false when agentContracts check fails", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-doctor-"));
+    await writeCachedProbe(tmpDir, { copilotToken: "github_pat_test_valid" });
     // ok is a composite of all critical checks — if agentContracts is false,
     // ok must also be false regardless of other check states.
     const result = await runDoctor({
       paths: { stateDir: tmpDir },
-      env: { githubToken: "x", targetRepo: "CanerDoqdu/Box", copilotCliCommand: "node" }
+      env: {
+        githubToken: "x",
+        targetRepo: "CanerDoqdu/Box",
+        copilotCliCommand: "node",
+        copilotGithubToken: "github_pat_test_valid",
+      }
     });
     // The check result itself is boolean; we verify the invariant:
-    // ok === (node && githubToken && targetRepo && stateDir && agentContracts)
+    // ok === critical check conjunction including copilot auth.
     const expectedOk = result.checks.node
       && result.checks.githubToken
       && result.checks.targetRepo
       && result.checks.stateDir
-      && result.checks.agentContracts;
+      && result.checks.agentContracts
+      && result.checks.copilotCli
+      && result.checks.gitAvailable
+      && result.checks.copilotAuth;
     assert.equal(result.ok, expectedOk, "ok must be false when any critical check fails including agentContracts");
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("rejects classic ghp tokens because they override valid gh auth with an unsupported Copilot token", () => {
+    const result = classifyCopilotAuthInputs({
+      copilotToken: "ghp_classic_token",
+      ghAuthActive: true,
+      ghActiveAccount: "example",
+    });
+    assert.equal(result.ready, false);
+    assert.equal(result.source, "env");
+    assert.equal(result.tokenType, "ghp");
+  });
+
+  it("reuses cached successful auth probe only when fingerprint and cli path match", () => {
+    const fingerprint = buildCopilotAuthFingerprint({
+      copilotToken: "github_pat_test_valid",
+      ghAuthActive: false,
+      ghActiveAccount: null,
+    });
+    assert.equal(shouldReuseCopilotAuthProbe({
+      ok: true,
+      fingerprint,
+      cliPath: "node",
+      checkedAt: new Date().toISOString(),
+    }, fingerprint, "node"), true);
+    assert.equal(shouldReuseCopilotAuthProbe({
+      ok: true,
+      fingerprint,
+      cliPath: "other",
+      checkedAt: new Date().toISOString(),
+    }, fingerprint, "node"), false);
   });
 });
 
