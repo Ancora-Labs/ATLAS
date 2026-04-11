@@ -1462,6 +1462,33 @@ describe("jesus_supervisor — runSystemHealthAudit CI finding shape", () => {
   });
 });
 
+// ── hasCiSystemLearningDebt — resolved lineage findings must not trigger active debt ──
+
+describe("hasCiSystemLearningDebt — resolved lineage isolation", () => {
+  it("returns false for a finding that matches the resolved lineage shape (has _resolvedAt)", () => {
+    // Findings that have been moved to resolvedLineage carry _resolvedAt.
+    // They must never trigger the active CI fastlane — only active findings[] should.
+    const resolvedFinding = {
+      area: "system-learning",
+      severity: "warning",
+      finding: "CI-broken tests accumulated as historical CI-break debt (0ec5b75, f276e7a, 531bbc0)",
+      remediation: "ci-fix required",
+      latestMainCiConclusion: "success",
+      _resolvedAt: new Date().toISOString(),
+      _resolutionReason: "stale_system_learning_ci_debt:latestMainCiConclusion=success",
+    };
+    // hasCiSystemLearningDebt operates on findings[]; callers should only pass active
+    // findings, but the latestMainCiConclusion=success gate provides a second safety net.
+    assert.equal(hasCiSystemLearningDebt([resolvedFinding]), false,
+      "resolved lineage finding with latestMainCiConclusion=success must not trigger CI fastlane");
+  });
+
+  it("returns false when findings array is empty (all moved to resolvedLineage)", () => {
+    assert.equal(hasCiSystemLearningDebt([]), false,
+      "empty active findings array must not trigger CI fastlane");
+  });
+});
+
 // ── extractSessionsFromCycleRecord ─────────────────────────────────────────────
 
 import { extractSessionsFromCycleRecord } from "../../src/core/cycle_analytics.js";

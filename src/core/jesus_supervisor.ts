@@ -938,11 +938,47 @@ export async function runJesusCycle(config) {
   // the normalization layer can detect when a previously-stale CI-break finding
   // has been superseded by a healthy CI run.
   {
+    const liveMainCiSuccess = githubState.latestMainCi?.conclusion === "success";
+
+    // Partition findings: when main CI is healthy, move stale CI-break and
+    // system-learning CI-debt findings to resolvedLineage so downstream
+    // consumers don't treat historical debt as active mandatory work.
+    const CI_DEBT_PATTERN = /\bci[-_\s]?(?:broken|break|fail(?:ed|ing)?|fix|repair)\b/i;
+    const activeFindings: typeof healthFindings = [];
+    const resolvedLineage: Record<string, unknown>[] = [];
+    const resolvedAt = new Date().toISOString();
+
+    for (const f of healthFindings) {
+      const area = String(f.area || "").trim().toLowerCase();
+      const capability = String(f.capabilityNeeded || "").trim().toLowerCase();
+      const text = `${String(f.finding || "")} ${String(f.remediation || "")}`;
+      const isCiBreak =
+        (area === "ci" && (capability === "ci-fix" || capability === "ci-setup"));
+      const isSysLearningCiDebt =
+        area === "system-learning" &&
+        CI_DEBT_PATTERN.test(text) &&
+        String(f.latestMainCiConclusion || "").trim().toLowerCase() === "success";
+
+      if (liveMainCiSuccess && (isCiBreak || isSysLearningCiDebt)) {
+        resolvedLineage.push({
+          ...f,
+          _resolvedAt: resolvedAt,
+          _resolutionReason: isCiBreak
+            ? "stale_ci_break:latestMainCiConclusion=success"
+            : "stale_system_learning_ci_debt:latestMainCiConclusion=success",
+        });
+      } else {
+        activeFindings.push(f);
+      }
+    }
+
     const healthFindingsPayload: Record<string, unknown> = {
-      findings: healthFindings,
+      findings: activeFindings,
       auditedAt: new Date().toISOString(),
       latestMainCiConclusion: githubState.latestMainCi?.conclusion ?? null,
       latestMainCiUpdatedAt: githubState.latestMainCi?.updatedAt ?? null,
+      // Historical CI-break context preserved for audit trail; not treated as active debt.
+      ...(resolvedLineage.length > 0 ? { resolvedLineage } : {}),
       // Dual-source liveness evidence: downstream planners use these
       // fields to trust worker-health findings only when source-consistent and fresh.
       workerLivenessSource: sessionLoadResult.source,
@@ -956,10 +992,17 @@ export async function runJesusCycle(config) {
       filteredStaleRoles: sessionLoadResult.filteredStaleRoles,
     };
 
-    if (healthFindings.length > 0) {
-      const criticalCount = healthFindings.filter(f => f.severity === "critical").length;
-      await appendProgress(config, `[JESUS][AUDIT] ${healthFindings.length} finding(s) — ${criticalCount} critical`);
-      chatLog(stateDir, jesusName, `Health audit: ${healthFindings.length} findings (${criticalCount} critical)`);
+    if (activeFindings.length > 0 || resolvedLineage.length > 0) {
+      const criticalCount = activeFindings.filter(f => f.severity === "critical").length;
+      const resolvedCount = resolvedLineage.length;
+      await appendProgress(config,
+        `[JESUS][AUDIT] ${activeFindings.length} active finding(s) — ${criticalCount} critical` +
+        (resolvedCount > 0 ? ` (${resolvedCount} moved to resolvedLineage — historical CI-break context)` : "")
+      );
+      chatLog(stateDir, jesusName,
+        `Health audit: ${activeFindings.length} active findings (${criticalCount} critical)` +
+        (resolvedCount > 0 ? `, ${resolvedCount} resolved lineage` : "")
+      );
 
       // Persist capability execution status alongside findings so self-improvement
       // can distinguish "code present in source" from "actually invoked at runtime".
