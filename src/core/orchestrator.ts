@@ -703,24 +703,10 @@ export function autoResolveBenchmarkRecommendations(
     resolvedCount += 1;
   }
 
-  // Partial fallback: when verified done workers exist but no specific topic link
-  // was found, mark unresolved pending recommendations as "implemented_partially".
-  let usedFallback = false;
-  if (opts.verifiedDoneWorkers > 0) {
-    for (const { rec, idx } of pendingIndexes) {
-      if (resolvedIdxs.has(idx)) continue;
-      const prevEvidence = String(rec?.evidence || "").trim();
-      nextRecs[idx] = {
-        ...rec,
-        implementationStatus: "implemented_partially",
-        evidence: prevEvidence
-          ? `${prevEvidence}; partial-fallback@${opts.atIso}: ${opts.verifiedDoneWorkers} verified worker(s) completed`
-          : `partial-fallback@${opts.atIso}: ${opts.verifiedDoneWorkers} verified worker(s) completed`,
-      };
-      usedFallback = true;
-      resolvedCount += 1;
-    }
-  }
+  // Partial fallback removed: promoting recommendations on generic worker completion
+  // with no topic linkage is causally incorrect.  Only explicit synthesis_sources
+  // matches (collected above) are accepted as resolution evidence.
+  const usedFallback = false;
 
   const nextEntries = [...benchmarkEntries];
   nextEntries[0] = {

@@ -295,6 +295,45 @@ export const WORKER_CYCLE_ARTIFACTS_SCHEMA = Object.freeze({
   cycleRecordRequired: ["cycleId", "updatedAt", "status", "workerSessions", "workerActivity", "completedTaskIds"],
 });
 
+/**
+ * Maximum age in milliseconds before a worker_cycle_artifacts.json record is
+ * considered stale for planning purposes.  Matches the diagnostics freshness
+ * window used by computeDiagnosticsFreshnessAdmission in prometheus.ts.
+ */
+export const WORKER_CYCLE_ARTIFACTS_FRESHNESS_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+/**
+ * Build a DiagnosticsFreshnessRecord-compatible descriptor for worker_cycle_artifacts.json.
+ *
+ * Used to integrate the canonical cycle snapshot's age into the diagnostics
+ * freshness admission gate (computeDiagnosticsFreshnessAdmission in prometheus.ts)
+ * so stale cycle snapshots are treated as historical context rather than live
+ * planning truth.
+ *
+ * Pure function — no I/O.
+ *
+ * @param artifactData — parsed worker_cycle_artifacts.json content, or null/undefined if absent.
+ * @returns Object with label, recordedAt (from updatedAt field), and staleAfterMs.
+ */
+export function buildWorkerCycleArtifactsFreshnessRecord(artifactData: unknown): {
+  label: string;
+  recordedAt: string | null;
+  staleAfterMs: number;
+} {
+  const updatedAt =
+    artifactData !== null &&
+    artifactData !== undefined &&
+    typeof artifactData === "object" &&
+    !Array.isArray(artifactData)
+      ? String((artifactData as Record<string, unknown>).updatedAt || "").trim()
+      : "";
+  return {
+    label: "worker_cycle_artifacts",
+    recordedAt: updatedAt || null,
+    staleAfterMs: WORKER_CYCLE_ARTIFACTS_FRESHNESS_MAX_AGE_MS,
+  };
+}
+
 export const WORKER_CYCLE_ARTIFACT_MIGRATION_REASON = Object.freeze({
   OK: "ok",
   ALREADY_CURRENT: "already_current",

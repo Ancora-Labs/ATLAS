@@ -80,6 +80,7 @@ import {
   computeMandatoryFindingsPreflight,
   MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS,
   MANDATORY_FINDINGS_PREFLIGHT_STATUS,
+  PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments, CANDIDATE_GENERATION_SECTION } from "../../src/core/prompt_compiler.js";
 import {
@@ -6561,5 +6562,47 @@ describe("pre-merge sentinel: verification-specificity grammar coherence", () =>
         `isNonSpecificVerification("${example}") must return false (specific reference)`
       );
     }
+  });
+});
+
+// ── PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES — planning input contract ────────
+
+describe("PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES — canonical planning input contract", () => {
+  it("includes state/worker_cycle_artifacts.json as the canonical cycle snapshot source", () => {
+    assert.ok(
+      PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES.includes("state/worker_cycle_artifacts.json"),
+      "canonical workflow must reference state/worker_cycle_artifacts.json"
+    );
+  });
+
+  it("does NOT include state/evolution_progress.json (deprecated legacy file)", () => {
+    assert.ok(
+      !PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES.includes("state/evolution_progress.json"),
+      "evolution_progress.json is deprecated and must not appear in canonical workflow state files"
+    );
+  });
+
+  it("includes all required canonical health state files", () => {
+    const required = [
+      "state/cycle_analytics.json",
+      "state/capacity_scoreboard.json",
+      "state/cycle_health.json",
+      "state/athena_postmortems.json",
+    ];
+    for (const file of required) {
+      assert.ok(
+        PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES.includes(file),
+        `canonical workflow must include ${file}`
+      );
+    }
+  });
+
+  it("is frozen (immutable) to prevent accidental mutation", () => {
+    const arr = PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES as unknown as string[];
+    assert.throws(
+      () => { arr.push("state/foo.json"); },
+      (err: unknown) => err instanceof TypeError,
+      "array must be frozen — push must throw TypeError"
+    );
   });
 });

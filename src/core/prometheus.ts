@@ -4099,6 +4099,23 @@ export const PROMETHEUS_STATIC_SECTION_NAMES: ReadonlySet<string> = new Set(
   Object.values(PROMETHEUS_STATIC_SECTIONS).map(s => s.name)
 );
 
+/**
+ * Canonical list of state files that Prometheus reads during its planning workflow.
+ * Used in the context prompt (step 2) and exported for test verification.
+ *
+ * Invariant: state/worker_cycle_artifacts.json is the canonical cycle snapshot
+ * source.  state/evolution_progress.json is legacy and must NOT appear here.
+ */
+export const PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES: ReadonlyArray<string> = Object.freeze([
+  "state/cycle_analytics.json",
+  "state/capacity_scoreboard.json",
+  "state/cycle_health.json",
+  "state/worker_cycle_artifacts.json",
+  "state/athena_postmortems.json",
+  "state/intervention_optimizer_log.jsonl",
+  "state/dependency_graph_diagnostics.json",
+]);
+
 export const PROMETHEUS_PROMPT_DENSITY_MIN = Object.freeze({
   minTargetFiles: 2,
   minAcceptanceCriteria: 2,
@@ -5597,7 +5614,8 @@ ${userPrompt}
 ## YOUR WORKFLOW
 You have full read and write access to the repository and state directory.
 1. Read state/research_synthesis.json for the latest research intelligence (extracted content from internet sources).
-2. Read key state files to understand system health: state/cycle_analytics.json, state/capacity_scoreboard.json, state/cycle_health.json, state/evolution_progress.json, state/athena_postmortems.json, state/intervention_optimizer_log.jsonl, state/dependency_graph_diagnostics.json
+2. Read key state files to understand system health: ${PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES.join(", ")}
+   - state/worker_cycle_artifacts.json is the canonical cycle snapshot (schemaVersion=1, fields: latestCycleId, cycles{}, updatedAt). Check the updatedAt field for freshness — records older than 6 hours are historical context only, not live planning truth.
    - Use diagnostics freshness metadata (freshness.staleAfterMs + timestamp fields) and do NOT treat stale diagnostics entries as live planning truth.
 3. Read source files you need to understand for planning — browse src/core/, src/workers/, src/types/ as needed.
 4. Produce your self-evolution master plan following your agent definition's output format.

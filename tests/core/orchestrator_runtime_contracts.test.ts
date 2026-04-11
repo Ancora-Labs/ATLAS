@@ -6,6 +6,8 @@ import { describe, it } from "node:test";
 
 import {
   autoResolveBenchmarkRecommendations,
+  buildCycleWorkerResultRow,
+  isCheckpointAdvanceEligibleStatus,
   isResumePreferredTimeoutOutcome,
   promotePrometheusAnalysisFromWorkerEvidence,
   rebatchOversizedAthenaPlanGroupsForAdmission,
@@ -235,7 +237,68 @@ describe("orchestrator runtime contracts - benchmark auto-resolution", () => {
     assert.equal(result.entries[0].recommendations[0].implementationStatus, "implemented_correctly");
   });
 
-  it("uses partial fallback when only generic verified completion exists", () => {
+  it("preserves synthesis linkage when building cycle worker rows", () => {
+    const row = buildCycleWorkerResultRow(
+      {
+        role: "evolution-worker",
+        plans: [
+          {
+            task: "Fix timeout recovery flow",
+            synthesis_sources: ["Worker lifecycle safety"],
+          },
+        ],
+      },
+      {
+        status: "done",
+        filesTouched: ["src/core/orchestrator.ts"],
+        verificationEvidence: "VERIFICATION_REPORT: TESTS=pass",
+        dispatchContract: { doneWorkerWithVerificationReportEvidence: true },
+      },
+    );
+
+    assert.deepEqual(row.planTasks, ["Fix timeout recovery flow"]);
+    assert.deepEqual(row.synthesisSources, ["Worker lifecycle safety"]);
+    assert.deepEqual(row.filesTouched, ["src/core/orchestrator.ts"]);
+
+    const benchmarkResult = autoResolveBenchmarkRecommendations(
+      [{
+        recommendations: [
+          {
+            topic: "Worker lifecycle safety",
+            implementationStatus: "pending",
+            evidence: "",
+          },
+        ],
+      }],
+      {
+        verifiedDoneWorkers: 1,
+        workerBatches: [{ plans: [{ synthesis_sources: ["Worker lifecycle safety"] }] }],
+        workerResults: [row],
+        atIso: "2026-04-09T12:00:00.000Z",
+      },
+    );
+
+    assert.equal(benchmarkResult.entries[0].recommendations[0].implementationStatus, "implemented_correctly");
+
+    const promotionResult = promotePrometheusAnalysisFromWorkerEvidence(
+      {
+        plans: [
+          {
+            task: "Fix timeout recovery flow",
+            implementationStatus: "not_implemented",
+            implementationEvidence: [],
+          },
+        ],
+      },
+      [row],
+      "2026-04-09T12:00:00.000Z",
+    );
+
+    assert.equal(promotionResult.analysis.plans[0].implementationStatus, "implemented_correctly");
+    assert.ok(promotionResult.analysis.plans[0].implementationEvidence.includes("src/core/orchestrator.ts"));
+  });
+
+  it("fails closed when only generic verified completion exists without linkage", () => {
     const result = autoResolveBenchmarkRecommendations(
       [{
         recommendations: [
@@ -254,8 +317,18 @@ describe("orchestrator runtime contracts - benchmark auto-resolution", () => {
       },
     );
 
-    assert.equal(result.resolvedCount, 1);
-    assert.equal(result.entries[0].recommendations[0].implementationStatus, "implemented_partially");
+    assert.equal(result.resolvedCount, 0);
+    assert.equal(result.entries[0].recommendations[0].implementationStatus, "pending");
+  });
+});
+
+describe("orchestrator runtime contracts - closure truth", () => {
+  it("treats only fully completed worker statuses as checkpoint-advance eligible", () => {
+    assert.equal(isCheckpointAdvanceEligibleStatus("done"), true);
+    assert.equal(isCheckpointAdvanceEligibleStatus("success"), true);
+    assert.equal(isCheckpointAdvanceEligibleStatus("skipped"), true);
+    assert.equal(isCheckpointAdvanceEligibleStatus("partial"), false);
+    assert.equal(isCheckpointAdvanceEligibleStatus("blocked"), false);
   });
 });
 
@@ -363,6 +436,23 @@ describe("orchestrator runtime contracts - adaptive inter-batch cooldown", () =>
 
     assert.equal(result.cooldownMs, 0);
     assert.equal(result.reason, "no_remaining_batches");
+  });
+
+  it("uses the fast path for environment-blocked batches where waiting does not improve readiness", () => {
+    const result = resolveInterBatchCooldownDecision({
+      runtime: {
+        interBatchDelayMs: 90000,
+        interBatchSuccessDelayMs: 15000,
+      },
+    }, {
+      remainingBatches: 1,
+      workerStatus: "blocked",
+      transientRetries: 0,
+      dispatchBlockReason: "access_blocked:tools",
+    });
+
+    assert.equal(result.cooldownMs, 15000);
+    assert.equal(result.reason, "environment_blocker_fast_path");
   });
 });
 
@@ -631,5 +721,55 @@ describe("extractMandatoryFindingsPreflightAdmissionTelemetry", () => {
   it("negative: returns null for completely empty object", () => {
     const result = extractMandatoryFindingsPreflightAdmissionTelemetry({});
     assert.equal(result, null);
+  });
+});
+
+// ── buildWorkerCycleArtifactsFreshnessRecord — cycle snapshot freshness ────────
+
+import {
+  buildWorkerCycleArtifactsFreshnessRecord,
+  WORKER_CYCLE_ARTIFACTS_FRESHNESS_MAX_AGE_MS,
+} from "../../src/core/cycle_analytics.js";
+
+describe("buildWorkerCycleArtifactsFreshnessRecord — cycle snapshot freshness signals", () => {
+  it("extracts updatedAt from valid artifact data as recordedAt", () => {
+    const ts = new Date().toISOString();
+    const result = buildWorkerCycleArtifactsFreshnessRecord({
+      schemaVersion: 1,
+      updatedAt: ts,
+      latestCycleId: "cycle-1",
+      cycles: {},
+    });
+    assert.equal(result.recordedAt, ts);
+    assert.equal(result.label, "worker_cycle_artifacts");
+    assert.equal(result.staleAfterMs, WORKER_CYCLE_ARTIFACTS_FRESHNESS_MAX_AGE_MS);
+  });
+
+  it("returns recordedAt=null when artifact data is null (file absent)", () => {
+    const result = buildWorkerCycleArtifactsFreshnessRecord(null);
+    assert.equal(result.recordedAt, null);
+    assert.equal(result.label, "worker_cycle_artifacts");
+  });
+
+  it("returns recordedAt=null when artifact data is undefined", () => {
+    const result = buildWorkerCycleArtifactsFreshnessRecord(undefined);
+    assert.equal(result.recordedAt, null);
+  });
+
+  it("returns recordedAt=null when artifact data lacks updatedAt field", () => {
+    const result = buildWorkerCycleArtifactsFreshnessRecord({ schemaVersion: 1, cycles: {} });
+    assert.equal(result.recordedAt, null);
+  });
+
+  it("returns recordedAt=null for non-object inputs (e.g. arrays, primitives)", () => {
+    assert.equal(buildWorkerCycleArtifactsFreshnessRecord([]).recordedAt, null);
+    assert.equal(buildWorkerCycleArtifactsFreshnessRecord("string").recordedAt, null);
+    assert.equal(buildWorkerCycleArtifactsFreshnessRecord(42).recordedAt, null);
+  });
+
+  it("staleAfterMs is 6 hours (matches WORKER_CYCLE_ARTIFACTS_FRESHNESS_MAX_AGE_MS)", () => {
+    assert.equal(WORKER_CYCLE_ARTIFACTS_FRESHNESS_MAX_AGE_MS, 6 * 60 * 60 * 1000);
+    const result = buildWorkerCycleArtifactsFreshnessRecord({ updatedAt: new Date().toISOString() });
+    assert.equal(result.staleAfterMs, 6 * 60 * 60 * 1000);
   });
 });
