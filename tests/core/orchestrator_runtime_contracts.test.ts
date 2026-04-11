@@ -429,3 +429,100 @@ describe("orchestrator — canonical session loading behavior (extractSessionsFr
     assert.ok(typeof recovered === "object" && recovered !== null, "recovered must be an object");
   });
 });
+
+// ── filterStaleWorkerSessions — canonical-first liveness arbitration ──────────
+
+import { filterStaleWorkerSessions } from "../../src/core/cycle_analytics.js";
+
+describe("orchestrator — filterStaleWorkerSessions pure function contracts", () => {
+  it("returns all sessions with no staleRoles when sessions is empty", () => {
+    const result = filterStaleWorkerSessions({}, null);
+    assert.deepEqual(result.sessions, {});
+    assert.deepEqual(result.staleRoles, []);
+  });
+
+  it("returns all sessions unchanged when cycleStart is null (no reference available)", () => {
+    const sessions = {
+      worker1: { status: "working", startedAt: "2020-01-01T00:00:00.000Z" },
+    };
+    const result = filterStaleWorkerSessions(sessions, null);
+    assert.ok("worker1" in result.sessions, "session must be kept when cycleStart is null");
+    assert.deepEqual(result.staleRoles, [], "no stale roles when cycleStart is null");
+  });
+
+  it("excludes sessions whose startedAt predates cycleStart", () => {
+    const cycleStart = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const staleTs    = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+    const freshTs    = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+
+    const sessions = {
+      stale:  { status: "working", startedAt: staleTs },
+      active: { status: "working", startedAt: freshTs },
+    };
+    const result = filterStaleWorkerSessions(sessions, cycleStart);
+
+    assert.ok(!("stale" in result.sessions), "stale session must be excluded");
+    assert.ok("active" in result.sessions, "active session must remain");
+    assert.ok(result.staleRoles.includes("stale"), "stale role must be reported");
+    assert.equal(result.staleRoles.length, 1);
+  });
+
+  it("prefers lastActiveAt over startedAt when both are present", () => {
+    const cycleStart      = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const staleStart      = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+    const freshLastActive = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+
+    // startedAt is before cycleStart but lastActiveAt is after — should NOT be filtered
+    const sessions = {
+      mixed: { status: "working", startedAt: staleStart, lastActiveAt: freshLastActive },
+    };
+    const result = filterStaleWorkerSessions(sessions, cycleStart);
+
+    assert.ok("mixed" in result.sessions,
+      "session with stale startedAt but fresh lastActiveAt must be kept");
+    assert.deepEqual(result.staleRoles, []);
+  });
+
+  it("keeps sessions with no parseable timestamp (cannot be proven stale)", () => {
+    const cycleStart = new Date().toISOString();
+    const sessions = {
+      unknown: { status: "working" }, // no timestamps at all
+    };
+    const result = filterStaleWorkerSessions(sessions, cycleStart);
+
+    assert.ok("unknown" in result.sessions,
+      "session with no timestamp must be kept (cannot prove staleness)");
+    assert.deepEqual(result.staleRoles, []);
+  });
+
+  it("filters all sessions when all predate cycleStart", () => {
+    const cycleStart = new Date(Date.now() - 60 * 1000).toISOString();
+    const staleTs    = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+
+    const sessions = {
+      worker1: { status: "working", startedAt: staleTs },
+      worker2: { status: "idle",    startedAt: staleTs },
+    };
+    const result = filterStaleWorkerSessions(sessions, cycleStart);
+
+    assert.deepEqual(result.sessions, {}, "all sessions must be filtered");
+    assert.equal(result.staleRoles.length, 2);
+    assert.ok(result.staleRoles.includes("worker1"));
+    assert.ok(result.staleRoles.includes("worker2"));
+  });
+
+  it("returns sessions unchanged when all timestamps are after cycleStart", () => {
+    const cycleStart = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const freshTs    = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+
+    const sessions = {
+      worker1: { status: "working", startedAt: freshTs },
+      worker2: { status: "working", startedAt: freshTs },
+    };
+    const result = filterStaleWorkerSessions(sessions, cycleStart);
+
+    assert.ok("worker1" in result.sessions);
+    assert.ok("worker2" in result.sessions);
+    assert.deepEqual(result.staleRoles, []);
+  });
+});

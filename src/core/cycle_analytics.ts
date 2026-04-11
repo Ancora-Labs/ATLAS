@@ -540,6 +540,55 @@ export function extractSessionsFromCycleRecord(
 }
 
 /**
+ * Filter legacy worker sessions by staleness relative to a pipeline cycle start.
+ *
+ * Sessions whose most recent activity timestamp (lastActiveAt, then startedAt)
+ * predates the cycle start are considered stale and excluded so they cannot emit
+ * actionable worker-health findings when the canonical artifact is absent.
+ *
+ * Pure function — no I/O.
+ *
+ * @param sessions   - flat session map from worker_sessions.json
+ * @param cycleStart - ISO timestamp of the current pipeline cycle; pass null to
+ *                     skip filtering (sessions are returned unchanged)
+ * @returns { sessions: filtered map, staleRoles: roles that were excluded }
+ */
+export function filterStaleWorkerSessions(
+  sessions: Record<string, unknown>,
+  cycleStart: string | null | undefined,
+): { sessions: Record<string, unknown>; staleRoles: string[] } {
+  if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
+    return { sessions: {}, staleRoles: [] };
+  }
+  if (!cycleStart) return { sessions, staleRoles: [] };
+  const cycleStartMs = Date.parse(cycleStart);
+  if (!Number.isFinite(cycleStartMs)) return { sessions, staleRoles: [] };
+
+  const kept: Record<string, unknown> = {};
+  const staleRoles: string[] = [];
+  for (const [role, session] of Object.entries(sessions)) {
+    if (!session || typeof session !== "object" || Array.isArray(session)) {
+      kept[role] = session;
+      continue;
+    }
+    const s = session as Record<string, unknown>;
+    const lastActiveMs = typeof s.lastActiveAt === "string" ? Date.parse(s.lastActiveAt) : NaN;
+    const startedAtMs  = typeof s.startedAt    === "string" ? Date.parse(s.startedAt)    : NaN;
+    // Use the most recent parseable timestamp available.
+    const sessionMs = Number.isFinite(lastActiveMs) ? lastActiveMs
+                    : Number.isFinite(startedAtMs)  ? startedAtMs
+                    : null;
+    // Sessions with no parseable timestamp cannot be proven stale → keep them.
+    if (sessionMs === null || sessionMs >= cycleStartMs) {
+      kept[role] = session;
+    } else {
+      staleRoles.push(role);
+    }
+  }
+  return { sessions: kept, staleRoles };
+}
+
+/**
  * Compatibility migration for legacy evolution_progress-style task maps.
  * Converts legacy { tasks:{ id:{status} } } payloads into canonical
  * completedTaskIds used by worker_cycle_artifacts v1 consumers.

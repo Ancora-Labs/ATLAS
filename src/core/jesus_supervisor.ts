@@ -16,7 +16,7 @@
 
 import path from "node:path";
 import { appendFileSync } from "node:fs";
-import { readJson, readJsonSafe, writeJson, spawnAsync, buildIncrementalSignatureIndex } from "./fs_utils.js";
+import { readJson, readJsonSafe, writeJson, spawnAsync, buildIncrementalSignatureIndex, READ_JSON_REASON } from "./fs_utils.js";
 import { appendProgress, appendAlert, ALERT_SEVERITY, loadCapabilityExecutionSummary } from "./state_tracker.js";
 import { getRoleRegistry } from "./role_registry.js";
 import { buildAgentArgs, parseAgentOutput, logAgentThinking } from "./agent_loader.js";
@@ -40,6 +40,7 @@ import {
   migrateWorkerCycleArtifacts,
   selectWorkerCycleRecord,
   extractSessionsFromCycleRecord,
+  filterStaleWorkerSessions,
 } from "./cycle_analytics.js";
 
 // ── CI system-learning debt detection ────────────────────────────────────────
@@ -263,7 +264,13 @@ function isCapabilityGapVerifiedPresentAndExecuted(
   return sourcePresent && executionPresent;
 }
 
-export async function runSystemHealthAudit(config, githubState, AthenaCoordination, sessions) {
+export async function runSystemHealthAudit(
+  config,
+  githubState,
+  AthenaCoordination,
+  sessions,
+  sessionMeta?: { source: "canonical" | "legacy" | "empty"; cycleId: string | null },
+) {
   const findings = [];
 
   // 1. CI Health — is main branch green?
@@ -332,7 +339,11 @@ export async function runSystemHealthAudit(config, githubState, AthenaCoordinati
     }
   }
 
-  // 4. Worker session health — detect stuck or errored workers
+  // 4. Worker session health — detect stuck or errored workers.
+  // When sessions came from the legacy worker_sessions.json file (not the canonical
+  // worker_cycle_artifacts.json), worker-health findings are tagged with a reduced
+  // livenessSource so downstream planners can trust them with appropriate caution.
+  const livenessSource = sessionMeta?.source ?? "canonical";
   const workerIssues = [];
   for (const [role, session] of Object.entries(sessions) as any[]) {
     if (session?.status === "error") {
@@ -362,7 +373,10 @@ export async function runSystemHealthAudit(config, githubState, AthenaCoordinati
       severity: "warning",
       finding: `Worker issues detected: ${workerIssues.join("; ")}`,
       remediation: "Reset stuck workers, investigate error causes",
-      capabilityNeeded: "worker-recovery"
+      capabilityNeeded: "worker-recovery",
+      // Provenance: downstream planners should not treat legacy-sourced liveness
+      // findings as authoritative — canonical artifacts are the ground truth.
+      ...(livenessSource !== "canonical" ? { livenessSource, livenessConfidence: "low" } : {}),
     });
   }
 
@@ -747,7 +761,8 @@ function buildCapacityDeltaReport(d, healthFindings, kpis) {
 
   return { topBottlenecks, projectedGains, commandedInterventions };
 }
-
+
+
 // ── Canonical session loader ────────────────────────────────────────────────
 
 /**
@@ -758,7 +773,7 @@ function buildCapacityDeltaReport(d, healthFindings, kpis) {
  * Returns structured evidence so callers can persist dual-source metadata and
  * detect source conflicts downstream.
  */
-async function loadWorkerSessionsForHealthAudit(
+export async function loadWorkerSessionsForHealthAudit(
   config: unknown,
   stateDir: string,
 ): Promise<{
@@ -769,6 +784,10 @@ async function loadWorkerSessionsForHealthAudit(
   legacySessionsAvailable: boolean;
   workerSessionSourceConflict: boolean;
   conflictReason: string | null;
+  /** Number of legacy sessions excluded because they predate the current cycle. */
+  staleSessionsFiltered: number;
+  /** Roles that were excluded due to staleness. */
+  filteredStaleRoles: string[];
 }> {
   // Read canonical worker_cycle_artifacts and legacy sessions in parallel.
   const artifactsPath = path.join(stateDir, WORKER_CYCLE_ARTIFACTS_FILE);
@@ -778,15 +797,15 @@ async function loadWorkerSessionsForHealthAudit(
     readJsonSafe(legacyPath),
   ]);
 
-  const legacySessions = (legacyRaw && typeof legacyRaw === "object" && !Array.isArray(legacyRaw))
-    ? (legacyRaw as Record<string, unknown>)
+  const legacySessions = (legacyRaw.ok && legacyRaw.data && typeof legacyRaw.data === "object" && !Array.isArray(legacyRaw.data))
+    ? (legacyRaw.data as Record<string, unknown>)
     : null;
   const legacyAvailable = legacySessions !== null && Object.keys(legacySessions).length > 0;
 
   // Attempt canonical resolution.
-  if (artifactsRaw && typeof artifactsRaw === "object") {
+  if (artifactsRaw.ok && artifactsRaw.data && typeof artifactsRaw.data === "object") {
     try {
-      const migrated = migrateWorkerCycleArtifacts(artifactsRaw);
+      const migrated = migrateWorkerCycleArtifacts(artifactsRaw.data);
       if (migrated.ok && migrated.data) {
         // Determine preferred cycle from active pipeline.
         let preferredCycleId: string | null = null;
@@ -822,24 +841,42 @@ async function loadWorkerSessionsForHealthAudit(
             legacySessionsAvailable: legacyAvailable,
             workerSessionSourceConflict: conflict,
             conflictReason,
+            staleSessionsFiltered: 0,
+            filteredStaleRoles: [],
           };
         }
       }
     } catch {
-      // Canonical read failed — fall through to legacy
+      // Canonical read failed after a successful JSON parse.
     }
   }
 
-  // Fallback: legacy worker_sessions.json
-  if (legacySessions && Object.keys(legacySessions).length > 0) {
+  // Fallback: legacy worker_sessions.json is allowed only when the canonical
+  // artifact is absent, not when it exists but is invalid/unusable.
+  if (artifactsRaw.reason === READ_JSON_REASON.MISSING && legacySessions && Object.keys(legacySessions).length > 0) {
+    // Filter sessions that predate the current pipeline cycle so stale legacy
+    // "working" sessions cannot generate actionable worker-health findings.
+    let pipelineStartedAt: string | null = null;
+    try {
+      const progress = await readPipelineProgress(config as Parameters<typeof readPipelineProgress>[0]);
+      pipelineStartedAt = progress?.startedAt ?? null;
+    } catch {
+      // pipeline progress unreadable — staleness filter cannot run; pass sessions through
+    }
+    const { sessions: filteredSessions, staleRoles } = filterStaleWorkerSessions(
+      legacySessions,
+      pipelineStartedAt,
+    );
     return {
-      sessions: legacySessions,
+      sessions: filteredSessions,
       source: "legacy",
       cycleId: null,
       canonicalSessionsAvailable: false,
       legacySessionsAvailable: true,
       workerSessionSourceConflict: false,
       conflictReason: null,
+      staleSessionsFiltered: staleRoles.length,
+      filteredStaleRoles: staleRoles,
     };
   }
 
@@ -848,9 +885,11 @@ async function loadWorkerSessionsForHealthAudit(
     source: "empty",
     cycleId: null,
     canonicalSessionsAvailable: false,
-    legacySessionsAvailable: false,
+    legacySessionsAvailable: legacyAvailable,
     workerSessionSourceConflict: false,
     conflictReason: null,
+    staleSessionsFiltered: 0,
+    filteredStaleRoles: [],
   };
 }
 
@@ -890,7 +929,8 @@ export async function runJesusCycle(config) {
 
   // ── Hierarchical Health Audit — detect what lower layers missed ──────────
   chatLog(stateDir, jesusName, "[LIVE] running hierarchical health audit");
-  const healthFindings = await runSystemHealthAudit(config, githubState, AthenaCoordination, sessions);
+  const sessionMeta = { source: sessionLoadResult.source, cycleId: sessionLoadResult.cycleId };
+  const healthFindings = await runSystemHealthAudit(config, githubState, AthenaCoordination, sessions, sessionMeta);
   chatLog(stateDir, jesusName, `[LIVE] health audit complete findings=${healthFindings.length}`);
 
   // Always persist the findings file so Prometheus can perform freshness-aware
@@ -903,7 +943,7 @@ export async function runJesusCycle(config) {
       auditedAt: new Date().toISOString(),
       latestMainCiConclusion: githubState.latestMainCi?.conclusion ?? null,
       latestMainCiUpdatedAt: githubState.latestMainCi?.updatedAt ?? null,
-      // Dual-source liveness evidence (Task 3): downstream planners use these
+      // Dual-source liveness evidence: downstream planners use these
       // fields to trust worker-health findings only when source-consistent and fresh.
       workerLivenessSource: sessionLoadResult.source,
       canonicalCycleId: sessionLoadResult.cycleId,
@@ -911,6 +951,9 @@ export async function runJesusCycle(config) {
       legacySessionsAvailable: sessionLoadResult.legacySessionsAvailable,
       workerSessionSourceConflict: sessionLoadResult.workerSessionSourceConflict,
       workerSessionSourceConflictReason: sessionLoadResult.conflictReason ?? null,
+      // Staleness provenance: how many legacy sessions were suppressed before the audit.
+      staleSessionsFiltered: sessionLoadResult.staleSessionsFiltered,
+      filteredStaleRoles: sessionLoadResult.filteredStaleRoles,
     };
 
     if (healthFindings.length > 0) {
@@ -969,7 +1012,7 @@ export async function runJesusCycle(config) {
   // We do this AFTER the fresh-directive check so we only calibrate on real new cycles.
   chatLog(stateDir, jesusName, "[LIVE] calibration start (expected vs realized)");
   try {
-    const calibrationHealthFindings = await runSystemHealthAudit(config, githubState, AthenaCoordination, sessions);
+    const calibrationHealthFindings = await runSystemHealthAudit(config, githubState, AthenaCoordination, sessions, sessionMeta);
     const criticalCount = calibrationHealthFindings.filter(f => f.severity === "critical").length;
     const warningCount = calibrationHealthFindings.filter(f => f.severity === "warning").length;
     let realizedHealth = "good";

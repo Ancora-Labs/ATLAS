@@ -5,6 +5,7 @@
  *   - validateDirectivePayload: required field enforcement and fail-close semantics
  *   - validateExpectedOutcomeMeasurable: concrete measurable outcome verification
  *   - queue viability + completionRate gate: replan suppression respects execution-effectiveness
+ *   - canonical-first worker-liveness arbitration and provenance persistence
  */
 
 import { describe, it } from "node:test";
@@ -15,6 +16,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import {
   runSystemHealthAudit,
+  loadWorkerSessionsForHealthAudit,
   validateDirectivePayload,
   validateExpectedOutcomeMeasurable,
   sanitizeDirectiveFieldForPersistence,
@@ -1583,5 +1585,221 @@ describe("jesus_supervisor — loadWorkerSessionsForHealthAudit dual-source meta
       (s) => s && typeof s === "object" && (s as any).status === "working",
     ).length;
     assert.equal(activeCount, 1, "active worker count must be derivable from extracted sessions");
+  });
+
+  it("uses legacy worker_sessions only when canonical worker-cycle artifacts are absent", async () => {
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "jesus-health-audit-legacy-"));
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "worker_sessions.json"),
+        JSON.stringify({ workerA: { status: "working", startedAt: new Date().toISOString() } }),
+        "utf8",
+      );
+
+      const result = await loadWorkerSessionsForHealthAudit({ paths: { stateDir } } as any, stateDir);
+      assert.equal(result.source, "legacy");
+      assert.equal(result.legacySessionsAvailable, true);
+      assert.equal(result.canonicalSessionsAvailable, false);
+      assert.equal(Object.keys(result.sessions).length, 1);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses legacy worker_sessions when canonical worker-cycle artifacts are invalid", async () => {
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "jesus-health-audit-invalid-canonical-"));
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "worker_sessions.json"),
+        JSON.stringify({ workerA: { status: "working", startedAt: new Date().toISOString() } }),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(stateDir, "worker_cycle_artifacts.json"),
+        "{ invalid json",
+        "utf8",
+      );
+
+      const result = await loadWorkerSessionsForHealthAudit({ paths: { stateDir } } as any, stateDir);
+      assert.equal(result.source, "empty");
+      assert.equal(result.legacySessionsAvailable, true);
+      assert.equal(result.canonicalSessionsAvailable, false);
+      assert.deepEqual(result.sessions, {});
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── Canonical-first arbitration: stale legacy session filtering ───────────────
+
+describe("jesus_supervisor — loadWorkerSessionsForHealthAudit stale session filtering", () => {
+  it("filters legacy sessions that predate the pipeline cycle start", async () => {
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "jesus-stale-filter-"));
+    try {
+      const cycleStart = new Date(Date.now() - 30 * 60 * 1000).toISOString(); // 30 min ago
+      const staleTs    = new Date(Date.now() - 4  * 60 * 60 * 1000).toISOString(); // 4 hours ago
+      const freshTs    = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // 10 min ago
+
+      await fs.writeFile(
+        path.join(stateDir, "worker_sessions.json"),
+        JSON.stringify({
+          "stale-worker":  { status: "working", startedAt: staleTs },
+          "active-worker": { status: "working", startedAt: freshTs },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(stateDir, "pipeline_progress.json"),
+        JSON.stringify({ startedAt: cycleStart, status: "running" }),
+        "utf8",
+      );
+
+      const result = await loadWorkerSessionsForHealthAudit({ paths: { stateDir } } as any, stateDir);
+      assert.equal(result.source, "legacy");
+      assert.equal(result.staleSessionsFiltered, 1, "one stale session must be filtered");
+      assert.ok(result.filteredStaleRoles.includes("stale-worker"),
+        "stale-worker must be in filteredStaleRoles");
+      assert.ok("active-worker" in result.sessions, "active session must remain");
+      assert.ok(!("stale-worker" in result.sessions), "stale session must be excluded");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns all sessions when pipeline_progress is absent (no cycle reference available)", async () => {
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "jesus-stale-no-pipeline-"));
+    try {
+      const oldTs = new Date(Date.now() - 10 * 60 * 60 * 1000).toISOString(); // 10 hours ago
+
+      await fs.writeFile(
+        path.join(stateDir, "worker_sessions.json"),
+        JSON.stringify({ "old-worker": { status: "working", startedAt: oldTs } }),
+        "utf8",
+      );
+      // No pipeline_progress.json — staleness filter cannot run
+
+      const result = await loadWorkerSessionsForHealthAudit({ paths: { stateDir } } as any, stateDir);
+      assert.equal(result.source, "legacy");
+      assert.equal(result.staleSessionsFiltered, 0, "no sessions should be filtered without cycle reference");
+      assert.ok("old-worker" in result.sessions, "session must be passed through when cycle start unknown");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports staleSessionsFiltered=0 and empty filteredStaleRoles for canonical source", async () => {
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "jesus-canonical-provenance-"));
+    try {
+      const cycleId = new Date().toISOString();
+      const artifacts = {
+        schemaVersion: 1,
+        updatedAt: cycleId,
+        latestCycleId: cycleId,
+        cycles: {
+          [cycleId]: {
+            cycleId,
+            status: "active",
+            updatedAt: cycleId,
+            workerSessions: { coder: { status: "working", startedAt: cycleId } },
+            workerActivity: {},
+            completedTaskIds: [],
+          },
+        },
+      };
+      await fs.writeFile(
+        path.join(stateDir, "worker_cycle_artifacts.json"),
+        JSON.stringify(artifacts),
+        "utf8",
+      );
+
+      const result = await loadWorkerSessionsForHealthAudit({ paths: { stateDir } } as any, stateDir);
+      assert.equal(result.source, "canonical");
+      assert.equal(result.staleSessionsFiltered, 0);
+      assert.deepEqual(result.filteredStaleRoles, []);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── runSystemHealthAudit — session provenance annotation ─────────────────────
+
+describe("jesus_supervisor — runSystemHealthAudit worker-health provenance", () => {
+  function withTempRepo3<T>(fn: (ctx: { stateDir: string }) => Promise<T>): Promise<T> {
+    const repoDir = mkdtempSync(path.join(tmpdir(), "jesus-provenance-"));
+    const stateDir = path.join(repoDir, "state");
+    mkdirSync(stateDir, { recursive: true });
+    const previousCwd = process.cwd();
+    return Promise.resolve()
+      .then(() => { process.chdir(repoDir); return fn({ stateDir }); })
+      .finally(() => {
+        process.chdir(previousCwd);
+        rmSync(repoDir, { recursive: true, force: true });
+      });
+  }
+
+  it("does NOT annotate worker-health findings when sessionMeta source is canonical", async () => {
+    await withTempRepo3(async ({ stateDir }) => {
+      const oldTs = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+      const sessions = { coder: { status: "working", lastActiveAt: oldTs } };
+
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        { latestMainCi: null, failedCiRuns: [], pullRequests: [] },
+        {},
+        sessions,
+        { source: "canonical", cycleId: "c1" },
+      );
+
+      const workerHealth = findings.find((f: any) => f.area === "worker-health");
+      assert.ok(workerHealth, "worker-health finding must be present for old canonical session");
+      assert.equal(workerHealth.livenessSource, undefined,
+        "canonical-source findings must NOT carry livenessSource annotation");
+      assert.equal(workerHealth.livenessConfidence, undefined,
+        "canonical-source findings must NOT carry livenessConfidence annotation");
+    });
+  });
+
+  it("annotates worker-health findings with livenessSource=legacy when sessionMeta source is legacy", async () => {
+    await withTempRepo3(async ({ stateDir }) => {
+      const oldTs = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+      const sessions = { coder: { status: "working", lastActiveAt: oldTs } };
+
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        { latestMainCi: null, failedCiRuns: [], pullRequests: [] },
+        {},
+        sessions,
+        { source: "legacy", cycleId: null },
+      );
+
+      const workerHealth = findings.find((f: any) => f.area === "worker-health");
+      assert.ok(workerHealth, "worker-health finding must be present");
+      assert.equal(workerHealth.livenessSource, "legacy",
+        "legacy-source findings must carry livenessSource=legacy");
+      assert.equal(workerHealth.livenessConfidence, "low",
+        "legacy-source findings must carry livenessConfidence=low");
+    });
+  });
+
+  it("annotates worker-health findings when sessionMeta is omitted (defaults to canonical behaviour)", async () => {
+    await withTempRepo3(async ({ stateDir }) => {
+      const oldTs = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+      const sessions = { coder: { status: "working", lastActiveAt: oldTs } };
+
+      // No sessionMeta param → backward-compatible default
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        { latestMainCi: null, failedCiRuns: [], pullRequests: [] },
+        {},
+        sessions,
+      );
+
+      const workerHealth = findings.find((f: any) => f.area === "worker-health");
+      assert.ok(workerHealth, "worker-health finding must be present");
+      assert.equal(workerHealth.livenessSource, undefined,
+        "omitted sessionMeta must not add livenessSource (treats as canonical)");
+    });
   });
 });
