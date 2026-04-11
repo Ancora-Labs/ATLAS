@@ -1307,6 +1307,46 @@ describe("hasCiSystemLearningDebt", () => {
   it("negative: returns false when finding is null or non-object", () => {
     assert.equal(hasCiSystemLearningDebt([null, undefined, 42, "string"]), false);
   });
+
+  it("negative: returns false for system-learning finding annotated with latestMainCiConclusion=success even when text mentions CI", () => {
+    // The live CI signal confirms main is healthy — the lesson is referencing past debt.
+    const findings = [{
+      area: "system-learning",
+      severity: "warning",
+      finding: "CI-broken tests accumulating as system-learning debt",
+      remediation: "ci-fix required",
+      latestMainCiConclusion: "success",
+    }];
+    assert.equal(hasCiSystemLearningDebt(findings), false,
+      "stale CI-break lesson with live success signal must NOT trigger CI fastlane");
+  });
+
+  it("positive: returns true for system-learning finding with latestMainCiConclusion=failure when text mentions CI", () => {
+    // CI is still broken — the lesson represents active debt.
+    const findings = [{
+      area: "system-learning",
+      severity: "warning",
+      finding: "CI-broken tests accumulating as system-learning debt",
+      remediation: "ci-fix required",
+      latestMainCiConclusion: "failure",
+    }];
+    assert.equal(hasCiSystemLearningDebt(findings), true,
+      "system-learning CI-break finding with live failure signal must still trigger CI fastlane");
+  });
+
+  it("positive: latestMainCiConclusion=success does NOT suppress ciFastlaneRequired=true marker", () => {
+    // Explicit ciFastlaneRequired overrides freshness gate — highest-priority signal.
+    const findings = [{
+      area: "system-learning",
+      severity: "warning",
+      finding: "some lesson",
+      remediation: "",
+      latestMainCiConclusion: "success",
+      ciFastlaneRequired: true,
+    }];
+    assert.equal(hasCiSystemLearningDebt(findings), true,
+      "ciFastlaneRequired=true must bypass the freshness gate");
+  });
 });
 
 // ── runSystemHealthAudit — CI context in findings for freshness arbitration ────
@@ -1357,6 +1397,65 @@ describe("jesus_supervisor — runSystemHealthAudit CI finding shape", () => {
       );
       const ciFinding = findings.find((f: any) => f.area === "ci" && f.capabilityNeeded === "ci-fix");
       assert.equal(ciFinding, undefined, "must NOT emit ci-fix finding when main CI is healthy");
+    });
+  });
+
+  it("annotates system-improvement finding with latestMainCiConclusion from live CI state", async () => {
+    await withTempRepo(async ({ stateDir }) => {
+      // Write a knowledge_memory.json with a critical lesson that mentions CI.
+      const stateFullPath = path.join(process.cwd(), "state");
+      writeFileSync(
+        path.join(stateFullPath, "knowledge_memory.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          lessons: [
+            { lesson: "CI-broken tests kept accumulating", severity: "critical" },
+          ],
+        }),
+      );
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        {
+          latestMainCi: { conclusion: "success", branch: "main", headSha: "abc999", updatedAt: new Date().toISOString() },
+          failedCiRuns: [],
+          pullRequests: [],
+        },
+        {},
+        {},
+      );
+      const siFinding = findings.find((f: any) => f.area === "system-learning" && f.capabilityNeeded === "system-improvement");
+      assert.ok(siFinding, "system-improvement finding must be emitted when critical lessons exist");
+      assert.equal(siFinding.latestMainCiConclusion, "success",
+        "finding must carry latestMainCiConclusion=success from live CI state");
+    });
+  });
+
+  it("annotates system-improvement finding with latestMainCiConclusion=failure when CI is broken", async () => {
+    await withTempRepo(async ({ stateDir }) => {
+      const stateFullPath = path.join(process.cwd(), "state");
+      writeFileSync(
+        path.join(stateFullPath, "knowledge_memory.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          lessons: [
+            { lesson: "CI-broken tests kept accumulating", severity: "critical" },
+          ],
+        }),
+      );
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        {
+          latestMainCi: { conclusion: "failure", branch: "main", headSha: "abc000", updatedAt: new Date().toISOString() },
+          failedCiRuns: [],
+          pullRequests: [],
+        },
+        {},
+        {},
+      );
+      const siFinding = findings.find((f: any) => f.area === "system-learning" && f.capabilityNeeded === "system-improvement");
+      assert.ok(siFinding, "system-improvement finding must be emitted when critical lessons exist");
+      assert.equal(siFinding.latestMainCiConclusion, "failure",
+        "finding must carry latestMainCiConclusion=failure when CI is still broken");
     });
   });
 });

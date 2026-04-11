@@ -6037,6 +6037,32 @@ describe("normalizeStaleCiBreakFindings", () => {
     const normalized = result.payload as any;
     assert.equal(normalized.findings.length, 1, "only system-learning finding remains");
   });
+
+  it("retains system-learning finding that carries per-finding latestMainCiConclusion=success (freshness annotation pass-through)", () => {
+    // When runSystemHealthAudit annotates a system-improvement finding with the live
+    // CI conclusion, normalizeStaleCiBreakFindings must NOT suppress it — suppression
+    // applies only to area=ci findings via isCiBreakFinding.
+    const annotatedSystemLearningFinding = {
+      area: "system-learning",
+      severity: "warning",
+      capabilityNeeded: "system-improvement",
+      finding: "Self-improvement flagged CI has been broken",
+      remediation: "Address in next cycle",
+      latestMainCiConclusion: "success",
+    };
+    const payload = {
+      findings: [annotatedSystemLearningFinding],
+      auditedAt: new Date().toISOString(),
+      latestMainCiConclusion: "success",
+    };
+    const result = normalizeStaleCiBreakFindings(payload);
+    assert.equal(result.suppressedCount, 0,
+      "system-improvement finding with per-finding latestMainCiConclusion must NOT be suppressed by normalizeStaleCiBreakFindings");
+    const normalized = result.payload as any;
+    assert.equal(normalized.findings.length, 1, "annotated system-learning finding must be retained");
+    assert.equal(normalized.findings[0].latestMainCiConclusion, "success",
+      "per-finding latestMainCiConclusion annotation must be preserved through normalization");
+  });
 });
 
 describe("selectBestCandidatePlans — bounded candidate generation", () => {

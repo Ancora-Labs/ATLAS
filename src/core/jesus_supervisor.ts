@@ -53,6 +53,13 @@ export function hasCiSystemLearningDebt(findings: unknown[]): boolean {
     const severity = String(f.severity || "").trim().toLowerCase();
     if (severity !== "critical" && severity !== "warning") return false;
     const area = String(f.area || "").trim().toLowerCase();
+    // Freshness gate: system-learning findings annotated with a live CI-success signal
+    // reference past failures that have already been resolved.  Suppress them so stale
+    // lesson debt does not force an unnecessary wave-1 CI-fix fastlane.
+    if (
+      area === "system-learning" &&
+      String(f.latestMainCiConclusion || "").trim().toLowerCase() === "success"
+    ) return false;
     const text = `${String(f.finding || "")} ${String(f.remediation || "")}`;
     return (
       area === "ci"
@@ -395,12 +402,16 @@ export async function runSystemHealthAudit(config, githubState, AthenaCoordinati
     const executionTraces = new Set(capabilityExecutionSummary.observedCapabilities);
 
     if (criticalLessons.length > 0) {
+      // Annotate with the live CI conclusion so hasCiSystemLearningDebt (and downstream
+      // consumers) can distinguish stale CI-break debt from active failures.
+      const liveMainCiConclusion = String(githubState?.latestMainCi?.conclusion || "").trim().toLowerCase();
       findings.push({
         area: "system-learning",
         severity: "warning",
         finding: `Self-improvement flagged ${criticalLessons.length} critical lesson(s): ${criticalLessons.map(l => l.lesson).join("; ").slice(0, 300)}`,
         remediation: "Address critical lessons in next cycle planning",
-        capabilityNeeded: "system-improvement"
+        capabilityNeeded: "system-improvement",
+        ...(liveMainCiConclusion ? { latestMainCiConclusion: liveMainCiConclusion } : {}),
       });
     }
 
