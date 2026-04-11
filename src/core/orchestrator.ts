@@ -1132,6 +1132,46 @@ export function isResumePreferredTimeoutOutcome(outcome: {
 }
 
 /**
+ * Extract the mandatory findings preflight admission telemetry from a
+ * Prometheus analysis result for orchestrator-level logging and audit.
+ *
+ * Returns a structured record that the caller can log via appendProgress.
+ * Pure function — no I/O.  Exported for testing.
+ *
+ * @param prometheusAnalysis — return value of runPrometheusAnalysis
+ * @returns telemetry record, or null when no preflight data is available
+ */
+export function extractMandatoryFindingsPreflightAdmissionTelemetry(
+  prometheusAnalysis: unknown,
+): {
+  quarantinedCount: number;
+  trustedCount: number;
+  preflightStatus: string;
+  sourceAgeMs: number | null;
+  sourceFresh: boolean;
+  quarantineReasons: string[];
+} | null {
+  if (!prometheusAnalysis || typeof prometheusAnalysis !== "object") return null;
+  const preflightResult = (prometheusAnalysis as any)?.mandatoryTasks?.preflightResult;
+  if (!preflightResult || typeof preflightResult !== "object") return null;
+
+  const quarantinedCount = Number(preflightResult.quarantinedCount ?? 0);
+  const trustedCount = Array.isArray(preflightResult.trustedFindings)
+    ? preflightResult.trustedFindings.length
+    : 0;
+  const preflightStatus = String(preflightResult.preflightStatus || "unknown");
+  const rawAgeMs = preflightResult.sourceAgeMs;
+  // Infinity is not JSON-safe — normalize to null for logging/serialization; callers check sourceFresh instead
+  const sourceAgeMs = Number.isFinite(rawAgeMs) ? Math.round(rawAgeMs) : null;
+  const sourceFresh = preflightResult.sourceFresh === true;
+  const quarantineReasons = Array.isArray(preflightResult.quarantineReasons)
+    ? preflightResult.quarantineReasons.map((r: unknown) => String(r || "")).filter(Boolean)
+    : [];
+
+  return { quarantinedCount, trustedCount, preflightStatus, sourceAgeMs, sourceFresh, quarantineReasons };
+}
+
+/**
  * Promote Prometheus analysis plan entries to "implemented_correctly" when
  * matching done-worker rows supply verification report evidence.
  *
@@ -3969,6 +4009,21 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   }
 
   markPremiumOutcome(primaryPrometheusPremiumEvent.eventId, true);
+
+  // ── Mandatory findings preflight admission telemetry ─────────────────────
+  // Emit structured log about any findings quarantined by the pre-planning
+  // truth preflight so operators can audit what was suppressed and why.
+  {
+    const preflightTelemetry = extractMandatoryFindingsPreflightAdmissionTelemetry(prometheusAnalysis);
+    if (preflightTelemetry && preflightTelemetry.quarantinedCount > 0) {
+      await appendProgress(config,
+        `[CYCLE][PREFLIGHT_TRUTH] Mandatory findings preflight: quarantined=${preflightTelemetry.quarantinedCount} ` +
+        `trusted=${preflightTelemetry.trustedCount} ` +
+        `preflightStatus=${preflightTelemetry.preflightStatus} ` +
+        `sourceAgeMs=${preflightTelemetry.sourceAgeMs ?? "unknown"}`
+      );
+    }
+  }
 
   if (!prometheusAnalysis || !Array.isArray(prometheusAnalysis.plans) || prometheusAnalysis.plans.length === 0) {
     await appendProgress(config, "[CYCLE] Prometheus produced no plans — cycle complete");

@@ -77,6 +77,9 @@ import {
   selectBestCandidatePlans,
   MAX_CANDIDATE_SETS,
   CANDIDATE_TIE_THRESHOLD,
+  computeMandatoryFindingsPreflight,
+  MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS,
+  MANDATORY_FINDINGS_PREFLIGHT_STATUS,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments, CANDIDATE_GENERATION_SECTION } from "../../src/core/prompt_compiler.js";
 import {
@@ -6336,5 +6339,139 @@ describe("selectBestCandidateSet — deterministic candidate selection", () => {
     const r1 = selectBestCandidateSet([setA, setB]);
     const r2 = selectBestCandidateSet([setA, setB]);
     assert.deepEqual(r1.bestCandidates, r2.bestCandidates, "deterministic on repeat calls");
+  });
+});
+
+// ── computeMandatoryFindingsPreflight — pre-planning truth preflight gate ─────
+
+describe("computeMandatoryFindingsPreflight", () => {
+  const now = Date.now();
+
+  const ciBreakFinding = {
+    id: "ci-fix",
+    area: "ci",
+    severity: "critical" as const,
+    finding: "CI on main is failing",
+    remediation: "Fix CI",
+    capabilityNeeded: "ci-fix",
+  };
+
+  const ciSetupFinding = {
+    id: "ci-setup",
+    area: "ci",
+    severity: "warning" as const,
+    finding: "CI not configured",
+    remediation: "Add workflow",
+    capabilityNeeded: "ci-setup",
+  };
+
+  const capGapFinding = {
+    id: "api-design",
+    area: "api-design",
+    severity: "warning" as const,
+    finding: "No structured schema for plans",
+    remediation: "Add JSON schema validation",
+    capabilityNeeded: "api-design",
+  };
+
+  it("trusts all findings when auditedAt is fresh (within 24h)", () => {
+    const freshAuditedAt = new Date(now - 1 * 60 * 60 * 1000).toISOString(); // 1h ago
+    const payload = { auditedAt: freshAuditedAt };
+    const result = computeMandatoryFindingsPreflight([ciBreakFinding, capGapFinding], payload, now);
+
+    assert.equal(result.preflightStatus, MANDATORY_FINDINGS_PREFLIGHT_STATUS.TRUSTED);
+    assert.equal(result.trustedFindings.length, 2);
+    assert.equal(result.quarantinedCount, 0);
+    assert.equal(result.sourceFresh, true);
+    assert.ok(Number.isFinite(result.sourceAgeMs));
+    assert.ok(result.sourceAgeMs < MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS);
+  });
+
+  it("quarantines CI-break findings when auditedAt is stale (older than 24h)", () => {
+    const staleAuditedAt = new Date(now - 25 * 60 * 60 * 1000).toISOString(); // 25h ago
+    const payload = { auditedAt: staleAuditedAt };
+    const result = computeMandatoryFindingsPreflight([ciBreakFinding, capGapFinding], payload, now);
+
+    assert.equal(result.preflightStatus, MANDATORY_FINDINGS_PREFLIGHT_STATUS.DEGRADED,
+      "degraded when some CI findings quarantined but non-CI findings trusted");
+    assert.equal(result.quarantinedCount, 1, "only the CI-break finding is quarantined");
+    assert.equal(result.trustedFindings.length, 1, "non-CI capability gap remains trusted");
+    assert.equal(result.trustedFindings[0].id, "api-design");
+    assert.equal(result.quarantinedFindings[0].id, "ci-fix");
+    assert.equal(result.sourceFresh, false);
+  });
+
+  it("quarantines ALL findings (quarantined status) when all are CI-related and stale", () => {
+    const staleAuditedAt = new Date(now - 30 * 60 * 60 * 1000).toISOString(); // 30h ago
+    const payload = { auditedAt: staleAuditedAt };
+    const result = computeMandatoryFindingsPreflight([ciBreakFinding, ciSetupFinding], payload, now);
+
+    assert.equal(result.preflightStatus, MANDATORY_FINDINGS_PREFLIGHT_STATUS.QUARANTINED);
+    assert.equal(result.quarantinedCount, 2);
+    assert.equal(result.trustedFindings.length, 0);
+  });
+
+  it("quarantines CI-related findings when auditedAt is absent (Infinity age)", () => {
+    const payload = {}; // no auditedAt
+    const result = computeMandatoryFindingsPreflight([ciBreakFinding, capGapFinding], payload, now);
+
+    assert.equal(result.sourceFresh, false);
+    assert.equal(result.sourceAgeMs, Infinity);
+    assert.equal(result.quarantinedCount, 1, "CI finding must be quarantined when no auditedAt");
+    assert.equal(result.trustedFindings[0].id, "api-design", "non-CI gap remains trusted");
+  });
+
+  it("quarantines CI-related findings when auditedAt is invalid ISO string", () => {
+    const payload = { auditedAt: "not-a-date" };
+    const result = computeMandatoryFindingsPreflight([ciBreakFinding], payload, now);
+
+    assert.equal(result.sourceFresh, false);
+    assert.equal(result.sourceAgeMs, Infinity);
+    assert.equal(result.quarantinedCount, 1);
+  });
+
+  it("returns trusted for all non-CI findings even when source is stale", () => {
+    const staleAuditedAt = new Date(now - 48 * 60 * 60 * 1000).toISOString(); // 2 days ago
+    const payload = { auditedAt: staleAuditedAt };
+    const result = computeMandatoryFindingsPreflight([capGapFinding], payload, now);
+
+    assert.equal(result.preflightStatus, MANDATORY_FINDINGS_PREFLIGHT_STATUS.TRUSTED,
+      "no CI findings to quarantine → trusted status even with stale source");
+    assert.equal(result.trustedFindings.length, 1);
+    assert.equal(result.quarantinedCount, 0);
+    assert.equal(result.sourceFresh, false);
+  });
+
+  it("returns trusted with empty findings array regardless of source age", () => {
+    const payload = {};
+    const result = computeMandatoryFindingsPreflight([], payload, now);
+
+    assert.equal(result.preflightStatus, MANDATORY_FINDINGS_PREFLIGHT_STATUS.TRUSTED);
+    assert.equal(result.trustedFindings.length, 0);
+    assert.equal(result.quarantinedCount, 0);
+  });
+
+  it("includes machine-readable quarantine reasons per quarantined finding", () => {
+    const staleAuditedAt = new Date(now - 26 * 60 * 60 * 1000).toISOString();
+    const payload = { auditedAt: staleAuditedAt };
+    const result = computeMandatoryFindingsPreflight([ciBreakFinding], payload, now);
+
+    assert.equal(result.quarantineReasons.length, 1);
+    assert.ok(result.quarantineReasons[0].includes("mandatory_finding_quarantined"), "reason must be machine-readable");
+    assert.ok(result.quarantineReasons[0].includes("ci-fix"), "reason must identify the finding");
+    assert.ok(result.quarantineReasons[0].includes("stale_ci_evidence"), "reason must name the quarantine cause");
+  });
+
+  it("MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS is 24 hours", () => {
+    assert.equal(MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS, 24 * 60 * 60 * 1000);
+  });
+
+  it("negative path: at-boundary (exactly at threshold) is still treated as stale", () => {
+    // sourceAgeMs === MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS + 1 is over threshold
+    const atBoundaryMs = now - MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS - 1;
+    const payload = { auditedAt: new Date(atBoundaryMs).toISOString() };
+    const result = computeMandatoryFindingsPreflight([ciBreakFinding], payload, now);
+    assert.equal(result.sourceFresh, false, "just-over-threshold must not be considered fresh");
+    assert.equal(result.quarantinedCount, 1);
   });
 });

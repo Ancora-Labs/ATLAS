@@ -14,6 +14,7 @@ import {
   shouldBypassSpecializationAdmissionGate,
   recoverStaleWorkerSessions,
   shouldRecoverWorkingSessionAfterDaemonRestart,
+  extractMandatoryFindingsPreflightAdmissionTelemetry,
 } from "../../src/core/orchestrator.js";
 
 describe("orchestrator runtime contracts - timeout recovery", () => {
@@ -524,5 +525,111 @@ describe("orchestrator — filterStaleWorkerSessions pure function contracts", (
     assert.ok("worker1" in result.sessions);
     assert.ok("worker2" in result.sessions);
     assert.deepEqual(result.staleRoles, []);
+  });
+});
+
+// ── extractMandatoryFindingsPreflightAdmissionTelemetry ───────────────────────
+
+describe("extractMandatoryFindingsPreflightAdmissionTelemetry", () => {
+  it("returns null when analysis is null", () => {
+    const result = extractMandatoryFindingsPreflightAdmissionTelemetry(null);
+    assert.equal(result, null);
+  });
+
+  it("returns null when analysis is undefined", () => {
+    const result = extractMandatoryFindingsPreflightAdmissionTelemetry(undefined);
+    assert.equal(result, null);
+  });
+
+  it("returns null when mandatoryTasks is absent", () => {
+    const analysis = { plan: [], mandatoryTasks: undefined };
+    const result = extractMandatoryFindingsPreflightAdmissionTelemetry(analysis);
+    assert.equal(result, null);
+  });
+
+  it("returns null when mandatoryTasks.preflightResult is absent", () => {
+    const analysis = { mandatoryTasks: { tasks: [], preflightResult: undefined } };
+    const result = extractMandatoryFindingsPreflightAdmissionTelemetry(analysis);
+    assert.equal(result, null);
+  });
+
+  it("returns structured telemetry when preflightResult is present", () => {
+    const analysis = {
+      mandatoryTasks: {
+        tasks: [],
+        preflightResult: {
+          preflightStatus: "TRUSTED",
+          trustedFindings: [{ id: "api-design" }],
+          quarantinedFindings: [],
+          quarantinedCount: 0,
+          quarantineReasons: [],
+          sourceFresh: true,
+          sourceAgeMs: 3_600_000,
+        },
+      },
+    };
+    const result = extractMandatoryFindingsPreflightAdmissionTelemetry(analysis);
+    assert.ok(result !== null, "must return telemetry when preflightResult is present");
+    assert.equal(result.preflightStatus, "TRUSTED");
+    assert.equal(result.trustedCount, 1);
+    assert.equal(result.quarantinedCount, 0);
+    assert.equal(result.sourceAgeMs, 3_600_000);
+    assert.equal(result.sourceFresh, true);
+  });
+
+  it("returns correct counts when some findings are quarantined (DEGRADED)", () => {
+    const analysis = {
+      mandatoryTasks: {
+        tasks: [],
+        preflightResult: {
+          preflightStatus: "DEGRADED",
+          trustedFindings: [{ id: "api-design" }],
+          quarantinedFindings: [{ id: "ci-fix" }],
+          quarantinedCount: 1,
+          quarantineReasons: ["mandatory_finding_quarantined:ci-fix:stale_ci_evidence"],
+          sourceFresh: false,
+          sourceAgeMs: 90_000_000,
+        },
+      },
+    };
+    const result = extractMandatoryFindingsPreflightAdmissionTelemetry(analysis);
+    assert.ok(result !== null);
+    assert.equal(result.preflightStatus, "DEGRADED");
+    assert.equal(result.trustedCount, 1);
+    assert.equal(result.quarantinedCount, 1);
+    assert.equal(result.sourceFresh, false);
+  });
+
+  it("returns correct counts when all findings are quarantined (QUARANTINED)", () => {
+    const analysis = {
+      mandatoryTasks: {
+        tasks: [],
+        preflightResult: {
+          preflightStatus: "QUARANTINED",
+          trustedFindings: [],
+          quarantinedFindings: [{ id: "ci-fix" }, { id: "ci-setup" }],
+          quarantinedCount: 2,
+          quarantineReasons: [
+            "mandatory_finding_quarantined:ci-fix:stale_ci_evidence",
+            "mandatory_finding_quarantined:ci-setup:stale_ci_evidence",
+          ],
+          sourceFresh: false,
+          sourceAgeMs: Infinity,
+        },
+      },
+    };
+    const result = extractMandatoryFindingsPreflightAdmissionTelemetry(analysis);
+    assert.ok(result !== null);
+    assert.equal(result.preflightStatus, "QUARANTINED");
+    assert.equal(result.trustedCount, 0);
+    assert.equal(result.quarantinedCount, 2);
+    // sourceAgeMs is null when source age is Infinity (not JSON-safe); check sourceFresh instead
+    assert.equal(result.sourceAgeMs, null);
+    assert.equal(result.sourceFresh, false);
+  });
+
+  it("negative: returns null for completely empty object", () => {
+    const result = extractMandatoryFindingsPreflightAdmissionTelemetry({});
+    assert.equal(result, null);
   });
 });
