@@ -1109,14 +1109,20 @@ export const PROCESS_THOUGHT_MARKER_PATTERNS: ReadonlyArray<RegExp> = Object.fre
   /<internal>/i,
   /<\/internal>/i,
   /<!--\s*thinking/i,
-  // Process narration: first-person agent action narration at sentence start
+  // Process narration: first-person agent action narration at sentence start — tool-use verbs
   /^(let\s+me|i'?m\s+going\s+to|i\s+am\s+going\s+to|i\s+will\s+now|i'?m\s+now|i\s+am\s+now|now\s+i\s+will|now\s+i'?m|i'?ll\s+now)\s+(read|scan|check|view|analyze|look|open|search|find|examine|browse|explore|fetch|get|inspect)/im,
+  // Process narration: first-person procedural intent — investigation/gathering/evidence verbs
+  /^(let\s+me|i'?m\s+going\s+to|i\s+am\s+going\s+to|i\s+will\s+now|i'?m\s+now|i\s+am\s+now|now\s+i\s+will|now\s+i'?m|i'?ll\s+now)\s+(gather|collect|investigate|review|document|compile|assess|evaluate|determine|identify|figure|understand|capture|record)\b/im,
   // Semantic tool-trace: direct tool invocation fragments
   /\b(view_file|read_file|write_file|list_files|search_files|create_file|delete_file)\s*\(/i,
   // Semantic tool-trace: tool/function output block markers
   /^(tool\s+output|function\s+output|tool\s+response|function\s+result)\s*:/im,
   // Semantic tool-trace: present-progressive tool operation at line start
   /^(reading|scanning|checking|viewing)\s+(the\s+)?(file|directory|repo|codebase|code|source)\b/im,
+  // Unparsed decision blobs: structured planner/reviewer decision markers at line start
+  /^(DECISION|APPROVE|REJECT|VOTE|VERDICT|OUTCOME|RATIONALE)\s*[:=]/im,
+  // Unparsed decision blobs: JSON object with decision-related keys
+  /^\s*\{[^{}]*"(decision|approve|reject|vote|confidence|rationale|verdict|outcome)"\s*:/im,
 ]);
 
 /**

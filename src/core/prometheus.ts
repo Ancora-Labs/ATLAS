@@ -222,8 +222,11 @@ export function normalizeTextForContaminationCheck(text: string): string {
  * Exported for testing and reuse in plan_contract_validator.ts.
  */
 export const PROCESS_NARRATION_LEXICAL_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
-  // First-person agent narration of upcoming action at sentence start
+  // First-person agent narration of upcoming action at sentence start — tool-use verbs
   /^(let\s+me|i'?m\s+going\s+to|i\s+am\s+going\s+to|i\s+will\s+now|i'?m\s+now|i\s+am\s+now|now\s+i\s+will|now\s+i'?m|i'?ll\s+now)\s+(read|scan|check|view|analyze|look|open|search|find|examine|browse|explore|fetch|get|inspect)/im,
+  // First-person agent narration — investigation/gathering/evidence-collection verbs
+  // Catches "I'm going to gather evidence", "I will now collect findings", etc.
+  /^(let\s+me|i'?m\s+going\s+to|i\s+am\s+going\s+to|i\s+will\s+now|i'?m\s+now|i\s+am\s+now|now\s+i\s+will|now\s+i'?m|i'?ll\s+now)\s+(gather|collect|investigate|review|document|compile|assess|evaluate|determine|identify|figure|understand|capture|record)\b/im,
 ]);
 
 /**
@@ -247,14 +250,35 @@ export const SEMANTIC_TOOL_TRACE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze
 ]);
 
 /**
+ * Patterns that identify unparsed decision blobs — structured planner/reviewer
+ * decision outputs (Athena votes, JSON decision objects) that must NOT appear
+ * verbatim in persisted strategic planning fields (keyFindings, strategicNarrative).
+ *
+ * Examples of rejected strings:
+ *   "DECISION: approve | task_id: T-001"
+ *   "VOTE: approve"
+ *   '{"decision": "approve", "confidence": 0.8}'
+ *
+ * Exported for testing and reuse in plan_contract_validator.ts.
+ */
+export const DECISION_BLOB_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  // Structured decision trace markers at line start (planner/Athena output that leaked in)
+  /^(DECISION|APPROVE|REJECT|VOTE|VERDICT|OUTCOME|RATIONALE)\s*[:=]/im,
+  // JSON decision blob: object literal containing decision-related keys
+  /^\s*\{[^{}]*"(decision|approve|reject|vote|confidence|rationale|verdict|outcome)"\s*:/im,
+]);
+
+/**
  * Returns true when the given string contains tool-trace or process-thought
  * contamination patterns that must not appear in persisted planning fields.
  *
- * Checks three categories in order:
+ * Checks five categories in order:
  *   1. Classic tool-call / role-prefix markers (tool_call:, assistant:, etc.)
  *   2. Process-thought XML/marker tags (<thinking>, [THINKING], <reasoning>, etc.)
- *   3. Process narration lexical patterns (first-person action narration)
+ *   3. Process narration lexical patterns (first-person action narration, including
+ *      gathering/collecting/investigating verbs that signal procedural intent)
  *   4. Semantic tool-trace fragments (tool invocation text, output blocks)
+ *   5. Unparsed decision blobs (Athena/planner decision outputs, JSON decision objects)
  *
  * Unicode NFKC normalization is applied before pattern matching so that
  * homoglyph substitutions (e.g. mathematical bold "𝐋et me" → "Let me") cannot
@@ -287,6 +311,8 @@ export function isStrategicFieldToolTraceContaminated(text: string): boolean {
   if (PROCESS_NARRATION_LEXICAL_PATTERNS.some(p => p.test(s))) return true;
   // ── Category 4: semantic tool-trace fragments ─────────────────────────────
   if (SEMANTIC_TOOL_TRACE_PATTERNS.some(p => p.test(s))) return true;
+  // ── Category 5: unparsed decision blobs ──────────────────────────────────
+  if (DECISION_BLOB_PATTERNS.some(p => p.test(s))) return true;
   return false;
 }
 

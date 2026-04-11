@@ -66,6 +66,7 @@ import {
   normalizeTextForContaminationCheck,
   PROCESS_NARRATION_LEXICAL_PATTERNS,
   SEMANTIC_TOOL_TRACE_PATTERNS,
+  DECISION_BLOB_PATTERNS,
   hasPrometheusRuntimeContractSignals,
   applyDiagnosticsFreshnessTruthToPlanning,
   ROLE_PLAN_COMPLETENESS_ERROR_CODE,
@@ -6686,6 +6687,178 @@ describe("PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES — canonical planning input
       () => { arr.push("state/foo.json"); },
       (err: unknown) => err instanceof TypeError,
       "array must be frozen — push must throw TypeError"
+    );
+  });
+});
+
+// ── isStrategicFieldToolTraceContaminated: extended procedural intent patterns ─
+
+describe("isStrategicFieldToolTraceContaminated — extended procedural intent (gather/collect/investigate)", () => {
+  it("rejects 'I'm going to gather evidence' procedural intent", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated("I'm going to gather evidence about the CI failures"),
+      true,
+      "'I'm going to gather evidence' is procedural intent and must be rejected",
+    );
+  });
+
+  it("rejects 'I will now gather findings' procedural intent", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated("I will now gather findings from the codebase"),
+      true,
+      "'I will now gather findings' is procedural intent and must be rejected",
+    );
+  });
+
+  it("rejects 'I'm going to collect the failing test data'", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated("I'm going to collect the failing test data for analysis"),
+      true,
+      "'I'm going to collect' is procedural intent and must be rejected",
+    );
+  });
+
+  it("rejects 'Let me investigate the root cause'", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated("Let me investigate the root cause of the dispatch failures"),
+      true,
+      "'Let me investigate' is procedural intent and must be rejected",
+    );
+  });
+
+  it("rejects 'I will now assess the coverage gaps'", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated("I will now assess the coverage gaps in the test suite"),
+      true,
+      "'I will now assess' is procedural intent and must be rejected",
+    );
+  });
+
+  it("rejects 'I'll now document the findings'", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated("I'll now document the findings from this analysis"),
+      true,
+      "'I'll now document' is procedural intent and must be rejected",
+    );
+  });
+
+  it("does NOT reject legitimate findings where 'gather' appears mid-sentence", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated(
+        "The CI pipeline should gather test results from all workers before reporting status"
+      ),
+      false,
+      "'gather' mid-sentence in legitimate strategic content must not trigger rejection",
+    );
+  });
+
+  it("does NOT reject strategic narrative using 'collect' as a system action", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated(
+        "Telemetry agents collect metrics continuously; bottlenecks appear in the aggregation layer"
+      ),
+      false,
+      "System-level 'collect' in legitimate strategic content must not be rejected",
+    );
+  });
+});
+
+// ── isStrategicFieldToolTraceContaminated: decision blob patterns ──────────────
+
+describe("isStrategicFieldToolTraceContaminated — decision blob patterns", () => {
+  it("rejects 'DECISION: approve' structured decision marker at line start", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated("DECISION: approve | task_id: T-001 | confidence: high"),
+      true,
+      "'DECISION:' at line start is an unparsed decision blob and must be rejected",
+    );
+  });
+
+  it("rejects 'VOTE: approve' structured decision marker", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated("VOTE: approve"),
+      true,
+      "'VOTE:' at line start is an unparsed decision blob and must be rejected",
+    );
+  });
+
+  it("rejects 'REJECT: task exceeds scope' decision trace", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated("REJECT: task exceeds scope limit"),
+      true,
+      "'REJECT:' at line start is an unparsed decision blob and must be rejected",
+    );
+  });
+
+  it("rejects 'VERDICT: approved' decision trace", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated("VERDICT: approved with minor reservations"),
+      true,
+      "'VERDICT:' at line start is an unparsed decision blob and must be rejected",
+    );
+  });
+
+  it("rejects JSON decision blob with 'decision' key", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated('{"decision": "approve", "task_id": "T-001", "confidence": 0.8}'),
+      true,
+      "JSON object with 'decision' key is an unparsed decision blob and must be rejected",
+    );
+  });
+
+  it("rejects JSON decision blob with 'verdict' key", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated('{"confidence": 0.9, "verdict": "approved"}'),
+      true,
+      "JSON object with decision-related keys is an unparsed decision blob and must be rejected",
+    );
+  });
+
+  it("does NOT reject prose mentioning 'decision' mid-sentence", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated(
+        "The decision to refactor the dispatch layer should be deferred until CI is stable"
+      ),
+      false,
+      "'decision' mid-sentence in legitimate strategic content must not trigger rejection",
+    );
+  });
+
+  it("does NOT reject prose with 'outcome' mid-sentence", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated(
+        "Expected outcome is a 40% reduction in failed dispatches after the patch is applied"
+      ),
+      false,
+      "'outcome' mid-sentence in legitimate strategic content must not trigger rejection",
+    );
+  });
+
+  it("negative path: 'DECISION' word mid-sentence without colon is not rejected", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated(
+        "A DECISION framework is needed before wave-2 can proceed to dispatch"
+      ),
+      false,
+      "'DECISION' mid-sentence without trailing colon must not be flagged as a decision blob",
+    );
+  });
+});
+
+// ── DECISION_BLOB_PATTERNS export ─────────────────────────────────────────────
+
+describe("DECISION_BLOB_PATTERNS export", () => {
+  it("is a frozen non-empty array", () => {
+    assert.ok(Array.isArray(DECISION_BLOB_PATTERNS));
+    assert.ok(DECISION_BLOB_PATTERNS.length > 0, "DECISION_BLOB_PATTERNS must be non-empty");
+    assert.ok(Object.isFrozen(DECISION_BLOB_PATTERNS), "DECISION_BLOB_PATTERNS must be frozen");
+  });
+
+  it("array must be frozen — push must throw TypeError", () => {
+    assert.throws(
+      () => (DECISION_BLOB_PATTERNS as RegExp[]).push(/test/),
+      TypeError,
+      "array must be frozen — push must throw TypeError",
     );
   });
 });
