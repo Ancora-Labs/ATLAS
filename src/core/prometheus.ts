@@ -2639,7 +2639,13 @@ function buildConcreteVerificationArtifacts(taskText, taskKind, targetFiles, src
     .replace(/^(add|introduce|enforce|convert|fix|create|implement|move|extend|upgrade|persist|evolve)\s+/i, "")
     .replace(/\s+/g, " ")
     .trim();
-  const explicitDescription = normalizedSignals.find((value) => /\b(test:|assert|scenario|prove|proving|regression)\b/i.test(value) && !/^\s*(npm|node|pnpm|yarn)\b/i.test(value));
+  const rawExplicitDescription = normalizedSignals.find(
+    (value) => /\b(test:|assert|scenario|prove|proving|regression)\b/i.test(value)
+      && !/^\s*(npm|node|pnpm|yarn)\b/i.test(value),
+  );
+  const explicitDescription = rawExplicitDescription
+    ? (/^\s*test:/i.test(rawExplicitDescription) ? rawExplicitDescription : `test: ${rawExplicitDescription}`)
+    : "";
   const fallbackDescription = taskKind === "test"
     ? `test: ${expectation || "targeted behavior"} passes in ${primaryTarget} with >= 1 explicit assertion`
     : `test: ${expectation || "targeted behavior"} is verified in ${primaryTarget} with 0 regressions`;
