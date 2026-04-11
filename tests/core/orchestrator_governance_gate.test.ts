@@ -185,7 +185,9 @@ describe("orchestrator governance gate — specialization admission", () => {
         systemGuardian: { enabled: false },
         governanceFreeze: { enabled: false, manualOverrideActive: false },
         workerPool: {
-          minLanes: 2,
+          // This scenario validates specialization-admission bypass behavior; keep
+          // lane-diversity gate disabled so it does not mask the specialization result.
+          minLanes: 1,
           specializationTargets: { minSpecializedShare: 0.5 },
         },
       };
