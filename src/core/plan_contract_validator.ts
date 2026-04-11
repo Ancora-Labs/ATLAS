@@ -138,8 +138,13 @@ export const PACKET_VIOLATION_CODE = Object.freeze({
  * reference or observable assertion description.
  * Per the Prometheus output format, `verification` MUST be a specific test file
  * path + expected test description, not a generic command invocation.
+ *
+ * SENTINEL CONTRACT: every entry here MUST have a corresponding entry in
+ * NON_SPECIFIC_VERIFICATION_CANONICAL_FIXTURES (same index, same array length).
+ * isNonSpecificVerification delegates to this array as its final check so the
+ * function behaviour stays mechanically coupled to the declared patterns.
  */
-export const NON_SPECIFIC_VERIFICATION_PATTERNS = [
+export const NON_SPECIFIC_VERIFICATION_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
   /^npm\s+test\s*$/i,
   /^npm\s+run\s+test\s*$/i,
   /^npm\s+run\s+tests\s*$/i,
@@ -147,7 +152,24 @@ export const NON_SPECIFIC_VERIFICATION_PATTERNS = [
   /^npx\s+[a-z][\w-]*\s*$/i,
   /^run\s+tests?\s*$/i,
   /^tests?\s+pass\s*$/i,
-];
+]);
+
+/**
+ * One canonical positive fixture per entry in NON_SPECIFIC_VERIFICATION_PATTERNS
+ * (index-aligned).  The pre-merge sentinel test asserts:
+ *   1. lengths are equal (no pattern without a fixture, no fixture without a pattern)
+ *   2. isNonSpecificVerification(fixture) === true for every entry
+ * Adding a pattern without also adding a fixture here will fail the sentinel.
+ */
+export const NON_SPECIFIC_VERIFICATION_CANONICAL_FIXTURES: ReadonlyArray<string> = Object.freeze([
+  "npm test",
+  "npm run test",
+  "npm run tests",
+  "node --test",
+  "npx vitest",
+  "run tests",
+  "tests pass",
+]);
 
 /**
  * Maximum number of acceptance criteria a single plan task may declare.
@@ -599,7 +621,11 @@ export function isNonSpecificVerification(value: string): boolean {
   // Non-specific: matches a known bare CLI command (no file argument).
   // pnpm, yarn, and bun are included because bare invocations like "pnpm vitest"
   // or "yarn test" carry no test-file specificity.
-  return /^(npm|node|npx|pnpm|yarn|bun)\s/i.test(v) || /^run\s+(test|check)/i.test(v);
+  // Delegates to NON_SPECIFIC_VERIFICATION_PATTERNS as the authoritative source so
+  // that the function behaviour is mechanically coupled to the declared patterns array.
+  return /^(npm|node|npx|pnpm|yarn|bun)\s/i.test(v)
+    || /^run\s+(test|check)/i.test(v)
+    || NON_SPECIFIC_VERIFICATION_PATTERNS.some(p => p.test(v));
 }
 
 /**

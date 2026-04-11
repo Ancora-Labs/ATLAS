@@ -148,3 +148,32 @@ describe("doctor", () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PRE-MERGE SENTINEL: doctor.ts export contract
+//
+// Fails fast if any symbol imported by this test file is absent from the
+// runtime export of src/core/doctor.ts.  The import statement at the top
+// already throws on missing named exports; these asserts add explicit
+// diagnostic output in the CI log so the developer knows exactly which
+// symbol regressed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("pre-merge sentinel: doctor.ts export contract", () => {
+  it("all symbols imported from doctor.ts are defined with correct types", () => {
+    assert.ok(typeof runDoctor === "function", "runDoctor must be a function");
+    assert.ok(typeof classifyCopilotAuthInputs === "function", "classifyCopilotAuthInputs must be a function");
+    assert.ok(typeof buildCopilotAuthFingerprint === "function", "buildCopilotAuthFingerprint must be a function");
+    assert.ok(typeof shouldReuseCopilotAuthProbe === "function", "shouldReuseCopilotAuthProbe must be a function");
+  });
+
+  it("negative path: classifyCopilotAuthInputs returns ready:false for empty inputs", () => {
+    const result = classifyCopilotAuthInputs({
+      copilotToken: null,
+      ghAuthActive: false,
+      ghActiveAccount: null,
+    });
+    assert.equal(result.ready, false, "empty inputs must not be considered auth-ready");
+    assert.equal(result.source, "none");
+  });
+});
+

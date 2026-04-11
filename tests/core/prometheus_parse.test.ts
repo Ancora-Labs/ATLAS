@@ -103,6 +103,8 @@ import {
   isCiCriticalMandatoryFinding,
   extractCiEvidenceFromMandatoryFinding,
   PACKET_VIOLATION_CODE,
+  NON_SPECIFIC_VERIFICATION_PATTERNS,
+  NON_SPECIFIC_VERIFICATION_CANONICAL_FIXTURES,
   type WaveTaskObject,
 } from "../../src/core/plan_contract_validator.js";
 
@@ -6473,5 +6475,91 @@ describe("computeMandatoryFindingsPreflight", () => {
     const result = computeMandatoryFindingsPreflight([ciBreakFinding], payload, now);
     assert.equal(result.sourceFresh, false, "just-over-threshold must not be considered fresh");
     assert.equal(result.quarantinedCount, 1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRE-MERGE SENTINEL: export-import contract + verification-specificity grammar
+//
+// These tests act as a CI gate that fails fast when:
+//   1. A test file imports a symbol absent from the corresponding runtime export.
+//   2. NON_SPECIFIC_VERIFICATION_PATTERNS and NON_SPECIFIC_VERIFICATION_CANONICAL_FIXTURES
+//      diverge (pattern added without a fixture, or vice-versa).
+//   3. isNonSpecificVerification behaviour is inconsistent with the declared patterns.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("pre-merge sentinel: prometheus export contract", () => {
+  it("all prometheus.js symbols imported by this test file are defined at runtime", () => {
+    // Spot-check the highest-churn symbols. The import at the top of this file
+    // will already throw if a symbol is missing; these asserts provide explicit
+    // diagnostic output for the CI log.
+    assert.ok(typeof normalizePrometheusParsedOutput === "function", "normalizePrometheusParsedOutput");
+    assert.ok(typeof applyAdmissionPacketHardFilter === "function", "applyAdmissionPacketHardFilter");
+    assert.ok(typeof extractMandatoryHealthAuditFindings === "function", "extractMandatoryHealthAuditFindings");
+    assert.ok(typeof validateMandatoryTaskCoverageContract === "function", "validateMandatoryTaskCoverageContract");
+    assert.ok(typeof enforceCiRepairPacketForMandatoryFindings === "function", "enforceCiRepairPacketForMandatoryFindings");
+    assert.ok(typeof computeMandatoryFindingsPreflight === "function", "computeMandatoryFindingsPreflight");
+    assert.ok(typeof selectBestCandidatePlans === "function", "selectBestCandidatePlans");
+    assert.ok(MANDATORY_FINDINGS_PREFLIGHT_STATUS !== undefined, "MANDATORY_FINDINGS_PREFLIGHT_STATUS");
+    assert.ok(typeof CI_BREAK_FINDING_FRESHNESS_MAX_AGE_MS === "number", "CI_BREAK_FINDING_FRESHNESS_MAX_AGE_MS");
+    assert.ok(typeof SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS === "number", "SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS");
+  });
+
+  it("all plan_contract_validator.js symbols imported by this test file are defined at runtime", () => {
+    assert.ok(typeof isNonSpecificVerification === "function", "isNonSpecificVerification");
+    assert.ok(typeof validatePlanContract === "function", "validatePlanContract");
+    assert.ok(typeof validateAndInjectRolePlans === "function", "validateAndInjectRolePlans");
+    assert.ok(typeof ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX === "string", "ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX");
+    assert.ok(typeof ROLE_PLAN_SKELETON_METADATA_SOURCE === "string", "ROLE_PLAN_SKELETON_METADATA_SOURCE");
+    assert.ok(typeof detectProcessThoughtMarkers === "function", "detectProcessThoughtMarkers");
+    assert.ok(Array.isArray(NON_SPECIFIC_VERIFICATION_PATTERNS), "NON_SPECIFIC_VERIFICATION_PATTERNS");
+    assert.ok(Array.isArray(NON_SPECIFIC_VERIFICATION_CANONICAL_FIXTURES), "NON_SPECIFIC_VERIFICATION_CANONICAL_FIXTURES");
+    assert.ok(PACKET_VIOLATION_CODE !== undefined, "PACKET_VIOLATION_CODE");
+  });
+});
+
+describe("pre-merge sentinel: verification-specificity grammar coherence", () => {
+  it("NON_SPECIFIC_VERIFICATION_PATTERNS and CANONICAL_FIXTURES have 1:1 index alignment", () => {
+    assert.equal(
+      NON_SPECIFIC_VERIFICATION_CANONICAL_FIXTURES.length,
+      NON_SPECIFIC_VERIFICATION_PATTERNS.length,
+      "each pattern must have exactly one canonical fixture — add a fixture when adding a pattern"
+    );
+  });
+
+  it("isNonSpecificVerification returns true for every canonical fixture (grammar-function coupling)", () => {
+    for (const fixture of NON_SPECIFIC_VERIFICATION_CANONICAL_FIXTURES) {
+      assert.equal(
+        isNonSpecificVerification(fixture),
+        true,
+        `isNonSpecificVerification("${fixture}") must return true — fix the function or remove the pattern`
+      );
+    }
+  });
+
+  it("every canonical fixture matches its paired pattern (index-aligned coverage)", () => {
+    for (let i = 0; i < NON_SPECIFIC_VERIFICATION_PATTERNS.length; i++) {
+      const pattern = NON_SPECIFIC_VERIFICATION_PATTERNS[i];
+      const fixture = NON_SPECIFIC_VERIFICATION_CANONICAL_FIXTURES[i];
+      assert.ok(
+        pattern.test(fixture),
+        `Pattern[${i}] ${pattern} must match its canonical fixture "${fixture}"`
+      );
+    }
+  });
+
+  it("negative path: specific verification strings are not flagged as non-specific", () => {
+    const specificExamples = [
+      "npm test -- tests/core/doctor.test.ts",
+      "tests/core/plan_contract_validator.test.ts — test: isNonSpecificVerification",
+      "node --test tests/core/foo.test.ts",
+    ];
+    for (const example of specificExamples) {
+      assert.equal(
+        isNonSpecificVerification(example),
+        false,
+        `isNonSpecificVerification("${example}") must return false (specific reference)`
+      );
+    }
   });
 });
