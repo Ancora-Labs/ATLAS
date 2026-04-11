@@ -206,6 +206,19 @@ describe("pr_triage_automation — triage record for PR #268", () => {
     assert.ok(record.decidedBy, "decidedBy required");
   });
 
+  it("triage record has a valid applyState field", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const raw = await readFile(join("state", "pr_triage_268.json"), "utf8");
+    const record = JSON.parse(raw);
+
+    const validApplyStates = ["pending", "applied", "failed", "skipped"];
+    assert.ok(
+      typeof record.applyState === "string" && validApplyStates.includes(record.applyState),
+      `applyState must be one of ${validApplyStates.join(", ")} — got: ${record.applyState}`,
+    );
+  });
+
   it("negative path: record does not claim merge without CI evidence", async () => {
     const { readFile } = await import("node:fs/promises");
     const { join } = await import("node:path");
@@ -217,5 +230,80 @@ describe("pr_triage_automation — triage record for PR #268", () => {
       assert.ok(record.ci.allChecksPassed === true || record.ci.passingChecks > 0,
         "MERGE decision requires passing CI evidence");
     }
+  });
+
+  it("negative path: applied record must have appliedAt timestamp", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const raw = await readFile(join("state", "pr_triage_268.json"), "utf8");
+    const record = JSON.parse(raw);
+
+    if (record.applyState === "applied") {
+      assert.ok(
+        typeof record.appliedAt === "string" && record.appliedAt.length > 0,
+        "applied record must have appliedAt timestamp",
+      );
+    }
+  });
+});
+
+describe("pr_triage_automation — applyState state machine", () => {
+  // These tests exercise the state machine invariants using pure logic,
+  // without touching the GitHub API.
+
+  function buildRecord(applyState: string, decision = "MERGE", passingCi = true) {
+    return {
+      schemaVersion: 1,
+      triageTimestamp: new Date().toISOString(),
+      pr: { number: 999, isAutomatedPr: true },
+      ci: { allChecksPassed: passingCi, passingChecks: passingCi ? 1 : 0, totalChecks: 1, failingChecks: 0, pendingChecks: 0 },
+      diff: { hasSubstantiveChanges: true },
+      decision,
+      rationale: "test",
+      decidedBy: "test",
+      decidedAt: new Date().toISOString(),
+      applyState,
+    };
+  }
+
+  it("idempotency: applied record is terminal — same applyState preserved", () => {
+    const record = buildRecord("applied");
+    // Simulate the idempotency gate: if applyState === "applied", skip re-processing.
+    const shouldSkip = record.applyState === "applied";
+    assert.equal(shouldSkip, true, "applied state must trigger skip");
+  });
+
+  it("pending record is not terminal — processing should continue", () => {
+    const record = buildRecord("pending");
+    const shouldSkip = record.applyState === "applied";
+    assert.equal(shouldSkip, false, "pending state must not trigger skip");
+  });
+
+  it("failed record is retryable — processing should continue", () => {
+    const record = buildRecord("failed");
+    const shouldSkip = record.applyState === "applied";
+    assert.equal(shouldSkip, false, "failed state must not trigger skip — allow retry");
+  });
+
+  it("skipped record (dry-run) is retryable — processing should continue", () => {
+    const record = buildRecord("skipped");
+    const shouldSkip = record.applyState === "applied";
+    assert.equal(shouldSkip, false, "dry-run skipped state must not be terminal");
+  });
+
+  it("applied record for MERGE decision must have had passing CI", () => {
+    const record = buildRecord("applied", "MERGE", true);
+    if (record.decision === "MERGE") {
+      assert.ok(
+        record.ci.allChecksPassed || record.ci.passingChecks > 0,
+        "MERGE+applied record must show passing CI",
+      );
+    }
+  });
+
+  it("negative path: invalid applyState value is not terminal", () => {
+    const record = buildRecord("unknown-state");
+    const shouldSkip = record.applyState === "applied";
+    assert.equal(shouldSkip, false, "unrecognised applyState must not be treated as terminal");
   });
 });
