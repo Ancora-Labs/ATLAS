@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "triageTimestamp": "2026-04-11T08:00:41.637Z",
+  "triageTimestamp": "2026-04-11T12:06:31.725Z",
   "pr": {
     "number": 268,
     "title": "[quality-worker] api-blocked recovery — automated commit",
@@ -44,9 +44,16 @@
     "hasSubstantiveChanges": true,
     "summary": "17 file(s): box.config.json, src/core/capability_pool.ts, src/core/orchestrator.ts, src/core/plan_contract_validator.ts, src/core/prometheus.ts …"
   },
-  "decision": "MERGE",
-  "rationale": "CI checks all pass (1/1). Diff contains substantive production changes. Safe to merge automatically.",
+  "mergeState": {
+    "mergeable": null,
+    "behindBy": 38
+  },
+  "decision": "CLOSE",
+  "rationale": "Branch is 38 commits behind base (threshold: 10). Salvage: cherry-pick relevant commits onto a fresh branch from main.",
   "decidedBy": "runStaleAutomatedPrGuard",
-  "decidedAt": "2026-04-11T08:00:41.637Z",
-  "applyState": "pending"
+  "decidedAt": "2026-04-11T12:06:31.725Z",
+  "applyState": "superseded",
+  "applyError": "HTTP 404: {\"message\":\"Not Found\",\"documentation_url\":\"https://docs.github.com/rest/pulls/pulls#update-a-pull-request\",\"status\":\"404\"}",
+  "supersededAt": "2026-04-11T12:38:09.074Z",
+  "supersededReason": "GitHub returned HTTP 404 on close attempt — PR no longer exists (already resolved externally). Terminal state: no further recovery planning."
 }

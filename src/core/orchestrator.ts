@@ -7454,11 +7454,13 @@ export async function runStaleAutomatedPrGuard(config: any): Promise<void> {
     const createdAt = String(pr?.created_at || "");
     const ageMs = createdAt ? Date.now() - new Date(createdAt).getTime() : 0;
 
-    // Idempotency gate: skip PRs already in terminal applied state.
+    // Idempotency gate: skip PRs already in a terminal state.
+    // "applied"    — action was successfully executed; do not repeat.
+    // "superseded" — GitHub returned HTTP 404 (PR gone/already closed); artifact is permanently resolved.
     const recordPath = path.join(stateDir, `pr_triage_${prNumber}.json`);
     const existingRecord = await readJson(recordPath, null);
-    if (existingRecord?.applyState === "applied") {
-      await appendProgress(config, `[STALE_PR_GUARD] PR #${prNumber} already applied — skipping`);
+    if (existingRecord?.applyState === "applied" || existingRecord?.applyState === "superseded") {
+      await appendProgress(config, `[STALE_PR_GUARD] PR #${prNumber} already in terminal state (${existingRecord.applyState}) — skipping`);
       continue;
     }
 
@@ -7572,7 +7574,11 @@ export async function runStaleAutomatedPrGuard(config: any): Promise<void> {
     }
 
     // Apply the decision: merge or close the PR, then persist the apply result.
-    let applyState: "applied" | "failed" = "failed";
+    // Terminal states:
+    //   "applied"    — action executed successfully.
+    //   "superseded" — GitHub returned HTTP 404; PR no longer exists (already closed/merged elsewhere).
+    //                  Treated as terminal to prevent repeated recovery-planning on a resolved artifact.
+    let applyState: "applied" | "failed" | "superseded" = "failed";
     let appliedAt: string | undefined;
     let applyError: string | undefined;
 
@@ -7588,6 +7594,13 @@ export async function runStaleAutomatedPrGuard(config: any): Promise<void> {
           applyState = "applied";
           appliedAt = new Date().toISOString();
           await appendProgress(config, `[STALE_PR_GUARD] PR #${prNumber} merged (HTTP ${mergeRes.status})`);
+        } else if (mergeRes.status === 404) {
+          // PR no longer exists on GitHub — mark as superseded (terminal).
+          const errText = await mergeRes.text().catch(() => "");
+          applyError = `HTTP ${mergeRes.status}: ${errText.slice(0, 200)}`;
+          applyState = "superseded";
+          warn(`[stale_pr_guard] PR #${prNumber} not found on merge (HTTP 404) — marking superseded`);
+          await appendProgress(config, `[STALE_PR_GUARD] PR #${prNumber} superseded (HTTP 404 on merge — PR already resolved)`);
         } else {
           const errText = await mergeRes.text().catch(() => "");
           applyError = `HTTP ${mergeRes.status}: ${errText.slice(0, 200)}`;
@@ -7603,6 +7616,13 @@ export async function runStaleAutomatedPrGuard(config: any): Promise<void> {
           applyState = "applied";
           appliedAt = new Date().toISOString();
           await appendProgress(config, `[STALE_PR_GUARD] PR #${prNumber} closed`);
+        } else if (closeRes.status === 404) {
+          // PR no longer exists on GitHub — mark as superseded (terminal).
+          const errText = await closeRes.text().catch(() => "");
+          applyError = `HTTP ${closeRes.status}: ${errText.slice(0, 200)}`;
+          applyState = "superseded";
+          warn(`[stale_pr_guard] PR #${prNumber} not found on close (HTTP 404) — marking superseded`);
+          await appendProgress(config, `[STALE_PR_GUARD] PR #${prNumber} superseded (HTTP 404 on close — PR already resolved)`);
         } else {
           const errText = await closeRes.text().catch(() => "");
           applyError = `HTTP ${closeRes.status}: ${errText.slice(0, 200)}`;

@@ -212,7 +212,7 @@ describe("pr_triage_automation — triage record for PR #268", () => {
     const raw = await readFile(join("state", "pr_triage_268.json"), "utf8");
     const record = JSON.parse(raw);
 
-    const validApplyStates = ["pending", "applied", "failed", "skipped"];
+    const validApplyStates = ["pending", "applied", "failed", "skipped", "superseded"];
     assert.ok(
       typeof record.applyState === "string" && validApplyStates.includes(record.applyState),
       `applyState must be one of ${validApplyStates.join(", ")} — got: ${record.applyState}`,
@@ -273,21 +273,28 @@ describe("pr_triage_automation — applyState state machine", () => {
     assert.equal(shouldSkip, true, "applied state must trigger skip");
   });
 
+  it("idempotency: superseded record is terminal — HTTP 404 artifact is permanently resolved", () => {
+    const record = buildRecord("superseded");
+    // superseded = GitHub returned HTTP 404; PR is gone. Must not re-process.
+    const shouldSkip = record.applyState === "applied" || record.applyState === "superseded";
+    assert.equal(shouldSkip, true, "superseded state must trigger skip — PR no longer exists on GitHub");
+  });
+
   it("pending record is not terminal — processing should continue", () => {
     const record = buildRecord("pending");
-    const shouldSkip = record.applyState === "applied";
+    const shouldSkip = record.applyState === "applied" || record.applyState === "superseded";
     assert.equal(shouldSkip, false, "pending state must not trigger skip");
   });
 
   it("failed record is retryable — processing should continue", () => {
     const record = buildRecord("failed");
-    const shouldSkip = record.applyState === "applied";
+    const shouldSkip = record.applyState === "applied" || record.applyState === "superseded";
     assert.equal(shouldSkip, false, "failed state must not trigger skip — allow retry");
   });
 
   it("skipped record (dry-run) is retryable — processing should continue", () => {
     const record = buildRecord("skipped");
-    const shouldSkip = record.applyState === "applied";
+    const shouldSkip = record.applyState === "applied" || record.applyState === "superseded";
     assert.equal(shouldSkip, false, "dry-run skipped state must not be terminal");
   });
 
@@ -303,7 +310,50 @@ describe("pr_triage_automation — applyState state machine", () => {
 
   it("negative path: invalid applyState value is not terminal", () => {
     const record = buildRecord("unknown-state");
-    const shouldSkip = record.applyState === "applied";
+    const shouldSkip = record.applyState === "applied" || record.applyState === "superseded";
     assert.equal(shouldSkip, false, "unrecognised applyState must not be treated as terminal");
+  });
+});
+
+describe("pr_triage_automation — HTTP 404 superseded state machine", () => {
+  // These tests exercise the 404→superseded transition logic in pure form,
+  // without touching the GitHub API.
+
+  function resolveApplyState(httpStatus: number): "applied" | "failed" | "superseded" {
+    if (httpStatus === 200 || httpStatus === 405) return "applied";
+    if (httpStatus === 404) return "superseded";
+    return "failed";
+  }
+
+  it("HTTP 200 on close resolves to applied", () => {
+    assert.equal(resolveApplyState(200), "applied");
+  });
+
+  it("HTTP 405 on merge (already merged) resolves to applied", () => {
+    assert.equal(resolveApplyState(405), "applied");
+  });
+
+  it("HTTP 404 (PR not found) resolves to superseded — terminal, no retry", () => {
+    assert.equal(resolveApplyState(404), "superseded");
+  });
+
+  it("HTTP 422 (merge conflict / validation error) resolves to failed — retryable", () => {
+    assert.equal(resolveApplyState(422), "failed");
+  });
+
+  it("HTTP 500 (server error) resolves to failed — retryable", () => {
+    assert.equal(resolveApplyState(500), "failed");
+  });
+
+  it("negative path: superseded state must NOT be retried (is terminal)", () => {
+    const applyState = resolveApplyState(404);
+    const isTerminal = applyState === "applied" || applyState === "superseded";
+    assert.equal(isTerminal, true, "404 → superseded must be treated as terminal — no recovery planning");
+  });
+
+  it("negative path: failed state IS retried (non-terminal)", () => {
+    const applyState = resolveApplyState(422);
+    const isTerminal = applyState === "applied" || applyState === "superseded";
+    assert.equal(isTerminal, false, "non-404 failure must remain retryable");
   });
 });

@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { runOnce, runResumeDispatch, evaluatePreDispatchGovernanceGate, BLOCK_REASON, processEscalationQueueClosureWorkflow, isDispatchCheckpointResumable } from "../../src/core/orchestrator.js";
+import { runOnce, runResumeDispatch, evaluateDispatchResumeReadiness, evaluatePreDispatchGovernanceGate, BLOCK_REASON, processEscalationQueueClosureWorkflow, isDispatchCheckpointResumable } from "../../src/core/orchestrator.js";
 import { ATHENA_PLAN_REVIEW_REASON_CODE } from "../../src/core/athena_reviewer.js";
 import { readPipelineProgress, PIPELINE_STAGE_ENUM, PIPELINE_STEPS } from "../../src/core/pipeline_progress.js";
 import { EVENTS } from "../../src/core/event_schema.js";
@@ -692,6 +692,148 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
       typeof checkpoint.totalPlans === "number" && checkpoint.totalPlans > 0,
       `dispatch_checkpoint.json must record totalPlans > 0 when plans are present; got totalPlans=${checkpoint.totalPlans}`
     );
+  });
+
+  it("resumes from checkpoint snapshot even when live Athena review artifacts are absent", async () => {
+    const checkpoint = {
+      status: "dispatching",
+      createdAt: "2026-04-11T07:31:14.738Z",
+      updatedAt: "2026-04-11T07:58:39.727Z",
+      totalPlans: 1,
+      planCount: 1,
+      completedPlans: 0,
+      planSetSignature: "resume-snapshot-test",
+      planAnalyzedAt: "2026-04-11T07:28:14.861Z",
+      dispatchPlanSnapshot: [
+        {
+          id: "T1",
+          task_id: "T1",
+          task: "task one",
+          role: "evolution-worker",
+          wave: 1,
+          targetFiles: ["src/core/orchestrator.ts"],
+          scope: "implementation",
+          verification_commands: ["npm test"],
+          acceptance_criteria: ["tests pass"],
+        },
+      ],
+      workerBatchesSnapshot: [
+        {
+          role: "evolution-worker",
+          wave: 1,
+          plans: [
+            {
+              id: "T1",
+              task_id: "T1",
+              task: "task one",
+              role: "evolution-worker",
+              wave: 1,
+              targetFiles: ["src/core/orchestrator.ts"],
+              scope: "implementation",
+              verification_commands: ["npm test"],
+              acceptance_criteria: ["tests pass"],
+            },
+          ],
+        },
+      ],
+    };
+
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify(checkpoint, null, 2),
+      "utf8",
+    );
+
+    await assert.doesNotReject(
+      () => runResumeDispatch(config),
+      "runResumeDispatch must resume from checkpoint snapshots even without athena_plan_review.json"
+    );
+
+    const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
+    assert.match(progressLog, /\[RESUME\] Force-resuming dispatch checkpoint/);
+    assert.match(progressLog, /\[RESUME\] Source=checkpoint_snapshot/);
+  });
+
+  it("reports blocked auto-resume when interrupted checkpoint has no usable plan source", async () => {
+    const checkpoint = {
+      status: "dispatching",
+      createdAt: "2026-04-11T07:31:14.738Z",
+      updatedAt: "2026-04-11T07:58:39.727Z",
+      totalPlans: 2,
+      planCount: 2,
+      completedPlans: 0,
+      planSetSignature: "resume-missing-plan-source",
+    };
+
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify(checkpoint, null, 2),
+      "utf8",
+    );
+
+    const readiness = await evaluateDispatchResumeReadiness(config);
+    assert.equal(readiness.interrupted, true);
+    assert.equal(readiness.ready, false);
+    assert.equal(readiness.reason, "missing_live_plan_source");
+    assert.equal(readiness.planSource, "none");
+  });
+
+  it("treats checkpoint snapshots as sufficient for auto-resume readiness", async () => {
+    const checkpoint = {
+      status: "dispatching",
+      createdAt: "2026-04-11T07:31:14.738Z",
+      updatedAt: "2026-04-11T07:58:39.727Z",
+      totalPlans: 1,
+      planCount: 1,
+      completedPlans: 0,
+      planSetSignature: "resume-readiness-snapshot",
+      dispatchPlanSnapshot: [
+        {
+          id: "T1",
+          task_id: "T1",
+          task: "task one",
+          role: "evolution-worker",
+          wave: 1,
+          targetFiles: ["src/core/orchestrator.ts"],
+          scope: "implementation",
+          verification_commands: ["npm test"],
+          acceptance_criteria: ["tests pass"],
+        },
+      ],
+      workerBatchesSnapshot: [
+        {
+          role: "evolution-worker",
+          wave: 1,
+          plans: [
+            {
+              id: "T1",
+              task_id: "T1",
+              task: "task one",
+              role: "evolution-worker",
+              wave: 1,
+              targetFiles: ["src/core/orchestrator.ts"],
+              scope: "implementation",
+              verification_commands: ["npm test"],
+              acceptance_criteria: ["tests pass"],
+            },
+          ],
+        },
+      ],
+    };
+
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify(checkpoint, null, 2),
+      "utf8",
+    );
+
+    const readiness = await evaluateDispatchResumeReadiness(config);
+    assert.equal(readiness.interrupted, true);
+    assert.equal(readiness.ready, true);
+    assert.equal(readiness.reason, "checkpoint_snapshot_ready");
+    assert.equal(readiness.planSource, "checkpoint_snapshot");
+    assert.equal(readiness.planCount, 1);
+    assert.equal(readiness.workerBatchCount, 1);
   });
 });
 
@@ -3266,11 +3408,14 @@ describe("runStaleAutomatedPrGuard — applyState state machine", () => {
   // Reproduce the idempotency gate logic to verify it is correct in isolation.
   function isTerminalApplyState(record: unknown): boolean {
     if (!record || typeof record !== "object") return false;
-    return (record as Record<string, unknown>).applyState === "applied";
+    const state = (record as Record<string, unknown>).applyState;
+    // "applied"    — action successfully executed; do not repeat.
+    // "superseded" — GitHub returned HTTP 404; PR is permanently resolved.
+    return state === "applied" || state === "superseded";
   }
 
   // Reproduce the valid-state set for schema validation.
-  const VALID_APPLY_STATES = ["pending", "applied", "failed", "skipped"];
+  const VALID_APPLY_STATES = ["pending", "applied", "failed", "skipped", "superseded"];
 
   function buildTriageRecord(applyState: string, decision: string = "MERGE") {
     return {
@@ -3300,6 +3445,11 @@ describe("runStaleAutomatedPrGuard — applyState state machine", () => {
   it("applyState=failed is not terminal — retry on next cycle", () => {
     const record = buildTriageRecord("failed");
     assert.equal(isTerminalApplyState(record), false);
+  });
+
+  it("applyState=superseded is terminal — HTTP 404 means PR is permanently resolved", () => {
+    const record = buildTriageRecord("superseded");
+    assert.equal(isTerminalApplyState(record), true);
   });
 
   it("applyState=skipped (dry-run) is not terminal — can be applied later", () => {
