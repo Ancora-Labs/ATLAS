@@ -7096,12 +7096,16 @@ function _makeStaleGuardDecision(
 }
 
 /**
- * Stale automated-PR guard — audits open BOX-owned PRs and records a
+ * Stale automated-PR guard — audits open BOX-owned PRs and executes a
  * deterministic MERGE or CLOSE decision with CI + diff evidence.
  *
- * Each triaged PR writes a record to state/pr_triage_<number>.json.
- * Actual merge/close actions are NOT performed here; this is an audit + record
- * pass only. Use scripts/pr_triage_automation.mjs with --execute for mutations.
+ * State machine per PR:
+ *   pending  → applied  (decision executed successfully)
+ *   pending  → failed   (execution error — will retry on next loop)
+ *   applied              (terminal — idempotency gate skips re-processing)
+ *
+ * Each triaged PR persists its record to state/pr_triage_<number>.json with
+ * an `applyState` field tracking the transition.
  *
  * Integration: called once per daemon loop iteration as a hygiene step.
  */
@@ -7144,6 +7148,14 @@ export async function runStaleAutomatedPrGuard(config: any): Promise<void> {
     const title = String(pr?.title || "");
     const createdAt = String(pr?.created_at || "");
     const ageMs = createdAt ? Date.now() - new Date(createdAt).getTime() : 0;
+
+    // Idempotency gate: skip PRs already in terminal applied state.
+    const recordPath = path.join(stateDir, `pr_triage_${prNumber}.json`);
+    const existingRecord = await readJson(recordPath, null);
+    if (existingRecord?.applyState === "applied") {
+      await appendProgress(config, `[STALE_PR_GUARD] PR #${prNumber} already applied — skipping`);
+      continue;
+    }
 
     // Fetch CI check-runs
     let ci = { allChecksPassed: false, totalChecks: 0, failingChecks: 0, passingChecks: 0, pendingChecks: 0, checkNames: [] as string[] };
@@ -7223,7 +7235,8 @@ export async function runStaleAutomatedPrGuard(config: any): Promise<void> {
     const { decision, rationale } = _makeStaleGuardDecision(ci, diff, ageMs, mergeState);
     const now = new Date().toISOString();
 
-    const record = {
+    // Write initial record with applyState=pending before attempting apply.
+    const record: Record<string, unknown> = {
       schemaVersion: 1,
       triageTimestamp: now,
       pr: {
@@ -7243,14 +7256,67 @@ export async function runStaleAutomatedPrGuard(config: any): Promise<void> {
       rationale,
       decidedBy: "runStaleAutomatedPrGuard",
       decidedAt: now,
+      applyState: "pending",
     };
 
     try {
-      const recordPath = path.join(stateDir, `pr_triage_${prNumber}.json`);
       await writeJson(recordPath, record);
       await appendProgress(config, `[STALE_PR_GUARD] PR #${prNumber} (${branch}) → ${decision}: ${rationale}`);
     } catch (err) {
       warn(`[stale_pr_guard] Failed to write triage record for PR #${prNumber}: ${String((err as any)?.message || err)}`);
+    }
+
+    // Apply the decision: merge or close the PR, then persist the apply result.
+    let applyState: "applied" | "failed" = "failed";
+    let appliedAt: string | undefined;
+    let applyError: string | undefined;
+
+    try {
+      if (decision === "MERGE") {
+        const mergeRes = await fetch(`${base}/pulls/${prNumber}/merge`, {
+          method: "PUT",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({ merge_method: "squash" }),
+        });
+        if (mergeRes.ok || mergeRes.status === 405) {
+          // 405 = Method Not Allowed means PR is already merged — treat as applied.
+          applyState = "applied";
+          appliedAt = new Date().toISOString();
+          await appendProgress(config, `[STALE_PR_GUARD] PR #${prNumber} merged (HTTP ${mergeRes.status})`);
+        } else {
+          const errText = await mergeRes.text().catch(() => "");
+          applyError = `HTTP ${mergeRes.status}: ${errText.slice(0, 200)}`;
+          warn(`[stale_pr_guard] Merge failed for PR #${prNumber}: ${applyError}`);
+        }
+      } else if (decision === "CLOSE") {
+        const closeRes = await fetch(`${base}/pulls/${prNumber}`, {
+          method: "PATCH",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({ state: "closed" }),
+        });
+        if (closeRes.ok) {
+          applyState = "applied";
+          appliedAt = new Date().toISOString();
+          await appendProgress(config, `[STALE_PR_GUARD] PR #${prNumber} closed`);
+        } else {
+          const errText = await closeRes.text().catch(() => "");
+          applyError = `HTTP ${closeRes.status}: ${errText.slice(0, 200)}`;
+          warn(`[stale_pr_guard] Close failed for PR #${prNumber}: ${applyError}`);
+        }
+      }
+    } catch (err) {
+      applyError = String((err as any)?.message || err);
+      warn(`[stale_pr_guard] Apply exception for PR #${prNumber}: ${applyError}`);
+    }
+
+    // Persist apply result back to the record.
+    try {
+      const updatedRecord: Record<string, unknown> = { ...record, applyState };
+      if (appliedAt) updatedRecord.appliedAt = appliedAt;
+      if (applyError) updatedRecord.applyError = applyError;
+      await writeJson(recordPath, updatedRecord);
+    } catch (err) {
+      warn(`[stale_pr_guard] Failed to update apply state for PR #${prNumber}: ${String((err as any)?.message || err)}`);
     }
   }
 }

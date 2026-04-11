@@ -252,15 +252,22 @@ async function writeTriageRecord(stateDir, record) {
 /**
  * Triage stale automated PRs in the target repository.
  *
+ * State machine per PR:
+ *   pending → applied  (decision executed successfully)
+ *   pending → failed   (execution error — retryable on next run)
+ *   applied             (terminal — idempotency gate skips re-processing)
+ *
  * For each open automated PR, this function:
- *  1. Fetches CI check status via `gh pr checks`
- *  2. Fetches diff file list via `gh pr diff --name-only`
- *  3. Applies deterministic MERGE/CLOSE decision rules
- *  4. Writes a triage record to state/pr_triage_<number>.json
- *  5. Optionally executes the decision (merge/close) when `dryRun=false`
+ *  1. Checks existing triage record for applyState=applied (idempotency gate)
+ *  2. Fetches CI check status via `gh pr checks`
+ *  3. Fetches diff file list via `gh pr diff --name-only`
+ *  4. Applies deterministic MERGE/CLOSE decision rules
+ *  5. Writes a triage record to state/pr_triage_<number>.json with applyState=pending
+ *  6. Executes the decision (merge/close) when `dryRun=false`
+ *  7. Updates the record with applyState=applied|failed and appliedAt|applyError
  *
  * @param {{ repo: string, stateDir?: string, dryRun?: boolean }} options
- * @returns {Promise<Array<{ prNumber: number, decision: string, written: string }>>}
+ * @returns {Promise<Array<{ prNumber: number, decision: string, written: string, applyState: string }>>}
  */
 export async function triageStalePrs(options = {}) {
   const repo = String(options.repo || process.env.BOX_TARGET_REPO || "");
@@ -306,6 +313,20 @@ export async function triageStalePrs(options = {}) {
     const createdAt = String(pr.createdAt || "");
     const ageMs = createdAt ? Date.now() - new Date(createdAt).getTime() : 0;
 
+    // Idempotency gate: skip PRs already in terminal applied state.
+    const recordFilePath = path.join(stateDir, `pr_triage_${prNumber}.json`);
+    let existingRecord = null;
+    try {
+      const raw = await fs.readFile(recordFilePath, "utf8");
+      existingRecord = JSON.parse(raw);
+    } catch { /* no existing record — first run */ }
+
+    if (existingRecord?.applyState === "applied") {
+      console.log(`[pr_triage] PR #${prNumber} already applied — skipping`);
+      results.push({ prNumber, decision: existingRecord.decision, written: recordFilePath, applyState: "applied" });
+      continue;
+    }
+
     const [ci, diff] = await Promise.all([
       fetchPrCiStatus(prNumber, repo),
       fetchPrDiffMeta(prNumber, repo),
@@ -313,6 +334,9 @@ export async function triageStalePrs(options = {}) {
 
     const { decision, rationale } = makeTriageDecision(ci, diff, ageMs);
     const now = new Date().toISOString();
+
+    // Determine initial applyState: skipped in dry-run, pending in execute mode.
+    const initialApplyState = dryRun ? "skipped" : "pending";
 
     const record = {
       schemaVersion: 1,
@@ -333,6 +357,7 @@ export async function triageStalePrs(options = {}) {
       rationale,
       decidedBy: "pr_triage_automation",
       decidedAt: now,
+      applyState: initialApplyState,
     };
 
     let written = "";
@@ -343,8 +368,11 @@ export async function triageStalePrs(options = {}) {
       console.error(`[pr_triage] Failed to write triage record for PR #${prNumber}: ${String(err?.message || err)}`);
     }
 
-    // Execute decision only in non-dry-run mode
+    // Execute decision only in non-dry-run mode, then persist the apply result.
+    let applyState = initialApplyState;
     if (!dryRun) {
+      let appliedAt = null;
+      let applyError = null;
       try {
         if (decision === "MERGE") {
           await execFileAsync("gh", [
@@ -356,6 +384,8 @@ export async function triageStalePrs(options = {}) {
             "--squash",
             "--auto",
           ]);
+          applyState = "applied";
+          appliedAt = new Date().toISOString();
           console.log(`[pr_triage] Merged PR #${prNumber}`);
         } else if (decision === "CLOSE") {
           await execFileAsync("gh", [
@@ -367,14 +397,28 @@ export async function triageStalePrs(options = {}) {
             "--comment",
             `[pr_triage_automation] Closing stale automated PR: ${rationale}`,
           ]);
+          applyState = "applied";
+          appliedAt = new Date().toISOString();
           console.log(`[pr_triage] Closed PR #${prNumber}`);
         }
       } catch (err) {
-        console.error(`[pr_triage] Failed to execute ${decision} for PR #${prNumber}: ${String(err?.message || err)}`);
+        applyState = "failed";
+        applyError = String(err?.message || err);
+        console.error(`[pr_triage] Failed to execute ${decision} for PR #${prNumber}: ${applyError}`);
+      }
+
+      // Persist apply result back to record.
+      try {
+        const updatedRecord = { ...record, applyState };
+        if (appliedAt) updatedRecord.appliedAt = appliedAt;
+        if (applyError) updatedRecord.applyError = applyError;
+        written = await writeTriageRecord(stateDir, updatedRecord);
+      } catch (err) {
+        console.error(`[pr_triage] Failed to update apply state for PR #${prNumber}: ${String(err?.message || err)}`);
       }
     }
 
-    results.push({ prNumber, decision, written });
+    results.push({ prNumber, decision, written, applyState });
   }
 
   return results;
