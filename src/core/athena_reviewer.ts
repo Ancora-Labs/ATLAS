@@ -90,6 +90,12 @@ export const ATHENA_FAST_PATH_REASON = Object.freeze({
    * Reserves full AI review capacity for genuinely changed or high-risk packets.
    */
   DELTA_REVIEW_APPROVED: "DELTA_REVIEW_APPROVED",
+  /**
+   * Main CI is green and all stale automated PR debt is already in a terminal
+   * state (applyState === "superseded" | "applied").  Worker dispatch is skipped
+   * and the cycle is closed via the stale-artifact closure fastpath.
+   */
+  STALE_SUPERSEDED_CI_GREEN: "STALE_SUPERSEDED_CI_GREEN",
 } as const);
 
 // ── Deterministic plan-batch fingerprinting ───────────────────────────────────
@@ -4516,4 +4522,44 @@ export function computeRecurrenceQualityScore(postmortems: unknown[]): {
   const qualityScore = Math.round((totalPoints / maxPoints) * 10000) / 10000;
 
   return { qualityScore, totalPoints, maxPoints, postmortemCount: pms.length };
+}
+
+// ── Stale-artifact closure fastpath evaluation ────────────────────────────────
+
+/**
+ * Deterministic eligibility check for the stale-artifact closure fastpath.
+ *
+ * Returns eligible=true only when ALL of the following hold:
+ *   1. At least one stale PR triage record exists (there was stale automated PR debt).
+ *   2. Every triage record is in a terminal state ("applied" or "superseded").
+ *   3. Main CI is reported green by the caller.
+ *
+ * This is a pure function — all I/O (reading triage records, checking CI) must be
+ * performed by the caller before invoking this function.
+ */
+export function evaluateStaleArtifactClosureFastpath(opts: {
+  staleTriageRecords: Array<{ applyState: string }>;
+  mainCiGreen: boolean;
+}): { eligible: boolean; reason: string } {
+  const records = Array.isArray(opts.staleTriageRecords) ? opts.staleTriageRecords : [];
+
+  // Need at least one triage record to evaluate stale PR debt.
+  if (records.length === 0) {
+    return { eligible: false, reason: "no_stale_pr_records" };
+  }
+
+  // All stale PR triage records must be in terminal state.
+  const allTerminal = records.every(
+    (r) => r.applyState === "applied" || r.applyState === "superseded",
+  );
+  if (!allTerminal) {
+    return { eligible: false, reason: "non_terminal_stale_pr_records" };
+  }
+
+  // Main CI must be green.
+  if (!opts.mainCiGreen) {
+    return { eligible: false, reason: "main_ci_not_green" };
+  }
+
+  return { eligible: true, reason: ATHENA_FAST_PATH_REASON.STALE_SUPERSEDED_CI_GREEN };
 }

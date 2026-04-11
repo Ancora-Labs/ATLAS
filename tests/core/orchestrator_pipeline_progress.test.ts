@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { runOnce, runResumeDispatch, evaluateDispatchResumeReadiness, evaluatePreDispatchGovernanceGate, BLOCK_REASON, processEscalationQueueClosureWorkflow, isDispatchCheckpointResumable } from "../../src/core/orchestrator.js";
+import { runOnce, runResumeDispatch, evaluateDispatchResumeReadiness, evaluatePreDispatchGovernanceGate, BLOCK_REASON, processEscalationQueueClosureWorkflow, isDispatchCheckpointResumable, loadStaleTriageRecords, runStaleArtifactClosureFastpath } from "../../src/core/orchestrator.js";
 import { ATHENA_PLAN_REVIEW_REASON_CODE } from "../../src/core/athena_reviewer.js";
 import { readPipelineProgress, PIPELINE_STAGE_ENUM, PIPELINE_STEPS } from "../../src/core/pipeline_progress.js";
 import { EVENTS } from "../../src/core/event_schema.js";
@@ -3506,5 +3506,136 @@ describe("runStaleAutomatedPrGuard — applyState state machine", () => {
       // the invariant is tracked. Existing records without appliedAt are migration candidates.
       assert.equal(typeof hasAppliedAt, "boolean", "appliedAt presence check must be boolean");
     }
+  });
+});
+
+// ── Stale-artifact closure fastpath — orchestrator integration ────────────────
+
+describe("loadStaleTriageRecords — file discovery", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-stale-triage-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("returns empty array when state dir has no pr_triage files", async () => {
+    const cfg = { paths: { stateDir: tmpDir } };
+    const records = await loadStaleTriageRecords(cfg);
+    assert.deepEqual(records, []);
+  });
+
+  it("reads a single triage record correctly", async () => {
+    const record = { schemaVersion: 1, applyState: "superseded", pr: { number: 42 } };
+    await fs.writeFile(path.join(tmpDir, "pr_triage_42.json"), JSON.stringify(record), "utf8");
+    const cfg = { paths: { stateDir: tmpDir } };
+    const records = await loadStaleTriageRecords(cfg);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].applyState, "superseded");
+  });
+
+  it("reads multiple triage records from the state dir", async () => {
+    for (const [num, state] of [[10, "applied"], [11, "superseded"], [12, "failed"]]) {
+      await fs.writeFile(
+        path.join(tmpDir, `pr_triage_${num}.json`),
+        JSON.stringify({ applyState: state }),
+        "utf8",
+      );
+    }
+    const cfg = { paths: { stateDir: tmpDir } };
+    const records = await loadStaleTriageRecords(cfg);
+    assert.equal(records.length, 3);
+    const states = records.map((r) => r.applyState).sort();
+    assert.deepEqual(states, ["applied", "failed", "superseded"]);
+  });
+
+  it("ignores non-triage files in the state dir", async () => {
+    await fs.writeFile(path.join(tmpDir, "orchestrator_health.json"), "{}", "utf8");
+    await fs.writeFile(path.join(tmpDir, "prometheus_analysis.json"), "{}", "utf8");
+    const cfg = { paths: { stateDir: tmpDir } };
+    const records = await loadStaleTriageRecords(cfg);
+    assert.deepEqual(records, []);
+  });
+
+  it("returns empty array when state dir does not exist", async () => {
+    const cfg = { paths: { stateDir: path.join(tmpDir, "nonexistent") } };
+    const records = await loadStaleTriageRecords(cfg);
+    assert.deepEqual(records, []);
+  });
+});
+
+describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-closure-fp-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("returns eligible=false when no triage records exist (even if CI were green)", async () => {
+    // No GitHub token → fetchMainBranchCiStatus returns green=false, and no records.
+    const cfg = { paths: { stateDir: tmpDir }, env: {} };
+    const result = await runStaleArtifactClosureFastpath(cfg);
+    assert.equal(result.eligible, false);
+    assert.equal(result.stalePrCount, 0);
+    assert.equal(result.reason, "no_stale_pr_records");
+  });
+
+  it("returns eligible=false when records exist but CI status is non-green", async () => {
+    // Write a terminal triage record.
+    await fs.writeFile(
+      path.join(tmpDir, "pr_triage_99.json"),
+      JSON.stringify({ applyState: "superseded" }),
+      "utf8",
+    );
+    // No GitHub credentials → CI green = false.
+    const cfg = { paths: { stateDir: tmpDir }, env: {} };
+    const result = await runStaleArtifactClosureFastpath(cfg);
+    assert.equal(result.eligible, false);
+    assert.equal(result.stalePrCount, 1);
+    assert.equal(result.mainCiGreen, false);
+    assert.equal(result.reason, "main_ci_not_green");
+  });
+
+  it("returns eligible=false when a non-terminal record exists", async () => {
+    await fs.writeFile(
+      path.join(tmpDir, "pr_triage_55.json"),
+      JSON.stringify({ applyState: "pending" }),
+      "utf8",
+    );
+    const cfg = { paths: { stateDir: tmpDir }, env: {} };
+    const result = await runStaleArtifactClosureFastpath(cfg);
+    assert.equal(result.eligible, false);
+    assert.equal(result.stalePrCount, 1);
+    assert.equal(result.reason, "non_terminal_stale_pr_records");
+  });
+
+  it("result always includes stalePrCount and mainCiGreen fields", async () => {
+    const cfg = { paths: { stateDir: tmpDir }, env: {} };
+    const result = await runStaleArtifactClosureFastpath(cfg);
+    assert.ok("stalePrCount" in result, "stalePrCount must be present");
+    assert.ok("mainCiGreen" in result, "mainCiGreen must be present");
+    assert.ok("eligible" in result, "eligible must be present");
+    assert.ok("reason" in result, "reason must be present");
+  });
+
+  it("negative path: mixed terminal/non-terminal records block the fastpath", async () => {
+    for (const [num, state] of [[1, "applied"], [2, "pending"]]) {
+      await fs.writeFile(
+        path.join(tmpDir, `pr_triage_${num}.json`),
+        JSON.stringify({ applyState: state }),
+        "utf8",
+      );
+    }
+    const cfg = { paths: { stateDir: tmpDir }, env: {} };
+    const result = await runStaleArtifactClosureFastpath(cfg);
+    assert.equal(result.eligible, false);
+    assert.equal(result.reason, "non_terminal_stale_pr_records");
   });
 });

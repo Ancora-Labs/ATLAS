@@ -20,6 +20,8 @@ import {
   runAthenaPostmortem,
   buildPatchedPlanCorrectionTracking,
   PATCHED_PLAN_MUTATION_KIND,
+  ATHENA_FAST_PATH_REASON,
+  evaluateStaleArtifactClosureFastpath,
 } from "../../src/core/athena_reviewer.js";
 import { evaluatePreDispatchGovernanceGate, BLOCK_REASON } from "../../src/core/orchestrator.js";
 import fs from "node:fs/promises";
@@ -1119,6 +1121,96 @@ describe("mergeLaneVerdicts — output contract", () => {
   it("mergePolicy matches the policy argument", () => {
     const result = mergeLaneVerdicts(makeVerdict("quality", true), makeVerdict("governance", true), LANE_MERGE_POLICY.ANY_PASS);
     assert.equal(result.mergePolicy, LANE_MERGE_POLICY.ANY_PASS);
+  });
+});
+
+// ── evaluateStaleArtifactClosureFastpath — deterministic eligibility ───────────
+
+describe("evaluateStaleArtifactClosureFastpath — eligibility contract", () => {
+  it("STALE_SUPERSEDED_CI_GREEN is present in ATHENA_FAST_PATH_REASON", () => {
+    assert.equal(
+      ATHENA_FAST_PATH_REASON.STALE_SUPERSEDED_CI_GREEN,
+      "STALE_SUPERSEDED_CI_GREEN",
+    );
+  });
+
+  it("returns eligible=true when all records are superseded and CI is green", () => {
+    const result = evaluateStaleArtifactClosureFastpath({
+      staleTriageRecords: [
+        { applyState: "superseded" },
+        { applyState: "applied" },
+      ],
+      mainCiGreen: true,
+    });
+    assert.equal(result.eligible, true);
+    assert.equal(result.reason, ATHENA_FAST_PATH_REASON.STALE_SUPERSEDED_CI_GREEN);
+  });
+
+  it("returns eligible=false when there are no triage records", () => {
+    const result = evaluateStaleArtifactClosureFastpath({
+      staleTriageRecords: [],
+      mainCiGreen: true,
+    });
+    assert.equal(result.eligible, false);
+    assert.equal(result.reason, "no_stale_pr_records");
+  });
+
+  it("returns eligible=false when main CI is not green", () => {
+    const result = evaluateStaleArtifactClosureFastpath({
+      staleTriageRecords: [{ applyState: "superseded" }],
+      mainCiGreen: false,
+    });
+    assert.equal(result.eligible, false);
+    assert.equal(result.reason, "main_ci_not_green");
+  });
+
+  it("returns eligible=false when any record is in a non-terminal state", () => {
+    const result = evaluateStaleArtifactClosureFastpath({
+      staleTriageRecords: [
+        { applyState: "superseded" },
+        { applyState: "pending" },
+      ],
+      mainCiGreen: true,
+    });
+    assert.equal(result.eligible, false);
+    assert.equal(result.reason, "non_terminal_stale_pr_records");
+  });
+
+  it("negative path: failed applyState is non-terminal, blocks fastpath", () => {
+    const result = evaluateStaleArtifactClosureFastpath({
+      staleTriageRecords: [{ applyState: "failed" }],
+      mainCiGreen: true,
+    });
+    assert.equal(result.eligible, false);
+    assert.equal(result.reason, "non_terminal_stale_pr_records");
+  });
+
+  it("negative path: returns eligible=false when main CI has failing checks", () => {
+    const result = evaluateStaleArtifactClosureFastpath({
+      staleTriageRecords: [{ applyState: "applied" }],
+      mainCiGreen: false,
+    });
+    assert.equal(result.eligible, false);
+  });
+
+  it("single superseded record with green CI is eligible", () => {
+    const result = evaluateStaleArtifactClosureFastpath({
+      staleTriageRecords: [{ applyState: "superseded" }],
+      mainCiGreen: true,
+    });
+    assert.equal(result.eligible, true);
+  });
+
+  it("mixed applied/superseded records with green CI is eligible", () => {
+    const result = evaluateStaleArtifactClosureFastpath({
+      staleTriageRecords: [
+        { applyState: "applied" },
+        { applyState: "superseded" },
+        { applyState: "applied" },
+      ],
+      mainCiGreen: true,
+    });
+    assert.equal(result.eligible, true);
   });
 });
 

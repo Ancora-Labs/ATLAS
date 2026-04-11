@@ -30,6 +30,7 @@ import {
   ATHENA_PLAN_REVIEW_REASON_CODE,
   hasFiniteAthenaOverallScore,
   extractCrossCycleDispatchPrerequisiteFromDependency,
+  evaluateStaleArtifactClosureFastpath,
 } from "./athena_reviewer.js";
 import { runWorkerConversation, isAnalyticsCompletedWorkerStatus, isTerminalWorkerStatus } from "./worker_runner.js";
 import { runSelfImprovementCycle, shouldTriggerSelfImprovement } from "./self_improvement.js";
@@ -4752,6 +4753,34 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     await appendAutoApproveTelemetry(config, planReview as Record<string, unknown>, autoApproveCycleId);
   }
 
+  // ── Stale-artifact closure fastpath ───────────────────────────────────────
+  // When main CI is green and all stale automated PR debt is already terminal
+  // (superseded or applied), skip worker dispatch.  The system is healthy and
+  // the stale PR guard has already resolved the debt — no worker work needed.
+  try {
+    const staleClosureFastpath = await runStaleArtifactClosureFastpath(config);
+    if (staleClosureFastpath.eligible) {
+      await appendProgress(
+        config,
+        `[CYCLE] Stale-artifact closure fastpath — skipping worker dispatch: reason=${staleClosureFastpath.reason} stalePrCount=${staleClosureFastpath.stalePrCount}`,
+      );
+      await safeUpdatePipelineProgress(
+        config,
+        "cycle_complete",
+        `Stale-artifact closure fastpath: all ${staleClosureFastpath.stalePrCount} stale PR record(s) superseded and main CI green`,
+      );
+      return;
+    }
+    if (staleClosureFastpath.stalePrCount > 0) {
+      await appendProgress(
+        config,
+        `[CYCLE] Stale-artifact closure fastpath not eligible — reason=${staleClosureFastpath.reason} stalePrCount=${staleClosureFastpath.stalePrCount} mainCiGreen=${String(staleClosureFastpath.mainCiGreen)}`,
+      );
+    }
+  } catch (fastpathErr) {
+    warn(`[orchestrator] stale-artifact closure fastpath check failed (non-fatal): ${String((fastpathErr as Error)?.message || fastpathErr)}`);
+  }
+
   // Step 4: Dispatch workers sequentially (1 request per worker)
   let rawPlans = Array.isArray(planReview.patchedPlans) && planReview.patchedPlans.length > 0
     ? planReview.patchedPlans
@@ -7644,4 +7673,124 @@ export async function runStaleAutomatedPrGuard(config: any): Promise<void> {
       warn(`[stale_pr_guard] Failed to update apply state for PR #${prNumber}: ${String((err as any)?.message || err)}`);
     }
   }
+}
+
+// ── Stale-artifact closure fastpath ──────────────────────────────────────────
+
+/**
+ * Fetches CI check-run status for the main branch HEAD commit.
+ *
+ * Returns a summary object that is safe to use in deterministic gates.
+ * Falls back to { green: false, ... } on any network or parse error so callers
+ * can treat absence-of-CI as non-green without throwing.
+ */
+export async function fetchMainBranchCiStatus(config: any): Promise<{
+  green: boolean;
+  totalChecks: number;
+  passingChecks: number;
+  failingChecks: number;
+  pendingChecks: number;
+  sha: string;
+}> {
+  const defaultResult = { green: false, totalChecks: 0, passingChecks: 0, failingChecks: 0, pendingChecks: 0, sha: "" };
+  const repo = config?.env?.targetRepo;
+  const token = config?.env?.githubToken;
+  if (!repo || !token) return defaultResult;
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "BOX/1.0",
+  };
+  const base = `https://api.github.com/repos/${repo}`;
+
+  try {
+    const branchRes = await fetch(`${base}/branches/main`, { headers });
+    if (!branchRes.ok) return defaultResult;
+    const branchData = await branchRes.json() as any;
+    const sha = String(branchData?.commit?.sha || "");
+    if (!sha) return defaultResult;
+
+    const runsRes = await fetch(`${base}/commits/${sha}/check-runs?per_page=50`, { headers });
+    if (!runsRes.ok) return { ...defaultResult, sha };
+    const runsBody = await runsRes.json() as any;
+    const runs: any[] = Array.isArray(runsBody?.check_runs) ? runsBody.check_runs : [];
+    const total = runs.length;
+    const failing = runs.filter((r) => String(r?.conclusion || "").toLowerCase() === "failure").length;
+    const passing = runs.filter((r) => ["success", "neutral"].includes(String(r?.conclusion || "").toLowerCase())).length;
+    const pending = runs.filter((r) => r?.status === "in_progress" || r?.status === "queued").length;
+
+    return {
+      green: total > 0 && failing === 0 && pending === 0,
+      totalChecks: total,
+      passingChecks: passing,
+      failingChecks: failing,
+      pendingChecks: pending,
+      sha,
+    };
+  } catch (err) {
+    warn(`[orchestrator] main branch CI fetch failed (non-fatal): ${String((err as any)?.message || err)}`);
+    return defaultResult;
+  }
+}
+
+/**
+ * Reads all stale automated-PR triage records from the state directory.
+ *
+ * Files are named `pr_triage_<number>.json` and contain an `applyState` field.
+ * Returns an empty array when the state dir is missing or no triage files exist.
+ * Individual file read errors are silently skipped (best-effort).
+ */
+export async function loadStaleTriageRecords(config: any): Promise<Array<{ applyState: string; pr?: { number: number } }>> {
+  const stateDir = config?.paths?.stateDir || "state";
+  try {
+    const entries = await fs.readdir(stateDir);
+    const triageFiles = entries.filter((e) => /^pr_triage_\d+\.json$/.test(e));
+    const records: Array<{ applyState: string; pr?: { number: number } }> = [];
+    for (const file of triageFiles) {
+      try {
+        const data = await readJson(path.join(stateDir, file), null);
+        if (data && typeof data === "object") {
+          records.push(data as any);
+        }
+      } catch {
+        // best-effort — skip unreadable files
+      }
+    }
+    return records;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Orchestrates the stale-artifact closure fastpath decision.
+ *
+ * Loads stale PR triage records and fetches main branch CI status, then
+ * delegates to the deterministic `evaluateStaleArtifactClosureFastpath`
+ * in athena_reviewer for the eligibility decision.
+ *
+ * Returns:
+ *   eligible=true  → caller should skip worker dispatch and close the cycle.
+ *   eligible=false → caller should proceed with normal dispatch.
+ */
+export async function runStaleArtifactClosureFastpath(config: any): Promise<{
+  eligible: boolean;
+  reason: string;
+  stalePrCount: number;
+  mainCiGreen: boolean;
+}> {
+  const triageRecords = await loadStaleTriageRecords(config);
+  const ciStatus = await fetchMainBranchCiStatus(config);
+  const result = evaluateStaleArtifactClosureFastpath({
+    staleTriageRecords: triageRecords,
+    mainCiGreen: ciStatus.green,
+  });
+  return {
+    eligible: result.eligible,
+    reason: result.reason,
+    stalePrCount: triageRecords.length,
+    mainCiGreen: ciStatus.green,
+  };
 }
