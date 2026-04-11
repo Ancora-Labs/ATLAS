@@ -596,8 +596,10 @@ export function isNonSpecificVerification(value: string): boolean {
   if (/--grep\s+['"][^'"]{4,}['"]/i.test(v)) return false;
   // Specific: contains a --testNamePattern flag with a substantive pattern (aliased in some runners).
   if (/--testNamePattern\s*=\s*['"][^'"]{4,}['"]/i.test(v)) return false;
-  // Non-specific: matches a known bare CLI command (no file argument)
-  return /^(npm|node|npx)\s/i.test(v) || /^run\s+(test|check)/i.test(v);
+  // Non-specific: matches a known bare CLI command (no file argument).
+  // pnpm, yarn, and bun are included because bare invocations like "pnpm vitest"
+  // or "yarn test" carry no test-file specificity.
+  return /^(npm|node|npx|pnpm|yarn|bun)\s/i.test(v) || /^run\s+(test|check)/i.test(v);
 }
 
 /**

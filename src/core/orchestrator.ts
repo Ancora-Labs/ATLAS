@@ -460,17 +460,6 @@ export function computeHealthDivergence(operationalStatus, plannerHealth, planne
   if (truthStatus !== "live") {
     return {
       divergenceState: HEALTH_DIVERGENCE_STATE.UNKNOWN,
-      pipelineStatus: PIPELINE_HEALTH_STATUS.UNKNOWN,
-      operationalStatus: opStatus || "unknown",
-      plannerHealth: phStatus || "unknown",
-      plannerTruthStatus: truthStatus,
-      isWarning: false,
-    };
-  }
-
-  if (!opStatus || !phStatus || (!isOperational && !isDegraded) || (!isGood && !isNeedsWork && !isCritical)) {
-    return {
-      divergenceState: HEALTH_DIVERGENCE_STATE.UNKNOWN,
       pipelineStatus:  PIPELINE_HEALTH_STATUS.UNKNOWN,
       operationalStatus: opStatus || "unknown",
       plannerHealth:     phStatus || "unknown",
@@ -523,12 +512,23 @@ export function computeHealthDivergence(operationalStatus, plannerHealth, planne
     };
   }
 
-  // operational + good → fully healthy
+  if (isOperational && isGood) {
+    return {
+      divergenceState: HEALTH_DIVERGENCE_STATE.NONE,
+      pipelineStatus:  PIPELINE_HEALTH_STATUS.HEALTHY,
+      operationalStatus: opStatus,
+      plannerHealth:     phStatus,
+      plannerTruthStatus: truthStatus,
+      isWarning: false,
+    };
+  }
+
+  // No recognised combination matched — missing, null, or unrecognised inputs.
   return {
-    divergenceState: HEALTH_DIVERGENCE_STATE.NONE,
-    pipelineStatus:  PIPELINE_HEALTH_STATUS.HEALTHY,
-    operationalStatus: opStatus,
-    plannerHealth:     phStatus,
+    divergenceState: HEALTH_DIVERGENCE_STATE.UNKNOWN,
+    pipelineStatus:  PIPELINE_HEALTH_STATUS.UNKNOWN,
+    operationalStatus: opStatus || "unknown",
+    plannerHealth:     phStatus || "unknown",
     plannerTruthStatus: truthStatus,
     isWarning: false,
   };
@@ -683,6 +683,7 @@ export function autoResolveBenchmarkRecommendations(
 
   const nextRecs = [...recs];
   let resolvedCount = 0;
+  const resolvedIdxs = new Set<number>();
 
   for (const { rec, idx } of pendingIndexes) {
     const topic = normalizeTopicLabel(rec?.topic || rec?.summary || rec?.id || "");
@@ -698,23 +699,25 @@ export function autoResolveBenchmarkRecommendations(
         ? `${prevEvidence}; auto-resolved@${opts.atIso}: linked synthesis_sources match`
         : `auto-resolved@${opts.atIso}: linked synthesis_sources match`,
     };
+    resolvedIdxs.add(idx);
     resolvedCount += 1;
   }
 
+  // Partial fallback: when verified done workers exist but no specific topic link
+  // was found, mark unresolved pending recommendations as "implemented_partially".
   let usedFallback = false;
-  if (resolvedCount === 0 && opts.verifiedDoneWorkers > 0) {
-    usedFallback = true;
-    const limit = Math.min(opts.verifiedDoneWorkers, pendingIndexes.length);
-    for (let i = 0; i < limit; i += 1) {
-      const { rec, idx } = pendingIndexes[i];
+  if (opts.verifiedDoneWorkers > 0) {
+    for (const { rec, idx } of pendingIndexes) {
+      if (resolvedIdxs.has(idx)) continue;
       const prevEvidence = String(rec?.evidence || "").trim();
       nextRecs[idx] = {
         ...rec,
         implementationStatus: "implemented_partially",
         evidence: prevEvidence
-          ? `${prevEvidence}; auto-resolved@${opts.atIso}: verified worker completion fallback (missing synthesis_sources linkage)`
-          : `auto-resolved@${opts.atIso}: verified worker completion fallback (missing synthesis_sources linkage)`,
+          ? `${prevEvidence}; partial-fallback@${opts.atIso}: ${opts.verifiedDoneWorkers} verified worker(s) completed`
+          : `partial-fallback@${opts.atIso}: ${opts.verifiedDoneWorkers} verified worker(s) completed`,
       };
+      usedFallback = true;
       resolvedCount += 1;
     }
   }
@@ -1223,6 +1226,58 @@ export function promotePrometheusAnalysisFromWorkerEvidence(
   });
 
   return { promotedCount, analysis: { ...analysis, plans: nextPlans } };
+}
+
+export function buildCycleWorkerResultRow(batch: any, workerResult: any): {
+  roleName: string;
+  status: string;
+  verificationEvidence?: unknown;
+  dispatchContract?: {
+    doneWorkerWithVerificationReportEvidence?: boolean;
+    doneWorkerWithCleanTreeStatusEvidence?: boolean;
+    dispatchBlockReason?: string | null;
+    closureBoundaryViolation?: boolean;
+    replayClosure?: {
+      contractSatisfied?: boolean;
+      canonicalCommands?: string[];
+      executedCommands?: string[];
+      rawArtifactEvidenceLinks?: string[];
+    } | null;
+  } | null;
+  dispatchBlockReason?: string | null;
+  closureBoundaryViolation?: boolean;
+  planTasks: string[];
+  filesTouched: string[];
+  synthesisSources: string[];
+} {
+  const batchPlans = Array.isArray(batch?.plans) ? batch.plans : [];
+  const planTasks: string[] = [...new Set<string>(
+    batchPlans
+      .map((plan: any) => String(plan?.task || "").trim())
+      .filter(Boolean) as string[],
+  )];
+  const synthesisSources: string[] = [...new Set<string>(
+    batchPlans.flatMap((plan: any) => (
+      Array.isArray(plan?.synthesis_sources)
+        ? plan.synthesis_sources.map((source: unknown) => String(source || "").trim()).filter(Boolean) as string[]
+        : [] as string[]
+    )),
+  )];
+  const filesTouched = Array.isArray(workerResult?.filesTouched)
+    ? workerResult.filesTouched.map((file: unknown) => String(file || "").trim()).filter(Boolean)
+    : [];
+
+  return {
+    roleName: String(workerResult?.roleName || batch?.role || "unknown"),
+    status: String(workerResult?.status || "unknown"),
+    verificationEvidence: workerResult?.verificationEvidence || null,
+    dispatchContract: workerResult?.dispatchContract || null,
+    dispatchBlockReason: workerResult?.dispatchBlockReason || null,
+    closureBoundaryViolation: workerResult?.dispatchContract?.closureBoundaryViolation === true,
+    planTasks,
+    filesTouched,
+    synthesisSources,
+  };
 }
 
 /**
@@ -2176,6 +2231,141 @@ function checkpointMatchesPlanSet(
   return checkpointUpdatedAtMs >= analyzedAtMs;
 }
 
+function cloneCheckpointSnapshot<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value ?? null));
+}
+
+function extractPlansFromWorkerBatches(workerBatches: any[]): any[] {
+  return (Array.isArray(workerBatches) ? workerBatches : []).flatMap((batch: any) => (
+    Array.isArray(batch?.plans) ? batch.plans : []
+  ));
+}
+
+function getCheckpointWorkerBatchesSnapshot(checkpoint: any): any[] {
+  return Array.isArray(checkpoint?.workerBatchesSnapshot)
+    ? checkpoint.workerBatchesSnapshot
+    : [];
+}
+
+function getCheckpointDispatchPlanSnapshot(checkpoint: any): any[] {
+  return Array.isArray(checkpoint?.dispatchPlanSnapshot)
+    ? checkpoint.dispatchPlanSnapshot
+    : [];
+}
+
+export async function evaluateDispatchResumeReadiness(config): Promise<{
+  checkpoint: any;
+  interrupted: boolean;
+  ready: boolean;
+  reason:
+    | "checkpoint_missing"
+    | "checkpoint_not_resumable"
+    | "active_workers_present"
+    | "checkpoint_snapshot_ready"
+    | "missing_live_plan_source"
+    | "empty_worker_batches"
+    | "live_review_ready";
+  planSource: "checkpoint_snapshot" | "live_review" | "none";
+  planCount: number;
+  workerBatchCount: number;
+}> {
+  const checkpoint = await readDispatchCheckpoint(config);
+  if (!checkpoint) {
+    return {
+      checkpoint: null,
+      interrupted: false,
+      ready: false,
+      reason: "checkpoint_missing",
+      planSource: "none",
+      planCount: 0,
+      workerBatchCount: 0,
+    };
+  }
+
+  if (!isDispatchCheckpointResumable(checkpoint)) {
+    return {
+      checkpoint,
+      interrupted: false,
+      ready: false,
+      reason: "checkpoint_not_resumable",
+      planSource: "none",
+      planCount: 0,
+      workerBatchCount: 0,
+    };
+  }
+
+  if (await hasActiveWorkersAsync(config)) {
+    return {
+      checkpoint,
+      interrupted: true,
+      ready: false,
+      reason: "active_workers_present",
+      planSource: "none",
+      planCount: 0,
+      workerBatchCount: 0,
+    };
+  }
+
+  const checkpointWorkerBatches = getCheckpointWorkerBatchesSnapshot(checkpoint);
+  const checkpointPlanSnapshot = getCheckpointDispatchPlanSnapshot(checkpoint);
+  if (checkpointWorkerBatches.length > 0 || checkpointPlanSnapshot.length > 0) {
+    return {
+      checkpoint,
+      interrupted: true,
+      ready: true,
+      reason: "checkpoint_snapshot_ready",
+      planSource: "checkpoint_snapshot",
+      planCount: checkpointPlanSnapshot.length,
+      workerBatchCount: checkpointWorkerBatches.length,
+    };
+  }
+
+  const stateDir = config.paths?.stateDir || "state";
+  const athenaReview = await readJson(path.join(stateDir, "athena_plan_review.json"), null);
+  const prometheusAnalysis = await readJson(path.join(stateDir, "prometheus_analysis.json"), null);
+  const livePlans = Array.isArray(athenaReview?.patchedPlans) && athenaReview.patchedPlans.length > 0
+    ? athenaReview.patchedPlans
+    : (Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans : []);
+  if (!athenaReview?.approved || livePlans.length === 0) {
+    return {
+      checkpoint,
+      interrupted: true,
+      ready: false,
+      reason: "missing_live_plan_source",
+      planSource: "none",
+      planCount: 0,
+      workerBatchCount: 0,
+    };
+  }
+
+  const normalizedPlans = livePlans.map((plan: any) => {
+    const resolved = resolveWorkerRole(plan?.role, plan?.taskKind || plan?.kind || "implementation");
+    return resolved !== (plan?.role || "") ? { ...plan, role: resolved } : plan;
+  });
+  const workerBatches = applyDispatchBoundaryHardCap(buildRoleExecutionBatches(normalizedPlans, config) as any[]) as any[];
+  if (workerBatches.length === 0) {
+    return {
+      checkpoint,
+      interrupted: true,
+      ready: false,
+      reason: "empty_worker_batches",
+      planSource: "live_review",
+      planCount: livePlans.length,
+      workerBatchCount: 0,
+    };
+  }
+
+  return {
+    checkpoint,
+    interrupted: true,
+    ready: true,
+    reason: "live_review_ready",
+    planSource: "live_review",
+    planCount: livePlans.length,
+    workerBatchCount: workerBatches.length,
+  };
+}
+
 async function beginDispatchCheckpoint(
   config,
   plans,
@@ -2195,6 +2385,8 @@ async function beginDispatchCheckpoint(
     completedPlans: 0,
     planSetSignature,
     planAnalyzedAt: opts?.planAnalyzedAt || null,
+    dispatchPlanSnapshot: cloneCheckpointSnapshot(extractPlansFromWorkerBatches(Array.isArray(plans) ? plans : [])),
+    workerBatchesSnapshot: cloneCheckpointSnapshot(Array.isArray(plans) ? plans : []),
   }, {
     spanBatches: Number(config?.runtime?.runSegmentBatchSpan || RUN_SEGMENT_BATCH_SPAN_DEFAULT),
     historyMax: Number(config?.runtime?.runSegmentHistoryMax || RUN_SEGMENT_HISTORY_MAX_DEFAULT),
@@ -2224,8 +2416,8 @@ async function updateDispatchCheckpointProgress(config, checkpoint, completedPla
 
 async function completeDispatchCheckpoint(config, checkpoint) {
   if (!checkpoint) return;
-  checkpoint.status = "complete";
   checkpoint.completedPlans = Number(checkpoint.totalPlans || 0);
+  checkpoint.status = "complete";
   checkpoint.updatedAt = new Date().toISOString();
   await writeDispatchCheckpoint(config, checkpoint);
 }
@@ -2252,8 +2444,7 @@ async function failCloseDispatchCheckpoint(config, checkpoint, detail: {
 }
 
 function isDispatchOutcomeSuccessful(workerResult) {
-  const status = String(workerResult?.status || "").toLowerCase();
-  return status === "partial" || isAnalyticsCompletedWorkerStatus(status);
+  return isCheckpointAdvanceEligibleStatus(workerResult?.status);
 }
 
 function shouldFailCloseDispatchOutcome(workerResult) {
@@ -2267,33 +2458,48 @@ function shouldFailCloseDispatchOutcome(workerResult) {
   return blockReason.startsWith("runtime_hook_denied:");
 }
 
+export function isCheckpointAdvanceEligibleStatus(status: unknown): boolean {
+  return isAnalyticsCompletedWorkerStatus(status);
+}
+
 async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolean } = {}) {
   const stateDir = config.paths?.stateDir || "state";
   const force = options?.force === true;
   const activeWorkers = await hasActiveWorkersAsync(config);
   if (activeWorkers) return false;
 
+  let checkpoint = await readDispatchCheckpoint(config);
+  const checkpointWorkerBatches = getCheckpointWorkerBatchesSnapshot(checkpoint);
+  const checkpointPlanSnapshot = getCheckpointDispatchPlanSnapshot(checkpoint);
+  const hasCheckpointBatchSnapshot = checkpointWorkerBatches.length > 0;
+  const hasCheckpointPlanSnapshot = checkpointPlanSnapshot.length > 0;
+
   const athenaReview = await readJson(path.join(stateDir, "athena_plan_review.json"), null);
   const prometheusAnalysis = await readJson(path.join(stateDir, "prometheus_analysis.json"), null);
-  const plans = Array.isArray(athenaReview?.patchedPlans) && athenaReview.patchedPlans.length > 0
+  const livePlans = Array.isArray(athenaReview?.patchedPlans) && athenaReview.patchedPlans.length > 0
     ? athenaReview.patchedPlans
     : (Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans : []);
-  if (!athenaReview?.approved || plans.length === 0) return false;
+  const plans = hasCheckpointPlanSnapshot ? checkpointPlanSnapshot : livePlans;
+  const planSource = hasCheckpointPlanSnapshot ? "checkpoint_snapshot" : "live_review";
+  if (!hasCheckpointPlanSnapshot && (!athenaReview?.approved || plans.length === 0)) return false;
   const _normalizedPlansResume = plans.map((p: any) => {
     const resolved = resolveWorkerRole(p?.role, p?.taskKind || p?.kind || "implementation");
     return resolved !== (p?.role || "") ? { ...p, role: resolved } : p;
   });
-  const _rawWorkerBatchesResume = buildRoleExecutionBatches(_normalizedPlansResume, config);
+  const _rawWorkerBatchesResume = hasCheckpointBatchSnapshot
+    ? checkpointWorkerBatches
+    : buildRoleExecutionBatches(_normalizedPlansResume, config);
   // ── Final dispatch-boundary hard cap (resume path) ───────────────────────
-  // Applied unconditionally so no resumed batch exceeds MAX_ACTIONABLE_STEPS_PER_PACKET,
-  // regardless of which batching path produced it.
-  const workerBatches = applyDispatchBoundaryHardCap(_rawWorkerBatchesResume as any[]) as typeof _rawWorkerBatchesResume;
+  // Apply only when rebuilding from live plans; checkpoint snapshots already
+  // reflect the exact admitted dispatch topology from the interrupted run.
+  const workerBatches = hasCheckpointBatchSnapshot
+    ? _rawWorkerBatchesResume
+    : applyDispatchBoundaryHardCap(_rawWorkerBatchesResume as any[]) as typeof _rawWorkerBatchesResume;
   if (workerBatches.length === 0) return false;
 
   // Stamp deterministic task IDs so resume-path artifact events carry non-empty taskIds.
   stampBatchPlanTaskIds(workerBatches as any[]);
 
-  let checkpoint = await readDispatchCheckpoint(config);
   const checkpointMatchesPlanIdentity = checkpointMatchesPlanSet(
     checkpoint,
     plans,
@@ -2358,6 +2564,7 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
         ? `[RESUME] Resuming dispatch checkpoint: batch ${startIndex + 1}/${workerBatches.length}`
         : `[RESUME] Existing approved plan detected — dispatching from batch ${startIndex + 1}/${workerBatches.length} without replanning`
   );
+  await appendProgress(config, `[RESUME] Source=${planSource} checkpointStatus=${String(checkpoint?.status || "missing")} checkpointVersion=${String(checkpoint?.checkpointVersion || "n/a")}`);
 
   await safeUpdatePipelineProgress(config, "workers_dispatching", `Resuming dispatch from batch ${startIndex + 1}/${workerBatches.length}`, {
     workersTotal: workerBatches.length,
@@ -2396,7 +2603,7 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
       }
       resumeCurrentWave = resumeBatchWave;
       await appendProgress(config,
-        `[WAVE_BOUNDARY] Starting wave ${resumeBatchWave} — batch ${index + 1}/${workerBatches.length}`
+        `[WAVE_BOUNDARY] Starting wave ${resumeBatchWave} — batch ${index + 1}/${workerBatches.length} roleBatch=${Number((batch as any)?.roleBatchIndex || 1)}/${Number((batch as any)?.roleBatchTotal || 1)} role=${String((batch as any)?.role || "worker")}`
       );
     }
 
@@ -2518,6 +2725,7 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
       remainingBatches: workerBatches.length - (index + 1),
       workerStatus: String(workerResult?.status || ""),
       transientRetries,
+      dispatchBlockReason: String(workerResult?.dispatchBlockReason || workerResult?.dispatchContract?.dispatchBlockReason || ""),
     });
     if (resumeCooldown.cooldownMs > 0) {
       await appendProgress(config, `[RESUME] Inter-batch cooldown ${Math.round(resumeCooldown.cooldownMs / 1000)}s reason=${resumeCooldown.reason}`);
@@ -3387,8 +3595,7 @@ async function countCompletedPlans(config, plans) {
       continue;
     }
     const lastLog = Array.isArray(ws.activityLog) ? ws.activityLog[ws.activityLog.length - 1] : null;
-    // Accept both "done" and "partial" — partial means work was submitted (PR opened)
-    if (lastLog?.status === "done" || lastLog?.status === "partial") {
+    if (isCheckpointAdvanceEligibleStatus(lastLog?.status)) {
       completed.push({ plan, workerState: ws, lastLog });
     } else {
       pending.push(plan);
@@ -3521,6 +3728,7 @@ export function resolveInterBatchCooldownDecision(
     remainingBatches?: number;
     workerStatus?: string | null;
     transientRetries?: number;
+    dispatchBlockReason?: string | null;
   } = {},
 ): { cooldownMs: number; reason: string } {
   const baseDelayRaw = Number(config?.runtime?.interBatchDelayMs || 90000);
@@ -3542,6 +3750,17 @@ export function resolveInterBatchCooldownDecision(
   const fastDelay = Number.isFinite(fastDelayRaw) && fastDelayRaw >= 0
     ? Math.min(baseDelay, Math.floor(fastDelayRaw))
     : fastDelayDefault;
+  const dispatchBlockReason = String(options.dispatchBlockReason || "").trim().toLowerCase();
+  if (
+    dispatchBlockReason.startsWith("access_blocked:")
+    || dispatchBlockReason.startsWith("environment_blocked:")
+    || dispatchBlockReason.includes("permission denied and could not request permission from user")
+  ) {
+    return {
+      cooldownMs: fastDelay,
+      reason: fastDelay > 0 ? "environment_blocker_fast_path" : "environment_blocker_no_delay",
+    };
+  }
   const workerStatus = String(options.workerStatus || "").toLowerCase().trim();
   if (workerStatus === "done" || workerStatus === "success" || workerStatus === "skipped") {
     return {
@@ -5355,6 +5574,9 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     } | null;
     dispatchBlockReason?: string | null;
     closureBoundaryViolation?: boolean;
+    planTasks: string[];
+    filesTouched: string[];
+    synthesisSources: string[];
   }> = [];
   // Collects (taskText, verificationEvidence) from successful workers for
   // carry-forward auto-close matching at end of cycle.
@@ -5431,7 +5653,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       }
       currentDispatchWave = batchWave;
       await appendProgress(config,
-        `[WAVE_BOUNDARY] Starting wave ${batchWave} — batch ${workersDone + 1}/${workerBatches.length}`
+        `[WAVE_BOUNDARY] Starting wave ${batchWave} — batch ${workersDone + 1}/${workerBatches.length} roleBatch=${Number((batch as any)?.roleBatchIndex || 1)}/${Number((batch as any)?.roleBatchTotal || 1)} role=${String((batch as any)?.role || "worker")}`
       );
     }
     waveBatchCount += 1;
@@ -5584,14 +5806,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     markPremiumOutcome(workerPremiumEvent.eventId, isAnalyticsCompletedWorkerStatus(String(workerResult?.status || "unknown")));
 
     workersDone += 1;
-    allWorkerResults.push({
-      roleName: batch.role,
-      status: String(workerResult?.status || "unknown"),
-      verificationEvidence: workerResult?.verificationEvidence || null,
-      dispatchContract: workerResult?.dispatchContract || null,
-      dispatchBlockReason: workerResult?.dispatchBlockReason || null,
-      closureBoundaryViolation: workerResult?.dispatchContract?.closureBoundaryViolation === true,
-    });
+    allWorkerResults.push(buildCycleWorkerResultRow(batch, workerResult));
     // replayClosureContract is reserved for future replay-gate wiring
     const replayClosureContract: { contractSatisfied?: boolean } | undefined = undefined;
     if (workerResult?.verificationEvidence || replayClosureContract?.contractSatisfied === true) {
@@ -5703,6 +5918,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       remainingBatches: workerBatches.length - workersDone,
       workerStatus: String(workerResult?.status || ""),
       transientRetries,
+      dispatchBlockReason: String(workerResult?.dispatchBlockReason || workerResult?.dispatchContract?.dispatchBlockReason || ""),
     });
     if (cycleCooldown.cooldownMs > 0) {
       await appendProgress(config, `[CYCLE] Inter-batch cooldown ${Math.round(cycleCooldown.cooldownMs / 1000)}s reason=${cycleCooldown.reason}`);
@@ -6731,14 +6947,60 @@ async function mainLoop(config) {
         // resume from it before starting a fresh full cycle. This avoids duplicating
         // work when the daemon was restarted mid-dispatch.
         try {
-          const dispatchCheckpoint = await readDispatchCheckpoint(config);
-          if (isDispatchCheckpointResumable(dispatchCheckpoint)) {
-            await appendProgress(config, `[LOOP] Interrupted dispatch checkpoint detected (${dispatchCheckpoint.completedPlans}/${dispatchCheckpoint.totalPlans} complete) — attempting resume`);
+          const resumeState = await evaluateDispatchResumeReadiness(config);
+          if (resumeState.interrupted) {
+            const dispatchCheckpoint = resumeState.checkpoint;
+            if (!resumeState.ready) {
+              await appendProgress(
+                config,
+                `[LOOP][RESUME_BLOCKED] Interrupted dispatch checkpoint present but auto-resume is not ready — reason=${resumeState.reason} source=${resumeState.planSource}`,
+              );
+              await appendAlert(config, {
+                severity: ALERT_SEVERITY.HIGH,
+                source: "orchestrator",
+                title: "Interrupted dispatch checkpoint blocked fresh replanning",
+                message: `reason=${resumeState.reason} source=${resumeState.planSource} checkpointStatus=${String(dispatchCheckpoint?.status || "missing")}`,
+              });
+              await safeUpdatePipelineProgress(
+                config,
+                "idle",
+                `Interrupted dispatch checkpoint preserved — auto-resume blocked (${resumeState.reason})`,
+              );
+              await sleep(RE_EVAL_SLEEP_MS);
+              continue;
+            }
+
+            await appendProgress(
+              config,
+              `[LOOP] Interrupted dispatch checkpoint detected (${dispatchCheckpoint.completedPlans}/${dispatchCheckpoint.totalPlans} complete) — attempting resume source=${resumeState.planSource}`,
+            );
             const resumed = await tryResumeDispatchFromCheckpoint(config);
             if (resumed) {
               await sleep(RE_EVAL_SLEEP_MS);
               continue;
             }
+            await appendProgress(
+              config,
+              `[LOOP][RESUME_ANOMALY] Eligible interrupted checkpoint was not resumed — preserving checkpoint and blocking fresh cycle`,
+            );
+            await appendAlert(config, {
+              severity: ALERT_SEVERITY.HIGH,
+              source: "orchestrator",
+              title: "Interrupted dispatch checkpoint was eligible but resume returned false",
+              message: `source=${resumeState.planSource} checkpointStatus=${String(dispatchCheckpoint?.status || "missing")}`,
+            });
+            await safeUpdatePipelineProgress(
+              config,
+              "idle",
+              "Eligible interrupted dispatch checkpoint was not resumed; fresh replanning blocked",
+            );
+            await sleep(RE_EVAL_SLEEP_MS);
+            continue;
+          }
+
+          const dispatchCheckpoint = resumeState.checkpoint;
+          if (dispatchCheckpoint) {
+            await appendProgress(config, `[LOOP] Dispatch checkpoint present but not resumable — status=${String(dispatchCheckpoint.status || "unknown")} completed=${String(dispatchCheckpoint.completedPlans || 0)}/${String(dispatchCheckpoint.totalPlans || 0)}`);
           }
         } catch (resumeErr) {
           warn(`[orchestrator] dispatch checkpoint resume check failed (non-fatal): ${String((resumeErr as Error)?.message || resumeErr)}`);
@@ -6771,7 +7033,9 @@ async function mainLoop(config) {
           await appendProgress(config, `[SELF-IMPROVEMENT] Quality gate passed: ${siGate.reason}`);
           await runSelfImprovementCycle(config);
           // Reset cycle counter
+          const siState = await readJson(path.join(stateDir, "self_improvement_state.json"), {});
           await writeJson(path.join(stateDir, "self_improvement_state.json"), {
+            ...siState,
             lastRunAt: new Date().toISOString(),
             cyclesSinceLastRun: 0
           });
