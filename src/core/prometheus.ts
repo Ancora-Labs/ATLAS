@@ -671,9 +671,9 @@ export function enforceCiRepairPacketForMandatoryFindings(
 export function normalizeStaleCiBreakFindings(
   payload: unknown,
   nowMs: number = Date.now(),
-): { payload: unknown; suppressedCount: number; suppressedReasons: string[] } {
+): { payload: unknown; suppressedCount: number; suppressedReasons: string[]; resolvedLineage: Record<string, unknown>[] } {
   if (!payload || typeof payload !== "object") {
-    return { payload, suppressedCount: 0, suppressedReasons: [] };
+    return { payload, suppressedCount: 0, suppressedReasons: [], resolvedLineage: [] };
   }
   const obj = payload as Record<string, unknown>;
   const findings = Array.isArray(obj.findings) ? obj.findings : [];
@@ -683,7 +683,7 @@ export function normalizeStaleCiBreakFindings(
   // Only suppress when stored CI evidence confirms main was healthy at audit time.
   // Absent or non-success CI conclusion → pass through unchanged (fail-safe).
   if (latestMainCiConclusion !== "success") {
-    return { payload, suppressedCount: 0, suppressedReasons: [] };
+    return { payload, suppressedCount: 0, suppressedReasons: [], resolvedLineage: [] };
   }
 
   // Compute audit age so system-learning CI-debt suppression can apply an age gate.
@@ -694,16 +694,21 @@ export function normalizeStaleCiBreakFindings(
   const auditIsFresh = auditAgeMs <= SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS;
 
   const suppressedReasons: string[] = [];
+  // Collect suppressed findings into resolvedLineage so callers can distinguish
+  // historical CI-break context from active debt without losing audit trail.
+  const resolvedLineage: Record<string, unknown>[] = [];
+
   const normalizedFindings = findings.filter((f: unknown) => {
     if (!f || typeof f !== "object") return true;
     const entry = f as Record<string, unknown>;
 
     // Gate 1: suppress canonical area=ci findings (ci-fix / ci-setup) — existing behaviour.
     if (isCiBreakFinding(f)) {
-      suppressedReasons.push(
+      const reason =
         `stale_ci_break_suppressed:area=ci:capabilityNeeded=${String(entry.capabilityNeeded || "")}` +
-        `:latestMainCiConclusion=success:auditedAt=${auditedAt}`,
-      );
+        `:latestMainCiConclusion=success:auditedAt=${auditedAt}`;
+      suppressedReasons.push(reason);
+      resolvedLineage.push({ ...entry, _resolvedAt: auditedAt, _resolutionReason: reason });
       return false;
     }
 
@@ -715,11 +720,12 @@ export function normalizeStaleCiBreakFindings(
       String(entry.latestMainCiConclusion || "").trim().toLowerCase() === "success" &&
       auditIsFresh
     ) {
-      suppressedReasons.push(
+      const reason =
         `stale_system_learning_ci_debt_suppressed:area=system-learning` +
         `:findingCiConclusion=success:payloadCiConclusion=success` +
-        `:auditedAt=${auditedAt}:auditAgeMs=${Math.round(auditAgeMs)}`,
-      );
+        `:auditedAt=${auditedAt}:auditAgeMs=${Math.round(auditAgeMs)}`;
+      suppressedReasons.push(reason);
+      resolvedLineage.push({ ...entry, _resolvedAt: auditedAt, _resolutionReason: reason });
       return false;
     }
 
@@ -727,7 +733,7 @@ export function normalizeStaleCiBreakFindings(
   });
 
   if (suppressedReasons.length === 0) {
-    return { payload, suppressedCount: 0, suppressedReasons: [] };
+    return { payload, suppressedCount: 0, suppressedReasons: [], resolvedLineage: [] };
   }
 
   const normalizedPayload: Record<string, unknown> = {
@@ -735,11 +741,14 @@ export function normalizeStaleCiBreakFindings(
     findings: normalizedFindings,
     _staleCiBreakFindingsSuppressed: suppressedReasons.length,
     _staleCiBreakSuppressedReasons: suppressedReasons,
+    // Historical CI-break context preserved for audit trail; not treated as active debt.
+    resolvedLineage,
   };
   return {
     payload: normalizedPayload,
     suppressedCount: suppressedReasons.length,
     suppressedReasons,
+    resolvedLineage,
   };
 }
 

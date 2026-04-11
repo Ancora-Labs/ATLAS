@@ -6166,6 +6166,89 @@ describe("normalizeStaleCiBreakFindings", () => {
     assert.equal(SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS, 2 * 60 * 60 * 1000);
   });
 
+  it("populates resolvedLineage with suppressed CI-break finding", () => {
+    const ciBreakFinding = {
+      area: "ci",
+      severity: "critical",
+      capabilityNeeded: "ci-fix",
+      finding: "CI on main is failure",
+      remediation: "Fix CI immediately",
+    };
+    const payload = {
+      findings: [ciBreakFinding],
+      auditedAt: new Date().toISOString(),
+      latestMainCiConclusion: "success",
+    };
+    const result = normalizeStaleCiBreakFindings(payload);
+    assert.equal(result.suppressedCount, 1);
+    assert.ok(Array.isArray(result.resolvedLineage), "resolvedLineage must be an array");
+    assert.equal(result.resolvedLineage.length, 1, "suppressed finding must be in resolvedLineage");
+    assert.equal(result.resolvedLineage[0].area, "ci");
+    assert.ok(
+      typeof result.resolvedLineage[0]._resolutionReason === "string" &&
+      result.resolvedLineage[0]._resolutionReason.includes("stale_ci_break_suppressed"),
+      "resolvedLineage entry must carry a _resolutionReason",
+    );
+    assert.ok(
+      typeof result.resolvedLineage[0]._resolvedAt === "string",
+      "resolvedLineage entry must carry a _resolvedAt timestamp",
+    );
+    // The normalized payload must also expose resolvedLineage.
+    const normalized = result.payload as any;
+    assert.ok(Array.isArray(normalized.resolvedLineage), "payload.resolvedLineage must be an array");
+    assert.equal(normalized.resolvedLineage.length, 1);
+    assert.equal(normalized.findings.length, 0, "active findings must be empty");
+  });
+
+  it("populates resolvedLineage with suppressed system-learning CI-debt finding", () => {
+    const annotatedFinding = {
+      area: "system-learning",
+      severity: "warning",
+      capabilityNeeded: "system-improvement",
+      finding: "CI-broken tests accumulating as system-learning debt (0ec5b75, f276e7a, 531bbc0)",
+      remediation: "ci-fix required in next cycle",
+      latestMainCiConclusion: "success",
+    };
+    const payload = {
+      findings: [annotatedFinding],
+      auditedAt: new Date().toISOString(),
+      latestMainCiConclusion: "success",
+    };
+    const result = normalizeStaleCiBreakFindings(payload);
+    assert.equal(result.suppressedCount, 1);
+    assert.ok(Array.isArray(result.resolvedLineage));
+    assert.equal(result.resolvedLineage.length, 1);
+    assert.equal(result.resolvedLineage[0].area, "system-learning");
+    assert.ok(
+      (result.resolvedLineage[0]._resolutionReason as string).includes(
+        "stale_system_learning_ci_debt_suppressed",
+      ),
+      "resolvedLineage reason must indicate system-learning CI-debt",
+    );
+    // Active findings array must be empty after suppression.
+    const normalized = result.payload as any;
+    assert.equal(normalized.findings.length, 0);
+    assert.equal(normalized.resolvedLineage.length, 1);
+  });
+
+  it("resolvedLineage is empty array when no suppression occurs", () => {
+    const payload = {
+      findings: [{ area: "planning", severity: "warning", finding: "low quality", remediation: "" }],
+      auditedAt: new Date().toISOString(),
+      latestMainCiConclusion: "success",
+    };
+    const result = normalizeStaleCiBreakFindings(payload);
+    assert.equal(result.suppressedCount, 0);
+    assert.ok(Array.isArray(result.resolvedLineage), "resolvedLineage must be an array even when empty");
+    assert.equal(result.resolvedLineage.length, 0);
+  });
+
+  it("resolvedLineage is empty array on null payload", () => {
+    const result = normalizeStaleCiBreakFindings(null);
+    assert.ok(Array.isArray(result.resolvedLineage));
+    assert.equal(result.resolvedLineage.length, 0);
+  });
+
   it("isSystemLearningCiDebtFinding correctly identifies CI-debt system-learning findings", () => {
     assert.equal(isSystemLearningCiDebtFinding({
       area: "system-learning",
