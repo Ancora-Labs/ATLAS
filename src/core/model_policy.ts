@@ -1577,7 +1577,18 @@ export function rankModelsByTaskKindExpectedValue(
   const taskSampleCount = typeof (taskTelemetry as any).sampleCount === "number"
     ? (taskTelemetry as any).sampleCount
     : Infinity; // legacy telemetry without sampleCount is trusted as-is
-  if (taskSampleCount < MIN_TELEMETRY_SAMPLE_THRESHOLD) {
+  const lineageLinkedSampleCount = typeof (taskTelemetry as any).lineageLinkedSampleCount === "number"
+    ? (taskTelemetry as any).lineageLinkedSampleCount
+    : taskSampleCount;
+  if (
+    Number.isFinite(taskSampleCount)
+    && taskSampleCount > 0
+    && (!Number.isFinite(lineageLinkedSampleCount) || lineageLinkedSampleCount <= 0)
+  ) {
+    return { rankedModels: original, scoreByModel: {}, usedTelemetry: false, reason: "telemetry-unlinked" };
+  }
+  const effectiveSampleCount = Math.min(taskSampleCount, lineageLinkedSampleCount);
+  if (effectiveSampleCount < MIN_TELEMETRY_SAMPLE_THRESHOLD) {
     return { rankedModels: original, scoreByModel: {}, usedTelemetry: false, reason: "telemetry-below-threshold" };
   }
 

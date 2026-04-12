@@ -1768,7 +1768,7 @@ export function computeCycleAnalytics(config, {
     parserBaselineRecovery: parserBaselineRecovery ?? null,
     stageTransitions: Array.isArray(stageTransitions) ? stageTransitions : [],
     dropReasons:      Array.isArray(dropReasons) ? dropReasons : [],
-    modelRoutingTelemetry: buildModelRoutingTelemetry(premiumUsageLog ?? []),
+    modelRoutingTelemetry: buildModelRoutingTelemetry(premiumUsageLog ?? [], lineageLog ?? []),
     capabilityExecutionSummary: normalizedCapabilityExecutionSummary,
     lineageSummary: buildLineageSummary(lineageLog ?? []),
     memoryHitTelemetry: buildMemoryHitTelemetry(memoryHitLog ?? []),
@@ -1812,15 +1812,20 @@ export { MIN_TELEMETRY_SAMPLE_THRESHOLD } from "./telemetry_thresholds.js";
  *     }
  *   }
  */
-export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
+export function buildModelRoutingTelemetry(premiumUsageLog: unknown[], _lineageLog: unknown[] = []): {
   byTaskKind: Record<string, {
     sampleCount: number;
+    lineageLinkedSampleCount: number;
     default: { successProbability: number; capacityImpact: number; requestCost: number };
     models: Record<string, { successProbability: number; capacityImpact: number; requestCost: number }>;
   }>;
   sampleCount: number;
+  linkedSampleCount: number;
+  droppedUnlinkedCount: number;
 } {
-  if (!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) return { byTaskKind: {}, sampleCount: 0 };
+  if (!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) {
+    return { byTaskKind: {}, sampleCount: 0, linkedSampleCount: 0, droppedUnlinkedCount: 0 };
+  }
 
   type EcoPoint = { successProbability: number; capacityImpact: number; requestCost: number };
   type Accumulator = { done: number; total: number };
@@ -1828,6 +1833,7 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
   // Grouped tallies: taskKind → model → { done, total }
   const byTaskKindModel: Record<string, Record<string, Accumulator>> = {};
   let usableEntries = 0;
+  let droppedUnlinkedCount = 0;
 
   for (const entry of premiumUsageLog) {
     if (
@@ -1837,7 +1843,13 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
       || typeof (entry as Record<string, unknown>).outcome !== "string"
     ) continue;
 
-    const { taskKind, model, outcome } = entry as Record<string, string>;
+    const row = entry as Record<string, unknown>;
+    const { taskKind, model, outcome } = row as Record<string, string>;
+    const lineageId = typeof row.lineageId === "string" ? row.lineageId.trim() : "";
+    if (!lineageId) {
+      droppedUnlinkedCount++;
+      continue;
+    }
     const normalizedModel = normalizeModelLabel(model);
     if (!taskKind || !normalizedModel) continue;
 
@@ -1848,7 +1860,9 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
     usableEntries++;
   }
 
-  if (usableEntries === 0) return { byTaskKind: {}, sampleCount: 0 };
+  if (usableEntries === 0) {
+    return { byTaskKind: {}, sampleCount: 0, linkedSampleCount: 0, droppedUnlinkedCount };
+  }
 
   const toEcoPoint = (acc: Accumulator): EcoPoint => {
     const sp = acc.total > 0 ? acc.done / acc.total : 0;
@@ -1857,6 +1871,7 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
 
   const resultByTaskKind: Record<string, {
     sampleCount: number;
+    lineageLinkedSampleCount: number;
     default: EcoPoint;
     models: Record<string, EcoPoint>;
   }> = {};
@@ -1873,12 +1888,18 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
 
     resultByTaskKind[taskKind] = {
       sampleCount: allAcc.total,
+      lineageLinkedSampleCount: allAcc.total,
       default: toEcoPoint(allAcc),
       models: modelPoints,
     };
   }
 
-  return { byTaskKind: resultByTaskKind, sampleCount: usableEntries };
+  return {
+    byTaskKind: resultByTaskKind,
+    sampleCount: usableEntries,
+    linkedSampleCount: usableEntries,
+    droppedUnlinkedCount,
+  };
 }
 
 // ── Evaluation suite split: verified_suite vs exploratory_suite ────────────────
