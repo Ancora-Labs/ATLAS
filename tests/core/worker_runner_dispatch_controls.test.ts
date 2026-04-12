@@ -453,6 +453,62 @@ describe("worker_runner — non-retryable policy block classification", () => {
   });
 });
 
+describe("worker_runner — model-call settings overlays", () => {
+  it("buildWorkerRunContract applies per-task maxTurns overlay and persists typed settings in trace metadata", async () => {
+    const { buildWorkerRunContract } = await import("../../src/core/worker_runner.js");
+    const contract = buildWorkerRunContract(
+      {
+        workerRunContract: {
+          maxTurns: 50,
+          traceMetadata: { source: "test" },
+          modelCallSettings: { maxTurns: 12, silent: true },
+        },
+      },
+      {
+        modelCallSettings: { maxTurns: 7, model: "GPT-5.3-Codex" },
+      },
+    );
+    assert.equal(contract.maxTurns, 7, "task overlay maxTurns must override base maxTurns");
+    assert.deepEqual(
+      (contract.traceMetadata as any).modelCallSettings,
+      { maxTurns: 7, silent: true, model: "GPT-5.3-Codex" },
+      "trace metadata must include merged typed model-call settings",
+    );
+  });
+
+  it("buildAgentArgs applies overlay model/no-ask/silent for deterministic worker calls", async () => {
+    const { buildAgentArgs } = await import("../../src/core/agent_loader.js");
+    const args = buildAgentArgs({
+      prompt: "overlay-test",
+      model: "Claude Sonnet 4.6",
+      modelCallSettings: {
+        model: "gpt-5.3-codex",
+        noAskUser: true,
+        silent: true,
+      },
+    });
+    assert.ok(args.includes("--no-ask-user"), "overlay must force --no-ask-user");
+    assert.ok(args.includes("--silent"), "overlay must force --silent");
+    const modelIdx = args.indexOf("--model");
+    assert.ok(modelIdx >= 0, "args must contain --model");
+    assert.equal(args[modelIdx + 1], "gpt-5.3-codex", "overlay model must override base model");
+  });
+
+  it("negative path: invalid overlay fields are ignored safely", async () => {
+    const { buildWorkerRunContract } = await import("../../src/core/worker_runner.js");
+    const contract = buildWorkerRunContract(
+      { workerRunContract: { maxTurns: 11, modelCallSettings: { maxTurns: 9 } } },
+      { modelCallSettings: { maxTurns: "bad", model: "   " } },
+    );
+    assert.equal(contract.maxTurns, 9, "invalid task maxTurns must not override base modelCallSettings.maxTurns");
+    assert.deepEqual(
+      (contract.traceMetadata as any).modelCallSettings,
+      { maxTurns: 9 },
+      "invalid task overlay values must be dropped from merged settings",
+    );
+  });
+});
+
 // ── Runtime hook enforcement via generateRuntimeHookDecisions ────────────────
 
 describe("generateRuntimeHookDecisions", () => {
