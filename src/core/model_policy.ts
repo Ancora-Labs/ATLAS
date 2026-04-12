@@ -1580,10 +1580,16 @@ export function rankModelsByTaskKindExpectedValue(
   const lineageLinkedSampleCount = typeof (taskTelemetry as any).lineageLinkedSampleCount === "number"
     ? (taskTelemetry as any).lineageLinkedSampleCount
     : taskSampleCount;
+  const linkedRatio = typeof cycleAnalytics?.routingROISummary?.linkedRatio === "number"
+    ? clamp01(cycleAnalytics.routingROISummary.linkedRatio)
+    : null;
+  const linkageAdjustedSampleCount = linkedRatio !== null && linkedRatio > 0
+    ? Math.floor(taskSampleCount * linkedRatio)
+    : taskSampleCount;
   // Enforce lineage linkage when linked samples exist; legacy telemetry without
   // linkage remains backward-compatible.
   const effectiveSampleCount = Number.isFinite(lineageLinkedSampleCount) && lineageLinkedSampleCount > 0
-    ? Math.min(taskSampleCount, lineageLinkedSampleCount)
+    ? Math.min(taskSampleCount, lineageLinkedSampleCount, linkageAdjustedSampleCount)
     : taskSampleCount;
   if (effectiveSampleCount < MIN_TELEMETRY_SAMPLE_THRESHOLD) {
     return { rankedModels: original, scoreByModel: {}, usedTelemetry: false, reason: "telemetry-below-threshold" };

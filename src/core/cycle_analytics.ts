@@ -1768,7 +1768,7 @@ export function computeCycleAnalytics(config, {
     parserBaselineRecovery: parserBaselineRecovery ?? null,
     stageTransitions: Array.isArray(stageTransitions) ? stageTransitions : [],
     dropReasons:      Array.isArray(dropReasons) ? dropReasons : [],
-    modelRoutingTelemetry: buildModelRoutingTelemetry(premiumUsageLog ?? [], lineageLog ?? []),
+    modelRoutingTelemetry: buildModelRoutingTelemetry(premiumUsageLog ?? []),
     capabilityExecutionSummary: normalizedCapabilityExecutionSummary,
     lineageSummary: buildLineageSummary(lineageLog ?? []),
     memoryHitTelemetry: buildMemoryHitTelemetry(memoryHitLog ?? []),
@@ -1812,29 +1812,22 @@ export { MIN_TELEMETRY_SAMPLE_THRESHOLD } from "./telemetry_thresholds.js";
  *     }
  *   }
  */
-export function buildModelRoutingTelemetry(premiumUsageLog: unknown[], _lineageLog: unknown[] = []): {
+export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
   byTaskKind: Record<string, {
     sampleCount: number;
-    lineageLinkedSampleCount: number;
     default: { successProbability: number; capacityImpact: number; requestCost: number };
     models: Record<string, { successProbability: number; capacityImpact: number; requestCost: number }>;
   }>;
   sampleCount: number;
-  linkedSampleCount: number;
-  droppedUnlinkedCount: number;
 } {
-  if (!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) {
-    return { byTaskKind: {}, sampleCount: 0, linkedSampleCount: 0, droppedUnlinkedCount: 0 };
-  }
+  if (!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) return { byTaskKind: {}, sampleCount: 0 };
 
   type EcoPoint = { successProbability: number; capacityImpact: number; requestCost: number };
-  type Accumulator = { done: number; total: number; linked: number };
+  type Accumulator = { done: number; total: number };
 
   // Grouped tallies: taskKind → model → { done, total }
   const byTaskKindModel: Record<string, Record<string, Accumulator>> = {};
   let usableEntries = 0;
-  let droppedUnlinkedCount = 0;
-  let linkedEntries = 0;
 
   for (const entry of premiumUsageLog) {
     if (
@@ -1844,26 +1837,18 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[], _lineageL
       || typeof (entry as Record<string, unknown>).outcome !== "string"
     ) continue;
 
-    const row = entry as Record<string, unknown>;
-    const { taskKind, model, outcome } = row as Record<string, string>;
-    const lineageId = typeof row.lineageId === "string" ? row.lineageId.trim() : "";
-    const hasLineageId = Boolean(lineageId);
-    if (!hasLineageId) droppedUnlinkedCount++;
-    else linkedEntries++;
+    const { taskKind, model, outcome } = entry as Record<string, string>;
     const normalizedModel = normalizeModelLabel(model);
     if (!taskKind || !normalizedModel) continue;
 
     byTaskKindModel[taskKind] ??= {};
-    byTaskKindModel[taskKind][normalizedModel] ??= { done: 0, total: 0, linked: 0 };
+    byTaskKindModel[taskKind][normalizedModel] ??= { done: 0, total: 0 };
     byTaskKindModel[taskKind][normalizedModel].total++;
-    if (hasLineageId) byTaskKindModel[taskKind][normalizedModel].linked++;
     if (outcome === "done") byTaskKindModel[taskKind][normalizedModel].done++;
     usableEntries++;
   }
 
-  if (usableEntries === 0) {
-    return { byTaskKind: {}, sampleCount: 0, linkedSampleCount: 0, droppedUnlinkedCount };
-  }
+  if (usableEntries === 0) return { byTaskKind: {}, sampleCount: 0 };
 
   const toEcoPoint = (acc: Accumulator): EcoPoint => {
     const sp = acc.total > 0 ? acc.done / acc.total : 0;
@@ -1872,36 +1857,28 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[], _lineageL
 
   const resultByTaskKind: Record<string, {
     sampleCount: number;
-    lineageLinkedSampleCount: number;
     default: EcoPoint;
     models: Record<string, EcoPoint>;
   }> = {};
 
   for (const [taskKind, modelMap] of Object.entries(byTaskKindModel)) {
-    const allAcc: Accumulator = { done: 0, total: 0, linked: 0 };
+    const allAcc: Accumulator = { done: 0, total: 0 };
     const modelPoints: Record<string, EcoPoint> = {};
 
     for (const [modelName, acc] of Object.entries(modelMap)) {
       allAcc.done += acc.done;
       allAcc.total += acc.total;
-      allAcc.linked += acc.linked;
       modelPoints[modelName] = toEcoPoint(acc);
     }
 
     resultByTaskKind[taskKind] = {
       sampleCount: allAcc.total,
-      lineageLinkedSampleCount: allAcc.linked,
       default: toEcoPoint(allAcc),
       models: modelPoints,
     };
   }
 
-  return {
-    byTaskKind: resultByTaskKind,
-    sampleCount: usableEntries,
-    linkedSampleCount: linkedEntries,
-    droppedUnlinkedCount,
-  };
+  return { byTaskKind: resultByTaskKind, sampleCount: usableEntries };
 }
 
 // ── Evaluation suite split: verified_suite vs exploratory_suite ────────────────
