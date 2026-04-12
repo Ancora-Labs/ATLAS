@@ -399,6 +399,7 @@ export function buildWorkerCycleArtifactsFreshnessRecord(artifactData: unknown):
 export function buildWorkerCycleArtifactsDiagnosticsRecord(
   artifactData: unknown,
 ): Record<string, unknown> | null {
+  if (!isWorkerCycleArtifactsSnapshotContractValid(artifactData)) return null;
   const migrated = migrateWorkerCycleArtifacts(artifactData);
   if (!migrated.ok || !migrated.data) return null;
   const payload = migrated.data;
@@ -429,6 +430,43 @@ export function buildWorkerCycleArtifactsDiagnosticsRecord(
       updatedAt: savedAt,
     },
   };
+}
+
+/**
+ * Strict contract validator for canonical worker_cycle_artifacts snapshots.
+ * This gate intentionally rejects malformed or timestamp-less payloads so
+ * Prometheus never treats them as live planning truth.
+ */
+export function isWorkerCycleArtifactsSnapshotContractValid(artifactData: unknown): boolean {
+  if (!artifactData || typeof artifactData !== "object" || Array.isArray(artifactData)) return false;
+  const raw = artifactData as Record<string, unknown>;
+  if (Number(raw.schemaVersion) !== WORKER_CYCLE_ARTIFACTS_SCHEMA.schemaVersion) return false;
+
+  const updatedAt = String(raw.updatedAt || "").trim();
+  const updatedAtMs = Date.parse(updatedAt);
+  if (!updatedAt || !Number.isFinite(updatedAtMs)) return false;
+
+  const latestCycleId = String(raw.latestCycleId || "").trim();
+  if (!latestCycleId) return false;
+
+  const cycles = raw.cycles;
+  if (!cycles || typeof cycles !== "object" || Array.isArray(cycles)) return false;
+  const cycleMap = cycles as Record<string, unknown>;
+  const latestRecord = cycleMap[latestCycleId];
+  if (!latestRecord || typeof latestRecord !== "object" || Array.isArray(latestRecord)) return false;
+
+  for (const field of WORKER_CYCLE_ARTIFACTS_SCHEMA.cycleRecordRequired) {
+    if (!(field in (latestRecord as Record<string, unknown>))) return false;
+  }
+  const rec = latestRecord as Record<string, unknown>;
+  const recUpdatedAt = String(rec.updatedAt || "").trim();
+  if (!recUpdatedAt || !Number.isFinite(Date.parse(recUpdatedAt))) return false;
+  if (!rec.workerSessions || typeof rec.workerSessions !== "object" || Array.isArray(rec.workerSessions)) return false;
+  if (!rec.workerActivity || typeof rec.workerActivity !== "object" || Array.isArray(rec.workerActivity)) return false;
+  if (!Array.isArray(rec.completedTaskIds)) return false;
+  if (rec.completedTaskIds.some((id) => typeof id !== "string" || String(id).trim().length === 0)) return false;
+
+  return true;
 }
 
 export const WORKER_CYCLE_ARTIFACT_MIGRATION_REASON = Object.freeze({

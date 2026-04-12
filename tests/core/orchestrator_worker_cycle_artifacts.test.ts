@@ -19,6 +19,7 @@ import assert from "node:assert/strict";
 import {
   generateDeterministicTaskId,
   migrateWorkerCycleArtifacts,
+  isWorkerCycleArtifactsSnapshotContractValid,
   selectWorkerCycleRecord,
   WORKER_CYCLE_ARTIFACTS_FILE,
   WORKER_CYCLE_ARTIFACTS_SCHEMA,
@@ -405,5 +406,45 @@ describe("WORKER_CYCLE_ARTIFACTS constants", () => {
       WORKER_CYCLE_ARTIFACTS_SCHEMA.cycleRecordRequired.includes("completedTaskIds"),
       "cycleRecordRequired must include completedTaskIds",
     );
+  });
+});
+
+describe("isWorkerCycleArtifactsSnapshotContractValid", () => {
+  it("returns true for canonical schema-valid snapshot", () => {
+    const updatedAt = new Date().toISOString();
+    const snapshot = {
+      schemaVersion: 1,
+      updatedAt,
+      latestCycleId: "cycle-valid",
+      cycles: {
+        "cycle-valid": {
+          cycleId: "cycle-valid",
+          updatedAt,
+          status: "running",
+          workerSessions: {},
+          workerActivity: {},
+          completedTaskIds: [],
+        },
+      },
+    };
+    assert.equal(isWorkerCycleArtifactsSnapshotContractValid(snapshot), true);
+  });
+
+  it("negative path — returns false when updatedAt is missing", () => {
+    const snapshot = {
+      schemaVersion: 1,
+      latestCycleId: "cycle-missing-updated-at",
+      cycles: {
+        "cycle-missing-updated-at": {
+          cycleId: "cycle-missing-updated-at",
+          updatedAt: new Date().toISOString(),
+          status: "running",
+          workerSessions: {},
+          workerActivity: {},
+          completedTaskIds: [],
+        },
+      },
+    };
+    assert.equal(isWorkerCycleArtifactsSnapshotContractValid(snapshot), false);
   });
 });

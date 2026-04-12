@@ -90,6 +90,42 @@ export const GRAPH_DIAGNOSTICS_JSONL_SCHEMA = DIAGNOSTICS_ARTIFACT_JSONL_SCHEMA;
 export const GRAPH_DIAGNOSTICS_FRESHNESS_MS = 6 * 60 * 60 * 1000;
 export const GRAPH_DIAGNOSTICS_RECORD_TYPE = "dependency_graph_diagnostic";
 
+/**
+ * Strict contract validator for persisted dependency-graph diagnostics records.
+ * Used by Prometheus to enforce trust boundaries before planning.
+ */
+export function isGraphDiagnosticsRecordContractValid(record: unknown): boolean {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return false;
+  const obj = record as Record<string, unknown>;
+  if (obj.jsonlSchema !== GRAPH_DIAGNOSTICS_JSONL_SCHEMA) return false;
+  if (obj.recordType !== GRAPH_DIAGNOSTICS_RECORD_TYPE) return false;
+  if (Number(obj.schemaVersion) !== GRAPH_DIAGNOSTICS_SCHEMA_VERSION) return false;
+  if (!(Object.values(GRAPH_STATUS) as string[]).includes(String(obj.status))) return false;
+  if (!(Object.values(GRAPH_REASON) as string[]).includes(String(obj.reasonCode))) return false;
+  if (!Array.isArray(obj.waves) || !Array.isArray(obj.conflictPairs) || !Array.isArray(obj.cycles)) return false;
+
+  const freshness = obj.freshness;
+  if (!freshness || typeof freshness !== "object" || Array.isArray(freshness)) return false;
+  const freshObj = freshness as Record<string, unknown>;
+  const staleAfterMs = Number(freshObj.staleAfterMs);
+  if (!Number.isFinite(staleAfterMs) || staleAfterMs <= 0) return false;
+  const expiresAtMs = Date.parse(String(freshObj.expiresAt || ""));
+  if (!Number.isFinite(expiresAtMs)) return false;
+
+  const timestampRaw = String(obj.savedAt || obj.persistedAt || "").trim();
+  const timestampMs = Date.parse(timestampRaw);
+  if (!timestampRaw || !Number.isFinite(timestampMs)) return false;
+
+  const payload = obj.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const payloadObj = payload as Record<string, unknown>;
+  if (!(Object.values(GRAPH_STATUS) as string[]).includes(String(payloadObj.status))) return false;
+  if (!(Object.values(GRAPH_REASON) as string[]).includes(String(payloadObj.reasonCode))) return false;
+  if (!Array.isArray(payloadObj.waves) || !Array.isArray(payloadObj.conflictPairs) || !Array.isArray(payloadObj.cycles)) return false;
+
+  return true;
+}
+
 // ── Status enum (AC10) ────────────────────────────────────────────────────────
 
 /**

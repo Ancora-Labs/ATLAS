@@ -34,6 +34,7 @@ import {
   GRAPH_STATUS,
   GRAPH_DIAGNOSTICS_JSONL_SCHEMA,
   GRAPH_DIAGNOSTICS_RECORD_TYPE,
+  isGraphDiagnosticsRecordContractValid,
 } from "./dependency_graph_resolver.js";
 import { dualPassCriticRepair, selectBestCandidateSet, CANDIDATE_TIE_THRESHOLD as _CANDIDATE_TIE_THRESHOLD, MAX_CANDIDATE_SETS as _MAX_CANDIDATE_SETS } from "./plan_critic.js";
 import { compileAcceptanceCriteria, enrichPlansWithAC } from "./ac_compiler.js";
@@ -107,7 +108,14 @@ import type { RetryViolationSignal } from "./model_policy.js";
 import {
   computeResearchCapacityGain,
   computeHistoricalLaneDifficultyPriors,
+  buildWorkerCycleArtifactsDiagnosticsRecord,
+  isWorkerCycleArtifactsSnapshotContractValid,
 } from "./cycle_analytics.js";
+
+// Keep cycle diagnostics contract literals local to avoid circular-import TDZ
+// during module initialization between prometheus <-> cycle_analytics.
+const CYCLE_DIAGNOSTICS_ARTIFACT_JSONL_SCHEMA = "box.diagnostics_artifact.v1";
+const WORKER_CYCLE_ARTIFACTS_DIAGNOSTICS_RECORD_TYPE = "worker_cycle_snapshot";
 
 // ── Span contract emitter ─────────────────────────────────────────────────────
 
@@ -1426,13 +1434,9 @@ async function readLatestJsonlRecord(filePath: string): Promise<any | null> {
     const raw = await fs.readFile(filePath, "utf8");
     const lines = raw.split("\n").map(line => line.trim()).filter(Boolean);
     if (lines.length === 0) return null;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try {
-        return JSON.parse(lines[i]);
-      } catch {
-        // continue scanning backwards for the most recent parseable entry
-      }
-    }
+    // Trust boundary: only the latest line is admissible as "current" diagnostics
+    // truth. If that line is malformed, quarantine the stream for this cycle.
+    return JSON.parse(lines[lines.length - 1]);
   } catch {
     // optional diagnostics files may not exist
   }
@@ -1466,34 +1470,44 @@ async function readLegacyDiagnosticsFallback(stateDir: string, label: string): P
   }
 }
 
-function normalizeDiagnosticsRecord(record: any, expectedSchema: string, expectedRecordType: string): any | null {
-  if (isDiagnosticsRecordContractValid(record, expectedSchema, expectedRecordType)) return record;
-  if (!record || typeof record !== "object") return null;
-  const timestamp = String(record.savedAt || record.persistedAt || record.resolvedAt || record.recordedAt || "").trim();
-  if (!timestamp) return null;
-  const staleAfterMs = DIAGNOSTICS_FRESHNESS_MAX_AGE_MS;
-  return {
-    jsonlSchema: expectedSchema,
-    recordType: expectedRecordType,
-    schemaVersion: Number(record.schemaVersion || 1),
-    savedAt: timestamp,
-    freshness: {
-      status: "fresh",
-      staleAfterMs,
-      expiresAt: new Date(new Date(timestamp).getTime() + staleAfterMs).toISOString(),
-    },
-    payload: record.payload && typeof record.payload === "object" ? record.payload : record,
-  };
-}
-
 function isDiagnosticsRecordContractValid(
   record: any,
+  sourceLabel: string,
   expectedSchema: string,
   expectedRecordType: string,
 ): boolean {
   if (!record || typeof record !== "object") return false;
   if (record.jsonlSchema !== expectedSchema) return false;
   if (record.recordType !== expectedRecordType) return false;
+
+  if (sourceLabel === "dependency_graph") {
+    return isGraphDiagnosticsRecordContractValid(record);
+  }
+
+  if (sourceLabel === "worker_cycle_artifacts") {
+    const payload = (record && typeof record.payload === "object" && !Array.isArray(record.payload))
+      ? (record.payload as Record<string, unknown>)
+      : null;
+    if (!payload) return false;
+    const latestCycleId = String(payload.latestCycleId || "").trim();
+    if (!latestCycleId) return false;
+    const rawSnapshot = {
+      schemaVersion: record.schemaVersion,
+      updatedAt: record.savedAt,
+      latestCycleId,
+      cycles: {
+        [latestCycleId]: {
+          cycleId: latestCycleId,
+          updatedAt: payload.updatedAt,
+          status: "snapshot",
+          workerSessions: {},
+          workerActivity: {},
+          completedTaskIds: [],
+        },
+      },
+    };
+    if (!isWorkerCycleArtifactsSnapshotContractValid(rawSnapshot)) return false;
+  }
 
   const freshness = record.freshness && typeof record.freshness === "object"
     ? record.freshness
@@ -1537,41 +1551,10 @@ const DIAGNOSTICS_SOURCE_DESCRIPTORS = [
     label: "worker_cycle_artifacts",
     file: "worker_cycle_artifacts.json",
     fileFormat: "json",
-    jsonlSchema: "box.diagnostics_artifact.v1",
-    recordType: "worker_cycle_snapshot",
+    jsonlSchema: CYCLE_DIAGNOSTICS_ARTIFACT_JSONL_SCHEMA,
+    recordType: WORKER_CYCLE_ARTIFACTS_DIAGNOSTICS_RECORD_TYPE,
   },
 ] as const;
-
-function buildWorkerCycleArtifactsDiagnosticsRecord(artifactData: unknown): any | null {
-  if (!artifactData || typeof artifactData !== "object" || Array.isArray(artifactData)) return null;
-  const payload = artifactData as Record<string, unknown>;
-  const schemaVersionRaw = Number(payload.schemaVersion);
-  if (!Number.isInteger(schemaVersionRaw) || schemaVersionRaw < 1) return null;
-  const updatedAt = String(payload.updatedAt || "").trim();
-  const updatedAtMs = Date.parse(updatedAt);
-  if (!updatedAt || !Number.isFinite(updatedAtMs)) return null;
-  if (!payload.cycles || typeof payload.cycles !== "object" || Array.isArray(payload.cycles)) return null;
-  const staleAfterMs = DIAGNOSTICS_FRESHNESS_MAX_AGE_MS;
-  const evaluatedAt = new Date().toISOString();
-  return {
-    jsonlSchema: "box.diagnostics_artifact.v1",
-    recordType: "worker_cycle_snapshot",
-    schemaVersion: schemaVersionRaw,
-    savedAt: updatedAt,
-    freshness: {
-      status: "fresh",
-      truthStatus: "point_in_time",
-      evaluatedAt,
-      staleAfterMs,
-      expiresAt: new Date(updatedAtMs + staleAfterMs).toISOString(),
-    },
-    payload: {
-      latestCycleId: String(payload.latestCycleId || "").trim() || null,
-      cycleCount: Object.keys(payload.cycles as Record<string, unknown>).length,
-      updatedAt,
-    },
-  };
-}
 
 async function readLatestDiagnosticsSourceRecord(
   stateDir: string,
@@ -1580,11 +1563,17 @@ async function readLatestDiagnosticsSourceRecord(
   const filePath = path.join(stateDir, item.file);
   if (item.fileFormat === "json") {
     const rawSnapshot = await readJson(filePath, null);
+    if (!isWorkerCycleArtifactsSnapshotContractValid(rawSnapshot)) return null;
     return buildWorkerCycleArtifactsDiagnosticsRecord(rawSnapshot);
   }
   const latest = await readLatestJsonlRecord(filePath);
-  return normalizeDiagnosticsRecord(latest, item.jsonlSchema, item.recordType)
-    || await readLegacyDiagnosticsFallback(stateDir, item.label);
+  if (isDiagnosticsRecordContractValid(latest, item.label, item.jsonlSchema, item.recordType)) {
+    return latest;
+  }
+  if (item.label === "intervention_optimizer") {
+    return await readLegacyDiagnosticsFallback(stateDir, item.label);
+  }
+  return null;
 }
 
 /**
@@ -1604,7 +1593,7 @@ export async function buildDiagnosticsFreshnessRecords(stateDir: string): Promis
     } catch {
       // diagnostics files are optional — treat as missing
     }
-    if (!normalized || !isDiagnosticsRecordContractValid(normalized, item.jsonlSchema, item.recordType)) {
+    if (!normalized || !isDiagnosticsRecordContractValid(normalized, item.label, item.jsonlSchema, item.recordType)) {
       records.push({ label: item.label, recordedAt: null });
       continue;
     }
@@ -1630,7 +1619,7 @@ async function buildDiagnosticsFreshnessPromptSection(stateDir: string): Promise
   const lines: string[] = [];
   for (const item of diagnostics) {
     const normalized = await readLatestDiagnosticsSourceRecord(stateDir, item);
-    if (!normalized || !isDiagnosticsRecordContractValid(normalized, item.jsonlSchema, item.recordType)) {
+    if (!normalized || !isDiagnosticsRecordContractValid(normalized, item.label, item.jsonlSchema, item.recordType)) {
       lines.push(`- ${item.label}: missing_or_unparseable (${item.file})`);
       continue;
     }

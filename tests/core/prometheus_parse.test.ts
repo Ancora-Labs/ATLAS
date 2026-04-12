@@ -4978,8 +4978,8 @@ describe("buildDiagnosticsFreshnessRecords", () => {
     try {
       const savedAt = new Date(Date.now() - 60_000).toISOString(); // 1 minute ago
       const record = {
-        jsonlSchema: "box/optimizer-log/v1",
-        recordType: "optimizer-log",
+        jsonlSchema: "box.intervention_optimizer_log.v2",
+        recordType: "intervention_optimizer_diagnostic",
         schemaVersion: 1,
         savedAt,
         freshness: { status: "fresh", staleAfterMs: 21_600_000, expiresAt: new Date(Date.now() + 1000).toISOString() },
@@ -5013,6 +5013,81 @@ describe("buildDiagnosticsFreshnessRecords", () => {
       const r = records.find(r => r.label === "intervention_optimizer");
       assert.ok(r, "record must still be returned");
       assert.equal(r!.recordedAt, null, "unparseable artifact must produce recordedAt=null");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("negative: dependency_graph recordedAt=null when latest JSONL line fails diagnostics contract", async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const tmpDir = mkdtempSync(path.join(tmpdir(), "diag-freshness-"));
+    try {
+      const invalidRecord = {
+        // deliberately wrong schema to verify strict trust-boundary validation.
+        jsonlSchema: "legacy.schema",
+        recordType: "dependency_graph_diagnostic",
+        savedAt: new Date().toISOString(),
+        freshness: { staleAfterMs: 21_600_000 },
+      };
+      writeFileSync(
+        path.join(tmpDir, "dependency_graph_diagnostics.json"),
+        JSON.stringify(invalidRecord) + "\n",
+        "utf8",
+      );
+      const records = await buildDiagnosticsFreshnessRecords(tmpDir);
+      const graphRecord = records.find((r) => r.label === "dependency_graph");
+      assert.ok(graphRecord, "dependency_graph record must exist");
+      assert.equal(graphRecord!.recordedAt, null, "invalid diagnostics contract must not be normalized for prompt admission");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("negative: quarantines dependency_graph when latest NDJSON line is malformed even if older line is valid", async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const tmpDir = mkdtempSync(path.join(tmpdir(), "diag-freshness-"));
+    try {
+      const validSavedAt = new Date(Date.now() - 30_000).toISOString();
+      const validRecord = {
+        jsonlSchema: "box.diagnostics_artifact.v1",
+        recordType: "dependency_graph_diagnostic",
+        schemaVersion: 1,
+        savedAt: validSavedAt,
+        persistedAt: validSavedAt,
+        freshness: {
+          status: "fresh",
+          staleAfterMs: 21_600_000,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+        status: "ok",
+        reasonCode: "VALID",
+        waves: [],
+        conflictPairs: [],
+        cycles: [],
+        payload: {
+          status: "ok",
+          reasonCode: "VALID",
+          waves: [],
+          conflictPairs: [],
+          cycles: [],
+        },
+      };
+      const malformedNewestLine = "{this-is-not-json";
+      writeFileSync(
+        path.join(tmpDir, "dependency_graph_diagnostics.json"),
+        `${JSON.stringify(validRecord)}\n${malformedNewestLine}\n`,
+        "utf8",
+      );
+      const records = await buildDiagnosticsFreshnessRecords(tmpDir);
+      const graphRecord = records.find((r) => r.label === "dependency_graph");
+      assert.ok(graphRecord, "dependency_graph record must exist");
+      assert.equal(
+        graphRecord!.recordedAt,
+        null,
+        "malformed latest line must quarantine dependency_graph instead of back-scanning older entries",
+      );
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -5069,6 +5144,40 @@ describe("buildDiagnosticsFreshnessRecords", () => {
       );
       const records = await buildDiagnosticsFreshnessRecords(tmpDir);
       const snapshotRecord = records.find(r => r.label === "worker_cycle_artifacts");
+      assert.ok(snapshotRecord, "worker_cycle_artifacts record must be emitted");
+      assert.equal(snapshotRecord!.recordedAt, null);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("negative: worker_cycle_artifacts recordedAt=null when latestCycleId does not map to a cycle record", async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const tmpDir = mkdtempSync(path.join(tmpdir(), "diag-freshness-"));
+    try {
+      const updatedAt = new Date().toISOString();
+      writeFileSync(
+        path.join(tmpDir, "worker_cycle_artifacts.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          updatedAt,
+          latestCycleId: "missing-cycle",
+          cycles: {
+            "other-cycle": {
+              cycleId: "other-cycle",
+              updatedAt,
+              status: "running",
+              workerSessions: {},
+              workerActivity: {},
+              completedTaskIds: [],
+            },
+          },
+        }),
+        "utf8",
+      );
+      const records = await buildDiagnosticsFreshnessRecords(tmpDir);
+      const snapshotRecord = records.find((r) => r.label === "worker_cycle_artifacts");
       assert.ok(snapshotRecord, "worker_cycle_artifacts record must be emitted");
       assert.equal(snapshotRecord!.recordedAt, null);
     } finally {

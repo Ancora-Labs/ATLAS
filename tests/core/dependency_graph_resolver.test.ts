@@ -32,6 +32,7 @@ import {
   GRAPH_DIAGNOSTICS_SCHEMA_VERSION,
   GRAPH_DIAGNOSTICS_JSONL_SCHEMA,
   GRAPH_DIAGNOSTICS_FRESHNESS_MS,
+  isGraphDiagnosticsRecordContractValid,
   READINESS_STATUS,
   READINESS_REASON,
   READINESS_CONFIDENCE_THRESHOLD_DEFAULT,
@@ -655,6 +656,49 @@ describe("persistGraphDiagnostics — guaranteed parseable NDJSON contract", () 
     assert.equal(secondEntry.seq, 2,
       "second line must be independently parseable without requiring the first");
     assert.equal(secondEntry.schemaVersion, GRAPH_DIAGNOSTICS_SCHEMA_VERSION);
+  });
+});
+
+describe("isGraphDiagnosticsRecordContractValid", () => {
+  it("returns true for a persisted dependency graph diagnostics entry", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-dgr-contract-"));
+    try {
+      const resolution = resolveDependencyGraph([makeTask("c1"), makeTask("c2", { dependsOn: ["c1"] })]);
+      await persistGraphDiagnostics(tmpDir, resolution);
+      const raw = await fs.readFile(path.join(tmpDir, "dependency_graph_diagnostics.json"), "utf8");
+      const entry = JSON.parse(raw.trim().split("\n").slice(-1)[0]);
+      assert.equal(isGraphDiagnosticsRecordContractValid(entry), true);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("negative: returns false when payload arrays are malformed", () => {
+    const record = {
+      jsonlSchema: GRAPH_DIAGNOSTICS_JSONL_SCHEMA,
+      recordType: "dependency_graph_diagnostic",
+      schemaVersion: GRAPH_DIAGNOSTICS_SCHEMA_VERSION,
+      savedAt: new Date().toISOString(),
+      persistedAt: new Date().toISOString(),
+      freshness: {
+        status: "fresh",
+        staleAfterMs: GRAPH_DIAGNOSTICS_FRESHNESS_MS,
+        expiresAt: new Date(Date.now() + GRAPH_DIAGNOSTICS_FRESHNESS_MS).toISOString(),
+      },
+      status: GRAPH_STATUS.OK,
+      reasonCode: GRAPH_REASON.VALID,
+      waves: [],
+      conflictPairs: [],
+      cycles: [],
+      payload: {
+        status: GRAPH_STATUS.OK,
+        reasonCode: GRAPH_REASON.VALID,
+        waves: "not-an-array",
+        conflictPairs: [],
+        cycles: [],
+      },
+    };
+    assert.equal(isGraphDiagnosticsRecordContractValid(record), false);
   });
 });
 
