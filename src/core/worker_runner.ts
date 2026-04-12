@@ -455,6 +455,32 @@ function logPremiumUsage(config, roleName, model, taskKind, durationMs, { outcom
   try { writeFileSync(logPath, JSON.stringify(entries, null, 2), "utf8"); } catch { /* non-critical */ }
 }
 
+/**
+ * Resolve the lineage ID used to join worker dispatch telemetry, premium usage,
+ * and cycle analytics.
+ *
+ * Priority:
+ *   1) explicit instruction.lineageId
+ *   2) inherited instruction.parentLineageId
+ *   3) deterministic synthetic ID from task fingerprint + numeric taskId + attempt
+ *
+ * Returns null when no stable lineage key can be derived.
+ */
+export function resolveWorkerExecutionLineageId(instruction: any): string | null {
+  const explicit = typeof instruction?.lineageId === "string" ? instruction.lineageId.trim() : "";
+  if (explicit) return explicit;
+
+  const parent = typeof instruction?.parentLineageId === "string" ? instruction.parentLineageId.trim() : "";
+  if (parent) return parent;
+
+  const rawTaskId = Number(instruction?.taskId);
+  if (!Number.isInteger(rawTaskId) || rawTaskId <= 0) return null;
+
+  const fingerprint = buildTaskFingerprint(instruction?.taskKind || "general", instruction?.task || "");
+  const attempt = Number(instruction?.reworkAttempt || 0) + 1;
+  return buildLineageId(fingerprint, rawTaskId, attempt);
+}
+
 // ── Memory-hit telemetry ─────────────────────────────────────────────────────
 
 const MEMORY_HIT_LOG_FILE = "memory_hit_log.json";
@@ -1904,14 +1930,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // Emit after model is fully resolved (including deliberation escalation)
   // so downstream consumers see the final routing decision, not an intermediate one.
   // lineageId links this routing event to the matching premium_usage_log entry.
-  let _dispatchLineageId: string | null = null;
-  if (instruction.taskId) {
-    try {
-      const _fp = buildTaskFingerprint(instruction.taskKind || "general", instruction.task || "");
-      const _attempt = Number(instruction.reworkAttempt || 0) + 1;
-      _dispatchLineageId = buildLineageId(_fp, Number(instruction.taskId), _attempt);
-    } catch { /* non-critical */ }
-  }
+  const _dispatchLineageId: string | null = resolveWorkerExecutionLineageId(instruction);
   try {
     const policyResult = enforceModelPolicy(model, taskHints, config?.copilot?.defaultModel || "Claude Sonnet 4.6");
     emitEvent(EVENTS.POLICY_MODEL_ROUTED, EVENT_DOMAIN.POLICY, `model-route-${roleName}-${Date.now()}`, {
@@ -2001,7 +2020,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       droppedLowTrust = dropped1 + dropped2;
     }
     const hitRecord = buildMemoryHitRecord({
-      lineageId:       String(instruction.lineageId || instruction.lineageRootId || ""),
+      lineageId:       String(_dispatchLineageId || instruction.lineageRootId || ""),
       taskId:          _memoryHitTaskId || null,
       workerKind:      workerKind ?? null,
       taskKind:        instruction.taskKind ?? null,

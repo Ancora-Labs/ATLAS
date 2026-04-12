@@ -39,6 +39,7 @@ import {
   CANONICAL_EVENT_NAMES,
   CYCLE_TRUTH_TERMINAL_BLOCK_REASON,
   buildModelRoutingTelemetry,
+  buildRoutingROISummary,
   MIN_TELEMETRY_SAMPLE_THRESHOLD,
   migrateLegacyEvolutionProgressToCompletedTaskIds,
   WORKER_CYCLE_ARTIFACTS_SCHEMA,
@@ -1867,12 +1868,48 @@ describe("modelRoutingTelemetry schema contract", () => {
     const result = buildModelRoutingTelemetry(log);
     assert.equal(result.sampleCount, 4, "sampleCount tracks all structurally valid rows");
     assert.equal(result.byTaskKind.implementation.sampleCount, 4);
+    assert.equal(result.byTaskKind.implementation.lineageLinkedSampleCount, 2);
+    assert.equal(result.byTaskKind.implementation.lineageLinkedRatio, 0.5);
+  });
+
+  it("buildModelRoutingTelemetry enforces lineage reference set when lineage log is provided", () => {
+    const log = [
+      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done", lineageId: "impl-1" },
+      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done", lineageId: "impl-2" },
+      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "blocked", lineageId: "orphan-lineage" },
+    ];
+    const lineageLog = [
+      { id: "impl-1", sourceKind: "gap_candidate" },
+      { id: "impl-2", sourceKind: "carry_forward" },
+    ];
+    const result = buildModelRoutingTelemetry(log, lineageLog);
+    assert.equal(result.byTaskKind.implementation.sampleCount, 3);
+    assert.equal(result.byTaskKind.implementation.lineageLinkedSampleCount, 2,
+      "only lineage IDs present in lineageLog should be counted as linked");
+    assert.equal(result.byTaskKind.implementation.lineageLinkedRatio, 0.667);
   });
 
   it("MIN_TELEMETRY_SAMPLE_THRESHOLD is exported and is a positive integer", () => {
     assert.ok(typeof MIN_TELEMETRY_SAMPLE_THRESHOLD === "number", "must be a number");
     assert.ok(MIN_TELEMETRY_SAMPLE_THRESHOLD > 0, "must be positive");
     assert.ok(Number.isInteger(MIN_TELEMETRY_SAMPLE_THRESHOLD), "must be an integer");
+  });
+});
+
+describe("buildRoutingROISummary", () => {
+  it("enforces lineage log linkage when lineage log is provided", () => {
+    const premiumUsageLog = [
+      { taskKind: "implementation", model: "Claude Sonnet 4.6", outcome: "done", lineageId: "impl-1" },
+      { taskKind: "implementation", model: "Claude Sonnet 4.6", outcome: "blocked", lineageId: "orphan-lineage" },
+      { taskKind: "implementation", model: "Claude Sonnet 4.6", outcome: "done", lineageId: "" },
+    ];
+    const lineageLog = [{ id: "impl-1", sourceKind: "gap_candidate" }];
+    const summary = buildRoutingROISummary(premiumUsageLog, lineageLog);
+    assert.equal(summary.totalRequests, 3);
+    assert.equal(summary.linkedRequests, 1);
+    assert.equal(summary.linkedRatio, 0.333);
+    assert.equal(summary.roiByLineageId["impl-1"]?.roi, 1);
+    assert.equal(summary.overallLinkedROI, 1);
   });
 });
 

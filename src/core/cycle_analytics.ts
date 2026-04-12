@@ -1768,7 +1768,7 @@ export function computeCycleAnalytics(config, {
     parserBaselineRecovery: parserBaselineRecovery ?? null,
     stageTransitions: Array.isArray(stageTransitions) ? stageTransitions : [],
     dropReasons:      Array.isArray(dropReasons) ? dropReasons : [],
-    modelRoutingTelemetry: buildModelRoutingTelemetry(premiumUsageLog ?? []),
+    modelRoutingTelemetry: buildModelRoutingTelemetry(premiumUsageLog ?? [], lineageLog ?? []),
     capabilityExecutionSummary: normalizedCapabilityExecutionSummary,
     lineageSummary: buildLineageSummary(lineageLog ?? []),
     memoryHitTelemetry: buildMemoryHitTelemetry(memoryHitLog ?? []),
@@ -1812,9 +1812,14 @@ export { MIN_TELEMETRY_SAMPLE_THRESHOLD } from "./telemetry_thresholds.js";
  *     }
  *   }
  */
-export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
+export function buildModelRoutingTelemetry(
+  premiumUsageLog: unknown[],
+  lineageLog: unknown[] = [],
+): {
   byTaskKind: Record<string, {
     sampleCount: number;
+    lineageLinkedSampleCount: number;
+    lineageLinkedRatio: number;
     default: { successProbability: number; capacityImpact: number; requestCost: number };
     models: Record<string, { successProbability: number; capacityImpact: number; requestCost: number }>;
   }>;
@@ -1823,7 +1828,17 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
   if (!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) return { byTaskKind: {}, sampleCount: 0 };
 
   type EcoPoint = { successProbability: number; capacityImpact: number; requestCost: number };
-  type Accumulator = { done: number; total: number };
+  type Accumulator = { done: number; total: number; linked: number };
+  const linkageReference = new Set<string>();
+  if (Array.isArray(lineageLog)) {
+    for (const entry of lineageLog) {
+      if (!entry || typeof entry !== "object") continue;
+      const rawId = (entry as Record<string, unknown>).id;
+      const id = typeof rawId === "string" ? rawId.trim() : "";
+      if (id) linkageReference.add(id);
+    }
+  }
+  const enforceLineageReference = linkageReference.size > 0;
 
   // Grouped tallies: taskKind → model → { done, total }
   const byTaskKindModel: Record<string, Record<string, Accumulator>> = {};
@@ -1840,11 +1855,16 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
     const { taskKind, model, outcome } = entry as Record<string, string>;
     const normalizedModel = normalizeModelLabel(model);
     if (!taskKind || !normalizedModel) continue;
+    const lineageId = typeof (entry as Record<string, unknown>).lineageId === "string"
+      ? String((entry as Record<string, unknown>).lineageId).trim()
+      : "";
+    const linked = lineageId.length > 0 && (!enforceLineageReference || linkageReference.has(lineageId));
 
     byTaskKindModel[taskKind] ??= {};
-    byTaskKindModel[taskKind][normalizedModel] ??= { done: 0, total: 0 };
+    byTaskKindModel[taskKind][normalizedModel] ??= { done: 0, total: 0, linked: 0 };
     byTaskKindModel[taskKind][normalizedModel].total++;
     if (outcome === "done") byTaskKindModel[taskKind][normalizedModel].done++;
+    if (linked) byTaskKindModel[taskKind][normalizedModel].linked++;
     usableEntries++;
   }
 
@@ -1857,22 +1877,27 @@ export function buildModelRoutingTelemetry(premiumUsageLog: unknown[]): {
 
   const resultByTaskKind: Record<string, {
     sampleCount: number;
+    lineageLinkedSampleCount: number;
+    lineageLinkedRatio: number;
     default: EcoPoint;
     models: Record<string, EcoPoint>;
   }> = {};
 
   for (const [taskKind, modelMap] of Object.entries(byTaskKindModel)) {
-    const allAcc: Accumulator = { done: 0, total: 0 };
+    const allAcc: Accumulator = { done: 0, total: 0, linked: 0 };
     const modelPoints: Record<string, EcoPoint> = {};
 
     for (const [modelName, acc] of Object.entries(modelMap)) {
       allAcc.done += acc.done;
       allAcc.total += acc.total;
+      allAcc.linked += acc.linked;
       modelPoints[modelName] = toEcoPoint(acc);
     }
 
     resultByTaskKind[taskKind] = {
       sampleCount: allAcc.total,
+      lineageLinkedSampleCount: allAcc.linked,
+      lineageLinkedRatio: allAcc.total > 0 ? Math.round((allAcc.linked / allAcc.total) * 1000) / 1000 : 0,
       default: toEcoPoint(allAcc),
       models: modelPoints,
     };
@@ -2579,7 +2604,7 @@ export function buildLineageSummary(lineageLog: unknown[]): {
  */
 export function buildRoutingROISummary(
   premiumUsageLog: unknown[],
-  _lineageLog: unknown[] = [],
+  lineageLog: unknown[] = [],
 ): {
   totalRequests: number;
   linkedRequests: number;
@@ -2590,6 +2615,16 @@ export function buildRoutingROISummary(
   if (!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) {
     return { totalRequests: 0, linkedRequests: 0, linkedRatio: null, roiByLineageId: {}, overallLinkedROI: null };
   }
+  const linkageReference = new Set<string>();
+  if (Array.isArray(lineageLog)) {
+    for (const entry of lineageLog) {
+      if (!entry || typeof entry !== "object") continue;
+      const rawId = (entry as Record<string, unknown>).id;
+      const id = typeof rawId === "string" ? rawId.trim() : "";
+      if (id) linkageReference.add(id);
+    }
+  }
+  const enforceLineageReference = linkageReference.size > 0;
 
   const byLineageId: Record<string, { success: number; total: number }> = {};
   let linkedRequests = 0;
@@ -2602,8 +2637,9 @@ export function buildRoutingROISummary(
     const lid = typeof row.lineageId === "string" && row.lineageId ? row.lineageId : null;
     const outcome = typeof row.outcome === "string" ? row.outcome : "unknown";
     const isDone = outcome === "done";
+    const linked = !!(lid && (!enforceLineageReference || linkageReference.has(lid)));
 
-    if (lid) {
+    if (linked && lid) {
       byLineageId[lid] ??= { success: 0, total: 0 };
       byLineageId[lid].total++;
       if (isDone) byLineageId[lid].success++;

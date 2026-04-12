@@ -1579,18 +1579,26 @@ export function rankModelsByTaskKindExpectedValue(
     : Infinity; // legacy telemetry without sampleCount is trusted as-is
   const lineageLinkedSampleCount = typeof (taskTelemetry as any).lineageLinkedSampleCount === "number"
     ? (taskTelemetry as any).lineageLinkedSampleCount
-    : taskSampleCount;
-  const linkedRatio = typeof cycleAnalytics?.routingROISummary?.linkedRatio === "number"
-    ? clamp01(cycleAnalytics.routingROISummary.linkedRatio)
     : null;
-  const linkageAdjustedSampleCount = linkedRatio !== null && linkedRatio > 0
+  const linkedRatio = typeof (taskTelemetry as any).lineageLinkedRatio === "number"
+    ? clamp01((taskTelemetry as any).lineageLinkedRatio)
+    : (typeof cycleAnalytics?.routingROISummary?.linkedRatio === "number"
+        ? clamp01(cycleAnalytics.routingROISummary.linkedRatio)
+        : null);
+  const linkageAdjustedSampleCount = linkedRatio !== null
     ? Math.floor(taskSampleCount * linkedRatio)
     : taskSampleCount;
-  // Enforce lineage linkage when linked samples exist; legacy telemetry without
-  // linkage remains backward-compatible.
-  const effectiveSampleCount = Number.isFinite(lineageLinkedSampleCount) && lineageLinkedSampleCount > 0
+  const hasLineageLinkedSampleCount = typeof lineageLinkedSampleCount === "number"
+    && Number.isFinite(lineageLinkedSampleCount)
+    && lineageLinkedSampleCount >= 0;
+  // Enforce lineage linkage when analytics publishes linked sample counts.
+  // Legacy telemetry (without lineage counts) remains backward-compatible.
+  const effectiveSampleCount = hasLineageLinkedSampleCount
     ? Math.min(taskSampleCount, lineageLinkedSampleCount, linkageAdjustedSampleCount)
-    : taskSampleCount;
+    : linkageAdjustedSampleCount;
+  if (!Number.isFinite(effectiveSampleCount)) {
+    return { rankedModels: original, scoreByModel: {}, usedTelemetry: false, reason: "telemetry-invalid" };
+  }
   if (effectiveSampleCount < MIN_TELEMETRY_SAMPLE_THRESHOLD) {
     return { rankedModels: original, scoreByModel: {}, usedTelemetry: false, reason: "telemetry-below-threshold" };
   }

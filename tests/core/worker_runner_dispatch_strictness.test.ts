@@ -36,6 +36,7 @@ import {
   DISCOVERY_SAFE_TASK_KINDS,
   NON_MERGE_TASK_KINDS,
 } from "../../src/core/verification_gate.js";
+import { resolveWorkerExecutionLineageId } from "../../src/core/worker_runner.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -577,6 +578,49 @@ describe("discovery-safe bypass — dispatch strictness interaction", () => {
     assert.equal(isDiscoverySafeTask("doc"), true);
     assert.equal(isDiscoverySafeTask("audit"), true);
     assert.equal(isDiscoverySafeTask("implementation"), false);
+  });
+});
+
+describe("resolveWorkerExecutionLineageId", () => {
+  it("uses explicit lineageId when provided", () => {
+    const lineageId = resolveWorkerExecutionLineageId({
+      lineageId: "lineage-explicit-1",
+      taskId: 42,
+      taskKind: "implementation",
+      task: "Implement feature X",
+      reworkAttempt: 0,
+    });
+    assert.equal(lineageId, "lineage-explicit-1");
+  });
+
+  it("falls back to parentLineageId when explicit lineageId is absent", () => {
+    const lineageId = resolveWorkerExecutionLineageId({
+      parentLineageId: "parent-lineage-9",
+      taskId: 17,
+      taskKind: "ci-fix",
+      task: "Fix CI failure",
+    });
+    assert.equal(lineageId, "parent-lineage-9");
+  });
+
+  it("builds deterministic lineage ID from task fingerprint and attempt", () => {
+    const lineageId = resolveWorkerExecutionLineageId({
+      taskId: 31,
+      taskKind: "implementation",
+      task: "Add strict lineage telemetry",
+      reworkAttempt: 1,
+    });
+    assert.ok(typeof lineageId === "string" && lineageId.length > 0);
+    assert.ok(lineageId!.endsWith("-31-2"), `expected deterministic suffix -31-2, got ${lineageId}`);
+  });
+
+  it("returns null when no explicit lineage and taskId is invalid", () => {
+    const lineageId = resolveWorkerExecutionLineageId({
+      taskId: "not-a-number",
+      taskKind: "research",
+      task: "Investigate metrics drift",
+    });
+    assert.equal(lineageId, null);
   });
 });
 

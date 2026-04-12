@@ -943,6 +943,9 @@ describe("rankModelsByTaskKindExpectedValue", () => {
       modelRoutingTelemetry: {
         byTaskKind: {
           "ci-fix": {
+            sampleCount: MIN_TELEMETRY_SAMPLE_THRESHOLD + 2,
+            lineageLinkedSampleCount: MIN_TELEMETRY_SAMPLE_THRESHOLD + 2,
+            lineageLinkedRatio: 1,
             default: { successProbability: 0.5, capacityImpact: 0.5, requestCost: 1 },
             models: {
               "Claude Sonnet 4.6": { successProbability: 0.7, capacityImpact: 0.8, requestCost: 1.0 },
@@ -1051,6 +1054,61 @@ describe("rankModelsByTaskKindExpectedValue — threshold enforcement", () => {
     assert.equal(result.usedTelemetry, false);
     assert.equal(result.reason, "telemetry-below-threshold");
     assert.deepEqual(result.rankedModels, ["Claude Sonnet 4.6", "GPT-5.3-Codex"]);
+  });
+
+  it("falls back when lineage-linked sample count is zero even if total sample count is high", () => {
+    const cycleAnalytics = {
+      modelRoutingTelemetry: {
+        byTaskKind: {
+          "ci-fix": {
+            sampleCount: MIN_TELEMETRY_SAMPLE_THRESHOLD + 8,
+            lineageLinkedSampleCount: 0,
+            lineageLinkedRatio: 0,
+            default: { successProbability: 0.9, capacityImpact: 0.8, requestCost: 1 },
+            models: {
+              "GPT-5.3-Codex": { successProbability: 0.95, capacityImpact: 0.9, requestCost: 1 },
+              "Claude Sonnet 4.6": { successProbability: 0.4, capacityImpact: 0.3, requestCost: 1 },
+            },
+          },
+        },
+      },
+      routingROISummary: { linkedRatio: 0.9 },
+    };
+    const result = rankModelsByTaskKindExpectedValue(
+      "ci-fix",
+      ["Claude Sonnet 4.6", "GPT-5.3-Codex"],
+      cycleAnalytics,
+    );
+    assert.equal(result.usedTelemetry, false);
+    assert.equal(result.reason, "telemetry-below-threshold");
+  });
+
+  it("uses per-task lineageLinkedRatio over global linkedRatio for effective sample gating", () => {
+    const cycleAnalytics = {
+      modelRoutingTelemetry: {
+        byTaskKind: {
+          "ci-fix": {
+            sampleCount: MIN_TELEMETRY_SAMPLE_THRESHOLD + 2,
+            lineageLinkedSampleCount: MIN_TELEMETRY_SAMPLE_THRESHOLD + 2,
+            lineageLinkedRatio: 1,
+            default: { successProbability: 0.6, capacityImpact: 0.5, requestCost: 1 },
+            models: {
+              "GPT-5.3-Codex": { successProbability: 0.95, capacityImpact: 0.8, requestCost: 1 },
+              "Claude Sonnet 4.6": { successProbability: 0.5, capacityImpact: 0.4, requestCost: 1 },
+            },
+          },
+        },
+      },
+      // Should be ignored for this task because per-task lineageLinkedRatio is present.
+      routingROISummary: { linkedRatio: 0.1 },
+    };
+    const result = rankModelsByTaskKindExpectedValue(
+      "ci-fix",
+      ["Claude Sonnet 4.6", "GPT-5.3-Codex"],
+      cycleAnalytics,
+    );
+    assert.equal(result.usedTelemetry, true);
+    assert.equal(result.rankedModels[0], "GPT-5.3-Codex");
   });
 
   it("MIN_TELEMETRY_SAMPLE_THRESHOLD is exported as a positive integer", () => {
