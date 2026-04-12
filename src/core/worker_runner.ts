@@ -2531,15 +2531,9 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   }
 
   // Track premium request usage per worker (always log, even for failed verification attempts)
-  // Derive the shared lineage key so premium_usage_log entries can be joined with lineage_graph.
-  let _premiumLineageId: string | null = null;
-  if (instruction.taskId) {
-    try {
-      const _fp = buildTaskFingerprint(instruction.taskKind || "general", instruction.task || "");
-      const _attempt = Number(instruction.reworkAttempt || 0) + 1;
-      _premiumLineageId = buildLineageId(_fp, Number(instruction.taskId), _attempt);
-    } catch { /* non-critical — lineage key is observability only */ }
-  }
+  // Reuse the exact dispatch lineage key so analytics can deterministically join
+  // routing decisions ↔ premium usage ↔ lineage graph outcomes.
+  const _premiumLineageId: string | null = _dispatchLineageId;
   logPremiumUsage(config, roleName, model, instruction.taskKind, Date.now() - startMs, {
     outcome: parsed.status,
     taskId: instruction.taskId || instruction.task || null,
@@ -2802,7 +2796,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       const entryStatus = statusMap[parsed.status] || LINEAGE_ENTRY_STATUS.FAILED;
 
       const lineageEntry = {
-        id: buildLineageId(fp, taskId, attempt),
+        id: _dispatchLineageId || buildLineageId(fp, taskId, attempt),
         taskId,
         semanticKey: String(instruction.semanticKey || `${instruction.taskKind || "general"}::${fp.slice(0, 16)}`),
         fingerprint: fp,

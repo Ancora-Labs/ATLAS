@@ -1843,10 +1843,10 @@ describe("modelRoutingTelemetry schema contract", () => {
 
   it("buildModelRoutingTelemetry aggregates usage entries by taskKind and model", () => {
     const log = [
-      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done" },
-      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done" },
-      { model: "GPT-5.3-Codex",     taskKind: "implementation", outcome: "blocked" },
-      { model: "Claude Sonnet 4.6", taskKind: "ci-fix",          outcome: "done" },
+      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done", lineageId: "impl-1" },
+      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done", lineageId: "impl-2" },
+      { model: "GPT-5.3-Codex",     taskKind: "implementation", outcome: "blocked", lineageId: "impl-3" },
+      { model: "Claude Sonnet 4.6", taskKind: "ci-fix",          outcome: "done", lineageId: "ci-1" },
     ];
     const result = buildModelRoutingTelemetry(log);
     assert.ok(result !== null, "must never return null");
@@ -1855,6 +1855,18 @@ describe("modelRoutingTelemetry schema contract", () => {
     const implEntry = result.byTaskKind["implementation"];
     assert.equal(implEntry.sampleCount, 3);
     assert.ok("claude sonnet 4.6" in implEntry.models, "Claude model must be tracked under canonical key");
+  });
+
+  it("buildModelRoutingTelemetry remains stable when lineageId is missing on some rows", () => {
+    const log = [
+      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done", lineageId: "impl-1" },
+      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "blocked" },
+      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done", lineageId: "impl-2" },
+      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done", lineageId: "" },
+    ];
+    const result = buildModelRoutingTelemetry(log);
+    assert.equal(result.sampleCount, 4, "sampleCount tracks all structurally valid rows");
+    assert.equal(result.byTaskKind.implementation.sampleCount, 4);
   });
 
   it("MIN_TELEMETRY_SAMPLE_THRESHOLD is exported and is a positive integer", () => {
