@@ -1865,13 +1865,18 @@ export function extractWorkerViolationSummary(workerResult: unknown): {
 export function buildWorkerRunContract(config: any, instruction: any): import("../types/index.js").WorkerRunContract {
   const base = config?.workerRunContract || {};
   const modelCallSettings = resolveModelCallSettingsOverlay(base?.modelCallSettings, instruction?.modelCallSettings);
+  const traceMetadataBase =
+    typeof base?.traceMetadata === "object" && base.traceMetadata
+      ? { ...base.traceMetadata as Record<string, unknown> }
+      : {};
+  const hasModelCallSettings = Object.keys(modelCallSettings).length > 0;
   return {
     maxTurns:                 Number(instruction?.maxTurns  ?? modelCallSettings.maxTurns ?? base?.maxTurns  ?? 50),
     workflowName:             String(instruction?.workflowName ?? base?.workflowName ?? "box-evolution"),
     groupId:                  String(instruction?.groupId   ?? base?.groupId   ?? "box-workers"),
-    traceMetadata:            typeof base?.traceMetadata === "object" && base.traceMetadata
-                                ? { ...base.traceMetadata, modelCallSettings }
-                                : { modelCallSettings },
+    traceMetadata:            hasModelCallSettings
+                                ? { ...traceMetadataBase, modelCallSettings }
+                                : traceMetadataBase,
     traceIncludeSensitiveData: base?.traceIncludeSensitiveData === true ? true : false,
     sessionInputPolicy:       (base?.sessionInputPolicy || "allow_all") as "allow_all" | "no_tools" | "auto",
   };
