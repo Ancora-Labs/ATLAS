@@ -37,6 +37,7 @@ import {
   MEMORY_FLOOR_RELAX_AMOUNT,
   MEMORY_FLOOR_TIGHTEN_AMOUNT,
   QUALITY_FLOOR_DEFAULT,
+  resolveModelCallSettingsOverlay,
   computeBenchmarkPlanningPriors,
   normalizePolicyInterventionUplift,
 } from "../../src/core/model_policy.js";
@@ -131,6 +132,27 @@ describe("model_policy — complexity tiers", () => {
       const result = enforceModelPolicy("Claude Sonnet 4.6");
       assert.equal(result.downgraded, false);
       assert.equal(result.routingReasonCode, ROUTING_REASON.ALLOWED);
+    });
+
+    it("merges typed per-task model-call settings overlays deterministically", () => {
+      const result = resolveModelCallSettingsOverlay(
+        { maxTurns: 12, silent: true, noAskUser: false },
+        { model: "GPT-5.3-Codex", maxTurns: 7, noAskUser: true },
+      );
+      assert.deepEqual(result, {
+        model: "GPT-5.3-Codex",
+        maxTurns: 7,
+        noAskUser: true,
+        silent: true,
+      });
+    });
+
+    it("negative path: ignores invalid overlay fields safely", () => {
+      const result = resolveModelCallSettingsOverlay(
+        { maxTurns: 9 },
+        { maxTurns: "bad", model: "   ", silent: "yes" },
+      );
+      assert.deepEqual(result, { maxTurns: 9 });
     });
   });
 

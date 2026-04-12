@@ -112,6 +112,46 @@ export interface DeliberationPolicy {
   reason: string;
 }
 
+/** Typed overlays for per-task model call settings. */
+export interface ModelCallSettingsOverlay {
+  /** Optional explicit model override for this task (still policy-enforced). */
+  model?: string;
+  /** Optional bounded override for max turns/continues in this task run. */
+  maxTurns?: number;
+  /** Optional per-task no-ask-user toggle for deterministic execution. */
+  noAskUser?: boolean;
+  /** Optional per-task silent mode toggle for lower-noise calls. */
+  silent?: boolean;
+}
+
+function normalizeModelCallSettingsOverlay(input: unknown): ModelCallSettingsOverlay {
+  if (!input || typeof input !== "object") return {};
+  const src = input as Record<string, unknown>;
+  const out: ModelCallSettingsOverlay = {};
+  const model = String(src.model ?? "").trim();
+  if (model) out.model = model;
+  const rawMaxTurns = Number(src.maxTurns);
+  if (Number.isFinite(rawMaxTurns)) {
+    out.maxTurns = Math.max(1, Math.min(200, Math.round(rawMaxTurns)));
+  }
+  if (src.noAskUser === true) out.noAskUser = true;
+  if (src.silent === true) out.silent = true;
+  return out;
+}
+
+/**
+ * Merge base + per-task model-call settings overlays deterministically.
+ * Per-task values always win over base values.
+ */
+export function resolveModelCallSettingsOverlay(
+  baseOverlay: unknown,
+  taskOverlay: unknown,
+): ModelCallSettingsOverlay {
+  const base = normalizeModelCallSettingsOverlay(baseOverlay);
+  const task = normalizeModelCallSettingsOverlay(taskOverlay);
+  return { ...base, ...task };
+}
+
 /**
  * Check if a model is absolutely banned.
  * @param {string} modelName - Model name or slug

@@ -35,6 +35,8 @@ import {
   COMPLEXITY_TIER,
   decideDeliberationPolicy,
   QUALITY_FLOOR_DEFAULT,
+  resolveModelCallSettingsOverlay,
+  type ModelCallSettingsOverlay,
 } from "./model_policy.js";
 import { deriveRoutingAdjustments, buildPromptHardConstraints } from "./learning_policy_compiler.js";
 import { loadPolicy, getProtectedPathMatches, getRolePathViolations, enforcePreExecuteHookDecisions } from "./policy_engine.js";
@@ -365,6 +367,35 @@ export function shouldResolveRecoveredWorkerEscalations(status: unknown): boolea
 
 /** Canonical agent identifier for workers in span events. */
 export const WORKER_AGENT_ID = "worker";
+
+export const WORKER_MODEL_CALL_HOOK = Object.freeze({
+  SETTINGS_OVERLAY_RESOLVED: "settings_overlay_resolved",
+  BEFORE_MODEL_CALL: "before_model_call",
+  AFTER_MODEL_CALL: "after_model_call",
+});
+
+export type WorkerModelCallHook = (typeof WORKER_MODEL_CALL_HOOK)[keyof typeof WORKER_MODEL_CALL_HOOK];
+
+export function emitWorkerModelCallHookEvent(
+  hook: WorkerModelCallHook,
+  roleName: string,
+  model: string | null,
+  lineageId: string | null,
+  payload: Record<string, unknown> = {},
+): void {
+  emitEvent(
+    EVENTS.POLICY_MODEL_SELECTED,
+    EVENT_DOMAIN.POLICY,
+    `model-hook-${String(roleName || "worker")}-${hook}-${Date.now()}`,
+    {
+      hook,
+      roleName: String(roleName || "worker"),
+      model: model ?? null,
+      lineageId: lineageId ?? null,
+      ...payload,
+    },
+  );
+}
 
 /**
  * Build a PLANNING_STAGE_TRANSITION span event for a worker.
@@ -1833,13 +1864,14 @@ export function extractWorkerViolationSummary(workerResult: unknown): {
  */
 export function buildWorkerRunContract(config: any, instruction: any): import("../types/index.js").WorkerRunContract {
   const base = config?.workerRunContract || {};
+  const modelCallSettings = resolveModelCallSettingsOverlay(base?.modelCallSettings, instruction?.modelCallSettings);
   return {
-    maxTurns:                 Number(instruction?.maxTurns  ?? base?.maxTurns  ?? 50),
+    maxTurns:                 Number(instruction?.maxTurns  ?? modelCallSettings.maxTurns ?? base?.maxTurns  ?? 50),
     workflowName:             String(instruction?.workflowName ?? base?.workflowName ?? "box-evolution"),
     groupId:                  String(instruction?.groupId   ?? base?.groupId   ?? "box-workers"),
     traceMetadata:            typeof base?.traceMetadata === "object" && base.traceMetadata
-                                ? { ...base.traceMetadata }
-                                : {},
+                                ? { ...base.traceMetadata, modelCallSettings }
+                                : { modelCallSettings },
     traceIncludeSensitiveData: base?.traceIncludeSensitiveData === true ? true : false,
     sessionInputPolicy:       (base?.sessionInputPolicy || "allow_all") as "allow_all" | "no_tools" | "auto",
   };
@@ -1863,6 +1895,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // firstAttemptAt is only set once and carried forward across retries.
   const attempt = Number(instruction?.reworkAttempt ?? 0);
   const runId = buildRunId(instruction?.taskId, attempt);
+  const _dispatchLineageId: string | null = resolveWorkerExecutionLineageId(instruction);
   const firstAttemptAt: string = String(
     instruction?.firstAttemptAt ?? new Date().toISOString()
   );
@@ -1892,6 +1925,23 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       outcomeMetrics,
     }
   );
+  const modelCallSettings: ModelCallSettingsOverlay = resolveModelCallSettingsOverlay(
+    config?.workerRunContract?.modelCallSettings,
+    instruction?.modelCallSettings,
+  );
+  try {
+    emitWorkerModelCallHookEvent(
+      WORKER_MODEL_CALL_HOOK.SETTINGS_OVERLAY_RESOLVED,
+      String(roleName || "worker"),
+      null,
+      _dispatchLineageId,
+      {
+        applied: Object.keys(modelCallSettings).length > 0,
+        hasModelOverride: typeof modelCallSettings.model === "string" && modelCallSettings.model.length > 0,
+        hasMaxTurnsOverride: typeof modelCallSettings.maxTurns === "number",
+      },
+    );
+  } catch { /* telemetry is non-critical */ }
 
   // ── Task 1: Uncertainty-aware model selection ─────────────────────────────
   // resolveModel now uses routeModelWithUncertainty (backed by historical ROI)
@@ -1918,6 +1968,14 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     }
   }
 
+  // Per-task model override overlay is applied after routing/escalation and still
+  // enforced by global model policy so unsafe models cannot bypass guards.
+  if (modelCallSettings.model) {
+    const defaultModel = config?.copilot?.defaultModel || "Claude Sonnet 4.6";
+    const overlaid = enforceModelPolicy(modelCallSettings.model, taskHints, defaultModel);
+    model = overlaid.model;
+  }
+
   // Classify complexity tier for prompt budget injection
   const { tier } = classifyComplexityTier(taskHints);
 
@@ -1930,7 +1988,6 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // Emit after model is fully resolved (including deliberation escalation)
   // so downstream consumers see the final routing decision, not an intermediate one.
   // lineageId links this routing event to the matching premium_usage_log entry.
-  const _dispatchLineageId: string | null = resolveWorkerExecutionLineageId(instruction);
   try {
     const policyResult = enforceModelPolicy(model, taskHints, config?.copilot?.defaultModel || "Claude Sonnet 4.6");
     emitEvent(EVENTS.POLICY_MODEL_ROUTED, EVENT_DOMAIN.POLICY, `model-route-${roleName}-${Date.now()}`, {
@@ -2107,6 +2164,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     agentSlug,
     prompt: conversationContext,
     model,
+    modelCallSettings,
     allowAll: allowAllTools,
     noAskUser: allowAllTools,
     maxContinues: undefined,
@@ -2161,6 +2219,20 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     abortController.abort(_token.reason || "cancelled-before-spawn");
   }
 
+  try {
+    emitWorkerModelCallHookEvent(
+      WORKER_MODEL_CALL_HOOK.BEFORE_MODEL_CALL,
+      String(roleName || "worker"),
+      model,
+      _dispatchLineageId,
+      {
+        taskId: instruction?.taskId ?? null,
+        taskKind: instruction?.taskKind ?? "general",
+        runId,
+      },
+    );
+  } catch { /* telemetry is non-critical */ }
+
   const result = await spawnAsync(command, args, {
     env: {
       ...process.env,
@@ -2202,6 +2274,22 @@ export async function runWorkerConversation(config, roleName, instruction, histo
 
   const stdout = String(result?.stdout || "");
   const stderr = String(result?.stderr || "");
+  try {
+    emitWorkerModelCallHookEvent(
+      WORKER_MODEL_CALL_HOOK.AFTER_MODEL_CALL,
+      String(roleName || "worker"),
+      model,
+      _dispatchLineageId,
+      {
+        taskId: instruction?.taskId ?? null,
+        taskKind: instruction?.taskKind ?? "general",
+        runId,
+        exitCode: typeof result?.status === "number" ? result.status : null,
+        timedOut: result?.timedOut === true,
+        aborted: result?.aborted === true,
+      },
+    );
+  } catch { /* telemetry is non-critical */ }
 
   // Cooperative cancellation: if the orchestrator cancelled while the worker was
   // running, don't advance into the verification / audit path — the cycle is being

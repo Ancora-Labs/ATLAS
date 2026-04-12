@@ -36,7 +36,11 @@ import {
   DISCOVERY_SAFE_TASK_KINDS,
   NON_MERGE_TASK_KINDS,
 } from "../../src/core/verification_gate.js";
-import { resolveWorkerExecutionLineageId } from "../../src/core/worker_runner.js";
+import {
+  resolveWorkerExecutionLineageId,
+  WORKER_MODEL_CALL_HOOK,
+  emitWorkerModelCallHookEvent,
+} from "../../src/core/worker_runner.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -82,6 +86,45 @@ describe("DISPATCH_STRICTNESS", () => {
     assert.equal(DISPATCH_STRICTNESS.STRICT,   "strict");
     assert.equal(DISPATCH_STRICTNESS.BLOCKED,  "blocked");
     assert.throws(() => { (DISPATCH_STRICTNESS as any).NEW_LEVEL = "x"; }, "must be frozen");
+  });
+});
+
+describe("worker_runner lifecycle hook events", () => {
+  it("exports deterministic model-call hook names", () => {
+    assert.equal(WORKER_MODEL_CALL_HOOK.SETTINGS_OVERLAY_RESOLVED, "settings_overlay_resolved");
+    assert.equal(WORKER_MODEL_CALL_HOOK.BEFORE_MODEL_CALL, "before_model_call");
+    assert.equal(WORKER_MODEL_CALL_HOOK.AFTER_MODEL_CALL, "after_model_call");
+    assert.ok(Object.isFrozen(WORKER_MODEL_CALL_HOOK));
+  });
+
+  it("emits explicit lifecycle hook events without throwing", () => {
+    assert.doesNotThrow(() => {
+      emitWorkerModelCallHookEvent(
+        WORKER_MODEL_CALL_HOOK.BEFORE_MODEL_CALL,
+        "worker",
+        "Claude Sonnet 4.6",
+        "lin-123",
+        { taskId: 1 },
+      );
+      emitWorkerModelCallHookEvent(
+        WORKER_MODEL_CALL_HOOK.AFTER_MODEL_CALL,
+        "worker",
+        "Claude Sonnet 4.6",
+        "lin-123",
+        { taskId: 1, exitCode: 0 },
+      );
+    });
+  });
+
+  it("negative path: tolerates null lineage and empty payload", () => {
+    assert.doesNotThrow(() => {
+      emitWorkerModelCallHookEvent(
+        WORKER_MODEL_CALL_HOOK.SETTINGS_OVERLAY_RESOLVED,
+        "worker",
+        null,
+        null,
+      );
+    });
   });
 });
 

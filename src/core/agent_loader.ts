@@ -15,6 +15,7 @@ import { existsSync, readFileSync, appendFileSync, writeFileSync, readdirSync, u
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { isModelBanned } from "./model_policy.js";
+import type { ModelCallSettingsOverlay } from "./model_policy.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -102,8 +103,14 @@ export function buildAgentArgs({
   silent = false,
   maxContinues = undefined,
   runContract = undefined,
+  modelCallSettings = undefined,
 }: any = {}) {
   const args = [];
+  const normalizedModelCallSettings: ModelCallSettingsOverlay =
+    modelCallSettings && typeof modelCallSettings === "object" ? modelCallSettings : {};
+  const effectiveNoAskUser = noAskUser || normalizedModelCallSettings.noAskUser === true;
+  const effectiveSilent = silent || normalizedModelCallSettings.silent === true;
+  const effectiveModel = normalizedModelCallSettings.model || model;
 
   const pushResolvedModelArg = (requestedModel) => {
     if (!requestedModel) return;
@@ -120,22 +127,22 @@ export function buildAgentArgs({
   };
 
   if (allowAll) args.push("--allow-all");
-  if (noAskUser) args.push("--no-ask-user");
+  if (effectiveNoAskUser) args.push("--no-ask-user");
   if (autopilot) {
     args.push("--autopilot");
     // runContract.maxTurns takes precedence over the legacy maxContinues arg.
     const effectiveMaxContinues = runContract?.maxTurns ?? maxContinues;
     if (effectiveMaxContinues != null) args.push("--max-autopilot-continues", String(effectiveMaxContinues));
   }
-  if (silent) args.push("--silent");
+  if (effectiveSilent) args.push("--silent");
 
   if (agentSlug && agentFileExists(agentSlug)) {
     args.push("--agent", agentSlug);
     // Force explicit model even with custom agent to avoid default-model fallback.
-    pushResolvedModelArg(model);
-  } else if (model) {
+    pushResolvedModelArg(effectiveModel);
+  } else if (effectiveModel) {
     // No agent file — explicit model only.
-    pushResolvedModelArg(model);
+    pushResolvedModelArg(effectiveModel);
   }
 
   let promptText = String(prompt);
