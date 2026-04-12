@@ -447,4 +447,44 @@ describe("isWorkerCycleArtifactsSnapshotContractValid", () => {
     };
     assert.equal(isWorkerCycleArtifactsSnapshotContractValid(snapshot), false);
   });
+
+  it("negative path — returns false when latest cycleId and record cycleId diverge", () => {
+    const updatedAt = new Date().toISOString();
+    const snapshot = {
+      schemaVersion: 1,
+      updatedAt,
+      latestCycleId: "cycle-a",
+      cycles: {
+        "cycle-a": {
+          cycleId: "cycle-b",
+          updatedAt,
+          status: "running",
+          workerSessions: {},
+          workerActivity: {},
+          completedTaskIds: [],
+        },
+      },
+    };
+    assert.equal(isWorkerCycleArtifactsSnapshotContractValid(snapshot), false);
+  });
+
+  it("negative path — returns false when latest cycle status is empty", () => {
+    const updatedAt = new Date().toISOString();
+    const snapshot = {
+      schemaVersion: 1,
+      updatedAt,
+      latestCycleId: "cycle-a",
+      cycles: {
+        "cycle-a": {
+          cycleId: "cycle-a",
+          updatedAt,
+          status: "",
+          workerSessions: {},
+          workerActivity: {},
+          completedTaskIds: [],
+        },
+      },
+    };
+    assert.equal(isWorkerCycleArtifactsSnapshotContractValid(snapshot), false);
+  });
 });

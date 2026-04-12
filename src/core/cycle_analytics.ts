@@ -459,8 +459,12 @@ export function isWorkerCycleArtifactsSnapshotContractValid(artifactData: unknow
     if (!(field in (latestRecord as Record<string, unknown>))) return false;
   }
   const rec = latestRecord as Record<string, unknown>;
+  const recCycleId = String(rec.cycleId || "").trim();
+  if (!recCycleId || recCycleId !== latestCycleId) return false;
   const recUpdatedAt = String(rec.updatedAt || "").trim();
   if (!recUpdatedAt || !Number.isFinite(Date.parse(recUpdatedAt))) return false;
+  const recStatus = String(rec.status || "").trim();
+  if (!recStatus) return false;
   if (!rec.workerSessions || typeof rec.workerSessions !== "object" || Array.isArray(rec.workerSessions)) return false;
   if (!rec.workerActivity || typeof rec.workerActivity !== "object" || Array.isArray(rec.workerActivity)) return false;
   if (!Array.isArray(rec.completedTaskIds)) return false;
