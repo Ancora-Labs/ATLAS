@@ -54,6 +54,49 @@ export function getTestCommand(config) {
 export { DEFAULTS as VERIFICATION_DEFAULTS };
 
 /**
+ * Generic verification commands that do not prove an exact test target.
+ *
+ * These commands may be executable and portable, but they are too broad to
+ * serve as deterministic completion evidence for merge-oriented work. A worker
+ * asked to satisfy an exact verification proof must reference a concrete test
+ * file (and optionally a named test description), not just a bare runner.
+ */
+export const NON_SPECIFIC_VERIFICATION_PATTERNS = Object.freeze([
+  /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test(?:\s|$)/i,
+  /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?build(?:\s|$)/i,
+  /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?lint(?:\s|$)/i,
+  /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?check(?:\s|$)/i,
+  /^node\s+--test(?:\s|$)/i,
+  /^(?:npx\s+)?(?:vitest|jest|mocha|ava)(?:\s+(?:run|test))?(?:\s|$)/i,
+  /^run\s+(?:test|check)(?:\s|$)/i,
+]);
+
+const EXACT_TEST_FILE_PATTERN =
+  /(?:^|[\s"'`])(?:tests?[/\\][^\s"'`*?]+\.(?:test|spec)\.[cm]?[jt]sx?|[^\s"'`*?]+\.(?:test|spec)\.[cm]?[jt]sx?)(?:$|[\s"'`])/i;
+
+const NAMED_TEST_PROOF_TARGET_PATTERN =
+  /^(tests\/[^\s—–-]+(?:\.test\.[cm]?[jt]sx?|\.spec\.[cm]?[jt]sx?))\s*(?:[—–-]+\s*(?:test:|it:|describe:|should\s)?(.+))?$/i;
+
+/**
+ * Returns true when a verification command is too broad to prove an exact
+ * verification target for merge-oriented work.
+ *
+ * Specific test file references (for example `tests/core/foo.test.ts`) are
+ * treated as exact proof targets and therefore return false.
+ *
+ * @param {string} command — verification command or proof text
+ * @returns {boolean} true when the command is executable but non-specific
+ */
+export function isNonSpecificVerificationCommand(command: string): boolean {
+  const text = String(command || "").trim();
+  if (!text) return false;
+  if (EXACT_TEST_FILE_PATTERN.test(text)) return false;
+  if (NAMED_TEST_PROOF_TARGET_PATTERN.test(text)) return false;
+  if (/--testNamePattern\s*=\s*['"][^'"]{4,}['"]/i.test(text)) return false;
+  return NON_SPECIFIC_VERIFICATION_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+/**
  * Forbidden verification command patterns (Packet 4).
  * These patterns are known to fail on Windows (glob non-expansion) or
  * waste premium requests. Plans containing these must be rejected.

@@ -25,6 +25,7 @@ import {
   hasCleanTreeStatusEvidence,
   VERIFICATION_REPORT_TEMPLATE_GAP,
   VERIFICATION_REPORT_MALFORMED_GAP,
+  NON_SPECIFIC_VERIFICATION_GAP,
   parseToolExecutionTelemetry,
   checkHookEnvelopeDecisionPairing,
 } from "../../src/core/verification_gate.js";
@@ -1914,6 +1915,56 @@ describe("verification_gate — packet-named verification proof gate (Task 1)", 
     assert.ok(namedGap,
       `gaps must reference the missing named test file; got: [${result.gaps.join("; ")}]`
     );
+  });
+});
+
+describe("verification_gate — exact-proof verification target enforcement", () => {
+  const COMPLETE_DONE_OUTPUT = [
+    "BOX_MERGED_SHA=abc1234f",
+    "CLEAN_TREE_STATUS=clean",
+    "===NPM TEST OUTPUT START===",
+    "# Subtest: verification_gate.test.ts",
+    "ok 1 - rejects generic verification",
+    "# pass 1",
+    "===NPM TEST OUTPUT END===",
+    "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass",
+    "BOX_PR_URL=https://github.com/org/repo/pull/123",
+  ].join("\n");
+
+  it("rejects merge-oriented done output when verification target is generic", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: COMPLETE_DONE_OUTPUT,
+    }, {
+      taskKind: "backend",
+      verificationText: "npm test",
+    });
+    assert.equal(result.passed, false);
+    assert.ok(result.gaps.includes(`${NON_SPECIFIC_VERIFICATION_GAP}: "npm test"`));
+  });
+
+  it("rejects merge-oriented done output when verification target uses a Windows-incompatible glob", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: COMPLETE_DONE_OUTPUT,
+    }, {
+      taskKind: "backend",
+      verificationText: "node --test tests/**/*.test.ts",
+    });
+    assert.equal(result.passed, false);
+    assert.ok(result.gaps.some((gap) => gap.includes("non-portable command")));
+  });
+
+  it("does not enforce exact-proof target for discovery-safe task kinds", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: "VERIFICATION_REPORT: BUILD=n/a; TESTS=n/a; EDGE_CASES=n/a",
+    }, {
+      taskKind: "scan",
+      verificationText: "npm test",
+    });
+    const verificationGap = result.gaps.find((gap) => gap.includes("Verification target"));
+    assert.equal(verificationGap, undefined);
   });
 });
 

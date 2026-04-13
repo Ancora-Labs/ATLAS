@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { getVerificationCommands, getTestCommand, VERIFICATION_DEFAULTS, checkForbiddenCommands, FORBIDDEN_VERIFICATION_PATTERNS, rewriteVerificationCommand, VERIFICATION_CMD_REWRITE_RULES, normalizeCommandBatch, validateDispatchCommands } from "../../src/core/verification_command_registry.js";
+import { getVerificationCommands, getTestCommand, VERIFICATION_DEFAULTS, checkForbiddenCommands, FORBIDDEN_VERIFICATION_PATTERNS, rewriteVerificationCommand, VERIFICATION_CMD_REWRITE_RULES, normalizeCommandBatch, validateDispatchCommands, NON_SPECIFIC_VERIFICATION_PATTERNS, isNonSpecificVerificationCommand } from "../../src/core/verification_command_registry.js";
 import { applyDispatchCommandGate } from "../../src/core/verification_gate.js";
 
 describe("verification_command_registry", () => {
@@ -194,6 +194,36 @@ describe("normalizeCommandBatch — end-to-end batch normalization", () => {
     assert.ok(!result.some(cmd => cmd.includes("*")),
       `glob must not survive normalization; got: [${result.join(", ")}]`
     );
+  });
+});
+
+describe("isNonSpecificVerificationCommand — exact-proof hardening", () => {
+  it("flags bare npm test as non-specific verification", () => {
+    assert.equal(isNonSpecificVerificationCommand("npm test"), true);
+    assert.equal(isNonSpecificVerificationCommand("npm run build"), true);
+  });
+
+  it("flags bare node --test runner invocations as non-specific", () => {
+    assert.equal(isNonSpecificVerificationCommand("node --test"), true);
+  });
+
+  it("does not flag a concrete test file target", () => {
+    assert.equal(
+      isNonSpecificVerificationCommand("tests/core/verification_gate.test.ts — test: rejects generic verification"),
+      false,
+    );
+    assert.equal(
+      isNonSpecificVerificationCommand("npm test -- tests/core/verification_gate.test.ts"),
+      false,
+    );
+  });
+
+  it("negative path: placeholder-empty input is not treated as non-specific evidence", () => {
+    assert.equal(isNonSpecificVerificationCommand(""), false);
+  });
+
+  it("exports a non-empty pattern registry for non-specific verification commands", () => {
+    assert.ok(NON_SPECIFIC_VERIFICATION_PATTERNS.length > 0);
   });
 });
 

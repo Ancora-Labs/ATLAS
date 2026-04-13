@@ -279,6 +279,16 @@ function deriveOutcomeQualityScore(status: string, verificationEvidence: unknown
   return 0;
 }
 
+export function resolvePostVerificationTelemetryOutcome(
+  status: unknown,
+  reworkDecision?: { shouldRework?: boolean; shouldEscalate?: boolean } | null,
+): string {
+  const normalizedStatus = String(status || "unknown").trim().toLowerCase();
+  if (reworkDecision?.shouldRework) return TERMINATION_CAUSE.VERIFICATION_FAILED;
+  if (reworkDecision?.shouldEscalate && normalizedStatus === "done") return "blocked";
+  return normalizedStatus || "unknown";
+}
+
 type SpawnAsyncResult = {
   status: number;
   stdout: string;
@@ -2835,7 +2845,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       writeFileSync(auditPath, JSON.stringify(audit, null, 2), "utf8");
     } catch { /* non-critical */ }
 
-    const reworkDecision = decideRework(validationResult, instruction.task, currentAttempt, maxReworkAttempts);
+      const reworkDecision = decideRework(validationResult, instruction.task, currentAttempt, maxReworkAttempts);
+      const telemetryOutcome = resolvePostVerificationTelemetryOutcome(parsed.status, reworkDecision);
 
     if (reworkDecision.shouldEscalate) {
       // Max rework attempts exhausted — block the task instead of looping
@@ -2866,12 +2877,36 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       await appendProgress(config,
         `[WORKER:${roleName}] Verification failed (attempt ${currentAttempt + 1}/${maxReworkAttempts}) — gaps: ${validationResult.gaps.slice(0, 2).join("; ")}`
       );
+      logPremiumUsage(config, roleName, model, instruction.taskKind, Date.now() - startMs, {
+        outcome: telemetryOutcome,
+        taskId: instruction.taskId || instruction.task || null,
+        lineageId: _dispatchLineageId,
+      });
+      updateMemoryHitOutcome(config, _memoryHitTaskId || null, telemetryOutcome);
+      try {
+        await realizeRouteROIEntry(
+          config,
+          routingTaskId,
+          deriveOutcomeQualityScore(telemetryOutcome, verificationEvidence, dispatchContract),
+          telemetryOutcome,
+        );
+      } catch {
+        // non-critical routing telemetry
+      }
       // Re-dispatch with rework instruction; recursive depth is bounded by maxReworkAttempts
       return runWorkerConversation(config, roleName, reworkDecision.instruction, updatedHistory, sessionState);
     }
 
     parsed.verificationEvidence = verificationEvidence;
   }
+
+  const finalTelemetryOutcome = resolvePostVerificationTelemetryOutcome(parsed.status);
+  logPremiumUsage(config, roleName, model, instruction.taskKind, Date.now() - startMs, {
+    outcome: finalTelemetryOutcome,
+    taskId: instruction.taskId || instruction.task || null,
+    lineageId: _dispatchLineageId,
+  });
+  updateMemoryHitOutcome(config, _memoryHitTaskId || null, finalTelemetryOutcome);
 
   await appendLiveWorkerLog(
     liveLogPath,
@@ -3042,8 +3077,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     await realizeRouteROIEntry(
       config,
       routingTaskId,
-      deriveOutcomeQualityScore(parsed.status, parsed.verificationEvidence || null, dispatchContract),
-      parsed.status,
+      deriveOutcomeQualityScore(finalTelemetryOutcome, parsed.verificationEvidence || null, dispatchContract),
+      finalTelemetryOutcome,
     );
   } catch {
     // non-critical routing telemetry

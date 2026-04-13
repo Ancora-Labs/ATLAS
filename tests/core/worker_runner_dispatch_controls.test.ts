@@ -558,6 +558,122 @@ describe("generateRuntimeHookDecisions", () => {
   });
 });
 
+describe("worker_runner verification telemetry outcome hardening", () => {
+  it("maps rework-queued done results to verification_failed telemetry", async () => {
+    const { resolvePostVerificationTelemetryOutcome } = await import("../../src/core/worker_runner.js");
+    assert.equal(
+      resolvePostVerificationTelemetryOutcome("done", { shouldRework: true, shouldEscalate: false }),
+      "verification_failed",
+    );
+  });
+
+  it("negative path: preserves clean done outcomes when no rework is queued", async () => {
+    const { resolvePostVerificationTelemetryOutcome } = await import("../../src/core/worker_runner.js");
+    assert.equal(resolvePostVerificationTelemetryOutcome("done"), "done");
+  });
+});
+
+describe("worker_runner verification closure pipeline", () => {
+  it("keeps non-portable or non-specific verification evidence out of worker closure and Athena fast-paths", async () => {
+    const { parseWorkerResponse, resolvePostVerificationTelemetryOutcome } = await import("../../src/core/worker_runner.js");
+    const {
+      validateWorkerContract,
+      decideRework,
+      buildReplayClosureEvidence,
+      hasVerificationReportEvidence,
+    } = await import("../../src/core/verification_gate.js");
+    const {
+      runAthenaPostmortem,
+      POSTMORTEM_REVIEW_STATUS,
+    } = await import("../../src/core/athena_reviewer.js");
+
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "box-verification-closure-"));
+    try {
+      fs.writeFileSync(path.join(stateDir, "policy.json"), JSON.stringify({ blockedCommands: [] }), "utf8");
+
+      const stdout = [
+        "BOX_STATUS=done",
+        "BOX_MERGED_SHA=abc1234f",
+        "CLEAN_TREE_STATUS=clean",
+        "===NPM TEST OUTPUT START===",
+        "node --test tests/**/*.test.ts",
+        "glob patterns are not expanded on Windows",
+        "npm test",
+        "# Subtest: verification_gate.test.ts",
+        "ok 1 - rejects generic verification",
+        "# pass 1",
+        "===NPM TEST OUTPUT END===",
+        "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass; API=n/a; RESPONSIVE=n/a",
+        "BOX_PR_URL=https://github.com/org/repo/pull/123",
+        "BOX_EXPECTED_OUTCOME=reject generic verification evidence",
+        "BOX_ACTUAL_OUTCOME=worker claimed done with generic verification target",
+        "BOX_DEVIATION=minor",
+      ].join("\n");
+
+      const parsed = parseWorkerResponse(stdout, "");
+      assert.equal(parsed.status, "done");
+
+      const validation = validateWorkerContract("backend", parsed, {
+        taskKind: "backend",
+        verificationText: "npm test",
+      });
+      assert.equal(validation.passed, false);
+      assert.ok(validation.gaps.some((gap) => gap.includes("Verification target is non-specific")));
+
+      const reworkDecision = decideRework(validation, "Harden verification closure", 0, 2);
+      assert.equal(reworkDecision.shouldRework, true);
+      assert.equal(
+        resolvePostVerificationTelemetryOutcome(parsed.status, reworkDecision),
+        "verification_failed",
+      );
+
+      const replayClosure = buildReplayClosureEvidence(parsed.fullOutput);
+      const athenaResult: any = await runAthenaPostmortem({
+        paths: {
+          stateDir,
+          progressFile: path.join(stateDir, "progress.log"),
+          policyFile: path.join(stateDir, "policy.json"),
+        },
+        env: {
+          targetRepo: "Ancora-Labs/Box",
+          copilotCliCommand: "__missing_copilot_binary__",
+        },
+        roleRegistry: {
+          qualityReviewer: { name: "Athena", model: "test-model" },
+        },
+        athena: { forceAiPostmortem: true },
+      } as any, {
+        roleName: "quality-worker",
+        status: "blocked",
+        summary: `Verification rejected: ${validation.gaps.join("; ")}`,
+        verificationPassed: false,
+        verificationEvidence: { build: "pass", tests: "fail", lint: "n/a" },
+        dispatchContract: {
+          doneWorkerWithVerificationReportEvidence: hasVerificationReportEvidence(parsed.fullOutput),
+          doneWorkerWithCleanTreeStatusEvidence: true,
+          dispatchBlockReason: "verification_failed:nonspecific-target",
+          closureBoundaryViolation: false,
+          replayClosure: {
+            contractSatisfied: replayClosure.contractSatisfied,
+            canonicalCommands: replayClosure.canonicalCommands,
+            executedCommands: replayClosure.executedCommands,
+            rawArtifactEvidenceLinks: replayClosure.rawArtifactEvidenceLinks,
+          },
+        },
+      } as any, {
+        task: "Reject generic verification evidence",
+        riskLevel: "low",
+        verification: "npm test",
+      } as any);
+
+      assert.equal(athenaResult.reviewStatus, POSTMORTEM_REVIEW_STATUS.DEGRADED_REVIEW_REQUIRED);
+      assert.equal(athenaResult.closureEvidenceEnvelope == null, true);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
 // ── FailureEnvelope fields in dispatch results ────────────────────────────────
 
 import {
