@@ -49,6 +49,11 @@ import {
   selectWorkerCycleRecord,
 } from "../../src/core/cycle_analytics.js";
 import { isTerminalWorkerStatus } from "../../src/core/worker_runner.js";
+import {
+  auditReplayPolicySignals,
+  computeDispatchStrictness,
+  DISPATCH_STRICTNESS,
+} from "../../src/core/parser_replay_harness.js";
 
 // ── 1. Dependency Wave Order ───────────────────────────────────────────────────
 
@@ -175,6 +180,117 @@ describe("Integration: worker terminal status contract", () => {
     assert.equal(isTerminalWorkerStatus("partial"), true);
     assert.equal(isTerminalWorkerStatus("blocked"), true);
     assert.equal(isTerminalWorkerStatus("working"), false);
+  });
+});
+
+describe("Integration: typed handoff replay contract", () => {
+  it("typed handoff chain snapshots remain replay-auditable after orchestration expansion", () => {
+    const typedDispatchPlans = [
+      {
+        task_id: "T-chain-1",
+        task: "Quality stage",
+        role: "quality-worker",
+        wave: 1,
+        _chainMode: true,
+        _chainId: "chain-1",
+        _chainStageIndex: 1,
+        _chainStageTotal: 2,
+        _typedHandoffArtifact: {
+          id: "handoff-1",
+          chainId: "chain-1",
+          stage: "quality",
+          artifactKey: "chain-1:quality:artifact",
+        },
+      },
+      {
+        task_id: "T-chain-2",
+        task: "Integration stage",
+        role: "integration-worker",
+        wave: 2,
+        _chainMode: true,
+        _chainId: "chain-1",
+        _chainStageIndex: 2,
+        _chainStageTotal: 2,
+        _typedHandoffArtifact: {
+          id: "handoff-2",
+          chainId: "chain-1",
+          stage: "integration",
+          artifactKey: "chain-1:integration:artifact",
+        },
+      },
+    ];
+
+    const audit = auditReplayPolicySignals({
+      expectedDomains: ["typed_handoffs"],
+      dispatchPlans: typedDispatchPlans,
+    });
+
+    assert.equal(audit.passed, true);
+    assert.equal(audit.regressionCount, 0);
+  });
+
+  it("negative path: typed handoff snapshots fail closed when artifact metadata is incomplete", () => {
+    const audit = auditReplayPolicySignals({
+      expectedDomains: ["typed_handoffs"],
+      dispatchPlans: [
+        {
+          task_id: "T-chain-1",
+          task: "Broken stage",
+          role: "quality-worker",
+          wave: 1,
+          _chainMode: true,
+          _chainId: "chain-1",
+          _chainStageIndex: 1,
+          _chainStageTotal: 2,
+          _typedHandoffArtifact: {
+            id: "",
+            chainId: "chain-1",
+            stage: "quality",
+            artifactKey: "",
+          },
+        },
+      ],
+    });
+
+    assert.equal(audit.passed, false);
+    assert.equal(audit.regressionCount, 1);
+    assert.equal(
+      audit.results.find((entry) => entry.domain === "typed_handoffs")?.passed,
+      false,
+    );
+  });
+
+  it("dispatch strictness blocks when multiple replay signal domains regress together", () => {
+    const audit = auditReplayPolicySignals({
+      expectedDomains: ["candidate_planning", "typed_handoffs", "phase_retry"],
+      dispatchPlans: [
+        {
+          task_id: "T-chain-1",
+          task: "Broken stage",
+          role: "quality-worker",
+          wave: 1,
+          _chainMode: true,
+          _chainId: "chain-1",
+          _chainStageIndex: 1,
+          _chainStageTotal: 2,
+          _typedHandoffArtifact: {
+            id: "",
+            chainId: "chain-1",
+            stage: "quality",
+            artifactKey: "",
+          },
+        },
+      ],
+      attemptCheckpoints: [],
+    });
+    const strictness = computeDispatchStrictness(
+      { regressionCount: 0, totalCount: 10, passed: true, computedAt: "2026-04-13T00:00:00.000Z" },
+      null,
+      audit,
+    );
+
+    assert.equal(audit.regressionCount, 3);
+    assert.equal(strictness.strictness, DISPATCH_STRICTNESS.BLOCKED);
   });
 });
 

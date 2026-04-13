@@ -24,7 +24,7 @@
  *   AC16: This file is referenced explicitly as the replay-specific test file.
  *   AC17: PolicyEvalResult schema verified (all required fields + enums).
  *   AC18: Reason codes enumerated and tested: MISSING_CYCLES, INVALID_CYCLE,
- *         POLICY_ERROR, INSUFFICIENT_CYCLES, INVALID_POLICY.
+ *         POLICY_ERROR, INSUFFICIENT_CYCLES, INVALID_POLICY, SIGNAL_REGRESSION.
  *   AC19: status enum values tested: "ok" | "degraded" | "error".
  */
 
@@ -59,6 +59,125 @@ async function writeTestJson(dir, filename, data) {
 async function writeRaw(dir, filename, text) {
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, filename), text, "utf8");
+}
+
+async function writeReplayPolicySignalFixtures(dir, overrides = {}) {
+  const plannerCheckpoint = Object.prototype.hasOwnProperty.call(overrides, "plannerCheckpoint")
+    ? overrides.plannerCheckpoint
+    : {
+    candidatePlanning: {
+      enabled: true,
+      candidateCount: 2,
+      selectedIndex: 1,
+      selectedLabel: "candidate-b",
+      score: 0.91,
+      tieBreakUsed: false,
+      reason: "clear-winner",
+      summaries: [
+        { label: "candidate-a", originalPlanCount: 1, admittedPlanCount: 1, contractPassRate: 0.6, freshnessPenalty: 0.2 },
+        { label: "candidate-b", originalPlanCount: 1, admittedPlanCount: 1, contractPassRate: 1, freshnessPenalty: 0 },
+      ],
+    },
+  };
+  const dispatchCheckpoint = Object.prototype.hasOwnProperty.call(overrides, "dispatchCheckpoint")
+    ? overrides.dispatchCheckpoint
+    : {
+    schemaVersion: 2,
+    replayCompatibility: { replayContractVersion: 1 },
+    dispatchPlanSnapshot: [
+      {
+        task_id: "T-chain-1",
+        task: "Quality stage",
+        role: "quality-worker",
+        wave: 1,
+        _chainMode: true,
+        _chainId: "chain-1",
+        _chainStageIndex: 1,
+        _chainStageTotal: 2,
+        _typedHandoffArtifact: {
+          id: "handoff-1",
+          chainId: "chain-1",
+          stage: "quality",
+          artifactKey: "chain-1:quality:artifact",
+        },
+      },
+      {
+        task_id: "T-chain-2",
+        task: "Integration stage",
+        role: "integration-worker",
+        wave: 2,
+        _chainMode: true,
+        _chainId: "chain-1",
+        _chainStageIndex: 2,
+        _chainStageTotal: 2,
+        _typedHandoffArtifact: {
+          id: "handoff-2",
+          chainId: "chain-1",
+          stage: "integration",
+          artifactKey: "chain-1:integration:artifact",
+        },
+      },
+    ],
+  };
+  const attemptCheckpoint = Object.prototype.hasOwnProperty.call(overrides, "attemptCheckpoint")
+    ? overrides.attemptCheckpoint
+    : {
+    retryStateKind: "phase_aware_retry_v1",
+    phaseOrder: ["plan", "edit", "test", "push"],
+    currentPhase: "test",
+    failedPhase: "test",
+    resumeFromPhase: "test",
+    lastCompletedPhase: "edit",
+    phaseStates: {
+      plan: { status: "done", evidence: [] },
+      edit: { status: "done", evidence: [] },
+      test: { status: "failed", evidence: [{ code: "tests_failed", detail: "unit test failed", source: "worker_output" }] },
+      push: { status: "pending", evidence: [] },
+    },
+    evidence: [{ code: "tests_failed", detail: "unit test failed", source: "worker_output" }],
+    mutation: {
+      strategy: "resume_from_failed_phase",
+      instructions: ["Reproduce the failed test before editing."],
+    },
+  };
+  const routeRoiLedger = Object.prototype.hasOwnProperty.call(overrides, "routeRoiLedger")
+    ? overrides.routeRoiLedger
+    : [
+    {
+      taskId: "T-hard-1",
+      model: "Claude Opus 4.6",
+      tier: "T3",
+      estimatedTokens: 1400,
+      expectedQuality: 0.92,
+      realizedQuality: 0.88,
+      outcome: "done",
+      roi: 62.86,
+      roiDelta: -2.85,
+      routedAt: "2026-04-13T00:00:00.000Z",
+      realizedAt: "2026-04-13T00:10:00.000Z",
+      lineageId: "chain-1",
+      taskKind: "integration",
+      role: "integration-worker",
+      cycleId: "cycle-1",
+      routingReasonCode: "hard-task-escalation",
+      hardChainSuccessRate: 1,
+      hardChainSampleCount: 1,
+      laneReliability: 0.92,
+    },
+  ];
+
+  if (plannerCheckpoint !== null) {
+    await writeTestJson(dir, "boundary_checkpoint_planner_cycle-1.json", plannerCheckpoint);
+  }
+  if (dispatchCheckpoint !== null) {
+    await writeTestJson(dir, "dispatch_checkpoint.json", dispatchCheckpoint);
+  }
+  if (attemptCheckpoint !== null) {
+    await writeTestJson(dir, "boundary_checkpoint_attempt_task-1.json", attemptCheckpoint);
+  }
+  if (routeRoiLedger !== null) {
+    await writeTestJson(dir, "route_roi_ledger.json", routeRoiLedger);
+  }
 }
 
 function makeConfig(stateDir, overrides = {}) {
@@ -136,14 +255,15 @@ describe("REPLAY_STATUS enum (AC8, AC19)", () => {
 // ── AC8/AC18: REPLAY_DEGRADED_REASON enum ────────────────────────────────────
 
 describe("REPLAY_DEGRADED_REASON enum (AC8, AC18)", () => {
-  it("is frozen with all five reason codes", () => {
+  it("is frozen with all six reason codes", () => {
     assert.ok(Object.isFrozen(REPLAY_DEGRADED_REASON));
     assert.equal(REPLAY_DEGRADED_REASON.MISSING_CYCLES,      "MISSING_CYCLES");
     assert.equal(REPLAY_DEGRADED_REASON.INVALID_CYCLE,       "INVALID_CYCLE");
     assert.equal(REPLAY_DEGRADED_REASON.POLICY_ERROR,        "POLICY_ERROR");
     assert.equal(REPLAY_DEGRADED_REASON.INSUFFICIENT_CYCLES, "INSUFFICIENT_CYCLES");
     assert.equal(REPLAY_DEGRADED_REASON.INVALID_POLICY,      "INVALID_POLICY");
-    assert.equal(Object.keys(REPLAY_DEGRADED_REASON).length, 5);
+    assert.equal(REPLAY_DEGRADED_REASON.SIGNAL_REGRESSION,   "SIGNAL_REGRESSION");
+    assert.equal(Object.keys(REPLAY_DEGRADED_REASON).length, 6);
   });
 });
 
@@ -637,6 +757,65 @@ describe("runReplay — successful replay (AC1–AC5, AC14)", () => {
     const persisted = JSON.parse(raw);
     assert.equal(persisted.replayId, result.replayId);
     assert.equal(persisted.status, result.status);
+  });
+});
+
+describe("runReplay — policy signal audit", () => {
+  let tmpDir;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-t023-signals-"));
+    await writeTestJson(tmpDir, "athena_postmortems.json", makePostmortems(FULL_ENTRIES));
+    await writeReplayPolicySignalFixtures(tmpDir);
+  });
+
+  after(async () => { await fs.rm(tmpDir, { recursive: true, force: true }); });
+
+  it("keeps replay status=ok when candidate planning, typed handoffs, phase retries, and hard-task routing signals are valid", async () => {
+    const result = await runReplay(makeConfig(tmpDir, {
+      replay: {
+        expectedSignalDomains: [
+          "candidate_planning",
+          "typed_handoffs",
+          "phase_retry",
+          "hard_task_routing",
+        ],
+      },
+    }), [makePolicy()]);
+
+    assert.equal(result.status, REPLAY_STATUS.OK);
+    assert.equal(result.degradedReason, null);
+    assert.equal(result.policySignalAudit.passed, true);
+    assert.equal(result.policySignalAudit.regressionCount, 0);
+    assert.deepEqual(
+      result.policySignalAudit.activeDomains.sort(),
+      ["candidate_planning", "hard_task_routing", "phase_retry", "typed_handoffs"],
+    );
+  });
+
+  it("fails closed with SIGNAL_REGRESSION when an expected replay signal snapshot is missing", async () => {
+    const missingSignalsDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-t023-signal-miss-"));
+    try {
+      await writeTestJson(missingSignalsDir, "athena_postmortems.json", makePostmortems(FULL_ENTRIES));
+      await writeReplayPolicySignalFixtures(missingSignalsDir, { plannerCheckpoint: null });
+
+      const result = await runReplay(makeConfig(missingSignalsDir, {
+        replay: {
+          expectedSignalDomains: ["candidate_planning"],
+        },
+      }), [makePolicy()]);
+
+      assert.equal(result.status, REPLAY_STATUS.DEGRADED);
+      assert.equal(result.degradedReason, REPLAY_DEGRADED_REASON.SIGNAL_REGRESSION);
+      assert.equal(result.policySignalAudit.passed, false);
+      assert.equal(result.policySignalAudit.regressionCount, 1);
+      assert.equal(
+        result.policySignalAudit.results.find((entry) => entry.domain === "candidate_planning")?.reason,
+        "candidate planning snapshot missing",
+      );
+    } finally {
+      await fs.rm(missingSignalsDir, { recursive: true, force: true });
+    }
   });
 });
 

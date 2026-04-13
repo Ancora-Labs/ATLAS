@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
+import { auditReplayPolicySignals } from "../../src/core/parser_replay_harness.js";
 
 // We test the exported/internal logic by exercising the module via exported symbols
 // and by monkey-patching state-file reads using a temp stateDir.
@@ -432,6 +433,84 @@ describe("worker_runner — realized ROI dispatch controls", () => {
     const result = await routeModelWithRealizedROI(config, {}, {});
     assert.equal(result.realizedROI, 0, "ledger read failure must silently yield roi=0");
     assert.ok(result.model, "still returns a model");
+  });
+});
+
+describe("worker_runner — replay signal contracts", () => {
+  it("phase-aware retry artifacts remain replay-auditable", () => {
+    const audit = auditReplayPolicySignals({
+      expectedDomains: ["phase_retry"],
+      attemptCheckpoints: [
+        {
+          retryStateKind: "phase_aware_retry_v1",
+          phaseOrder: ["plan", "edit", "test", "push"],
+          currentPhase: "test",
+          failedPhase: "test",
+          resumeFromPhase: "test",
+          lastCompletedPhase: "edit",
+          phaseStates: {
+            plan: { status: "done", evidence: [] },
+            edit: { status: "done", evidence: [] },
+            test: { status: "failed", evidence: [{ code: "tests_failed", detail: "unit test failed", source: "worker_output" }] },
+            push: { status: "pending", evidence: [] },
+          },
+          evidence: [{ code: "tests_failed", detail: "unit test failed", source: "worker_output" }],
+          mutation: {
+            strategy: "resume_from_failed_phase",
+            instructions: ["Re-run tests before more edits."],
+          },
+        },
+      ],
+    });
+
+    assert.equal(audit.passed, true);
+    assert.equal(audit.regressionCount, 0);
+  });
+
+  it("hard-task escalation telemetry remains replay-auditable", () => {
+    const audit = auditReplayPolicySignals({
+      expectedDomains: ["hard_task_routing"],
+      routingTelemetry: [
+        {
+          taskId: "T-hard-1",
+          lineageId: "chain-1",
+          taskKind: "integration",
+          outcome: "done",
+          expectedQuality: 0.92,
+          estimatedTokens: 1400,
+          routingReasonCode: "hard-task-escalation",
+          hardChainSuccessRate: 1,
+          hardChainSampleCount: 1,
+          laneReliability: 0.91,
+        },
+      ],
+    });
+
+    assert.equal(audit.passed, true);
+    assert.equal(audit.regressionCount, 0);
+  });
+
+  it("negative path: malformed hard-task telemetry is rejected by the replay audit", () => {
+    const audit = auditReplayPolicySignals({
+      expectedDomains: ["hard_task_routing"],
+      routingTelemetry: [
+        {
+          taskId: "T-hard-1",
+          lineageId: "",
+          taskKind: "integration",
+          outcome: "done",
+          expectedQuality: 0.92,
+          estimatedTokens: 1400,
+          routingReasonCode: "hard-task-escalation",
+          hardChainSuccessRate: 1.5,
+          hardChainSampleCount: 1,
+          laneReliability: 2,
+        },
+      ],
+    });
+
+    assert.equal(audit.passed, false);
+    assert.equal(audit.regressionCount, 1);
   });
 });
 

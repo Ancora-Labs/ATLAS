@@ -217,6 +217,272 @@ export interface DispatchStrictnessResult {
   reason:          string;
 }
 
+export const POLICY_SIGNAL_DOMAIN = Object.freeze({
+  CANDIDATE_PLANNING: "candidate_planning",
+  TYPED_HANDOFFS: "typed_handoffs",
+  PHASE_RETRY: "phase_retry",
+  HARD_TASK_ROUTING: "hard_task_routing",
+} as const);
+
+export type PolicySignalDomain = typeof POLICY_SIGNAL_DOMAIN[keyof typeof POLICY_SIGNAL_DOMAIN];
+
+export interface ReplayPolicySignalAuditEntry {
+  domain: PolicySignalDomain;
+  active: boolean;
+  passed: boolean;
+  reason: string;
+  evidence: string[];
+}
+
+export interface ReplayPolicySignalAudit {
+  passed: boolean;
+  regressionCount: number;
+  activeDomains: PolicySignalDomain[];
+  results: ReplayPolicySignalAuditEntry[];
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function normalizeExpectedDomains(value: unknown): Set<PolicySignalDomain> {
+  const domains = new Set<PolicySignalDomain>();
+  for (const item of Array.isArray(value) ? value : []) {
+    const normalized = String(item || "").trim().toLowerCase();
+    if ((Object.values(POLICY_SIGNAL_DOMAIN) as string[]).includes(normalized)) {
+      domains.add(normalized as PolicySignalDomain);
+    }
+  }
+  return domains;
+}
+
+function buildPolicySignalEntry(
+  domain: PolicySignalDomain,
+  active: boolean,
+  passed: boolean,
+  reason: string,
+  evidence: string[] = [],
+): ReplayPolicySignalAuditEntry {
+  return {
+    domain,
+    active,
+    passed,
+    reason,
+    evidence: evidence.filter(Boolean),
+  };
+}
+
+export function auditReplayPolicySignals(input: {
+  expectedDomains?: unknown;
+  candidatePlanning?: unknown;
+  dispatchPlans?: unknown;
+  attemptCheckpoints?: unknown;
+  routingTelemetry?: unknown;
+} = {}): ReplayPolicySignalAudit {
+  const expectedDomains = normalizeExpectedDomains(input.expectedDomains);
+  const results: ReplayPolicySignalAuditEntry[] = [];
+
+  {
+    const snapshot = input.candidatePlanning && typeof input.candidatePlanning === "object" && !Array.isArray(input.candidatePlanning)
+      ? input.candidatePlanning as Record<string, unknown>
+      : null;
+    const active = expectedDomains.has(POLICY_SIGNAL_DOMAIN.CANDIDATE_PLANNING) || snapshot !== null;
+    if (!active) {
+      results.push(buildPolicySignalEntry(
+        POLICY_SIGNAL_DOMAIN.CANDIDATE_PLANNING,
+        false,
+        true,
+        "candidate planning inactive",
+      ));
+    } else if (!snapshot) {
+      results.push(buildPolicySignalEntry(
+        POLICY_SIGNAL_DOMAIN.CANDIDATE_PLANNING,
+        true,
+        false,
+        "candidate planning snapshot missing",
+      ));
+    } else if (snapshot.enabled !== true) {
+      results.push(buildPolicySignalEntry(
+        POLICY_SIGNAL_DOMAIN.CANDIDATE_PLANNING,
+        true,
+        !expectedDomains.has(POLICY_SIGNAL_DOMAIN.CANDIDATE_PLANNING),
+        expectedDomains.has(POLICY_SIGNAL_DOMAIN.CANDIDATE_PLANNING)
+          ? "candidate planning expected but disabled"
+          : "candidate planning explicitly disabled",
+      ));
+    } else {
+      const candidateCount = Number(snapshot.candidateCount ?? 0);
+      const selectedIndex = Number(snapshot.selectedIndex ?? -1);
+      const selectedLabel = String(snapshot.selectedLabel || "");
+      const score = Number(snapshot.score ?? 0);
+      const tieBreakUsed = typeof snapshot.tieBreakUsed === "boolean";
+      const reason = String(snapshot.reason || "");
+      const summaries = Array.isArray(snapshot.summaries) ? snapshot.summaries : [];
+      const summaryValid = summaries.every((summary) => {
+        const row = summary && typeof summary === "object" ? summary as Record<string, unknown> : {};
+        return String(row.label || "").trim().length > 0
+          && isFiniteNumber(Number(row.originalPlanCount))
+          && isFiniteNumber(Number(row.admittedPlanCount))
+          && isFiniteNumber(Number(row.contractPassRate))
+          && isFiniteNumber(Number(row.freshnessPenalty));
+      });
+      const failClosed = snapshot.failClosed === true;
+      const selectedCandidateValid = selectedIndex >= 0
+        ? selectedLabel.trim().length > 0
+        : failClosed && selectedLabel.trim().length === 0 && reason.trim().length > 0;
+      const passed = Number.isInteger(candidateCount)
+        && candidateCount >= 2
+        && Number.isInteger(selectedIndex)
+        && isFiniteNumber(score)
+        && tieBreakUsed
+        && summaries.length === candidateCount
+        && summaryValid
+        && selectedCandidateValid;
+      results.push(buildPolicySignalEntry(
+        POLICY_SIGNAL_DOMAIN.CANDIDATE_PLANNING,
+        true,
+        passed,
+        passed ? "candidate planning snapshot valid" : "candidate planning snapshot malformed",
+        [
+          `candidateCount=${candidateCount}`,
+          `selectedIndex=${selectedIndex}`,
+          `selectedLabel=${selectedLabel || "<empty>"}`,
+          `failClosed=${String(failClosed)}`,
+        ],
+      ));
+    }
+  }
+
+  {
+    const plans = Array.isArray(input.dispatchPlans) ? input.dispatchPlans : [];
+    const typedPlans = plans.filter((plan) => plan && typeof plan === "object" && (
+      (plan as Record<string, unknown>)._chainMode === true
+      || !!(plan as Record<string, unknown>)._typedHandoffArtifact
+    ));
+    const active = expectedDomains.has(POLICY_SIGNAL_DOMAIN.TYPED_HANDOFFS) || typedPlans.length > 0;
+    if (!active) {
+      results.push(buildPolicySignalEntry(POLICY_SIGNAL_DOMAIN.TYPED_HANDOFFS, false, true, "typed handoffs inactive"));
+    } else if (typedPlans.length === 0) {
+      results.push(buildPolicySignalEntry(POLICY_SIGNAL_DOMAIN.TYPED_HANDOFFS, true, false, "typed handoff plans missing"));
+    } else {
+      const chains = new Map<string, number>();
+      const passed = typedPlans.every((plan) => {
+        const row = plan as Record<string, unknown>;
+        const artifact = row._typedHandoffArtifact && typeof row._typedHandoffArtifact === "object"
+          ? row._typedHandoffArtifact as Record<string, unknown>
+          : null;
+        const chainId = String(row._chainId || artifact?.chainId || "").trim();
+        if (chainId) chains.set(chainId, (chains.get(chainId) || 0) + 1);
+        const stageIndex = Number(row._chainStageIndex ?? 0);
+        const stageTotal = Number(row._chainStageTotal ?? 0);
+        return row._chainMode === true
+          && !!artifact
+          && chainId.length > 0
+          && String(artifact.id || "").trim().length > 0
+          && String(artifact.stage || "").trim().length > 0
+          && String(artifact.artifactKey || "").trim().length > 0
+          && Number.isInteger(stageIndex)
+          && Number.isInteger(stageTotal)
+          && stageIndex >= 1
+          && stageTotal >= 2
+          && stageIndex <= stageTotal;
+      }) && [...chains.values()].every((count) => count >= 2);
+      results.push(buildPolicySignalEntry(
+        POLICY_SIGNAL_DOMAIN.TYPED_HANDOFFS,
+        true,
+        passed,
+        passed ? "typed handoff snapshot valid" : "typed handoff snapshot malformed",
+        [`typedPlanCount=${typedPlans.length}`, `chainCount=${chains.size}`],
+      ));
+    }
+  }
+
+  {
+    const checkpoints = Array.isArray(input.attemptCheckpoints) ? input.attemptCheckpoints : [];
+    const active = expectedDomains.has(POLICY_SIGNAL_DOMAIN.PHASE_RETRY) || checkpoints.length > 0;
+    if (!active) {
+      results.push(buildPolicySignalEntry(POLICY_SIGNAL_DOMAIN.PHASE_RETRY, false, true, "phase-aware retry inactive"));
+    } else if (checkpoints.length === 0) {
+      results.push(buildPolicySignalEntry(POLICY_SIGNAL_DOMAIN.PHASE_RETRY, true, false, "phase-aware retry checkpoints missing"));
+    } else {
+      const phaseKeys = ["plan", "edit", "test", "push"];
+      const passed = checkpoints.every((checkpoint) => {
+        const row = checkpoint && typeof checkpoint === "object" ? checkpoint as Record<string, unknown> : {};
+        const phaseStates = row.phaseStates && typeof row.phaseStates === "object"
+          ? row.phaseStates as Record<string, unknown>
+          : {};
+        return row.retryStateKind === "phase_aware_retry_v1"
+          && Array.isArray(row.phaseOrder)
+          && (row.phaseOrder as unknown[]).length >= 1
+          && typeof row.currentPhase === "string"
+          && row.mutation
+          && typeof row.mutation === "object"
+          && typeof (row.mutation as Record<string, unknown>).strategy === "string"
+          && phaseKeys.every((phase) => {
+            const state = phaseStates[phase];
+            return state && typeof state === "object" && typeof (state as Record<string, unknown>).status === "string";
+          });
+      });
+      results.push(buildPolicySignalEntry(
+        POLICY_SIGNAL_DOMAIN.PHASE_RETRY,
+        true,
+        passed,
+        passed ? "phase-aware retry checkpoints valid" : "phase-aware retry checkpoints malformed",
+        [`checkpointCount=${checkpoints.length}`],
+      ));
+    }
+  }
+
+  {
+    const telemetry = Array.isArray(input.routingTelemetry) ? input.routingTelemetry : [];
+    const relevantRows = telemetry.filter((entry) => entry && typeof entry === "object" && (
+      String((entry as Record<string, unknown>).routingReasonCode || "").trim() === "hard-task-escalation"
+      || Number((entry as Record<string, unknown>).hardChainSampleCount ?? 0) > 0
+    ));
+    const active = expectedDomains.has(POLICY_SIGNAL_DOMAIN.HARD_TASK_ROUTING) || relevantRows.length > 0;
+    if (!active) {
+      results.push(buildPolicySignalEntry(POLICY_SIGNAL_DOMAIN.HARD_TASK_ROUTING, false, true, "hard-task routing inactive"));
+    } else if (relevantRows.length === 0) {
+      results.push(buildPolicySignalEntry(POLICY_SIGNAL_DOMAIN.HARD_TASK_ROUTING, true, false, "hard-task routing telemetry missing"));
+    } else {
+      const passed = relevantRows.every((entry) => {
+        const row = entry as Record<string, unknown>;
+        const hardChainSuccessRate = Number(row.hardChainSuccessRate ?? 0);
+        const laneReliability = Number(row.laneReliability ?? 0);
+        return String(row.taskId || "").trim().length > 0
+          && String(row.lineageId || "").trim().length > 0
+          && String(row.taskKind || "").trim().length > 0
+          && String(row.routingReasonCode || "").trim().length > 0
+          && String(row.outcome || "").trim().length > 0
+          && Number.isFinite(Number(row.expectedQuality ?? 0))
+          && Number.isFinite(Number(row.estimatedTokens ?? 0))
+          && Number.isFinite(hardChainSuccessRate)
+          && hardChainSuccessRate >= 0
+          && hardChainSuccessRate <= 1
+          && Number.isFinite(laneReliability)
+          && laneReliability >= 0
+          && laneReliability <= 1;
+      });
+      results.push(buildPolicySignalEntry(
+        POLICY_SIGNAL_DOMAIN.HARD_TASK_ROUTING,
+        true,
+        passed,
+        passed ? "hard-task routing telemetry valid" : "hard-task routing telemetry malformed",
+        [`telemetryCount=${relevantRows.length}`],
+      ));
+    }
+  }
+
+  const activeDomains = results.filter((entry) => entry.active).map((entry) => entry.domain);
+  const regressionCount = results.filter((entry) => entry.active && !entry.passed).length;
+  return {
+    passed: regressionCount === 0,
+    regressionCount,
+    activeDomains,
+    results,
+  };
+}
+
 /**
  * Compute the dispatch strictness level from replay harness regression data
  * and the current parser baseline recovery record.
@@ -234,7 +500,8 @@ export interface DispatchStrictnessResult {
  */
 export function computeDispatchStrictness(
   replayState:            ReplayRegressionState | null | undefined,
-  baselineRecoveryRecord: BaselineRecoveryRecord | null | undefined
+  baselineRecoveryRecord: BaselineRecoveryRecord | null | undefined,
+  policySignalAudit?: ReplayPolicySignalAudit | null | undefined,
 ): DispatchStrictnessResult {
   const totalCount      = typeof replayState?.totalCount === "number" ? replayState.totalCount : 0;
   const regressionCount = typeof replayState?.regressionCount === "number" ? replayState.regressionCount : 0;
@@ -260,9 +527,17 @@ export function computeDispatchStrictness(
         typeof cgap.dependencyGraph === "number" ? cgap.dependencyGraph : 0,
       )
     : 0;
+  const signalRegressionCount = typeof policySignalAudit?.regressionCount === "number"
+    ? policySignalAudit.regressionCount
+    : 0;
+  const signalReasons = Array.isArray(policySignalAudit?.results)
+    ? policySignalAudit.results
+      .filter((entry) => entry.active && !entry.passed)
+      .map((entry) => entry.domain)
+    : [];
 
   // Hard block: >50% of the replay corpus has regressed.
-  if (regressionRate > 0.5) {
+  if (regressionRate > 0.5 || signalRegressionCount >= 3) {
     return {
       strictness:      DISPATCH_STRICTNESS.BLOCKED,
       regressionRate,
@@ -271,7 +546,9 @@ export function computeDispatchStrictness(
       recoveryActive,
       penaltyCount,
       maxComponentGap,
-      reason: `Replay regression rate ${(regressionRate * 100).toFixed(0)}% exceeds 50% — dispatch blocked pending human review`,
+      reason: signalRegressionCount >= 3
+        ? `Replay policy signal regressions require review (${signalReasons.join(", ")})`
+        : `Replay regression rate ${(regressionRate * 100).toFixed(0)}% exceeds 50% — dispatch blocked pending human review`,
     };
   }
 
@@ -280,10 +557,12 @@ export function computeDispatchStrictness(
   // aggregate parserConfidence is still above 0.7, because a single deeply-degraded component
   // is a reliable precursor to plan quality failures.
   const hasDeepComponentDegradation = recoveryActive && maxComponentGap >= 0.4;
-  if (regressionRate > 0.2 || (recoveryActive && parserConfidence < 0.7) || hasDeepComponentDegradation) {
+  if (regressionRate > 0.2 || (recoveryActive && parserConfidence < 0.7) || hasDeepComponentDegradation || signalRegressionCount > 0) {
     let strictReason: string;
     if (regressionRate > 0.2) {
       strictReason = `Replay regression rate ${(regressionRate * 100).toFixed(0)}% exceeds 20%`;
+    } else if (signalRegressionCount > 0) {
+      strictReason = `Replay policy signal regressions detected (${signalReasons.join(", ")})`;
     } else if (parserConfidence < 0.7) {
       strictReason = `Baseline recovery active with deep confidence degradation (confidence=${parserConfidence})`;
     } else {

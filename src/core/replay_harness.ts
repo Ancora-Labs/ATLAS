@@ -68,6 +68,8 @@ import { readJsonSafe, READ_JSON_REASON, writeJson } from "./fs_utils.js";
 import { extractPostmortemEntries, migrateData, STATE_FILE_TYPE } from "./schema_registry.js";
 import { normalizeDecisionQualityLabel, DECISION_QUALITY_LABEL } from "./athena_reviewer.js";
 import { computeWeightedDecisionScore } from "./self_improvement.js";
+import { loadRouteROILedger } from "./model_policy.js";
+import { auditReplayPolicySignals } from "./parser_replay_harness.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -107,6 +109,7 @@ export const REPLAY_STATUS = Object.freeze({
  * POLICY_ERROR         — a policy candidate threw during evaluation
  * INSUFFICIENT_CYCLES  — fewer cycles loaded than requested (< N)
  * INVALID_POLICY       — policy candidate is missing required fields
+ * SIGNAL_REGRESSION    — replay-only policy signal contract is malformed
  */
 export const REPLAY_DEGRADED_REASON = Object.freeze({
   MISSING_CYCLES:      "MISSING_CYCLES",
@@ -114,6 +117,7 @@ export const REPLAY_DEGRADED_REASON = Object.freeze({
   POLICY_ERROR:        "POLICY_ERROR",
   INSUFFICIENT_CYCLES: "INSUFFICIENT_CYCLES",
   INVALID_POLICY:      "INVALID_POLICY",
+  SIGNAL_REGRESSION:   "SIGNAL_REGRESSION",
 });
 
 export const REPLAY_CHECKPOINT_CONTRACT_VERSION = 1;
@@ -440,6 +444,64 @@ async function readReplayCheckpointCompatibility(stateDir) {
   };
 }
 
+async function loadJsonIfPresent(filePath) {
+  const result = await readJsonSafe(filePath);
+  return result.ok ? result.data : null;
+}
+
+async function loadBoundaryCheckpoints(stateDir, prefix) {
+  let files;
+  try {
+    files = (await fs.readdir(stateDir, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(".json"))
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    return [];
+  }
+  const snapshots = [];
+  for (const fileName of files) {
+    const payload = await loadJsonIfPresent(path.join(stateDir, fileName));
+    if (payload && typeof payload === "object") {
+      snapshots.push(payload);
+    }
+  }
+  return snapshots;
+}
+
+function extractCandidatePlanningSnapshot(source) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+  const snapshot = (source as any).candidatePlanning ?? (source as any)._candidatePlanning;
+  return snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) ? snapshot : null;
+}
+
+async function loadReplayPolicySignals(config, stateDir) {
+  const overrides = config?.replay?.policySignals && typeof config.replay.policySignals === "object"
+    ? config.replay.policySignals
+    : {};
+  const dispatchCheckpoint = overrides.dispatchCheckpoint && typeof overrides.dispatchCheckpoint === "object"
+    ? overrides.dispatchCheckpoint
+    : await loadJsonIfPresent(path.join(stateDir, "dispatch_checkpoint.json"));
+  const plannerCheckpoints = Array.isArray(overrides.plannerCheckpoints)
+    ? overrides.plannerCheckpoints
+    : await loadBoundaryCheckpoints(stateDir, "boundary_checkpoint_planner");
+  const attemptCheckpoints = Array.isArray(overrides.attemptCheckpoints)
+    ? overrides.attemptCheckpoints
+    : await loadBoundaryCheckpoints(stateDir, "boundary_checkpoint_attempt");
+  const plannerSnapshot = plannerCheckpoints.find((checkpoint) => extractCandidatePlanningSnapshot(checkpoint)) ?? null;
+
+  return {
+    expectedDomains: overrides.expectedDomains ?? config?.replay?.expectedSignalDomains ?? [],
+    candidatePlanning: overrides.candidatePlanning ?? extractCandidatePlanningSnapshot(plannerSnapshot),
+    dispatchPlans: overrides.dispatchPlans
+      ?? (Array.isArray((dispatchCheckpoint as any)?.dispatchPlanSnapshot) ? (dispatchCheckpoint as any).dispatchPlanSnapshot : []),
+    attemptCheckpoints,
+    routingTelemetry: Array.isArray(overrides.routingTelemetry)
+      ? overrides.routingTelemetry
+      : await loadRouteROILedger(config),
+  };
+}
+
 // ── Main Replay Entry Point ───────────────────────────────────────────────────
 
 /**
@@ -522,13 +584,16 @@ export async function runReplay(config, policyCandidates) {
   const { cycles, sourceFiles } = snapshotResult;
   const checkpointCompatibility = await readReplayCheckpointCompatibility(stateDir);
   const inputHash = computeInputHash(cycles);
+  const policySignalAudit = auditReplayPolicySignals(await loadReplayPolicySignals(config, stateDir));
 
-  const topLevelStatus = (!checkpointCompatibility.compatible || cycles.length < cycleWindow)
+  const topLevelStatus = (!checkpointCompatibility.compatible || policySignalAudit.regressionCount > 0 || cycles.length < cycleWindow)
     ? REPLAY_STATUS.DEGRADED
     : REPLAY_STATUS.OK;
 
   const topLevelReason = !checkpointCompatibility.compatible
     ? checkpointCompatibility.reason
+    : policySignalAudit.regressionCount > 0
+      ? REPLAY_DEGRADED_REASON.SIGNAL_REGRESSION
     : cycles.length < cycleWindow
       ? REPLAY_DEGRADED_REASON.INSUFFICIENT_CYCLES
       : null;
@@ -624,6 +689,7 @@ export async function runReplay(config, policyCandidates) {
       reason: checkpointCompatibility.reason,
       contractVersion: REPLAY_CHECKPOINT_CONTRACT_VERSION,
     },
+    policySignalAudit,
     policyResults
   };
 
