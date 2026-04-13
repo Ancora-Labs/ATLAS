@@ -100,6 +100,7 @@ type WorkerInstruction = {
   context?: string;
   verification?: string;
   taskKind?: string;
+  originalTask?: string;
   targetFiles?: string[];
   [key: string]: unknown;
 };
@@ -1692,7 +1693,7 @@ async function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {
   const efficientModel = config?.copilot?.efficientModel || defaultModel;
 
   let candidate;
-  // 1. Task-kind override (e.g. "scan" always uses GPT-5.3-Codex)
+  // 1. Task-kind override from configured preferences
   if (taskKind) {
     const byKind = config?.copilot?.preferredModelsByTaskKind?.[taskKind];
     if (Array.isArray(byKind) && byKind.length > 0) candidate = byKind[0];
@@ -2104,6 +2105,8 @@ export function buildConversationContext(history, instruction: WorkerInstruction
     parts.push("  ✓ ===VERIFICATION_REPORT===              ← use pass/fail/n/a, not placeholders");
     parts.push("    BUILD=pass  TESTS=pass  SECURITY=pass  ...etc.");
     parts.push("    ===END_VERIFICATION===");
+    parts.push("  ✓ Emit exactly ONE ===VERIFICATION_REPORT=== block in the entire response.");
+    parts.push("    Put acceptance-criterion prose outside that block under a separate heading such as 'Acceptance Evidence:'.");
     parts.push("  ✓ BOX_EXPECTED_OUTCOME=<one-line: what this task was supposed to achieve>");
     parts.push("  ✓ BOX_ACTUAL_OUTCOME=<one-line: what was actually done/delivered>");
     parts.push("  ✓ BOX_DEVIATION=none|minor|major  ← 'none' if on-plan, 'minor'/'major' if off-plan");
@@ -2115,6 +2118,7 @@ export function buildConversationContext(history, instruction: WorkerInstruction
     parts.push("  - BOX_MERGED_SHA=<sha>");
     parts.push("  - <paste full raw npm test stdout here>");
     parts.push("  - POST_MERGE_TEST_OUTPUT");
+    parts.push("  - a second ===VERIFICATION_REPORT=== block");
     parts.push("Do NOT copy instructional examples verbatim into your final evidence block.");
   }
 
@@ -3568,7 +3572,16 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       writeFileSync(auditPath, JSON.stringify(audit, null, 2), "utf8");
     } catch { /* non-critical */ }
 
-    const reworkDecision = decideRework(validationResult, instruction.task, currentAttempt, maxReworkAttempts);
+    const canonicalOriginalTask = typeof instruction.originalTask === "string" && instruction.originalTask.trim()
+      ? instruction.originalTask.trim()
+      : String(instruction.task || "").trim();
+    const reworkDecision = decideRework(
+      validationResult,
+      instruction.task,
+      currentAttempt,
+      maxReworkAttempts,
+      { canonicalTask: canonicalOriginalTask },
+    );
     const telemetryOutcome = resolvePostVerificationTelemetryOutcome(parsed.status, reworkDecision);
 
     if (reworkDecision.shouldEscalate) {

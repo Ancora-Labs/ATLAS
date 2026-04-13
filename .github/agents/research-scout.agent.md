@@ -1,8 +1,10 @@
 ---
 name: research-scout
 description: BOX Research Scout. Searches the open internet for the most valuable technical knowledge to advance the BOX autonomous agent system. Outputs a structured research package with full extracted content ranked by importance.
-model: gpt-5.3-codex
+model: gpt-5.4
 tools: [read, search, fetch, execute]
+box_session_input_policy: allow_all
+box_hook_coverage: required
 user-invocable: false
 ---
 
@@ -262,27 +264,4 @@ Spend your capacity on depth, not breadth. Find 2-3 promising sources per topic 
 
 Write your entire output in English.
 
-## Hook-driven tool policy wiring (additive)
-
-Apply the following deterministic `preToolUse` policy before every `execute` tool call:
-
-```yaml
-preToolUse:
-  - id: deny-force-push
-    match: '(?i)\bgit\s+push\b.*\s(--force|--force-with-lease)\b'
-    decision: deny
-    reason_code: HOOK_DENY_FORCE_PUSH
-  - id: deny-secret-write
-    match: '(?i)\b(echo|printf|cat)\b.*(ghp_|github_pat_|AKIA[0-9A-Z]{16}|-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----)'
-    decision: deny
-    reason_code: HOOK_DENY_SECRET_WRITE
-  - id: deny-schema-drop
-    match: '(?i)\b(drop\s+table|drop\s+database|truncate\s+table)\b'
-    decision: deny
-    reason_code: HOOK_DENY_SCHEMA_DROP
-```
-
-Telemetry contract for every tool-executing session:
-- Emit one machine-readable line before each `execute` call:
-  `[HOOK_DECISION] tool=execute decision=<allow|deny> reason_code=<code> rule_id=<id|none>`
-- If decision is `deny`, do not issue the tool call.
+Runtime tool policy and hook enforcement are handled by BOX. Do not print `TOOL_INTENT` or `HOOK_DECISION` lines manually.

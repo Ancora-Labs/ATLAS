@@ -188,16 +188,16 @@ export function isAthenaReviewOrPostmortemTask(taskKind: unknown, taskText: unkn
 
 export function getRoleRegistry(config) {
   const fallback = {
-    ceoSupervisor: { id: "ceo-supervisor", name: "Jesus", model: "gpt-5.3-codex" },
-    planner: { id: "planner", name: "Prometheus", model: "gpt-5.3-codex" },
-    reviewer: { id: "reviewer", name: "Athena", model: "gpt-5.3-codex" },
+    ceoSupervisor: { id: "ceo-supervisor", name: "Jesus", model: "Claude Sonnet 4.6" },
+    planner: { id: "planner", name: "Prometheus", model: "gpt-5.4" },
+    reviewer: { id: "reviewer", name: "Athena", model: "Claude Sonnet 4.6" },
     workers: {
-      evolution:      { id: "worker-evolution",      name: "evolution-worker",      model: "gpt-5.3-codex", lane: "implementation" },
-      quality:        { id: "worker-quality",         name: "quality-worker",        model: "gpt-5.3-codex", lane: "quality" },
-      governance:     { id: "worker-governance",      name: "governance-worker",     model: "gpt-5.3-codex", lane: "governance" },
-      infrastructure: { id: "worker-infrastructure",  name: "infrastructure-worker", model: "gpt-5.3-codex", lane: "infrastructure" },
-      integration:    { id: "worker-integration",     name: "integration-worker",    model: "gpt-5.3-codex", lane: "integration" },
-      observation:    { id: "worker-observation",     name: "observation-worker",    model: "gpt-5.3-codex", lane: "observation" },
+      evolution:      { id: "worker-evolution",      name: "evolution-worker",      model: "gpt-5.4", lane: "implementation" },
+      quality:        { id: "worker-quality",         name: "quality-worker",        model: "gpt-5.4", lane: "quality" },
+      governance:     { id: "worker-governance",      name: "governance-worker",     model: "gpt-5.4", lane: "governance" },
+      infrastructure: { id: "worker-infrastructure",  name: "infrastructure-worker", model: "gpt-5.4", lane: "infrastructure" },
+      integration:    { id: "worker-integration",     name: "integration-worker",    model: "gpt-5.4", lane: "integration" },
+      observation:    { id: "worker-observation",     name: "observation-worker",    model: "gpt-5.4", lane: "observation" },
     }
   };
 

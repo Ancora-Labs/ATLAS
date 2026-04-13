@@ -277,6 +277,51 @@ describe("runAthenaPostmortem — recurrence weighted intervention metadata", ()
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("emits a verified closure evidence envelope for replay-verified done work", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-lifecycle-envelope-"));
+    try {
+      const config = {
+        paths: { stateDir, progressFile: path.join(stateDir, "progress.log"), policyFile: path.join(stateDir, "policy.json") },
+        env: { targetRepo: "CanerDoqdu/Box", copilotCliCommand: "__missing_copilot_binary__" },
+        roleRegistry: { qualityReviewer: { name: "Athena", model: "GPT-5.3-Codex" } },
+        athena: { forceAiPostmortem: false },
+      };
+      const workerResult = {
+        roleName: "quality-worker",
+        status: "done",
+        summary: "Replay-verified completion with clean post-merge evidence.",
+        verificationPassed: true,
+        verificationEvidence: { lint: "pass", tests: "pass", build: "pass" },
+        filesTouched: ["src/core/athena_reviewer.ts"],
+        preReviewIssues: [],
+        dispatchContract: {
+          doneWorkerWithVerificationReportEvidence: true,
+          doneWorkerWithCleanTreeStatusEvidence: true,
+          closureBoundaryViolation: false,
+          replayClosure: {
+            contractSatisfied: true,
+            canonicalCommands: ["git rev-parse HEAD", "git status --porcelain", "npm test"],
+            executedCommands: ["git rev-parse HEAD", "git status --porcelain", "npm test"],
+            rawArtifactEvidenceLinks: ["inline://post-merge-sha/abc123", "inline://clean-tree-status", "inline://npm-test-output-block"],
+          },
+        },
+      };
+      const originalPlan = {
+        task: "Harden postmortem closure tracking",
+        riskLevel: "low",
+        target_files: ["src/core/athena_reviewer.ts"],
+      };
+      const result: any = await runAthenaPostmortem(config as any, workerResult as any, originalPlan as any);
+
+      assert.equal(result.closureEvidenceEnvelope?.lifecycleState, "closed");
+      assert.equal(result.closureEvidenceEnvelope?.verified, true);
+      assert.equal(result.closureEvidenceEnvelope?.advisoryOnly, false);
+      assert.equal(result.closureEvidenceEnvelope?.verification?.replayClosureSatisfied, true);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── Task 3: Patched-plan validation gate ──────────────────────────────────────

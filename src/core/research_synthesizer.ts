@@ -789,7 +789,7 @@ export function sanitizeResearchSynthesisForPersistence(payload: {
     researchGaps,
     synthesizedAt: String(payload.synthesizedAt || new Date().toISOString()),
     scoutSourceCount: Number.isFinite(Number(payload.scoutSourceCount)) ? Math.max(0, Number(payload.scoutSourceCount)) : 0,
-    model: toSingleLine(payload.model, 80) || "gpt-5.3-codex",
+    model: toSingleLine(payload.model, 80) || "gpt-5.4",
     plannerSignals,
     ...(payload.qualityGate ? { qualityGate: payload.qualityGate } : {}),
     ...(payload.lastConsumedAt ? { lastConsumedAt: String(payload.lastConsumedAt) } : {}),
@@ -819,7 +819,7 @@ export interface ResearchSynthesisResult {
 export async function runResearchSynthesizer(config: any, scoutOutput: any): Promise<ResearchSynthesisResult> {
   const stateDir = config.paths?.stateDir || "state";
   const command = config.env?.copilotCliCommand || "copilot";
-  const model = config.roleRegistry?.researchSynthesizer?.model || "gpt-5.3-codex";
+  const model = config.roleRegistry?.researchSynthesizer?.model || "gpt-5.4";
 
   const ts = () => new Date().toISOString().replace("T", " ").slice(0, 19);
 
@@ -847,7 +847,7 @@ ${scoutRawText}`),
   ], {
     tokenBudget: resolveMaxPromptBudget(
       config,
-      String(model || "gpt-5.3-codex"),
+      String(model || "gpt-5.4"),
       Number(config?.runtime?.researchSynthesizerPromptTokenBudget)
     ) || undefined,
   });
@@ -882,7 +882,7 @@ ${scoutRawText}`),
   const cleanRaw = stripExecutionTranscriptNoise(raw);
   await appendAgentContextUsage(config, {
     agent: "research-synthesizer",
-    model: String(model || "gpt-5.3-codex"),
+    model: String(model || "gpt-5.4"),
     promptText: contextPrompt,
     status: (result as any).status === 0 ? "success" : "failed",
   });
@@ -953,7 +953,7 @@ Follow your agent definition's output format exactly.`),
     ], {
       tokenBudget: resolveMaxPromptBudget(
         config,
-        String(model || "gpt-5.3-codex"),
+        String(model || "gpt-5.4"),
         Number(config?.runtime?.researchSynthesizerPromptTokenBudget)
       ) || undefined,
     });
@@ -986,7 +986,7 @@ Follow your agent definition's output format exactly.`),
       const repairRaw = stripExecutionTranscriptNoise(String(repairResult?.stdout || repairResult?.stderr || ""));
       await appendAgentContextUsage(config, {
         agent: "research-synthesizer-repair",
-        model: String(model || "gpt-5.3-codex"),
+        model: String(model || "gpt-5.4"),
         promptText: repairPrompt,
         status: "success",
       });

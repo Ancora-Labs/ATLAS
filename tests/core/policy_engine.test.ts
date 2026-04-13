@@ -9,6 +9,7 @@ import {
   applyGovernanceDecision,
   loadHookPolicy,
   validateHookTelemetryConsistency,
+  auditAuthoritativeHookCoverage,
   type HookPolicy,
 } from "../../src/core/policy_engine.js";
 
@@ -549,5 +550,78 @@ describe("validateHookTelemetryConsistency", () => {
     );
     assert.equal(result.consistent, true);
     assert.equal(result.gaps.length, 0);
+  });
+});
+
+describe("auditAuthoritativeHookCoverage", () => {
+  it("passes when execute-capable sessions have deterministic runtime-backed coverage", () => {
+    const result = auditAuthoritativeHookCoverage({
+      sessionInputPolicy: "allow_all",
+      hookCoverage: "required",
+      telemetry: {
+        envelopes: [{ scope: "src/core", intent: "patch-gate", impact: "high", clearance: "admin" }],
+        hookDecisions: [{ envelopeScope: "src/core", envelopeIntent: "patch-gate", envelopeImpact: "high", envelopeClearance: "admin" }],
+        gaps: [],
+        hasDeterministicCoverage: true,
+      },
+      runtimeDecisions: [{ envelope: { scope: "src/core" }, decision: { decision: "allow" } }],
+      runtimeAuditGaps: [],
+    });
+
+    assert.equal(result.required, true);
+    assert.equal(result.covered, true);
+    assert.equal(result.reasonCode, null);
+  });
+
+  it("fails closed when required hook coverage is missing runtime decisions", () => {
+    const result = auditAuthoritativeHookCoverage({
+      sessionInputPolicy: "allow_all",
+      hookCoverage: "required",
+      telemetry: {
+        envelopes: [{ scope: "src/core", intent: "patch-gate", impact: "high", clearance: "admin" }],
+        hookDecisions: [],
+        gaps: [],
+        hasDeterministicCoverage: false,
+      },
+      runtimeDecisions: [],
+      runtimeAuditGaps: [],
+    });
+
+    assert.equal(result.required, true);
+    assert.equal(result.covered, false);
+    assert.ok(result.gaps.includes("HOOK_COVERAGE_MISSING_RUNTIME_DECISIONS"));
+  });
+
+  it("passes when required hook coverage has no hook activity to audit", () => {
+    const result = auditAuthoritativeHookCoverage({
+      sessionInputPolicy: "allow_all",
+      hookCoverage: "required",
+      telemetry: {
+        envelopes: [],
+        hookDecisions: [],
+        gaps: [],
+        hasDeterministicCoverage: false,
+      },
+      runtimeDecisions: [],
+      runtimeAuditGaps: [],
+    });
+
+    assert.equal(result.required, true);
+    assert.equal(result.covered, true);
+    assert.deepEqual(result.gaps, []);
+    assert.equal(result.reasonCode, null);
+  });
+
+  it("does not require hook coverage for no-tools sessions", () => {
+    const result = auditAuthoritativeHookCoverage({
+      sessionInputPolicy: "no_tools",
+      hookCoverage: "not_required",
+      telemetry: null,
+      runtimeDecisions: [],
+      runtimeAuditGaps: [],
+    });
+
+    assert.equal(result.required, false);
+    assert.equal(result.covered, true);
   });
 });

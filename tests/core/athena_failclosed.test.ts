@@ -820,6 +820,40 @@ describe("runAthenaPlanReview — HIGH_QUALITY_LOW_RISK fast-path", () => {
     assert.equal(result.autoApproved, undefined,
       "disablePlanReviewCache=true must suppress all fast-path approval including HIGH_QUALITY_LOW_RISK");
   });
+
+  it("bypasses unchanged fast-path when fragile lane telemetry is weak", async () => {
+    const plan = {
+      ...HIGH_QUALITY_PLAN,
+      role: "quality-worker",
+      task: "Add deterministic regression coverage for planner routing telemetry",
+    };
+    const config = makeConfig(tmpDir);
+    const prometheusOutput = { plans: [plan], analyzedAt: new Date().toISOString() };
+    await fs.writeFile(
+      path.join(tmpDir, "cycle_analytics.json"),
+      JSON.stringify({
+        lastCycle: {
+          laneTelemetry: {
+            quality: { completionRate: 0.4, roi: 0.5 },
+          },
+        },
+      }, null, 2),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(tmpDir, "athena_plan_review.json"),
+      JSON.stringify({
+        approved: true,
+        planBatchFingerprint: computePlanBatchFingerprint([plan]),
+        overallScore: 8,
+        planReviews: [],
+      }, null, 2),
+      "utf8",
+    );
+
+    const result = await runAthenaPlanReview(config, prometheusOutput);
+    assert.notEqual(result.autoApproveReason?.code, ATHENA_FAST_PATH_REASON.LOW_RISK_UNCHANGED);
+  });
 });
 
 describe("AUTO_APPROVE_DISPATCH_SIGNAL and appendAutoApproveTelemetry", () => {

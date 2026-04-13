@@ -675,4 +675,32 @@ describe("evaluatePreDispatchGovernanceGate — lane diversity pre-dispatch gate
     assert.equal(result.gateKey, "LANE_DIVERSITY");
     assert.equal(result.gateIndex, GATE_PRECEDENCE.LANE_DIVERSITY);
   });
+
+  it("passes when generic evolution-worker plans semantically expand into multiple lanes", async () => {
+    const config = passAllConfig({
+      workerPool: { minLanes: 2 },
+    });
+    const plans = [
+      {
+        role: "Evolution Worker",
+        task: "Normalize lane-diversity reason contract with compatibility bridge",
+        task_id: "lane-diversity-normalization",
+        target_files: ["src/core/governance_contract.ts", "src/core/orchestrator.ts"],
+        acceptance_criteria: ["Governance contract remains deterministic"],
+        verification: "npm test -- tests/core/orchestrator_gate_precedence.test.ts",
+        verification_commands: ["npm test -- tests/core/orchestrator_gate_precedence.test.ts"],
+      },
+      {
+        role: "Evolution Worker",
+        task: "Reconcile health audit capability detection with current Athena fidelity tracking",
+        task_id: "athena-audit-reconcile",
+        target_files: ["tests/core/athena_review_normalization.test.ts", "src/core/athena_reviewer.ts"],
+        acceptance_criteria: ["Regression test proves audit finding is retired"],
+        verification: "npm test -- tests/core/athena_review_normalization.test.ts",
+        verification_commands: ["npm test -- tests/core/athena_review_normalization.test.ts"],
+      },
+    ];
+    const result = await evaluatePreDispatchGovernanceGate(config, plans, "lane-diversity-semantic-routing-test");
+    assert.equal(result.blocked, false);
+  });
 });

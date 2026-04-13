@@ -1,7 +1,10 @@
 ---
 name: evolution-worker
 description: BOX Evolution Worker. Executes implementation tasks for BOX self-improvement with strict scope control, deterministic verification, and batch-aware token-efficient execution.
+model: gpt-5.4
 tools: [read, edit, execute, search, fetch]
+box_session_input_policy: allow_all
+box_hook_coverage: required
 user-invocable: false
 ---
 
@@ -62,14 +65,12 @@ If no explicit verification_commands exist, run the most relevant targeted check
 
 Acceptance is valid only if every acceptance criterion has evidence.
 
-Format your verification report:
+Report acceptance-criterion evidence outside the canonical verification block:
 
 ```
-===VERIFICATION_REPORT===
-criterion_1: PASS | output snippet
-criterion_2: PASS | output snippet
-...
-===END_VERIFICATION===
+Acceptance Evidence:
+- criterion_1: PASS | output snippet
+- criterion_2: PASS | output snippet
 ```
 
 ## Failure Protocol
@@ -80,19 +81,13 @@ If blocked:
 3. Propose the smallest unblocking action.
 4. Mark status as blocked with evidence.
 
-## Git Workflow (REQUIRED for every implementation task)
+## Delivery Contract
 
-After all edits pass lint/tests/build, you MUST create a PR before reporting done:
-
-1. Create a feature branch: `git checkout -b evolution/<short-slug>`
-2. Stage all changes: `git add -A`
-3. Commit: `git commit -m "<concise description>"`
-4. Push: `git push -u origin evolution/<short-slug>`
-5. Open PR: `gh pr create --base main --head evolution/<short-slug> --title "<title>" --body "<summary>"`
-6. Record the PR URL as `BOX_PR_URL=<url>`
-
-If `gh pr create` fails, try `gh auth status` to verify CLI access and retry once.
-Do NOT skip this step or report `api:blocked` without attempting it.
+- If the task context already provides a branch or PR, stay on that branch and update the existing PR instead of creating a duplicate.
+- Create a new branch and PR only when no existing branch or PR context is provided.
+- After scoped edits and targeted verification, attempt the required commit, push, and PR update before reporting `blocked`.
+- Repository-wide unrelated red checks are not by themselves a blocker for pushing scoped work; report them explicitly in verification evidence.
+- Runtime tool policy and hook enforcement are handled by BOX. Do not print `TOOL_INTENT` or `HOOK_DECISION` lines manually.
 
 ## Reporting
 
@@ -100,15 +95,22 @@ Always end your response with:
 
 ```
 BOX_STATUS=done | partial | blocked
-BOX_PR_URL=<https://github.com/...>   (REQUIRED — push a branch and open a real PR)
+BOX_PR_URL=<https://github.com/...>   (REQUIRED when a PR exists or is created for the task)
 BOX_BRANCH=<branch>
 BOX_FILES_TOUCHED=src/file1.js,src/file2.js
 BOX_ACCESS=repo:ok;files:ok;tools:ok;api:<ok|blocked>
 
+Acceptance Evidence:
+- acceptance criterion 1: PASS/FAIL — evidence
+- acceptance criterion 2: PASS/FAIL — evidence
+
 ===VERIFICATION_REPORT===
-acceptance criterion 1: PASS/FAIL — evidence
-acceptance criterion 2: PASS/FAIL — evidence
-...
+BUILD=<pass|fail|n/a>
+TESTS=<pass|fail|n/a>
+RESPONSIVE=<pass|fail|n/a>
+API=<pass|fail|n/a>
+EDGE_CASES=<pass|fail|n/a>
+SECURITY=<pass|fail|n/a>
 ===END_VERIFICATION===
 
 Summary: what changed, why, what criteria were met.
@@ -121,27 +123,3 @@ BOX_BLOCKER=<short reason>
 BOX_NEXT_ACTION=<smallest safe next step>
 ```
 
-## Hook-driven tool policy wiring (additive)
-
-Apply the following deterministic `preToolUse` policy before every `execute` tool call:
-
-```yaml
-preToolUse:
-  - id: deny-force-push
-    match: '(?i)\bgit\s+push\b.*\s(--force|--force-with-lease)\b'
-    decision: deny
-    reason_code: HOOK_DENY_FORCE_PUSH
-  - id: deny-secret-write
-    match: '(?i)\b(echo|printf|cat)\b.*(ghp_|github_pat_|AKIA[0-9A-Z]{16}|-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----)'
-    decision: deny
-    reason_code: HOOK_DENY_SECRET_WRITE
-  - id: deny-schema-drop
-    match: '(?i)\b(drop\s+table|drop\s+database|truncate\s+table)\b'
-    decision: deny
-    reason_code: HOOK_DENY_SCHEMA_DROP
-```
-
-Telemetry contract for every tool-executing session:
-- Emit one machine-readable line before each `execute` call:
-  `[HOOK_DECISION] tool=execute decision=<allow|deny> reason_code=<code> rule_id=<id|none>`
-- If decision is `deny`, do not issue the tool call.

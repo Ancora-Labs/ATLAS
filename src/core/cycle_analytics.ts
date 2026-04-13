@@ -3514,10 +3514,11 @@ export function buildRoutingROISummary(
     });
     const outcome = typeof row.outcome === "string" ? row.outcome : "unknown";
     const isDone = outcome === "done";
-    const linked = !!(joinKey && (!enforceLineageReference || linkageReference.has(joinKey)));
+    const explicitLineageId = String(contract.lineageId || "").trim();
+    const linked = !!(explicitLineageId && joinKey && (!enforceLineageReference || linkageReference.has(joinKey)));
 
     if (linked && joinKey) {
-      const lineageKey = contract.lineageId || joinKey;
+      const lineageKey = explicitLineageId || joinKey;
       byLineageId[lineageKey] ??= { success: 0, total: 0 };
       byLineageId[lineageKey].total++;
       if (isDone) byLineageId[lineageKey].success++;

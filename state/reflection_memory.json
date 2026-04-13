@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "updatedAt": "2026-04-13T17:41:39.411Z",
+  "updatedAt": "2026-04-13T19:36:08.177Z",
   "entries": [
     {
       "roleName": "infrastructure-worker",
@@ -15,7 +15,12 @@
       },
       "retryState": {
         "schemaVersion": 1,
-        "phaseOrder": ["plan", "edit", "test", "push"],
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
         "currentPhase": "plan",
         "failedPhase": "plan",
         "resumeFromPhase": "plan",
@@ -24,15 +29,32 @@
           "plan": {
             "status": "failed",
             "evidence": [
-              { "code": "dispatch_block_reason", "detail": "hook telemetry evidence missing in worker output", "source": "verification_gate" }
+              {
+                "code": "dispatch_block_reason",
+                "detail": "hook telemetry evidence missing in worker output",
+                "source": "verification_gate"
+              }
             ]
           },
-          "edit": { "status": "pending", "evidence": [] },
-          "test": { "status": "pending", "evidence": [] },
-          "push": { "status": "pending", "evidence": [] }
+          "edit": {
+            "status": "pending",
+            "evidence": []
+          },
+          "test": {
+            "status": "pending",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
         },
         "evidence": [
-          { "code": "dispatch_block_reason", "detail": "hook telemetry evidence missing in worker output", "source": "verification_gate" }
+          {
+            "code": "dispatch_block_reason",
+            "detail": "hook telemetry evidence missing in worker output",
+            "source": "verification_gate"
+          }
         ],
         "mutation": {
           "strategy": "resume_from_failed_phase",
@@ -56,31 +78,62 @@
       },
       "retryState": {
         "schemaVersion": 1,
-        "phaseOrder": ["plan", "edit", "test", "push"],
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
         "currentPhase": "push",
         "failedPhase": "push",
         "resumeFromPhase": "push",
         "lastCompletedPhase": "test",
         "phaseStates": {
-          "plan": { "status": "completed", "evidence": [] },
-          "edit": { "status": "completed", "evidence": [] },
+          "plan": {
+            "status": "completed",
+            "evidence": []
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": []
+          },
           "test": {
             "status": "completed",
             "evidence": [
-              { "code": "verification_report", "detail": "verification report marker was present but malformed", "source": "verification_gate" }
+              {
+                "code": "verification_report",
+                "detail": "verification report marker was present but malformed",
+                "source": "verification_gate"
+              }
             ]
           },
           "push": {
             "status": "failed",
             "evidence": [
-              { "code": "pr_url", "detail": "existing PR recovery path triggered", "source": "worker_output" },
-              { "code": "dispatch_block_reason", "detail": "api-only block softened to partial", "source": "dispatch_contract" }
+              {
+                "code": "pr_url",
+                "detail": "existing PR recovery path triggered",
+                "source": "worker_output"
+              },
+              {
+                "code": "dispatch_block_reason",
+                "detail": "api-only block softened to partial",
+                "source": "dispatch_contract"
+              }
             ]
           }
         },
         "evidence": [
-          { "code": "pr_url", "detail": "existing PR recovery path triggered", "source": "worker_output" },
-          { "code": "dispatch_block_reason", "detail": "api-only block softened to partial", "source": "dispatch_contract" }
+          {
+            "code": "pr_url",
+            "detail": "existing PR recovery path triggered",
+            "source": "worker_output"
+          },
+          {
+            "code": "dispatch_block_reason",
+            "detail": "api-only block softened to partial",
+            "source": "dispatch_contract"
+          }
         ],
         "mutation": {
           "strategy": "resume_from_failed_phase",
@@ -104,7 +157,12 @@
       },
       "retryState": {
         "schemaVersion": 1,
-        "phaseOrder": ["plan", "edit", "test", "push"],
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
         "currentPhase": "plan",
         "failedPhase": "plan",
         "resumeFromPhase": "plan",
@@ -113,15 +171,32 @@
           "plan": {
             "status": "failed",
             "evidence": [
-              { "code": "scope_scan", "detail": "planning inspection stalled before file edits", "source": "worker_output" }
+              {
+                "code": "scope_scan",
+                "detail": "planning inspection stalled before file edits",
+                "source": "worker_output"
+              }
             ]
           },
-          "edit": { "status": "pending", "evidence": [] },
-          "test": { "status": "pending", "evidence": [] },
-          "push": { "status": "pending", "evidence": [] }
+          "edit": {
+            "status": "pending",
+            "evidence": []
+          },
+          "test": {
+            "status": "pending",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
         },
         "evidence": [
-          { "code": "scope_scan", "detail": "planning inspection stalled before file edits", "source": "worker_output" }
+          {
+            "code": "scope_scan",
+            "detail": "planning inspection stalled before file edits",
+            "source": "worker_output"
+          }
         ],
         "mutation": {
           "strategy": "resume_from_failed_phase",
@@ -145,7 +220,12 @@
       },
       "retryState": {
         "schemaVersion": 1,
-        "phaseOrder": ["plan", "edit", "test", "push"],
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
         "currentPhase": "plan",
         "failedPhase": "plan",
         "resumeFromPhase": "plan",
@@ -154,15 +234,32 @@
           "plan": {
             "status": "failed",
             "evidence": [
-              { "code": "scope_scan", "detail": "planning inspection stalled before targeted tests", "source": "worker_output" }
+              {
+                "code": "scope_scan",
+                "detail": "planning inspection stalled before targeted tests",
+                "source": "worker_output"
+              }
             ]
           },
-          "edit": { "status": "pending", "evidence": [] },
-          "test": { "status": "pending", "evidence": [] },
-          "push": { "status": "pending", "evidence": [] }
+          "edit": {
+            "status": "pending",
+            "evidence": []
+          },
+          "test": {
+            "status": "pending",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
         },
         "evidence": [
-          { "code": "scope_scan", "detail": "planning inspection stalled before targeted tests", "source": "worker_output" }
+          {
+            "code": "scope_scan",
+            "detail": "planning inspection stalled before targeted tests",
+            "source": "worker_output"
+          }
         ],
         "mutation": {
           "strategy": "resume_from_failed_phase",
@@ -185,7 +282,12 @@
       },
       "retryState": {
         "schemaVersion": 1,
-        "phaseOrder": ["plan", "edit", "test", "push"],
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
         "currentPhase": "plan",
         "failedPhase": "plan",
         "resumeFromPhase": "plan",
@@ -194,15 +296,32 @@
           "plan": {
             "status": "failed",
             "evidence": [
-              { "code": "dispatch_block_reason", "detail": "api-only access softened to partial before scoped inspection", "source": "dispatch_contract" }
+              {
+                "code": "dispatch_block_reason",
+                "detail": "api-only access softened to partial before scoped inspection",
+                "source": "dispatch_contract"
+              }
             ]
           },
-          "edit": { "status": "pending", "evidence": [] },
-          "test": { "status": "pending", "evidence": [] },
-          "push": { "status": "pending", "evidence": [] }
+          "edit": {
+            "status": "pending",
+            "evidence": []
+          },
+          "test": {
+            "status": "pending",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
         },
         "evidence": [
-          { "code": "dispatch_block_reason", "detail": "api-only access softened to partial before scoped inspection", "source": "dispatch_contract" }
+          {
+            "code": "dispatch_block_reason",
+            "detail": "api-only access softened to partial before scoped inspection",
+            "source": "dispatch_contract"
+          }
         ],
         "mutation": {
           "strategy": "resume_from_failed_phase",
@@ -226,7 +345,12 @@
       },
       "retryState": {
         "schemaVersion": 1,
-        "phaseOrder": ["plan", "edit", "test", "push"],
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
         "currentPhase": "plan",
         "failedPhase": "plan",
         "resumeFromPhase": "plan",
@@ -235,15 +359,32 @@
           "plan": {
             "status": "failed",
             "evidence": [
-              { "code": "verification_report", "detail": "verification block needed corrected parseable markers", "source": "verification_gate" }
+              {
+                "code": "verification_report",
+                "detail": "verification block needed corrected parseable markers",
+                "source": "verification_gate"
+              }
             ]
           },
-          "edit": { "status": "pending", "evidence": [] },
-          "test": { "status": "pending", "evidence": [] },
-          "push": { "status": "pending", "evidence": [] }
+          "edit": {
+            "status": "pending",
+            "evidence": []
+          },
+          "test": {
+            "status": "pending",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
         },
         "evidence": [
-          { "code": "verification_report", "detail": "verification block needed corrected parseable markers", "source": "verification_gate" }
+          {
+            "code": "verification_report",
+            "detail": "verification block needed corrected parseable markers",
+            "source": "verification_gate"
+          }
         ],
         "mutation": {
           "strategy": "resume_from_failed_phase",
@@ -266,7 +407,12 @@
       },
       "retryState": {
         "schemaVersion": 1,
-        "phaseOrder": ["plan", "edit", "test", "push"],
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
         "currentPhase": "plan",
         "failedPhase": "plan",
         "resumeFromPhase": "plan",
@@ -275,21 +421,427 @@
           "plan": {
             "status": "failed",
             "evidence": [
-              { "code": "scope_scan", "detail": "scoped planning modules inspected before code changes", "source": "worker_output" }
+              {
+                "code": "scope_scan",
+                "detail": "scoped planning modules inspected before code changes",
+                "source": "worker_output"
+              }
             ]
           },
-          "edit": { "status": "pending", "evidence": [] },
-          "test": { "status": "pending", "evidence": [] },
-          "push": { "status": "pending", "evidence": [] }
+          "edit": {
+            "status": "pending",
+            "evidence": []
+          },
+          "test": {
+            "status": "pending",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
         },
         "evidence": [
-          { "code": "scope_scan", "detail": "scoped planning modules inspected before code changes", "source": "worker_output" }
+          {
+            "code": "scope_scan",
+            "detail": "scoped planning modules inspected before code changes",
+            "source": "worker_output"
+          }
         ],
         "mutation": {
           "strategy": "resume_from_failed_phase",
           "instructions": [
             "Resume from planning with the scoped worker, retry, failure, and checkpoint files.",
             "Avoid broad scans outside the declared target files."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "evolution-worker",
+      "taskKind": "rework",
+      "task": "## AUTO-REWORK — VERIFICATION GAPS DETECTED (attempt 2/2)\n\nYour previous completion was REJECTED by the verification gate because the following evidence was missing or failed:\n\n  1. Post-merge artifact block contains unfilled template place",
+      "status": "blocked",
+      "retryAction": "cooldown_retry",
+      "failureClass": "environment",
+      "reason": "[ARTIFACT GATE] done hard-blocked — Post-merge artifact block contains unfilled template placeholders — replace every placeholder with actual output (BOX_MERGED_SHA=<sha>, CLEAN_TREE_STATUS=clean, and the ===NPM TEST OUTPUT START=== block w",
+      "recordedAt": "2026-04-13T18:27:53.420Z"
+    },
+    {
+      "roleName": "observation-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "3c3f1f270833824f28802f2f850447f6620b83e6",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "blocked",
+        "retryAction": "reassign",
+        "failureClass": "policy",
+        "recordedAt": "2026-04-13T19:09:40.632Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "push",
+        "failedPhase": "push",
+        "resumeFromPhase": "push",
+        "lastCompletedPhase": "test",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "src/core/cycle_analytics.ts, src/core/model_policy.ts, src/core/intervention_optimizer.ts, src/core/capacity_scoreboard.ts, src/core/athena_reviewer.ts, tests/core/cycle_analytics.test.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "src/core/cycle_analytics.ts, src/core/model_policy.ts, src/core/intervention_optimizer.ts, src/core/capacity_scoreboard.ts, src/core/athena_reviewer.ts, src/core/verification_gate.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "dispatch_block_reason",
+                "detail": "hook_coverage_incomplete:HOOK_COVERAGE_NOT_DETERMINISTIC",
+                "source": "dispatch_contract"
+              },
+              {
+                "code": "branch",
+                "detail": "box/observation-outcome-scoring",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/Box/pull/324",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "1736df7cb9868a0f2c5e6a44d325f43b4abc45c4",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "src/core/cycle_analytics.ts, src/core/model_policy.ts, src/core/intervention_optimizer.ts, src/core/capacity_scoreboard.ts, src/core/athena_reviewer.ts, tests/core/cycle_analytics.test.ts",
+            "source": "instruction"
+          },
+          {
+            "code": "dispatch_block_reason",
+            "detail": "hook_coverage_incomplete:HOOK_COVERAGE_NOT_DETERMINISTIC",
+            "source": "dispatch_contract"
+          },
+          {
+            "code": "failure_class",
+            "detail": "policy",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "reassign",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "src/core/cycle_analytics.ts, src/core/model_policy.ts, src/core/intervention_optimizer.ts, src/core/capacity_scoreboard.ts, src/core/athena_reviewer.ts, src/core/verification_gate.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "box/observation-outcome-scoring",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: src/core/cycle_analytics.ts, src/core/model_policy.ts, src/core/intervention_optimizer.ts, src/core/capacity_scoreboard.ts, src/core/athena_reviewer.ts, tests/core/cycle_analyt...",
+            "Reuse the recorded branch/PR context and resolve git or clean-tree blockers before another push.",
+            "Continue from branch: box/observation-outcome-scoring.",
+            "Update the existing PR instead of opening a duplicate: https://github.com/Ancora-Labs/Box/pull/324."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "observation-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "3c3f1f270833824f28802f2f850447f6620b83e6",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "verification_failed",
+        "retryAction": "rework",
+        "failureClass": "verification",
+        "recordedAt": "2026-04-13T19:28:26.049Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "test",
+        "failedPhase": "test",
+        "resumeFromPhase": "test",
+        "lastCompletedPhase": "edit",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "src/core/cycle_analytics.ts, src/core/model_policy.ts, src/core/intervention_optimizer.ts, src/core/capacity_scoreboard.ts, src/core/athena_reviewer.ts, tests/core/cycle_analytics.test.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "src/core/cycle_analytics.ts, src/core/model_policy.ts, src/core/intervention_optimizer.ts, src/core/capacity_scoreboard.ts, src/core/athena_reviewer.ts, tests/core/cycle_analytics.test.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "verification_gaps",
+                "detail": "VERIFICATION_REPORT marker found but report is malformed/unparseable — use the canonical ===VERIFICATION_REPORT=== block",
+                "source": "verification_gate"
+              }
+            ]
+          },
+          "push": {
+            "status": "pending",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "box/observation-outcome-scoring",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/Box/pull/325",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "085f82bfec1341f2fd3229eb6c06acb776ca793c",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "src/core/cycle_analytics.ts, src/core/model_policy.ts, src/core/intervention_optimizer.ts, src/core/capacity_scoreboard.ts, src/core/athena_reviewer.ts, tests/core/cycle_analytics.test.ts",
+            "source": "instruction"
+          },
+          {
+            "code": "failure_class",
+            "detail": "verification",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "rework",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "src/core/cycle_analytics.ts, src/core/model_policy.ts, src/core/intervention_optimizer.ts, src/core/capacity_scoreboard.ts, src/core/athena_reviewer.ts, tests/core/cycle_analytics.test.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "verification_gaps",
+            "detail": "VERIFICATION_REPORT marker found but report is malformed/unparseable — use the canonical ===VERIFICATION_REPORT=== block",
+            "source": "verification_gate"
+          },
+          {
+            "code": "branch",
+            "detail": "box/observation-outcome-scoring",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/Box/pull/325",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "085f82bfec1341f2fd3229eb6c06acb776ca793c",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: src/core/cycle_analytics.ts, src/core/model_policy.ts, src/core/intervention_optimizer.ts, src/core/capacity_scoreboard.ts, src/core/athena_reviewer.ts, tests/core/cycle_analyt...",
+            "Start by reproducing the recorded verification/build/test evidence before wider edits."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "observation-worker",
+      "taskKind": "rework",
+      "taskFingerprint": "585fa762e2789715317fe5c596a5d7043852ecca",
+      "taskSnippet": "## AUTO-REWORK — VERIFICATION GAPS DETECTED (attempt 1/2)\n\nYour previous completion was REJECTED by the verification gate because the following evidence was missing or failed:\n\n  1. VERIFICATION_REPORT marker found but report is malformed/u",
+      "outcome": {
+        "status": "skipped",
+        "retryAction": null,
+        "failureClass": null,
+        "recordedAt": "2026-04-13T19:36:08.177Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "edit",
+        "failedPhase": "edit",
+        "resumeFromPhase": "edit",
+        "lastCompletedPhase": "plan",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": []
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "src/core/athena_reviewer.ts, src/core/capacity_scoreboard.ts, src/core/cycle_analytics.ts, src/core/intervention_optimizer.ts, src/core/model_policy.ts, tests/core/capacity_scoreboard.test.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "box/observation-outcome-scoring",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/Box/pull/325",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "085f82bfec1341f2fd3229eb6c06acb776ca793c",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "files_touched",
+            "detail": "src/core/athena_reviewer.ts, src/core/capacity_scoreboard.ts, src/core/cycle_analytics.ts, src/core/intervention_optimizer.ts, src/core/model_policy.ts, tests/core/capacity_scoreboard.test.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "box/observation-outcome-scoring",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/Box/pull/325",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "085f82bfec1341f2fd3229eb6c06acb776ca793c",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Inspect the last touched files before any new search.",
+            "Resume edits from: src/core/athena_reviewer.ts, src/core/capacity_scoreboard.ts, src/core/cycle_analytics.ts, src/core/intervention_optimizer.ts, src/core/model_policy.ts, tests/core/capacity_scoreboa..."
           ]
         }
       }

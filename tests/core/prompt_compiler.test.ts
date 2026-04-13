@@ -13,6 +13,7 @@ import {
   compileTieredPrompt,
   markCacheableSegments,
   CACHE_STABLE_SECTION_NAMES,
+  derivePromptFamilyKey,
   markCycleDeltaSectionsRequired,
   PROMPT_BUDGET_PARTITION,
   analyzePacketDensification,
@@ -315,6 +316,30 @@ describe("prompt_compiler", () => {
       assert.ok(CACHE_STABLE_SECTION_NAMES instanceof Set);
       assert.ok(CACHE_STABLE_SECTION_NAMES.has("role"));
       assert.ok(CACHE_STABLE_SECTION_NAMES.has("system"));
+    });
+
+    it("derives a stable prompt-family key from cacheable sections only", () => {
+      const first = markCacheableSegments([
+        section("role", "You are Prometheus."),
+        section("context", "dynamic cycle input A"),
+      ]);
+      const second = markCacheableSegments([
+        section("role", "You are Prometheus."),
+        section("context", "dynamic cycle input B"),
+      ]);
+      assert.equal(
+        derivePromptFamilyKey(first, { salt: "test" }),
+        derivePromptFamilyKey(second, { salt: "test" }),
+      );
+    });
+
+    it("changes prompt-family key when a cacheable section changes", () => {
+      const first = markCacheableSegments([section("role", "You are Prometheus.")]);
+      const second = markCacheableSegments([section("role", "You are Athena.")]);
+      assert.notEqual(
+        derivePromptFamilyKey(first, { salt: "test" }),
+        derivePromptFamilyKey(second, { salt: "test" }),
+      );
     });
   });
 

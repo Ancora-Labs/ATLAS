@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { runOnce, runResumeDispatch, evaluateDispatchResumeReadiness, evaluatePreDispatchGovernanceGate, BLOCK_REASON, processEscalationQueueClosureWorkflow, isDispatchCheckpointResumable, loadStaleTriageRecords, runStaleArtifactClosureFastpath, persistSkippedDispatchCheckpoint, clearAthenaPlanRejectionLatch } from "../../src/core/orchestrator.js";
+import { runOnce, runResumeDispatch, evaluateDispatchResumeReadiness, evaluatePreDispatchGovernanceGate, BLOCK_REASON, processEscalationQueueClosureWorkflow, isDispatchCheckpointResumable, loadStaleTriageRecords, runStaleArtifactClosureFastpath, persistSkippedDispatchCheckpoint, clearAthenaPlanRejectionLatch, recoverStaleWorkerSessions } from "../../src/core/orchestrator.js";
 import { ATHENA_PLAN_REVIEW_REASON_CODE } from "../../src/core/athena_reviewer.js";
 import { readPipelineProgress, PIPELINE_STAGE_ENUM, PIPELINE_STEPS } from "../../src/core/pipeline_progress.js";
 import { EVENTS } from "../../src/core/event_schema.js";
@@ -834,6 +834,57 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
     assert.equal(readiness.planSource, "checkpoint_snapshot");
     assert.equal(readiness.planCount, 1);
     assert.equal(readiness.workerBatchCount, 1);
+  });
+
+  it("recovers stale working sessions when checkpoint progress proves their batch is already complete", async () => {
+    await fs.writeFile(
+      path.join(tmpDir, "pipeline_progress.json"),
+      JSON.stringify({ startedAt: "2026-04-11T07:31:14.738Z" }, null, 2),
+      "utf8",
+    );
+
+    const checkpoint = {
+      status: "dispatching",
+      createdAt: "2026-04-11T07:31:14.738Z",
+      updatedAt: "2026-04-11T07:58:39.727Z",
+      totalPlans: 2,
+      planCount: 2,
+      completedPlans: 1,
+      planSetSignature: "resume-stale-working-session",
+      dispatchPlanSnapshot: [
+        { task_id: "T1", task: "task one", role: "quality-worker", wave: 1 },
+        { task_id: "T2", task: "task two", role: "observation-worker", wave: 2 },
+      ],
+      workerBatchesSnapshot: [
+        { role: "quality-worker", wave: 1, plans: [{ task_id: "T1", task: "task one", role: "quality-worker", wave: 1 }] },
+        { role: "observation-worker", wave: 2, plans: [{ task_id: "T2", task: "task two", role: "observation-worker", wave: 2 }] },
+      ],
+    };
+
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify(checkpoint, null, 2),
+      "utf8",
+    );
+
+    const sessions = {
+      "quality-worker": {
+        status: "working",
+        startedAt: "2026-04-11T07:40:00.000Z",
+        updatedAt: "2026-04-11T07:40:00.000Z",
+        history: [
+          { status: "working", from: "quality-worker", at: "2026-04-11T07:40:00.000Z", taskIds: ["T1"] },
+        ],
+      },
+    };
+
+    const recovered = await recoverStaleWorkerSessions(config, tmpDir, sessions as any);
+    assert.equal(recovered, true);
+    assert.equal((sessions as any)["quality-worker"].status, "idle");
+
+    const readiness = await evaluateDispatchResumeReadiness(config);
+    assert.equal(readiness.ready, true);
+    assert.equal(readiness.reason, "checkpoint_snapshot_ready");
   });
 });
 

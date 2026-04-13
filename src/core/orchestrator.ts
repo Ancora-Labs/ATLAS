@@ -19,12 +19,12 @@
 import path from "node:path";
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { appendProgress, appendAlert, ALERT_SEVERITY, appendGovernanceBlockEvent, recordCapabilityExecution } from "./state_tracker.js";
+import { appendProgress, appendAlert, ALERT_SEVERITY, appendGovernanceBlockEvent, recordCapabilityExecution, appendInterventionApplicationEntries, appendInterventionRetirementEvidence, appendPolicyClosureEvidence, enforceStateRetention, readPromptCacheTelemetry } from "./state_tracker.js";
 import { readStopRequest, writeDaemonPid, clearDaemonPid, clearStopRequest, readReloadRequest, clearReloadRequest, createCancellationToken, readDaemonPid } from "./daemon_control.js";
 import type { CancellationToken } from "./daemon_control.js";
 import { loadConfig } from "../config.js";
 import { runJesusCycle, appendJesusOutcomeLedger, buildJesusDecisionOutcome } from "./jesus_supervisor.js";
-import { runPrometheusAnalysis, loadTopicMemory, saveTopicMemory, topicKey as prometheusTopicKey, findCanonicalTopicKey } from "./prometheus.js";
+import { runPrometheusAnalysis, loadTopicMemory, saveTopicMemory, topicKey as prometheusTopicKey, findCanonicalTopicKey, applyPlanLifecycleAdmissionFilter } from "./prometheus.js";
 import {
   runAthenaPlanReview,
   ATHENA_PLAN_REVIEW_REASON_CODE,
@@ -61,7 +61,7 @@ import { appendCapacityEntry } from "./capacity_scoreboard.js";
 import { computeCapabilityDelta } from "./delta_analytics.js";
 import { evaluateRetune } from "./strategy_retuner.js";
 import { compileLessonsToPolicies } from "./learning_policy_compiler.js";
-import { assignWorkersToPlans, enforceLaneDiversity, evaluateSpecializationAdmissionGate, computeTopologyFeasibility, buildLanePerformanceFromCycleTelemetry, buildReroutePenaltyLedger, SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES, getLaneScore, computeAdaptiveSpecialistFillThreshold } from "./capability_pool.js";
+import { assignWorkersToPlans, enforceLaneDiversity, evaluateSpecializationAdmissionGate, computeTopologyFeasibility, buildLanePerformanceFromCycleTelemetry, buildLaneTelemetrySignals, buildReroutePenaltyLedger, SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES, getLaneScore, computeAdaptiveSpecialistFillThreshold, buildWorkerChain, computeLaneROIAdmission } from "./capability_pool.js";
 import { runDoctor } from "./doctor.js";
 import { validateAllPlans, validatePacketBatchAdmission, applyDispatchBoundaryHardCap, bindNamedVerificationTargets } from "./plan_contract_validator.js";
 import {
@@ -116,6 +116,7 @@ import {
   loadRecentFailureClassifications,
   normalizeRoleKey,
 } from "./failure_classifier.js";
+import { recordAgentHandoff } from "./agent_control_plane.js";
 import {
   readCheckpoint as readVersionedCheckpoint,
   writeCheckpoint as writeVersionedCheckpoint,
@@ -129,7 +130,7 @@ import {
 } from "./checkpoint_engine.js";
 import { assessRetryExpectedROI, rankModelsByTaskKindExpectedValue } from "./model_policy.js";
 import { loadHookPolicy, DEFAULT_HOOK_POLICY_PATH } from "./policy_engine.js";
-import { AGENT_CONTRACT_GOVERNANCE_REASON_CODE } from "./governance_contract.js";
+import { AGENT_CONTRACT_GOVERNANCE_REASON_CODE, GOVERNANCE_SIGNAL_REGISTRY } from "./governance_contract.js";
 
 /**
  * Orchestrator health status enum.
@@ -225,37 +226,6 @@ export const BLOCK_REASON = Object.freeze({
   /** Per-role plan group exceeds the configured actionable-steps cap — decompose before dispatch. */
   OVERSIZED_PACKET:               "packet_exceeds_actionable_steps_cap",
 });
-
-const ATHENA_GOVERNANCE_CORRECTION_TOKEN_MAP = Object.freeze({
-  [BLOCK_REASON.GUARDRAIL_PAUSE_WORKERS_ACTIVE]: {
-    blockReason: BLOCK_REASON.GUARDRAIL_PAUSE_WORKERS_ACTIVE,
-    gateKey: "GUARDRAIL_PAUSE",
-  },
-  [BLOCK_REASON.GUARDRAIL_FORCE_CHECKPOINT_ACTIVE]: {
-    blockReason: BLOCK_REASON.GUARDRAIL_FORCE_CHECKPOINT_ACTIVE,
-    gateKey: "FORCE_CHECKPOINT",
-  },
-  [BLOCK_REASON.GOVERNANCE_FREEZE_ACTIVE]: {
-    blockReason: BLOCK_REASON.GOVERNANCE_FREEZE_ACTIVE,
-    gateKey: "GOVERNANCE_FREEZE",
-  },
-  [BLOCK_REASON.GOVERNANCE_CANARY_BREACH]: {
-    blockReason: BLOCK_REASON.GOVERNANCE_CANARY_BREACH,
-    gateKey: "GOVERNANCE_CANARY",
-  },
-  [BLOCK_REASON.CLOUD_AGENT_GOVERNANCE_POLICY_VIOLATION]: {
-    blockReason: BLOCK_REASON.CLOUD_AGENT_GOVERNANCE_POLICY_VIOLATION,
-    gateKey: "CLOUD_AGENT_GOVERNANCE",
-  },
-  [BLOCK_REASON.CRITICAL_DEBT_OVERDUE]: {
-    blockReason: BLOCK_REASON.CRITICAL_DEBT_OVERDUE,
-    gateKey: "CARRY_FORWARD_DEBT",
-  },
-  [BLOCK_REASON.ROLLING_YIELD_THROTTLE]: {
-    blockReason: BLOCK_REASON.ROLLING_YIELD_THROTTLE,
-    gateKey: "ROLLING_COMPLETION_YIELD",
-  },
-} as const);
 
 const CLOUD_AGENT_ALLOWED_SETUP_JOB_KEYS = new Set([
   "steps",
@@ -391,16 +361,20 @@ export function resolveAthenaCorrectionDispatchBlockReason(corrections: unknown)
     ? corrections.map((entry) => String(entry || "").toLowerCase())
     : [String(corrections || "").toLowerCase()];
   let selected: { token: string; blockReason: string; gateKey: keyof typeof GATE_PRECEDENCE; gateIndex: number } | null = null;
-  for (const [token, mapped] of Object.entries(ATHENA_GOVERNANCE_CORRECTION_TOKEN_MAP)) {
+  for (const [token, mapped] of Object.entries(
+    GOVERNANCE_SIGNAL_REGISTRY as Record<string, { gateKey: string; dispatchBlockReason?: string; blocking?: boolean }>,
+  )) {
+    if (mapped?.blocking !== true || !mapped?.dispatchBlockReason) continue;
+    if (!(mapped.gateKey in GATE_PRECEDENCE)) continue;
     const tokenPattern = new RegExp(`(^|[^a-z0-9_])${token}(?=$|[^a-z0-9_])`, "i");
     const found = correctionStrings.some((line) => tokenPattern.test(line));
     if (!found) continue;
-    const gateIndex = GATE_PRECEDENCE[mapped.gateKey];
+    const gateIndex = GATE_PRECEDENCE[mapped.gateKey as keyof typeof GATE_PRECEDENCE];
     if (!selected || gateIndex < selected.gateIndex) {
       selected = {
         token,
-        blockReason: mapped.blockReason,
-        gateKey: mapped.gateKey,
+        blockReason: mapped.dispatchBlockReason,
+        gateKey: mapped.gateKey as keyof typeof GATE_PRECEDENCE,
         gateIndex,
       };
     }
@@ -596,29 +570,6 @@ type CriticalReadResult = {
   } | null;
 };
 
-const PLAN_IMPLEMENTATION_STATUS = Object.freeze({
-  IMPLEMENTED_CORRECTLY: "implemented_correctly",
-  IMPLEMENTED_PARTIALLY: "implemented_partially",
-  NOT_IMPLEMENTED: "not_implemented",
-  UNKNOWN: "unknown",
-});
-
-function normalizePlanIdentity(value: unknown): string {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function normalizeImplementationStatus(rawStatus: unknown): string {
-  const status = String(rawStatus || "").toLowerCase().trim();
-  if (status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_CORRECTLY) return status;
-  if (status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_PARTIALLY) return status;
-  if (status === PLAN_IMPLEMENTATION_STATUS.NOT_IMPLEMENTED) return status;
-  return PLAN_IMPLEMENTATION_STATUS.UNKNOWN;
-}
-
 function normalizeTopicLabel(value: unknown): string {
   return String(value || "")
     .toLowerCase()
@@ -727,79 +678,13 @@ export function autoResolveBenchmarkRecommendations(
   return { entries: nextEntries, resolvedCount, usedFallback };
 }
 
-async function loadCompletedTaskIdentities(stateDir: string): Promise<Set<string>> {
-  const done = new Set<string>();
-
-  try {
-    const postmortems = await readJson(path.join(stateDir, "athena_postmortems.json"), null);
-    const entries = Array.isArray(postmortems?.entries)
-      ? postmortems.entries
-      : Array.isArray(postmortems)
-        ? postmortems
-        : [];
-    for (const entry of entries) {
-      if (!entry || typeof entry !== "object") continue;
-      if (entry.taskCompleted !== true) continue;
-      const identity = normalizePlanIdentity(entry.followUpTask || entry.expectedOutcome || entry.actualOutcome);
-      if (identity) done.add(identity);
-    }
-  } catch {
-    // Best-effort signal only.
-  }
-
-  return done;
-}
-
-function extractEvidencePaths(evidence: unknown): string[] {
-  if (!Array.isArray(evidence)) return [];
-  return evidence
-    .map(item => String(item || "").trim())
-    .filter(Boolean)
-    .map(item => {
-      const m = item.match(/(?:src|tests|scripts|docs)\/[A-Za-z0-9_./-]+/);
-      return m ? m[0].replace(/[),.;:]+$/, "") : "";
-    })
-    .filter(Boolean);
-}
-
 type PlanNoveltyFilterResult = {
   actionablePlans: any[];
   skippedPlans: Array<{ plan: any; reason: string }>;
 };
 
 async function filterAlreadyImplementedPlans(stateDir: string, plans: any[]): Promise<PlanNoveltyFilterResult> {
-  const actionablePlans: any[] = [];
-  const skippedPlans: Array<{ plan: any; reason: string }> = [];
-  const completedTaskIdentities = await loadCompletedTaskIdentities(stateDir);
-
-  for (const plan of Array.isArray(plans) ? plans : []) {
-    const status = normalizeImplementationStatus(plan?.implementationStatus);
-    const evidencePaths = extractEvidencePaths(plan?.implementationEvidence);
-    const planIdentity = normalizePlanIdentity(plan?.task || plan?.title || plan?.task_id || plan?.id);
-    const matchesCompletedHistory = planIdentity && completedTaskIdentities.has(planIdentity);
-
-    if (status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_CORRECTLY) {
-      skippedPlans.push({
-        plan,
-        reason: evidencePaths.length > 0
-          ? "implementationStatus=implemented_correctly with evidence"
-          : "implementationStatus=implemented_correctly"
-      });
-      continue;
-    }
-
-    if (status === PLAN_IMPLEMENTATION_STATUS.UNKNOWN && matchesCompletedHistory) {
-      skippedPlans.push({
-        plan,
-        reason: "task appears in completed Athena history"
-      });
-      continue;
-    }
-
-    actionablePlans.push(plan);
-  }
-
-  return { actionablePlans, skippedPlans };
+  return applyPlanLifecycleAdmissionFilter(stateDir, plans);
 }
 
 function buildNoveltyReplanPrompt(basePrompt: string, skippedPlans: Array<{ plan: any; reason: string }>): string {
@@ -815,11 +700,12 @@ function buildNoveltyReplanPrompt(basePrompt: string, skippedPlans: Array<{ plan
     String(basePrompt || "Full repository self-evolution analysis").trim(),
     "",
     "ADDITIONAL ORCHESTRATOR GATE CONTEXT:",
-    "The following proposed plans are already implemented correctly or already completed in system history. Do not re-propose them:",
+    "The following proposed plans are already closed, superseded, or already continuing in the same family. Do not reopen them as net-new work:",
     skippedList || "(none)",
     "",
     "MANDATORY OUTPUT UPDATE:",
     "- Return only net-new plans or delta plans for partially implemented capabilities.",
+    "- If same-family work is already in progress, emit only a continuation/delta plan instead of reopening it as a new task.",
     "- For each plan include precise target files, acceptance criteria, and verification commands.",
     "- For each plan include implementationStatus and implementationEvidence.",
     "- If everything is already implemented correctly, return plans: [] and explain why.",
@@ -1112,6 +998,25 @@ export function shouldBypassSpecializationAdmissionGate(opts: {
   return { bypass: false, reason: null };
 }
 
+function isExplicitNoSignalJudgeDecision(decision: any): boolean {
+  const finalDecision = String(decision?.decision || "").trim().toLowerCase();
+  const reason = String(decision?.reason || decision?.deterministicReason || "").trim().toLowerCase();
+  return finalDecision === "hold"
+    && (
+      reason.startsWith("insufficient_sample:")
+      || reason.startsWith("sample_guard:")
+      || reason.includes("no_signal")
+    );
+}
+
+function mapJudgeDecisionToOutcomeScore(decision: string, noSignalOutcome: boolean): number {
+  if (noSignalOutcome) return 0.35;
+  if (decision === "promote") return 1;
+  if (decision === "hold") return 0.55;
+  if (decision === "rework") return 0.25;
+  return 0;
+}
+
 /**
  * Check whether a worker outcome should be treated as resume-preferred.
  *
@@ -1227,6 +1132,10 @@ export function promotePrometheusAnalysisFromWorkerEvidence(
 export function buildCycleWorkerResultRow(batch: any, workerResult: any): {
   roleName: string;
   status: string;
+  taskKind: string;
+  batchSize: number;
+  orderedStepCount: number;
+  contextUtilizationPercent: number | null;
   verificationEvidence?: unknown;
   dispatchContract?: {
     doneWorkerWithVerificationReportEvidence?: boolean;
@@ -1266,6 +1175,14 @@ export function buildCycleWorkerResultRow(batch: any, workerResult: any): {
   return {
     roleName: String(workerResult?.roleName || batch?.role || "unknown"),
     status: String(workerResult?.status || "unknown"),
+    taskKind: String(batch?.taskKind || "implementation"),
+    batchSize: batchPlans.length,
+    orderedStepCount: Number.isFinite(Number(batch?.orderedStepCount))
+      ? Math.max(1, Math.floor(Number(batch.orderedStepCount)))
+      : Math.max(1, batchPlans.length),
+    contextUtilizationPercent: Number.isFinite(Number(batch?.contextUtilizationPercent))
+      ? Math.max(0, Math.min(100, Number(batch.contextUtilizationPercent)))
+      : null,
     verificationEvidence: workerResult?.verificationEvidence || null,
     dispatchContract: workerResult?.dispatchContract || null,
     dispatchBlockReason: workerResult?.dispatchBlockReason || null,
@@ -1736,8 +1653,21 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
         // File absent or unreadable — start from 0.
       }
 
+      let laneTelemetrySignalsForAdmission = {};
+      try {
+        const analyticsForAdmission = await readCycleAnalytics(config);
+        const laneTelemetry = analyticsForAdmission?.lastCycle?.laneTelemetry;
+        if (laneTelemetry && typeof laneTelemetry === "object") {
+          laneTelemetrySignalsForAdmission = buildLaneTelemetrySignals(laneTelemetry);
+        }
+      } catch {
+        // Missing lane telemetry is non-fatal; ROI admission falls back optimistic.
+      }
+
       // assignWorkersToPlans is synchronous; call it with current plans to get fresh utilization.
-      const poolSample = assignWorkersToPlans(normalizedPlans, config);
+      const poolSample = assignWorkersToPlans(normalizedPlans, config, undefined, {
+        laneTelemetrySignals: laneTelemetrySignalsForAdmission,
+      });
 
       // Compute topology feasibility: when no plans route to a specialist, the
       // gate must not block (infeasible topology — no amount of waiting will add
@@ -1765,9 +1695,16 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
         admissionReroutePenaltyLedger,
         topologyFeasibility,
       );
+      const laneROIAdmission = computeLaneROIAdmission(laneTelemetrySignalsForAdmission);
+
+      const specializationBlocked = admissionResult.blocked && !laneROIAdmission.admitted;
+      const roiBlocked = !laneROIAdmission.admitted && topologyFeasibility.feasible;
+      const blockedReason = roiBlocked
+        ? `${laneROIAdmission.reason}; shareGate=${admissionResult.reason || "pass"}`
+        : admissionResult.reason;
 
       // Persist updated counter regardless of outcome so bypass counter resets on pass.
-      const newCount = admissionResult.blocked ? admissionResult.consecutiveBlockCycles : 0;
+      const newCount = specializationBlocked ? admissionResult.consecutiveBlockCycles : 0;
       try {
         await fs.mkdir(path.dirname(gateStatePath), { recursive: true });
         await fs.writeFile(gateStatePath, JSON.stringify({ consecutiveBlockCycles: newCount, updatedAt: new Date().toISOString() }), "utf8");
@@ -1775,18 +1712,20 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
         warn(`[orchestrator] specialization gate state write failed (non-fatal): ${String(writeErr?.message || writeErr)}`);
       }
 
-      if (admissionResult.blocked) {
+      if (roiBlocked) {
         return {
           blocked: true,
-          reason: admissionResult.reason,
+          reason: blockedReason,
           action: undefined,
-          dispatchBlockReason: admissionResult.reason,
+          dispatchBlockReason: blockedReason,
           graphResult,
           cycleId,
           budgetEligibility,
           gateKey: "SPECIALIZATION_ADMISSION",
           gateIndex: GATE_PRECEDENCE.SPECIALIZATION_ADMISSION,
         };
+      } else if (admissionResult.blocked && laneROIAdmission.admitted) {
+        warn(`[orchestrator] specialization share gate bypassed by positive lane ROI admission: ${laneROIAdmission.reason}`);
       } else if (admissionResult.reason && admissionResult.reason.includes("bypassed_fallback")) {
         warn(`[orchestrator] specialization admission gate bypassed (bounded fallback): ${admissionResult.reason}`);
       }
@@ -1794,7 +1733,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       await recordCapabilityExecution(
         config,
         "specialization-admission-control",
-        `blocked=${admissionResult.blocked} reason=${String(admissionResult.reason || "pass").slice(0, 120)}`,
+        `blocked=${String(roiBlocked)} shareGate=${String(admissionResult.reason || "pass").slice(0, 80)} roiGate=${String(laneROIAdmission.reason || "pass").slice(0, 80)}`,
       );
     } catch (specErr) {
       warn(`[orchestrator] specialization admission gate failed (non-fatal): ${String(specErr?.message || specErr)}`);
@@ -3127,6 +3066,45 @@ function getLastWorkerReportedStatus(session, role) {
   return "";
 }
 
+function getLastWorkerTaskIds(session, role): string[] {
+  const history = Array.isArray(session?.history) ? session.history : [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i];
+    if (!entry) continue;
+    if (role && entry.from && entry.from !== role) continue;
+    const taskIds = Array.isArray(entry.taskIds)
+      ? entry.taskIds.map((taskId: unknown) => String(taskId || "").trim()).filter(Boolean)
+      : [];
+    if (taskIds.length > 0) return taskIds;
+  }
+  return [];
+}
+
+function getCompletedCheckpointTaskIds(checkpoint: any): Set<string> {
+  const completedTaskIds = new Set<string>();
+  const completedPlans = Math.max(0, Number(checkpoint?.completedPlans || 0));
+  const workerBatches = getCheckpointWorkerBatchesSnapshot(checkpoint);
+  for (let index = 0; index < Math.min(completedPlans, workerBatches.length); index += 1) {
+    const batch = workerBatches[index];
+    const plans = Array.isArray(batch?.plans) ? batch.plans : [];
+    for (const plan of plans) {
+      const taskId = String(plan?.task_id || plan?.id || "").trim();
+      if (taskId) completedTaskIds.add(taskId);
+    }
+  }
+  return completedTaskIds;
+}
+
+function shouldRecoverWorkingSessionFromCheckpoint(session: WorkerSessionRecord, role: string, checkpoint: any): boolean {
+  if (String(session?.status || "") !== "working") return false;
+  if (!isDispatchCheckpointResumable(checkpoint)) return false;
+  const completedTaskIds = getCompletedCheckpointTaskIds(checkpoint);
+  if (completedTaskIds.size === 0) return false;
+  const lastTaskIds = getLastWorkerTaskIds(session, role);
+  if (lastTaskIds.length === 0) return false;
+  return lastTaskIds.every((taskId) => completedTaskIds.has(taskId));
+}
+
 function parseIsoTimestampMs(value) {
   const ms = Date.parse(String(value || ""));
   return Number.isFinite(ms) ? ms : null;
@@ -3155,6 +3133,7 @@ export async function recoverStaleWorkerSessions(config, stateDir, sessions) {
   const recoveredSignals = new Map<string, string>();
   const daemonPid = await readDaemonPid(config).catch(() => null);
   const daemonStartedAtIso = typeof daemonPid?.startedAt === "string" ? daemonPid.startedAt : null;
+  const checkpoint = await readDispatchCheckpoint(config).catch(() => null);
 
   for (const [role, session] of Object.entries(sessions || {}) as Array<[string, WorkerSessionRecord]>) {
     if (session?.status !== "working") continue;
@@ -3171,6 +3150,13 @@ export async function recoverStaleWorkerSessions(config, stateDir, sessions) {
       session.status = "idle";
       recoveredRoles.push(role);
       recoveredSignals.set(role, reportedStatus || "terminal-history");
+      continue;
+    }
+
+    if (shouldRecoverWorkingSessionFromCheckpoint(session, role, checkpoint)) {
+      session.status = "idle";
+      recoveredRoles.push(role);
+      recoveredSignals.set(role, "checkpoint-completed-batch");
       continue;
     }
   }
@@ -3226,7 +3212,12 @@ async function hasActiveWorkersAsync(config) {
             augmented[role] = {
               ...session,
               // Synthesize history from the activity log for recovery detection.
-              history: log.map(e => ({ status: String(e.status || ""), from: role, at: e.at || "" })),
+              history: log.map(e => ({
+                status: String(e.status || ""),
+                from: role,
+                at: e.at || "",
+                taskIds: Array.isArray(e.taskIds) ? e.taskIds : [],
+              })),
             } as WorkerSessionRecord;
           }
           await recoverStaleWorkerSessions(config, stateDir, augmented);
@@ -4908,26 +4899,33 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   // measured lane ROI (rather than static estimates) to route plans to the
   // strongest available worker lane.
   let lanePerformanceFromCycle: ReturnType<typeof buildLanePerformanceFromCycleTelemetry> = {};
+  let laneTelemetrySignalsFromCycle = {};
   try {
     const prevAnalyticsForLane = await readCycleAnalytics(config);
     const prevLaneTelemetry = (prevAnalyticsForLane as any)?.lastCycle?.laneTelemetry;
     if (prevLaneTelemetry && typeof prevLaneTelemetry === "object") {
       lanePerformanceFromCycle = buildLanePerformanceFromCycleTelemetry(prevLaneTelemetry);
+      laneTelemetrySignalsFromCycle = buildLaneTelemetrySignals(prevLaneTelemetry);
     }
   } catch { /* non-fatal: no previous cycle analytics yet */ }
 
   // ── Capability pool: assign workers based on task capability matching ──────
   let capabilityPoolResult = null;
   try {
-    const poolResult = assignWorkersToPlans(plans, config, lanePerformanceFromCycle);
+    const poolResult = assignWorkersToPlans(plans, config, lanePerformanceFromCycle, {
+      laneTelemetrySignals: laneTelemetrySignalsFromCycle,
+    });
     capabilityPoolResult = poolResult;
     if (poolResult.diversityIndex > 0) {
       await appendProgress(config, `[CAPABILITY_POOL] Worker diversity index: ${poolResult.diversityIndex} (0=single-worker, 1=fully diversified)`);
     }
     if (poolResult.specializationUtilization && !poolResult.specializationUtilization.specializationTargetsMet) {
+      const roiNote = poolResult?.laneROIAdmission?.admitted
+        ? `, roiGate=pass:${String(poolResult.laneROIAdmission.reason || "pass")}`
+        : `, roiGate=block:${String(poolResult?.laneROIAdmission?.reason || "unknown")}`;
       await appendProgress(
         config,
-        `[CAPABILITY_POOL] Specialist utilization below target: ${Math.round(poolResult.specializationUtilization.specializedShare * 100)}% < ${Math.round(poolResult.specializationUtilization.minSpecializedShare * 100)}%`
+        `[CAPABILITY_POOL] Specialist utilization below target: ${Math.round(poolResult.specializationUtilization.specializedShare * 100)}% < ${Math.round(poolResult.specializationUtilization.minSpecializedShare * 100)}%${roiNote}`
       );
     }
     // Apply pool assignment — update plan.role to the capability-assigned role when it improves on the default.
@@ -4986,7 +4984,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     warn(`[orchestrator] Plan quality gate failed (non-fatal): ${String(err?.message || err)}`);
   }
 
-  await appendProgress(config, `[CYCLE] ── Step 4: Dispatching ${plans.length} workers ──`);
+  await appendProgress(config, `[CYCLE] ── Step 4: Evaluating dispatch admission for ${plans.length} worker plans ──`);
 
   // Pre-dispatch governance gate: single decision source for guardrail pause,
   // governance freeze, dependency cycle detection, and governance canary breach.
@@ -5266,6 +5264,110 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     }
   }
 
+  const cycleLineageId = String((prometheusAnalysis as any)?.cycleId || (prometheusAnalysis as any)?.analyzedAt || Date.now());
+  const shouldUseTypedHandoffChain = (plan: any) => {
+    const risk = String(plan?.riskLevel || plan?.complexity || "").toLowerCase();
+    const expectedROI = Number(plan?.requestROI || plan?.predictedROI || 0);
+    return ["high", "critical"].includes(risk) && expectedROI >= 1.2;
+  };
+  const laneToWorkerRole = (lane: string) => {
+    switch (String(lane || "").toLowerCase()) {
+      case "quality": return "quality-worker";
+      case "governance": return "governance-worker";
+      case "integration": return "integration-worker";
+      case "infrastructure": return "infrastructure-worker";
+      case "observation": return "observation-worker";
+      default: return "evolution-worker";
+    }
+  };
+  const expandPlansToTypedHandoffChains = async (inputPlans: any[]) => {
+    const expanded: any[] = [];
+    let batchCursor = 1;
+    let chainCount = 0;
+    for (const plan of inputPlans) {
+      if (!shouldUseTypedHandoffChain(plan)) {
+        expanded.push(plan);
+        continue;
+      }
+      const chain = buildWorkerChain(plan, { complexity: plan?.riskLevel || plan?.complexity || "high" });
+      if (!chain.isChained || chain.chain.length === 0) {
+        expanded.push(plan);
+        continue;
+      }
+      chainCount += 1;
+      const chainId = String(plan?.task_id || plan?.id || plan?.intervention_id || `chain-${chainCount}`)
+        .replace(/[^a-zA-Z0-9_-]+/g, "-");
+      for (let index = 0; index < chain.chain.length; index += 1) {
+        const stage = chain.chain[index];
+        const artifactId = `${chainId}:${stage.stage}`;
+        const previousStage = index > 0 ? chain.chain[index - 1] : null;
+        expanded.push({
+          ...plan,
+          task: stage.task,
+          role: laneToWorkerRole(stage.lane),
+          wave: Number(plan?.wave || 1) + index,
+          _chainMode: true,
+          _chainId: chainId,
+          _chainStage: stage.stage,
+          _chainStageIndex: index + 1,
+          _chainStageTotal: chain.chain.length,
+          _typedHandoffArtifact: {
+            id: artifactId,
+            chainId,
+            stage: stage.stage,
+            fromStage: previousStage ? previousStage.stage : null,
+            toStage: index < chain.chain.length - 1 ? chain.chain[index + 1].stage : null,
+            artifactKey: `${chainId}:${stage.stage}:artifact`,
+          },
+          _batchIndex: batchCursor,
+          _batchWorkerRole: laneToWorkerRole(stage.lane),
+          _batchWave: Number(plan?.wave || 1) + index,
+          _chainSourceTask: String(plan?.task || plan?.title || ""),
+        });
+        batchCursor += 1;
+      }
+      for (let index = 1; index < chain.chain.length; index += 1) {
+        const fromStage = chain.chain[index - 1];
+        const toStage = chain.chain[index];
+        await recordAgentHandoff(config, {
+          from: laneToWorkerRole(fromStage.lane),
+          to: laneToWorkerRole(toStage.lane),
+          cycleId: cycleLineageId,
+          status: "planned",
+          summary: `${String(plan?.task || plan?.title || "").slice(0, 160)} :: ${fromStage.stage}->${toStage.stage}`,
+          artifact: `${chainId}:${fromStage.stage}->${toStage.stage}`,
+        }).catch(() => {});
+      }
+    }
+    return { plans: expanded, chainCount };
+  };
+
+  const chainExpansion = await expandPlansToTypedHandoffChains(plans as any[]);
+  if (chainExpansion.chainCount > 0) {
+    await appendProgress(config, `[CHAIN_MODE] Expanded ${chainExpansion.chainCount} high-complexity plan(s) into typed handoff chains`);
+    plans.splice(0, plans.length, ...chainExpansion.plans);
+  }
+
+  if (optimizerUsage) {
+    (optimizerUsage as any).interventionApplications = plans.length;
+    (optimizerUsage as any).typedHandoffStagesPlanned = plans.filter((plan: any) => plan?._chainMode === true).length;
+  }
+
+  await appendInterventionApplicationEntries(
+    config,
+    plans.map((plan: any, index: number) => ({
+      interventionId: String(plan?.intervention_id || plan?.id || plan?.task_id || `plan-${index + 1}`),
+      lineageId: String(plan?._chainId || plan?.lineageId || plan?.task_id || "") || null,
+      policyId: String(plan?.policyId || "") || null,
+      cycleId: cycleLineageId,
+      role: String(plan?.role || "evolution-worker"),
+      selectedAt: new Date().toISOString(),
+      status: plan?._chainMode ? `selected:${String(plan?._chainStage || "stage")}` : "selected",
+      noSignalOutcome: false,
+      decisionReason: plan?._chainMode ? "typed_handoff_chain" : "optimizer_admitted",
+    })),
+  ).catch(() => {});
+
   // Normalize analysis-only roles before batch planning so plans that will
   // be redirected to evolution-worker are co-batched together instead of
   // producing one thin batch per logical role (prometheus/athena/orchestrator).
@@ -5451,10 +5553,13 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       const totalPlans = Math.max(1, Array.isArray(normalizedPlansForBatching) ? normalizedPlansForBatching.length : 0);
       const achievedSpecializedCount = Math.max(0, Math.round(Number(util.specializedShare || 0) * totalPlans));
       const requiredSpecializedCount = Math.max(0, Math.ceil(Number(util.adaptiveMinSpecializedShare || 0) * totalPlans));
+      const feasibleSpecializedCount = Math.max(achievedSpecializedCount, Number(util.specializedCount || 0));
       firstBatch.specialistUtilizationTarget = {
         targetMet: achievedSpecializedCount >= requiredSpecializedCount,
         achievedSpecializedCount,
         requiredSpecializedCount,
+        feasibleSpecializedCount,
+        infeasibleUnderCurrentMix: feasibleSpecializedCount < requiredSpecializedCount,
         minSpecializedShare: util.minSpecializedShare,
         adaptiveMinSpecializedShare: util.adaptiveMinSpecializedShare,
         poolReportedTargetMet: util.specializationTargetsMet === true,
@@ -5517,12 +5622,20 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     ) {
       const achieved = Number(specializationTarget.achievedSpecializedCount || 0);
       const required = Number(specializationTarget.requiredSpecializedCount || 0);
+      const feasible = Number(specializationTarget.feasibleSpecializedCount || achieved);
       if (achieved < required) {
+        if (feasible < required) {
+          await appendProgress(
+            config,
+            `[BATCH_PLANNER] Specialist utilization target infeasible under admitted mix: achieved=${achieved} feasibleMax=${feasible} required=${required} — proceeding with deterministic degraded admission`
+          );
+        } else {
         await appendProgress(
           config,
           `[BATCH_PLANNER] Specialist utilization admission blocked dispatch: achieved=${achieved} required=${required}`
         );
         return;
+        }
       }
     }
   }
@@ -6168,14 +6281,24 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         completed:  allWorkerResults.filter(r => isAnalyticsCompletedWorkerStatus(r.status)).length,
       },
       premiumUsageLog: await readJson(path.join(stateDir, "premium_usage_log.json"), []),
+      lineageLog: ((await readJson(path.join(stateDir, "lineage_graph.json"), { entries: [] }))?.entries) ?? [],
       premiumEfficiencyRaw: _premiumEfficiencyRaw,
       premiumEfficiencyAdjusted: _premiumEfficiencyAdjusted,
       rawPremiumEfficiency: _rawPremiumEfficiency,
       executionAdjustedPremiumEfficiency: _executionAdjustedPremiumEfficiency,
       memoryHitLog: await readJson(path.join(stateDir, "memory_hit_log.json"), []),
+      promptCacheTelemetry: await readPromptCacheTelemetry(config),
       retryCount:                 cycleTransientRetries,
       contractViolationCounters:  cycleContractViolationCounters,
       rerouteMetrics:             cycleRerouteMetrics,
+      assignedLaneDistribution: capabilityPoolResult?.laneCounts ?? null,
+      assignedRoleDistribution: capabilityPoolResult?.assignments
+        ? capabilityPoolResult.assignments.reduce((acc: Record<string, number>, row: any) => {
+            const role = String(row?.selection?.role || "unknown");
+            acc[role] = (acc[role] || 0) + 1;
+            return acc;
+          }, {})
+        : null,
     });
     await persistCycleAnalytics(config, analyticsRecord);
 
@@ -6219,6 +6342,27 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       const decisionSummary = decisions.map((d: any) => `${d.interventionId}=${d.decision}`).join(", ");
       await appendProgress(config, `[INTERVENTION_JUDGE] Cycle evaluation complete — ${decisions.length} decision(s): ${decisionSummary || "none"}`);
 
+      const plansForLineage = Array.isArray(plans) ? plans : [];
+      const planByInterventionId = new Map<string, any>();
+      for (let i = 0; i < plansForLineage.length; i++) {
+        const plan = plansForLineage[i];
+        const interventionId = String(plan?.intervention_id || plan?.id || plan?.task_id || `plan-${i + 1}`);
+        if (!planByInterventionId.has(interventionId)) {
+          planByInterventionId.set(interventionId, plan);
+        }
+      }
+
+      let policyImpactByInterventionId: Record<string, { policyId: string; decayedEffectiveness: number; inactiveCycles: number }> = {};
+      try {
+        const learnedPoliciesRaw = await readJson(path.join(stateDir, "learned_policies.json"), []);
+        const learnedPolicies = Array.isArray(learnedPoliciesRaw) ? learnedPoliciesRaw : [];
+        if (learnedPolicies.length > 0 && plansForLineage.length > 0) {
+          policyImpactByInterventionId = buildPolicyImpactByInterventionId(plansForLineage, learnedPolicies);
+        }
+      } catch {
+        policyImpactByInterventionId = {};
+      }
+
       // Action executor: convert judge decisions into deterministic runtime actions.
       // Promote/Hold/Rework are ledgered; Rollback optionally triggers rollback engine.
       const policyLedgerPath = path.join(stateDir, "intervention_policy_ledger.json");
@@ -6229,24 +6373,81 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       });
       const existingEntries = Array.isArray(policyLedger?.entries) ? policyLedger.entries : [];
       const actionCounters = { promote: 0, hold: 0, rework: 0, rollback: 0, rollbackExecuted: 0 };
+      const closureLedgerEntries: any[] = [];
+      const retirementEvidenceEntries: any[] = [];
+      const policyClosureEntries: any[] = [];
+      const cycleClosureTimestamp = new Date().toISOString();
 
       for (const d of decisions as any[]) {
         const finalDecision = String(d?.decision || "hold").toLowerCase();
+        const interventionId = String(d?.interventionId || "unknown");
+        const linkedPlan = planByInterventionId.get(interventionId) || null;
+        const policyImpact = policyImpactByInterventionId[interventionId];
+        const policyId = String(linkedPlan?.policyId || policyImpact?.policyId || "") || null;
+        const noSignalOutcome = isExplicitNoSignalJudgeDecision(d);
+        const outcomeScore = mapJudgeDecisionToOutcomeScore(finalDecision, noSignalOutcome);
+        const closureMode = noSignalOutcome
+          ? "no_signal"
+          : finalDecision === "promote"
+            ? "policy_closed"
+            : "observed";
         if (finalDecision === "promote") actionCounters.promote += 1;
         else if (finalDecision === "rework") actionCounters.rework += 1;
         else if (finalDecision === "rollback") actionCounters.rollback += 1;
         else actionCounters.hold += 1;
 
         existingEntries.push({
-          recordedAt: new Date().toISOString(),
+          recordedAt: cycleClosureTimestamp,
           cycleId: String(interventionJudgeReport?.cycleId || cycleStartedAt),
-          interventionId: String(d?.interventionId || "unknown"),
+          interventionId,
           decision: finalDecision,
           reason: String(d?.reason || "unknown"),
           decisionMode: String(d?.decisionMode || "unknown"),
           aiUsed: d?.aiReviewStatus === "ok",
           aiConfidence: typeof d?.aiConfidence === "number" ? d.aiConfidence : null,
+          noSignalOutcome,
+          policyId,
         });
+
+        closureLedgerEntries.push({
+          interventionId,
+          lineageId: String(linkedPlan?._chainId || linkedPlan?.lineageId || linkedPlan?.task_id || "") || null,
+          policyId,
+          cycleId: String(interventionJudgeReport?.cycleId || cycleStartedAt),
+          role: String(linkedPlan?.role || d?.role || "evolution-worker"),
+          selectedAt: cycleClosureTimestamp,
+          status: `closed:${finalDecision}`,
+          noSignalOutcome,
+          decisionReason: String(d?.reason || "unknown"),
+          recordedAt: cycleClosureTimestamp,
+        });
+
+        retirementEvidenceEntries.push({
+          recordedAt: cycleClosureTimestamp,
+          cycleId: String(interventionJudgeReport?.cycleId || cycleStartedAt),
+          interventionId,
+          lineageId: String(linkedPlan?._chainId || linkedPlan?.lineageId || linkedPlan?.task_id || "") || null,
+          policyId,
+          role: String(linkedPlan?.role || d?.role || "evolution-worker"),
+          decision: finalDecision,
+          decisionMode: String(d?.decisionMode || "unknown"),
+          closureMode,
+          noSignalOutcome,
+          reason: String(d?.reason || "unknown"),
+          outcomeScore,
+          aiConfidence: typeof d?.aiConfidence === "number" ? d.aiConfidence : null,
+          resolvedPolicy: finalDecision === "promote" && Boolean(policyId),
+        });
+
+        if (finalDecision === "promote" && policyId) {
+          policyClosureEntries.push({
+            policyId,
+            resolvedAt: cycleClosureTimestamp,
+            resolvedBy: `intervention_judge:${interventionId}`,
+            evidence: `intervention_promoted:${String(d?.reason || "unknown")}`,
+            cycleId: String(interventionJudgeReport?.cycleId || cycleStartedAt),
+          });
+        }
 
         if (finalDecision === "rollback" && config.runtime?.interventionJudgeExecuteRollback === true) {
           const rollbackResult = await executeRollback({
@@ -6276,15 +6477,43 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         updatedAt: new Date().toISOString(),
       });
 
+      if (closureLedgerEntries.length > 0) {
+        await appendInterventionApplicationEntries(config, closureLedgerEntries).catch(() => {});
+      }
+      if (retirementEvidenceEntries.length > 0) {
+        await appendInterventionRetirementEvidence(config, retirementEvidenceEntries).catch(() => {});
+      }
+      if (policyClosureEntries.length > 0) {
+        for (const entry of policyClosureEntries) {
+          await appendPolicyClosureEvidence(config, entry).catch(() => {});
+        }
+      }
+
       await appendProgress(
         config,
         `[INTERVENTION_EXECUTOR] promote=${actionCounters.promote} hold=${actionCounters.hold} rework=${actionCounters.rework} rollback=${actionCounters.rollback} rollbackExecuted=${actionCounters.rollbackExecuted}`
+      );
+      await appendProgress(
+        config,
+        `[INTERVENTION_LINEAGE] closures=${closureLedgerEntries.length} retirementEvidence=${retirementEvidenceEntries.length} noSignal=${retirementEvidenceEntries.filter((entry) => entry.noSignalOutcome).length} policyClosures=${policyClosureEntries.length}`
       );
     }
   } catch (err) {
     // Advisory — never blocks orchestration
     warn(`[orchestrator] Intervention judge failed (non-fatal): ${String(err?.message || err)}`);
     await appendProgress(config, `[INTERVENTION_JUDGE] Evaluation failed (non-fatal): ${String(err?.message || err)}`);
+  }
+
+  try {
+    const retentionSummary = await enforceStateRetention(config);
+    if (retentionSummary.totalTrimmed > 0) {
+      await appendProgress(
+        config,
+        `[RETENTION] Trimmed ${retentionSummary.totalTrimmed} stale record(s) across ${retentionSummary.touchedFiles.join(", ")}`
+      );
+    }
+  } catch (retentionErr) {
+    warn(`[orchestrator] State retention enforcement failed (non-fatal): ${String((retentionErr as Error)?.message || retentionErr)}`);
   }
 
   // ── Autonomy band evaluation: composite score + state machine ──
@@ -6807,6 +7036,21 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       budgetUsed: prometheusAnalysis?.requestBudget?.estimatedPremiumRequestsTotal ?? 0,
       budgetLimit: prometheusAnalysis?.requestBudget?.hardCapTotal ?? 0,
       workersDone: workersDone,
+      assignedSpecialistShare: Number(capPoolUtil?.specializedShare ?? 0),
+      assignedSpecializedCount: Number(capPoolUtil?.specializedCount ?? 0),
+      realizedSpecializedShare: Number(
+        cycleLaneTelemetry && typeof cycleLaneTelemetry === "object"
+          ? (() => {
+              const entries = Object.values(cycleLaneTelemetry as Record<string, any>);
+              const totalDispatched = entries.reduce((sum, row) => sum + Math.max(0, Number(row?.dispatched || 0)), 0);
+              const realizedSpecialized = entries.reduce((sum, row) => {
+                const specialistLane = row?.specialistLane === true || String(row?.lane || "").toLowerCase() !== "implementation";
+                return specialistLane ? sum + Math.max(0, Number(row?.dispatched || 0)) : sum;
+              }, 0);
+              return totalDispatched > 0 ? realizedSpecialized / totalDispatched : 0;
+            })()
+          : 0
+      ),
       specializedShareTarget: Number(effectiveSpecTarget?.adaptiveMinSpecializedShare ?? effectiveSpecTarget?.minSpecializedShare ?? 0),
       specializedShareTargetMet: effectiveSpecTarget?.targetMet === true,
       specialistRerouteCount: Array.isArray(firstBatchRerouteReasons) ? firstBatchRerouteReasons.length : 0,
@@ -6815,6 +7059,8 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         ? { specialistRerouteReasons: firstBatchRerouteReasons }
         : {}),
       ...(cycleLaneTelemetry ? { laneTelemetry: cycleLaneTelemetry } : {}),
+      ...(capabilityPoolResult?.laneCounts ? { assignedLaneDistribution: capabilityPoolResult.laneCounts } : {}),
+      ...(cycleAnalyticsRecord?.lastCycle?.assignedRoleDistribution ? { assignedRoleDistribution: cycleAnalyticsRecord.lastCycle.assignedRoleDistribution } : {}),
       ...(optimizerUsage ? { optimizerUsage } : {}),
     });
   } catch (err) {
@@ -7042,7 +7288,10 @@ async function mainLoop(config) {
         }
         // There's remaining work — run a new full cycle
         // Jesus will see the current state and decide appropriately
-        await appendProgress(config, `[LOOP] ${completed.length}/${totalPlans} plans done, ${pending.length} remaining — starting new cycle`);
+        await appendProgress(
+          config,
+          `[LOOP] Fresh cycle trigger: latest approved plan set pending=${pending.length} completed=${completed.length}/${totalPlans} (checkpoint counters may differ)`
+        );
         await runSingleCycle(config, cycleToken);
         await sleep(RE_EVAL_SLEEP_MS);
         continue;

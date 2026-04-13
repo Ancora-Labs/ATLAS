@@ -11,6 +11,15 @@ import {
   type AgentContractValidation,
 } from "../../src/core/agent_loader.js";
 
+const WORKER_AGENT_SLUGS = [
+  "evolution-worker",
+  "quality-worker",
+  "governance-worker",
+  "infrastructure-worker",
+  "integration-worker",
+  "observation-worker",
+];
+
 // ── validateAgentContract unit tests ──────────────────────────────────────────
 
 describe("validateAgentContract", () => {
@@ -105,6 +114,24 @@ describe("validateAllAgentContracts", () => {
     // If allValid is false, violations must be non-empty.
     if (!result.allValid) {
       assert.ok(result.violations.length > 0, "allValid=false must come with at least one violation");
+    }
+  });
+
+  it("worker agents have explicit execute-session controls and valid contracts", () => {
+    for (const slug of WORKER_AGENT_SLUGS) {
+      const result = validateAgentContract(slug);
+      assert.equal(result.valid, true, `${slug} violations: ${result.violations.join(", ")}`);
+      assert.equal(result.fields.boxSessionInputPolicy, "allow_all", `${slug} must set explicit allow_all session policy`);
+      assert.equal(result.fields.boxHookCoverage, "required", `${slug} must require hook coverage`);
+    }
+  });
+
+  it("worker agents separate acceptance evidence from the canonical verification block", async () => {
+    for (const slug of WORKER_AGENT_SLUGS) {
+      const content = await fs.readFile(path.join(process.cwd(), ".github", "agents", `${slug}.agent.md`), "utf8");
+      assert.match(content, /Acceptance Evidence:/, `${slug} must include an Acceptance Evidence section`);
+      assert.match(content, /===VERIFICATION_REPORT===\s*\nBUILD=<pass\|fail\|n\/a>/, `${slug} must use canonical BUILD/TESTS verification fields`);
+      assert.doesNotMatch(content, /===VERIFICATION_REPORT===\s*[\s\S]*acceptance criterion 1:/, `${slug} must not place acceptance-criterion prose inside VERIFICATION_REPORT`);
     }
   });
 });

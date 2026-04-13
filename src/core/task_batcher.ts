@@ -11,6 +11,8 @@
  * costs 1 premium request.
  */
 
+import { resolveAdaptivePacketPlanLimit } from "./worker_batch_planner.js";
+
 // Rough approximation: 1 token ≈ 4 characters for mixed English/code text.
 const CHARS_PER_TOKEN = 4;
 
@@ -47,12 +49,23 @@ export { estimateBatchTokens } from "./worker_batch_planner.js";
  *
  * @param {Array} plans - Prometheus plan objects
  * @param {number} maxTokensPerBatch - total context window budget per worker call
+ * @param {{ maxPlansPerPacket?: number, uncertainty?: string, taskKindTelemetry?: object }} opts
  * @returns {Array<Array>} array of batches, each batch is an array of plans
  */
-export function packPlansIntoBatches(plans, maxTokensPerBatch) {
+export function packPlansIntoBatches(plans, maxTokensPerBatch, opts: any = {}) {
   if (!plans || plans.length === 0) return [];
 
   const available = maxTokensPerBatch - OVERHEAD_TOKENS;
+  const adaptivePacketLimit = Number.isFinite(Number(opts?.maxPlansPerPacket)) && Number(opts?.maxPlansPerPacket) > 0
+    ? resolveAdaptivePacketPlanLimit({
+        taskKinds: plans.map((plan) => plan?.taskKind || plan?.kind || "implementation"),
+        baseCap: Number(opts.maxPlansPerPacket),
+        uncertainty: typeof opts?.uncertainty === "string" ? opts.uncertainty : null,
+        taskKindTelemetry: opts?.taskKindTelemetry && typeof opts.taskKindTelemetry === "object"
+          ? opts.taskKindTelemetry
+          : undefined,
+      }).maxPlansPerPacket
+    : null;
   if (available <= 0) {
     // Budget too small for even overhead — each plan gets its own batch
     return plans.map(p => [p]);
@@ -64,8 +77,9 @@ export function packPlansIntoBatches(plans, maxTokensPerBatch) {
 
   for (const plan of plans) {
     const tokens = estimateTokens(plan);
+    const packetCapReached = adaptivePacketLimit !== null && currentBatch.length >= adaptivePacketLimit;
 
-    if (currentBatch.length > 0 && currentTokens + tokens > available) {
+    if (currentBatch.length > 0 && (currentTokens + tokens > available || packetCapReached)) {
       batches.push(currentBatch);
       currentBatch = [plan];
       currentTokens = tokens;

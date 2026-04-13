@@ -1266,7 +1266,8 @@ export async function runEvolutionLoop(config, options: { fromTaskId?: string; d
         prChecks,
         // Athena's own pre-review notes — closes the feedback loop
         preReviewAssessment: preReview.reason || null,
-        preReviewIssues: preReview.issues || []
+        preReviewIssues: preReview.issues || [],
+        dispatchContract: (workerResult as Record<string, unknown>).dispatchContract as EvidenceEnvelope["dispatchContract"],
       };
 
       // ── Envelope structure validation — hard admission control ──────────────
@@ -1294,7 +1295,9 @@ export async function runEvolutionLoop(config, options: { fromTaskId?: string; d
       const athenaOriginalPlan = {
         task: activeTask.title,
         verification: (activeTask.acceptance_criteria || []).join("; "),
-        context: activeTask.scope
+        context: activeTask.scope,
+        task_id: task.task_id,
+        target_files: Array.isArray(activeTask.files_hint) ? activeTask.files_hint : [],
       };
 
       let athenaResult;

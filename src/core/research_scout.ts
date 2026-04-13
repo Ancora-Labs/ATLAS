@@ -35,15 +35,118 @@ type TopicSiteState = {
   entries: TopicSiteEntry[];
 };
 
-function normalizeUrl(raw: string): string {
+type QueryMemoryState = {
+  updatedAt?: string;
+  terms?: Array<{ term?: string; score?: number; sourceCount?: number; lastSeenAt?: string }>;
+};
+
+type ResearchFeedbackState = {
+  updatedAt?: string;
+  researchGaps?: string;
+  unresolvedGaps?: string[];
+  topTopics?: string[];
+  priorityActions?: string[];
+};
+
+function normalizeSearchTerm(raw: unknown): string {
+  return String(raw || "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function tokenizeSearchTerm(raw: unknown): string[] {
+  return normalizeSearchTerm(raw)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 3);
+}
+
+function isLowQualitySearchTerm(raw: unknown): boolean {
+  const normalized = normalizeSearchTerm(raw);
+  if (!normalized) return true;
+  const tokens = tokenizeSearchTerm(normalized);
+  if (tokens.length === 0) return true;
+  if (tokens.length === 1 && new Set(["system", "general", "overview", "topic", "agent"]).has(tokens[0])) {
+    return true;
+  }
+  return false;
+}
+
+function overlapTokenScore(left: unknown, right: unknown): number {
+  const leftTokens = new Set(tokenizeSearchTerm(left));
+  const rightTokens = new Set(tokenizeSearchTerm(right));
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+  let score = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) score += 1;
+  }
+  return score;
+}
+
+export function normalizeUrl(raw: string): string {
   const s = String(raw || "").trim();
   if (!s) return "";
   try {
     const u = new URL(s);
+    if (!["http:", "https:"].includes(u.protocol)) return "";
     u.hash = "";
     return u.toString().replace(/\/$/, "").toLowerCase();
   } catch {
-    return s.replace(/\/$/, "").toLowerCase();
+    return "";
+  }
+}
+
+function canonicalGitHubDocsPath(url: URL): string {
+  const host = url.hostname.toLowerCase();
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (host === "api.github.com") {
+    const marker = ["repos", "github", "docs", "contents"];
+    const startsWithMarker = marker.every((value, index) => parts[index] === value);
+    if (startsWithMarker) return parts.slice(marker.length).join("/").toLowerCase();
+  }
+  if (host === "raw.githubusercontent.com") {
+    if (parts[0] === "github" && parts[1] === "docs" && parts.length >= 4) {
+      return parts.slice(3).join("/").toLowerCase();
+    }
+  }
+  if (host === "github.com") {
+    if (parts[0] === "github" && parts[1] === "docs" && parts[2] === "blob" && parts.length >= 5) {
+      return parts.slice(4).join("/").toLowerCase();
+    }
+  }
+  return url.pathname.replace(/^\/+/, "").toLowerCase();
+}
+
+export function canonicalSiteFromUrl(raw: string): string {
+  const normalized = normalizeUrl(raw);
+  if (!normalized) return "unknown";
+  try {
+    const url = new URL(normalized);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    if (["api.github.com", "raw.githubusercontent.com", "github.com"].includes(host)) {
+      const docsPath = canonicalGitHubDocsPath(url);
+      if (docsPath.startsWith("content/copilot/") || docsPath.startsWith("content/en/copilot/")) {
+        return "github-docs";
+      }
+    }
+    return host || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function canonicalSourceIdentity(raw: string): string {
+  const normalized = normalizeUrl(raw);
+  if (!normalized) return "";
+  try {
+    const url = new URL(normalized);
+    const site = canonicalSiteFromUrl(normalized);
+    if (site === "github-docs") {
+      return `${site}:${canonicalGitHubDocsPath(url)}`;
+    }
+    return normalized;
+  } catch {
+    return normalized;
   }
 }
 
@@ -202,6 +305,260 @@ function buildInProgressTopicsSection(state: TopicSiteState, maxEntries = 25): s
   ].join("\n");
 }
 
+function collectFeedbackTerms(feedback: ResearchFeedbackState | null | undefined): string[] {
+  if (!feedback || typeof feedback !== "object") return [];
+  const terms: string[] = [];
+  const unresolved = Array.isArray(feedback.unresolvedGaps) ? feedback.unresolvedGaps : [];
+  const topTopics = Array.isArray(feedback.topTopics) ? feedback.topTopics : [];
+  const priorityActions = Array.isArray(feedback.priorityActions) ? feedback.priorityActions : [];
+  for (const value of unresolved) terms.push(normalizeSearchTerm(value));
+  for (const value of topTopics) terms.push(normalizeSearchTerm(value));
+  for (const value of priorityActions) terms.push(normalizeSearchTerm(value));
+  if (typeof feedback.researchGaps === "string") {
+    for (const part of feedback.researchGaps.split(/[;\n]+/)) {
+      terms.push(normalizeSearchTerm(part));
+    }
+  }
+  return terms.filter((term) => !isLowQualitySearchTerm(term));
+}
+
+function topicCoverageScore(term: string, state: TopicSiteState | null | undefined): number {
+  const entries = Array.isArray(state?.entries) ? state!.entries : [];
+  if (!term) return 0;
+  let best = 0;
+  for (const entry of entries) {
+    const coverageTarget = `${entry.site} ${entry.topic}`;
+    const overlap = overlapTokenScore(term, coverageTarget);
+    if (overlap <= 0) continue;
+    best = Math.max(best, Math.max(0, Number(entry.uniqueSourceCount || 0)));
+  }
+  return best;
+}
+
+export function computeAdaptiveScoutTarget({
+  configuredTarget,
+  minTarget,
+  adaptiveEnabled,
+  seenUrlCount,
+  topicSiteState,
+  recentUniqueSourceCount,
+}: {
+  configuredTarget: number;
+  minTarget: number;
+  adaptiveEnabled: boolean;
+  seenUrlCount: number;
+  topicSiteState?: TopicSiteState | null;
+  recentUniqueSourceCount?: number;
+}): { effectiveTarget: number; saturationRatio: number; reason: string } {
+  const safeConfiguredTarget = Math.max(1, Math.floor(Number(configuredTarget || 1)));
+  const safeMinTarget = Math.max(1, Math.min(safeConfiguredTarget, Math.floor(Number(minTarget || 1))));
+  if (adaptiveEnabled !== true) {
+    return { effectiveTarget: safeConfiguredTarget, saturationRatio: 0, reason: "adaptive_disabled" };
+  }
+
+  const entryCount = Array.isArray(topicSiteState?.entries) ? topicSiteState!.entries.length : 0;
+  const seenPressure = Math.min(1, Math.max(0, Number(seenUrlCount || 0)) / 400);
+  const topicPressure = Math.min(1, entryCount / 12);
+  const saturationRatio = Math.max(seenPressure, topicPressure);
+  const lowYield = Math.max(0, Number(recentUniqueSourceCount || 0)) <= 1;
+
+  if (saturationRatio >= 0.55 && lowYield) {
+    return { effectiveTarget: safeMinTarget, saturationRatio, reason: "high_saturation_low_yield" };
+  }
+
+  if (saturationRatio >= 0.75) {
+    const reduced = Math.max(safeMinTarget, Math.min(safeConfiguredTarget, Math.round(safeConfiguredTarget * 0.5)));
+    return { effectiveTarget: reduced, saturationRatio, reason: "high_saturation" };
+  }
+
+  return { effectiveTarget: safeConfiguredTarget, saturationRatio, reason: "baseline" };
+}
+
+function extractFallbackUrl(block: string): string {
+  const match = String(block || "").match(/https?:\/\/[^\s)\]}>"]+/i);
+  return match ? match[0] : "";
+}
+
+function buildSourceSearchCorpus(source: Record<string, unknown>): string {
+  return [
+    source.title,
+    source.url,
+    source.whyImportant,
+    Array.isArray(source.topicTags) ? source.topicTags.join(" ") : source.topicTags,
+    source.learningNote,
+    source.extractedContent,
+  ].map((part) => String(part || "")).join(" ");
+}
+
+function deriveSourceDiversityKey(source: Record<string, unknown>): string {
+  const normalizedUrl = normalizeUrl(String(source.url || ""));
+  const site = canonicalSiteFromUrl(normalizedUrl);
+  const topicTags = Array.isArray(source.topicTags)
+    ? source.topicTags.map((tag) => normalizeTopic(String(tag || ""))).filter(Boolean)
+    : [];
+  if (topicTags.length > 0) {
+    return `${site}:${Array.from(new Set(topicTags)).sort().join("|")}`;
+  }
+
+  try {
+    const url = new URL(normalizedUrl);
+    const parts = url.pathname.split("/").filter(Boolean);
+    const firstPathSegment = parts[0] || "root";
+    return `${site}:${firstPathSegment.toLowerCase()}`;
+  } catch {
+    return `${site}:unknown`;
+  }
+}
+
+function scoreCandidateAgainstFeedback(
+  source: Record<string, unknown>,
+  feedbackTerms: string[],
+  state: TopicSiteState | null | undefined,
+): number {
+  const corpus = buildSourceSearchCorpus(source);
+  let bestFeedback = 0;
+  for (const term of feedbackTerms) {
+    bestFeedback = Math.max(bestFeedback, overlapTokenScore(term, corpus));
+  }
+  const topicPenalty = Math.max(0, topicCoverageScore(corpus, state) * 0.1);
+  return bestFeedback - topicPenalty;
+}
+
+export function selectDiverseScoutSources({
+  parsedSources,
+  seenUrls,
+  targetSourceCount,
+  maxTargetSourceCount,
+  topicSiteState,
+  researchFeedback,
+}: {
+  parsedSources: Array<Record<string, unknown>>;
+  seenUrls?: Set<string>;
+  targetSourceCount: number;
+  maxTargetSourceCount?: number;
+  topicSiteState?: TopicSiteState | null;
+  researchFeedback?: ResearchFeedbackState | null;
+}): {
+  sources: Array<Record<string, unknown>>;
+  uniqueHostCount: number;
+  filteredRepeatCount: number;
+  filteredDuplicateInRunCount: number;
+} {
+  const alreadySeen = seenUrls instanceof Set ? seenUrls : new Set<string>();
+  const feedbackTerms = collectFeedbackTerms(researchFeedback);
+  const uniqueCandidates: Array<Record<string, unknown> & { _identity: string; _normalizedUrl: string; _site: string; _score: number }> = [];
+  const seenIdentities = new Set<string>();
+  let filteredRepeatCount = 0;
+  let filteredDuplicateInRunCount = 0;
+
+  for (const rawSource of Array.isArray(parsedSources) ? parsedSources : []) {
+    const normalizedUrl = normalizeUrl(String(rawSource?.url || ""));
+    if (!normalizedUrl) continue;
+    const identity = canonicalSourceIdentity(normalizedUrl);
+    if (!identity) continue;
+    if (alreadySeen.has(normalizedUrl)) {
+      filteredRepeatCount += 1;
+      continue;
+    }
+    if (seenIdentities.has(identity)) {
+      filteredDuplicateInRunCount += 1;
+      continue;
+    }
+    seenIdentities.add(identity);
+    uniqueCandidates.push({
+      ...rawSource,
+      url: normalizedUrl,
+      _identity: identity,
+      _normalizedUrl: normalizedUrl,
+      _site: canonicalSiteFromUrl(normalizedUrl),
+      _score: scoreCandidateAgainstFeedback(rawSource, feedbackTerms, topicSiteState),
+    });
+  }
+
+  uniqueCandidates.sort((left, right) => {
+    if (right._score !== left._score) return right._score - left._score;
+    const leftTopicPenalty = topicCoverageScore(buildSourceSearchCorpus(left), topicSiteState);
+    const rightTopicPenalty = topicCoverageScore(buildSourceSearchCorpus(right), topicSiteState);
+    if (leftTopicPenalty !== rightTopicPenalty) return leftTopicPenalty - rightTopicPenalty;
+    return String(left.url || "").localeCompare(String(right.url || ""));
+  });
+
+  const desiredCount = Math.max(1, Math.floor(Number(targetSourceCount || 1)));
+  const hardCap = Math.max(desiredCount, Math.floor(Number(maxTargetSourceCount || desiredCount)));
+  const selected: Array<Record<string, unknown> & { _site?: string }> = [];
+  const selectedDiversityKeys = new Set<string>();
+  let blockerCoverageCount = 0;
+
+  for (const candidate of uniqueCandidates) {
+    const shouldExtendForFeedback = candidate._score > 0 && blockerCoverageCount < feedbackTerms.length && selected.length < hardCap;
+    if (selected.length >= desiredCount && !shouldExtendForFeedback) continue;
+    const candidateDiversityKey = deriveSourceDiversityKey(candidate);
+    if (selected.length < desiredCount && selectedDiversityKeys.has(candidateDiversityKey)) {
+      const alternativeExists = uniqueCandidates.some((alternative) => {
+        if (selected.includes(alternative)) return false;
+        return deriveSourceDiversityKey(alternative) !== candidateDiversityKey;
+      });
+      if (alternativeExists) continue;
+    }
+    selected.push(candidate);
+    selectedDiversityKeys.add(candidateDiversityKey);
+    if (candidate._score > 0) blockerCoverageCount += 1;
+    if (selected.length >= hardCap) break;
+  }
+
+  const uniqueHostCount = new Set(selected.map((source) => String(source._site || canonicalSiteFromUrl(String(source.url || ""))))).size;
+  return {
+    sources: selected.map(({ _identity, _normalizedUrl, _site, _score, ...source }) => source),
+    uniqueHostCount,
+    filteredRepeatCount,
+    filteredDuplicateInRunCount,
+  };
+}
+
+export function buildScoutDynamicQueryTerms({
+  systemSeeds,
+  researchFeedback,
+  topicSiteState,
+  queryMemory,
+  maxTerms,
+}: {
+  systemSeeds?: string[];
+  researchFeedback?: ResearchFeedbackState | null;
+  topicSiteState?: TopicSiteState | null;
+  queryMemory?: QueryMemoryState | null;
+  maxTerms?: number;
+}): string[] {
+  const limit = Math.max(1, Math.floor(Number(maxTerms || 8)));
+  const scored = new Map<string, number>();
+  const feedbackTerms = collectFeedbackTerms(researchFeedback);
+  const addTerm = (term: unknown, baseScore: number) => {
+    const normalized = normalizeSearchTerm(term);
+    if (isLowQualitySearchTerm(normalized)) return;
+    const coveragePenalty = topicCoverageScore(normalized, topicSiteState) * 0.35;
+    const nextScore = baseScore - coveragePenalty;
+    const current = scored.get(normalized) ?? Number.NEGATIVE_INFINITY;
+    if (nextScore > current) scored.set(normalized, nextScore);
+  };
+
+  for (const term of feedbackTerms) addTerm(term, 300);
+  for (const term of Array.isArray(systemSeeds) ? systemSeeds : []) addTerm(term, 200);
+
+  const memoryTerms = Array.isArray(queryMemory?.terms) ? queryMemory!.terms : [];
+  for (const entry of memoryTerms) {
+    const sourceCount = Math.max(0, Number(entry?.sourceCount || 0));
+    const score = Math.max(0, Number(entry?.score || 0));
+    addTerm(entry?.term, 100 + score - sourceCount * 6);
+  }
+
+  return Array.from(scored.entries())
+    .sort((left, right) => {
+      if (right[1] !== left[1]) return right[1] - left[1];
+      return left[0].localeCompare(right[0]);
+    })
+    .slice(0, limit)
+    .map(([term]) => term);
+}
+
 function liveLogPath(stateDir: string): string {
   return path.join(stateDir, "live_worker_research-scout.log");
 }
@@ -219,7 +576,7 @@ function appendLiveLogSync(stateDir: string, text: string): void {
  */
 async function buildScoutContext(config: any): Promise<string> {
   const stateDir = config.paths?.stateDir || "state";
-  const scoutModel = config?.roleRegistry?.researchScout?.model || "gpt-5.3-codex";
+  const scoutModel = config?.roleRegistry?.researchScout?.model || "gpt-5.4";
   const promptTokenBudget = resolveMaxPromptBudget(
     config,
     String(scoutModel),
@@ -308,10 +665,12 @@ ${String(previousResearch.researchGaps).slice(0, 1000)}`));
  * Parse structured sources from the Scout's raw text output.
  * Extracts source blocks with their metadata fields.
  */
-function parseScoutSources(rawText: string): Array<Record<string, unknown>> {
+export function parseScoutSources(rawText: string): Array<Record<string, unknown>> {
   const sources: Array<Record<string, unknown>> = [];
-  // Match source blocks: ### [Source N] or ### Source N
-  const blocks = rawText.split(/###\s*\[?Source\s*\d+\]?\s*/i).filter(b => b.trim());
+  const text = String(rawText || "");
+  const firstHeadingIndex = text.search(/###\s*\[?Source\s*\d+\]?\s*/i);
+  if (firstHeadingIndex < 0) return [];
+  const blocks = text.slice(firstHeadingIndex).split(/###\s*\[?Source\s*\d+\]?\s*/i).filter(b => b.trim());
 
   for (const block of blocks) {
     const source: Record<string, unknown> = {};
@@ -322,7 +681,8 @@ function parseScoutSources(rawText: string): Array<Record<string, unknown>> {
 
     // Extract fields
     const urlMatch = block.match(/\*?\*?URL\*?\*?:\s*(.+)/i);
-    if (urlMatch) source.url = urlMatch[1].trim();
+    const extractedUrl = normalizeUrl(urlMatch ? urlMatch[1].trim() : extractFallbackUrl(block));
+    if (extractedUrl) source.url = extractedUrl;
 
     const typeMatch = block.match(/\*?\*?Source\s*Type\*?\*?:\s*(.+)/i);
     if (typeMatch) source.sourceType = typeMatch[1].trim();
@@ -390,7 +750,7 @@ export interface ResearchScoutResult {
 export async function runResearchScout(config: any): Promise<ResearchScoutResult> {
   const stateDir = config.paths?.stateDir || "state";
   const command = config.env?.copilotCliCommand || "copilot";
-  const model = config.roleRegistry?.researchScout?.model || "gpt-5.3-codex";
+  const model = config.roleRegistry?.researchScout?.model || "gpt-5.4";
   const disablePromptCache = config?.runtime?.researchScoutDisableCache !== false;
   const runNonce = disablePromptCache
     ? `research-scout-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
@@ -460,7 +820,7 @@ Follow the output format specified in your agent definition exactly.`;
   const raw = stdout || stderr;
   await appendAgentContextUsage(config, {
     agent: "research-scout",
-    model: String(model || "gpt-5.3-codex"),
+    model: String(model || "gpt-5.4"),
     promptText: contextPromptFinal,
     status: (result as any).status === 0 ? "success" : "failed",
   });

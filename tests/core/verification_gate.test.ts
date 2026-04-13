@@ -25,6 +25,7 @@ import {
   hasCleanTreeStatusEvidence,
   VERIFICATION_REPORT_TEMPLATE_GAP,
   VERIFICATION_REPORT_MALFORMED_GAP,
+  NON_SPECIFIC_VERIFICATION_GAP,
   parseToolExecutionTelemetry,
   checkHookEnvelopeDecisionPairing,
 } from "../../src/core/verification_gate.js";
@@ -60,6 +61,32 @@ describe("verification_gate parse helpers", () => {
 
   it("returns null for malformed VERIFICATION_REPORT envelope without key/value entries", () => {
     assert.equal(parseVerificationReport("===VERIFICATION_REPORT===\nhello\n===END_VERIFICATION==="), null);
+  });
+
+  it("prefers the canonical block when multiple VERIFICATION_REPORT blocks are present", () => {
+    const report = parseVerificationReport([
+      "===VERIFICATION_REPORT===",
+      "acceptance criterion 1: PASS — touched files updated",
+      "===END_VERIFICATION===",
+      "",
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=pass",
+      "RESPONSIVE=n/a",
+      "API=n/a",
+      "EDGE_CASES=pass",
+      "SECURITY=n/a",
+      "===END_VERIFICATION===",
+    ].join("\n"));
+
+    assert.deepEqual(report, {
+      build: "pass",
+      tests: "pass",
+      responsive: "n/a",
+      api: "n/a",
+      edgeCases: "pass",
+      security: "n/a",
+    });
   });
 
   it("parses RESPONSIVE_MATRIX key/value pairs", () => {
@@ -428,6 +455,37 @@ describe("verification_gate buildReworkInstruction — gap list and attempt meta
     const instruction = buildReworkInstruction("task", gaps, 1, 2);
     assert.ok(instruction.context.includes("TESTS fail"), "context must include gap list");
     assert.ok(instruction.context.includes("BUILD missing"));
+  });
+
+  it("preserves the canonical original task separately from rework prompt text", () => {
+    const instruction = buildReworkInstruction(
+      "## AUTO-REWORK — VERIFICATION GAPS DETECTED (attempt 1/2)",
+      ["gap"],
+      2,
+      2,
+      { canonicalTask: "Implement OAuth login" },
+    );
+    assert.equal(instruction.originalTask, "Implement OAuth login");
+    assert.ok(instruction.task.includes("Implement OAuth login"));
+    assert.ok(!instruction.task.includes("## AUTO-REWORK — VERIFICATION GAPS DETECTED (attempt 1/2)\n\n## ORIGINAL TASK"));
+  });
+});
+
+describe("verification_gate decideRework — canonical task continuity", () => {
+  it("does not nest the previous auto-rework prompt into the next rework attempt", () => {
+    const first = decideRework({ passed: false, gaps: ["gap"] }, "Implement OAuth login", 0, 2);
+    assert.equal(first.shouldRework, true);
+    const second = decideRework(
+      { passed: false, gaps: ["gap"] },
+      first.instruction.task,
+      1,
+      2,
+      { canonicalTask: first.instruction.originalTask },
+    );
+    assert.equal(second.shouldRework, true);
+    assert.equal(second.instruction.originalTask, "Implement OAuth login");
+    assert.ok(second.instruction.task.includes("Implement OAuth login"));
+    assert.ok(!second.instruction.task.includes("attempt 1/2\n\nYour previous completion was REJECTED"));
   });
 });
 
@@ -1914,6 +1972,56 @@ describe("verification_gate — packet-named verification proof gate (Task 1)", 
     assert.ok(namedGap,
       `gaps must reference the missing named test file; got: [${result.gaps.join("; ")}]`
     );
+  });
+});
+
+describe("verification_gate — exact-proof verification target enforcement", () => {
+  const COMPLETE_DONE_OUTPUT = [
+    "BOX_MERGED_SHA=abc1234f",
+    "CLEAN_TREE_STATUS=clean",
+    "===NPM TEST OUTPUT START===",
+    "# Subtest: verification_gate.test.ts",
+    "ok 1 - rejects generic verification",
+    "# pass 1",
+    "===NPM TEST OUTPUT END===",
+    "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; EDGE_CASES=pass; SECURITY=pass",
+    "BOX_PR_URL=https://github.com/org/repo/pull/123",
+  ].join("\n");
+
+  it("rejects merge-oriented done output when verification target is generic", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: COMPLETE_DONE_OUTPUT,
+    }, {
+      taskKind: "backend",
+      verificationText: "npm test",
+    });
+    assert.equal(result.passed, false);
+    assert.ok(result.gaps.includes(`${NON_SPECIFIC_VERIFICATION_GAP}: "npm test"`));
+  });
+
+  it("rejects merge-oriented done output when verification target uses a Windows-incompatible glob", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: COMPLETE_DONE_OUTPUT,
+    }, {
+      taskKind: "backend",
+      verificationText: "node --test tests/**/*.test.ts",
+    });
+    assert.equal(result.passed, false);
+    assert.ok(result.gaps.some((gap) => gap.includes("non-portable command")));
+  });
+
+  it("does not enforce exact-proof target for discovery-safe task kinds", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: "VERIFICATION_REPORT: BUILD=n/a; TESTS=n/a; EDGE_CASES=n/a",
+    }, {
+      taskKind: "scan",
+      verificationText: "npm test",
+    });
+    const verificationGap = result.gaps.find((gap) => gap.includes("Verification target"));
+    assert.equal(verificationGap, undefined);
   });
 });
 

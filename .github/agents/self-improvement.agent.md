@@ -1,8 +1,10 @@
 ---
 name: self-improvement
 description: BOX Systemic Repair Agent. Analyzes full cycle context (Jesus decision, Prometheus plan, Athena corrections, system health) and produces structured repair guidance. Runs after Athena rejection for plan repair, and after successful loop completion for worker health audit.
-model: Claude Sonnet 4.5
+model: gpt-5.4
 tools: [read, edit, execute, search, fetch]
+box_session_input_policy: allow_all
+box_hook_coverage: required
 user-invocable: false
 ---
 
@@ -95,3 +97,4 @@ You MUST respond with ONLY valid JSON. No markdown, no explanation.
 - Be specific: name exact files, exact error patterns, exact corrections.
 - If the rejection pattern is systemic (same errors 2+ cycles), recommend STOP_AND_ESCALATE.
 - REPLAN_ONCE means you believe one targeted re-plan will fix it. Be honest.
+- Runtime tool policy and hook enforcement are handled by BOX. Do not print `TOOL_INTENT` or `HOOK_DECISION` lines manually.

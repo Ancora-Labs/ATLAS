@@ -221,7 +221,7 @@ export function chooseCopilotModel({
   const escalationKeywords = parseCsv(opusEscalationKeywordsCsv);
   const multipliers = parseMultipliers(multipliersJson);
 
-  const normalizedDefault = normalizeModelName(defaultModel) || "gpt-5.3-codex";
+  const normalizedDefault = normalizeModelName(defaultModel) || "gpt-5.4";
   const normalizedTaskKind = String(taskKind || "general").toLowerCase();
 
   let selected = normalizedDefault;
@@ -239,12 +239,12 @@ export function chooseCopilotModel({
     }
 
     if (teamLeadAllowOpus) {
-      selected = normalizeModelName(opusModel) || "gpt-5.3-codex";
+      selected = normalizeModelName(opusModel) || "gpt-5.4";
       escalationSource = "team-lead";
     }
 
     if (shouldEscalateToOpus(taskTitle, normalizedTaskKind, allowOpusEscalation, escalationKeywords)) {
-      selected = normalizeModelName(opusModel) || "gpt-5.3-codex";
+      selected = normalizeModelName(opusModel) || "gpt-5.4";
       escalationSource = escalationSource || "keyword";
     }
   }
@@ -255,7 +255,7 @@ export function chooseCopilotModel({
     multipliers,
     maxMultiplier,
     defaultModel: normalizedDefault,
-    opusModel: normalizeModelName(opusModel) || "gpt-5.3-codex",
+    opusModel: normalizeModelName(opusModel) || "gpt-5.4",
     allowOpusEscalation
   });
 

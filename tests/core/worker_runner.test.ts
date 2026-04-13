@@ -428,6 +428,8 @@ describe("tool access + capability guards", () => {
     assert.ok(prompt.includes("<pass|fail|n/a>"));
     assert.ok(prompt.includes("<paste full raw npm test stdout here>"));
     assert.ok(prompt.includes("POST_MERGE_TEST_OUTPUT"));
+    assert.ok(prompt.includes("Emit exactly ONE ===VERIFICATION_REPORT=== block in the entire response."));
+    assert.ok(prompt.includes("Acceptance Evidence:"));
     assert.ok(prompt.includes("Do NOT copy instructional examples verbatim into your final evidence block."));
   });
 });

@@ -932,6 +932,32 @@ describe("routeModelWithRealizedROI", () => {
     assert.ok(result.reason.includes("tier="), `reason should include tier=, got: ${result.reason}`);
     await fs.rm((config as any).paths.stateDir, { recursive: true, force: true });
   });
+
+  it("relaxes the effective floor when prompt-cache economics are strong", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-roi-cache-"));
+    const config = { paths: { stateDir: tmpDir } };
+    const result = await routeModelWithRealizedROI(
+      config,
+      { estimatedLines: 20, complexity: "low" },
+      {
+        efficientModel: "Claude Haiku 4",
+        defaultModel: "Claude Sonnet 4.6",
+        strongModel: "Claude Opus 4.6",
+        qualityByModel: {
+          "Claude Haiku 4": 0.7,
+          "Claude Sonnet 4.6": 0.85,
+        },
+      },
+      {
+        qualityFloor: 0.72,
+        promptCacheHitRate: 0.9,
+        promptCacheSavedTokens: 2400,
+      },
+    );
+    assert.equal(result.model, "Claude Haiku 4");
+    assert.notEqual(result.promptCacheAdjustment, "none");
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
 });
 
 describe("decideDeliberationPolicy", () => {

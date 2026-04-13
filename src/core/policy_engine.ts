@@ -561,6 +561,7 @@ export interface HookTelemetryInput {
   envelopes: Array<{ scope: string; intent: string; impact: string; clearance: string }>;
   hookDecisions: Array<{ envelopeScope: string; envelopeIntent: string; envelopeImpact: string; envelopeClearance: string }>;
   gaps: string[];
+  hasDeterministicCoverage?: boolean;
 }
 
 /**
@@ -641,4 +642,94 @@ export function validateHookTelemetryConsistency(
   }
 
   return { consistent: gaps.length === 0, gaps };
+}
+
+export interface AuthoritativeHookCoverageAuditInput {
+  sessionInputPolicy: "allow_all" | "no_tools" | "auto";
+  hookCoverage: "required" | "not_required";
+  telemetry: HookTelemetryInput | null | undefined;
+  runtimeDecisions: Array<unknown>;
+  runtimeAuditGaps?: string[];
+}
+
+export interface AuthoritativeHookCoverageAuditResult {
+  required: boolean;
+  covered: boolean;
+  reasonCode: string | null;
+  gaps: string[];
+  runtimeDecisionCount: number;
+  workerDecisionCount: number;
+}
+
+function firstHookCoverageReasonCode(gaps: string[]): string | null {
+  const firstGap = String(gaps[0] || "");
+  if (!firstGap) return null;
+  if (firstGap.startsWith("HOOK_TELEMETRY_UNPAIRED")) return "HOOK_COVERAGE_UNPAIRED";
+  if (firstGap.startsWith("HOOK_TELEMETRY_MISMATCH")) return "HOOK_COVERAGE_MISMATCH";
+  if (firstGap.startsWith("RUNTIME_HOOK_COUNT_MISMATCH")) return "HOOK_COVERAGE_RUNTIME_COUNT_MISMATCH";
+  if (firstGap.startsWith("RUNTIME_HOOK_DECISION_MISMATCH")) return "HOOK_COVERAGE_RUNTIME_DECISION_MISMATCH";
+  return firstGap.replace(/[^A-Z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toUpperCase() || null;
+}
+
+export function auditAuthoritativeHookCoverage(
+  input: AuthoritativeHookCoverageAuditInput,
+): AuthoritativeHookCoverageAuditResult {
+  const required = input.sessionInputPolicy === "allow_all" && input.hookCoverage === "required";
+  const telemetry = input.telemetry;
+  const runtimeDecisionCount = Array.isArray(input.runtimeDecisions) ? input.runtimeDecisions.length : 0;
+  const workerDecisionCount = Array.isArray(telemetry?.hookDecisions) ? telemetry!.hookDecisions.length : 0;
+  const envelopeCount = Array.isArray(telemetry?.envelopes) ? telemetry!.envelopes.length : 0;
+  if (!required) {
+    return {
+      required: false,
+      covered: true,
+      reasonCode: null,
+      gaps: [],
+      runtimeDecisionCount,
+      workerDecisionCount,
+    };
+  }
+
+  const hasHookActivity = envelopeCount > 0
+    || workerDecisionCount > 0
+    || runtimeDecisionCount > 0
+    || (Array.isArray(telemetry?.gaps) && telemetry!.gaps.length > 0)
+    || (Array.isArray(input.runtimeAuditGaps) && input.runtimeAuditGaps.length > 0);
+
+  if (!hasHookActivity) {
+    return {
+      required: true,
+      covered: true,
+      reasonCode: null,
+      gaps: [],
+      runtimeDecisionCount,
+      workerDecisionCount,
+    };
+  }
+
+  const gaps: string[] = [];
+  if (!telemetry) {
+    gaps.push("HOOK_COVERAGE_TELEMETRY_MISSING");
+  } else {
+    for (const gap of Array.isArray(telemetry.gaps) ? telemetry.gaps : []) gaps.push(String(gap));
+    if (telemetry.hasDeterministicCoverage !== true) {
+      gaps.push("HOOK_COVERAGE_NOT_DETERMINISTIC");
+    }
+  }
+  for (const gap of Array.isArray(input.runtimeAuditGaps) ? input.runtimeAuditGaps : []) {
+    gaps.push(String(gap));
+  }
+  if (runtimeDecisionCount === 0) {
+    gaps.push("HOOK_COVERAGE_MISSING_RUNTIME_DECISIONS");
+  }
+
+  const uniqueGaps = Array.from(new Set(gaps.filter(Boolean)));
+  return {
+    required,
+    covered: uniqueGaps.length === 0,
+    reasonCode: firstHookCoverageReasonCode(uniqueGaps),
+    gaps: uniqueGaps,
+    runtimeDecisionCount,
+    workerDecisionCount,
+  };
 }

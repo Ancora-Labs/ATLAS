@@ -17,17 +17,22 @@
 
 import path from "node:path";
 import { readJson, writeJson } from "./fs_utils.js";
+import { applyRetentionCap, getStateRetentionRule } from "./state_tracker.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /** Target confidence for baseline recovery status. Below this = recovery active. */
 export const PARSER_CONFIDENCE_RECOVERY_THRESHOLD = 0.9;
 
-/** Maximum history entries retained in parser_baseline_metrics.json. */
-const MAX_BASELINE_HISTORY = 100;
-
 /** State file name. */
 const BASELINE_METRICS_FILE = "parser_baseline_metrics.json";
+
+/** Maximum history entries retained in parser_baseline_metrics.json. */
+const MAX_BASELINE_HISTORY = Number(
+  getStateRetentionRule(BASELINE_METRICS_FILE)?.maxEntries
+  ?? getStateRetentionRule("parserBaselineMetrics")?.maxEntries
+  ?? 100,
+);
 
 /** Schema version for parser_baseline_metrics.json. */
 export const BASELINE_METRICS_SCHEMA_VERSION = 1;
@@ -170,15 +175,12 @@ export async function persistBaselineMetrics(
   });
 
   const history: BaselineRecoveryRecord[] = Array.isArray(existing.history) ? existing.history : [];
-  history.unshift(record);
-  if (history.length > MAX_BASELINE_HISTORY) {
-    history.length = MAX_BASELINE_HISTORY;
-  }
+  const retainedHistory = applyRetentionCap([record, ...history], MAX_BASELINE_HISTORY, { newestFirst: true });
 
   await writeJson(filePath, {
     schemaVersion: BASELINE_METRICS_SCHEMA_VERSION,
     lastRecord: record,
-    history,
+    history: retainedHistory,
     updatedAt: new Date().toISOString(),
   });
 }

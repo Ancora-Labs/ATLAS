@@ -2,7 +2,9 @@
 name: athena
 description: BOX Quality Gate & Postmortem Reviewer. Validates Prometheus plans before execution (measurable goals, clear success criteria). Runs postmortem after each worker completes (expected vs actual, lessons learned).
 model: claude-sonnet-4.6
-tools: [read, edit, execute, search, fetch]
+tools: [read, search, fetch]
+box_session_input_policy: no_tools
+box_hook_coverage: not_required
 user-invocable: false
 ---
 
@@ -54,27 +56,3 @@ Write your reasoning first in plain English. Then close with:
 
 CRITICAL: JSON must be between ===DECISION=== and ===END=== markers exactly.
 
-## Hook-driven tool policy wiring (additive)
-
-Apply the following deterministic `preToolUse` policy before every `execute` tool call:
-
-```yaml
-preToolUse:
-  - id: deny-force-push
-    match: '(?i)\bgit\s+push\b.*\s(--force|--force-with-lease)\b'
-    decision: deny
-    reason_code: HOOK_DENY_FORCE_PUSH
-  - id: deny-secret-write
-    match: '(?i)\b(echo|printf|cat)\b.*(ghp_|github_pat_|AKIA[0-9A-Z]{16}|-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----)'
-    decision: deny
-    reason_code: HOOK_DENY_SECRET_WRITE
-  - id: deny-schema-drop
-    match: '(?i)\b(drop\s+table|drop\s+database|truncate\s+table)\b'
-    decision: deny
-    reason_code: HOOK_DENY_SCHEMA_DROP
-```
-
-Telemetry contract for every tool-executing session:
-- Emit one machine-readable line before each `execute` call:
-  `[HOOK_DECISION] tool=execute decision=<allow|deny> reason_code=<code> rule_id=<id|none>`
-- If decision is `deny`, do not issue the tool call.

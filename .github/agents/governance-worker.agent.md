@@ -1,7 +1,10 @@
 ---
 name: governance-worker
 description: BOX Governance Lane Worker. Handles policy engine changes, governance freeze logic, canary rules, state contract validation, and security-sensitive changes from the orchestrator's capability-based routing.
+model: gpt-5.4
 tools: [read, edit, execute, search, fetch]
+box_session_input_policy: allow_all
+box_hook_coverage: required
 user-invocable: false
 ---
 
@@ -46,6 +49,14 @@ When batched, execute tasks in order and respect dependency/wave boundaries.
 - Keep changes scoped to the task — do not fix unrelated things
 - Run `npm test` after every non-trivial change
 
+## Delivery Contract
+
+- If the task context already provides a branch or PR, stay on that branch and update the existing PR instead of creating a duplicate.
+- Create a new branch and PR only when no existing branch or PR context is provided.
+- After scoped edits and targeted verification, attempt the required commit, push, and PR update before reporting `blocked`.
+- Repository-wide unrelated red checks are not by themselves a blocker for pushing scoped work; report them explicitly in verification evidence.
+- Runtime tool policy and hook enforcement are handled by BOX. Do not print `TOOL_INTENT` or `HOOK_DECISION` lines manually.
+
 ## Reporting
 
 Always end your response with:
@@ -56,36 +67,19 @@ BOX_PR_URL=<url>   (if PR was created)
 BOX_BRANCH=<branch>
 BOX_FILES_TOUCHED=src/file1.js,src/file2.js
 
+Acceptance Evidence:
+- acceptance criterion 1: PASS/FAIL — evidence
+- acceptance criterion 2: PASS/FAIL — evidence
+
 ===VERIFICATION_REPORT===
-acceptance criterion 1: PASS/FAIL — evidence
-acceptance criterion 2: PASS/FAIL — evidence
-...
+BUILD=<pass|fail|n/a>
+TESTS=<pass|fail|n/a>
+RESPONSIVE=<pass|fail|n/a>
+API=<pass|fail|n/a>
+EDGE_CASES=<pass|fail|n/a>
+SECURITY=<pass|fail|n/a>
 ===END_VERIFICATION===
 
 Summary: what changed, why, what criteria were met.
 ```
 
-## Hook-driven tool policy wiring (additive)
-
-Apply the following deterministic `preToolUse` policy before every `execute` tool call:
-
-```yaml
-preToolUse:
-  - id: deny-force-push
-    match: '(?i)\bgit\s+push\b.*\s(--force|--force-with-lease)\b'
-    decision: deny
-    reason_code: HOOK_DENY_FORCE_PUSH
-  - id: deny-secret-write
-    match: '(?i)\b(echo|printf|cat)\b.*(ghp_|github_pat_|AKIA[0-9A-Z]{16}|-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----)'
-    decision: deny
-    reason_code: HOOK_DENY_SECRET_WRITE
-  - id: deny-schema-drop
-    match: '(?i)\b(drop\s+table|drop\s+database|truncate\s+table)\b'
-    decision: deny
-    reason_code: HOOK_DENY_SCHEMA_DROP
-```
-
-Telemetry contract for every tool-executing session:
-- Emit one machine-readable line before each `execute` call:
-  `[HOOK_DECISION] tool=execute decision=<allow|deny> reason_code=<code> rule_id=<id|none>`
-- If decision is `deny`, do not issue the tool call.

@@ -150,6 +150,89 @@ export const AGENT_CONTRACT_GOVERNANCE_REASON_CODE = Object.freeze({
   AGENT_SCHEMA_VIOLATION:    "AGENT_SCHEMA_VIOLATION",
 });
 
+export const GOVERNANCE_SIGNAL_REGISTRY = Object.freeze({
+  budget_exhausted: {
+    gateKey: "BUDGET_ELIGIBILITY",
+    dispatchBlockReason: "budget_exhausted",
+    blocking: true,
+  },
+  guardrail_pause_workers_active: {
+    gateKey: "GUARDRAIL_PAUSE",
+    dispatchBlockReason: "guardrail_pause_workers_active",
+    blocking: true,
+  },
+  force_checkpoint_validation_active: {
+    gateKey: "FORCE_CHECKPOINT",
+    dispatchBlockReason: "force_checkpoint_validation_active",
+    blocking: true,
+  },
+  governance_freeze_active: {
+    gateKey: "GOVERNANCE_FREEZE",
+    dispatchBlockReason: "governance_freeze_active",
+    blocking: true,
+  },
+  cloud_agent_governance_policy_violation: {
+    gateKey: "CLOUD_AGENT_GOVERNANCE",
+    dispatchBlockReason: "cloud_agent_governance_policy_violation",
+    blocking: true,
+  },
+  lineage_cycle_detected: {
+    gateKey: "LINEAGE_CYCLE",
+    dispatchBlockReason: "lineage_cycle_detected",
+    blocking: true,
+  },
+  governance_canary_breach: {
+    gateKey: "GOVERNANCE_CANARY",
+    dispatchBlockReason: "governance_canary_breach",
+    blocking: true,
+  },
+  critical_debt_overdue: {
+    gateKey: "CARRY_FORWARD_DEBT",
+    dispatchBlockReason: "critical_debt_overdue",
+    blocking: true,
+  },
+  mandatory_drift_debt_unresolved: {
+    gateKey: "MANDATORY_DRIFT_DEBT",
+    dispatchBlockReason: "mandatory_drift_debt_unresolved",
+    blocking: true,
+  },
+  plan_evidence_coupling_invalid: {
+    gateKey: "PLAN_EVIDENCE_COUPLING",
+    dispatchBlockReason: "plan_evidence_coupling_invalid",
+    blocking: true,
+  },
+  cross_cycle_prerequisite_unmet: {
+    gateKey: "CROSS_CYCLE_PREREQUISITE",
+    dispatchBlockReason: "cross_cycle_prerequisite_unmet",
+    blocking: true,
+  },
+  dependency_readiness_incomplete: {
+    gateKey: "DEPENDENCY_READINESS",
+    dispatchBlockReason: "dependency_readiness_incomplete",
+    blocking: true,
+  },
+  lane_diversity_gate_blocked: {
+    gateKey: "LANE_DIVERSITY",
+    dispatchBlockReason: "lane_diversity_gate_blocked",
+    blocking: true,
+  },
+  rolling_yield_throttle: {
+    gateKey: "ROLLING_COMPLETION_YIELD",
+    dispatchBlockReason: "rolling_yield_throttle",
+    blocking: true,
+  },
+  specialization_admission_gate_failed: {
+    gateKey: "SPECIALIZATION_ADMISSION",
+    dispatchBlockReason: "specialization_admission_gate_failed",
+    blocking: true,
+  },
+  packet_exceeds_actionable_steps_cap: {
+    gateKey: "OVERSIZED_PACKET",
+    dispatchBlockReason: "packet_exceeds_actionable_steps_cap",
+    blocking: true,
+  },
+} as const);
+
 // ── Approval evidence schema ──────────────────────────────────────────────────
 
 /**

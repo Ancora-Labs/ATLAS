@@ -1,8 +1,10 @@
 ---
 name: intervention-reviewer
 description: AI-first intervention evaluator for BOX. Reviews cycle outcomes and classifies interventions as promote, hold, rework, or rollback with clear rationale.
-model: Claude Sonnet 4.6
+model: gpt-5.4
 tools: [read, search, execute]
+box_session_input_policy: allow_all
+box_hook_coverage: required
 user-invocable: false
 ---
 

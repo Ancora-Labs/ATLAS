@@ -133,6 +133,7 @@ export interface WorkerInstruction {
   context?: string;
   verification?: string;
   taskKind?: string;
+  originalTask?: string;
   estimatedLines?: number;
   estimatedDurationMinutes?: number;
   complexity?: string;
@@ -254,6 +255,7 @@ export interface ReworkInstruction {
   reworkAttempt: number;
   maxReworkAttempts: number;
   taskKind: "rework";
+  originalTask?: string;
 }
 
 // ─── Policy ────────────────────────────────────────────────────────

@@ -6332,7 +6332,7 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   const repoRoot = process.cwd();
   const registry = getRoleRegistry(config);
   const prometheusName = registry?.deepPlanner?.name || "Prometheus";
-  const prometheusModel = registry?.deepPlanner?.model || "gpt-5.3-codex";
+  const prometheusModel = registry?.deepPlanner?.model || "gpt-5.4";
   const command = config.env?.copilotCliCommand || "copilot";
 
   const userPrompt = options.prompt || options.prometheusReason || "Full repository self-evolution analysis";

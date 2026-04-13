@@ -820,19 +820,16 @@ export function normalizeReportValue(raw: string): string {
  */
 export function parseVerificationReport(output) {
   const text = String(output || "");
+  const keyMap = {
+    build: "build", tests: "tests", test: "tests",
+    responsive: "responsive", responsivematrix: "responsive",
+    api: "api", edgecases: "edgeCases", edge_cases: "edgeCases", security: "security"
+  };
 
-  // --- Format 2: block delimiters ---
-  const blockMatch = text.match(/===VERIFICATION[_\s]?REPORT===\s*([\s\S]*?)\s*===END[_\s]?VERIFICATION(?:[_\s]?REPORT)?===/i);
-  if (blockMatch) {
+  const parseReportBlock = (body: string): Record<string, string> | null => {
     const report: Record<string, string> = {};
-    const lines = blockMatch[1].split(/[\n\r]+/).map(s => s.trim()).filter(Boolean);
-    const keyMap = {
-      build: "build", tests: "tests", test: "tests",
-      responsive: "responsive", responsivematrix: "responsive",
-      api: "api", edgecases: "edgeCases", edge_cases: "edgeCases", security: "security"
-    };
+    const lines = String(body || "").split(/[\n\r]+/).map(s => s.trim()).filter(Boolean);
     for (const line of lines) {
-      // Accept "KEY=value", "KEY: value", "criterion_N: PASS|FAIL ..." patterns
       const eqIdx = line.indexOf("=");
       const colonIdx = line.indexOf(":");
       const sepIdx = eqIdx >= 0 && (colonIdx < 0 || eqIdx <= colonIdx) ? eqIdx : colonIdx;
@@ -844,8 +841,20 @@ export function parseVerificationReport(output) {
         report[normalizedKey] = normalizeReportValue(rawValue);
       }
     }
-    if (Object.keys(report).length > 0) return report;
+    return Object.keys(report).length > 0 ? report : null;
+  };
+
+  // --- Format 2: block delimiters ---
+  const blockMatches = text.matchAll(/===VERIFICATION[_\s]?REPORT===\s*([\s\S]*?)\s*===END[_\s]?VERIFICATION(?:[_\s]?REPORT)?===/gi);
+  let bestBlockReport: Record<string, string> | null = null;
+  for (const match of blockMatches) {
+    const parsed = parseReportBlock(match[1]);
+    if (!parsed) continue;
+    if (!bestBlockReport || Object.keys(parsed).length > Object.keys(bestBlockReport).length) {
+      bestBlockReport = parsed;
+    }
   }
+  if (bestBlockReport) return bestBlockReport;
 
   // --- Format 1: inline single-line ---
   const match = text.match(/VERIFICATION_REPORT:\s*([^\n\r]+)/i);
@@ -859,17 +868,6 @@ export function parseVerificationReport(output) {
     const key = pair.slice(0, eqIdx).trim().toLowerCase().replace(/[_\s]+/g, "");
     const rawValue = pair.slice(eqIdx + 1).trim().toLowerCase();
     // Normalize key names
-    const keyMap = {
-      build: "build",
-      tests: "tests",
-      test: "tests",
-      responsive: "responsive",
-      responsivematrix: "responsive",
-      api: "api",
-      edgecases: "edgeCases",
-      edge_cases: "edgeCases",
-      security: "security"
-    };
     const normalizedKey = keyMap[key];
     if (normalizedKey) {
       report[normalizedKey] = normalizeReportValue(rawValue);
