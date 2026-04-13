@@ -1,8 +1,10 @@
 ---
 name: prometheus
 description: BOX Evolution Architect. Performs deep repository analysis and outputs one self-evolution master plan focused on how BOX can redesign itself, improve its own planning intelligence, evolve worker behavior, deepen model utilization, and increase long-term capability per premium request.
-model: gpt-5.3-codex
-tools: [read, search, fetch, execute]
+model: gpt-5.4
+tools: [read, search, fetch]
+box_session_input_policy: no_tools
+box_hook_coverage: not_required
 user-invocable: false
 ---
 

@@ -404,6 +404,32 @@ describe("tool access + capability guards", () => {
     assert.ok(!prompt.includes("Before every execute tool call, emit one explicit tool-intent envelope:"));
     assert.ok(!prompt.includes("[TOOL_INTENT] scope=<repo-path-or-subsystem> intent=<goal> impact=<low|medium|high|critical> clearance=<read|write|admin>"));
   });
+
+  it("worker prompt adds a final placeholder self-check before done responses", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Patch verification handling in src/core/worker_runner.ts and update tests.",
+        taskKind: "implementation",
+        verification: "1. npm test -- tests/core/worker_runner.test.ts",
+        targetFiles: ["src/core/worker_runner.ts", "tests/core/worker_runner.test.ts"],
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-prompt-test") },
+      },
+      "quality",
+      {},
+    );
+
+    assert.ok(prompt.includes("Before you send your final answer, do one last literal self-check on your draft."));
+    assert.ok(prompt.includes("BOX_MERGED_SHA=<sha>"));
+    assert.ok(prompt.includes("<pass|fail|n/a>"));
+    assert.ok(prompt.includes("<paste full raw npm test stdout here>"));
+    assert.ok(prompt.includes("POST_MERGE_TEST_OUTPUT"));
+    assert.ok(prompt.includes("Do NOT copy instructional examples verbatim into your final evidence block."));
+  });
 });
 
 // ── detectRepoContamination ──────────────────────────────────────────────────
@@ -853,7 +879,7 @@ describe("buildWorkerRunContract", () => {
     assert.equal(contract.workflowName, "box-evolution");
     assert.equal(contract.groupId, "box-workers");
     assert.equal(contract.traceIncludeSensitiveData, false);
-    assert.equal(contract.sessionInputPolicy, "allow_all");
+    assert.equal(contract.sessionInputPolicy, "auto");
     assert.deepEqual(contract.traceMetadata, {});
   });
 

@@ -21,7 +21,7 @@ import { spawnAsync, writeJson } from "./fs_utils.js";
 import { addSchemaVersion, STATE_FILE_TYPE } from "./schema_registry.js";
 import { getRoleRegistry, assertRoleCapabilityForTask, isAthenaReviewOrPostmortemTask, normalizeTaskKindLabel } from "./role_registry.js";
 import { appendProgress, appendLineageEntry, appendFailureClassification, readPromptCacheTelemetry } from "./state_tracker.js";
-import { buildAgentArgs, nameToSlug } from "./agent_loader.js";
+import { buildAgentArgs, nameToSlug, resolveAgentExecutionProfile, resolveAgentSessionInputPolicy } from "./agent_loader.js";
 import { buildVerificationChecklist, CANONICAL_VERIFICATION_REPORT_TEMPLATE } from "./verification_profiles.js";
 import { getVerificationCommands, classifyNodeTestGlobWindowsArtifact } from "./verification_command_registry.js";
 import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence, parseToolExecutionTelemetry, checkCancellationAtVerification, auditRuntimeHookEnforcement } from "./verification_gate.js";
@@ -39,7 +39,7 @@ import {
   type ModelCallSettingsOverlay,
 } from "./model_policy.js";
 import { deriveRoutingAdjustments, buildPromptHardConstraints } from "./learning_policy_compiler.js";
-import { loadPolicy, getProtectedPathMatches, getRolePathViolations, enforcePreExecuteHookDecisions } from "./policy_engine.js";
+import { loadPolicy, getProtectedPathMatches, getRolePathViolations, enforcePreExecuteHookDecisions, auditAuthoritativeHookCoverage } from "./policy_engine.js";
 import { compileRankedContextSection } from "./prompt_compiler.js";
 import {
   scanProject,
@@ -326,6 +326,7 @@ type VerificationEvidence = {
     mergedSha: string | null;
   } | null;
   toolExecutionTelemetry?: unknown;
+  hookCoverageAudit?: unknown;
 };
 
 type ParsedWorkerResponse = ReturnType<typeof parseWorkerResponse> & {
@@ -1105,6 +1106,11 @@ function findWorkerByName(config, roleName) {
 }
 
 export function shouldEnableFullToolAccess(roleName: unknown, taskKind: unknown, taskText: unknown = ""): boolean {
+  const agentSlug = nameToSlug(roleName);
+  if (agentSlug) {
+    const profile = resolveAgentExecutionProfile(agentSlug);
+    if (profile.valid) return resolveAgentSessionInputPolicy(profile, "auto") === "allow_all";
+  }
   const normalizedRole = String(roleName || "").trim().toLowerCase();
   const normalizedTaskKind = normalizeTaskKindLabel(taskKind);
   const registeredWorker = findWorkerByName({}, normalizedRole);
@@ -2104,7 +2110,7 @@ export function buildWorkerRunContract(config: any, instruction: any): import(".
                                 ? { ...traceMetadataBase, modelCallSettings }
                                 : traceMetadataBase,
     traceIncludeSensitiveData: base?.traceIncludeSensitiveData === true ? true : false,
-    sessionInputPolicy:       (base?.sessionInputPolicy || "allow_all") as "allow_all" | "no_tools" | "auto",
+    sessionInputPolicy:       (base?.sessionInputPolicy || "auto") as "allow_all" | "no_tools" | "auto",
   };
 }
 
@@ -2387,10 +2393,66 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     };
   }
 
-  // Single-prompt mode: no autopilot continuations.
-  // All executable workers dispatched by the daemon need full tool access.
-  const allowAllTools = shouldEnableFullToolAccess(roleName, instruction.taskKind, instruction.task);
   const runContract = buildWorkerRunContract(config, instruction);
+  const agentProfile = resolveAgentExecutionProfile(agentSlug);
+  if (!agentProfile.valid) {
+    const summary = `Agent profile contract check failed for ${agentSlug}: ${agentProfile.violations.join(", ") || "unknown_violation"}`;
+    const replayClosure = buildReplayClosureEvidence(summary);
+    const dispatchContract: DispatchVerificationContract = {
+      doneWorkerWithVerificationReportEvidence: false,
+      doneWorkerWithCleanTreeStatusEvidence: false,
+      dispatchBlockReason: `agent_profile_invalid:${agentSlug}`,
+      dispatchBlockReasonContract: parseDispatchBlockReasonContract(`agent_profile_invalid:${agentSlug}`),
+      closureBoundaryViolation: false,
+      replayClosure: {
+        contractSatisfied: replayClosure.contractSatisfied === true,
+        canonicalCommands: Array.isArray(replayClosure.canonicalCommands) ? replayClosure.canonicalCommands : [],
+        executedCommands: Array.isArray(replayClosure.executedCommands) ? replayClosure.executedCommands : [],
+        rawArtifactEvidenceLinks: Array.isArray(replayClosure.rawArtifactEvidenceLinks) ? replayClosure.rawArtifactEvidenceLinks : [],
+      },
+    };
+    await appendProgress(config, `[WORKER:${roleName}] ${summary}`);
+    await persistLegacyWorkerSessionArtifacts(config, String(roleName || "worker"), {
+      phase: "complete",
+      task: String(instruction?.task || ""),
+      status: "blocked",
+      pr: null,
+      dispatchBlockReason: dispatchContract.dispatchBlockReason,
+    });
+    updatedHistory.push({
+      from: roleName,
+      content: summary,
+      fullOutput: summary,
+      prUrl: null,
+      timestamp: new Date().toISOString(),
+      status: "blocked"
+    });
+    return {
+      status: "blocked",
+      summary,
+      prUrl: null,
+      currentBranch: null,
+      filesTouched: [],
+      updatedHistory,
+      workerKind,
+      tier,
+      verificationReport: null,
+      responsiveMatrix: null,
+      verificationEvidence: null,
+      dispatchContract,
+      fullOutput: summary,
+      failureClassification: null,
+      retryDecision: null
+    };
+  }
+  const effectiveSessionInputPolicy = resolveAgentSessionInputPolicy(agentProfile, runContract.sessionInputPolicy);
+  runContract.traceMetadata = {
+    ...runContract.traceMetadata,
+    agentProfileSource: agentProfile.source,
+    agentSessionInputPolicy: effectiveSessionInputPolicy,
+    agentHookCoverage: agentProfile.hookCoverage,
+  };
+  const allowAllTools = effectiveSessionInputPolicy === "allow_all";
   const args = buildAgentArgs({
     agentSlug,
     prompt: conversationContext,
@@ -2824,26 +2886,39 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     }
 
     // Runtime hook enforcement: evaluate TOOL_INTENT envelopes from worker output
-    // against the loaded policy. This is authoritative — workers are NOT required
-    // to self-report HOOK_DECISION lines. auditRuntimeHookEnforcement() is the
-    // consistency auditor comparing runtime decisions with worker-emitted lines.
-    if (parsed.toolExecutionTelemetry && Array.isArray(parsed.toolExecutionTelemetry.envelopes)) {
-      const hookEnforcement = enforcePreExecuteHookDecisions(policy, roleName, parsed.toolExecutionTelemetry.envelopes);
+    // against the loaded policy. Done responses from execute-capable sessions must
+    // carry deterministic hook coverage before BOX accepts them as complete.
+    const hookTelemetry = parsed.toolExecutionTelemetry && typeof parsed.toolExecutionTelemetry === "object"
+      ? parsed.toolExecutionTelemetry
+      : { envelopes: [], hookDecisions: [], deniedDecisions: [], gaps: [], hasDeterministicCoverage: false };
+    if (Array.isArray(hookTelemetry.envelopes)) {
+      const hookEnforcement = enforcePreExecuteHookDecisions(policy, roleName, hookTelemetry.envelopes);
       if (!hookEnforcement.allowed && parsed.status !== "blocked" && parsed.status !== "skipped") {
         parsed.status = "blocked";
         if (!parsed.dispatchBlockReason) {
           parsed.dispatchBlockReason = hookEnforcement.blockReason ?? "runtime_hook_denied:unknown";
         }
       }
-      // Consistency audit (observability only — not a blocking gate)
-      const hookAudit = auditRuntimeHookEnforcement(hookEnforcement.decisions, parsed.toolExecutionTelemetry.hookDecisions);
-      if (!hookAudit.consistent) {
-        // Surface audit gaps in dispatchBlockReason metadata only when not already blocked
+      const hookAudit = auditRuntimeHookEnforcement(hookEnforcement.decisions, hookTelemetry.hookDecisions);
+      const hookCoverageAudit = auditAuthoritativeHookCoverage({
+        sessionInputPolicy: effectiveSessionInputPolicy,
+        hookCoverage: agentProfile.hookCoverage,
+        telemetry: hookTelemetry,
+        runtimeDecisions: hookEnforcement.decisions,
+        runtimeAuditGaps: hookAudit.gaps,
+      });
+      if (!hookCoverageAudit.covered && parsed.status === "done") {
+        parsed.status = "blocked";
+        parsed.dispatchBlockReason = `hook_coverage_incomplete:${hookCoverageAudit.reasonCode ?? "unknown"}`;
+        parsed.summary = `[HOOK COVERAGE] missing authoritative hook coverage for ${roleName}: ${hookCoverageAudit.gaps.join("; ")}\n${parsed.summary}`;
+      } else if (!hookAudit.consistent) {
         const auditNote = `runtime_hook_audit_gaps:${hookAudit.gaps.length}`;
         if (!parsed.dispatchBlockReason && parsed.status !== "skipped") {
           parsed.dispatchBlockReason = auditNote;
         }
       }
+      parsed.toolExecutionTelemetry = hookTelemetry;
+      (parsed as any).hookCoverageAudit = hookCoverageAudit;
     }
   } catch {
     // Non-fatal: if policy cannot be read, keep existing worker result.
@@ -2868,10 +2943,6 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     }).catch(() => { /* non-fatal */ });
   }
 
-  // Track premium request usage per worker (always log, even for failed verification attempts)
-  // Reuse the exact dispatch lineage key so analytics can deterministically join
-  // routing decisions ↔ premium usage ↔ lineage graph outcomes.
-  const _premiumLineageId: string | null = _dispatchLineageId;
   // ── Rework budget — pre-computed so both gates share the same values ─────────
   // Declared here (before the artifact gate) so the artifact gate can decide
   // whether to hard-block or to defer to the rework loop.
@@ -3017,6 +3088,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         ? (validationResult.evidence.optionalFieldFailures as string[])
         : [],
       toolExecutionTelemetry: validationResult.evidence?.toolExecutionTelemetry ?? null,
+      hookCoverageAudit: (parsed as any).hookCoverageAudit ?? null,
       artifactDetail: postMergeArtifact ? {
         hasSha: postMergeArtifact.hasSha,
         hasTestOutput: postMergeArtifact.hasTestOutput,
@@ -3085,7 +3157,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       logPremiumUsage(config, roleName, model, instruction.taskKind, Date.now() - startMs, {
         outcome: telemetryOutcome,
         taskId: instruction.taskId || instruction.task || null,
-        lineageId: _premiumLineageId,
+        lineageId: _dispatchLineageId,
       });
       updateMemoryHitOutcome(config, _memoryHitTaskId || null, telemetryOutcome);
       try {
@@ -3109,7 +3181,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   logPremiumUsage(config, roleName, model, instruction.taskKind, Date.now() - startMs, {
     outcome: finalTelemetryOutcome,
     taskId: instruction.taskId || instruction.task || null,
-    lineageId: _premiumLineageId,
+    lineageId: _dispatchLineageId,
   });
   updateMemoryHitOutcome(config, _memoryHitTaskId || null, finalTelemetryOutcome);
 
