@@ -1233,6 +1233,37 @@ function averageMetrics(values: Array<number | null | undefined>): number {
   return roundMetric(finite.reduce((sum, value) => sum + value, 0) / finite.length);
 }
 
+function computeRoutingReliabilityScore(input: {
+  completionRate?: number | null;
+  attemptRate?: number | null;
+  abstainRate?: number | null;
+  precisionOnAttempted?: number | null;
+}): number {
+  return averageMetrics([
+    input.completionRate ?? null,
+    input.attemptRate ?? null,
+    input.abstainRate != null ? 1 - input.abstainRate : null,
+    input.precisionOnAttempted ?? null,
+  ]);
+}
+
+function computeRoutingOutcomeScore(input: {
+  attemptRate?: number | null;
+  abstainRate?: number | null;
+  precisionOnAttempted?: number | null;
+  laneReliability?: number | null;
+  hardChainSuccessRate?: number | null;
+  includeHardChain?: boolean;
+}): number {
+  return averageMetrics([
+    input.attemptRate ?? null,
+    input.abstainRate != null ? 1 - input.abstainRate : null,
+    input.precisionOnAttempted ?? null,
+    input.laneReliability ?? null,
+    input.includeHardChain ? (input.hardChainSuccessRate ?? null) : null,
+  ]);
+}
+
 function deriveLatestBenchmarkSignal(benchmarkGroundTruth: any): {
   sampleCount: number;
   avgBenchmarkScore: number;
@@ -1494,12 +1525,12 @@ function deriveRoutingOutcomeSignal(premiumUsageData: any, taskKind: string): {
   let successful = 0;
   let attempted = 0;
   let abstained = 0;
-  const laneCounts = new Map<string, { total: number; successful: number; attempted: number }>();
+  const laneCounts = new Map<string, { total: number; successful: number; attempted: number; abstained: number }>();
   const hardChainGroups = new Map<string, { total: number; successful: number; abstained: number }>();
   for (const row of filtered) {
     const outcome = normalizeRoutingOutcome((row as any).outcome);
     const lane = getLaneForWorkerName((row as any).worker, "implementation");
-    const laneAcc = laneCounts.get(lane) ?? { total: 0, successful: 0, attempted: 0 };
+    const laneAcc = laneCounts.get(lane) ?? { total: 0, successful: 0, attempted: 0, abstained: 0 };
     laneAcc.total += 1;
     if (isRoutingSuccess(outcome)) {
       successful += 1;
@@ -1509,7 +1540,10 @@ function deriveRoutingOutcomeSignal(premiumUsageData: any, taskKind: string): {
       attempted += 1;
       laneAcc.attempted += 1;
     }
-    if (isRoutingAbstain(outcome)) abstained += 1;
+    if (isRoutingAbstain(outcome)) {
+      abstained += 1;
+      laneAcc.abstained += 1;
+    }
     laneCounts.set(lane, laneAcc);
 
     const lineageId = String((row as any).lineageId || "").trim();
@@ -1533,19 +1567,22 @@ function deriveRoutingOutcomeSignal(premiumUsageData: any, taskKind: string): {
     if (chain.abstained === 0 && chain.successful === chain.total) hardChainSuccess += 1;
   }
   const laneReliability = averageMetrics(
-    [...laneCounts.values()].map((lane) => averageMetrics([
-      lane.total > 0 ? lane.successful / lane.total : 0,
-      lane.total > 0 ? lane.attempted / lane.total : 0,
-      lane.attempted > 0 ? lane.successful / lane.attempted : 0,
-    ]))
+    [...laneCounts.values()].map((lane) => computeRoutingReliabilityScore({
+        completionRate: lane.total > 0 ? lane.successful / lane.total : 0,
+        attemptRate: lane.total > 0 ? lane.attempted / lane.total : 0,
+        abstainRate: lane.total > 0 ? lane.abstained / lane.total : 0,
+        precisionOnAttempted: lane.attempted > 0 ? lane.successful / lane.attempted : 0,
+      }))
   );
   const hardChainSuccessRate = hardChainTotal > 0 ? hardChainSuccess / hardChainTotal : 0;
-  const outcomeScore = averageMetrics([
-    precisionOnAttempted,
+  const outcomeScore = computeRoutingOutcomeScore({
     attemptRate,
+    abstainRate,
+    precisionOnAttempted,
     laneReliability,
-    hardChainTotal > 0 ? hardChainSuccessRate : null,
-  ]);
+    hardChainSuccessRate,
+    includeHardChain: hardChainTotal > 0,
+  });
   return {
     sampleCount: filtered.length,
     successRate: roundMetric(precisionOnAttempted),

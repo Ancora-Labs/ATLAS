@@ -203,6 +203,7 @@ function computeRoutingOutcomeScore(cycleData: any = {}): number | null {
   const metrics = [
     Number(cycleData?.precisionOnAttempted),
     Number(cycleData?.attemptRate),
+    Number.isFinite(Number(cycleData?.abstainRate)) ? 1 - Number(cycleData?.abstainRate) : null,
     Number(cycleData?.laneReliability),
   ].filter((value) => Number.isFinite(value));
   const hardChainSampleCount = Number(cycleData?.hardChainSampleCount ?? 0);

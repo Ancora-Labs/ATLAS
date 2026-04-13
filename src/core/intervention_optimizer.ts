@@ -1275,6 +1275,7 @@ function normalizeOutcomeScoreSignal(rawOutcome: unknown): number {
   const metrics = [
     Number(row.precisionOnAttempted),
     Number(row.attemptRate),
+    Number.isFinite(Number(row.abstainRate)) ? 1 - Number(row.abstainRate) : null,
     Number(row.laneReliability),
   ].filter((value) => Number.isFinite(value));
   const hardChainSampleCount = Number(row.hardChainSampleCount ?? 0);

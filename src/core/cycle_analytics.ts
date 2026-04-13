@@ -167,6 +167,7 @@ function averageMetrics(values: Array<number | null | undefined>): number {
 function computeReliabilityScore(input: {
   completionRate?: number | null;
   attemptRate?: number | null;
+  abstainRate?: number | null;
   precisionOnAttempted?: number | null;
   hardChainSuccessRate?: number | null;
   includeHardChain?: boolean;
@@ -174,7 +175,25 @@ function computeReliabilityScore(input: {
   return averageMetrics([
     input.completionRate ?? null,
     input.attemptRate ?? null,
+    input.abstainRate != null ? 1 - input.abstainRate : null,
     input.precisionOnAttempted ?? null,
+    input.includeHardChain ? (input.hardChainSuccessRate ?? null) : null,
+  ]);
+}
+
+function computeLongHorizonOutcomeScore(input: {
+  attemptRate?: number | null;
+  abstainRate?: number | null;
+  precisionOnAttempted?: number | null;
+  laneReliability?: number | null;
+  hardChainSuccessRate?: number | null;
+  includeHardChain?: boolean;
+}): number {
+  return averageMetrics([
+    input.attemptRate ?? null,
+    input.abstainRate != null ? 1 - input.abstainRate : null,
+    input.precisionOnAttempted ?? null,
+    input.laneReliability ?? null,
     input.includeHardChain ? (input.hardChainSuccessRate ?? null) : null,
   ]);
 }
@@ -1121,7 +1140,7 @@ function computeLaneTelemetry(workerResults: Array<{ roleName: string; status: s
     const attemptRate = row.dispatched > 0 ? row.attempted / row.dispatched : 0;
     const abstainRate = row.dispatched > 0 ? row.abstained / row.dispatched : 0;
     const precisionOnAttempted = row.attempted > 0 ? row.successfulAttempted / row.attempted : 0;
-    const reliability = computeReliabilityScore({ completionRate, attemptRate, precisionOnAttempted });
+    const reliability = computeReliabilityScore({ completionRate, attemptRate, abstainRate, precisionOnAttempted });
     const roi = row.completed / Math.max(1, row.failed);
     output[lane] = {
       dispatched: row.dispatched,
@@ -2135,7 +2154,8 @@ export function buildModelRoutingTelemetry(
       const completionRate = lane.total > 0 ? lane.successful / lane.total : 0;
       const attemptRate = lane.total > 0 ? lane.attempted / lane.total : 0;
       const precisionOnAttempted = lane.attempted > 0 ? lane.successful / lane.attempted : 0;
-      const reliability = computeReliabilityScore({ completionRate, attemptRate, precisionOnAttempted });
+      const abstainRate = lane.total > 0 ? lane.abstained / lane.total : 0;
+      const reliability = computeReliabilityScore({ completionRate, attemptRate, abstainRate, precisionOnAttempted });
       return sum + (reliability * lane.total);
     }, 0);
     return roundMetric(weighted / total);
@@ -2231,10 +2251,11 @@ export function buildModelRoutingTelemetry(
     const precisionOnAttempted = acc.attempted > 0 ? acc.successful / acc.attempted : 0;
     const hardChainSuccessRate = acc.hardChainTotal > 0 ? acc.hardChainSuccess / acc.hardChainTotal : 0;
     const laneReliability = computeLaneReliability(acc.laneCounts);
-    const outcomeScore = computeReliabilityScore({
-      completionRate: precisionOnAttempted,
+    const outcomeScore = computeLongHorizonOutcomeScore({
       attemptRate,
-      precisionOnAttempted: laneReliability,
+      abstainRate,
+      precisionOnAttempted,
+      laneReliability,
       hardChainSuccessRate,
       includeHardChain: acc.hardChainTotal > 0,
     });
@@ -3701,7 +3722,7 @@ export function computeHistoricalLaneDifficultyPriors(
       const precisionOnAttempted = typeof t.precisionOnAttempted === "number" ? t.precisionOnAttempted : 0;
       const reliability = typeof t.reliability === "number"
         ? t.reliability
-        : computeReliabilityScore({ completionRate, attemptRate, precisionOnAttempted });
+        : computeReliabilityScore({ completionRate, attemptRate, abstainRate, precisionOnAttempted });
 
       const current = accByLane.get(lane) ?? {
         completionRateSum: 0,

@@ -123,6 +123,25 @@ describe("capacity_scoreboard", () => {
       assert.ok(Math.abs(result.dimensions.modelTaskFit - 0.713) < 0.01);
       assert.ok(Math.abs(result.dimensions.costEfficiency - 0.713) < 0.01);
     });
+
+    it("penalizes routing outcome score when abstainRate is high", () => {
+      const strongAttempts = computeCapacityIndex({
+        premiumEfficiency: 0.2,
+        attemptRate: 0.8,
+        abstainRate: 0,
+        precisionOnAttempted: 0.75,
+        laneReliability: 0.7,
+      });
+      const abstaining = computeCapacityIndex({
+        premiumEfficiency: 0.2,
+        attemptRate: 0.8,
+        abstainRate: 0.4,
+        precisionOnAttempted: 0.75,
+        laneReliability: 0.7,
+      });
+      assert.ok(abstaining.dimensions.modelTaskFit < strongAttempts.dimensions.modelTaskFit);
+      assert.ok(abstaining.dimensions.costEfficiency < strongAttempts.dimensions.costEfficiency);
+    });
   });
 
   describe("completionYield and verificationLatencyMs in CapacityEntry", () => {

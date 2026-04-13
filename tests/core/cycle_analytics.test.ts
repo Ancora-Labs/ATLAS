@@ -983,7 +983,7 @@ describe("computeCycleAnalytics — lane telemetry outcome quality", () => {
     assert.equal(record.laneTelemetry.quality.attemptRate, 0.667);
     assert.equal(record.laneTelemetry.quality.abstainRate, 0.333);
     assert.equal(record.laneTelemetry.quality.precisionOnAttempted, 0.5);
-    assert.equal(record.laneTelemetry.quality.reliability, 0.5);
+    assert.equal(record.laneTelemetry.quality.reliability, 0.542);
   });
 });
 
@@ -2065,9 +2065,23 @@ describe("modelRoutingTelemetry schema contract", () => {
     assert.equal(telemetry.precisionOnAttempted, 0.75);
     assert.equal(telemetry.hardChainSuccessRate, 0.5);
     assert.equal(telemetry.hardChainSampleCount, 2);
-    assert.equal(telemetry.laneReliability, 0.734);
-    assert.equal(telemetry.outcomeScore, 0.696);
+    assert.equal(telemetry.laneReliability, 0.75);
+    assert.equal(telemetry.outcomeScore, 0.72);
     assert.equal(telemetry.capacityImpact, telemetry.outcomeScore);
+  });
+
+  it("buildModelRoutingTelemetry penalizes abstention in outcome scoring even when attempted precision stays high", () => {
+    const log = [
+      { model: "Claude Sonnet 4.6", taskKind: "observation", outcome: "done", worker: "observation-worker", lineageId: "obs-1" },
+      { model: "Claude Sonnet 4.6", taskKind: "observation", outcome: "blocked", worker: "observation-worker", lineageId: "obs-2" },
+    ];
+    const result = buildModelRoutingTelemetry(log);
+    const telemetry = result.byTaskKind.observation.default;
+    assert.equal(telemetry.precisionOnAttempted, 1);
+    assert.equal(telemetry.attemptRate, 0.5);
+    assert.equal(telemetry.abstainRate, 0.5);
+    assert.equal(telemetry.laneReliability, 0.625);
+    assert.equal(telemetry.outcomeScore, 0.656);
   });
 
   it("MIN_TELEMETRY_SAMPLE_THRESHOLD is exported and is a positive integer", () => {
