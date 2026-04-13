@@ -55,8 +55,16 @@ import { hasFiniteAthenaOverallScore } from "./athena_reviewer.js";
 import { hasPrometheusRuntimeContractSignals, isStrategicFieldToolTraceContaminated, STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH } from "./prometheus.js";
 import { getLaneForWorkerName, isSpecialistLane } from "./role_registry.js";
 import { isAnalyticsCompletedWorkerStatus } from "./worker_runner.js";
-import { loadCapabilityExecutionSummary } from "./state_tracker.js";
-import { normalizeModelLabel, computeBenchmarkIntegrityScore } from "./model_policy.js";
+import {
+  loadCapabilityExecutionSummary,
+  loadInterventionRetirementEvidence,
+  readPromptCacheTelemetry,
+  mergeInterventionLineageContracts,
+  normalizeInterventionLineageContract,
+  resolveInterventionLineageJoinKey,
+  type InterventionLineageContract,
+} from "./state_tracker.js";
+import { loadRouteROILedger, normalizeModelLabel, computeBenchmarkIntegrityScore } from "./model_policy.js";
 
 // ── Funnel helpers ─────────────────────────────────────────────────────────────
 
@@ -305,10 +313,11 @@ export const CYCLE_ANALYTICS_SCHEMA = Object.freeze({
       "structuralAnalytics",
       "laneTelemetry",
       "stageTransitions",
-      "dropReasons",
-      "modelRoutingTelemetry",
-      "capabilityExecutionSummary",
-    ],
+       "dropReasons",
+       "modelRoutingTelemetry",
+       "capabilityExecutionSummary",
+       "interventionLineageTelemetry",
+     ],
     cycleIdSource: "pipeline_progress.startedAt",
     phaseEnum: Object.freeze([...Object.values(CYCLE_PHASE)]),
     outcomeStatusEnum: Object.freeze([...Object.values(CYCLE_OUTCOME_STATUS)]),
@@ -1303,6 +1312,95 @@ function buildInterventionImpactCounters(optimizerUsage: any): Record<string, nu
   return Object.keys(counters).length > 0 ? counters : null;
 }
 
+function buildPacketOutcomeCorrelation(workerResults: any): {
+  byTaskKind: Record<string, {
+    sampleCount: number;
+    successRate: number;
+    averageBatchSize: number | null;
+    averageOrderedStepCount: number | null;
+    averageContextUtilizationPercent: number | null;
+  }>;
+  sampleCount: number;
+} {
+  if (!Array.isArray(workerResults) || workerResults.length === 0) {
+    return { byTaskKind: {}, sampleCount: 0 };
+  }
+
+  const byTaskKind = new Map<string, {
+    sampleCount: number;
+    doneCount: number;
+    batchSizeTotal: number;
+    batchSizeSamples: number;
+    orderedStepTotal: number;
+    orderedStepSamples: number;
+    contextUtilizationTotal: number;
+    contextUtilizationSamples: number;
+  }>();
+  let usableSamples = 0;
+
+  for (const row of workerResults) {
+    if (!row || typeof row !== "object") continue;
+    const taskKind = String((row as any)?.taskKind || (row as any)?.kind || "implementation")
+      .trim()
+      .toLowerCase()
+      .replace(/[_\s]+/g, "-") || "implementation";
+    const status = String((row as any)?.status || "unknown").trim().toLowerCase();
+    const batchSize = Number((row as any)?.batchSize);
+    const orderedStepCount = Number((row as any)?.orderedStepCount);
+    const contextUtilizationPercent = Number((row as any)?.contextUtilizationPercent);
+
+    const acc = byTaskKind.get(taskKind) ?? {
+      sampleCount: 0,
+      doneCount: 0,
+      batchSizeTotal: 0,
+      batchSizeSamples: 0,
+      orderedStepTotal: 0,
+      orderedStepSamples: 0,
+      contextUtilizationTotal: 0,
+      contextUtilizationSamples: 0,
+    };
+    acc.sampleCount += 1;
+    usableSamples += 1;
+    if (isAnalyticsCompletedWorkerStatus(status)) {
+      acc.doneCount += 1;
+    }
+    if (Number.isFinite(batchSize) && batchSize > 0) {
+      acc.batchSizeTotal += batchSize;
+      acc.batchSizeSamples += 1;
+    }
+    if (Number.isFinite(orderedStepCount) && orderedStepCount > 0) {
+      acc.orderedStepTotal += orderedStepCount;
+      acc.orderedStepSamples += 1;
+    }
+    if (Number.isFinite(contextUtilizationPercent) && contextUtilizationPercent >= 0) {
+      acc.contextUtilizationTotal += contextUtilizationPercent;
+      acc.contextUtilizationSamples += 1;
+    }
+    byTaskKind.set(taskKind, acc);
+  }
+
+  return {
+    byTaskKind: Object.fromEntries(
+      [...byTaskKind.entries()].map(([taskKind, acc]) => [taskKind, {
+        sampleCount: acc.sampleCount,
+        successRate: acc.sampleCount > 0
+          ? Math.round((acc.doneCount / acc.sampleCount) * 1000) / 1000
+          : 0,
+        averageBatchSize: acc.batchSizeSamples > 0
+          ? Math.round((acc.batchSizeTotal / acc.batchSizeSamples) * 1000) / 1000
+          : null,
+        averageOrderedStepCount: acc.orderedStepSamples > 0
+          ? Math.round((acc.orderedStepTotal / acc.orderedStepSamples) * 1000) / 1000
+          : null,
+        averageContextUtilizationPercent: acc.contextUtilizationSamples > 0
+          ? Math.round((acc.contextUtilizationTotal / acc.contextUtilizationSamples) * 1000) / 1000
+          : null,
+      }])
+    ),
+    sampleCount: usableSamples,
+  };
+}
+
 // ── Core computation ──────────────────────────────────────────────────────────
 
 /**
@@ -1359,9 +1457,12 @@ export function computeCycleAnalytics(config, {
   stageTransitions = [],
   dropReasons = [],
   premiumUsageLog = [],
+  promptCacheTelemetry = [],
+  routeRoiLedger = [],
   dispatchBlockReason = null,
   lineageLog = [],
   memoryHitLog = [],
+  postmortemOutcomes = [],
   premiumEfficiencyRaw = null,
   premiumEfficiencyAdjusted = null,
   rawPremiumEfficiency = null,
@@ -1745,6 +1846,7 @@ export function computeCycleAnalytics(config, {
     contractViolationRate:   dispatched !== null ? Math.round((totalViolations / dispatched) * 1000) / 1000 : null,
     rerouteRate:             dispatched !== null ? Math.round((specialistRerouteCount / dispatched) * 1000) / 1000 : null,
   };
+  const packetOutcomeCorrelation = buildPacketOutcomeCorrelation(workerResults);
 
   return {
     cycleId,
@@ -1768,8 +1870,17 @@ export function computeCycleAnalytics(config, {
     parserBaselineRecovery: parserBaselineRecovery ?? null,
     stageTransitions: Array.isArray(stageTransitions) ? stageTransitions : [],
     dropReasons:      Array.isArray(dropReasons) ? dropReasons : [],
+    packetOutcomeCorrelation,
     modelRoutingTelemetry: buildModelRoutingTelemetry(premiumUsageLog ?? [], lineageLog ?? []),
     capabilityExecutionSummary: normalizedCapabilityExecutionSummary,
+    interventionLineageTelemetry: buildInterventionLineageTelemetry({
+      premiumUsageLog: premiumUsageLog ?? [],
+      promptCacheTelemetry: promptCacheTelemetry ?? [],
+      routeRoiLedger: routeRoiLedger ?? [],
+      capabilityExecutionSummary: normalizedCapabilityExecutionSummary,
+      lineageLog: lineageLog ?? [],
+      postmortemOutcomes: postmortemOutcomes ?? [],
+    }),
     lineageSummary: buildLineageSummary(lineageLog ?? []),
     memoryHitTelemetry: buildMemoryHitTelemetry(memoryHitLog ?? []),
     routingROISummary: buildRoutingROISummary(premiumUsageLog ?? [], lineageLog ?? []),
@@ -1832,10 +1943,10 @@ export function buildModelRoutingTelemetry(
   const linkageReference = new Set<string>();
   if (Array.isArray(lineageLog)) {
     for (const entry of lineageLog) {
-      if (!entry || typeof entry !== "object") continue;
-      const rawId = (entry as Record<string, unknown>).id;
-      const id = typeof rawId === "string" ? rawId.trim() : "";
-      if (id) linkageReference.add(id);
+      const { joinKey } = resolveLineageContractFromRecord(entry, {
+        lineageId: entry && typeof entry === "object" ? (entry as Record<string, unknown>).id as string | null : null,
+      });
+      if (joinKey) linkageReference.add(joinKey);
     }
   }
   const enforceLineageReference = linkageReference.size > 0;
@@ -1855,10 +1966,14 @@ export function buildModelRoutingTelemetry(
     const { taskKind, model, outcome } = entry as Record<string, string>;
     const normalizedModel = normalizeModelLabel(model);
     if (!taskKind || !normalizedModel) continue;
-    const lineageId = typeof (entry as Record<string, unknown>).lineageId === "string"
-      ? String((entry as Record<string, unknown>).lineageId).trim()
-      : "";
-    const linked = lineageId.length > 0 && (!enforceLineageReference || linkageReference.has(lineageId));
+    const { joinKey } = resolveLineageContractFromRecord(entry, {
+      lineageId: (entry as Record<string, unknown>).lineageId as string | null,
+      taskId: (entry as Record<string, unknown>).taskId as string | null,
+      taskKind,
+      model,
+      role: (entry as Record<string, unknown>).worker as string | null,
+    });
+    const linked = !!(joinKey && (!enforceLineageReference || linkageReference.has(joinKey)));
 
     byTaskKindModel[taskKind] ??= {};
     byTaskKindModel[taskKind][normalizedModel] ??= { done: 0, total: 0, linked: 0 };
@@ -1989,13 +2104,44 @@ export async function persistCycleAnalytics(config, record) {
   });
 
   const stateDir = config?.paths?.stateDir || "state";
-  const runtimeCapabilityExecutionSummary = await loadCapabilityExecutionSummary({ paths: { stateDir } });
+  const [
+    runtimeCapabilityExecutionSummary,
+    runtimePromptCacheTelemetry,
+    runtimeRouteRoiLedger,
+    runtimePremiumUsageLog,
+    runtimeRetirementEvidence,
+    runtimeLineageState,
+    runtimeAthenaPostmortems,
+  ] = await Promise.all([
+    loadCapabilityExecutionSummary({ paths: { stateDir } }),
+    readPromptCacheTelemetry({ paths: { stateDir } }),
+    loadRouteROILedger({ paths: { stateDir } }),
+    readJson(path.join(stateDir, "premium_usage_log.json"), []),
+    loadInterventionRetirementEvidence({ paths: { stateDir } }),
+    readJson(path.join(stateDir, "lineage_graph.json"), { entries: [] }),
+    readJson(path.join(stateDir, "athena_postmortems.json"), []),
+  ]);
   const normalizedCapabilityExecutionSummary = normalizeCapabilityExecutionSummary(
     record?.capabilityExecutionSummary ?? runtimeCapabilityExecutionSummary,
   );
+  const runtimeInterventionLineageTelemetry = buildInterventionLineageTelemetry({
+    premiumUsageLog: Array.isArray(runtimePremiumUsageLog) ? runtimePremiumUsageLog : [],
+    promptCacheTelemetry: Array.isArray(runtimePromptCacheTelemetry) ? runtimePromptCacheTelemetry : [],
+    routeRoiLedger: Array.isArray(runtimeRouteRoiLedger) ? runtimeRouteRoiLedger : [],
+    capabilityExecutionSummary: runtimeCapabilityExecutionSummary,
+    lineageLog: Array.isArray(runtimeLineageState?.entries) ? runtimeLineageState.entries : [],
+    postmortemOutcomes: [
+      ...(Array.isArray(runtimeAthenaPostmortems) ? runtimeAthenaPostmortems : []),
+      ...(Array.isArray(runtimeRetirementEvidence) ? runtimeRetirementEvidence : []),
+    ],
+  });
+  const normalizedInterventionLineageTelemetry = record?.interventionLineageTelemetry?.lineageCount > 0
+    ? record.interventionLineageTelemetry
+    : runtimeInterventionLineageTelemetry;
   const normalizedRecord = {
     ...record,
     capabilityExecutionSummary: normalizedCapabilityExecutionSummary,
+    interventionLineageTelemetry: normalizedInterventionLineageTelemetry,
     confidence: applyCapabilityExecutionConfidenceGate(record?.confidence, normalizedCapabilityExecutionSummary, true),
   };
 
@@ -2588,6 +2734,450 @@ export function buildLineageSummary(lineageLog: unknown[]): {
   return { bySourceKind, totalEvents };
 }
 
+export const INTERVENTION_LINEAGE_TELEMETRY_SCHEMA_VERSION = 1 as const;
+
+export interface InterventionLineageTelemetrySummary {
+  lineageCount: number;
+  premiumRequestCount: number;
+  successfulPremiumRequestCount: number;
+  verifiedOutcomeCount: number;
+  capacityPerPremiumRequest: number | null;
+}
+
+export interface InterventionLineageJoinedSample {
+  joinKey: string;
+  contract: InterventionLineageContract;
+  surfaces: string[];
+  premiumRequestCount: number;
+  successfulPremiumRequestCount: number;
+  verifiedOutcomeCount: number;
+  promptCache: {
+    eventCount: number;
+    hitRate: number | null;
+    savedTokens: number;
+  };
+  modelRouting: {
+    decisionCount: number;
+    realizedCount: number;
+    positiveRoiDeltaCount: number;
+  };
+  specializationRouting: {
+    specialistAssignmentCount: number;
+    lanes: string[];
+  };
+  postmortem: {
+    outcomeCount: number;
+    closedOutcomeCount: number;
+    recurredCount: number;
+  };
+}
+
+export interface InterventionLineageTelemetry {
+  schemaVersion: typeof INTERVENTION_LINEAGE_TELEMETRY_SCHEMA_VERSION;
+  lineageCount: number;
+  linkedPremiumRequestCount: number;
+  linkedPremiumSuccessCount: number;
+  premiumSuccessRate: number | null;
+  verifiedWorkerOutcomeCount: number;
+  verifiedCapacityPerPremiumRequest: number | null;
+  surfaceCoverage: {
+    promptCache: number;
+    modelRouting: number;
+    specializationRouting: number;
+    workerOutcome: number;
+    postmortem: number;
+    fullyJoined: number;
+  };
+  byInterventionType: {
+    promptCache: InterventionLineageTelemetrySummary & { averageHitRate: number | null; averageSavedTokens: number | null; };
+    modelRouting: InterventionLineageTelemetrySummary & { realizedCount: number; positiveRoiDeltaCount: number; positiveRoiDeltaRate: number | null; };
+    specializationRouting: InterventionLineageTelemetrySummary & { specialistAssignmentCount: number; specialistLineages: number; lanesObserved: string[]; };
+    postmortem: InterventionLineageTelemetrySummary & { outcomeCount: number; closedOutcomeCount: number; recurredCount: number; recurrenceRate: number | null; };
+  };
+  joinedLineages: InterventionLineageJoinedSample[];
+}
+
+type LineageAggregate = {
+  joinKey: string;
+  contract: InterventionLineageContract;
+  surfaces: Set<string>;
+  premiumRequestCount: number;
+  successfulPremiumRequestCount: number;
+  verifiedOutcomeCount: number;
+  promptCacheEventCount: number;
+  promptCacheCachedSegments: number;
+  promptCacheTotalSegments: number;
+  promptCacheSavedTokens: number;
+  routeDecisionCount: number;
+  routeRealizedCount: number;
+  routePositiveRoiDeltaCount: number;
+  specialistAssignmentCount: number;
+  lanes: Set<string>;
+  postmortemOutcomeCount: number;
+  postmortemClosedOutcomeCount: number;
+  postmortemRecurredCount: number;
+};
+
+function createLineageAggregate(joinKey: string, contract: InterventionLineageContract): LineageAggregate {
+  return {
+    joinKey,
+    contract,
+    surfaces: new Set<string>(),
+    premiumRequestCount: 0,
+    successfulPremiumRequestCount: 0,
+    verifiedOutcomeCount: 0,
+    promptCacheEventCount: 0,
+    promptCacheCachedSegments: 0,
+    promptCacheTotalSegments: 0,
+    promptCacheSavedTokens: 0,
+    routeDecisionCount: 0,
+    routeRealizedCount: 0,
+    routePositiveRoiDeltaCount: 0,
+    specialistAssignmentCount: 0,
+    lanes: new Set<string>(),
+    postmortemOutcomeCount: 0,
+    postmortemClosedOutcomeCount: 0,
+    postmortemRecurredCount: 0,
+  };
+}
+
+function mergeLineageAggregateContract(
+  aggregate: LineageAggregate,
+  contract: InterventionLineageContract,
+) {
+  aggregate.contract = mergeInterventionLineageContracts(aggregate.contract, contract);
+}
+
+function buildLineageSummaryFromAggregates(aggregates: LineageAggregate[]): InterventionLineageTelemetrySummary {
+  const premiumRequestCount = aggregates.reduce((sum, aggregate) => sum + aggregate.premiumRequestCount, 0);
+  const successfulPremiumRequestCount = aggregates.reduce((sum, aggregate) => sum + aggregate.successfulPremiumRequestCount, 0);
+  const verifiedOutcomeCount = aggregates.reduce((sum, aggregate) => sum + aggregate.verifiedOutcomeCount, 0);
+  return {
+    lineageCount: aggregates.length,
+    premiumRequestCount,
+    successfulPremiumRequestCount,
+    verifiedOutcomeCount,
+    capacityPerPremiumRequest: premiumRequestCount > 0
+      ? Math.round((verifiedOutcomeCount / premiumRequestCount) * 1000) / 1000
+      : null,
+  };
+}
+
+function resolveLineageContractFromRecord(
+  record: unknown,
+  defaults: Partial<InterventionLineageContract> = {},
+): { contract: InterventionLineageContract; joinKey: string | null } {
+  const src = record && typeof record === "object" && !Array.isArray(record)
+    ? record as Record<string, unknown>
+    : {};
+  const lineage = src.lineage && typeof src.lineage === "object"
+    ? src.lineage
+    : src.lineageContract && typeof src.lineageContract === "object"
+      ? src.lineageContract
+      : src;
+  const contract = normalizeInterventionLineageContract(lineage, defaults);
+  return { contract, joinKey: resolveInterventionLineageJoinKey(contract) };
+}
+
+export function buildInterventionLineageTelemetry({
+  premiumUsageLog = [],
+  promptCacheTelemetry = [],
+  routeRoiLedger = [],
+  capabilityExecutionSummary = null,
+  lineageLog = [],
+  postmortemOutcomes = [],
+}: {
+  premiumUsageLog?: unknown[];
+  promptCacheTelemetry?: unknown[];
+  routeRoiLedger?: unknown[];
+  capabilityExecutionSummary?: unknown;
+  lineageLog?: unknown[];
+  postmortemOutcomes?: unknown[];
+} = {}): InterventionLineageTelemetry {
+  const aggregates = new Map<string, LineageAggregate>();
+  const getAggregate = (
+    record: unknown,
+    defaults: Partial<InterventionLineageContract> = {},
+  ): LineageAggregate | null => {
+    const { contract, joinKey } = resolveLineageContractFromRecord(record, defaults);
+    if (!joinKey) return null;
+    const existing = aggregates.get(joinKey);
+    if (existing) {
+      mergeLineageAggregateContract(existing, contract);
+      return existing;
+    }
+    const created = createLineageAggregate(joinKey, contract);
+    aggregates.set(joinKey, created);
+    return created;
+  };
+
+  for (const entry of Array.isArray(premiumUsageLog) ? premiumUsageLog : []) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const worker = String(row.worker || row.role || row.roleName || "").trim();
+    const lane = worker ? getLaneForWorkerName(worker, "") : "";
+    const aggregate = getAggregate(entry, {
+      lineageId: row.lineageId as string | null,
+      taskId: row.taskId as string | null,
+      taskKind: row.taskKind as string | null,
+      model: row.model as string | null,
+      role: worker || null,
+      lane: lane || null,
+      specialized: lane ? isSpecialistLane(lane) : null,
+    });
+    if (!aggregate) continue;
+    aggregate.premiumRequestCount += 1;
+    if (String(row.outcome || "").toLowerCase() === "done") {
+      aggregate.successfulPremiumRequestCount += 1;
+    }
+    if (lane) aggregate.lanes.add(lane);
+    if (worker && lane && isSpecialistLane(lane)) {
+      aggregate.specialistAssignmentCount += 1;
+      aggregate.surfaces.add("specializationRouting");
+    }
+  }
+
+  for (const entry of Array.isArray(promptCacheTelemetry) ? promptCacheTelemetry : []) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const aggregate = getAggregate(entry, {
+      lineageId: row.lineageId as string | null,
+      taskId: row.taskId as string | null,
+      cycleId: row.cycleId as string | null,
+      taskKind: row.taskKind as string | null,
+      interventionId: row.interventionId as string | null,
+      promptFamilyKey: row.promptFamilyKey as string | null,
+      model: row.model as string | null,
+      role: row.agent as string | null,
+      lane: row.lane as string | null,
+      capability: row.capability as string | null,
+      specialized: typeof row.specialized === "boolean" ? row.specialized : null,
+      rerouteReasonCode: row.rerouteReasonCode as string | null,
+    });
+    if (!aggregate) continue;
+    aggregate.surfaces.add("promptCache");
+    aggregate.promptCacheEventCount += 1;
+    aggregate.promptCacheCachedSegments += Math.max(0, Number(row.cachedSegments || 0));
+    aggregate.promptCacheTotalSegments += Math.max(0, Number(row.totalSegments || 0));
+    aggregate.promptCacheSavedTokens += Math.max(0, Number(row.estimatedSavedTokens || 0));
+  }
+
+  for (const entry of Array.isArray(routeRoiLedger) ? routeRoiLedger : []) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const aggregate = getAggregate(entry, {
+      lineageId: row.lineageId as string | null,
+      taskId: row.taskId as string | null,
+      cycleId: row.cycleId as string | null,
+      taskKind: row.taskKind as string | null,
+      interventionId: row.interventionId as string | null,
+      model: row.model as string | null,
+      role: row.role as string | null,
+      rerouteReasonCode: row.routingReasonCode as string | null,
+    });
+    if (!aggregate) continue;
+    aggregate.surfaces.add("modelRouting");
+    aggregate.routeDecisionCount += 1;
+    if (typeof row.realizedAt === "string" && row.realizedAt.trim()) {
+      aggregate.routeRealizedCount += 1;
+    }
+    if (typeof row.roiDelta === "number" && row.roiDelta > 0) {
+      aggregate.routePositiveRoiDeltaCount += 1;
+    }
+  }
+
+  const recentTraces = Array.isArray((capabilityExecutionSummary as any)?.recentTraces)
+    ? (capabilityExecutionSummary as any).recentTraces
+    : [];
+  for (const trace of recentTraces) {
+    if (!trace || typeof trace !== "object") continue;
+    const row = trace as Record<string, unknown>;
+    const aggregate = getAggregate(trace, {
+      role: row.role as string | null,
+      lane: row.lane as string | null,
+      capability: row.capability as string | null,
+      specialized: typeof row.specialized === "boolean"
+        ? row.specialized
+        : typeof row.role === "string"
+          ? isSpecialistLane(getLaneForWorkerName(String(row.role), ""))
+          : null,
+      rerouteReasonCode: row.rerouteReasonCode as string | null,
+    });
+    if (!aggregate) continue;
+    const lane = aggregate.contract.lane
+      || (typeof row.role === "string" ? getLaneForWorkerName(String(row.role), "") : "");
+    if (lane) aggregate.lanes.add(lane);
+    const specialized = aggregate.contract.specialized === true || (lane ? isSpecialistLane(lane) : false);
+    if (specialized) aggregate.specialistAssignmentCount += 1;
+    aggregate.surfaces.add("specializationRouting");
+  }
+
+  for (const entry of Array.isArray(lineageLog) ? lineageLog : []) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const aggregate = getAggregate(entry, {
+      lineageId: row.id as string | null,
+      taskId: row.taskId != null ? String(row.taskId) : null,
+      taskIdentity: row.semanticKey as string | null,
+    });
+    if (!aggregate) continue;
+    aggregate.surfaces.add("workerOutcome");
+    if (String(row.status || "").toLowerCase() === "passed") {
+      aggregate.verifiedOutcomeCount += 1;
+    }
+  }
+
+  for (const entry of Array.isArray(postmortemOutcomes) ? postmortemOutcomes : []) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const aggregate = getAggregate(entry, {
+      lineageId: row.lineageId as string | null,
+      taskId: row.taskId as string | null,
+      taskIdentity: row.taskIdentity as string | null,
+      continuationFamilyKey: row.continuationFamilyKey as string | null,
+      interventionId: row.interventionId as string | null,
+      cycleId: row.cycleId as string | null,
+    });
+    if (!aggregate) continue;
+    aggregate.surfaces.add("postmortem");
+    aggregate.postmortemOutcomeCount += 1;
+    if (
+      row.resolvedPolicy === true
+      || row.verified === true
+      || row.taskCompleted === true
+      || String(row.decision || row.recommendation || "").toLowerCase() === "promote"
+      || String(row.decision || row.recommendation || "").toLowerCase() === "proceed"
+      || typeof row.interventionClosedAt === "string"
+    ) {
+      aggregate.postmortemClosedOutcomeCount += 1;
+    }
+    if (row.recurred === true) {
+      aggregate.postmortemRecurredCount += 1;
+    }
+  }
+
+  const aggregateList = [...aggregates.values()];
+  const surfaceCoverage = {
+    promptCache: aggregateList.filter((aggregate) => aggregate.surfaces.has("promptCache")).length,
+    modelRouting: aggregateList.filter((aggregate) => aggregate.surfaces.has("modelRouting")).length,
+    specializationRouting: aggregateList.filter((aggregate) => aggregate.surfaces.has("specializationRouting")).length,
+    workerOutcome: aggregateList.filter((aggregate) => aggregate.surfaces.has("workerOutcome")).length,
+    postmortem: aggregateList.filter((aggregate) => aggregate.surfaces.has("postmortem")).length,
+    fullyJoined: aggregateList.filter((aggregate) => (
+      aggregate.surfaces.has("promptCache")
+      && aggregate.surfaces.has("modelRouting")
+      && aggregate.surfaces.has("specializationRouting")
+      && aggregate.surfaces.has("workerOutcome")
+      && aggregate.surfaces.has("postmortem")
+    )).length,
+  };
+  const linkedPremiumRequestCount = aggregateList.reduce((sum, aggregate) => sum + aggregate.premiumRequestCount, 0);
+  const linkedPremiumSuccessCount = aggregateList.reduce((sum, aggregate) => sum + aggregate.successfulPremiumRequestCount, 0);
+  const verifiedWorkerOutcomeCount = aggregateList.reduce((sum, aggregate) => sum + aggregate.verifiedOutcomeCount, 0);
+  const promptCacheAggregates = aggregateList.filter((aggregate) => aggregate.surfaces.has("promptCache"));
+  const routingAggregates = aggregateList.filter((aggregate) => aggregate.surfaces.has("modelRouting"));
+  const specializationAggregates = aggregateList.filter((aggregate) => aggregate.surfaces.has("specializationRouting"));
+  const postmortemAggregates = aggregateList.filter((aggregate) => aggregate.surfaces.has("postmortem"));
+  const promptCacheSummary = buildLineageSummaryFromAggregates(promptCacheAggregates);
+  const routingSummary = buildLineageSummaryFromAggregates(routingAggregates);
+  const specializationSummary = buildLineageSummaryFromAggregates(specializationAggregates);
+  const postmortemSummary = buildLineageSummaryFromAggregates(postmortemAggregates);
+
+  return {
+    schemaVersion: INTERVENTION_LINEAGE_TELEMETRY_SCHEMA_VERSION,
+    lineageCount: aggregateList.length,
+    linkedPremiumRequestCount,
+    linkedPremiumSuccessCount,
+    premiumSuccessRate: linkedPremiumRequestCount > 0
+      ? Math.round((linkedPremiumSuccessCount / linkedPremiumRequestCount) * 1000) / 1000
+      : null,
+    verifiedWorkerOutcomeCount,
+    verifiedCapacityPerPremiumRequest: linkedPremiumRequestCount > 0
+      ? Math.round((verifiedWorkerOutcomeCount / linkedPremiumRequestCount) * 1000) / 1000
+      : null,
+    surfaceCoverage,
+    byInterventionType: {
+      promptCache: {
+        ...promptCacheSummary,
+        averageHitRate: promptCacheAggregates.length > 0
+          ? Math.round((promptCacheAggregates.reduce((sum, aggregate) => (
+            sum + (aggregate.promptCacheTotalSegments > 0
+              ? (aggregate.promptCacheCachedSegments / aggregate.promptCacheTotalSegments)
+              : 0)
+          ), 0) / promptCacheAggregates.length) * 1000) / 1000
+          : null,
+        averageSavedTokens: promptCacheAggregates.length > 0
+          ? Math.round((promptCacheAggregates.reduce((sum, aggregate) => sum + aggregate.promptCacheSavedTokens, 0) / promptCacheAggregates.length) * 1000) / 1000
+          : null,
+      },
+      modelRouting: {
+        ...routingSummary,
+        realizedCount: routingAggregates.reduce((sum, aggregate) => sum + aggregate.routeRealizedCount, 0),
+        positiveRoiDeltaCount: routingAggregates.reduce((sum, aggregate) => sum + aggregate.routePositiveRoiDeltaCount, 0),
+        positiveRoiDeltaRate: routingAggregates.reduce((sum, aggregate) => sum + aggregate.routeRealizedCount, 0) > 0
+          ? Math.round((
+            routingAggregates.reduce((sum, aggregate) => sum + aggregate.routePositiveRoiDeltaCount, 0)
+            / routingAggregates.reduce((sum, aggregate) => sum + aggregate.routeRealizedCount, 0)
+          ) * 1000) / 1000
+          : null,
+      },
+      specializationRouting: {
+        ...specializationSummary,
+        specialistAssignmentCount: specializationAggregates.filter((aggregate) => aggregate.specialistAssignmentCount > 0).length,
+        specialistLineages: specializationAggregates.filter((aggregate) => aggregate.specialistAssignmentCount > 0).length,
+        lanesObserved: [...new Set(specializationAggregates.flatMap((aggregate) => [...aggregate.lanes]))].sort(),
+      },
+      postmortem: {
+        ...postmortemSummary,
+        outcomeCount: postmortemAggregates.reduce((sum, aggregate) => sum + aggregate.postmortemOutcomeCount, 0),
+        closedOutcomeCount: postmortemAggregates.reduce((sum, aggregate) => sum + aggregate.postmortemClosedOutcomeCount, 0),
+        recurredCount: postmortemAggregates.reduce((sum, aggregate) => sum + aggregate.postmortemRecurredCount, 0),
+        recurrenceRate: postmortemAggregates.reduce((sum, aggregate) => sum + aggregate.postmortemOutcomeCount, 0) > 0
+          ? Math.round((
+            postmortemAggregates.reduce((sum, aggregate) => sum + aggregate.postmortemRecurredCount, 0)
+            / postmortemAggregates.reduce((sum, aggregate) => sum + aggregate.postmortemOutcomeCount, 0)
+          ) * 1000) / 1000
+          : null,
+      },
+    },
+    joinedLineages: aggregateList
+      .sort((left, right) => {
+        const premiumDelta = right.premiumRequestCount - left.premiumRequestCount;
+        return premiumDelta || left.joinKey.localeCompare(right.joinKey);
+      })
+      .slice(0, 25)
+      .map((aggregate) => ({
+        joinKey: aggregate.joinKey,
+        contract: aggregate.contract,
+        surfaces: [...aggregate.surfaces].sort(),
+        premiumRequestCount: aggregate.premiumRequestCount,
+        successfulPremiumRequestCount: aggregate.successfulPremiumRequestCount,
+        verifiedOutcomeCount: aggregate.verifiedOutcomeCount,
+        promptCache: {
+          eventCount: aggregate.promptCacheEventCount,
+          hitRate: aggregate.promptCacheTotalSegments > 0
+            ? Math.round((aggregate.promptCacheCachedSegments / aggregate.promptCacheTotalSegments) * 1000) / 1000
+            : null,
+          savedTokens: aggregate.promptCacheSavedTokens,
+        },
+        modelRouting: {
+          decisionCount: aggregate.routeDecisionCount,
+          realizedCount: aggregate.routeRealizedCount,
+          positiveRoiDeltaCount: aggregate.routePositiveRoiDeltaCount,
+        },
+        specializationRouting: {
+          specialistAssignmentCount: aggregate.specialistAssignmentCount,
+          lanes: [...aggregate.lanes].sort(),
+        },
+        postmortem: {
+          outcomeCount: aggregate.postmortemOutcomeCount,
+          closedOutcomeCount: aggregate.postmortemClosedOutcomeCount,
+          recurredCount: aggregate.postmortemRecurredCount,
+        },
+      })),
+  };
+}
+
 /**
  * Join premium usage log and lineage log entries by shared lineageId to compute
  * per-lineage-key routing ROI.
@@ -2618,10 +3208,10 @@ export function buildRoutingROISummary(
   const linkageReference = new Set<string>();
   if (Array.isArray(lineageLog)) {
     for (const entry of lineageLog) {
-      if (!entry || typeof entry !== "object") continue;
-      const rawId = (entry as Record<string, unknown>).id;
-      const id = typeof rawId === "string" ? rawId.trim() : "";
-      if (id) linkageReference.add(id);
+      const { joinKey } = resolveLineageContractFromRecord(entry, {
+        lineageId: entry && typeof entry === "object" ? (entry as Record<string, unknown>).id as string | null : null,
+      });
+      if (joinKey) linkageReference.add(joinKey);
     }
   }
   const enforceLineageReference = linkageReference.size > 0;
@@ -2634,15 +3224,28 @@ export function buildRoutingROISummary(
   for (const entry of premiumUsageLog) {
     if (typeof entry !== "object" || entry === null) continue;
     const row = entry as Record<string, unknown>;
-    const lid = typeof row.lineageId === "string" && row.lineageId ? row.lineageId : null;
+    const { contract, joinKey } = resolveLineageContractFromRecord(entry, {
+      lineageId: row.lineageId as string | null,
+      taskId: row.taskId as string | null,
+      taskKind: row.taskKind as string | null,
+      model: row.model as string | null,
+      role: row.worker as string | null,
+    });
     const outcome = typeof row.outcome === "string" ? row.outcome : "unknown";
     const isDone = outcome === "done";
-    const linked = !!(lid && (!enforceLineageReference || linkageReference.has(lid)));
+    const linked = Boolean(
+      joinKey
+      && (
+        (enforceLineageReference && linkageReference.has(joinKey))
+        || (!enforceLineageReference && contract.lineageId)
+      )
+    );
 
-    if (linked && lid) {
-      byLineageId[lid] ??= { success: 0, total: 0 };
-      byLineageId[lid].total++;
-      if (isDone) byLineageId[lid].success++;
+    if (linked && joinKey) {
+      const lineageKey = contract.lineageId || joinKey;
+      byLineageId[lineageKey] ??= { success: 0, total: 0 };
+      byLineageId[lineageKey].total++;
+      if (isDone) byLineageId[lineageKey].success++;
       linkedRequests++;
       linkedTotal++;
       if (isDone) linkedDone++;

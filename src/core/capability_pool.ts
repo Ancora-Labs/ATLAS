@@ -12,6 +12,11 @@
  */
 
 import { LANE_WORKER_NAMES, WORKER_CAPABILITIES, getLaneForWorkerName, TASK_LANE_KIND, classifyTaskLaneKind, type TaskLaneKind } from "./role_registry.js";
+import {
+  normalizeInterventionLineageContract,
+  resolveInterventionLineageJoinKey,
+  type InterventionLineageContract,
+} from "./state_tracker.js";
 
 // Re-export lane-kind types so callers only need one import
 export { TASK_LANE_KIND, classifyTaskLaneKind };
@@ -135,6 +140,96 @@ export interface WorkerSelection {
   isFallback: boolean;
   performanceScore: number;
   rerouteReasonCode?: string | null;
+  lineageContract?: InterventionLineageContract | null;
+  lineageJoinKey?: string | null;
+  capabilityTag?: string | null;
+  specialized?: boolean;
+}
+
+function buildSelectionLineageContract(plan: any, extras: {
+  role: string;
+  lane: string;
+  capabilityTag: string;
+  rerouteReasonCode?: string | null;
+}): { lineageContract: InterventionLineageContract; lineageJoinKey: string | null; specialized: boolean } {
+  const lineageContract = normalizeInterventionLineageContract(plan, {
+    lineageId: plan?._chainId ?? plan?.lineageId ?? plan?.task_id ?? null,
+    taskId: plan?.taskId ?? plan?.task_id ?? null,
+    taskKind: plan?.taskKind ?? plan?.kind ?? null,
+    interventionId: plan?.intervention_id ?? plan?.id ?? plan?.task_id ?? null,
+    role: extras.role,
+    lane: extras.lane,
+    capability: extras.capabilityTag,
+    specialized: extras.role !== "evolution-worker",
+    rerouteReasonCode: extras.rerouteReasonCode ?? null,
+  });
+  return {
+    lineageContract,
+    lineageJoinKey: resolveInterventionLineageJoinKey(lineageContract),
+    specialized: lineageContract.specialized === true,
+  };
+}
+
+const TEST_TASK_PATTERN = /\b(test|tests|spec|assert|coverage|regression)\b/;
+const GOVERNANCE_TASK_PATTERN = /\b(governance|policy|freeze|canary|dispatch(?:blockreason| block)?|pre-dispatch)\b/;
+const PLANNER_TASK_PATTERN = /\b(prometheus|planner|plan|hypothesis|strategy)\b/;
+const INFRASTRUCTURE_TASK_PATTERN = /\b(docker|ci|deploy|compose|infra(?:structure)?)\b/;
+const OBSERVATION_TASK_PATTERN = /\b(dashboard|metric|metrics|monitor|alert|telemetry)\b/;
+const INTEGRATION_TASK_PATTERN = /\b(wire|wiring|connect|integration|integrate|import)\b/;
+
+function normalizeCapabilityToken(value: unknown): string {
+  return String(value || "").trim().toLowerCase().replace(/[\s_]+/g, "-");
+}
+
+function getExplicitCapabilityTag(plan: any): string {
+  const raw = normalizeCapabilityToken(
+    plan?.capabilityTag
+    || plan?.capability
+    || plan?._capabilityTag
+    || plan?.capabilityHint,
+  );
+  return raw && Object.prototype.hasOwnProperty.call(DEFAULT_CAPABILITY_MAP, raw) ? raw : "";
+}
+
+function getCapabilityTagFromLaneHint(plan: any): string {
+  const laneHint = normalizeCapabilityToken(
+    plan?._capabilityLane
+    || plan?.capabilityLane
+    || plan?.lane,
+  );
+  switch (laneHint) {
+    case "quality":
+      return "test-infra";
+    case "governance":
+      return "state-governance";
+    case "integration":
+      return "integration";
+    case "infrastructure":
+      return "infrastructure";
+    case "observation":
+      return "observation";
+    case "implementation":
+      return "runtime-refactor";
+    default:
+      return "";
+  }
+}
+
+function collectPlanSignalText(plan: any): string {
+  const targetFiles = [
+    ...(Array.isArray(plan?.target_files) ? plan.target_files : []),
+    ...(Array.isArray(plan?.targetFiles) ? plan.targetFiles : []),
+  ].map((value) => String(value || "").toLowerCase());
+  const acceptanceCriteria = Array.isArray(plan?.acceptance_criteria)
+    ? plan.acceptance_criteria
+    : Array.isArray(plan?.acceptanceCriteria)
+      ? plan.acceptanceCriteria
+      : [];
+  return [
+    ...targetFiles,
+    ...acceptanceCriteria.map((value) => String(value || "").toLowerCase()),
+    String(plan?.verification || "").toLowerCase(),
+  ].join(" ");
 }
 
 /**
@@ -146,9 +241,16 @@ export interface WorkerSelection {
 export function inferCapabilityTag(plan) {
   if (!plan) return "runtime-refactor";
 
+  const explicitCapabilityTag = getExplicitCapabilityTag(plan);
+  if (explicitCapabilityTag) return explicitCapabilityTag;
+
+  const laneHintCapabilityTag = getCapabilityTagFromLaneHint(plan);
+  if (laneHintCapabilityTag) return laneHintCapabilityTag;
+
   const task = String(plan.task || "").toLowerCase();
   const kind = String(plan.taskKind || plan.kind || "").toLowerCase();
   const role = String(plan.role || "").toLowerCase();
+  const planSignals = collectPlanSignalText(plan);
 
   // Direct role match
   if (role.includes("governance") || role.includes("policy")) return "state-governance";
@@ -159,12 +261,20 @@ export function inferCapabilityTag(plan) {
   if (role.includes("observ") || role.includes("monitor") || role.includes("dashboard")) return "observation";
 
   // Task content heuristics
-  if (/test|spec|assert|coverage/.test(task)) return "test-infra";
-  if (/governance|policy|freeze|canary/.test(task)) return "state-governance";
-  if (/prometheus|plan|hypothesis|strategy/.test(task)) return "planner-improvement";
-  if (/docker|ci|deploy|infra/.test(task)) return "infrastructure";
-  if (/dashboard|metric|monitor|alert/.test(task)) return "observation";
-  if (/wire|connect|integrate|import/.test(task)) return "integration";
+  if (TEST_TASK_PATTERN.test(task)) return "test-infra";
+  if (GOVERNANCE_TASK_PATTERN.test(task)) return "state-governance";
+  if (PLANNER_TASK_PATTERN.test(task)) return "planner-improvement";
+  if (INFRASTRUCTURE_TASK_PATTERN.test(task)) return "infrastructure";
+  if (OBSERVATION_TASK_PATTERN.test(task)) return "observation";
+  if (INTEGRATION_TASK_PATTERN.test(task)) return "integration";
+
+  // Supplemental plan signals from files, verification commands, and acceptance criteria.
+  if (/\bgovernance_contract\b/.test(planSignals) || GOVERNANCE_TASK_PATTERN.test(planSignals)) return "state-governance";
+  if (/\.test\.[jt]s|tests\//.test(planSignals) || TEST_TASK_PATTERN.test(planSignals) || /\baudit\b/.test(planSignals)) return "test-infra";
+  if (INFRASTRUCTURE_TASK_PATTERN.test(planSignals)) return "infrastructure";
+  if (OBSERVATION_TASK_PATTERN.test(planSignals)) return "observation";
+  if (INTEGRATION_TASK_PATTERN.test(planSignals)) return "integration";
+  if (PLANNER_TASK_PATTERN.test(planSignals)) return "planner-improvement";
 
   // Kind-based fallback
   if (kind === "governance") return "state-governance";
@@ -192,7 +302,16 @@ export function inferCapabilityTag(plan) {
 export function selectWorkerForPlan(plan, config?, lanePerformance?: LanePerformanceLedger) {
   const explicitRole = String(plan?.role || "").trim();
   const explicitLane = explicitRole ? getLaneForWorkerName(explicitRole, "") : "";
+  const capTag = inferCapabilityTag(plan);
+  const customMap = config?.workerPool?.capabilityMap;
+  const mapping = customMap?.[capTag] || DEFAULT_CAPABILITY_MAP[capTag] || { lane: "implementation", fallback: "evolution-worker" };
   if (explicitRole && explicitLane) {
+    const lineage = buildSelectionLineageContract(plan, {
+      role: explicitRole,
+      lane: explicitLane,
+      capabilityTag: capTag,
+      rerouteReasonCode: null,
+    });
     return {
       role: explicitRole,
       lane: explicitLane,
@@ -200,12 +319,22 @@ export function selectWorkerForPlan(plan, config?, lanePerformance?: LanePerform
       isFallback: false,
       performanceScore: getLaneScore(lanePerformance ?? {}, explicitLane),
       rerouteReasonCode: null,
+      lineageContract: lineage.lineageContract,
+      lineageJoinKey: lineage.lineageJoinKey,
+      capabilityTag: capTag,
+      specialized: lineage.specialized,
     };
   }
 
   const explicitLaneKey = explicitRole.toLowerCase();
   if (explicitRole && Object.prototype.hasOwnProperty.call(LANE_WORKER_NAMES, explicitLaneKey)) {
     const canonicalRole = LANE_WORKER_NAMES[explicitLaneKey];
+    const lineage = buildSelectionLineageContract(plan, {
+      role: canonicalRole,
+      lane: explicitLaneKey,
+      capabilityTag: capTag,
+      rerouteReasonCode: null,
+    });
     return {
       role: canonicalRole,
       lane: explicitLaneKey,
@@ -213,12 +342,12 @@ export function selectWorkerForPlan(plan, config?, lanePerformance?: LanePerform
       isFallback: false,
       performanceScore: getLaneScore(lanePerformance ?? {}, explicitLaneKey),
       rerouteReasonCode: null,
+      lineageContract: lineage.lineageContract,
+      lineageJoinKey: lineage.lineageJoinKey,
+      capabilityTag: capTag,
+      specialized: lineage.specialized,
     };
   }
-
-  const capTag = inferCapabilityTag(plan);
-  const customMap = config?.workerPool?.capabilityMap;
-  const mapping = customMap?.[capTag] || DEFAULT_CAPABILITY_MAP[capTag] || { lane: "implementation", fallback: "evolution-worker" };
 
   const score = getLaneScore(lanePerformance ?? {}, mapping.lane);
 
@@ -231,6 +360,12 @@ export function selectWorkerForPlan(plan, config?, lanePerformance?: LanePerform
   const performanceDegraded = score < LOW_PERFORMANCE_THRESHOLD;
   const selectedRole = performanceDegraded ? mapping.fallback : laneWorkerName;
   const isFallback = !LANE_WORKER_NAMES[mapping.lane] || performanceDegraded;
+  const lineage = buildSelectionLineageContract(plan, {
+    role: selectedRole,
+    lane: mapping.lane,
+    capabilityTag: capTag,
+    rerouteReasonCode: performanceDegraded ? SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED : null,
+  });
 
   return {
     role: selectedRole,
@@ -241,6 +376,10 @@ export function selectWorkerForPlan(plan, config?, lanePerformance?: LanePerform
     isFallback,
     performanceScore: score,
     rerouteReasonCode: performanceDegraded ? SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED : null,
+    lineageContract: lineage.lineageContract,
+    lineageJoinKey: lineage.lineageJoinKey,
+    capabilityTag: capTag,
+    specialized: lineage.specialized,
   };
 }
 
@@ -254,6 +393,7 @@ export function selectWorkerForPlan(plan, config?, lanePerformance?: LanePerform
  */
 export interface AssignWorkersOptions {
   diversityThreshold?: number;
+  laneTelemetrySignals?: LaneTelemetrySignalMap;
 }
 
 /**
@@ -276,6 +416,7 @@ export function assignWorkersToPlans(
       assignments: [],
       diversityIndex: 0,
       diversityCheck: { meetsMinimum: true, activeLaneCount: 0, warning: "" },
+      laneROIAdmission: computeLaneROIAdmission(opts?.laneTelemetrySignals ?? {}),
       specializationUtilization: {
         specializedCount: 0,
         total: 0,
@@ -327,10 +468,12 @@ export function assignWorkersToPlans(
   // callers (orchestrator, buildRoleExecutionBatches) can gate or log accordingly.
   const minLanes = opts.diversityThreshold ?? 2;
   const diversityCheck = enforceLaneDiversity(pool, { minLanes });
+  const laneROIAdmission = computeLaneROIAdmission(opts?.laneTelemetrySignals ?? {});
 
   return {
     ...pool,
     diversityCheck,
+    laneROIAdmission,
     specializationUtilization: {
       specializedCount,
       total: assignments.length,

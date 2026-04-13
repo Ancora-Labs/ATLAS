@@ -9,10 +9,17 @@ import fs from "node:fs/promises";
 import { readJson, writeJson } from "./fs_utils.js";
 import { getCalibrationSummary } from "./jesus_calibration.js";
 import {
+  buildInterventionLineageTelemetry,
   normalizeExternalBenchmarkSamples,
   summarizeBenchmarkSchemaCoverage,
 } from "./cycle_analytics.js";
 import { EXTERNAL_BENCHMARK_CONTRACTS } from "./experiment_registry.js";
+import {
+  loadCapabilityExecutionSummary,
+  loadInterventionRetirementEvidence,
+  readPromptCacheTelemetry,
+} from "./state_tracker.js";
+import { loadRouteROILedger } from "./model_policy.js";
 
 const WINDOW_24H = 24 * 60 * 60_000;
 
@@ -92,7 +99,13 @@ export async function collectEvolutionMetrics(config) {
     cycleTimeP50,
     jesusDirective,
     jesusCalibration,
-    benchmarkGroundTruth
+    benchmarkGroundTruth,
+    promptCacheTelemetry,
+    routeRoiLedger,
+    capabilityExecutionSummary,
+    lineageState,
+    athenaPostmortems,
+    retirementEvidence,
   ] = await Promise.all([
     computeDeterministicRate(stateDir),
     countProgressEntries(stateDir, "[JESUS] awakening"),
@@ -107,6 +120,12 @@ export async function collectEvolutionMetrics(config) {
     readJson(path.join(stateDir, "jesus_directive.json"), null),
     getCalibrationSummary(stateDir),
     readJson(path.join(stateDir, "benchmark_ground_truth.json"), null),
+    readPromptCacheTelemetry({ paths: { stateDir } }),
+    loadRouteROILedger({ paths: { stateDir } }),
+    loadCapabilityExecutionSummary({ paths: { stateDir } }),
+    readJson(path.join(stateDir, "lineage_graph.json"), { entries: [] }),
+    readJson(path.join(stateDir, "athena_postmortems.json"), []),
+    loadInterventionRetirementEvidence({ paths: { stateDir } }),
   ]);
 
   const jesusContextCorrect = !!(jesusDirective?.prometheusAnalysis?.projectHealth);
@@ -120,6 +139,17 @@ export async function collectEvolutionMetrics(config) {
     })),
     normalizedExternalSamples
   );
+  const interventionLineageTelemetry = buildInterventionLineageTelemetry({
+    premiumUsageLog: await readJson(path.join(stateDir, "premium_usage_log.json"), []),
+    promptCacheTelemetry: Array.isArray(promptCacheTelemetry) ? promptCacheTelemetry : [],
+    routeRoiLedger: Array.isArray(routeRoiLedger) ? routeRoiLedger : [],
+    capabilityExecutionSummary,
+    lineageLog: Array.isArray(lineageState?.entries) ? lineageState.entries : [],
+    postmortemOutcomes: [
+      ...(Array.isArray(athenaPostmortems) ? athenaPostmortems : []),
+      ...(Array.isArray(retirementEvidence) ? retirementEvidence : []),
+    ],
+  });
 
   const metrics = {
     collectedAt: new Date().toISOString(),
@@ -131,6 +161,7 @@ export async function collectEvolutionMetrics(config) {
     jesusContextCorrect,
     premiumRequestsPerDay: premiumRequests24h,
     jesusCalibration,
+    interventionLineageTelemetry,
     externalBenchmarkCoverage: {
       ...externalBenchmarkCoverage,
       normalizedSamples: normalizedExternalSamples.length,

@@ -19,6 +19,188 @@ export const ALERT_SEVERITY = {
   CRITICAL: "critical"
 };
 
+export const STATE_RETENTION_CLASS = Object.freeze({
+  PLANNING_TRUTH: "planning_truth",
+  WARM_TELEMETRY: "warm_telemetry",
+  AUDIT_LINEAGE: "audit_lineage",
+});
+
+export const STATE_RETENTION_RULES = Object.freeze({
+  parserBaselineMetrics: {
+    key: "parserBaselineMetrics",
+    fileName: "parser_baseline_metrics.json",
+    retentionClass: STATE_RETENTION_CLASS.PLANNING_TRUTH,
+    format: "json-history",
+    historyKey: "history",
+    maxEntries: 100,
+    newestFirst: true,
+  },
+  promptCacheTelemetry: {
+    key: "promptCacheTelemetry",
+    fileName: "prompt_cache_usage.jsonl",
+    retentionClass: STATE_RETENTION_CLASS.WARM_TELEMETRY,
+    format: "jsonl",
+    maxEntries: 240,
+  },
+  interventionApplicationLedger: {
+    key: "interventionApplicationLedger",
+    fileName: "intervention_application_ledger.jsonl",
+    retentionClass: STATE_RETENTION_CLASS.AUDIT_LINEAGE,
+    format: "jsonl",
+    maxEntries: 800,
+  },
+  interventionRetirementEvidence: {
+    key: "interventionRetirementEvidence",
+    fileName: "intervention_retirement_evidence.jsonl",
+    retentionClass: STATE_RETENTION_CLASS.AUDIT_LINEAGE,
+    format: "jsonl",
+    maxEntries: 800,
+  },
+  policyClosureEvidence: {
+    key: "policyClosureEvidence",
+    fileName: "policy_closure_evidence.jsonl",
+    retentionClass: STATE_RETENTION_CLASS.AUDIT_LINEAGE,
+    format: "jsonl",
+    maxEntries: 800,
+  },
+  interventionOptimizerLog: {
+    key: "interventionOptimizerLog",
+    fileName: "intervention_optimizer_log.jsonl",
+    retentionClass: STATE_RETENTION_CLASS.WARM_TELEMETRY,
+    format: "jsonl",
+    maxEntries: 240,
+  },
+});
+
+const RETENTION_CLASS_PRIORITY = Object.freeze({
+  [STATE_RETENTION_CLASS.WARM_TELEMETRY]: 1,
+  [STATE_RETENTION_CLASS.PLANNING_TRUTH]: 2,
+  [STATE_RETENTION_CLASS.AUDIT_LINEAGE]: 3,
+});
+
+export function getStateRetentionRule(keyOrFileName: string | null | undefined): any {
+  const needle = String(keyOrFileName || "").trim();
+  if (!needle) return null;
+  for (const rule of Object.values(STATE_RETENTION_RULES)) {
+    if (rule.key === needle || rule.fileName === needle) {
+      return rule;
+    }
+  }
+  return null;
+}
+
+export function applyRetentionCap<T>(
+  records: T[],
+  maxEntries: number,
+  opts: { newestFirst?: boolean } = {},
+): T[] {
+  const list = Array.isArray(records) ? [...records] : [];
+  const safeMax = Number.isFinite(Number(maxEntries))
+    ? Math.max(0, Math.floor(Number(maxEntries)))
+    : list.length;
+  if (safeMax <= 0) return [];
+  if (list.length <= safeMax) return list;
+  return opts.newestFirst === true
+    ? list.slice(0, safeMax)
+    : list.slice(list.length - safeMax);
+}
+
+export async function enforceStateRetention(
+  config,
+  opts: { rules?: string[] } = {},
+): Promise<{ ok: boolean; totalTrimmed: number; touchedFiles: string[]; details: any[] }> {
+  const stateDir = config?.paths?.stateDir || "state";
+  const requested = Array.isArray(opts?.rules) && opts.rules.length > 0
+    ? new Set(opts.rules.map((entry) => String(entry || "").trim()).filter(Boolean))
+    : null;
+  const rules = Object.values(STATE_RETENTION_RULES)
+    .filter((rule) => !requested || requested.has(rule.key) || requested.has(rule.fileName))
+    .sort((left, right) => {
+      const priorityDelta = (RETENTION_CLASS_PRIORITY[left.retentionClass] || 99) - (RETENTION_CLASS_PRIORITY[right.retentionClass] || 99);
+      return priorityDelta || String(left.fileName).localeCompare(String(right.fileName));
+    });
+
+  const details: any[] = [];
+  const touchedFiles = new Set<string>();
+  let totalTrimmed = 0;
+
+  for (const rule of rules) {
+    const filePath = path.join(stateDir, rule.fileName);
+    try {
+      if (rule.format === "jsonl") {
+        const raw = await fs.readFile(filePath, "utf8").catch(() => "");
+        const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
+        const retained = applyRetentionCap(lines, rule.maxEntries, { newestFirst: false });
+        const trimmed = Math.max(0, lines.length - retained.length);
+        if (trimmed > 0) {
+          await ensureParent(filePath);
+          const nextRaw = retained.length > 0 ? `${retained.join("\n")}\n` : "";
+          await fs.writeFile(filePath, nextRaw, "utf8");
+          touchedFiles.add(rule.fileName);
+          totalTrimmed += trimmed;
+        }
+        details.push({
+          key: rule.key,
+          fileName: rule.fileName,
+          retentionClass: rule.retentionClass,
+          trimmed,
+          retained: retained.length,
+        });
+        continue;
+      }
+
+      if (rule.format === "json-history") {
+        const historyRule = rule as any;
+        const snapshot = await readJson(filePath, null);
+        if (!snapshot || typeof snapshot !== "object") {
+          details.push({
+            key: rule.key,
+            fileName: rule.fileName,
+            retentionClass: rule.retentionClass,
+            trimmed: 0,
+            retained: 0,
+          });
+          continue;
+        }
+        const historyKey = String(historyRule.historyKey || "history");
+        const history = Array.isArray((snapshot as any)[historyKey]) ? (snapshot as any)[historyKey] : [];
+        const retained = applyRetentionCap(history, rule.maxEntries, { newestFirst: Boolean(historyRule.newestFirst) });
+        const trimmed = Math.max(0, history.length - retained.length);
+        if (trimmed > 0) {
+          (snapshot as any)[historyKey] = retained;
+          if (Object.prototype.hasOwnProperty.call(snapshot, "lastRecord")) {
+            (snapshot as any).lastRecord = retained.length === 0
+              ? null
+              : (historyRule.newestFirst ? retained[0] : retained[retained.length - 1]);
+          }
+          (snapshot as any).updatedAt = new Date().toISOString();
+          await writeJson(filePath, snapshot);
+          touchedFiles.add(rule.fileName);
+          totalTrimmed += trimmed;
+        }
+        details.push({
+          key: rule.key,
+          fileName: rule.fileName,
+          retentionClass: rule.retentionClass,
+          trimmed,
+          retained: retained.length,
+        });
+      }
+    } catch (err) {
+      details.push({
+        key: rule.key,
+        fileName: rule.fileName,
+        retentionClass: rule.retentionClass,
+        trimmed: 0,
+        retained: 0,
+        error: String((err as any)?.message || err),
+      });
+    }
+  }
+
+  return { ok: true, totalTrimmed, touchedFiles: [...touchedFiles], details };
+}
+
 function getMonthKey(date = new Date()) {
   const year = date.getUTCFullYear();
   const month = String(date.getUTCMonth() + 1).padStart(2, "0");
@@ -340,6 +522,132 @@ export const CACHE_COMPLETION_OUTCOME = Object.freeze({
   UNKNOWN:  "unknown",
 } as const);
 
+export const INTERVENTION_LINEAGE_CONTRACT_SCHEMA_VERSION = 1 as const;
+
+export interface InterventionLineageContract {
+  schemaVersion: typeof INTERVENTION_LINEAGE_CONTRACT_SCHEMA_VERSION;
+  lineageId: string | null;
+  taskId: string | null;
+  taskIdentity: string | null;
+  cycleId: string | null;
+  taskKind: string | null;
+  interventionId: string | null;
+  promptFamilyKey: string | null;
+  continuationFamilyKey: string | null;
+  model: string | null;
+  role: string | null;
+  lane: string | null;
+  capability: string | null;
+  specialized: boolean | null;
+  rerouteReasonCode: string | null;
+}
+
+function normalizeLineageScalar(value: unknown, maxLength = 160): string | null {
+  if (value === null || value === undefined) return null;
+  const normalized = String(value).trim();
+  if (!normalized) return null;
+  return normalized.slice(0, maxLength);
+}
+
+function normalizeLineageBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  return null;
+}
+
+export function normalizeInterventionLineageContract(
+  input: unknown,
+  defaults: Partial<InterventionLineageContract> = {},
+): InterventionLineageContract {
+  const src = input && typeof input === "object" && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : {};
+  return {
+    schemaVersion: INTERVENTION_LINEAGE_CONTRACT_SCHEMA_VERSION,
+    lineageId: normalizeLineageScalar(src.lineageId ?? src.id ?? defaults.lineageId),
+    taskId: normalizeLineageScalar(src.taskId ?? src.task_id ?? defaults.taskId),
+    taskIdentity: normalizeLineageScalar(
+      src.taskIdentity
+      ?? src.semanticKey
+      ?? defaults.taskIdentity,
+      240,
+    ),
+    cycleId: normalizeLineageScalar(src.cycleId ?? defaults.cycleId),
+    taskKind: normalizeLineageScalar(src.taskKind ?? src.kind ?? defaults.taskKind),
+    interventionId: normalizeLineageScalar(src.interventionId ?? src.id ?? defaults.interventionId),
+    promptFamilyKey: normalizeLineageScalar(src.promptFamilyKey ?? defaults.promptFamilyKey),
+    continuationFamilyKey: normalizeLineageScalar(
+      src.continuationFamilyKey
+      ?? src.familyKey
+      ?? defaults.continuationFamilyKey,
+    ),
+    model: normalizeLineageScalar(src.model ?? src.resolvedModel ?? defaults.model),
+    role: normalizeLineageScalar(
+      src.role
+      ?? src.roleName
+      ?? src.worker
+      ?? src.agent
+      ?? defaults.role,
+    ),
+    lane: normalizeLineageScalar(src.lane ?? src.capabilityLane ?? defaults.lane),
+    capability: normalizeLineageScalar(
+      src.capability
+      ?? src.capabilityId
+      ?? src.capabilityTag
+      ?? defaults.capability,
+    ),
+    specialized: normalizeLineageBoolean(src.specialized ?? defaults.specialized),
+    rerouteReasonCode: normalizeLineageScalar(
+      src.rerouteReasonCode
+      ?? defaults.rerouteReasonCode,
+    ),
+  };
+}
+
+export function resolveInterventionLineageJoinKey(input: unknown): string | null {
+  const contract = normalizeInterventionLineageContract(input);
+  if (contract.lineageId) return `lineage:${contract.lineageId}`;
+  if (contract.taskId && contract.cycleId) return `cycle-task:${contract.cycleId}:${contract.taskId}`;
+  if (contract.taskId) return `task:${contract.taskId}`;
+  if (contract.taskIdentity) return `identity:${contract.taskIdentity}`;
+  if (contract.continuationFamilyKey) return `family:${contract.continuationFamilyKey}`;
+  if (contract.interventionId && contract.cycleId) {
+    return `cycle-intervention:${contract.cycleId}:${contract.interventionId}`;
+  }
+  if (contract.interventionId) return `intervention:${contract.interventionId}`;
+  return null;
+}
+
+export function mergeInterventionLineageContracts(
+  ...values: unknown[]
+): InterventionLineageContract {
+  const fields: Array<keyof InterventionLineageContract> = [
+    "lineageId",
+    "taskId",
+    "taskIdentity",
+    "cycleId",
+    "taskKind",
+    "interventionId",
+    "promptFamilyKey",
+    "continuationFamilyKey",
+    "model",
+    "role",
+    "lane",
+    "capability",
+    "specialized",
+    "rerouteReasonCode",
+  ];
+  const merged = normalizeInterventionLineageContract(null);
+  for (const value of values) {
+    const contract = normalizeInterventionLineageContract(value);
+    for (const field of fields) {
+      if (merged[field] == null && contract[field] != null) {
+        (merged as unknown as Record<string, unknown>)[field] = contract[field];
+      }
+    }
+  }
+  return merged;
+}
+
 /**
  * Persist a cache hit/miss record alongside its completion outcome.
  *
@@ -390,6 +698,179 @@ export async function appendCacheOutcome(
     return { ok: true };
   } catch (err) {
     return { ok: false, reason: String((err as any)?.message || err) };
+  }
+}
+
+export async function appendPromptCacheTelemetry(
+  config,
+  record: {
+    promptFamilyKey: string;
+    agent?: string;
+    model?: string;
+    taskKind?: string;
+    totalSegments: number;
+    cachedSegments: number;
+    estimatedSavedTokens?: number;
+    lineage?: unknown;
+    lineageId?: string;
+    taskId?: string;
+    cycleId?: string;
+    interventionId?: string;
+    lane?: string;
+    capability?: string;
+    specialized?: boolean;
+    rerouteReasonCode?: string;
+  },
+): Promise<{ ok: boolean; reason?: string }> {
+  const filePath = path.join(config?.paths?.stateDir || "state", "prompt_cache_usage.jsonl");
+  try {
+    const totalSegments = Math.max(0, Math.floor(Number(record?.totalSegments || 0)));
+    const cachedSegments = Math.max(0, Math.floor(Number(record?.cachedSegments || 0)));
+    if (!String(record?.promptFamilyKey || "").trim()) {
+      return { ok: false, reason: "promptFamilyKey is required" };
+    }
+    if (totalSegments <= 0) {
+      return { ok: false, reason: "totalSegments must be > 0" };
+    }
+    const boundedCachedSegments = Math.min(totalSegments, cachedSegments);
+    const estimatedSavedTokens = Math.max(0, Math.round(Number(record?.estimatedSavedTokens || 0)));
+    const lineage = normalizeInterventionLineageContract(record?.lineage, {
+      lineageId: record?.lineageId ?? null,
+      taskId: record?.taskId ?? null,
+      cycleId: record?.cycleId ?? null,
+      taskKind: record?.taskKind ?? null,
+      interventionId: record?.interventionId ?? null,
+      promptFamilyKey: record?.promptFamilyKey ?? null,
+      model: record?.model ?? null,
+      role: record?.agent ?? null,
+      lane: record?.lane ?? null,
+      capability: record?.capability ?? null,
+      specialized: record?.specialized ?? null,
+      rerouteReasonCode: record?.rerouteReasonCode ?? null,
+    });
+    const entry = {
+      promptFamilyKey: String(record.promptFamilyKey).trim(),
+      agent: String(record?.agent || "unknown"),
+      model: String(record?.model || "unknown"),
+      taskKind: String(record?.taskKind || "general"),
+      totalSegments,
+      cachedSegments: boundedCachedSegments,
+      hitRate: Math.round((boundedCachedSegments / totalSegments) * 1000) / 1000,
+      estimatedSavedTokens,
+      lineageId: lineage.lineageId,
+      lineageJoinKey: resolveInterventionLineageJoinKey(lineage),
+      lineage,
+      recordedAt: new Date().toISOString(),
+    };
+    await ensureParent(filePath);
+    await fs.appendFile(filePath, JSON.stringify(entry) + "\n", "utf8");
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: String((err as any)?.message || err) };
+  }
+}
+
+export async function readPromptCacheTelemetry(config): Promise<any[]> {
+  const filePath = path.join(config?.paths?.stateDir || "state", "prompt_cache_usage.jsonl");
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    return raw
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export async function appendInterventionApplicationEntries(config, entries) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return { ok: false, reason: "entries must be a non-empty array" };
+  }
+
+  const stateDir = config?.paths?.stateDir || "state";
+  const logFile = path.join(stateDir, "intervention_application_ledger.jsonl");
+
+  try {
+    await ensureParent(logFile);
+    const now = new Date().toISOString();
+    const lines = entries.map((entry) => JSON.stringify({
+      schemaVersion: 1,
+      recordedAt: String(entry?.recordedAt || now),
+      interventionId: String(entry?.interventionId || "").trim(),
+      lineageId: entry?.lineageId ? String(entry.lineageId).trim() : null,
+      policyId: entry?.policyId ? String(entry.policyId).trim() : null,
+      cycleId: entry?.cycleId ? String(entry.cycleId).trim() : null,
+      role: String(entry?.role || "evolution-worker").trim() || "evolution-worker",
+      selectedAt: String(entry?.selectedAt || now),
+      status: String(entry?.status || "selected").trim() || "selected",
+      noSignalOutcome: Boolean(entry?.noSignalOutcome),
+      decisionReason: entry?.decisionReason ? String(entry.decisionReason).trim() : null,
+    }));
+    await fs.appendFile(logFile, lines.join("\n") + "\n", "utf8");
+    return { ok: true, count: lines.length };
+  } catch (err) {
+    return { ok: false, reason: String((err as any)?.message || err) };
+  }
+}
+
+export async function appendInterventionRetirementEvidence(config, entries) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return { ok: false, reason: "entries must be a non-empty array" };
+  }
+
+  const stateDir = config?.paths?.stateDir || "state";
+  const logFile = path.join(stateDir, "intervention_retirement_evidence.jsonl");
+
+  try {
+    await ensureParent(logFile);
+    const now = new Date().toISOString();
+    const lines = entries.map((entry) => JSON.stringify({
+      schemaVersion: 1,
+      recordedAt: String(entry?.recordedAt || now),
+      cycleId: entry?.cycleId ? String(entry.cycleId).trim() : null,
+      interventionId: String(entry?.interventionId || "").trim(),
+      lineageId: entry?.lineageId ? String(entry.lineageId).trim() : null,
+      policyId: entry?.policyId ? String(entry.policyId).trim() : null,
+      role: entry?.role ? String(entry.role).trim() : null,
+      decision: String(entry?.decision || "hold").trim().toLowerCase() || "hold",
+      decisionMode: entry?.decisionMode ? String(entry.decisionMode).trim() : null,
+      closureMode: String(entry?.closureMode || "observed").trim().toLowerCase() || "observed",
+      noSignalOutcome: Boolean(entry?.noSignalOutcome),
+      reason: entry?.reason ? String(entry.reason).trim() : null,
+      outcomeScore: Number.isFinite(Number(entry?.outcomeScore))
+        ? Math.max(0, Math.min(1, Number(entry.outcomeScore)))
+        : null,
+      aiConfidence: Number.isFinite(Number(entry?.aiConfidence))
+        ? Math.max(0, Math.min(1, Number(entry.aiConfidence)))
+        : null,
+      resolvedPolicy: Boolean(entry?.resolvedPolicy),
+    }));
+    await fs.appendFile(logFile, lines.join("\n") + "\n", "utf8");
+    return { ok: true, count: lines.length };
+  } catch (err) {
+    return { ok: false, reason: String((err as any)?.message || err) };
+  }
+}
+
+export async function loadInterventionRetirementEvidence(config): Promise<any[]> {
+  try {
+    const filePath = path.join(config?.paths?.stateDir || "state", "intervention_retirement_evidence.jsonl");
+    const raw = await fs.readFile(filePath, "utf8").catch(() => "");
+    if (!raw.trim()) return [];
+    return raw.trim().split("\n").map((line) => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean);
+  } catch {
+    return [];
   }
 }
 
@@ -858,6 +1339,7 @@ export async function appendPolicyClosureEvidence(
     }
     const filePath = path.join(config?.paths?.stateDir || "state", "policy_closure_evidence.jsonl");
     const entry = JSON.stringify({ ...record, appendedAt: new Date().toISOString() });
+    await ensureParent(filePath);
     await fs.appendFile(filePath, entry + "\n", "utf8");
     return { ok: true };
   } catch (err) {
@@ -915,6 +1397,10 @@ export interface CapabilityExecutionTrace {
   gateId?: string | null;
   /** Outcome of the governance gate or capability execution step. */
   outcome?: string | null;
+  /** Shared lineage contract tying capability execution to routing and outcomes. */
+  lineage?: InterventionLineageContract | null;
+  /** Deterministic join key derived from lineage. */
+  lineageJoinKey?: string | null;
 }
 
 export interface CapabilityExecutionSummary {
@@ -949,6 +1435,15 @@ export interface CapabilityTraceMetadata {
   gateId?: string | null;
   /** Outcome of the governance gate or capability execution step. */
   outcome?: string | null;
+  /** Shared lineage contract tying this trace to routing, usage, and outcomes. */
+  lineage?: unknown;
+  taskId?: string | null;
+  cycleId?: string | null;
+  taskKind?: string | null;
+  interventionId?: string | null;
+  lane?: string | null;
+  specialized?: boolean | null;
+  rerouteReasonCode?: string | null;
 }
 
 export async function recordCapabilityExecution(
@@ -965,6 +1460,17 @@ export async function recordCapabilityExecution(
       const raw = await readJson(filePath, { traces: [] });
       existing = Array.isArray(raw?.traces) ? raw.traces : [];
     } catch { /* first write */ }
+    const lineage = normalizeInterventionLineageContract(meta?.lineage, {
+      taskId: meta?.taskId ?? null,
+      cycleId: meta?.cycleId ?? null,
+      taskKind: meta?.taskKind ?? null,
+      interventionId: meta?.interventionId ?? null,
+      role: meta?.role ?? null,
+      lane: meta?.lane ?? null,
+      capability,
+      specialized: meta?.specialized ?? null,
+      rerouteReasonCode: meta?.rerouteReasonCode ?? null,
+    });
     const record: CapabilityExecutionTrace = {
       capability: String(capability || "").trim().toLowerCase(),
       observedAt: new Date().toISOString(),
@@ -973,6 +1479,8 @@ export async function recordCapabilityExecution(
       ...(meta?.wave != null && { wave: Number.isFinite(Number(meta.wave)) ? Number(meta.wave) : null }),
       ...(meta?.gateId != null && { gateId: String(meta.gateId).slice(0, 80) }),
       ...(meta?.outcome != null && { outcome: String(meta.outcome).slice(0, 80) }),
+      lineage,
+      lineageJoinKey: resolveInterventionLineageJoinKey(lineage),
     };
     const updated = [...existing, record].slice(-200);
     await writeJson(filePath, { traces: updated });
@@ -1035,10 +1543,25 @@ export async function loadCapabilityExecutionSummary(
     }
 
     const normalizedRecent = recent.map((t) => {
+      const rawTrace = t as unknown as Record<string, unknown>;
+      const lineage = normalizeInterventionLineageContract(rawTrace.lineage, {
+        lineageId: normalizeLineageScalar(rawTrace.lineageId),
+        taskId: normalizeLineageScalar(rawTrace.taskId),
+        cycleId: normalizeLineageScalar(rawTrace.cycleId),
+        taskKind: normalizeLineageScalar(rawTrace.taskKind),
+        interventionId: normalizeLineageScalar(rawTrace.interventionId),
+        role: normalizeLineageScalar(rawTrace.role),
+        lane: normalizeLineageScalar(rawTrace.lane),
+        capability: normalizeLineageScalar(rawTrace.capability),
+        specialized: normalizeLineageBoolean(rawTrace.specialized),
+        rerouteReasonCode: normalizeLineageScalar(rawTrace.rerouteReasonCode),
+      });
       const base: CapabilityExecutionTrace = {
         capability: String(t?.capability || "").trim().toLowerCase(),
         observedAt: String(t?.observedAt || ""),
         context: String(t?.context || ""),
+        lineage,
+        lineageJoinKey: resolveInterventionLineageJoinKey(lineage),
       };
       if (t?.role != null) base.role = String(t.role).slice(0, 80);
       if (t?.wave != null) base.wave = Number.isFinite(Number(t.wave)) ? Number(t.wave) : null;

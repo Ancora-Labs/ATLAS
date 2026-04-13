@@ -10,11 +10,16 @@ import {
   updateTaskInTestsState,
   CACHE_COMPLETION_OUTCOME,
   appendCacheOutcome,
+  appendPromptCacheTelemetry,
+  appendInterventionRetirementEvidence,
   appendPolicyClosureEvidence,
+  enforceStateRetention,
+  loadInterventionRetirementEvidence,
   loadPolicyClosureHistory,
   loadInterventionOptimizerLog,
   appendInterventionOptimizerEntry,
   appendGovernanceBlockEvent,
+  STATE_RETENTION_RULES,
 } from "../../src/core/state_tracker.js";
 import {
   OPTIMIZER_LOG_JSONL_SCHEMA,
@@ -228,6 +233,85 @@ describe("loadPolicyClosureHistory", () => {
     assert.equal(history.length, 2);
     assert.equal(history[0].policyId, "ok");
     assert.equal(history[1].policyId, "also-ok");
+  });
+});
+
+describe("appendInterventionRetirementEvidence / loadInterventionRetirementEvidence", () => {
+  let retirementStateDir: string;
+
+  beforeEach(async () => {
+    retirementStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-retirement-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(retirementStateDir, { recursive: true, force: true });
+  });
+
+  it("persists explicit no-signal closure evidence and reads it back", async () => {
+    const config = { paths: { stateDir: retirementStateDir } };
+    const result = await appendInterventionRetirementEvidence(config, [{
+      cycleId: "cycle-1",
+      interventionId: "plan-17",
+      policyId: "policy-parser-guard",
+      decision: "hold",
+      decisionMode: "safety_gate",
+      closureMode: "no_signal",
+      noSignalOutcome: true,
+      reason: "insufficient_sample:1/3",
+      outcomeScore: 0.35,
+    }]);
+
+    assert.equal(result.ok, true);
+    const history = await loadInterventionRetirementEvidence(config);
+    assert.equal(history.length, 1);
+    assert.equal(history[0].interventionId, "plan-17");
+    assert.equal(history[0].closureMode, "no_signal");
+    assert.equal(history[0].noSignalOutcome, true);
+  });
+});
+
+describe("enforceStateRetention", () => {
+  let retentionStateDir: string;
+
+  beforeEach(async () => {
+    retentionStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-retention-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(retentionStateDir, { recursive: true, force: true });
+  });
+
+  it("trims jsonl and history-backed artifacts according to centralized rules", async () => {
+    const config = { paths: { stateDir: retentionStateDir } };
+    const promptRule = STATE_RETENTION_RULES.promptCacheTelemetry;
+    const baselineRule = STATE_RETENTION_RULES.parserBaselineMetrics;
+
+    const promptLines = Array.from({ length: promptRule.maxEntries + 5 }, (_, index) => JSON.stringify({ index }));
+    await fs.writeFile(path.join(retentionStateDir, promptRule.fileName), `${promptLines.join("\n")}\n`, "utf8");
+
+    const baselineHistory = Array.from({ length: baselineRule.maxEntries + 7 }, (_, index) => ({ cycleId: `cycle-${index}` }));
+    await fs.writeFile(
+      path.join(retentionStateDir, baselineRule.fileName),
+      JSON.stringify({ schemaVersion: 1, lastRecord: baselineHistory[0], history: baselineHistory, updatedAt: null }),
+      "utf8",
+    );
+
+    const result = await enforceStateRetention(config);
+    assert.equal(result.ok, true);
+    assert.equal(result.totalTrimmed, 12);
+
+    const retainedPromptLines = (await fs.readFile(path.join(retentionStateDir, promptRule.fileName), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.equal(retainedPromptLines.length, promptRule.maxEntries);
+    assert.equal(retainedPromptLines[0].index, 5);
+
+    const retainedBaseline = JSON.parse(await fs.readFile(path.join(retentionStateDir, baselineRule.fileName), "utf8"));
+    assert.equal(retainedBaseline.history.length, baselineRule.maxEntries);
+    assert.equal(retainedBaseline.history[0].cycleId, "cycle-0");
+    assert.equal(retainedBaseline.history.at(-1).cycleId, `cycle-${baselineRule.maxEntries - 1}`);
+    assert.equal(retainedBaseline.lastRecord.cycleId, "cycle-0");
   });
 });
 
@@ -464,6 +548,58 @@ describe("recordCapabilityExecution", () => {
     assert.equal(summary.recentTraceCount, 0);
     assert.equal(summary.staleTraceCount, 1);
     assert.equal(summary.lastObservedAt, null);
+  });
+
+  it("persists prompt-cache lineage contract fields for causal joins", async () => {
+    const config = { paths: { stateDir } };
+    const result = await appendPromptCacheTelemetry(config, {
+      promptFamilyKey: "planner",
+      agent: "quality-worker",
+      model: "Claude Sonnet 4.6",
+      taskKind: "test",
+      totalSegments: 10,
+      cachedSegments: 6,
+      estimatedSavedTokens: 120,
+      lineageId: "lineage-1",
+      taskId: "task-1",
+      cycleId: "cycle-1",
+      interventionId: "plan-1",
+      lane: "quality",
+      capability: "prompt-cache",
+      specialized: true,
+    });
+    assert.equal(result.ok, true);
+    const raw = await fs.readFile(path.join(stateDir, "prompt_cache_usage.jsonl"), "utf8");
+    const parsed = JSON.parse(raw.trim());
+    assert.equal(parsed.lineageId, "lineage-1");
+    assert.equal(parsed.lineageJoinKey, "lineage:lineage-1");
+    assert.equal(parsed.lineage.taskId, "task-1");
+    assert.equal(parsed.lineage.role, "quality-worker");
+    assert.equal(parsed.lineage.lane, "quality");
+    assert.equal(parsed.lineage.specialized, true);
+  });
+
+  it("retains capability-execution lineage metadata in the runtime summary", async () => {
+    const config = { paths: { stateDir } };
+    await recordCapabilityExecution(config, "specialization-admission-control", "c1", {
+      role: "quality-worker",
+      taskId: "task-2",
+      cycleId: "cycle-2",
+      taskKind: "test",
+      interventionId: "plan-2",
+      lane: "quality",
+      specialized: true,
+      lineage: {
+        lineageId: "lineage-2",
+        taskIdentity: "targeted regression",
+      },
+    });
+    const summary = await loadCapabilityExecutionSummary(config);
+    assert.equal(summary.recentTraceCount, 1);
+    assert.equal(summary.recentTraces[0].lineage?.lineageId, "lineage-2");
+    assert.equal(summary.recentTraces[0].lineageJoinKey, "lineage:lineage-2");
+    assert.equal(summary.recentTraces[0].lineage?.lane, "quality");
+    assert.equal(summary.recentTraces[0].lineage?.specialized, true);
   });
 });
 

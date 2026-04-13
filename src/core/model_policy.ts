@@ -14,6 +14,11 @@
 
 import path from "node:path";
 import { readJson, writeJson } from "./fs_utils.js";
+import {
+  normalizeInterventionLineageContract,
+  resolveInterventionLineageJoinKey,
+  type InterventionLineageContract,
+} from "./state_tracker.js";
 import { MIN_TELEMETRY_SAMPLE_THRESHOLD } from "./telemetry_thresholds.js";
 export { MIN_TELEMETRY_SAMPLE_THRESHOLD };
 
@@ -462,6 +467,15 @@ export interface RouteROIEntry {
   realizedAt: string | null;
   /** Lineage contract ID tying this routing decision to dispatch, usage, and outcomes. */
   lineageId: string | null;
+  /** Normalized lineage contract spanning routing, specialization, and outcomes. */
+  lineage: InterventionLineageContract | null;
+  /** Deterministic join key derived from the lineage contract. */
+  lineageJoinKey: string | null;
+  taskKind?: string | null;
+  role?: string | null;
+  cycleId?: string | null;
+  interventionId?: string | null;
+  routingReasonCode?: string | null;
 }
 
 /**
@@ -483,6 +497,16 @@ export async function appendRouteROIEntry(
 
   const ledger: RouteROIEntry[] = await readJson(filePath, []);
   const safeList: RouteROIEntry[] = Array.isArray(ledger) ? ledger : [];
+  const lineage = normalizeInterventionLineageContract(entry?.lineage, {
+    lineageId: entry?.lineageId ?? null,
+    taskId: entry?.taskId ?? null,
+    cycleId: entry?.cycleId ?? null,
+    taskKind: entry?.taskKind ?? null,
+    model: entry?.model ?? null,
+    role: entry?.role ?? null,
+    interventionId: entry?.interventionId ?? null,
+    rerouteReasonCode: entry?.routingReasonCode ?? null,
+  });
 
   const record: RouteROIEntry = {
     taskId:          entry.taskId,
@@ -496,7 +520,13 @@ export async function appendRouteROIEntry(
     roiDelta:        entry.roiDelta ?? null,
     routedAt:        entry.routedAt || new Date().toISOString(),
     realizedAt:      entry.realizedAt ?? null,
-    lineageId:       entry.lineageId ?? null,
+    lineageId:       lineage.lineageId,
+    lineage,
+    lineageJoinKey:  resolveInterventionLineageJoinKey(lineage),
+    taskKind:        entry.taskKind ?? lineage.taskKind,
+    role:            entry.role ?? lineage.role,
+    cycleId:         entry.cycleId ?? lineage.cycleId,
+    routingReasonCode: entry.routingReasonCode ?? lineage.rerouteReasonCode,
   };
 
   safeList.push(record);
@@ -966,6 +996,10 @@ const EXPLORATION_LIMIT_THRESHOLD = EXPLORATION_BOUND;
 /** Additional quality floor increase applied when exploration is limited. */
 const EXPLORATION_LIMIT_TIGHTEN = 0.15;
 
+const PROMPT_CACHE_HIT_RATE_RELAX_THRESHOLD = 0.6;
+const PROMPT_CACHE_SAVED_TOKENS_RELAX_THRESHOLD = 1200;
+const PROMPT_CACHE_FLOOR_RELAX_AMOUNT = 0.05;
+
 /**
  * Route model selection using the realized ROI from the ROI ledger as the
  * dominant adaptive signal.
@@ -989,7 +1023,12 @@ export async function routeModelWithRealizedROI(
   config: object,
   taskHints: TaskHints = {},
   modelOptions: ModelOptions & { qualityByModel?: Record<string, number> } = {},
-  opts: { qualityFloor?: number; explorationBound?: number } = {},
+  opts: {
+    qualityFloor?: number;
+    explorationBound?: number;
+    promptCacheHitRate?: number;
+    promptCacheSavedTokens?: number;
+  } = {},
 ): Promise<{
   model: string;
   tier: string;
@@ -998,9 +1037,12 @@ export async function routeModelWithRealizedROI(
   uncertainty: string;
   meetsQualityFloor: boolean;
   explorationLimited: boolean;
+  promptCacheAdjustment: string;
 }> {
   const qualityFloor    = opts.qualityFloor    ?? 0.7;
   const explorationBound = opts.explorationBound ?? EXPLORATION_LIMIT_THRESHOLD;
+  const promptCacheHitRate = Number(opts.promptCacheHitRate ?? 0);
+  const promptCacheSavedTokens = Number(opts.promptCacheSavedTokens ?? 0);
 
   const { tier } = classifyComplexityTier(taskHints);
 
@@ -1020,6 +1062,15 @@ export async function routeModelWithRealizedROI(
     explorationLimited = true;
   }
 
+  let promptCacheAdjustment = "none";
+  if (
+    promptCacheHitRate >= PROMPT_CACHE_HIT_RATE_RELAX_THRESHOLD
+    || promptCacheSavedTokens >= PROMPT_CACHE_SAVED_TOKENS_RELAX_THRESHOLD
+  ) {
+    effectiveFloor = Math.max(MIN_QUALITY_FLOOR, effectiveFloor - PROMPT_CACHE_FLOOR_RELAX_AMOUNT);
+    promptCacheAdjustment = `relaxed (hitRate=${promptCacheHitRate.toFixed(2)} savedTokens=${Math.round(promptCacheSavedTokens)})`;
+  }
+
   const base = routeModelWithCompletionROI(taskHints, modelOptions, effectiveFloor, realizedROI);
 
   let uncertainty: string;
@@ -1032,11 +1083,12 @@ export async function routeModelWithRealizedROI(
   return {
     model:              base.model,
     tier,
-    reason:             `realized-roi(roi=${realizedROI}, tier=${tier})${explorationTag}: ${base.reason}`,
+    reason:             `realized-roi(roi=${realizedROI}, tier=${tier})${explorationTag} prompt-cache(${promptCacheAdjustment}): ${base.reason}`,
     realizedROI,
     uncertainty,
     meetsQualityFloor:  base.meetsQualityFloor,
     explorationLimited,
+    promptCacheAdjustment,
   };
 }
 

@@ -150,6 +150,7 @@ export const INTERVENTION_REJECTION_CODE = Object.freeze({
   BUDGET_TOTAL: "BUDGET_TOTAL",
   BUDGET_WAVE:  "BUDGET_WAVE",
   BUDGET_ROLE:  "BUDGET_ROLE",
+  DUPLICATE_FAMILY_CONTINUATION: "DUPLICATE_FAMILY_CONTINUATION",
 });
 
 // ── Intervention validation error codes ──────────────────────────────────────
@@ -654,6 +655,148 @@ export function computeExpectedValue(intervention) {
   return { adjustedSuccessProbability: adjustedP, ev };
 }
 
+const CONTINUATION_STATUS = Object.freeze({
+  IMPLEMENTED_CORRECTLY: "implemented_correctly",
+  IMPLEMENTED_PARTIALLY: "implemented_partially",
+  NOT_IMPLEMENTED: "not_implemented",
+  PENDING: "pending",
+});
+
+const FAMILY_KEY_STOP_WORDS = new Set([
+  "the", "and", "for", "with", "from", "into", "that", "this", "when", "then", "than", "while",
+  "under", "over", "into", "onto", "after", "before", "across", "only", "does", "not", "are",
+  "is", "was", "were", "have", "has", "had", "will", "would", "should", "could", "must", "can",
+  "your", "their", "them", "they", "each", "same", "keep", "keep", "more", "less", "very",
+  "plan", "task", "worker", "route", "routing",
+]);
+
+function normalizeContinuationStatus(rawStatus: unknown): string {
+  const status = String(rawStatus || CONTINUATION_STATUS.PENDING).toLowerCase().trim();
+  if (status === CONTINUATION_STATUS.IMPLEMENTED_CORRECTLY) return status;
+  if (status === CONTINUATION_STATUS.IMPLEMENTED_PARTIALLY) return status;
+  if (status === CONTINUATION_STATUS.NOT_IMPLEMENTED) return status;
+  return CONTINUATION_STATUS.PENDING;
+}
+
+function getContinuationStatusScore(rawStatus: unknown): number {
+  const status = normalizeContinuationStatus(rawStatus);
+  if (status === CONTINUATION_STATUS.IMPLEMENTED_CORRECTLY) return 3;
+  if (status === CONTINUATION_STATUS.IMPLEMENTED_PARTIALLY) return 2;
+  if (status === CONTINUATION_STATUS.NOT_IMPLEMENTED) return 1;
+  return 0;
+}
+
+function normalizeFamilySegment(value: unknown): string[] {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 4 && !FAMILY_KEY_STOP_WORDS.has(part));
+}
+
+function extractFamilyTargetTokens(targetFiles: unknown): string[] {
+  if (!Array.isArray(targetFiles)) return [];
+  const tokens: string[] = [];
+  for (const file of targetFiles) {
+    const base = path.basename(String(file || "")).replace(/\.[^.]+$/, "");
+    tokens.push(...normalizeFamilySegment(base));
+  }
+  return Array.from(new Set(tokens)).sort().slice(0, 4);
+}
+
+function deriveContinuationFamilyKey(source: any): string {
+  const explicitKey = String(
+    source?.continuationFamilyKey
+      || source?.familyKey
+      || source?._familyKey
+      || "",
+  ).trim();
+  if (explicitKey) {
+    return explicitKey.toLowerCase();
+  }
+
+  const textTokens = Array.from(new Set([
+    ...normalizeFamilySegment(source?.scope),
+    ...normalizeFamilySegment(source?.title),
+    ...normalizeFamilySegment(source?.task),
+    ...normalizeFamilySegment(source?.task_id),
+  ])).slice(0, 6);
+  const fileTokens = extractFamilyTargetTokens(source?.targetFiles ?? source?.target_files);
+  const parts = [...fileTokens, ...textTokens].slice(0, 8);
+  return parts.join(":");
+}
+
+function suppressDuplicateContinuationFamilies(rankedInterventions: any[]) {
+  if (!Array.isArray(rankedInterventions) || rankedInterventions.length === 0) {
+    return { ranked: [], rejected: [], duplicateFamilySuppressionsApplied: 0 };
+  }
+
+  const familyGroups = new Map<string, any[]>();
+  for (const intervention of rankedInterventions) {
+    const familyKey = deriveContinuationFamilyKey(intervention);
+    if (!familyKey) continue;
+    const groupKey = `${String(intervention.role || "")}:${familyKey}`;
+    const existing = familyGroups.get(groupKey);
+    if (existing) existing.push(intervention);
+    else familyGroups.set(groupKey, [intervention]);
+  }
+
+  const keptIds = new Set<string>();
+  const rejectedById = new Map<string, any>();
+
+  for (const [groupKey, group] of familyGroups.entries()) {
+    if (group.length < 2) continue;
+    const hasContinuationWork = group.some((item) => getContinuationStatusScore(item?.implementationStatus) > 0);
+    if (!hasContinuationWork) continue;
+
+    const preferred = [...group].sort((left, right) => {
+      const statusDiff = getContinuationStatusScore(right?.implementationStatus) - getContinuationStatusScore(left?.implementationStatus);
+      if (statusDiff !== 0) return statusDiff;
+      const evDiff = Number(right?.ev ?? 0) - Number(left?.ev ?? 0);
+      if (evDiff !== 0) return evDiff;
+      const impactDiff = Number(right?.impact ?? 0) - Number(left?.impact ?? 0);
+      if (impactDiff !== 0) return impactDiff;
+      const waveDiff = Number(left?.wave ?? 0) - Number(right?.wave ?? 0);
+      if (waveDiff !== 0) return waveDiff;
+      return String(left?.id || "").localeCompare(String(right?.id || ""));
+    })[0];
+
+    keptIds.add(String(preferred?.id || groupKey));
+    for (const intervention of group) {
+      const interventionId = String(intervention?.id || "");
+      if (interventionId === String(preferred?.id || "")) continue;
+      rejectedById.set(interventionId, {
+        ...intervention,
+        rejectionReason: `duplicate continuation family suppressed in favor of '${String(preferred?.id || groupKey)}'`,
+        reasonCode: INTERVENTION_REJECTION_CODE.DUPLICATE_FAMILY_CONTINUATION,
+        duplicateFamilyKey: groupKey,
+        preferredInterventionId: String(preferred?.id || groupKey),
+      });
+    }
+  }
+
+  const ranked = rankedInterventions.filter((intervention) => {
+    const interventionId = String(intervention?.id || "");
+    if (rejectedById.has(interventionId)) return false;
+    if (keptIds.size === 0) return true;
+    const familyKey = deriveContinuationFamilyKey(intervention);
+    if (!familyKey) return true;
+    const groupKey = `${String(intervention.role || "")}:${familyKey}`;
+    const group = familyGroups.get(groupKey);
+    if (!group || group.length < 2) return true;
+    const hasContinuationWork = group.some((item) => getContinuationStatusScore(item?.implementationStatus) > 0);
+    if (!hasContinuationWork) return true;
+    return keptIds.has(interventionId);
+  });
+
+  return {
+    ranked,
+    rejected: Array.from(rejectedById.values()),
+    duplicateFamilySuppressionsApplied: rejectedById.size,
+  };
+}
+
 // ── Ranking ───────────────────────────────────────────────────────────────────
 
 /**
@@ -1047,9 +1190,14 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
 
   // Rank by descending EV (with confidence penalties applied)
   const ranked = rankInterventions(adjustedInterventions);
+  const continuationSuppression = suppressDuplicateContinuationFamilies(ranked);
 
   // Reconcile all three budget constraints simultaneously
-  const reconciled = reconcileBudgets(ranked, budget);
+  const reconciled = reconcileBudgets(continuationSuppression.ranked, budget);
+  const mergedRejected = [
+    ...continuationSuppression.rejected,
+    ...reconciled.rejected,
+  ];
 
   // Capture optional specializationContext passed by the orchestrator so the
   // persisted log records the active workerPool specialization policy for
@@ -1064,10 +1212,12 @@ export function runInterventionOptimizer(interventions, budget, options: any = {
     policyImpactPenaltiesApplied,
     benchmarkTelemetryCount: benchmarkTelemetry.length,
     benchmarkBoostsApplied,
+    duplicateFamilySuppressionsApplied: continuationSuppression.duplicateFamilySuppressionsApplied,
     rerouteCostPenaltiesApplied,
     overbundlePenaltiesApplied,
     ...(specializationContext !== null ? { specializationContext } : {}),
     ...reconciled,
+    rejected: mergedRejected,
   };
 }
 
@@ -1215,6 +1365,7 @@ export function buildInterventionsFromPlan(plans, config) {
     // Derive impact from priority (1–10 → 0.1–1.0)
     const rawPriority = Number(plan?.priority ?? 5);
     const impact = Math.min(1.0, Math.max(0.1, rawPriority / 10));
+    const familyKey = deriveContinuationFamilyKey(plan);
 
     return {
       id:                  String(plan?.id ?? `plan-${index + 1}`),
@@ -1227,6 +1378,16 @@ export function buildInterventionsFromPlan(plans, config) {
       riskCost:            defaultRiskCost,
       sampleCount:         defaultSampleCount,
       budgetCost:          1,
+      task:                String(plan?.task ?? plan?.title ?? `task-${index + 1}`),
+      task_id:             String(plan?.task_id ?? plan?.intervention_id ?? ""),
+      scope:               String(plan?.scope ?? ""),
+      implementationStatus: normalizeContinuationStatus(plan?.implementationStatus),
+      targetFiles:         Array.isArray(plan?.targetFiles)
+        ? plan.targetFiles
+        : Array.isArray(plan?.target_files)
+          ? plan.target_files
+          : [],
+      continuationFamilyKey: familyKey,
     };
   });
 }

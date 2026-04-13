@@ -39,6 +39,7 @@ import {
   CANONICAL_EVENT_NAMES,
   CYCLE_TRUTH_TERMINAL_BLOCK_REASON,
   buildModelRoutingTelemetry,
+  buildInterventionLineageTelemetry,
   buildRoutingROISummary,
   MIN_TELEMETRY_SAMPLE_THRESHOLD,
   migrateLegacyEvolutionProgressToCompletedTaskIds,
@@ -47,7 +48,7 @@ import {
   LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION,
 } from "../../src/core/cycle_analytics.js";
 import type { ViolationFeedback } from "../../src/core/cycle_analytics.js";
-import { recordCapabilityExecution } from "../../src/core/state_tracker.js";
+import { appendPromptCacheTelemetry, recordCapabilityExecution } from "../../src/core/state_tracker.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -114,7 +115,7 @@ describe("CYCLE_ANALYTICS_SCHEMA (AC8)", () => {
 
   it("required fields list is complete", () => {
     const req = CYCLE_ANALYTICS_SCHEMA.cycleRecord.required;
-    for (const f of ["cycleId", "generatedAt", "phase", "outcomes", "kpis", "confidence", "causalLinks", "canonicalEvents", "missingData", "capabilityExecutionSummary"]) {
+    for (const f of ["cycleId", "generatedAt", "phase", "outcomes", "kpis", "confidence", "causalLinks", "canonicalEvents", "missingData", "capabilityExecutionSummary", "interventionLineageTelemetry"]) {
       assert.ok(req.includes(f), `required field missing: ${f}`);
     }
   });
@@ -738,6 +739,87 @@ describe("persistCycleAnalytics and readCycleAnalytics (AC4)", () => {
       const data = await readCycleAnalytics(config);
       assert.equal(data.lastCycle.capabilityExecutionSummary.observedCapabilityCount, 1);
       assert.ok(data.lastCycle.capabilityExecutionSummary.observedCapabilities.includes("runtime-contract-probe"));
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists runtime interventionLineageTelemetry even when compute input omits it", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "box-analytics-lineage-summary-"));
+    try {
+      const config = makeConfig(dir);
+      await fs.writeFile(
+        path.join(dir, "premium_usage_log.json"),
+        JSON.stringify([
+          { worker: "quality-worker", model: "Claude Sonnet 4.6", taskKind: "test", outcome: "done", lineageId: "lineage-1" },
+        ], null, 2),
+        "utf8",
+      );
+      await appendPromptCacheTelemetry(
+        { paths: { stateDir: dir } } as any,
+        {
+          promptFamilyKey: "planner",
+          agent: "quality-worker",
+          model: "Claude Sonnet 4.6",
+          taskKind: "test",
+          totalSegments: 8,
+          cachedSegments: 4,
+          estimatedSavedTokens: 80,
+          lineageId: "lineage-1",
+        },
+      );
+      await fs.writeFile(
+        path.join(dir, "route_roi_ledger.json"),
+        JSON.stringify([{
+          taskId: "task-1",
+          model: "Claude Sonnet 4.6",
+          tier: "T2",
+          estimatedTokens: 900,
+          expectedQuality: 0.8,
+          realizedQuality: 0.85,
+          outcome: "done",
+          roi: 94.4,
+          roiDelta: 5,
+          routedAt: makeTs(0),
+          realizedAt: makeTs(10_000),
+          lineageId: "lineage-1",
+          lineage: { lineageId: "lineage-1", taskId: "task-1" },
+          lineageJoinKey: "lineage:lineage-1",
+        }], null, 2),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(dir, "lineage_graph.json"),
+        JSON.stringify({ entries: [{ id: "lineage-1", status: "passed", sourceKind: "gap_candidate" }] }, null, 2),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(dir, "athena_postmortems.json"),
+        JSON.stringify([{ lineageId: "lineage-1", decision: "promote", resolvedPolicy: true }], null, 2),
+        "utf8",
+      );
+      await recordCapabilityExecution(
+        { paths: { stateDir: dir } } as any,
+        "specialization-admission-control",
+        "persisted summary test",
+        {
+          role: "quality-worker",
+          lane: "quality",
+          specialized: true,
+          lineage: { lineageId: "lineage-1" },
+        },
+      );
+
+      const record = computeCycleAnalytics(config, {
+        sloRecord: makeSloRecord(),
+        pipelineProgress: makePipelineProgress(),
+      });
+      await persistCycleAnalytics(config, record);
+      const data = await readCycleAnalytics(config);
+      assert.equal(data.lastCycle.interventionLineageTelemetry.lineageCount, 1);
+      assert.equal(data.lastCycle.interventionLineageTelemetry.surfaceCoverage.promptCache, 1);
+      assert.equal(data.lastCycle.interventionLineageTelemetry.surfaceCoverage.modelRouting, 1);
+      assert.equal(data.lastCycle.interventionLineageTelemetry.byInterventionType.modelRouting.positiveRoiDeltaCount, 1);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -1842,6 +1924,67 @@ describe("modelRoutingTelemetry schema contract", () => {
     assert.deepEqual((record.modelRoutingTelemetry as any).byTaskKind, {});
   });
 
+  it("buildInterventionLineageTelemetry joins cache, routing, specialization, outcomes, and postmortems", () => {
+    const telemetry = buildInterventionLineageTelemetry({
+      premiumUsageLog: [
+        { worker: "quality-worker", model: "Claude Sonnet 4.6", taskKind: "test", outcome: "done", lineageId: "lineage-1" },
+        { worker: "evolution-worker", model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "blocked", lineageId: "lineage-2" },
+      ],
+      promptCacheTelemetry: [
+        { promptFamilyKey: "planner", totalSegments: 8, cachedSegments: 4, estimatedSavedTokens: 80, lineageId: "lineage-1", agent: "quality-worker" },
+      ],
+      routeRoiLedger: [
+        {
+          taskId: "task-1",
+          model: "Claude Sonnet 4.6",
+          tier: "T2",
+          estimatedTokens: 1200,
+          expectedQuality: 0.8,
+          realizedQuality: 0.9,
+          outcome: "done",
+          roi: 75,
+          roiDelta: 8,
+          routedAt: makeTs(0),
+          realizedAt: makeTs(60_000),
+          lineageId: "lineage-1",
+        },
+      ],
+      capabilityExecutionSummary: {
+        observedCapabilityCount: 1,
+        observedCapabilities: ["specialization-admission-control"],
+        recentTraces: [{
+          capability: "specialization-admission-control",
+          observedAt: makeTs(10_000),
+          context: "selected quality lane",
+          role: "quality-worker",
+          lineage: {
+            lineageId: "lineage-1",
+            lane: "quality",
+            specialized: true,
+          },
+        }],
+      },
+      lineageLog: [
+        { id: "lineage-1", status: "passed", sourceKind: "gap_candidate" },
+        { id: "lineage-2", status: "blocked", sourceKind: "carry_forward" },
+      ],
+      postmortemOutcomes: [
+        { lineageId: "lineage-1", decision: "promote", resolvedPolicy: true },
+        { lineageId: "lineage-2", decision: "hold", recurred: true },
+      ],
+    });
+    assert.equal(telemetry.lineageCount, 2);
+    assert.equal(telemetry.surfaceCoverage.promptCache, 1);
+    assert.equal(telemetry.surfaceCoverage.modelRouting, 1);
+    assert.equal(telemetry.surfaceCoverage.specializationRouting, 1);
+    assert.equal(telemetry.surfaceCoverage.workerOutcome, 2);
+    assert.equal(telemetry.surfaceCoverage.postmortem, 2);
+    assert.equal(telemetry.verifiedCapacityPerPremiumRequest, 0.5);
+    assert.equal(telemetry.byInterventionType.modelRouting.positiveRoiDeltaCount, 1);
+    assert.equal(telemetry.byInterventionType.specializationRouting.specialistAssignmentCount, 1);
+    assert.equal(telemetry.byInterventionType.postmortem.closedOutcomeCount, 1);
+  });
+
   it("buildModelRoutingTelemetry aggregates usage entries by taskKind and model", () => {
     const log = [
       { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done", lineageId: "impl-1" },
@@ -1893,6 +2036,83 @@ describe("modelRoutingTelemetry schema contract", () => {
     assert.ok(typeof MIN_TELEMETRY_SAMPLE_THRESHOLD === "number", "must be a number");
     assert.ok(MIN_TELEMETRY_SAMPLE_THRESHOLD > 0, "must be positive");
     assert.ok(Number.isInteger(MIN_TELEMETRY_SAMPLE_THRESHOLD), "must be an integer");
+  });
+
+  it("computeCycleAnalytics records packet-size outcome correlation by taskKind", () => {
+    const record = computeCycleAnalytics(makeConfig("state"), {
+      phase: CYCLE_PHASE.COMPLETED,
+      workerResults: [
+        {
+          roleName: "quality-worker",
+          status: "done",
+          taskKind: "test",
+          batchSize: 2,
+          orderedStepCount: 4,
+          contextUtilizationPercent: 62,
+        },
+        {
+          roleName: "quality-worker",
+          status: "failed",
+          taskKind: "test",
+          batchSize: 3,
+          orderedStepCount: 7,
+          contextUtilizationPercent: 84,
+        },
+      ],
+    });
+
+    assert.equal(record.packetOutcomeCorrelation.sampleCount, 2);
+    assert.deepEqual(record.packetOutcomeCorrelation.byTaskKind.test, {
+      sampleCount: 2,
+      successRate: 0.5,
+      averageBatchSize: 2.5,
+      averageOrderedStepCount: 5.5,
+      averageContextUtilizationPercent: 73,
+    });
+  });
+
+  it("computeCycleAnalytics includes interventionLineageTelemetry when explicit source logs are provided", () => {
+    const record = computeCycleAnalytics(makeConfig("state"), {
+      phase: CYCLE_PHASE.COMPLETED,
+      premiumUsageLog: [
+        { worker: "quality-worker", model: "Claude Sonnet 4.6", taskKind: "test", outcome: "done", lineageId: "lineage-1" },
+      ],
+      promptCacheTelemetry: [
+        { promptFamilyKey: "planner", totalSegments: 6, cachedSegments: 3, estimatedSavedTokens: 60, lineageId: "lineage-1", agent: "quality-worker" },
+      ],
+      routeRoiLedger: [
+        {
+          taskId: "task-1",
+          model: "Claude Sonnet 4.6",
+          tier: "T2",
+          estimatedTokens: 900,
+          expectedQuality: 0.8,
+          realizedQuality: 0.85,
+          outcome: "done",
+          roi: 94.4,
+          roiDelta: 5,
+          routedAt: makeTs(0),
+          realizedAt: makeTs(20_000),
+          lineageId: "lineage-1",
+        },
+      ],
+      capabilityExecutionSummary: {
+        observedCapabilityCount: 1,
+        observedCapabilities: ["specialization-admission-control"],
+        recentTraces: [{
+          capability: "specialization-admission-control",
+          observedAt: makeTs(5_000),
+          context: "quality lane",
+          role: "quality-worker",
+          lineage: { lineageId: "lineage-1", lane: "quality", specialized: true },
+        }],
+      },
+      lineageLog: [{ id: "lineage-1", status: "passed", sourceKind: "gap_candidate" }],
+      postmortemOutcomes: [{ lineageId: "lineage-1", decision: "promote", resolvedPolicy: true }],
+    });
+    assert.equal(record.interventionLineageTelemetry.lineageCount, 1);
+    assert.equal(record.interventionLineageTelemetry.surfaceCoverage.fullyJoined, 1);
+    assert.equal(record.interventionLineageTelemetry.byInterventionType.promptCache.averageHitRate, 0.5);
   });
 });
 
