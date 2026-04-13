@@ -20,6 +20,7 @@ import {
   type InterventionLineageContract,
 } from "./state_tracker.js";
 import { MIN_TELEMETRY_SAMPLE_THRESHOLD } from "./telemetry_thresholds.js";
+import { getLaneForWorkerName } from "./role_registry.js";
 export { MIN_TELEMETRY_SAMPLE_THRESHOLD };
 
 // ── Banned model patterns (case-insensitive) ─────────────────────────────────
@@ -82,12 +83,33 @@ export interface RoutingOutcomeMetrics {
   successRate: number;
   /** ROI-like proxy from outcomes in [0, 1]. */
   recentROI: number;
+  /** Raw done/total completion rate retained for compatibility and auditability. */
+  completionRate?: number;
+  /** Ratio of requests that produced a substantive attempt. */
+  attemptRate?: number;
+  /** Ratio of requests that abstained or exited without attempting. */
+  abstainRate?: number;
+  /** Successful attempted tasks / attempted tasks. */
+  precisionOnAttempted?: number;
+  /** Successful hard-task chains / observed hard-task chains. */
+  hardChainSuccessRate?: number;
+  /** Count of hard-task chains contributing to hardChainSuccessRate. */
+  hardChainSampleCount?: number;
+  /** Weighted lane-level reliability observed for this task kind. */
+  laneReliability?: number;
+  /** Composite long-horizon outcome score in [0, 1]. */
+  outcomeScore?: number;
 }
 
 export const HARD_TASK_UNCERTAINTY_THRESHOLDS = Object.freeze({
   minObservedSamples: 6,
   minSuccessRate: 0.55,
   minRecentROI: 0.30,
+  minAttemptRate: 0.70,
+  maxAbstainRate: 0.25,
+  minPrecisionOnAttempted: 0.65,
+  minHardChainSuccessRate: 0.55,
+  minLaneReliability: 0.55,
   minBenchmarkScore: 0.70,
   minCapacityGain: 0.10,
 });
@@ -1157,6 +1179,60 @@ function clamp01(value: number): number {
   return value;
 }
 
+function roundMetric(value: number): number {
+  return Math.round(clamp01(value) * 1000) / 1000;
+}
+
+const ROUTING_SUCCESS_OUTCOMES = new Set(["done", "success"]);
+const ROUTING_ATTEMPTED_OUTCOMES = new Set([
+  "done",
+  "success",
+  "partial",
+  "error",
+  "failed",
+  "transient_error",
+  "verification_failed",
+  "rollback",
+]);
+const ROUTING_ABSTAIN_OUTCOMES = new Set([
+  "blocked",
+  "skipped",
+  "timeout",
+  "abstain",
+  "abstained",
+  "unknown",
+  "inconclusive",
+  "no_signal",
+  "noop",
+  "no-op",
+]);
+
+function normalizeRoutingOutcome(value: unknown): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isRoutingSuccess(value: unknown): boolean {
+  return ROUTING_SUCCESS_OUTCOMES.has(normalizeRoutingOutcome(value));
+}
+
+function isRoutingAttempt(value: unknown): boolean {
+  const normalized = normalizeRoutingOutcome(value);
+  return ROUTING_SUCCESS_OUTCOMES.has(normalized) || ROUTING_ATTEMPTED_OUTCOMES.has(normalized);
+}
+
+function isRoutingAbstain(value: unknown): boolean {
+  return ROUTING_ABSTAIN_OUTCOMES.has(normalizeRoutingOutcome(value));
+}
+
+function averageMetrics(values: Array<number | null | undefined>): number {
+  const finite = values
+    .filter((value) => value !== null && value !== undefined)
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+  if (finite.length === 0) return 0;
+  return roundMetric(finite.reduce((sum, value) => sum + value, 0) / finite.length);
+}
+
 function deriveLatestBenchmarkSignal(benchmarkGroundTruth: any): {
   sampleCount: number;
   avgBenchmarkScore: number;
@@ -1366,9 +1442,32 @@ export const RETRY_EXPECTED_GAIN_MIN_THRESHOLD = 0.18;
 function deriveRoutingOutcomeSignal(premiumUsageData: any, taskKind: string): {
   sampleCount: number;
   successRate: number;
+  recentROI: number;
+  completionRate: number;
+  attemptRate: number;
+  abstainRate: number;
+  precisionOnAttempted: number;
+  hardChainSuccessRate: number;
+  hardChainSampleCount: number;
+  laneReliability: number;
+  outcomeScore: number;
 } {
   const rows = Array.isArray(premiumUsageData) ? premiumUsageData : [];
-  if (rows.length === 0) return { sampleCount: 0, successRate: 0 };
+  if (rows.length === 0) {
+    return {
+      sampleCount: 0,
+      successRate: 0,
+      recentROI: 0,
+      completionRate: 0,
+      attemptRate: 0,
+      abstainRate: 0,
+      precisionOnAttempted: 0,
+      hardChainSuccessRate: 0,
+      hardChainSampleCount: 0,
+      laneReliability: 0,
+      outcomeScore: 0,
+    };
+  }
   const key = String(taskKind || "general").trim().toLowerCase();
   const filtered = rows
     .filter((row) => row && typeof row === "object")
@@ -1377,14 +1476,88 @@ function deriveRoutingOutcomeSignal(premiumUsageData: any, taskKind: string): {
       return rowKind === key;
     })
     .slice(-30);
-  if (filtered.length === 0) return { sampleCount: 0, successRate: 0 };
-  const done = filtered.reduce((acc, row) => {
-    const status = String((row as any).outcome || "").toLowerCase().trim();
-    return acc + (status === "done" ? 1 : 0);
-  }, 0);
+  if (filtered.length === 0) {
+    return {
+      sampleCount: 0,
+      successRate: 0,
+      recentROI: 0,
+      completionRate: 0,
+      attemptRate: 0,
+      abstainRate: 0,
+      precisionOnAttempted: 0,
+      hardChainSuccessRate: 0,
+      hardChainSampleCount: 0,
+      laneReliability: 0,
+      outcomeScore: 0,
+    };
+  }
+  let successful = 0;
+  let attempted = 0;
+  let abstained = 0;
+  const laneCounts = new Map<string, { total: number; successful: number; attempted: number }>();
+  const hardChainGroups = new Map<string, { total: number; successful: number; abstained: number }>();
+  for (const row of filtered) {
+    const outcome = normalizeRoutingOutcome((row as any).outcome);
+    const lane = getLaneForWorkerName((row as any).worker, "implementation");
+    const laneAcc = laneCounts.get(lane) ?? { total: 0, successful: 0, attempted: 0 };
+    laneAcc.total += 1;
+    if (isRoutingSuccess(outcome)) {
+      successful += 1;
+      laneAcc.successful += 1;
+    }
+    if (isRoutingAttempt(outcome)) {
+      attempted += 1;
+      laneAcc.attempted += 1;
+    }
+    if (isRoutingAbstain(outcome)) abstained += 1;
+    laneCounts.set(lane, laneAcc);
+
+    const lineageId = String((row as any).lineageId || "").trim();
+    if (lineageId) {
+      const chainAcc = hardChainGroups.get(lineageId) ?? { total: 0, successful: 0, abstained: 0 };
+      chainAcc.total += 1;
+      if (isRoutingSuccess(outcome)) chainAcc.successful += 1;
+      if (isRoutingAbstain(outcome)) chainAcc.abstained += 1;
+      hardChainGroups.set(lineageId, chainAcc);
+    }
+  }
+  const completionRate = filtered.length > 0 ? successful / filtered.length : 0;
+  const attemptRate = filtered.length > 0 ? attempted / filtered.length : 0;
+  const abstainRate = filtered.length > 0 ? abstained / filtered.length : 0;
+  const precisionOnAttempted = attempted > 0 ? successful / attempted : 0;
+  let hardChainTotal = 0;
+  let hardChainSuccess = 0;
+  for (const chain of hardChainGroups.values()) {
+    if (chain.total <= 1) continue;
+    hardChainTotal += 1;
+    if (chain.abstained === 0 && chain.successful === chain.total) hardChainSuccess += 1;
+  }
+  const laneReliability = averageMetrics(
+    [...laneCounts.values()].map((lane) => averageMetrics([
+      lane.total > 0 ? lane.successful / lane.total : 0,
+      lane.total > 0 ? lane.attempted / lane.total : 0,
+      lane.attempted > 0 ? lane.successful / lane.attempted : 0,
+    ]))
+  );
+  const hardChainSuccessRate = hardChainTotal > 0 ? hardChainSuccess / hardChainTotal : 0;
+  const outcomeScore = averageMetrics([
+    precisionOnAttempted,
+    attemptRate,
+    laneReliability,
+    hardChainTotal > 0 ? hardChainSuccessRate : null,
+  ]);
   return {
     sampleCount: filtered.length,
-    successRate: Math.round(clamp01(done / filtered.length) * 1000) / 1000,
+    successRate: roundMetric(precisionOnAttempted),
+    recentROI: outcomeScore,
+    completionRate: roundMetric(completionRate),
+    attemptRate: roundMetric(attemptRate),
+    abstainRate: roundMetric(abstainRate),
+    precisionOnAttempted: roundMetric(precisionOnAttempted),
+    hardChainSuccessRate: roundMetric(hardChainSuccessRate),
+    hardChainSampleCount: hardChainTotal,
+    laneReliability,
+    outcomeScore,
   };
 }
 
@@ -1414,7 +1587,7 @@ export function assessRetryExpectedROI(input: {
   const outcome = deriveRoutingOutcomeSignal(input?.premiumUsageData, taskKind);
   const benchmark = deriveLatestBenchmarkSignal(input?.benchmarkGroundTruth);
   const integrity = computeBenchmarkIntegrityScore(input?.benchmarkGroundTruth);
-  const successSignal = outcome.sampleCount > 0 ? outcome.successRate : 0.5;
+  const successSignal = outcome.sampleCount > 0 ? clamp01(outcome.outcomeScore ?? outcome.successRate) : 0.5;
   // Use integrity-aware benchmark signal: blend raw score with integrityScore penalty
   const rawBenchmarkSignal = benchmark.sampleCount > 0
     ? clamp01((benchmark.avgBenchmarkScore + benchmark.avgCapacityGain + (1 - benchmark.unresolvedRatio)) / 3)
@@ -1429,7 +1602,7 @@ export function assessRetryExpectedROI(input: {
     allowRetry,
     expectedGain,
     threshold,
-    reason: `retry-roi(taskKind=${taskKind}, success=${successSignal.toFixed(2)}, benchmark=${benchmarkSignal.toFixed(2)}, attempt=${attempt})`,
+    reason: `retry-roi(taskKind=${taskKind}, outcome=${successSignal.toFixed(2)}, precision=${(outcome.precisionOnAttempted ?? outcome.successRate).toFixed(2)}, attempt_rate=${(outcome.attemptRate ?? 0).toFixed(2)}, benchmark=${benchmarkSignal.toFixed(2)}, attempt=${attempt})`,
     attempt,
   };
 }
@@ -1476,6 +1649,12 @@ export function assessHardTaskEscalation(
 
   const outcomeSampleCount = Number(signals.outcomeMetrics?.sampleCount ?? 0);
   const outcomeSuccessRate = clamp01(Number(signals.outcomeMetrics?.successRate ?? 0));
+  const outcomeAttemptRate = clamp01(Number(signals.outcomeMetrics?.attemptRate ?? 0));
+  const outcomeAbstainRate = clamp01(Number(signals.outcomeMetrics?.abstainRate ?? (outcomeSampleCount > 0 ? 1 - outcomeAttemptRate : 0)));
+  const precisionOnAttempted = clamp01(Number(signals.outcomeMetrics?.precisionOnAttempted ?? outcomeSuccessRate));
+  const hardChainSuccessRate = clamp01(Number(signals.outcomeMetrics?.hardChainSuccessRate ?? 0));
+  const hardChainSampleCount = Math.max(0, Number(signals.outcomeMetrics?.hardChainSampleCount ?? 0));
+  const laneReliability = clamp01(Number(signals.outcomeMetrics?.laneReliability ?? 0));
   const outcomeROI = Number.isFinite(Number(signals.outcomeMetrics?.recentROI))
     ? clamp01(Number(signals.outcomeMetrics?.recentROI))
     : clamp01(Number(history.recentROI || 0));
@@ -1486,6 +1665,11 @@ export function assessHardTaskEscalation(
   const noSamples = outcomeSampleCount === 0;
   const weakSuccess = outcomeSampleCount > 0 && outcomeSuccessRate < t.minSuccessRate;
   const weakROI = outcomeROI > 0 && outcomeROI < t.minRecentROI;
+  const weakAttemptRate = outcomeSampleCount > 0 && outcomeAttemptRate < t.minAttemptRate;
+  const highAbstainRate = outcomeSampleCount > 0 && outcomeAbstainRate > t.maxAbstainRate;
+  const weakPrecision = outcomeSampleCount > 0 && precisionOnAttempted < t.minPrecisionOnAttempted;
+  const weakHardChain = hardChainSampleCount > 0 && hardChainSuccessRate < t.minHardChainSuccessRate;
+  const weakLaneReliability = outcomeSampleCount > 0 && laneReliability > 0 && laneReliability < t.minLaneReliability;
   const weakBenchmarkScore =
     benchmark.sampleCount > 0 &&
     benchmark.avgBenchmarkScore > 0 &&
@@ -1505,6 +1689,11 @@ export function assessHardTaskEscalation(
     lowSamples ? 0.20 : 0,
     weakSuccess ? 0.25 : 0,
     weakROI ? 0.20 : 0,
+    weakAttemptRate ? 0.15 : 0,
+    highAbstainRate ? 0.15 : 0,
+    weakPrecision ? 0.20 : 0,
+    weakHardChain ? 0.15 : 0,
+    weakLaneReliability ? 0.15 : 0,
     weakBenchmarkScore ? 0.15 : 0,
     weakCapacityGain ? 0.10 : 0,
     highUnresolvedBenchmark ? 0.15 : 0,
@@ -1644,10 +1833,32 @@ export function rankModelsByTaskKindExpectedValue(
     return { rankedModels: original, scoreByModel: {}, usedTelemetry: false, reason: "single-candidate" };
   }
 
+  const key = toTaskKindKey(taskKind);
+  const byTaskKind = cycleAnalytics?.modelRoutingTelemetry?.byTaskKind;
+  const taskTelemetry = byTaskKind && typeof byTaskKind === "object" ? byTaskKind[key] : null;
+  const telemetryOutcomeMetrics = taskTelemetry && typeof taskTelemetry === "object"
+    ? {
+        sampleCount: Number((taskTelemetry as any).sampleCount ?? 0),
+        successRate: Number((taskTelemetry as any)?.default?.successProbability ?? 0),
+        recentROI: Number((taskTelemetry as any)?.default?.outcomeScore ?? (taskTelemetry as any)?.default?.capacityImpact ?? 0),
+        completionRate: Number((taskTelemetry as any)?.default?.completionRate ?? 0),
+        attemptRate: Number((taskTelemetry as any)?.default?.attemptRate ?? 0),
+        abstainRate: Number((taskTelemetry as any)?.default?.abstainRate ?? 0),
+        precisionOnAttempted: Number((taskTelemetry as any)?.default?.precisionOnAttempted ?? 0),
+        hardChainSuccessRate: Number((taskTelemetry as any)?.default?.hardChainSuccessRate ?? 0),
+        hardChainSampleCount: Number((taskTelemetry as any)?.default?.hardChainSampleCount ?? 0),
+        laneReliability: Number((taskTelemetry as any)?.default?.laneReliability ?? 0),
+        outcomeScore: Number((taskTelemetry as any)?.default?.outcomeScore ?? 0),
+      } satisfies Partial<RoutingOutcomeMetrics>
+    : null;
+
   const hardSignal = assessHardTaskEscalation(
     opts.taskHints || {},
     opts.history || {},
-    opts.signals || {},
+    {
+      ...(opts.signals || {}),
+      outcomeMetrics: opts.signals?.outcomeMetrics ?? telemetryOutcomeMetrics,
+    },
   );
   if (hardSignal.escalate && hardSignal.severity === "required") {
     return {
@@ -1658,9 +1869,6 @@ export function rankModelsByTaskKindExpectedValue(
     };
   }
 
-  const key = toTaskKindKey(taskKind);
-  const byTaskKind = cycleAnalytics?.modelRoutingTelemetry?.byTaskKind;
-  const taskTelemetry = byTaskKind && typeof byTaskKind === "object" ? byTaskKind[key] : null;
   if (!taskTelemetry || typeof taskTelemetry !== "object") {
     return { rankedModels: original, scoreByModel: {}, usedTelemetry: false, reason: "telemetry-missing" };
   }

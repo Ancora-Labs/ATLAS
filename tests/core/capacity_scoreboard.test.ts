@@ -104,6 +104,25 @@ describe("capacity_scoreboard", () => {
         `without avgTierROI, modelTaskFit must use premiumEfficiency (0.6), got ${result.dimensions.modelTaskFit}`
       );
     });
+
+    it("outcomeScore overrides premiumEfficiency for routing-sensitive dimensions when avgTierROI is absent", () => {
+      const result = computeCapacityIndex({ outcomeScore: 0.82, premiumEfficiency: 0.3 });
+      assert.ok(Math.abs(result.dimensions.modelTaskFit - 0.82) < 0.01);
+      assert.ok(Math.abs(result.dimensions.costEfficiency - 0.82) < 0.01);
+    });
+
+    it("derives routing outcome score from attempt, precision, lane reliability, and hard-chain signals", () => {
+      const result = computeCapacityIndex({
+        premiumEfficiency: 0.2,
+        attemptRate: 0.8,
+        precisionOnAttempted: 0.75,
+        laneReliability: 0.7,
+        hardChainSuccessRate: 0.6,
+        hardChainSampleCount: 2,
+      });
+      assert.ok(Math.abs(result.dimensions.modelTaskFit - 0.713) < 0.01);
+      assert.ok(Math.abs(result.dimensions.costEfficiency - 0.713) < 0.01);
+    });
   });
 
   describe("completionYield and verificationLatencyMs in CapacityEntry", () => {

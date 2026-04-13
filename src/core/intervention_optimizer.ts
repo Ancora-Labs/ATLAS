@@ -1262,11 +1262,35 @@ export function buildPolicyImpactByInterventionId(
   return policyImpactMap;
 }
 
+function normalizeOutcomeScoreSignal(rawOutcome: unknown): number {
+  if (Number.isFinite(Number(rawOutcome))) {
+    return Math.max(0, Math.min(1, Number(rawOutcome)));
+  }
+  if (!rawOutcome || typeof rawOutcome !== "object") return 0;
+  const row = rawOutcome as Record<string, unknown>;
+  const explicit = Number(row.outcomeScore);
+  if (Number.isFinite(explicit)) {
+    return Math.max(0, Math.min(1, explicit));
+  }
+  const metrics = [
+    Number(row.precisionOnAttempted),
+    Number(row.attemptRate),
+    Number(row.laneReliability),
+  ].filter((value) => Number.isFinite(value));
+  const hardChainSampleCount = Number(row.hardChainSampleCount ?? 0);
+  const hardChainSuccessRate = Number(row.hardChainSuccessRate);
+  if (hardChainSampleCount > 0 && Number.isFinite(hardChainSuccessRate)) {
+    metrics.push(hardChainSuccessRate);
+  }
+  if (metrics.length === 0) return 0;
+  return Math.max(0, Math.min(1, Math.round((metrics.reduce((sum, value) => sum + value, 0) / metrics.length) * 1000) / 1000));
+}
+
 export function scoreInterventionsAgainstRubric(
   interventions: any[],
   rubricByInterventionId: Record<string, Record<string, number>>,
   opts: {
-    outcomeByInterventionId?: Record<string, number>;
+    outcomeByInterventionId?: Record<string, number | Record<string, unknown>>;
     cycleId?: string;
     policyByInterventionId?: Record<string, string>;
   } = {},
@@ -1310,8 +1334,7 @@ export function scoreInterventionsAgainstRubric(
     const rubricScore = values.length > 0
       ? Math.round(((values.reduce((sum, value) => sum + Math.max(0, Math.min(1, value)), 0) / values.length)) * 1000) / 1000
       : 0;
-    const rawOutcome = Number(outcomeByInterventionId[interventionId]);
-    const outcomeScore = Number.isFinite(rawOutcome) ? Math.max(0, Math.min(1, rawOutcome)) : 0;
+    const outcomeScore = normalizeOutcomeScoreSignal(outcomeByInterventionId[interventionId]);
     const combinedScore = Math.round(((rubricScore * 0.6) + (outcomeScore * 0.4)) * 1000) / 1000;
     rows.push({
       interventionId,

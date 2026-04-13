@@ -14,6 +14,8 @@ import { getVerificationProfile, CANONICAL_VERIFICATION_REPORT_TEMPLATE } from "
 import {
   validateDispatchCommands,
   classifyNodeTestGlobWindowsArtifact,
+  checkForbiddenCommands,
+  isNonSpecificVerificationCommand,
   type DispatchCommandValidationResult,
 } from "./verification_command_registry.js";
 import type { CancellationToken } from "./daemon_control.js";
@@ -57,6 +59,9 @@ export const NAMED_TEST_PROOF_PATTERN =
  */
 export const NAMED_TEST_PROOF_GAP =
   "Named test proof missing — the verification field names a specific test file/description that must appear in the worker output before done closure";
+
+export const NON_SPECIFIC_VERIFICATION_GAP =
+  "Verification target is non-specific — merge-oriented work must name a specific test file or exact proof target instead of a generic CLI command";
 
 /**
  * Returns true when a dispatchBlockReason string indicates a runtime hook denial.
@@ -1105,6 +1110,18 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
     for (const gap of collectArtifactGaps(artifact)) gaps.push(gap);
   }
 
+  if (options.verificationText && requireArtifact) {
+    const verificationText = String(options.verificationText).trim();
+    const forbiddenVerification = checkForbiddenCommands(verificationText);
+    if (forbiddenVerification.forbidden) {
+      for (const violation of forbiddenVerification.violations) {
+        gaps.push(`Verification target uses a non-portable command: ${violation.reason}`);
+      }
+    } else if (isNonSpecificVerificationCommand(verificationText)) {
+      gaps.push(`${NON_SPECIFIC_VERIFICATION_GAP}: "${verificationText}"`);
+    }
+  }
+
   // ── Named test proof gate ────────────────────────────────────────────────
   // When the task packet's verification field names a specific test file and
   // optionally a test description, the worker output must contain that evidence
@@ -1226,10 +1243,18 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
  * @param {string[]} gaps — array of gap descriptions
  * @param {number} attempt — current rework attempt number (1-based)
  * @param {number} maxAttempts — maximum rework attempts allowed
+ * @param {{ canonicalTask?: string | null }} [options] — canonical original task metadata
  * @returns {object} — instruction object for Athena to re-dispatch
  */
-export function buildReworkInstruction(originalTask, gaps, attempt, maxAttempts) {
+export function buildReworkInstruction(
+  originalTask,
+  gaps,
+  attempt,
+  maxAttempts,
+  options: { canonicalTask?: string | null } = {},
+) {
   const gapList = gaps.map((g, i) => `  ${i + 1}. ${g}`).join("\n");
+  const canonicalOriginalTask = String(options?.canonicalTask || originalTask || "").trim();
 
   const task = `## AUTO-REWORK — VERIFICATION GAPS DETECTED (attempt ${attempt}/${maxAttempts})
 
@@ -1257,7 +1282,7 @@ ${CANONICAL_VERIFICATION_REPORT_TEMPLATE}
 5. Do NOT repeat the same approach if it already failed — try a different strategy.
 
 ## ORIGINAL TASK (for reference)
-${originalTask}
+${canonicalOriginalTask}
 
 ${attempt >= maxAttempts ? "⚠️ THIS IS YOUR FINAL ATTEMPT. If you cannot resolve all gaps, report BOX_STATUS=blocked with a root-cause analysis of why each gap cannot be resolved." : ""}`;
 
@@ -1268,7 +1293,8 @@ ${attempt >= maxAttempts ? "⚠️ THIS IS YOUR FINAL ATTEMPT. If you cannot res
     isRework: true,
     reworkAttempt: attempt,
     maxReworkAttempts: maxAttempts,
-    taskKind: "rework"
+    taskKind: "rework",
+    originalTask: canonicalOriginalTask,
   };
 }
 
@@ -1278,9 +1304,10 @@ ${attempt >= maxAttempts ? "⚠️ THIS IS YOUR FINAL ATTEMPT. If you cannot res
  * @param {object} validationResult — output from validateWorkerContract()
  * @param {number} currentAttempt — how many times this worker has been re-dispatched for this task
  * @param {number} maxAttempts — configurable max rework attempts (default from config)
+ * @param {{ canonicalTask?: string | null }} [options] — canonical original task metadata
  * @returns {{ shouldRework: boolean, instruction: object|null, shouldEscalate: boolean }}
  */
-export function decideRework(validationResult, originalTask, currentAttempt, maxAttempts = 2) {
+export function decideRework(validationResult, originalTask, currentAttempt, maxAttempts = 2, options = {}) {
   if (validationResult.passed) {
     return { shouldRework: false, instruction: null, shouldEscalate: false };
   }
@@ -1301,7 +1328,8 @@ export function decideRework(validationResult, originalTask, currentAttempt, max
     originalTask,
     validationResult.gaps,
     nextAttempt,
-    maxAttempts
+    maxAttempts,
+    options,
   );
 
   return {

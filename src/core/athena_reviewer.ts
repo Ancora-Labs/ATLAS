@@ -2635,6 +2635,8 @@ const ATHENA_FRAGILE_LANE_NAMES = Object.freeze([
 ]);
 const ATHENA_FRAGILE_LANE_COMPLETION_THRESHOLD = 0.67;
 const ATHENA_FRAGILE_LANE_ROI_THRESHOLD = 1.0;
+const ATHENA_FRAGILE_LANE_RELIABILITY_THRESHOLD = 0.60;
+const ATHENA_FRAGILE_LANE_ABSTAIN_THRESHOLD = 0.25;
 const ATHENA_FRAGILE_FAST_PATH_THRESHOLD_BOOST = 20;
 
 async function assessFragileLaneFastPathSignal(config: any, plans: any[]): Promise<{
@@ -2662,9 +2664,13 @@ async function assessFragileLaneFastPathSignal(config: any, plans: any[]): Promi
       const telemetry = (laneTelemetry as any)?.[lane];
       const completionRate = Number(telemetry?.completionRate);
       const roi = Number(telemetry?.roi);
+      const reliability = Number(telemetry?.reliability);
+      const abstainRate = Number(telemetry?.abstainRate);
       return (
         (Number.isFinite(completionRate) && completionRate < ATHENA_FRAGILE_LANE_COMPLETION_THRESHOLD)
         || (Number.isFinite(roi) && roi < ATHENA_FRAGILE_LANE_ROI_THRESHOLD)
+        || (Number.isFinite(reliability) && reliability < ATHENA_FRAGILE_LANE_RELIABILITY_THRESHOLD)
+        || (Number.isFinite(abstainRate) && abstainRate > ATHENA_FRAGILE_LANE_ABSTAIN_THRESHOLD)
       );
     });
     return {

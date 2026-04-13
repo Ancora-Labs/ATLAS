@@ -110,6 +110,75 @@ function sanitizeWorkerResult(w: unknown): { roleName: string; status: string } 
   };
 }
 
+const SUCCESS_OUTCOME_STATUSES = new Set(["done", "success"]);
+const ATTEMPTED_OUTCOME_STATUSES = new Set([
+  "done",
+  "success",
+  "partial",
+  "error",
+  "failed",
+  "transient_error",
+  "verification_failed",
+  "rollback",
+]);
+const ABSTAIN_OUTCOME_STATUSES = new Set([
+  "blocked",
+  "skipped",
+  "timeout",
+  "abstain",
+  "abstained",
+  "unknown",
+  "inconclusive",
+  "no_signal",
+  "noop",
+  "no-op",
+]);
+
+function normalizeOutcomeStatus(value: unknown): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isSuccessfulOutcomeStatus(value: unknown): boolean {
+  return SUCCESS_OUTCOME_STATUSES.has(normalizeOutcomeStatus(value));
+}
+
+function isAttemptedOutcomeStatus(value: unknown): boolean {
+  const normalized = normalizeOutcomeStatus(value);
+  return SUCCESS_OUTCOME_STATUSES.has(normalized) || ATTEMPTED_OUTCOME_STATUSES.has(normalized);
+}
+
+function isAbstainedOutcomeStatus(value: unknown): boolean {
+  return ABSTAIN_OUTCOME_STATUSES.has(normalizeOutcomeStatus(value));
+}
+
+function roundMetric(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function averageMetrics(values: Array<number | null | undefined>): number {
+  const finite = values
+    .filter((value) => value !== null && value !== undefined)
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+  if (finite.length === 0) return 0;
+  return roundMetric(finite.reduce((sum, value) => sum + value, 0) / finite.length);
+}
+
+function computeReliabilityScore(input: {
+  completionRate?: number | null;
+  attemptRate?: number | null;
+  precisionOnAttempted?: number | null;
+  hardChainSuccessRate?: number | null;
+  includeHardChain?: boolean;
+}): number {
+  return averageMetrics([
+    input.completionRate ?? null,
+    input.attemptRate ?? null,
+    input.precisionOnAttempted ?? null,
+    input.includeHardChain ? (input.hardChainSuccessRate ?? null) : null,
+  ]);
+}
+
 // ── Violation feedback interface ──────────────────────────────────────────────
 
 /**
@@ -998,30 +1067,72 @@ function computeLaneTelemetry(workerResults: Array<{ roleName: string; status: s
   completed: number;
   failed: number;
   completionRate: number;
+  attemptRate: number;
+  abstainRate: number;
+  precisionOnAttempted: number;
+  reliability: number;
   roi: number;
   specialistLane: boolean;
 }> {
   if (!Array.isArray(workerResults) || workerResults.length === 0) return {};
-  const byLane = new Map<string, { dispatched: number; completed: number; failed: number }>();
+  const byLane = new Map<string, {
+    dispatched: number;
+    completed: number;
+    failed: number;
+    attempted: number;
+    abstained: number;
+    successfulAttempted: number;
+  }>();
   for (const result of workerResults) {
     const lane = getLaneForWorkerName(result?.roleName, "implementation");
-    const current = byLane.get(lane) || { dispatched: 0, completed: 0, failed: 0 };
+    const current = byLane.get(lane) || {
+      dispatched: 0,
+      completed: 0,
+      failed: 0,
+      attempted: 0,
+      abstained: 0,
+      successfulAttempted: 0,
+    };
     current.dispatched += 1;
     const status = String(result?.status || "").toLowerCase();
-    if (status === "done" || status === "success") current.completed += 1;
+    if (isSuccessfulOutcomeStatus(status)) {
+      current.completed += 1;
+      current.successfulAttempted += 1;
+    }
     if (status === "error" || status === "failed") current.failed += 1;
+    if (isAttemptedOutcomeStatus(status)) current.attempted += 1;
+    if (isAbstainedOutcomeStatus(status)) current.abstained += 1;
     byLane.set(lane, current);
   }
-  const output: Record<string, { dispatched: number; completed: number; failed: number; completionRate: number; roi: number; specialistLane: boolean }> = {};
+  const output: Record<string, {
+    dispatched: number;
+    completed: number;
+    failed: number;
+    completionRate: number;
+    attemptRate: number;
+    abstainRate: number;
+    precisionOnAttempted: number;
+    reliability: number;
+    roi: number;
+    specialistLane: boolean;
+  }> = {};
   for (const [lane, row] of byLane.entries()) {
     const completionRate = row.dispatched > 0 ? row.completed / row.dispatched : 0;
+    const attemptRate = row.dispatched > 0 ? row.attempted / row.dispatched : 0;
+    const abstainRate = row.dispatched > 0 ? row.abstained / row.dispatched : 0;
+    const precisionOnAttempted = row.attempted > 0 ? row.successfulAttempted / row.attempted : 0;
+    const reliability = computeReliabilityScore({ completionRate, attemptRate, precisionOnAttempted });
     const roi = row.completed / Math.max(1, row.failed);
     output[lane] = {
       dispatched: row.dispatched,
       completed: row.completed,
       failed: row.failed,
-      completionRate: Math.round(completionRate * 1000) / 1000,
-      roi: Math.round(roi * 1000) / 1000,
+      completionRate: roundMetric(completionRate),
+      attemptRate: roundMetric(attemptRate),
+      abstainRate: roundMetric(abstainRate),
+      precisionOnAttempted: roundMetric(precisionOnAttempted),
+      reliability,
+      roi: roundMetric(roi),
       specialistLane: isSpecialistLane(lane),
     };
   }
@@ -1931,15 +2042,104 @@ export function buildModelRoutingTelemetry(
     sampleCount: number;
     lineageLinkedSampleCount: number;
     lineageLinkedRatio: number;
-    default: { successProbability: number; capacityImpact: number; requestCost: number };
-    models: Record<string, { successProbability: number; capacityImpact: number; requestCost: number }>;
+    default: {
+      successProbability: number;
+      capacityImpact: number;
+      requestCost: number;
+      completionRate: number;
+      attemptRate: number;
+      abstainRate: number;
+      precisionOnAttempted: number;
+      hardChainSuccessRate: number;
+      hardChainSampleCount: number;
+      laneReliability: number;
+      outcomeScore: number;
+    };
+    models: Record<string, {
+      successProbability: number;
+      capacityImpact: number;
+      requestCost: number;
+      completionRate: number;
+      attemptRate: number;
+      abstainRate: number;
+      precisionOnAttempted: number;
+      hardChainSuccessRate: number;
+      hardChainSampleCount: number;
+      laneReliability: number;
+      outcomeScore: number;
+    }>;
   }>;
   sampleCount: number;
 } {
   if (!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) return { byTaskKind: {}, sampleCount: 0 };
 
-  type EcoPoint = { successProbability: number; capacityImpact: number; requestCost: number };
-  type Accumulator = { done: number; total: number; linked: number };
+  type EcoPoint = {
+    successProbability: number;
+    capacityImpact: number;
+    requestCost: number;
+    completionRate: number;
+    attemptRate: number;
+    abstainRate: number;
+    precisionOnAttempted: number;
+    hardChainSuccessRate: number;
+    hardChainSampleCount: number;
+    laneReliability: number;
+    outcomeScore: number;
+  };
+  type LaneAccumulator = { total: number; successful: number; attempted: number; abstained: number };
+  type Accumulator = {
+    successful: number;
+    total: number;
+    attempted: number;
+    abstained: number;
+    linked: number;
+    hardChainTotal: number;
+    hardChainSuccess: number;
+    laneCounts: Record<string, LaneAccumulator>;
+  };
+  const createAccumulator = (): Accumulator => ({
+    successful: 0,
+    total: 0,
+    attempted: 0,
+    abstained: 0,
+    linked: 0,
+    hardChainTotal: 0,
+    hardChainSuccess: 0,
+    laneCounts: {},
+  });
+  const updateAccumulator = (
+    acc: Accumulator,
+    lane: string,
+    outcome: string,
+    linked: boolean,
+  ) => {
+    const successful = isSuccessfulOutcomeStatus(outcome);
+    const attempted = isAttemptedOutcomeStatus(outcome);
+    const abstained = isAbstainedOutcomeStatus(outcome);
+    acc.total += 1;
+    if (successful) acc.successful += 1;
+    if (attempted) acc.attempted += 1;
+    if (abstained) acc.abstained += 1;
+    if (linked) acc.linked += 1;
+    acc.laneCounts[lane] ??= { total: 0, successful: 0, attempted: 0, abstained: 0 };
+    acc.laneCounts[lane].total += 1;
+    if (successful) acc.laneCounts[lane].successful += 1;
+    if (attempted) acc.laneCounts[lane].attempted += 1;
+    if (abstained) acc.laneCounts[lane].abstained += 1;
+  };
+  const computeLaneReliability = (laneCounts: Record<string, LaneAccumulator>): number => {
+    const lanes = Object.values(laneCounts);
+    const total = lanes.reduce((sum, lane) => sum + lane.total, 0);
+    if (total === 0) return 0;
+    const weighted = lanes.reduce((sum, lane) => {
+      const completionRate = lane.total > 0 ? lane.successful / lane.total : 0;
+      const attemptRate = lane.total > 0 ? lane.attempted / lane.total : 0;
+      const precisionOnAttempted = lane.attempted > 0 ? lane.successful / lane.attempted : 0;
+      const reliability = computeReliabilityScore({ completionRate, attemptRate, precisionOnAttempted });
+      return sum + (reliability * lane.total);
+    }, 0);
+    return roundMetric(weighted / total);
+  };
   const linkageReference = new Set<string>();
   if (Array.isArray(lineageLog)) {
     for (const entry of lineageLog) {
@@ -1951,8 +2151,15 @@ export function buildModelRoutingTelemetry(
   }
   const enforceLineageReference = linkageReference.size > 0;
 
-  // Grouped tallies: taskKind → model → { done, total }
   const byTaskKindModel: Record<string, Record<string, Accumulator>> = {};
+  const taskAccumulators: Record<string, Accumulator> = {};
+  const hardChainGroups = new Map<string, {
+    taskKind: string;
+    models: Set<string>;
+    total: number;
+    successful: number;
+    abstained: number;
+  }>();
   let usableEntries = 0;
 
   for (const entry of premiumUsageLog) {
@@ -1963,7 +2170,8 @@ export function buildModelRoutingTelemetry(
       || typeof (entry as Record<string, unknown>).outcome !== "string"
     ) continue;
 
-    const { taskKind, model, outcome } = entry as Record<string, string>;
+    const { taskKind, model } = entry as Record<string, string>;
+    const outcome = normalizeOutcomeStatus((entry as Record<string, unknown>).outcome);
     const normalizedModel = normalizeModelLabel(model);
     if (!taskKind || !normalizedModel) continue;
     const { joinKey } = resolveLineageContractFromRecord(entry, {
@@ -1974,20 +2182,75 @@ export function buildModelRoutingTelemetry(
       role: (entry as Record<string, unknown>).worker as string | null,
     });
     const linked = !!(joinKey && (!enforceLineageReference || linkageReference.has(joinKey)));
+    const lane = getLaneForWorkerName((entry as Record<string, unknown>).worker, "implementation");
 
     byTaskKindModel[taskKind] ??= {};
-    byTaskKindModel[taskKind][normalizedModel] ??= { done: 0, total: 0, linked: 0 };
-    byTaskKindModel[taskKind][normalizedModel].total++;
-    if (outcome === "done") byTaskKindModel[taskKind][normalizedModel].done++;
-    if (linked) byTaskKindModel[taskKind][normalizedModel].linked++;
+    taskAccumulators[taskKind] ??= createAccumulator();
+    byTaskKindModel[taskKind][normalizedModel] ??= createAccumulator();
+    updateAccumulator(taskAccumulators[taskKind], lane, outcome, linked);
+    updateAccumulator(byTaskKindModel[taskKind][normalizedModel], lane, outcome, linked);
+    if (joinKey) {
+      const chainKey = `${taskKind}::${joinKey}`;
+      const currentChain = hardChainGroups.get(chainKey) ?? {
+        taskKind,
+        models: new Set<string>(),
+        total: 0,
+        successful: 0,
+        abstained: 0,
+      };
+      currentChain.models.add(normalizedModel);
+      currentChain.total += 1;
+      if (isSuccessfulOutcomeStatus(outcome)) currentChain.successful += 1;
+      if (isAbstainedOutcomeStatus(outcome)) currentChain.abstained += 1;
+      hardChainGroups.set(chainKey, currentChain);
+    }
     usableEntries++;
   }
 
   if (usableEntries === 0) return { byTaskKind: {}, sampleCount: 0 };
 
+  for (const chain of hardChainGroups.values()) {
+    if (chain.total <= 1) continue;
+    const taskAcc = taskAccumulators[chain.taskKind];
+    if (!taskAcc) continue;
+    const chainSuccess = chain.abstained === 0 && chain.successful === chain.total;
+    taskAcc.hardChainTotal += 1;
+    if (chainSuccess) taskAcc.hardChainSuccess += 1;
+    for (const modelName of chain.models) {
+      const modelAcc = byTaskKindModel[chain.taskKind]?.[modelName];
+      if (!modelAcc) continue;
+      modelAcc.hardChainTotal += 1;
+      if (chainSuccess) modelAcc.hardChainSuccess += 1;
+    }
+  }
+
   const toEcoPoint = (acc: Accumulator): EcoPoint => {
-    const sp = acc.total > 0 ? acc.done / acc.total : 0;
-    return { successProbability: sp, capacityImpact: sp, requestCost: 1.0 };
+    const completionRate = acc.total > 0 ? acc.successful / acc.total : 0;
+    const attemptRate = acc.total > 0 ? acc.attempted / acc.total : 0;
+    const abstainRate = acc.total > 0 ? acc.abstained / acc.total : 0;
+    const precisionOnAttempted = acc.attempted > 0 ? acc.successful / acc.attempted : 0;
+    const hardChainSuccessRate = acc.hardChainTotal > 0 ? acc.hardChainSuccess / acc.hardChainTotal : 0;
+    const laneReliability = computeLaneReliability(acc.laneCounts);
+    const outcomeScore = computeReliabilityScore({
+      completionRate: precisionOnAttempted,
+      attemptRate,
+      precisionOnAttempted: laneReliability,
+      hardChainSuccessRate,
+      includeHardChain: acc.hardChainTotal > 0,
+    });
+    return {
+      successProbability: roundMetric(precisionOnAttempted),
+      capacityImpact: outcomeScore,
+      requestCost: 1.0,
+      completionRate: roundMetric(completionRate),
+      attemptRate: roundMetric(attemptRate),
+      abstainRate: roundMetric(abstainRate),
+      precisionOnAttempted: roundMetric(precisionOnAttempted),
+      hardChainSuccessRate: roundMetric(hardChainSuccessRate),
+      hardChainSampleCount: acc.hardChainTotal,
+      laneReliability,
+      outcomeScore,
+    };
   };
 
   const resultByTaskKind: Record<string, {
@@ -1999,13 +2262,10 @@ export function buildModelRoutingTelemetry(
   }> = {};
 
   for (const [taskKind, modelMap] of Object.entries(byTaskKindModel)) {
-    const allAcc: Accumulator = { done: 0, total: 0, linked: 0 };
+    const allAcc = taskAccumulators[taskKind] ?? createAccumulator();
     const modelPoints: Record<string, EcoPoint> = {};
 
     for (const [modelName, acc] of Object.entries(modelMap)) {
-      allAcc.done += acc.done;
-      allAcc.total += acc.total;
-      allAcc.linked += acc.linked;
       modelPoints[modelName] = toEcoPoint(acc);
     }
 
@@ -3381,6 +3641,14 @@ export interface LaneDifficultyPrior {
   completionRate: number;
   /** ROI proxy: completed / max(1, failed). Higher is better. */
   averageRoi: number;
+  /** Fraction of dispatched workers that produced a substantive attempt. */
+  attemptRate: number;
+  /** Fraction of dispatched workers that abstained or exited without attempting. */
+  abstainRate: number;
+  /** Successes / attempted workers. */
+  precisionOnAttempted: number;
+  /** Composite of completion, attempt consistency, and attempted precision. */
+  reliability: number;
   /** Number of historical cycles that contributed to this estimate. */
   sampleCount: number;
   /** Difficulty classification derived from completionRate. */
@@ -3408,7 +3676,15 @@ export function computeHistoricalLaneDifficultyPriors(
 ): Record<string, LaneDifficultyPrior> {
   if (!Array.isArray(cycleRecords) || cycleRecords.length === 0) return {};
 
-  const accByLane = new Map<string, { completionRateSum: number; roiSum: number; sampleCount: number }>();
+  const accByLane = new Map<string, {
+    completionRateSum: number;
+    roiSum: number;
+    attemptRateSum: number;
+    abstainRateSum: number;
+    precisionOnAttemptedSum: number;
+    reliabilitySum: number;
+    sampleCount: number;
+  }>();
 
   for (const record of cycleRecords) {
     if (!record || typeof record !== "object") continue;
@@ -3420,10 +3696,28 @@ export function computeHistoricalLaneDifficultyPriors(
       const t = telemetry as any;
       const completionRate = typeof t.completionRate === "number" ? t.completionRate : 0;
       const roi = typeof t.roi === "number" ? t.roi : 0;
+      const attemptRate = typeof t.attemptRate === "number" ? t.attemptRate : 0;
+      const abstainRate = typeof t.abstainRate === "number" ? t.abstainRate : 0;
+      const precisionOnAttempted = typeof t.precisionOnAttempted === "number" ? t.precisionOnAttempted : 0;
+      const reliability = typeof t.reliability === "number"
+        ? t.reliability
+        : computeReliabilityScore({ completionRate, attemptRate, precisionOnAttempted });
 
-      const current = accByLane.get(lane) ?? { completionRateSum: 0, roiSum: 0, sampleCount: 0 };
+      const current = accByLane.get(lane) ?? {
+        completionRateSum: 0,
+        roiSum: 0,
+        attemptRateSum: 0,
+        abstainRateSum: 0,
+        precisionOnAttemptedSum: 0,
+        reliabilitySum: 0,
+        sampleCount: 0,
+      };
       current.completionRateSum += completionRate;
       current.roiSum += roi;
+      current.attemptRateSum += attemptRate;
+      current.abstainRateSum += abstainRate;
+      current.precisionOnAttemptedSum += precisionOnAttempted;
+      current.reliabilitySum += reliability;
       current.sampleCount += 1;
       accByLane.set(lane, current);
     }
@@ -3431,13 +3725,26 @@ export function computeHistoricalLaneDifficultyPriors(
 
   const result: Record<string, LaneDifficultyPrior> = {};
   for (const [lane, acc] of accByLane.entries()) {
-    const completionRate = Math.round((acc.completionRateSum / acc.sampleCount) * 1000) / 1000;
-    const averageRoi = Math.round((acc.roiSum / acc.sampleCount) * 1000) / 1000;
+    const completionRate = roundMetric(acc.completionRateSum / acc.sampleCount);
+    const averageRoi = roundMetric(acc.roiSum / acc.sampleCount);
+    const attemptRate = roundMetric(acc.attemptRateSum / acc.sampleCount);
+    const abstainRate = roundMetric(acc.abstainRateSum / acc.sampleCount);
+    const precisionOnAttempted = roundMetric(acc.precisionOnAttemptedSum / acc.sampleCount);
+    const reliability = roundMetric(acc.reliabilitySum / acc.sampleCount);
     const difficulty: "easy" | "moderate" | "hard" =
       completionRate >= 0.70 ? "easy" :
       completionRate >= 0.40 ? "moderate" : "hard";
 
-    result[lane] = { completionRate, averageRoi, sampleCount: acc.sampleCount, difficulty };
+    result[lane] = {
+      completionRate,
+      averageRoi,
+      attemptRate,
+      abstainRate,
+      precisionOnAttempted,
+      reliability,
+      sampleCount: acc.sampleCount,
+      difficulty,
+    };
   }
 
   return result;

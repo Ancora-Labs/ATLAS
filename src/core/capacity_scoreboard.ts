@@ -139,11 +139,19 @@ export function computeTrend(entries, field) {
  * @param {number} [cycleData.securityScore] — 0-1
  * @param {number} [cycleData.cycleDurationMinutes] — actual duration
  * @param {number} [cycleData.targetDurationMinutes] — target duration
+ * @param {number} [cycleData.outcomeScore] — composite long-horizon routing outcome score (0-1)
+ * @param {number} [cycleData.attemptRate] — ratio of routed tasks that produced a substantive attempt (0-1)
+ * @param {number} [cycleData.abstainRate] — ratio of routed tasks that abstained or timed out before an attempt (0-1)
+ * @param {number} [cycleData.precisionOnAttempted] — successes / attempted tasks (0-1)
+ * @param {number} [cycleData.hardChainSuccessRate] — end-to-end success rate for hard typed-handoff chains (0-1)
+ * @param {number} [cycleData.hardChainSampleCount] — number of hard chains contributing to hardChainSuccessRate
+ * @param {number} [cycleData.laneReliability] — weighted lane reliability score derived from cycle analytics (0-1)
  * @param {number} [cycleData.avgTierROI] — average realized ROI for the current tier (0 = no data);
  *   when positive, this replaces premiumEfficiency as the modelTaskFit signal for higher fidelity
  * @returns {{ dimensions: CapacityIndex, composite: number, deltas: Record<string, number>|null }}
  */
 export function computeCapacityIndex(cycleData: any = {}, previousIndex = null) {
+  const routingOutcomeScore = computeRoutingOutcomeScore(cycleData);
   const d = {
     architecture: clamp(cycleData.planContractPassRate ?? 0.5),
     speed: clamp(cycleData.targetDurationMinutes
@@ -162,10 +170,10 @@ export function computeCapacityIndex(cycleData: any = {}, previousIndex = null) 
     modelTaskFit: clamp(
       (cycleData.avgTierROI != null && cycleData.avgTierROI > 0)
         ? Math.min(1, cycleData.avgTierROI)
-        : (cycleData.premiumEfficiency ?? 0.5)
+        : (routingOutcomeScore ?? cycleData.premiumEfficiency ?? 0.5)
     ),
     learningLoop: clamp(cycleData.recurrenceClosureRate ?? 0),
-    costEfficiency: clamp(cycleData.premiumEfficiency ?? 0.5),
+    costEfficiency: clamp(routingOutcomeScore ?? cycleData.premiumEfficiency ?? 0.5),
     security: clamp(cycleData.securityScore ?? 0.7),
   };
 
@@ -187,6 +195,23 @@ export function computeCapacityIndex(cycleData: any = {}, previousIndex = null) 
 
 function clamp(v) {
   return Math.max(0, Math.min(1, Number(v) || 0));
+}
+
+function computeRoutingOutcomeScore(cycleData: any = {}): number | null {
+  const explicit = Number(cycleData?.outcomeScore);
+  if (Number.isFinite(explicit)) return clamp(explicit);
+  const metrics = [
+    Number(cycleData?.precisionOnAttempted),
+    Number(cycleData?.attemptRate),
+    Number(cycleData?.laneReliability),
+  ].filter((value) => Number.isFinite(value));
+  const hardChainSampleCount = Number(cycleData?.hardChainSampleCount ?? 0);
+  const hardChainSuccessRate = Number(cycleData?.hardChainSuccessRate);
+  if (hardChainSampleCount > 0 && Number.isFinite(hardChainSuccessRate)) {
+    metrics.push(hardChainSuccessRate);
+  }
+  if (metrics.length === 0) return null;
+  return clamp(metrics.reduce((sum, value) => sum + value, 0) / metrics.length);
 }
 
 // ── ROI-weighted capacity index ───────────────────────────────────────────────
@@ -219,9 +244,10 @@ export function computeROIWeightedCapacityIndex(
   else if (tierROI > 0 && tierROI < 0.3) roiWeight = 0.85;
 
   // Derive base model-task-fit from realized ROI when available
+  const routingOutcomeScore = computeRoutingOutcomeScore(cycleData);
   const baseModelTaskFit = (tierROI > 0)
     ? Math.min(1, tierROI)
-    : (cycleData.premiumEfficiency ?? 0.5);
+    : (routingOutcomeScore ?? cycleData.premiumEfficiency ?? 0.5);
 
   const adjustedCycleData = {
     ...cycleData,

@@ -969,6 +969,24 @@ describe("Negative paths (AC7)", () => {
   });
 });
 
+describe("computeCycleAnalytics — lane telemetry outcome quality", () => {
+  it("tracks attempt rate, abstain rate, precision on attempted work, and reliability per lane", () => {
+    const record = computeCycleAnalytics(makeConfig("state"), {
+      workerResults: [
+        { roleName: "quality-worker", status: "done" },
+        { roleName: "quality-worker", status: "error" },
+        { roleName: "quality-worker", status: "blocked" },
+      ],
+      planCount: 3,
+      phase: CYCLE_PHASE.COMPLETED,
+    });
+    assert.equal(record.laneTelemetry.quality.attemptRate, 0.667);
+    assert.equal(record.laneTelemetry.quality.abstainRate, 0.333);
+    assert.equal(record.laneTelemetry.quality.precisionOnAttempted, 0.5);
+    assert.equal(record.laneTelemetry.quality.reliability, 0.5);
+  });
+});
+
 // ── Funnel counts and ratios ───────────────────────────────────────────────────
 
 describe("computeCycleAnalytics — funnel (Task 1)", () => {
@@ -2032,6 +2050,26 @@ describe("modelRoutingTelemetry schema contract", () => {
     assert.equal(result.byTaskKind.implementation.lineageLinkedRatio, 0.667);
   });
 
+  it("buildModelRoutingTelemetry adds long-horizon attempt, precision, hard-chain, and lane reliability signals", () => {
+    const log = [
+      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done", lineageId: "chain-1", worker: "quality-worker" },
+      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done", lineageId: "chain-1", worker: "quality-worker" },
+      { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "blocked", lineageId: "solo-1", worker: "quality-worker" },
+      { model: "GPT-5.3-Codex", taskKind: "implementation", outcome: "done", lineageId: "chain-2", worker: "integration-worker" },
+      { model: "GPT-5.3-Codex", taskKind: "implementation", outcome: "error", lineageId: "chain-2", worker: "integration-worker" },
+    ];
+    const result = buildModelRoutingTelemetry(log);
+    const telemetry = result.byTaskKind.implementation.default;
+    assert.equal(telemetry.attemptRate, 0.8);
+    assert.equal(telemetry.abstainRate, 0.2);
+    assert.equal(telemetry.precisionOnAttempted, 0.75);
+    assert.equal(telemetry.hardChainSuccessRate, 0.5);
+    assert.equal(telemetry.hardChainSampleCount, 2);
+    assert.equal(telemetry.laneReliability, 0.734);
+    assert.equal(telemetry.outcomeScore, 0.696);
+    assert.equal(telemetry.capacityImpact, telemetry.outcomeScore);
+  });
+
   it("MIN_TELEMETRY_SAMPLE_THRESHOLD is exported and is a positive integer", () => {
     assert.ok(typeof MIN_TELEMETRY_SAMPLE_THRESHOLD === "number", "must be a number");
     assert.ok(MIN_TELEMETRY_SAMPLE_THRESHOLD > 0, "must be positive");
@@ -2495,6 +2533,26 @@ describe("computeHistoricalLaneDifficultyPriors", () => {
     assert.equal(result.implementation.completionRate, 0.7);
     assert.equal(result.research.sampleCount, 1);
     assert.equal(result.research.completionRate, 0.6);
+  });
+
+  it("aggregates attempt, abstain, precision, and reliability priors alongside completion history", () => {
+    const records = [
+      {
+        laneTelemetry: {
+          quality: { completionRate: 0.5, roi: 1.0, attemptRate: 0.75, abstainRate: 0.25, precisionOnAttempted: 0.667, reliability: 0.639 },
+        },
+      },
+      {
+        laneTelemetry: {
+          quality: { completionRate: 1.0, roi: 2.0, attemptRate: 1.0, abstainRate: 0.0, precisionOnAttempted: 1.0, reliability: 1.0 },
+        },
+      },
+    ];
+    const result = computeHistoricalLaneDifficultyPriors(records);
+    assert.equal(result.quality.attemptRate, 0.875);
+    assert.equal(result.quality.abstainRate, 0.125);
+    assert.equal(result.quality.precisionOnAttempted, 0.834);
+    assert.equal(result.quality.reliability, 0.82);
   });
 
   it("classifies difficulty correctly based on completionRate", () => {
