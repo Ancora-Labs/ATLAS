@@ -3233,7 +3233,13 @@ export function buildRoutingROISummary(
     });
     const outcome = typeof row.outcome === "string" ? row.outcome : "unknown";
     const isDone = outcome === "done";
-    const linked = !!(joinKey && (!enforceLineageReference || linkageReference.has(joinKey)));
+    const linked = Boolean(
+      joinKey
+      && (
+        (enforceLineageReference && linkageReference.has(joinKey))
+        || (!enforceLineageReference && contract.lineageId)
+      )
+    );
 
     if (linked && joinKey) {
       const lineageKey = contract.lineageId || joinKey;

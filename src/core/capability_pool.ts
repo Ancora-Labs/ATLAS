@@ -11,7 +11,7 @@
  * optimal worker for each plan.
  */
 
-import { LANE_WORKER_NAMES, WORKER_CAPABILITIES, getLaneForWorkerName, normalizeWorkerName, TASK_LANE_KIND, classifyTaskLaneKind, type TaskLaneKind } from "./role_registry.js";
+import { LANE_WORKER_NAMES, WORKER_CAPABILITIES, getLaneForWorkerName, TASK_LANE_KIND, classifyTaskLaneKind, type TaskLaneKind } from "./role_registry.js";
 import {
   normalizeInterventionLineageContract,
   resolveInterventionLineageJoinKey,
@@ -306,35 +306,6 @@ export function selectWorkerForPlan(plan, config?, lanePerformance?: LanePerform
   const customMap = config?.workerPool?.capabilityMap;
   const mapping = customMap?.[capTag] || DEFAULT_CAPABILITY_MAP[capTag] || { lane: "implementation", fallback: "evolution-worker" };
   if (explicitRole && explicitLane) {
-    const normalizedExplicitRole = normalizeWorkerName(explicitRole);
-    const inferredSpecialistLane = mapping.lane && mapping.lane !== "implementation";
-    if (normalizedExplicitRole === "evolution-worker" && inferredSpecialistLane) {
-      const score = getLaneScore(lanePerformance ?? {}, mapping.lane);
-      const LOW_PERFORMANCE_THRESHOLD = 0.25;
-      const laneWorkerName = LANE_WORKER_NAMES[mapping.lane] || mapping.fallback;
-      const performanceDegraded = score < LOW_PERFORMANCE_THRESHOLD;
-      const selectedRole = performanceDegraded ? mapping.fallback : laneWorkerName;
-      const lineage = buildSelectionLineageContract(plan, {
-        role: selectedRole,
-        lane: mapping.lane,
-        capabilityTag: capTag,
-        rerouteReasonCode: performanceDegraded ? SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED : null,
-      });
-      return {
-        role: selectedRole,
-        lane: mapping.lane,
-        reason: performanceDegraded
-          ? `Generic planner role "${explicitRole}" upgraded to capability lane "${mapping.lane}" for "${capTag}", but performance score ${score.toFixed(2)} fell below threshold so dispatch falls back to "${selectedRole}"`
-          : `Generic planner role "${explicitRole}" upgraded to specialist lane "${mapping.lane}" for capability "${capTag}"`,
-        isFallback: performanceDegraded,
-        performanceScore: score,
-        rerouteReasonCode: performanceDegraded ? SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED : null,
-        lineageContract: lineage.lineageContract,
-        lineageJoinKey: lineage.lineageJoinKey,
-        capabilityTag: capTag,
-        specialized: lineage.specialized,
-      };
-    }
     const lineage = buildSelectionLineageContract(plan, {
       role: explicitRole,
       lane: explicitLane,
