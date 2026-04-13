@@ -1825,6 +1825,40 @@ export interface PlanningPrior {
   retryViolationAdjustment: number;
 }
 
+export interface CandidatePlanningPolicy {
+  enabled: boolean;
+  minCandidates: number;
+  maxCandidates: number;
+  reason: string;
+}
+
+/**
+ * Enable bounded multi-candidate planning only for high-uncertainty planning cycles.
+ * The returned bounds are intentionally small to control premium-request spend.
+ */
+export function deriveCandidatePlanningPolicy(
+  planningPrior: Pick<PlanningPrior, "uncertainty" | "verificationDepth"> | null | undefined,
+): CandidatePlanningPolicy {
+  const uncertainty = String(planningPrior?.uncertainty || "low").trim().toLowerCase();
+  if (uncertainty !== "high") {
+    return {
+      enabled: false,
+      minCandidates: 1,
+      maxCandidates: 1,
+      reason: `single_pass_uncertainty=${uncertainty || "low"}`,
+    };
+  }
+
+  const verificationDepth = String(planningPrior?.verificationDepth || "standard").trim().toLowerCase();
+  const maxCandidates = verificationDepth === "deep" ? 3 : 2;
+  return {
+    enabled: true,
+    minCandidates: 2,
+    maxCandidates,
+    reason: `bounded_multi_candidate_uncertainty=high verificationDepth=${verificationDepth}`,
+  };
+}
+
 /**
  * Compute planning priors from benchmark ground-truth data and cycle history.
  *

@@ -7,6 +7,7 @@ import {
   normalizePrometheusParsedOutput,
   normalizeExecutionStrategyWaveTasks,
   applyAdmissionPacketHardFilter,
+  analyzePlanContractGateOutcome,
   applyPlanningRubric,
   RIGIDITY_PENALTY,
   filterResolvedCarryForwardItems,
@@ -21,9 +22,11 @@ import {
   BOTTLENECK_COVERAGE_FLOOR,
   buildDriftDebtTasks,
   checkPacketCompleteness,
+  stabilizeRawPacketEconomics,
   UNRECOVERABLE_PACKET_REASONS,
   PLANNER_HEALTH_ALIASES,
   normalizeProjectHealthAlias,
+  resolvePrometheusProjectHealth,
   checkHighRiskPacketConfidence,
   HIGH_RISK_LOW_CONFIDENCE_REASON,
   computeHighRiskComponentGate,
@@ -52,6 +55,8 @@ import {
   applyMandatoryCoverageEnforceReject,
   MANDATORY_COVERAGE_ENFORCE_REJECT_TOKEN,
   MANDATORY_COVERAGE_ENFORCE_EXIT_CODE,
+  synthesizeMandatoryTaskCoverage,
+  enforceMandatoryFindingCoveragePackets,
   buildRoutingOutcomeSection,
   enforceParserContractBeforeNormalization,
   ensurePersistedAnalysisTimestamps,
@@ -76,18 +81,22 @@ import {
   SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS,
   isSystemLearningCiDebtFinding,
   selectBestCandidatePlans,
+  extractPrometheusCandidatePlanSets,
+  selectPrometheusCandidatePlanSet,
   MAX_CANDIDATE_SETS,
   CANDIDATE_TIE_THRESHOLD,
   computeMandatoryFindingsPreflight,
   MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS,
   MANDATORY_FINDINGS_PREFLIGHT_STATUS,
   PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES,
+  applyPlanLifecycleAdmissionFilter,
 } from "../../src/core/prometheus.js";
-import { compilePrompt, markCacheableSegments, CANDIDATE_GENERATION_SECTION } from "../../src/core/prompt_compiler.js";
+import { compilePrompt, markCacheableSegments, CANDIDATE_GENERATION_SECTION, buildCandidateGenerationSection } from "../../src/core/prompt_compiler.js";
 import {
   scoreCandidateSet,
   selectBestCandidateSet,
 } from "../../src/core/plan_critic.js";
+import { deriveCandidatePlanningPolicy } from "../../src/core/model_policy.js";
 import {
   isNonSpecificVerification,
   validatePlanContract,
@@ -194,15 +203,14 @@ describe("normalizePrometheusParsedOutput", () => {
     assert.equal(normalized.projectHealth, "needs-work");
     assert.equal(Array.isArray(normalized.plans), true);
     assert.equal(normalized.plans.length, 2);
-    // Wave 1 plan
-    assert.equal(normalized.plans[0].wave, 1);
-    assert.equal(normalized.plans[0].role, "evolution-worker");
-    assert.equal(typeof normalized.plans[0].task, "string");
-    assert.ok(normalized.plans[0].task.length > 0);
-    // Wave 2 plan
-    assert.equal(normalized.plans[1].wave, 2);
-    // Priority should reflect severity — BN-1 is critical → priority 1
-    assert.equal(normalized.plans[0].priority, 1);
+    const waveOnePlan = normalized.plans.find((plan: any) => plan.wave === 1);
+    const waveTwoPlan = normalized.plans.find((plan: any) => plan.wave === 2);
+    assert.ok(waveOnePlan);
+    assert.ok(waveTwoPlan);
+    assert.ok(typeof waveOnePlan!.role === "string" && waveOnePlan!.role.length > 0);
+    assert.equal(typeof waveOnePlan!.task, "string");
+    assert.ok(waveOnePlan!.task.length > 0);
+    assert.equal(waveOnePlan!.priority, 1);
   });
 
   it("keeps valid planner plans and fills missing required fields", () => {
@@ -221,11 +229,53 @@ describe("normalizePrometheusParsedOutput", () => {
 
     assert.equal(normalized.projectHealth, "good");
     assert.equal(normalized.plans.length, 1);
-    assert.equal(normalized.plans[0].role, "evolution-worker");
+    assert.ok(typeof normalized.plans[0].role === "string" && normalized.plans[0].role.length > 0);
     assert.ok(normalized.plans[0].verification.startsWith("npm test"));
     assert.match(normalized.plans[0].verification, /test:/i);
     assert.equal(normalized.plans[0].priority, 1);
     assert.ok(normalized.plans[0]._planningRubric, "planning rubric metadata should be attached");
+  });
+
+  it("upgrades generic governance-heavy plans to governance-worker with lane hints", () => {
+    const parsed = {
+      plans: [
+        {
+          task: "Normalize lane-diversity reason contract with compatibility bridge",
+          role: "evolution-worker",
+          target_files: ["src/core/orchestrator.ts", "src/core/governance_contract.ts"],
+          acceptance_criteria: ["Dispatch block reasons remain deterministic"],
+          verification: "npm test -- tests/core/orchestrator_gate_precedence.test.ts",
+        },
+      ],
+    };
+
+    const normalized = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    assert.equal(normalized.plans.length, 1);
+    assert.equal(normalized.plans[0].role, "governance-worker");
+    assert.equal(normalized.plans[0].capabilityLane, "governance");
+    assert.equal(normalized.plans[0].capabilityTag, "state-governance");
+  });
+
+  it("upgrades generic test-heavy plans to quality-worker with lane hints", () => {
+    const parsed = {
+      plans: [
+        {
+          task: "Retire stale Athena correction-fidelity health finding",
+          role: "evolution-worker",
+          target_files: ["src/core/athena_reviewer.ts", "tests/core/athena_review_normalization.test.ts"],
+          acceptance_criteria: ["Regression test proves deep-equality behavior remains intact"],
+          verification: "npm test -- tests/core/athena_review_normalization.test.ts",
+        },
+      ],
+    };
+
+    const normalized = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    assert.equal(normalized.plans.length, 1);
+    assert.equal(normalized.plans[0].role, "quality-worker");
+    assert.equal(normalized.plans[0].capabilityLane, "quality");
+    assert.equal(normalized.plans[0].capabilityTag, "test-infra");
   });
 
   it("maps DECISION-style waves with string task ids into actionable plans", () => {
@@ -244,11 +294,16 @@ describe("normalizePrometheusParsedOutput", () => {
     });
 
     assert.equal(normalized.plans.length, 3);
-    assert.equal(normalized.plans[0].wave, 1);
-    assert.equal(normalized.plans[1].wave, 1);
-    assert.equal(normalized.plans[2].wave, 2);
-    assert.equal(normalized.plans[0].task, "verification-harness-fix");
-    assert.equal(normalized.plans[0].role, "evolution-worker");
+    const verificationPlan = normalized.plans.find((plan: any) => plan.task === "verification-harness-fix");
+    const routerPlan = normalized.plans.find((plan: any) => plan.task === "decision-router-hardening");
+    const ledgerPlan = normalized.plans.find((plan: any) => plan.task === "closed-loop-learning-ledger");
+    assert.ok(verificationPlan);
+    assert.ok(routerPlan);
+    assert.ok(ledgerPlan);
+    assert.equal(verificationPlan!.wave, 1);
+    assert.equal(routerPlan!.wave, 1);
+    assert.equal(ledgerPlan!.wave, 2);
+    assert.ok(typeof verificationPlan!.role === "string" && verificationPlan!.role.length > 0);
   });
 
   it("always emits requestBudget to satisfy trust boundary", () => {
@@ -1125,6 +1180,313 @@ describe("filterResolvedCarryForwardItems", () => {
     assert.equal(result.length, 1);
   });
 
+
+describe("applyPlanLifecycleAdmissionFilter", () => {
+  async function makeStateDir(prefix: string): Promise<string> {
+    const { tmpdir } = await import("node:os");
+    return fs.mkdtemp(path.join(tmpdir(), prefix));
+  }
+
+  it("keeps evidence-backed partial work as continuing and suppresses same-family reopen", async () => {
+    const stateDir = await makeStateDir("lifecycle-filter-");
+
+    try {
+      const result = await applyPlanLifecycleAdmissionFilter(stateDir, [
+        {
+          task: "Finish worker restart recovery flow",
+          scope: "src/core/orchestrator.ts",
+          target_files: ["src/core/orchestrator.ts"],
+          continuationFamilyKey: "worker-restart-recovery",
+          implementationStatus: "implemented_partially",
+          implementationEvidence: ["src/core/orchestrator.ts line 25"],
+        },
+        {
+          task: "Add worker restart recovery guardrails",
+          scope: "src/core/orchestrator.ts",
+          target_files: ["src/core/orchestrator.ts"],
+          continuationFamilyKey: "worker-restart-recovery",
+          implementationStatus: "not_implemented",
+          implementationEvidence: [],
+        },
+      ]);
+
+      assert.equal(result.actionablePlans.length, 1);
+      assert.equal(result.actionablePlans[0]._lifecycleState, "continuing");
+      assert.ok(result.actionablePlans[0].continuationFamilyKey);
+      assert.equal(result.skippedPlans.length, 1);
+      assert.match(result.skippedPlans[0].reason, /already ongoing/i);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let unverified partial claims suppress same-family work", async () => {
+    const stateDir = await makeStateDir("lifecycle-filter-");
+
+    try {
+      const result = await applyPlanLifecycleAdmissionFilter(stateDir, [
+        {
+          task: "Finish worker restart recovery flow",
+          scope: "src/core/orchestrator.ts",
+          target_files: ["src/core/orchestrator.ts"],
+          continuationFamilyKey: "worker-restart-recovery",
+          implementationStatus: "implemented_partially",
+          implementationEvidence: [],
+        },
+        {
+          task: "Add worker restart recovery guardrails",
+          scope: "src/core/orchestrator.ts",
+          target_files: ["src/core/orchestrator.ts"],
+          continuationFamilyKey: "worker-restart-recovery",
+          implementationStatus: "not_implemented",
+          implementationEvidence: [],
+        },
+      ]);
+
+      assert.equal(result.actionablePlans.length, 2);
+      assert.equal(result.skippedPlans.length, 0);
+      assert.equal(result.actionablePlans[0]._lifecycleState, "partial_unverified");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses same-family new plans when persisted analysis already has verified continuation", async () => {
+    const stateDir = await makeStateDir("lifecycle-filter-");
+
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "prometheus_analysis.json"),
+        JSON.stringify({
+          plans: [
+            {
+              task: "Finish worker restart recovery flow",
+              scope: "src/core/orchestrator.ts",
+              target_files: ["src/core/orchestrator.ts"],
+              continuationFamilyKey: "worker-restart-recovery",
+              implementationStatus: "implemented_partially",
+              implementationEvidence: ["src/core/orchestrator.ts line 25"],
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      const result = await applyPlanLifecycleAdmissionFilter(stateDir, [
+        {
+          task: "Add worker restart recovery guardrails",
+          scope: "src/core/orchestrator.ts",
+          target_files: ["src/core/orchestrator.ts"],
+          continuationFamilyKey: "worker-restart-recovery",
+          implementationStatus: "not_implemented",
+          implementationEvidence: [],
+        },
+      ]);
+
+      assert.equal(result.actionablePlans.length, 0);
+      assert.equal(result.skippedPlans.length, 1);
+      assert.match(result.skippedPlans[0].reason, /already ongoing/i);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not auto-close work from coordination completedTasks without verified evidence", async () => {
+    const stateDir = await makeStateDir("lifecycle-filter-");
+
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "athena_coordination.json"),
+        JSON.stringify({ completedTasks: ["Fix timeout recovery flow"] }),
+        "utf8",
+      );
+
+      const result = await applyPlanLifecycleAdmissionFilter(stateDir, [
+        {
+          task: "Fix timeout recovery flow",
+          scope: "src/core/orchestrator.ts",
+          target_files: ["src/core/orchestrator.ts"],
+          implementationStatus: "implemented_correctly",
+          implementationEvidence: [],
+        },
+      ]);
+
+      assert.equal(result.actionablePlans.length, 1);
+      assert.equal(result.skippedPlans.length, 0);
+      assert.equal(result.actionablePlans[0]._lifecycleState, "unverified_completion_claim");
+      assert.equal(result.actionablePlans[0]._advisoryCompletionClaim, true);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("closes work from a verified Athena postmortem closure evidence envelope", async () => {
+    const stateDir = await makeStateDir("lifecycle-filter-");
+
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "athena_postmortems.json"),
+        JSON.stringify({
+          entries: [
+            {
+              taskCompleted: true,
+              expectedOutcome: "Fix timeout recovery flow",
+              closureEvidenceEnvelope: {
+                schemaVersion: 1,
+                source: "athena_postmortem",
+                task: "Fix timeout recovery flow",
+                taskIdentity: "fix timeout recovery flow",
+                continuationFamilyKey: "timeout:recovery:flow",
+                lifecycleState: "closed",
+                advisoryOnly: false,
+                verified: true,
+                implementationEvidence: ["src/core/orchestrator.ts"],
+                verification: {
+                  verificationPassed: true,
+                  doneWorkerWithVerificationReportEvidence: true,
+                  doneWorkerWithCleanTreeStatusEvidence: true,
+                  replayClosureSatisfied: true,
+                  closureBoundaryViolation: false,
+                },
+                emittedAt: "2026-04-13T12:00:00.000Z",
+              },
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      const result = await applyPlanLifecycleAdmissionFilter(stateDir, [
+        {
+          task: "Fix timeout recovery flow",
+          scope: "src/core/orchestrator.ts",
+          target_files: ["src/core/orchestrator.ts"],
+          continuationFamilyKey: "timeout:recovery:flow",
+          implementationStatus: "not_implemented",
+          implementationEvidence: [],
+        },
+      ]);
+
+      assert.equal(result.actionablePlans.length, 0);
+      assert.equal(result.skippedPlans.length, 1);
+      assert.match(result.skippedPlans[0].reason, /already (completed|closed)/i);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses same-family reopen from a verified Athena postmortem continuation envelope", async () => {
+    const stateDir = await makeStateDir("lifecycle-filter-");
+
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "athena_postmortems.json"),
+        JSON.stringify({
+          entries: [
+            {
+              taskCompleted: false,
+              expectedOutcome: "Finish worker restart recovery flow",
+              closureEvidenceEnvelope: {
+                schemaVersion: 1,
+                source: "athena_postmortem",
+                task: "Finish worker restart recovery flow",
+                taskIdentity: "finish worker restart recovery flow",
+                continuationFamilyKey: "worker-restart-recovery",
+                lifecycleState: "continuing",
+                advisoryOnly: false,
+                verified: true,
+                implementationEvidence: ["src/core/orchestrator.ts"],
+                verification: {
+                  verificationPassed: true,
+                  doneWorkerWithVerificationReportEvidence: false,
+                  doneWorkerWithCleanTreeStatusEvidence: false,
+                  replayClosureSatisfied: false,
+                  closureBoundaryViolation: false,
+                },
+                emittedAt: "2026-04-13T12:00:00.000Z",
+              },
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      const result = await applyPlanLifecycleAdmissionFilter(stateDir, [
+        {
+          task: "Add worker restart recovery guardrails",
+          scope: "src/core/orchestrator.ts",
+          target_files: ["src/core/orchestrator.ts"],
+          continuationFamilyKey: "worker-restart-recovery",
+          implementationStatus: "not_implemented",
+          implementationEvidence: [],
+        },
+      ]);
+
+      assert.equal(result.actionablePlans.length, 0);
+      assert.equal(result.skippedPlans.length, 1);
+      assert.match(result.skippedPlans[0].reason, /already ongoing/i);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("closes work only when carry-forward ledger has verified closure evidence", async () => {
+    const stateDir = await makeStateDir("lifecycle-filter-");
+
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "carry_forward_ledger.json"),
+        JSON.stringify([
+          {
+            id: "debt-1",
+            lesson: "Fix timeout recovery flow",
+            closedAt: "2026-04-13T12:00:00.000Z",
+            closureEvidence: "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/abc, inline://clean-tree-status, inline://npm-test-output-block]",
+          },
+        ]),
+        "utf8",
+      );
+
+      const result = await applyPlanLifecycleAdmissionFilter(stateDir, [
+        {
+          task: "Fix timeout recovery flow",
+          scope: "src/core/orchestrator.ts",
+          target_files: ["src/core/orchestrator.ts"],
+          implementationStatus: "not_implemented",
+          implementationEvidence: [],
+        },
+      ]);
+
+      assert.equal(result.actionablePlans.length, 0);
+      assert.equal(result.skippedPlans.length, 1);
+      assert.equal(result.skippedPlans[0].plan._lifecycleState, "closed");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on unverified completion claims instead of auto-closing them", async () => {
+    const stateDir = await makeStateDir("lifecycle-filter-");
+
+    try {
+      const result = await applyPlanLifecycleAdmissionFilter(stateDir, [
+        {
+          task: "Fix timeout recovery flow",
+          scope: "src/core/orchestrator.ts",
+          target_files: ["src/core/orchestrator.ts"],
+          implementationStatus: "implemented_correctly",
+          implementationEvidence: [],
+        },
+      ]);
+
+      assert.equal(result.actionablePlans.length, 1);
+      assert.equal(result.skippedPlans.length, 0);
+      assert.equal(result.actionablePlans[0]._lifecycleState, "unverified_completion_claim");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
   it("handles empty pendingEntries gracefully", () => {
     const result = filterResolvedCarryForwardItems([], [{ id: "d1", lesson: "anything", closedAt: "2025-01-01", closureEvidence: "done" }], []);
     assert.equal(result.length, 0);
@@ -1332,13 +1694,13 @@ describe("normalizePrometheusParsedOutput — batch/wave packet field preservati
     assert.equal(result.plans[0].owner, "governance-worker", "owner should fall back to role");
   });
 
-  it("defaults owner to evolution-worker when both owner and role are absent", () => {
+  it("defaults owner to the normalized role when both owner and role are absent", () => {
     const parsed = {
       projectHealth: "good",
       plans: [{ task: "Fix something", wave: 1 }]
     };
     const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
-    assert.equal(result.plans[0].owner, "evolution-worker", "owner must default to evolution-worker");
+    assert.equal(result.plans[0].owner, result.plans[0].role, "owner must default to the normalized role");
   });
 
   it("preserves explicit leverage_rank array from a capability-aware plan", () => {
@@ -1358,14 +1720,17 @@ describe("normalizePrometheusParsedOutput — batch/wave packet field preservati
       "leverage_rank must be preserved from source plan");
   });
 
-  it("defaults leverage_rank to empty array when absent", () => {
+  it("infers leverage_rank from normalized plan structure when absent", () => {
     const parsed = {
       projectHealth: "good",
       plans: [{ task: "Fix something", wave: 1 }]
     };
     const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
-    assert.deepEqual(result.plans[0].leverage_rank, [],
-      "leverage_rank must default to empty array when absent");
+    assert.ok(Array.isArray(result.plans[0].leverage_rank));
+    assert.ok(result.plans[0].leverage_rank.length >= 2,
+      "leverage_rank must be inferred to avoid classifying fallback packets as low-leverage by default");
+    assert.ok(result.plans[0].leverage_rank.includes("worker-specialization"));
+    assert.ok(result.plans[0].leverage_rank.includes("model-task-fit"));
   });
 
   it("synthesizes stub plans for string wave tasks that have no matching task entry", () => {
@@ -1385,8 +1750,10 @@ describe("normalizePrometheusParsedOutput — batch/wave packet field preservati
     assert.ok(taskTexts.includes("T-999"), "stub plan task must equal the unmatched task id string");
     assert.equal(result.plans.find(p => p.task === "T-999")?.wave, 1,
       "stub plan must have the correct wave assignment");
-    assert.equal(result.plans.find(p => p.task === "T-999")?.role, "evolution-worker",
+    assert.ok(String(result.plans.find(p => p.task === "T-999")?.role || "").length > 0,
       "stub plan must be assigned a role");
+    assert.ok(String(result.plans.find(p => p.task === "T-999")?.capabilityLane || "").length > 0,
+      "stub plan must carry a capability lane hint");
   });
 
   it("propagates wave dependsOn to plan waveDepends via buildPlansFromAlternativeShape", () => {
@@ -2196,6 +2563,21 @@ describe("checkPacketCompleteness — generation-boundary gate", () => {
     assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING));
   });
 
+  it("stabilizeRawPacketEconomics repairs invalid requestROI when the packet is otherwise actionable", () => {
+    const repaired = stabilizeRawPacketEconomics(validRawPlan({ requestROI: 0 }));
+    assert.equal(repaired.requestROI, 1.0);
+    const result = checkPacketCompleteness(repaired);
+    assert.equal(result.recoverable, true);
+  });
+
+  it("stabilizeRawPacketEconomics does not invent economics for packets with no verification signal", () => {
+    const repaired = stabilizeRawPacketEconomics({ task: "Missing verification", requestROI: 0, capacityDelta: 0.1 });
+    assert.equal(repaired.requestROI, 0);
+    const result = checkPacketCompleteness(repaired);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_REQUEST_ROI));
+  });
+
   // ── Raw packet stage: verification coupling is mandatory ─────────────────
 
   it("returns recoverable=false when verification_commands is absent", () => {
@@ -2339,6 +2721,24 @@ describe("PLANNER_HEALTH_ALIASES and normalizeProjectHealthAlias (Task 1)", () =
     );
     assert.ok(penalty, "must have a healthField penalty when health is missing");
     assert.equal(penalty.reason, "health_field_inferred_from_text");
+  });
+
+  it("infers critical only from explicit health/status context, not incidental critical wording", () => {
+    const parsed = {
+      analysis: "A critical capability gap exists in governance token parsing, but project health remains degraded while fixes are actionable.",
+      plans: [{ task: "Normalize governance token parsing", role: "evolution-worker", wave: 1 }],
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.equal(result.projectHealth, "needs-work");
+  });
+
+  it("infers critical when the narrative explicitly states health is critical", () => {
+    const parsed = {
+      analysis: "System health is critical because no dispatchable workers remain.",
+      plans: [{ task: "Restore dispatchable worker coverage", role: "evolution-worker", wave: 1 }],
+    };
+    const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.equal(result.projectHealth, "critical");
   });
 });
 
@@ -2675,6 +3075,31 @@ describe("buildPrometheusPlanningPolicy", () => {
 
     assert.equal(policy.maxTasks, 3);
     assert.equal(policy.maxWorkersPerWave, 3);
+  });
+
+  it("publishes tighter adaptive packet caps for fragile task kinds under uncertainty", () => {
+    const policy = buildPrometheusPlanningPolicy({
+      planner: {
+        maxPlansPerPacket: 5,
+      },
+    }, null, {
+      uncertainty: "high",
+      taskKindTelemetry: {
+        test: {
+          successRate: 0.4,
+          sampleCount: 4,
+          averageBatchSize: 4,
+          averageOrderedStepCount: 9,
+          averageContextUtilizationPercent: 71,
+        },
+      },
+    });
+
+    assert.equal(policy.maxPlansPerPacket, 5);
+    assert.equal(policy.planningUncertainty, "high");
+    assert.equal(policy.adaptivePacketCaps.implementation, 4);
+    assert.equal(policy.adaptivePacketCaps.test, 2);
+    assert.equal(policy.adaptivePacketCaps.rework, 2);
   });
 });
 
@@ -4467,6 +4892,93 @@ describe("health-audit mandatory task injection contract", () => {
     assert.ok(result.invalid.some((v) => v.includes("mapped_without_existing_plan")));
   });
 
+  it("synthesizes mandatory coverage from a matching plan when the companion block is missing", () => {
+    const findings = [
+      {
+        id: "lane-diversity-governance",
+        area: "governance",
+        severity: "critical" as const,
+        finding: "Lane diversity gate reasons are inconsistent across Prometheus and orchestrator",
+        remediation: "Normalize governance lane reason contract",
+        capabilityNeeded: "lane-diversity-governance",
+      },
+    ];
+    const payload: any = {
+      plans: [
+        {
+          task: "Normalize lane-diversity governance reason contract",
+          capabilityTag: "lane-diversity-governance",
+        },
+      ],
+    };
+
+    const synthesized = synthesizeMandatoryTaskCoverage(payload, findings as any);
+    const result = validateMandatoryTaskCoverageContract(synthesized, findings as any);
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(synthesized.mandatoryTaskCoverage, [
+      {
+        findingId: "lane-diversity-governance",
+        status: "mapped",
+        planTask: "Normalize lane-diversity governance reason contract",
+      },
+    ]);
+  });
+
+  it("maps CI-critical mandatory findings to the enforced ci-fix packet", () => {
+    const findings = [
+      {
+        id: "ci-failure-1",
+        area: "ci",
+        severity: "critical" as const,
+        finding: "TypeError in tests/core/ci_gate.test.ts",
+        remediation: "Repair CI failure packet",
+        capabilityNeeded: "ci-fix",
+      },
+    ];
+    const payload: any = {
+      plans: [
+        {
+          task: "Build explicit CI repair packet from mandatory CI-critical findings: ci-failure-1",
+          taskKind: "ci-fix",
+        },
+      ],
+    };
+
+    const synthesized = synthesizeMandatoryTaskCoverage(payload, findings as any);
+
+    assert.deepEqual(synthesized.mandatoryTaskCoverage, [
+      {
+        findingId: "ci-failure-1",
+        status: "mapped",
+        planTask: "Build explicit CI repair packet from mandatory CI-critical findings: ci-failure-1",
+      },
+    ]);
+  });
+
+  it("injects deterministic fallback packets for unmatched mandatory findings", () => {
+    const findings = [
+      {
+        id: "pre-wave-diversity-validation",
+        area: "capability-gap",
+        severity: "warning" as const,
+        finding: "Lane diversity gate fires after waves have already dispatched",
+        remediation: "Move lane_diversity_gate check to pre-wave-1 validation and set dispatchBlockReason in src/core/orchestrator.ts",
+        capabilityNeeded: "pre-wave-diversity-validation",
+      },
+    ];
+    const payload: any = { plans: [] };
+
+    const enforced = enforceMandatoryFindingCoveragePackets(payload, findings as any);
+    const synthesized = synthesizeMandatoryTaskCoverage(enforced.output, findings as any);
+    const result = validateMandatoryTaskCoverageContract(synthesized, findings as any);
+
+    assert.deepEqual(enforced.injectedFindingIds, ["pre-wave-diversity-validation"]);
+    assert.equal(enforced.output.plans.length, 1);
+    assert.equal(result.ok, true);
+    assert.match(String(enforced.output.plans[0].task || ""), /pre-wave-diversity-validation/i);
+  });
+
   it("buildMandatoryCoverageRetryDiff emits deterministic missing/invalid lines", () => {
     const diff = buildMandatoryCoverageRetryDiff({
       ok: false,
@@ -4728,10 +5240,20 @@ describe("normalizeScalarContractField — parse-boundary normalization", () => 
     assert.equal(result.value, 1.5, "value key must take priority over estimate");
   });
 
-  it("returns NaN with no_scalar_key provenance when object has no canonical key", () => {
+  it("aggregates numeric object values when no canonical scalar key is present", () => {
     const result = normalizeScalarContractField({ unknown_field: 0.5 }, "capacityDelta");
-    assert.ok(Number.isNaN(result.value));
-    assert.ok(typeof result.provenance === "string" && result.provenance.includes("no_scalar_key"));
+    assert.equal(result.value, 0.5);
+    assert.ok(typeof result.provenance === "string" && result.provenance.includes("object_aggregate"));
+  });
+
+  it("averages multidimensional numeric strings for capacityDelta", () => {
+    const result = normalizeScalarContractField({
+      latency: "+0.18",
+      cost_efficiency: "+0.22",
+      planning_repeatability: "+0.12",
+    }, "capacityDelta");
+    assert.equal(result.value, 0.173);
+    assert.ok(typeof result.provenance === "string" && result.provenance.includes("object_aggregate"));
   });
 
   it("normalizePrometheusParsedOutput handles object-shaped capacityDelta in plans", () => {
@@ -4758,7 +5280,7 @@ describe("normalizeScalarContractField — parse-boundary normalization", () => 
     assert.equal(plan.requestROI, 2.5, "requestROI must be extracted from {estimate} object");
   });
 
-  it("normalizePrometheusParsedOutput falls back to defaults for unresolvable object fields", () => {
+  it("normalizePrometheusParsedOutput aggregates numeric object fields when scalar keys are absent", () => {
     const parsed = {
       projectHealth: "needs-work",
       plans: [
@@ -4776,9 +5298,8 @@ describe("normalizeScalarContractField — parse-boundary normalization", () => 
 
     const result = normalizePrometheusParsedOutput(parsed, { raw: "" });
     const plan = result.plans[0];
-    // Default values must be applied when no canonical key is found
-    assert.equal(plan.capacityDelta, 0.1, "capacityDelta must fall back to 0.1 default");
-    assert.equal(plan.requestROI, 1.0, "requestROI must fall back to 1.0 default");
+    assert.equal(plan.capacityDelta, 0.4, "capacityDelta must aggregate numeric object values");
+    assert.equal(plan.requestROI, 2.5, "requestROI must aggregate numeric object values");
   });
 
   it("negative path: integer zero capacityDelta is preserved (boundary edge)", () => {
@@ -4932,6 +5453,18 @@ describe("tagStaleDiagnosticsBackedPlans", () => {
     ];
     tagStaleDiagnosticsBackedPlans(plans, staleFreshness);
     assert.equal(plans[0]._staleDiagnosticsGated, undefined, "plan with implementationEvidence must not be tagged");
+  });
+
+  it("does NOT tag plans that have concrete target_files when they don't reference stale source", () => {
+    const plans = [
+      {
+        task: "Refactor parser baseline recovery module",
+        role: "Evolution Worker",
+        target_files: ["src/core/prometheus.ts", "tests/core/prometheus_parse.test.ts"],
+      },
+    ];
+    tagStaleDiagnosticsBackedPlans(plans, staleFreshness);
+    assert.equal(plans[0]._staleDiagnosticsGated, undefined, "plan with target_files backing must not be tagged");
   });
 
   it("does NOT tag plans when all diagnostics are fresh", () => {
@@ -5232,6 +5765,32 @@ describe("stale-diagnostics live admission gate — tagStaleDiagnosticsBackedPla
     assert.equal(hasStaleViolation, false, "independently-evidenced plan must not receive stale_diagnostics_backed violation");
   });
 
+  it("plan with concrete target_files backing bypasses stale-diagnostics tagging", () => {
+    const staleFreshness = {
+      allFresh: false,
+      staleSources: ["worker_cycle_artifacts"],
+      freshnessReasons: ["stale_diagnostics:worker_cycle_artifacts:ageMinutes=480:staleAfterMs=21600000"],
+    };
+    const plans = [
+      {
+        task: "Restore deterministic Windows verification",
+        role: "quality-worker",
+        target_files: ["src/core/verification_command_registry.ts", "tests/core/prometheus_parse.test.ts"],
+        verification: "npm test -- tests/core/prometheus_parse.test.ts",
+        acceptance_criteria: ["Regression tests cover Windows glob artifact handling"],
+        dependencies: [],
+        capacityDelta: 0.33,
+        requestROI: 2.6,
+      },
+    ];
+    tagStaleDiagnosticsBackedPlans(plans, staleFreshness);
+    assert.equal(plans[0]._staleDiagnosticsGated, undefined);
+
+    const result = validatePlanContract(plans[0]);
+    const hasStaleViolation = result.violations.some(v => v.code === "stale_diagnostics_backed");
+    assert.equal(hasStaleViolation, false);
+  });
+
   it("negative: when all diagnostics are fresh, no plans are tagged regardless of evidence", () => {
     const freshAdmission = { allFresh: true, staleSources: [], freshnessReasons: [] };
     const plans = [
@@ -5318,6 +5877,89 @@ describe("applyAdmissionPacketHardFilter", () => {
     assert.equal(result.filteredCount, 0);
     assert.deepEqual(result.rejectedPlanIndices, [1, 0]);
     assert.equal(plans.length, 2, "all plans must be preserved for Athena review");
+  });
+});
+
+describe("analyzePlanContractGateOutcome", () => {
+  it("marks the cycle blocked when every plan has a critical contract violation", () => {
+    const outcome = analyzePlanContractGateOutcome({
+      totalPlans: 2,
+      results: [
+        {
+          planIndex: 0,
+          valid: false,
+          violations: [
+            {
+              code: PACKET_VIOLATION_CODE.MISSING_IMPLEMENTATION_EVIDENCE,
+              severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+            },
+          ],
+        },
+        {
+          planIndex: 1,
+          valid: false,
+          violations: [
+            {
+              code: PACKET_VIOLATION_CODE.STALE_DIAGNOSTICS_BACKED,
+              severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+            },
+          ],
+        },
+      ],
+    });
+
+    assert.equal(outcome.totalPlans, 2);
+    assert.equal(outcome.criticalInvalidCount, 2);
+    assert.equal(outcome.allPlansBlocked, true);
+    assert.deepEqual(outcome.blockedPlanIndices, [0, 1]);
+    assert.deepEqual(outcome.blockedViolationCodes, [
+      PACKET_VIOLATION_CODE.MISSING_IMPLEMENTATION_EVIDENCE,
+      PACKET_VIOLATION_CODE.STALE_DIAGNOSTICS_BACKED,
+    ]);
+  });
+
+  it("does not mark the cycle blocked when at least one plan remains dispatchable", () => {
+    const outcome = analyzePlanContractGateOutcome({
+      totalPlans: 3,
+      results: [
+        {
+          planIndex: 0,
+          valid: true,
+          violations: [],
+        },
+        {
+          planIndex: 1,
+          valid: false,
+          violations: [
+            {
+              code: PACKET_VIOLATION_CODE.MISSING_IMPLEMENTATION_EVIDENCE,
+              severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+            },
+            {
+              code: PACKET_VIOLATION_CODE.MISSING_IMPLEMENTATION_EVIDENCE,
+              severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+            },
+          ],
+        },
+        {
+          planIndex: 2,
+          valid: false,
+          violations: [
+            {
+              code: PACKET_VIOLATION_CODE.MISSING_CAPACITY_FIRST_JUSTIFICATION,
+              severity: PLAN_VIOLATION_SEVERITY.WARNING,
+            },
+          ],
+        },
+      ],
+    });
+
+    assert.equal(outcome.criticalInvalidCount, 1);
+    assert.equal(outcome.allPlansBlocked, false);
+    assert.deepEqual(outcome.blockedPlanIndices, [1]);
+    assert.deepEqual(outcome.blockedViolationCodes, [
+      PACKET_VIOLATION_CODE.MISSING_IMPLEMENTATION_EVIDENCE,
+    ]);
   });
 });
 
@@ -5582,6 +6224,53 @@ describe("isStrategicFieldToolTraceContaminated — Unicode-safe narration detec
       false,
       "Fullwidth digits in a measurement context must not be flagged as contamination",
     );
+  });
+
+  it("detects typographic apostrophe narration like I’m gathering evidence", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated("I’m gathering the latest system-state and research evidence first."),
+      true,
+      "Typographic apostrophe narration must be rejected as contamination",
+    );
+  });
+
+  it("detects typographic apostrophe narration like I’m pulling system state", () => {
+    assert.equal(
+      isStrategicFieldToolTraceContaminated("I’m pulling the system state and core orchestration files first."),
+      true,
+      "Typographic apostrophe pulling narration must be rejected as contamination",
+    );
+  });
+});
+
+describe("resolvePrometheusProjectHealth", () => {
+  it("defaults inferred health to good when plans survive and no hard gate failed", () => {
+    const result = resolvePrometheusProjectHealth({
+      projectHealth: "needs-work",
+      _projectHealthExplicit: false,
+      plans: [{ task: "Valid plan" }],
+    });
+    assert.equal(result, "good");
+  });
+
+  it("preserves explicit needs-work health from the model", () => {
+    const result = resolvePrometheusProjectHealth({
+      projectHealth: "needs-work",
+      _projectHealthExplicit: true,
+      plans: [{ task: "Valid plan" }],
+    });
+    assert.equal(result, "needs-work");
+  });
+
+  it("returns critical when fail-close gates emptied the plan set", () => {
+    const result = resolvePrometheusProjectHealth({
+      projectHealth: "needs-work",
+      _projectHealthExplicit: false,
+      plans: [],
+      failReason: "plan-contract-gate",
+      _planContractGateFailed: true,
+    });
+    assert.equal(result, "critical");
   });
 });
 
@@ -6141,6 +6830,33 @@ describe("sanitizePlanningFieldForPersistence", () => {
     const clean = "Implement feature X with proper error handling.";
     assert.equal(sanitizePlanningFieldForPersistence(clean), clean);
   });
+
+  it("strips typographic apostrophe process narration lines", () => {
+    const input = "I’m gathering the latest system-state and research evidence first.\nImplement deterministic packet gating.";
+    const result = sanitizePlanningFieldForPersistence(input);
+    assert.ok(!result.includes("I’m gathering"), "Unicode narration line must be stripped");
+    assert.ok(result.includes("Implement deterministic packet gating."), "clean strategic content must be preserved");
+  });
+});
+
+describe("validatePlanContract — verification prose handling", () => {
+  it("does not flag forbidden_command when verification prose mentions a bad command only inside descriptive text", () => {
+    const result = validatePlanContract({
+      task: "Restore deterministic Windows verification",
+      role: "quality-worker",
+      wave: 1,
+      verification: "tests/core/verification_gate.test.ts — test: Replace ambiguous `node --test tests/**/*.test.js`-style verification with exact-target commands.",
+      verification_commands: ["npm test -- tests/core/verification_gate.test.ts"],
+      acceptance_criteria: ["Named verification target remains exact and platform-safe"],
+      dependencies: [],
+      capacityDelta: 0.33,
+      requestROI: 2.6,
+      leverage_rank: ["architecture", "task-quality"],
+    });
+
+    assert.equal(result.valid, true);
+    assert.equal(result.violations.some((violation) => violation.code === PACKET_VIOLATION_CODE.FORBIDDEN_COMMAND), false);
+  });
 });
 
 // ── RolePlanCompletenessError — fail-closed completeness gate ─────────────────
@@ -6619,6 +7335,104 @@ describe("selectBestCandidatePlans — bounded candidate generation", () => {
   it("MAX_CANDIDATE_SETS is exported and >= 2", () => {
     assert.ok(typeof MAX_CANDIDATE_SETS === "number", "is a number");
     assert.ok(MAX_CANDIDATE_SETS >= 2, "allows at least 2 candidates");
+  });
+});
+
+describe("high-uncertainty candidate planning wiring", () => {
+  it("extracts bounded candidate plan sets from candidateSets payloads", () => {
+    const extracted = extractPrometheusCandidatePlanSets({
+      candidateSets: [
+        { label: "candidate-a", plans: [{ task: "A" }] },
+        [{ task: "B" }],
+        { label: "candidate-empty", plans: [] },
+      ],
+    });
+    assert.equal(extracted.length, 2);
+    assert.equal(extracted[0].label, "candidate-a");
+    assert.equal(extracted[1].label, "candidate-2");
+  });
+
+  it("selects the candidate set that survives freshness and contract gates best", () => {
+    const rawParsed = {
+      candidateSets: [
+        {
+          label: "stale-and-weak",
+          plans: [
+            {
+              task: "Fix diagnostics-only debt",
+              role: "evolution-worker",
+              wave: 1,
+              target_files: ["src/core/prometheus.ts"],
+              acceptance_criteria: ["one criterion only"],
+              verification: "manual check later",
+              _evidenceSources: ["health_audit_findings"],
+            },
+          ],
+        },
+        {
+          label: "fresh-and-strong",
+          plans: [
+            {
+              task: "Wire bounded candidate selection into src/core/prometheus.ts",
+              role: "evolution-worker",
+              wave: 1,
+              scope: "src/core/prometheus.ts",
+              target_files: ["src/core/prometheus.ts", "tests/core/prometheus_parse.test.ts"],
+              acceptance_criteria: [
+                "candidate selection keeps >= 1 dispatchable plan",
+                "npm test -- tests/core/prometheus_parse.test.ts exits with code 0",
+              ],
+              verification: "npm test -- tests/core/prometheus_parse.test.ts",
+              capacityDelta: 0.2,
+              requestROI: 1.5,
+              leverage_rank: ["task-quality", "worker-specialization"],
+              before_state: "single plan path only",
+              after_state: "high-uncertainty cycles select from bounded candidate sets",
+              riskLevel: "low",
+            },
+          ],
+        },
+      ],
+      projectHealth: "needs-work",
+      requestBudget: { estimatedPremiumRequestsTotal: 2, errorMarginPercent: 15, hardCapTotal: 3 },
+      generatedAt: "2026-04-13T00:00:00.000Z",
+      keyFindings: "High-uncertainty planning should select the strongest dispatchable candidate set.",
+      strategicNarrative: "Candidate selection should demote stale or contract-weak plan sets before repair.",
+    };
+    const selection = selectPrometheusCandidatePlanSet(rawParsed, { raw: "" }, {
+      diagnosticsFreshnessAdmission: {
+        allFresh: false,
+        staleSources: ["health_audit_findings"],
+        freshnessReasons: ["stale:health_audit_findings"],
+      },
+    });
+
+    assert.equal(selection.usedSelection, true);
+    assert.equal(selection.selectedLabel, "fresh-and-strong");
+    assert.equal(selection.selectedPlans.length, 1);
+    assert.ok(selection.candidateSummaries.some((summary) =>
+      summary.label === "stale-and-weak" && summary.freshnessPenalty > 0
+    ));
+  });
+
+  it("builds an explicit candidateSets JSON contract for the prompt", () => {
+    const section = buildCandidateGenerationSection({ minCandidates: 2, maxCandidates: 3 });
+    assert.match(section.content, /candidateSets/i);
+    assert.match(section.content, /between 2 and 3 distinct candidate plan sets/i);
+  });
+
+  it("enables bounded candidate planning only for high-uncertainty priors", () => {
+    const high = deriveCandidatePlanningPolicy({ uncertainty: "high", verificationDepth: "deep" });
+    const low = deriveCandidatePlanningPolicy({ uncertainty: "low", verificationDepth: "shallow" });
+    assert.equal(high.enabled, true);
+    assert.equal(high.minCandidates, 2);
+    assert.ok(high.maxCandidates >= 2);
+    assert.equal(low.enabled, false);
+    assert.equal(low.maxCandidates, 1);
+  });
+
+  it("keeps the default candidate generation section aligned with the JSON contract", () => {
+    assert.match(CANDIDATE_GENERATION_SECTION.content, /candidateSets/i);
   });
 });
 

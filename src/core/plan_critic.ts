@@ -372,6 +372,77 @@ export function scoreCandidateSet(plans: object[]): {
   return { setScore, dimensionCoverage, planCount: plans.length };
 }
 
+export interface CandidateSetGateMetrics {
+  contractPassRate?: number;
+  viablePlanCount?: number;
+  freshnessPenalty?: number;
+  allPlansBlocked?: boolean;
+}
+
+export interface CandidateSetScore {
+  setScore: number;
+  dimensionCoverage: number;
+  planCount: number;
+  contractPassRate: number;
+  viableRatio: number;
+  freshnessPenalty: number;
+  allPlansBlocked: boolean;
+  effectiveScore: number;
+}
+
+function clamp01(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.min(1, value));
+}
+
+export function scoreCandidateSetWithGates(
+  plans: object[],
+  gateMetrics: CandidateSetGateMetrics = {},
+): CandidateSetScore {
+  const base = scoreCandidateSet(plans);
+  if (base.planCount === 0) {
+    return {
+      ...base,
+      contractPassRate: 0,
+      viableRatio: 0,
+      freshnessPenalty: 1,
+      allPlansBlocked: true,
+      effectiveScore: 0,
+    };
+  }
+
+  const contractPassRate = clamp01(Number(gateMetrics.contractPassRate), 1);
+  const viablePlanCount = Number.isFinite(Number(gateMetrics.viablePlanCount))
+    ? Math.max(0, Math.min(base.planCount, Math.floor(Number(gateMetrics.viablePlanCount))))
+    : base.planCount;
+  const viableRatio = clamp01(viablePlanCount / Math.max(1, base.planCount), 1);
+  const freshnessPenalty = clamp01(Number(gateMetrics.freshnessPenalty), 0);
+  const allPlansBlocked = gateMetrics.allPlansBlocked === true || viablePlanCount === 0 || contractPassRate === 0;
+  if (allPlansBlocked) {
+    return {
+      ...base,
+      contractPassRate,
+      viableRatio,
+      freshnessPenalty,
+      allPlansBlocked: true,
+      effectiveScore: 0,
+    };
+  }
+  const gateMultiplier = 0.6 + (contractPassRate * 0.2) + (viableRatio * 0.2);
+  const effectiveScore = Math.round(
+    Math.max(0, Math.min(1, base.setScore * gateMultiplier * (1 - freshnessPenalty))) * 1000
+  ) / 1000;
+
+  return {
+    ...base,
+    contractPassRate,
+    viableRatio,
+    freshnessPenalty,
+    allPlansBlocked,
+    effectiveScore,
+  };
+}
+
 /**
  * Score differential below which two candidate sets are treated as tied.
  * When candidates are within this threshold, uncertainty-aware tie-breaks apply.
@@ -403,7 +474,10 @@ export const MAX_CANDIDATE_SETS = 5 as const;
  */
 export function selectBestCandidateSet(
   candidates: object[][],
-  opts: { threshold?: number } = {},
+  opts: {
+    threshold?: number;
+    gateMetricsByCandidate?: CandidateSetGateMetrics[];
+  } = {},
 ): {
   bestCandidates: object[];
   rank: number;
@@ -417,37 +491,47 @@ export function selectBestCandidateSet(
 
   const bounded = candidates.slice(0, MAX_CANDIDATE_SETS);
   const tieThreshold = typeof opts.threshold === "number" ? opts.threshold : CANDIDATE_TIE_THRESHOLD;
+  const gateMetricsByCandidate = Array.isArray(opts.gateMetricsByCandidate) ? opts.gateMetricsByCandidate : [];
 
   const scored = bounded.map((set, idx) => ({
     set,
     idx,
-    ...scoreCandidateSet(Array.isArray(set) ? set : []),
+    ...scoreCandidateSetWithGates(Array.isArray(set) ? set : [], gateMetricsByCandidate[idx]),
   }));
 
-  // Primary sort: setScore descending
+  // Primary sort: effectiveScore descending.
   scored.sort((a, b) => {
-    if (b.setScore !== a.setScore) return b.setScore - a.setScore;
-    // Tie-break 1: higher dimensionCoverage
+    if (a.allPlansBlocked !== b.allPlansBlocked) return a.allPlansBlocked ? 1 : -1;
+    if (b.effectiveScore !== a.effectiveScore) return b.effectiveScore - a.effectiveScore;
+    // Tie-break 1: higher contract pass rate
+    if (b.contractPassRate !== a.contractPassRate) return b.contractPassRate - a.contractPassRate;
+    // Tie-break 2: higher viable ratio
+    if (b.viableRatio !== a.viableRatio) return b.viableRatio - a.viableRatio;
+    // Tie-break 3: higher dimensionCoverage
     if (b.dimensionCoverage !== a.dimensionCoverage) return b.dimensionCoverage - a.dimensionCoverage;
-    // Tie-break 2: fewer plans (lower blast radius)
+    // Tie-break 4: lower freshness penalty
+    if (a.freshnessPenalty !== b.freshnessPenalty) return a.freshnessPenalty - b.freshnessPenalty;
+    // Tie-break 5: fewer plans (lower blast radius)
     if (a.planCount !== b.planCount) return a.planCount - b.planCount;
-    // Tie-break 3: original index (stable)
+    // Tie-break 6: original index (stable)
     return a.idx - b.idx;
   });
 
   const best = scored[0];
   const second = scored[1];
 
-  const tieBreakUsed = second !== undefined && Math.abs(best.setScore - second.setScore) <= tieThreshold;
+  const tieBreakUsed = second !== undefined && Math.abs(best.effectiveScore - second.effectiveScore) <= tieThreshold;
 
-  const reason = tieBreakUsed
-    ? `tie_break_applied: scores_within_${tieThreshold}_used_dimension_coverage_${best.dimensionCoverage}`
-    : `clear_winner: score=${best.setScore}`;
+  const reason = best.allPlansBlocked
+    ? "all_candidates_blocked"
+    : tieBreakUsed
+    ? `tie_break_applied: effective_score_within_${tieThreshold}_contract_${best.contractPassRate}_coverage_${best.dimensionCoverage}`
+    : `clear_winner: score=${best.effectiveScore}`;
 
   return {
     bestCandidates: Array.isArray(best.set) ? best.set : [],
     rank: best.idx,
-    score: best.setScore,
+    score: best.effectiveScore,
     tieBreakUsed,
     reason,
   };
