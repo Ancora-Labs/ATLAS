@@ -6857,6 +6857,23 @@ describe("validatePlanContract — verification prose handling", () => {
     assert.equal(result.valid, true);
     assert.equal(result.violations.some((violation) => violation.code === PACKET_VIOLATION_CODE.FORBIDDEN_COMMAND), false);
   });
+
+  it("still flags forbidden_command when the executable verification fragment itself is forbidden", () => {
+    const result = validatePlanContract({
+      task: "Replace globbed node --test invocation",
+      role: "quality-worker",
+      wave: 1,
+      verification: "node --test tests/**/*.test.js — test: Replace this with an exact-target command.",
+      verification_commands: ["node --test tests/**/*.test.js"],
+      acceptance_criteria: ["Verification command is portable on Windows"],
+      dependencies: [],
+      capacityDelta: 0.33,
+      requestROI: 2.6,
+      leverage_rank: ["architecture", "task-quality"],
+    });
+
+    assert.equal(result.violations.some((violation) => violation.code === PACKET_VIOLATION_CODE.FORBIDDEN_COMMAND), true);
+  });
 });
 
 // ── RolePlanCompletenessError — fail-closed completeness gate ─────────────────
