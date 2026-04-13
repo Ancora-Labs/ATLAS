@@ -20,6 +20,19 @@ import type { ModelCallSettingsOverlay } from "./model_policy.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const AGENTS_DIR = path.join(__dirname, "..", "..", ".github", "agents");
+const CRITICAL_AGENT_SLUGS = new Set(["prometheus", "athena"]);
+const WRITER_TOOL_NAMES = new Set(["edit", "execute"]);
+const SESSION_INPUT_POLICIES = new Set(["allow_all", "no_tools", "auto"]);
+const HOOK_COVERAGE_MODES = new Set(["required", "not_required"]);
+
+export type AgentSessionInputPolicy = "allow_all" | "no_tools" | "auto";
+export type AgentHookCoverageMode = "required" | "not_required";
+
+type AgentFrontmatterSnapshot = {
+  filePath: string;
+  raw: string | null;
+  frontmatter: string | null;
+};
 
 function logBannedModelAttempt(model, reason) {
   try {
@@ -40,6 +53,78 @@ export function nameToSlug(name) {
 
 export function agentFileExists(slug) {
   return existsSync(path.join(AGENTS_DIR, `${slug}.agent.md`));
+}
+
+function readAgentFrontmatterSnapshot(slug: string): AgentFrontmatterSnapshot {
+  const filePath = path.join(AGENTS_DIR, `${slug}.agent.md`);
+  if (!existsSync(filePath)) {
+    return { filePath, raw: null, frontmatter: null };
+  }
+
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, "utf8");
+  } catch {
+    return { filePath, raw: null, frontmatter: null };
+  }
+
+  const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---/);
+  return {
+    filePath,
+    raw,
+    frontmatter: fmMatch ? fmMatch[1] : null,
+  };
+}
+
+function extractFrontmatterField(frontmatter: string | null, key: string): string | undefined {
+  if (!frontmatter) return undefined;
+  const match = frontmatter.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
+  return match ? match[1].trim() : undefined;
+}
+
+function extractFrontmatterList(frontmatter: string | null, key: string): string[] | undefined {
+  if (!frontmatter) return undefined;
+  const inline = frontmatter.match(new RegExp(`^${key}:\\s*\\[([^\\]]*)\\]`, "m"));
+  if (inline) {
+    return inline[1].split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  const block = frontmatter.match(new RegExp(`^${key}:\\s*\\n((?:[ \\t]+-[ \\t]*.+\\n?)+)`, "m"));
+  if (block) {
+    return block[1].split("\n").map((line) => line.replace(/^[ \t]+-[ \t]*/, "").trim()).filter(Boolean);
+  }
+  return undefined;
+}
+
+function normalizeAgentToolNames(tools: string[] | undefined): string[] {
+  return Array.from(new Set(
+    (Array.isArray(tools) ? tools : [])
+      .map((tool) => String(tool || "").trim().toLowerCase())
+      .filter(Boolean),
+  ));
+}
+
+function normalizeSessionInputPolicy(value: unknown): AgentSessionInputPolicy | null {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (SESSION_INPUT_POLICIES.has(normalized)) {
+    return normalized as AgentSessionInputPolicy;
+  }
+  return null;
+}
+
+function normalizeHookCoverageMode(value: unknown): AgentHookCoverageMode | null {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (HOOK_COVERAGE_MODES.has(normalized)) {
+    return normalized as AgentHookCoverageMode;
+  }
+  return null;
+}
+
+function deriveSessionInputPolicyFromTools(tools: string[]): AgentSessionInputPolicy {
+  return tools.some((tool) => WRITER_TOOL_NAMES.has(tool)) ? "allow_all" : "no_tools";
+}
+
+function deriveHookCoverageModeFromTools(tools: string[]): AgentHookCoverageMode {
+  return tools.includes("execute") ? "required" : "not_required";
 }
 
 // ÔöÇÔöÇ Map model name to Copilot CLI model slug ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
@@ -108,6 +193,14 @@ export function buildAgentArgs({
   const args = [];
   const normalizedModelCallSettings: ModelCallSettingsOverlay =
     modelCallSettings && typeof modelCallSettings === "object" ? modelCallSettings : {};
+  const agentProfile = agentSlug && agentFileExists(agentSlug)
+    ? resolveAgentExecutionProfile(agentSlug)
+    : null;
+  const effectiveSessionInputPolicy = resolveAgentSessionInputPolicy(
+    agentProfile,
+    runContract?.sessionInputPolicy ?? (allowAll ? "allow_all" : "auto"),
+  );
+  const allowAllRequested = allowAll || effectiveSessionInputPolicy === "allow_all";
   const effectiveNoAskUser = noAskUser || normalizedModelCallSettings.noAskUser === true;
   const effectiveSilent = silent || normalizedModelCallSettings.silent === true;
   const effectiveModel = normalizedModelCallSettings.model || model;
@@ -126,8 +219,8 @@ export function buildAgentArgs({
     if (slug) args.push("--model", slug);
   };
 
-  if (allowAll) args.push("--allow-all");
-  if (effectiveNoAskUser) args.push("--no-ask-user");
+  if (effectiveSessionInputPolicy === "allow_all") args.push("--allow-all");
+  if (effectiveNoAskUser || allowAllRequested) args.push("--no-ask-user");
   if (autopilot) {
     args.push("--autopilot");
     // runContract.maxTurns takes precedence over the legacy maxContinues arg.
@@ -366,7 +459,22 @@ export interface AgentContractValidation {
     description?: string;
     model?: string;
     tools?: string[];
+    boxSessionInputPolicy?: AgentSessionInputPolicy;
+    boxHookCoverage?: AgentHookCoverageMode;
   };
+}
+
+export interface AgentExecutionProfile {
+  slug: string;
+  filePath: string;
+  valid: boolean;
+  violations: string[];
+  tools: string[];
+  sessionInputPolicy: AgentSessionInputPolicy;
+  hookCoverage: AgentHookCoverageMode;
+  source: "explicit" | "derived";
+  allowsExecute: boolean;
+  allowsWrites: boolean;
 }
 
 /**
@@ -374,68 +482,107 @@ export interface AgentContractValidation {
  * Uses regex extraction (no YAML parser dep) for deterministic behavior.
  */
 export function validateAgentContract(slug: string): AgentContractValidation {
-  const filePath = path.join(AGENTS_DIR, `${slug}.agent.md`);
+  const frontmatterSnapshot = readAgentFrontmatterSnapshot(slug);
   const result: AgentContractValidation = {
     slug,
-    filePath,
+    filePath: frontmatterSnapshot.filePath,
     valid: false,
     violations: [],
     fields: {},
   };
 
-  if (!existsSync(filePath)) {
+  if (!existsSync(frontmatterSnapshot.filePath)) {
     result.violations.push("file_missing");
     return result;
   }
 
-  let raw: string;
-  try {
-    raw = readFileSync(filePath, "utf8");
-  } catch {
+  if (frontmatterSnapshot.raw == null) {
     result.violations.push("file_unreadable");
     return result;
   }
 
-  // Extract YAML frontmatter block: --- ... ---
-  const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---/);
-  if (!fmMatch) {
+  if (!frontmatterSnapshot.frontmatter) {
     result.violations.push("frontmatter_missing");
     return result;
   }
 
-  const fmText = fmMatch[1];
+  const tools = normalizeAgentToolNames(extractFrontmatterList(frontmatterSnapshot.frontmatter, "tools"));
+  const sessionInputPolicyRaw = extractFrontmatterField(frontmatterSnapshot.frontmatter, "box_session_input_policy");
+  const hookCoverageRaw = extractFrontmatterField(frontmatterSnapshot.frontmatter, "box_hook_coverage");
+  const sessionInputPolicy = normalizeSessionInputPolicy(sessionInputPolicyRaw);
+  const hookCoverage = normalizeHookCoverageMode(hookCoverageRaw);
 
-  const extractField = (key: string): string | undefined => {
-    const m = fmText.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
-    return m ? m[1].trim() : undefined;
-  };
-
-  const extractTools = (): string[] | undefined => {
-    // Inline array form: tools: [read, search]
-    const inline = fmText.match(/^tools:\s*\[([^\]]*)\]/m);
-    if (inline) return inline[1].split(",").map(t => t.trim()).filter(Boolean);
-    // Block list form:
-    //   tools:
-    //     - read
-    //     - search
-    const block = fmText.match(/^tools:\s*\n((?:[ \t]+-[ \t]*.+\n?)+)/m);
-    if (block) {
-      return block[1].split("\n").map(l => l.replace(/^[ \t]+-[ \t]*/, "").trim()).filter(Boolean);
-    }
-    return undefined;
-  };
-
-  result.fields.name = extractField("name");
-  result.fields.description = extractField("description");
-  result.fields.model = extractField("model");
-  result.fields.tools = extractTools();
+  result.fields.name = extractFrontmatterField(frontmatterSnapshot.frontmatter, "name");
+  result.fields.description = extractFrontmatterField(frontmatterSnapshot.frontmatter, "description");
+  result.fields.model = extractFrontmatterField(frontmatterSnapshot.frontmatter, "model");
+  result.fields.tools = tools;
+  result.fields.boxSessionInputPolicy = sessionInputPolicy ?? undefined;
+  result.fields.boxHookCoverage = hookCoverage ?? undefined;
 
   if (!result.fields.description) result.violations.push("description_missing");
   if (!result.fields.model) result.violations.push("model_missing");
-  if (!result.fields.tools || result.fields.tools.length === 0) result.violations.push("tools_missing");
+  if (tools.length === 0) result.violations.push("tools_missing");
+
+  if (CRITICAL_AGENT_SLUGS.has(slug)) {
+    if (!sessionInputPolicyRaw) result.violations.push("session_input_policy_missing");
+    if (!hookCoverageRaw) result.violations.push("hook_coverage_missing");
+  }
+
+  if (sessionInputPolicyRaw && !sessionInputPolicy) {
+    result.violations.push("session_input_policy_invalid");
+  }
+  if (hookCoverageRaw && !hookCoverage) {
+    result.violations.push("hook_coverage_invalid");
+  }
+  if (sessionInputPolicy === "no_tools" && tools.some((tool) => WRITER_TOOL_NAMES.has(tool))) {
+    result.violations.push("session_input_policy_mismatch");
+  }
+  if (hookCoverage === "not_required" && tools.includes("execute")) {
+    result.violations.push("hook_coverage_mismatch");
+  }
 
   result.valid = result.violations.length === 0;
   return result;
+}
+
+export function resolveAgentExecutionProfile(slug: string): AgentExecutionProfile {
+  const validation = validateAgentContract(slug);
+  const tools = normalizeAgentToolNames(validation.fields.tools);
+  const explicitSessionInputPolicy = normalizeSessionInputPolicy(validation.fields.boxSessionInputPolicy);
+  const explicitHookCoverage = normalizeHookCoverageMode(validation.fields.boxHookCoverage);
+  const sessionInputPolicy = explicitSessionInputPolicy ?? deriveSessionInputPolicyFromTools(tools);
+  const hookCoverage = explicitHookCoverage ?? deriveHookCoverageModeFromTools(tools);
+  const usesExplicitProfile = Boolean(explicitSessionInputPolicy || explicitHookCoverage);
+
+  return {
+    slug,
+    filePath: validation.filePath,
+    valid: validation.valid,
+    violations: [...validation.violations],
+    tools,
+    sessionInputPolicy,
+    hookCoverage,
+    source: usesExplicitProfile ? "explicit" : "derived",
+    allowsExecute: tools.includes("execute"),
+    allowsWrites: tools.some((tool) => WRITER_TOOL_NAMES.has(tool)),
+  };
+}
+
+export function resolveAgentSessionInputPolicy(
+  profile: Pick<AgentExecutionProfile, "sessionInputPolicy" | "tools" | "allowsWrites"> | null,
+  requestedPolicy: unknown,
+): AgentSessionInputPolicy {
+  const requested = normalizeSessionInputPolicy(requestedPolicy) ?? "auto";
+  if (!profile) {
+    return requested === "auto" ? "no_tools" : requested;
+  }
+  if (requested === "no_tools") return "no_tools";
+  if (profile.sessionInputPolicy === "no_tools") return "no_tools";
+  if (requested === "allow_all") {
+    return profile.sessionInputPolicy === "allow_all" || profile.allowsWrites ? "allow_all" : "no_tools";
+  }
+  if (profile.sessionInputPolicy !== "auto") return profile.sessionInputPolicy;
+  return deriveSessionInputPolicyFromTools(normalizeAgentToolNames(profile.tools));
 }
 
 /**

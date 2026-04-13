@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseWorkerResponse } from "../../src/core/worker_runner.js";
+import { buildWorkerRunContract, parseWorkerResponse, shouldEnableFullToolAccess } from "../../src/core/worker_runner.js";
 import { checkPostMergeArtifact, ARTIFACT_GAP, POST_MERGE_PLACEHOLDER } from "../../src/core/verification_gate.js";
 
 describe("worker_runner safety seam", () => {
@@ -52,6 +52,16 @@ describe("worker_runner safety seam", () => {
     ].join("\n");
     const parsed = parseWorkerResponse(output, "");
     assert.equal(parsed.status, "done");
+  });
+
+  it("defaults sessionInputPolicy to auto for new worker dispatches", () => {
+    const contract = buildWorkerRunContract({}, {});
+    assert.equal(contract.sessionInputPolicy, "auto");
+  });
+
+  it("keeps planner sessions least-privilege through the agent profile", () => {
+    const allowAll = shouldEnableFullToolAccess("prometheus", "analysis", "Read repository state and produce a plan");
+    assert.equal(allowAll, false);
   });
 });
 
