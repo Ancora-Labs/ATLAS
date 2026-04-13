@@ -9,6 +9,7 @@ export const CHECKPOINT_FORMAT = "resumable_v2";
 export const CHECKPOINT_INTEGRITY_ALGORITHM = "sha256";
 export const RUN_SEGMENT_BATCH_SPAN_DEFAULT = 5;
 export const RUN_SEGMENT_HISTORY_MAX_DEFAULT = 20;
+export const PHASE_AWARE_RETRY_STATE_SCHEMA_VERSION = 1;
 
 /** Stable namespace identifiers for pipeline boundary checkpoints. */
 export const CHECKPOINT_NS = {
@@ -20,6 +21,108 @@ export const CHECKPOINT_NS = {
 } as const;
 
 export type CheckpointNs = typeof CHECKPOINT_NS[keyof typeof CHECKPOINT_NS];
+
+export const WORKER_EXECUTION_PHASE = Object.freeze({
+  PLAN: "plan",
+  EDIT: "edit",
+  TEST: "test",
+  PUSH: "push",
+} as const);
+
+export type WorkerExecutionPhase = typeof WORKER_EXECUTION_PHASE[keyof typeof WORKER_EXECUTION_PHASE];
+
+export const WORKER_EXECUTION_PHASE_ORDER = Object.freeze([
+  WORKER_EXECUTION_PHASE.PLAN,
+  WORKER_EXECUTION_PHASE.EDIT,
+  WORKER_EXECUTION_PHASE.TEST,
+  WORKER_EXECUTION_PHASE.PUSH,
+] as const);
+
+export function normalizeWorkerExecutionPhase(
+  value: unknown,
+  fallback: WorkerExecutionPhase | null = WORKER_EXECUTION_PHASE.PLAN,
+): WorkerExecutionPhase | null {
+  const normalized = String(value || "").toLowerCase().trim();
+  return (WORKER_EXECUTION_PHASE_ORDER as readonly string[]).includes(normalized)
+    ? normalized as WorkerExecutionPhase
+    : fallback;
+}
+
+function normalizePhaseCheckpointEvidence(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry) => entry && typeof entry === "object")
+    .slice(0, 12)
+    .map((entry) => ({
+      code: String((entry as any).code || "unspecified"),
+      detail: String((entry as any).detail || "").slice(0, 240),
+      source: String((entry as any).source || "worker_output"),
+    }));
+}
+
+function normalizePhaseCheckpointStates(value: unknown) {
+  const output: Record<string, { status: string; evidence: Array<{ code: string; detail: string; source: string }> }> = {};
+  const input = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  for (const phase of WORKER_EXECUTION_PHASE_ORDER) {
+    const raw = input[phase];
+    const state = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+    output[phase] = {
+      status: String(state.status || "pending"),
+      evidence: normalizePhaseCheckpointEvidence(state.evidence),
+    };
+  }
+  return output;
+}
+
+export function buildPhaseAwareAttemptCheckpoint(
+  retryState: unknown,
+  meta: {
+    taskId?: string | null;
+    roleName?: string | null;
+    status?: string | null;
+    retryAction?: string | null;
+    failureClass?: string | null;
+  } = {},
+) {
+  const input = retryState && typeof retryState === "object" ? retryState as Record<string, unknown> : {};
+  const phaseOrder = Array.isArray(input.phaseOrder)
+    ? input.phaseOrder
+      .map((phase) => normalizeWorkerExecutionPhase(phase, null))
+      .filter(Boolean)
+    : [...WORKER_EXECUTION_PHASE_ORDER];
+  const effectivePhaseOrder = phaseOrder.length > 0 ? phaseOrder : [...WORKER_EXECUTION_PHASE_ORDER];
+  return {
+    schemaVersion: PHASE_AWARE_RETRY_STATE_SCHEMA_VERSION,
+    retryStateKind: "phase_aware_retry_v1",
+    phaseOrder: effectivePhaseOrder,
+    currentPhase: normalizeWorkerExecutionPhase(input.currentPhase, WORKER_EXECUTION_PHASE.PLAN),
+    failedPhase: normalizeWorkerExecutionPhase(input.failedPhase, null),
+    resumeFromPhase: normalizeWorkerExecutionPhase(
+      input.resumeFromPhase,
+      normalizeWorkerExecutionPhase(input.currentPhase, WORKER_EXECUTION_PHASE.PLAN),
+    ),
+    lastCompletedPhase: normalizeWorkerExecutionPhase(input.lastCompletedPhase, null),
+    phaseStates: normalizePhaseCheckpointStates(input.phaseStates),
+    evidence: normalizePhaseCheckpointEvidence(input.evidence),
+    mutation: input.mutation && typeof input.mutation === "object"
+      ? {
+          strategy: String((input.mutation as any).strategy || "resume_from_failed_phase"),
+          instructions: Array.isArray((input.mutation as any).instructions)
+            ? (input.mutation as any).instructions.slice(0, 8).map((item) => String(item || "").slice(0, 240))
+            : [],
+        }
+      : {
+          strategy: "resume_from_failed_phase",
+          instructions: [],
+        },
+    taskId: meta.taskId != null ? String(meta.taskId) : null,
+    roleName: meta.roleName != null ? String(meta.roleName) : null,
+    status: meta.status != null ? String(meta.status) : null,
+    retryAction: meta.retryAction != null ? String(meta.retryAction) : null,
+    failureClass: meta.failureClass != null ? String(meta.failureClass) : null,
+    recordedAt: new Date().toISOString(),
+  };
+}
 
 const CHECKPOINT_META_KEYS = new Set([
   "schemaVersion",

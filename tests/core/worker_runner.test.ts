@@ -988,6 +988,31 @@ import { loadReflectionMemoryContext } from "../../src/core/worker_runner.js";
 
 describe("loadReflectionMemoryContext — failure-class keyed retrieval", () => {
   let tmpDir: string;
+  const structuredRetryState = {
+    schemaVersion: 1,
+    phaseOrder: ["plan", "edit", "test", "push"],
+    currentPhase: "test",
+    failedPhase: "test",
+    resumeFromPhase: "test",
+    lastCompletedPhase: "edit",
+    phaseStates: {
+      plan: { status: "completed", evidence: [{ code: "target_files", detail: "src/core/worker_runner.ts", source: "instruction" }] },
+      edit: { status: "completed", evidence: [{ code: "files_touched", detail: "src/core/worker_runner.ts", source: "worker_output" }] },
+      test: { status: "failed", evidence: [{ code: "tests_status", detail: "TESTS=fail", source: "verification_report" }] },
+      push: { status: "pending", evidence: [] },
+    },
+    evidence: [
+      { code: "files_touched", detail: "src/core/worker_runner.ts", source: "worker_output" },
+      { code: "tests_status", detail: "TESTS=fail", source: "verification_report" },
+    ],
+    mutation: {
+      strategy: "resume_from_failed_phase",
+      instructions: [
+        "Start by reproducing the recorded verification/build/test evidence before wider edits.",
+        "Repair TESTS=fail before entering push.",
+      ],
+    },
+  };
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-reflection-"));
@@ -1012,17 +1037,20 @@ describe("loadReflectionMemoryContext — failure-class keyed retrieval", () => 
       {
         roleName: "king-david",
         taskKind: "implementation",
-        task: "fix the auth bug",
-        status: "blocked",
-        failureClass: "logic_defect",
-        retryAction: "rework",
-        reason: "failed to resolve imports",
-        recordedAt: "2024-01-01T00:00:00Z",
+        taskFingerprint: "fp-1",
+        taskSnippet: "fix the auth bug",
+        outcome: {
+          status: "blocked",
+          failureClass: "logic_defect",
+          retryAction: "rework",
+          recordedAt: "2024-01-01T00:00:00Z",
+        },
+        retryState: structuredRetryState,
       },
     ];
     await fs.writeFile(
       path.join(tmpDir, "reflection_memory.json"),
-      JSON.stringify({ schemaVersion: 1, updatedAt: new Date().toISOString(), entries }),
+      JSON.stringify({ schemaVersion: 2, updatedAt: new Date().toISOString(), entries }),
     );
     const result = loadReflectionMemoryContext(
       { paths: { stateDir: tmpDir } },
@@ -1030,8 +1058,10 @@ describe("loadReflectionMemoryContext — failure-class keyed retrieval", () => 
       "implementation",
       "fix the auth bug",
     );
-    assert.ok(result.includes("REFLECTION MEMORY"), "must include memory header");
+    assert.ok(result.includes("RETRY STATE"), "must include structured retry-state header");
     assert.ok(result.includes("rework"), "must include retryAction from entry");
+    assert.ok(result.includes("failedPhase=test"), "must surface the failed phase");
+    assert.ok(result.includes("mutate next attempt"), "must include mutation guidance");
   });
 
   it("filters entries by failureClass when provided — keeps matching class", async () => {
@@ -1039,27 +1069,47 @@ describe("loadReflectionMemoryContext — failure-class keyed retrieval", () => 
       {
         roleName: "king-david",
         taskKind: "implementation",
-        task: "fix tests",
-        status: "blocked",
-        failureClass: "logic_defect",
-        retryAction: "rework",
-        reason: "wrong logic",
-        recordedAt: "2024-01-01T00:00:00Z",
+        taskFingerprint: "fp-2",
+        taskSnippet: "fix tests",
+        outcome: {
+          status: "blocked",
+          failureClass: "logic_defect",
+          retryAction: "rework",
+          recordedAt: "2024-01-01T00:00:00Z",
+        },
+        retryState: {
+          ...structuredRetryState,
+          evidence: [{ code: "failure_class", detail: "logic_defect", source: "failure_classifier" }],
+        },
       },
       {
         roleName: "king-david",
         taskKind: "implementation",
-        task: "fix tests",
-        status: "blocked",
-        failureClass: "environment",
-        retryAction: "cooldown_retry",
-        reason: "disk full",
-        recordedAt: "2024-01-01T00:01:00Z",
+        taskFingerprint: "fp-3",
+        taskSnippet: "fix tests",
+        outcome: {
+          status: "blocked",
+          failureClass: "environment",
+          retryAction: "cooldown_retry",
+          recordedAt: "2024-01-01T00:01:00Z",
+        },
+        retryState: {
+          ...structuredRetryState,
+          currentPhase: "plan",
+          failedPhase: "plan",
+          resumeFromPhase: "plan",
+          lastCompletedPhase: null,
+          mutation: {
+            strategy: "resume_from_failed_phase",
+            instructions: ["Re-validate repo, tools, and scoped files before editing."],
+          },
+          evidence: [{ code: "dispatch_block_reason", detail: "disk full", source: "worker_output" }],
+        },
       },
     ];
     await fs.writeFile(
       path.join(tmpDir, "reflection_memory.json"),
-      JSON.stringify({ schemaVersion: 1, updatedAt: new Date().toISOString(), entries }),
+      JSON.stringify({ schemaVersion: 2, updatedAt: new Date().toISOString(), entries }),
     );
     const result = loadReflectionMemoryContext(
       { paths: { stateDir: tmpDir } },
@@ -1069,7 +1119,8 @@ describe("loadReflectionMemoryContext — failure-class keyed retrieval", () => 
       "environment",
     );
     assert.ok(result.includes("cooldown_retry"), "must include the environment-class entry");
-    assert.ok(!result.includes("wrong logic"), "must NOT include the logic_defect entry");
+    assert.ok(!result.includes("logic_defect"), "must NOT include the logic_defect entry");
+    assert.ok(result.includes("resumeFrom=plan"), "must surface the matching retry start phase");
   });
 
   it("negative: returns empty string when failureClass matches no entries", async () => {
@@ -1077,17 +1128,20 @@ describe("loadReflectionMemoryContext — failure-class keyed retrieval", () => 
       {
         roleName: "king-david",
         taskKind: "implementation",
-        task: "fix tests",
-        status: "blocked",
-        failureClass: "logic_defect",
-        retryAction: "rework",
-        reason: "logic error",
-        recordedAt: "2024-01-01T00:00:00Z",
+        taskFingerprint: "fp-4",
+        taskSnippet: "fix tests",
+        outcome: {
+          status: "blocked",
+          failureClass: "logic_defect",
+          retryAction: "rework",
+          recordedAt: "2024-01-01T00:00:00Z",
+        },
+        retryState: structuredRetryState,
       },
     ];
     await fs.writeFile(
       path.join(tmpDir, "reflection_memory.json"),
-      JSON.stringify({ schemaVersion: 1, updatedAt: new Date().toISOString(), entries }),
+      JSON.stringify({ schemaVersion: 2, updatedAt: new Date().toISOString(), entries }),
     );
     const result = loadReflectionMemoryContext(
       { paths: { stateDir: tmpDir } },
@@ -1097,6 +1151,36 @@ describe("loadReflectionMemoryContext — failure-class keyed retrieval", () => 
       "model",
     );
     assert.equal(result, "", "no entries matching failureClass=model must yield empty string");
+  });
+
+  it("uses phase-aware mutation guidance instead of replaying raw reason transcripts", async () => {
+    const entries = [
+      {
+        roleName: "king-david",
+        taskKind: "implementation",
+        taskFingerprint: "fp-5",
+        taskSnippet: "fix the auth bug",
+        outcome: {
+          status: "partial",
+          failureClass: "verification",
+          retryAction: "rework",
+          recordedAt: "2024-01-01T00:02:00Z",
+        },
+        retryState: structuredRetryState,
+      },
+    ];
+    await fs.writeFile(
+      path.join(tmpDir, "reflection_memory.json"),
+      JSON.stringify({ schemaVersion: 2, updatedAt: new Date().toISOString(), entries }),
+    );
+    const result = loadReflectionMemoryContext(
+      { paths: { stateDir: tmpDir } },
+      "king-david",
+      "implementation",
+      "fix the auth bug",
+    );
+    assert.ok(!result.includes("reason="), "must not fall back to transcript-style reason replay");
+    assert.ok(result.includes("TESTS=fail"), "must expose deterministic evidence instead");
   });
 });
 
@@ -1169,7 +1253,7 @@ describe("enforcePreExecuteHookDecisions", () => {
 import { buildAttemptArtifact, ATTEMPT_ARTIFACT_SCHEMA_VERSION } from "../../src/core/retry_strategy.js";
 
 describe("buildAttemptArtifact", () => {
-  it("produces a schema-v1 artifact with correct structure", () => {
+  it("produces a phase-aware artifact with correct structure", () => {
     const artifact = buildAttemptArtifact(
       "abc123",
       0,
@@ -1178,6 +1262,10 @@ describe("buildAttemptArtifact", () => {
       "logic_defect",
       { retryAction: "rework" },
       "2024-01-01T00:00:00Z",
+      {
+        failedPhase: "edit",
+        resumeFromPhase: "edit",
+      },
     );
     assert.equal(artifact.schemaVersion, ATTEMPT_ARTIFACT_SCHEMA_VERSION);
     assert.equal(artifact.runId, "abc123");
@@ -1187,6 +1275,7 @@ describe("buildAttemptArtifact", () => {
     assert.equal(artifact.failureClass, "logic_defect");
     assert.equal(artifact.retryAction, "rework");
     assert.equal(artifact.firstAttemptAt, "2024-01-01T00:00:00Z");
+    assert.equal((artifact.phaseRetryState as any)?.failedPhase, "edit");
     assert.ok(typeof artifact.decidedAt === "string" && artifact.decidedAt.length > 0);
   });
 
@@ -1234,6 +1323,7 @@ describe("buildAttemptArtifact", () => {
     assert.equal(artifact.failureClass, null);
     assert.equal(artifact.policyApplied, null);
     assert.equal(artifact.outcome, "done");
+    assert.equal(artifact.phaseRetryState, null);
   });
 });
 

@@ -28,6 +28,9 @@
  *     log_lines              {string[]}     — from input.logLines (max 10 entries; or [])
  *     blocking_reason_class  {string|null}  — from input.blockingReasonClass (or null)
  *     worker_status          {string}       — from input.workerStatus
+ *   Optional phase-aware fields:
+ *     failure_phase          {string|null}  — plan|edit|test|push when deterministically inferred
+ *     phase_evidence         {object[]}     — compact evidence objects supporting failure_phase
  *
  * ── ClassificationResult schema (AC #8 / Athena missing item #7) ─────────────
  *   Required fields:
@@ -142,6 +145,10 @@ export const EVIDENCE_SCHEMA = Object.freeze({
     "log_lines",
     "blocking_reason_class",
     "worker_status",
+  ]),
+  optional: Object.freeze([
+    "failure_phase",
+    "phase_evidence",
   ]),
 });
 
@@ -423,6 +430,8 @@ function determineClass(input) {
  *   @param {string}  [input.errorMessage]          — optional: error message text
  *   @param {string}  [input.stackTrace]            — optional: stack trace
  *   @param {string[]}[input.logLines]              — optional: relevant log lines (max 10)
+ *   @param {string}  [input.failurePhase]          — optional: plan|edit|test|push failure location
+ *   @param {object[]} [input.phaseEvidence]        — optional: compact evidence supporting failurePhase
  *   @param {string}  [input.taskId]                — optional: task identifier
  *   @param {object}  [input.attemptMeta]           — optional: attempt-scoped metadata
  *     @param {string}  [input.attemptMeta.runId]          — short hex run identifier
@@ -456,15 +465,26 @@ export function classifyFailure(input) {
     confidence,
     flagged:           confidence < LOW_CONFIDENCE_THRESHOLD,
     attemptMeta,
-    evidence: {
-      error_message:         String(input.errorMessage || ""),
-      stack_trace:           String(input.stackTrace || ""),
-      log_lines:             Array.isArray(input.logLines) ? input.logLines.slice(0, 10).map(String) : [],
-      blocking_reason_class: input.blockingReasonClass != null ? String(input.blockingReasonClass) : null,
-      worker_status:         String(input.workerStatus),
-    },
-    classifiedAt: new Date().toISOString(),
-  };
+      evidence: {
+        error_message:         String(input.errorMessage || ""),
+        stack_trace:           String(input.stackTrace || ""),
+        log_lines:             Array.isArray(input.logLines) ? input.logLines.slice(0, 10).map(String) : [],
+        blocking_reason_class: input.blockingReasonClass != null ? String(input.blockingReasonClass) : null,
+        worker_status:         String(input.workerStatus),
+        failure_phase:         input.failurePhase != null ? String(input.failurePhase) : null,
+        phase_evidence:        Array.isArray(input.phaseEvidence)
+          ? input.phaseEvidence
+            .filter((entry) => entry && typeof entry === "object")
+            .slice(0, 8)
+            .map((entry) => ({
+              code: String((entry as any).code || "unspecified"),
+              detail: String((entry as any).detail || "").slice(0, 240),
+              source: String((entry as any).source || "worker_output"),
+            }))
+          : [],
+      },
+      classifiedAt: new Date().toISOString(),
+    };
 
   return { ok: true, classification };
 }
@@ -653,6 +673,8 @@ export interface FailureEnvelope {
   retryDecision: Record<string, unknown> | null;
   /** Attempt-scoped execution metadata for replay tracing. */
   attemptMeta: AttemptMeta | null;
+  /** Structured retry-phase state used to mutate the next attempt. */
+  phaseRetryState?: Record<string, unknown> | null;
   /** ISO timestamp when this envelope was assembled. */
   resolvedAt: string;
 }
@@ -686,6 +708,7 @@ export const FAILURE_ENVELOPE_SCHEMA = Object.freeze({
  * @param terminationCause - one of TERMINATION_CAUSE values
  * @param taskId          - task identifier, or null when not available
  * @param attemptMeta     - optional attempt-scoped metadata for replay tracing
+ * @param phaseRetryState - optional structured phase-aware retry state
  */
 export function buildFailureEnvelope(
   classification: Record<string, unknown> | null,
@@ -693,6 +716,7 @@ export function buildFailureEnvelope(
   terminationCause: TerminationCause,
   taskId?: string | null,
   attemptMeta?: AttemptMeta | null,
+  phaseRetryState?: Record<string, unknown> | null,
 ): FailureEnvelope {
   try {
     const cause: TerminationCause = Object.values(TERMINATION_CAUSE).includes(terminationCause as any)
@@ -708,10 +732,11 @@ export function buildFailureEnvelope(
       taskId: taskId != null ? String(taskId) : null,
       terminationCause: cause,
       classification: classification ?? null,
-      retryDecision: retryDecision ?? null,
-      attemptMeta: attemptMeta ?? null,
-      resolvedAt: new Date().toISOString(),
-    };
+        retryDecision: retryDecision ?? null,
+        attemptMeta: attemptMeta ?? null,
+        phaseRetryState: phaseRetryState ?? null,
+        resolvedAt: new Date().toISOString(),
+      };
   } catch (err) {
     // Fallback envelope that never blocks orchestration — includes the build error for observability.
     return {
@@ -720,10 +745,11 @@ export function buildFailureEnvelope(
       taskId: taskId != null ? String(taskId) : null,
       terminationCause: terminationCause ?? TERMINATION_CAUSE.ERROR,
       classification: null,
-      retryDecision: null,
-      attemptMeta: attemptMeta ?? null,
-      resolvedAt: new Date().toISOString(),
-      ...(({ buildError: String((err as any)?.message || err) }) as any),
-    };
+        retryDecision: null,
+        attemptMeta: attemptMeta ?? null,
+        phaseRetryState: phaseRetryState ?? null,
+        resolvedAt: new Date().toISOString(),
+        ...(({ buildError: String((err as any)?.message || err) }) as any),
+      };
   }
 }

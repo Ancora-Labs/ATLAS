@@ -1,0 +1,298 @@
+{
+  "schemaVersion": 2,
+  "updatedAt": "2026-04-13T17:41:39.411Z",
+  "entries": [
+    {
+      "roleName": "infrastructure-worker",
+      "taskKind": "rework",
+      "taskFingerprint": "infra-rework-hook-telemetry",
+      "taskSnippet": "AUTO-REWORK verification gaps for missing hook telemetry evidence",
+      "outcome": {
+        "status": "blocked",
+        "retryAction": "reassign",
+        "failureClass": "policy",
+        "recordedAt": "2026-04-11T07:58:39.705Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": ["plan", "edit", "test", "push"],
+        "currentPhase": "plan",
+        "failedPhase": "plan",
+        "resumeFromPhase": "plan",
+        "lastCompletedPhase": null,
+        "phaseStates": {
+          "plan": {
+            "status": "failed",
+            "evidence": [
+              { "code": "dispatch_block_reason", "detail": "hook telemetry evidence missing in worker output", "source": "verification_gate" }
+            ]
+          },
+          "edit": { "status": "pending", "evidence": [] },
+          "test": { "status": "pending", "evidence": [] },
+          "push": { "status": "pending", "evidence": [] }
+        },
+        "evidence": [
+          { "code": "dispatch_block_reason", "detail": "hook telemetry evidence missing in worker output", "source": "verification_gate" }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Re-validate the required output markers before editing.",
+            "Do not proceed beyond planning until deterministic hook evidence is accounted for."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "infrastructure-worker",
+      "taskKind": "rework",
+      "taskFingerprint": "infra-rework-verification-report",
+      "taskSnippet": "AUTO-REWORK for malformed verification report evidence",
+      "outcome": {
+        "status": "partial",
+        "retryAction": "reassign",
+        "failureClass": "policy",
+        "recordedAt": "2026-04-11T09:12:40.221Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": ["plan", "edit", "test", "push"],
+        "currentPhase": "push",
+        "failedPhase": "push",
+        "resumeFromPhase": "push",
+        "lastCompletedPhase": "test",
+        "phaseStates": {
+          "plan": { "status": "completed", "evidence": [] },
+          "edit": { "status": "completed", "evidence": [] },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              { "code": "verification_report", "detail": "verification report marker was present but malformed", "source": "verification_gate" }
+            ]
+          },
+          "push": {
+            "status": "failed",
+            "evidence": [
+              { "code": "pr_url", "detail": "existing PR recovery path triggered", "source": "worker_output" },
+              { "code": "dispatch_block_reason", "detail": "api-only block softened to partial", "source": "dispatch_contract" }
+            ]
+          }
+        },
+        "evidence": [
+          { "code": "pr_url", "detail": "existing PR recovery path triggered", "source": "worker_output" },
+          { "code": "dispatch_block_reason", "detail": "api-only block softened to partial", "source": "dispatch_contract" }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Reuse the recorded branch or PR context instead of opening a duplicate.",
+            "Resolve output-format blockers before another push or PR update."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "infrastructure-worker",
+      "taskKind": "test",
+      "taskFingerprint": "infra-test-batch-plan-validator",
+      "taskSnippet": "Bundled execution package blocked during scoped planning inspection",
+      "outcome": {
+        "status": "blocked",
+        "retryAction": "reassign",
+        "failureClass": "policy",
+        "recordedAt": "2026-04-11T11:15:12.532Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": ["plan", "edit", "test", "push"],
+        "currentPhase": "plan",
+        "failedPhase": "plan",
+        "resumeFromPhase": "plan",
+        "lastCompletedPhase": null,
+        "phaseStates": {
+          "plan": {
+            "status": "failed",
+            "evidence": [
+              { "code": "scope_scan", "detail": "planning inspection stalled before file edits", "source": "worker_output" }
+            ]
+          },
+          "edit": { "status": "pending", "evidence": [] },
+          "test": { "status": "pending", "evidence": [] },
+          "push": { "status": "pending", "evidence": [] }
+        },
+        "evidence": [
+          { "code": "scope_scan", "detail": "planning inspection stalled before file edits", "source": "worker_output" }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Re-check scoped files before attempting edits.",
+            "Stay inside the declared batch order and avoid broad discovery."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "quality-worker",
+      "taskKind": "test",
+      "taskFingerprint": "quality-test-batch-plan-validator",
+      "taskSnippet": "Bundled quality execution package blocked during planning inspection",
+      "outcome": {
+        "status": "blocked",
+        "retryAction": "reassign",
+        "failureClass": "policy",
+        "recordedAt": "2026-04-11T11:53:38.818Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": ["plan", "edit", "test", "push"],
+        "currentPhase": "plan",
+        "failedPhase": "plan",
+        "resumeFromPhase": "plan",
+        "lastCompletedPhase": null,
+        "phaseStates": {
+          "plan": {
+            "status": "failed",
+            "evidence": [
+              { "code": "scope_scan", "detail": "planning inspection stalled before targeted tests", "source": "worker_output" }
+            ]
+          },
+          "edit": { "status": "pending", "evidence": [] },
+          "test": { "status": "pending", "evidence": [] },
+          "push": { "status": "pending", "evidence": [] }
+        },
+        "evidence": [
+          { "code": "scope_scan", "detail": "planning inspection stalled before targeted tests", "source": "worker_output" }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Re-establish the minimal test scope before running commands."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "evolution-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "evolution-impl-retry-state",
+      "taskSnippet": "Replace transcript-style reflection memory with structured retry state",
+      "outcome": {
+        "status": "partial",
+        "retryAction": "reassign",
+        "failureClass": "policy",
+        "recordedAt": "2026-04-11T20:08:49.251Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": ["plan", "edit", "test", "push"],
+        "currentPhase": "plan",
+        "failedPhase": "plan",
+        "resumeFromPhase": "plan",
+        "lastCompletedPhase": null,
+        "phaseStates": {
+          "plan": {
+            "status": "failed",
+            "evidence": [
+              { "code": "dispatch_block_reason", "detail": "api-only access softened to partial before scoped inspection", "source": "dispatch_contract" }
+            ]
+          },
+          "edit": { "status": "pending", "evidence": [] },
+          "test": { "status": "pending", "evidence": [] },
+          "push": { "status": "pending", "evidence": [] }
+        },
+        "evidence": [
+          { "code": "dispatch_block_reason", "detail": "api-only access softened to partial before scoped inspection", "source": "dispatch_contract" }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Start with repo and API access validation before coding.",
+            "Inspect the scoped retry modules before editing."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "infrastructure-worker",
+      "taskKind": "rework",
+      "taskFingerprint": "infra-rework-plan-validator-followup",
+      "taskSnippet": "Rejected attempt needing corrected verification markers",
+      "outcome": {
+        "status": "partial",
+        "retryAction": "reassign",
+        "failureClass": "policy",
+        "recordedAt": "2026-04-12T06:44:35.539Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": ["plan", "edit", "test", "push"],
+        "currentPhase": "plan",
+        "failedPhase": "plan",
+        "resumeFromPhase": "plan",
+        "lastCompletedPhase": null,
+        "phaseStates": {
+          "plan": {
+            "status": "failed",
+            "evidence": [
+              { "code": "verification_report", "detail": "verification block needed corrected parseable markers", "source": "verification_gate" }
+            ]
+          },
+          "edit": { "status": "pending", "evidence": [] },
+          "test": { "status": "pending", "evidence": [] },
+          "push": { "status": "pending", "evidence": [] }
+        },
+        "evidence": [
+          { "code": "verification_report", "detail": "verification block needed corrected parseable markers", "source": "verification_gate" }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Confirm the required output contract before making more changes."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "evolution-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "evolution-impl-retry-state-followup",
+      "taskSnippet": "Structured retry state implementation follow-up inspection",
+      "outcome": {
+        "status": "partial",
+        "retryAction": "reassign",
+        "failureClass": "policy",
+        "recordedAt": "2026-04-13T17:41:39.411Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": ["plan", "edit", "test", "push"],
+        "currentPhase": "plan",
+        "failedPhase": "plan",
+        "resumeFromPhase": "plan",
+        "lastCompletedPhase": null,
+        "phaseStates": {
+          "plan": {
+            "status": "failed",
+            "evidence": [
+              { "code": "scope_scan", "detail": "scoped planning modules inspected before code changes", "source": "worker_output" }
+            ]
+          },
+          "edit": { "status": "pending", "evidence": [] },
+          "test": { "status": "pending", "evidence": [] },
+          "push": { "status": "pending", "evidence": [] }
+        },
+        "evidence": [
+          { "code": "scope_scan", "detail": "scoped planning modules inspected before code changes", "source": "worker_output" }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Resume from planning with the scoped worker, retry, failure, and checkpoint files.",
+            "Avoid broad scans outside the declared target files."
+          ]
+        }
+      }
+    }
+  ]
+}

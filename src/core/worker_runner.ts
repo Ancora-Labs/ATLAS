@@ -25,7 +25,15 @@ import { buildAgentArgs, nameToSlug, resolveAgentExecutionProfile, resolveAgentS
 import { buildVerificationChecklist, CANONICAL_VERIFICATION_REPORT_TEMPLATE } from "./verification_profiles.js";
 import { getVerificationCommands, classifyNodeTestGlobWindowsArtifact } from "./verification_command_registry.js";
 import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence, parseToolExecutionTelemetry, checkCancellationAtVerification, auditRuntimeHookEnforcement } from "./verification_gate.js";
-import { writeBoundaryCheckpoint, resetAttemptBoundary, CHECKPOINT_NS } from "./checkpoint_engine.js";
+import {
+  writeBoundaryCheckpoint,
+  resetAttemptBoundary,
+  CHECKPOINT_NS,
+  WORKER_EXECUTION_PHASE,
+  WORKER_EXECUTION_PHASE_ORDER,
+  buildPhaseAwareAttemptCheckpoint,
+  type WorkerExecutionPhase,
+} from "./checkpoint_engine.js";
 import {
   enforceModelPolicy,
   routeModelWithRealizedROI,
@@ -49,7 +57,7 @@ import {
 import { appendEscalation, BLOCKING_REASON_CLASS, NEXT_ACTION, resolveEscalationsForTask } from "./escalation_queue.js";
 import { buildTaskFingerprint, buildLineageId, LINEAGE_ENTRY_STATUS } from "./lineage_graph.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
-import { classifyFailure, classifyExitCode, buildFailureEnvelope, TERMINATION_CAUSE } from "./failure_classifier.js";
+import { classifyFailure, classifyExitCode, buildFailureEnvelope, TERMINATION_CAUSE, FAILURE_CLASS } from "./failure_classifier.js";
 import type { AttemptMeta } from "./failure_classifier.js";
 import { resolveRetryAction, persistRetryMetric, RETRY_ACTION, RETRY_STRATEGY_SCHEMA_VERSION, buildAttemptArtifact } from "./retry_strategy.js";
 import { filterMemoryEntriesByTrust, isPrivilegedMemoryRequester, buildMemoryHitRecord } from "./trust_boundary.js";
@@ -143,6 +151,404 @@ type WorkerSessionState = {
 
 const REFLECTION_MEMORY_FILE = "reflection_memory.json";
 const MAX_REFLECTION_ENTRIES = 200;
+const REFLECTION_MEMORY_SCHEMA_VERSION = 2;
+
+function buildRetryEvidence(code, detail, source = "worker_output") {
+  return {
+    code: String(code || "unspecified"),
+    detail: truncate(detail, 240),
+    source: String(source || "worker_output"),
+  };
+}
+
+function resolveVerificationFieldStatus(report: unknown, key: "build" | "tests") {
+  const raw = String((report as any)?.[key] || "").toLowerCase().trim();
+  return raw === "pass" || raw === "fail" || raw === "n/a" ? raw : null;
+}
+
+function inferLegacyFailurePhase(entry): WorkerExecutionPhase {
+  const text = `${String(entry?.reason || "")}\n${String(entry?.task || "")}\n${String(entry?.status || "")}`.toLowerCase();
+  if (/git push|gh pr create|pull request|branch|clean tree|merged sha/.test(text)) return WORKER_EXECUTION_PHASE.PUSH;
+  if (/build=|tests=|verification|npm test|npm run build|test failure|artifact gate/.test(text)) return WORKER_EXECUTION_PHASE.TEST;
+  if (/apply_patch|edited|files touched|write code|fix code|src\\|tests\\/.test(text)) return WORKER_EXECUTION_PHASE.EDIT;
+  return WORKER_EXECUTION_PHASE.PLAN;
+}
+
+function buildPhaseStateMap() {
+  return Object.fromEntries(
+    WORKER_EXECUTION_PHASE_ORDER.map((phase) => [phase, { status: "pending", evidence: [] }]),
+  ) as Record<string, { status: string; evidence: Array<{ code: string; detail: string; source: string }> }>;
+}
+
+function normalizeStoredRetryState(retryState, fallbackPhase: WorkerExecutionPhase = WORKER_EXECUTION_PHASE.PLAN) {
+  if (!retryState || typeof retryState !== "object") return null;
+  const phaseStates = buildPhaseStateMap();
+  const rawPhaseStates = retryState.phaseStates && typeof retryState.phaseStates === "object"
+    ? retryState.phaseStates
+    : {};
+  for (const phase of WORKER_EXECUTION_PHASE_ORDER) {
+    const state = rawPhaseStates[phase] && typeof rawPhaseStates[phase] === "object"
+      ? rawPhaseStates[phase]
+      : {};
+    phaseStates[phase] = {
+      status: String((state as any).status || "pending"),
+      evidence: Array.isArray((state as any).evidence)
+        ? (state as any).evidence
+          .filter((entry) => entry && typeof entry === "object")
+          .slice(0, 6)
+          .map((entry) => buildRetryEvidence((entry as any).code, (entry as any).detail, (entry as any).source))
+        : [],
+    };
+  }
+  const failedPhaseRaw = String(retryState.failedPhase || "").toLowerCase().trim();
+  const currentPhaseRaw = String(retryState.currentPhase || "").toLowerCase().trim();
+  const resumeFromPhaseRaw = String(retryState.resumeFromPhase || "").toLowerCase().trim();
+  const lastCompletedPhaseRaw = String(retryState.lastCompletedPhase || "").toLowerCase().trim();
+  const failedPhase = WORKER_EXECUTION_PHASE_ORDER.includes(failedPhaseRaw as any)
+    ? failedPhaseRaw as WorkerExecutionPhase
+    : fallbackPhase;
+  const currentPhase = WORKER_EXECUTION_PHASE_ORDER.includes(currentPhaseRaw as any)
+    ? currentPhaseRaw as WorkerExecutionPhase
+    : failedPhase;
+  const resumeFromPhase = WORKER_EXECUTION_PHASE_ORDER.includes(resumeFromPhaseRaw as any)
+    ? resumeFromPhaseRaw as WorkerExecutionPhase
+    : failedPhase;
+  const lastCompletedPhase = WORKER_EXECUTION_PHASE_ORDER.includes(lastCompletedPhaseRaw as any)
+    ? lastCompletedPhaseRaw as WorkerExecutionPhase
+    : null;
+  return {
+    schemaVersion: Number(retryState.schemaVersion || 1),
+    phaseOrder: [...WORKER_EXECUTION_PHASE_ORDER],
+    currentPhase,
+    failedPhase,
+    resumeFromPhase,
+    lastCompletedPhase,
+    phaseStates,
+    evidence: Array.isArray(retryState.evidence)
+      ? retryState.evidence
+        .filter((entry) => entry && typeof entry === "object")
+        .slice(0, 8)
+        .map((entry) => buildRetryEvidence((entry as any).code, (entry as any).detail, (entry as any).source))
+      : [],
+    mutation: retryState.mutation && typeof retryState.mutation === "object"
+      ? {
+          strategy: String((retryState.mutation as any).strategy || "resume_from_failed_phase"),
+          instructions: Array.isArray((retryState.mutation as any).instructions)
+            ? (retryState.mutation as any).instructions.slice(0, 4).map((item) => truncate(item, 200))
+            : [],
+        }
+      : {
+          strategy: "resume_from_failed_phase",
+          instructions: [],
+        },
+  };
+}
+
+function normalizeReflectionMemoryEntry(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  const taskKind = String(entry.taskKind || "general");
+  const taskSnippet = truncate(entry.taskSnippet || entry.task || "", 240);
+  const taskFingerprint = String(entry.taskFingerprint || buildTaskFingerprint(taskKind, taskSnippet));
+  const outcome = entry.outcome && typeof entry.outcome === "object"
+    ? entry.outcome
+    : {
+        status: entry.status,
+        retryAction: entry.retryAction,
+        failureClass: entry.failureClass,
+        recordedAt: entry.recordedAt,
+      };
+  const fallbackPhase = inferLegacyFailurePhase(entry);
+  const retryState = normalizeStoredRetryState(entry.retryState, fallbackPhase) || {
+    schemaVersion: 1,
+    phaseOrder: [...WORKER_EXECUTION_PHASE_ORDER],
+    currentPhase: fallbackPhase,
+    failedPhase: fallbackPhase,
+    resumeFromPhase: fallbackPhase,
+    lastCompletedPhase: WORKER_EXECUTION_PHASE_ORDER.indexOf(fallbackPhase) > 0
+      ? WORKER_EXECUTION_PHASE_ORDER[WORKER_EXECUTION_PHASE_ORDER.indexOf(fallbackPhase) - 1]
+      : null,
+    phaseStates: (() => {
+      const phaseStates = buildPhaseStateMap();
+      const failedIndex = WORKER_EXECUTION_PHASE_ORDER.indexOf(fallbackPhase);
+      for (const [index, phase] of WORKER_EXECUTION_PHASE_ORDER.entries()) {
+        if (index < failedIndex) phaseStates[phase].status = "completed";
+        else if (index === failedIndex) phaseStates[phase] = {
+          status: "failed",
+          evidence: [buildRetryEvidence("legacy_reason", entry.reason || entry.summary || entry.task || "legacy failure", "legacy_memory")],
+        };
+      }
+      return phaseStates;
+    })(),
+    evidence: [buildRetryEvidence("legacy_reason", entry.reason || entry.summary || entry.task || "legacy failure", "legacy_memory")],
+    mutation: {
+      strategy: "resume_from_failed_phase",
+      instructions: [`Resume from the ${fallbackPhase} phase using the latest deterministic evidence.`],
+    },
+  };
+  return {
+    roleName: String(entry.roleName || ""),
+    taskKind,
+    taskFingerprint,
+    taskSnippet,
+    outcome: {
+      status: String(outcome?.status || "unknown"),
+      retryAction: outcome?.retryAction != null ? String(outcome.retryAction) : null,
+      failureClass: outcome?.failureClass != null ? String(outcome.failureClass) : null,
+      recordedAt: String(outcome?.recordedAt || entry.recordedAt || new Date(0).toISOString()),
+    },
+    retryState,
+  };
+}
+
+function buildRetryMutationInstructions(failedPhase: WorkerExecutionPhase, details: {
+  targetFiles: string[];
+  filesTouched: string[];
+  currentBranch?: string | null;
+  prUrl?: string | null;
+  buildStatus?: string | null;
+  testsStatus?: string | null;
+  dispatchBlockReason?: string | null;
+}) {
+  const instructions = [];
+  if (details.targetFiles.length > 0) {
+    instructions.push(`Keep scope anchored to: ${details.targetFiles.slice(0, 6).join(", ")}.`);
+  }
+  if (failedPhase === WORKER_EXECUTION_PHASE.PLAN) {
+    instructions.push("Re-validate repo, tools, and scoped files before editing.");
+    if (details.dispatchBlockReason) {
+      instructions.push(`Resolve the recorded blocker first: ${truncate(details.dispatchBlockReason, 180)}.`);
+    }
+  } else if (failedPhase === WORKER_EXECUTION_PHASE.EDIT) {
+    instructions.push("Inspect the last touched files before any new search.");
+    if (details.filesTouched.length > 0) {
+      instructions.push(`Resume edits from: ${details.filesTouched.slice(0, 6).join(", ")}.`);
+    }
+  } else if (failedPhase === WORKER_EXECUTION_PHASE.TEST) {
+    instructions.push("Start by reproducing the recorded verification/build/test evidence before wider edits.");
+    if (details.buildStatus) instructions.push(`Repair BUILD=${details.buildStatus} before entering push.`);
+    if (details.testsStatus) instructions.push(`Repair TESTS=${details.testsStatus} before entering push.`);
+  } else if (failedPhase === WORKER_EXECUTION_PHASE.PUSH) {
+    instructions.push("Reuse the recorded branch/PR context and resolve git or clean-tree blockers before another push.");
+    if (details.currentBranch) instructions.push(`Continue from branch: ${details.currentBranch}.`);
+    if (details.prUrl) instructions.push(`Update the existing PR instead of opening a duplicate: ${details.prUrl}.`);
+  }
+  if (instructions.length === 0) {
+    instructions.push(`Resume from the ${failedPhase} phase using the latest deterministic evidence.`);
+  }
+  return instructions.slice(0, 4);
+}
+
+function buildPhaseAwareRetryState(input: {
+  instruction: WorkerInstruction;
+  parsed: Partial<ParsedWorkerResponse> & Record<string, unknown>;
+  statusOverride?: string | null;
+  retryAction?: string | null;
+  failureClass?: string | null;
+  verificationEvidence?: VerificationEvidence | null;
+  failedPhaseOverride?: WorkerExecutionPhase | null;
+}) {
+  const parsed = input.parsed && typeof input.parsed === "object" ? input.parsed : {};
+  const verificationEvidence = input.verificationEvidence || parsed.verificationEvidence || null;
+  const report = verificationEvidence?.report || parsed.verificationReport || null;
+  const buildStatus = resolveVerificationFieldStatus(report, "build");
+  const testsStatus = resolveVerificationFieldStatus(report, "tests");
+  const filesTouched = Array.isArray(parsed.filesTouched) ? parsed.filesTouched.map((file) => String(file || "")).filter(Boolean) : [];
+  const targetFiles = Array.isArray(input.instruction?.targetFiles) ? input.instruction.targetFiles.map((file) => String(file || "")).filter(Boolean) : [];
+  const currentBranch = parsed.currentBranch != null ? String(parsed.currentBranch) : null;
+  const prUrl = parsed.prUrl != null ? String(parsed.prUrl) : null;
+  const mergedSha = (parsed as any).mergedSha != null ? String((parsed as any).mergedSha) : null;
+  const dispatchBlockReason = parsed.dispatchBlockReason != null ? String(parsed.dispatchBlockReason) : null;
+  const fullOutput = String(parsed.fullOutput || parsed.summary || "");
+  const status = String(input.statusOverride || parsed.status || "unknown").toLowerCase();
+  const hasEditEvidence = filesTouched.length > 0;
+  const hasTestEvidence =
+    Boolean(verificationEvidence)
+    || Boolean(parsed.verificationReport)
+    || /===verification[_\s]?report===|===npm test output start===|npm test|npm run build|build=|tests=/i.test(fullOutput);
+  const hasPushEvidence =
+    Boolean(currentBranch || prUrl || mergedSha)
+    || /git push|gh pr create|box_branch=|box_pr_url=|box_merged_sha=/i.test(fullOutput);
+  const artifactDetail = verificationEvidence?.artifactDetail || null;
+  const hasFailingVerification = buildStatus === "fail" || testsStatus === "fail";
+  const hasPushArtifactGap = verificationEvidence?.passed === false && (
+    artifactDetail?.hasSha === false
+    || artifactDetail?.hasCleanTreeEvidence === false
+    || artifactDetail?.hasTaskScopedCleanTreeEvidence === false
+    || prUrl
+    || currentBranch
+  );
+  const hasTestArtifactGap = verificationEvidence?.passed === false && (
+    hasFailingVerification
+    || (artifactDetail?.hasTestOutput === false && artifactDetail?.hasSha !== false && artifactDetail?.hasCleanTreeEvidence !== false)
+  );
+  const failedPhase = input.failedPhaseOverride
+    || (
+      status === "verification_failed"
+      || hasFailingVerification
+      || hasTestArtifactGap
+        ? WORKER_EXECUTION_PHASE.TEST
+        : hasPushArtifactGap
+          ? WORKER_EXECUTION_PHASE.PUSH
+          : hasPushEvidence && status !== "done" && status !== "success" && status !== "skipped"
+            ? WORKER_EXECUTION_PHASE.PUSH
+            : hasTestEvidence && status !== "done" && status !== "success" && status !== "skipped"
+              ? WORKER_EXECUTION_PHASE.TEST
+              : hasEditEvidence
+                ? WORKER_EXECUTION_PHASE.EDIT
+                : WORKER_EXECUTION_PHASE.PLAN
+    );
+  const failedIndex = WORKER_EXECUTION_PHASE_ORDER.indexOf(failedPhase);
+  const highestReachedIndex = hasPushEvidence
+    ? WORKER_EXECUTION_PHASE_ORDER.indexOf(WORKER_EXECUTION_PHASE.PUSH)
+    : hasTestEvidence
+      ? WORKER_EXECUTION_PHASE_ORDER.indexOf(WORKER_EXECUTION_PHASE.TEST)
+      : hasEditEvidence
+        ? WORKER_EXECUTION_PHASE_ORDER.indexOf(WORKER_EXECUTION_PHASE.EDIT)
+        : WORKER_EXECUTION_PHASE_ORDER.indexOf(WORKER_EXECUTION_PHASE.PLAN);
+  const phaseStates = buildPhaseStateMap();
+  const evidence = [];
+  const planEvidence = [];
+  const editEvidence = [];
+  const testEvidence = [];
+  const pushEvidence = [];
+
+  if (targetFiles.length > 0) {
+    const item = buildRetryEvidence("target_files", targetFiles.slice(0, 6).join(", "), "instruction");
+    evidence.push(item);
+    planEvidence.push(item);
+  }
+  if (dispatchBlockReason) {
+    const item = buildRetryEvidence("dispatch_block_reason", dispatchBlockReason, "dispatch_contract");
+    evidence.push(item);
+    if (failedPhase === WORKER_EXECUTION_PHASE.PLAN) planEvidence.push(item);
+    if (failedPhase === WORKER_EXECUTION_PHASE.PUSH) pushEvidence.push(item);
+  }
+  if (input.failureClass) {
+    evidence.push(buildRetryEvidence("failure_class", input.failureClass, "failure_classifier"));
+  }
+  if (input.retryAction) {
+    evidence.push(buildRetryEvidence("retry_action", input.retryAction, "retry_strategy"));
+  }
+  if (filesTouched.length > 0) {
+    const item = buildRetryEvidence("files_touched", filesTouched.slice(0, 6).join(", "), "worker_output");
+    evidence.push(item);
+    editEvidence.push(item);
+  }
+  if (buildStatus) {
+    const item = buildRetryEvidence("build_status", `BUILD=${buildStatus}`, "verification_report");
+    evidence.push(item);
+    testEvidence.push(item);
+  }
+  if (testsStatus) {
+    const item = buildRetryEvidence("tests_status", `TESTS=${testsStatus}`, "verification_report");
+    evidence.push(item);
+    testEvidence.push(item);
+  }
+  if (verificationEvidence?.gaps?.length) {
+    const item = buildRetryEvidence("verification_gaps", verificationEvidence.gaps.slice(0, 2).join("; "), "verification_gate");
+    evidence.push(item);
+    testEvidence.push(item);
+  }
+  if (currentBranch) {
+    const item = buildRetryEvidence("branch", currentBranch, "worker_output");
+    evidence.push(item);
+    pushEvidence.push(item);
+  }
+  if (prUrl) {
+    const item = buildRetryEvidence("pr_url", prUrl, "worker_output");
+    evidence.push(item);
+    pushEvidence.push(item);
+  }
+  if (mergedSha) {
+    const item = buildRetryEvidence("merged_sha", mergedSha, "worker_output");
+    evidence.push(item);
+    pushEvidence.push(item);
+  }
+  if (artifactDetail?.hasSha === false) {
+    pushEvidence.push(buildRetryEvidence("missing_sha", "BOX_MERGED_SHA evidence missing", "verification_gate"));
+  }
+  if (artifactDetail?.hasCleanTreeEvidence === false && artifactDetail?.hasTaskScopedCleanTreeEvidence !== true) {
+    pushEvidence.push(buildRetryEvidence("missing_clean_tree", "clean-tree evidence missing", "verification_gate"));
+  }
+  if (artifactDetail?.hasTestOutput === false) {
+    testEvidence.push(buildRetryEvidence("missing_test_output", "raw npm test output missing", "verification_gate"));
+  }
+
+  for (const [index, phase] of WORKER_EXECUTION_PHASE_ORDER.entries()) {
+    if (status === "done" || status === "success" || status === "skipped") {
+      phaseStates[phase].status = index <= highestReachedIndex ? "completed" : "pending";
+    } else if (index < failedIndex) {
+      phaseStates[phase].status = "completed";
+    } else if (index === failedIndex) {
+      phaseStates[phase].status = "failed";
+    } else {
+      phaseStates[phase].status = "pending";
+    }
+  }
+
+  phaseStates[WORKER_EXECUTION_PHASE.PLAN].evidence = planEvidence.slice(0, 4);
+  phaseStates[WORKER_EXECUTION_PHASE.EDIT].evidence = editEvidence.slice(0, 4);
+  phaseStates[WORKER_EXECUTION_PHASE.TEST].evidence = testEvidence.slice(0, 4);
+  phaseStates[WORKER_EXECUTION_PHASE.PUSH].evidence = pushEvidence.slice(0, 4);
+
+  return {
+    schemaVersion: 1,
+    phaseOrder: [...WORKER_EXECUTION_PHASE_ORDER],
+    currentPhase: failedPhase,
+    failedPhase,
+    resumeFromPhase: failedPhase,
+    lastCompletedPhase: failedIndex > 0 ? WORKER_EXECUTION_PHASE_ORDER[failedIndex - 1] : null,
+    phaseStates,
+    evidence: evidence.slice(0, 8),
+    mutation: {
+      strategy: "resume_from_failed_phase",
+      instructions: buildRetryMutationInstructions(failedPhase, {
+        targetFiles,
+        filesTouched,
+        currentBranch,
+        prUrl,
+        buildStatus,
+        testsStatus,
+        dispatchBlockReason,
+      }),
+    },
+  };
+}
+
+async function persistPhaseAwareRetryArtifacts(config, input: {
+  roleName: string;
+  instruction: WorkerInstruction;
+  status: string;
+  retryAction?: string | null;
+  failureClass?: string | null;
+  retryState: Record<string, unknown>;
+}) {
+  await persistReflectionMemory(config, {
+    roleName: input.roleName,
+    taskKind: input.instruction.taskKind,
+    task: String(input.instruction.task || ""),
+    status: input.status,
+    retryAction: input.retryAction || null,
+    failureClass: input.failureClass || null,
+    retryState: input.retryState,
+  });
+  const checkpointThreadId = String(input.instruction?.taskId || input.instruction?.lineageId || input.roleName || "");
+  if (!checkpointThreadId) return;
+  await writeBoundaryCheckpoint(
+    config,
+    buildPhaseAwareAttemptCheckpoint(input.retryState, {
+      taskId: input.instruction.taskId != null ? String(input.instruction.taskId) : null,
+      roleName: input.roleName,
+      status: input.status,
+      retryAction: input.retryAction || null,
+      failureClass: input.failureClass || null,
+    }),
+    {
+      thread_id: checkpointThreadId,
+      checkpoint_ns: CHECKPOINT_NS.ATTEMPT,
+    },
+  );
+}
 
 export function loadReflectionMemoryContext(config, roleName, taskKind, taskText, failureClass?: string | null) {
   const stateDir = config?.paths?.stateDir || "state";
@@ -150,30 +556,47 @@ export function loadReflectionMemoryContext(config, roleName, taskKind, taskText
   if (!existsSync(filePath)) return "";
   try {
     const raw = JSON.parse(readFileSync(filePath, "utf8"));
-    const entries = Array.isArray(raw?.entries) ? raw.entries : [];
+    const entries = Array.isArray(raw?.entries)
+      ? raw.entries.map(normalizeReflectionMemoryEntry).filter(Boolean)
+      : [];
     const normalizedRole = String(roleName || "").toLowerCase().trim();
     const normalizedKind = String(taskKind || "").toLowerCase().trim();
     const taskNeedle = String(taskText || "").toLowerCase().trim();
+    const taskFingerprint = buildTaskFingerprint(taskKind || "general", taskText || "");
     const normalizedFailureClass = String(failureClass || "").toLowerCase().trim();
     const relevant = entries.filter((entry) => {
       if (!entry || typeof entry !== "object") return false;
       if (String(entry?.roleName || "").toLowerCase().trim() !== normalizedRole) return false;
       if (normalizedKind && String(entry?.taskKind || "").toLowerCase().trim() !== normalizedKind) return false;
-      // Failure-class keyed retrieval: when a class is provided, skip entries from other classes.
-      if (normalizedFailureClass && entry?.failureClass &&
-          String(entry.failureClass || "").toLowerCase().trim() !== normalizedFailureClass) return false;
+      if (
+        normalizedFailureClass
+        && entry?.outcome?.failureClass
+        && String(entry.outcome.failureClass || "").toLowerCase().trim() !== normalizedFailureClass
+      ) return false;
       if (!taskNeedle) return true;
-      const task = String(entry?.task || "").toLowerCase();
-      return task.includes(taskNeedle.slice(0, Math.min(40, taskNeedle.length))) || taskNeedle.includes(task.slice(0, Math.min(40, task.length)));
+      const entryFingerprint = String(entry?.taskFingerprint || "");
+      if (taskFingerprint && entryFingerprint === taskFingerprint) return true;
+      const snippet = String(entry?.taskSnippet || "").toLowerCase();
+      return snippet.includes(taskNeedle.slice(0, Math.min(40, taskNeedle.length)))
+        || taskNeedle.includes(snippet.slice(0, Math.min(40, snippet.length)));
     }).slice(-3);
     if (relevant.length === 0) return "";
     const bullets = relevant.map((entry, index) => {
-      const status = String(entry?.status || "unknown");
-      const retryAction = String(entry?.retryAction || "none");
-      const reason = String(entry?.reason || entry?.summary || "").slice(0, 180);
-      return `${index + 1}. status=${status} retryAction=${retryAction} reason=${reason}`;
+      const retryState = entry.retryState || {};
+      const evidence = Array.isArray(retryState.evidence)
+        ? retryState.evidence.slice(0, 3).map((item) => `${item.code}=${item.detail}`).join("; ")
+        : "none";
+      const mutation = Array.isArray(retryState?.mutation?.instructions)
+        ? retryState.mutation.instructions.slice(0, 3).map((item) => `   - ${item}`).join("\n")
+        : "   - Resume from the recorded failed phase.";
+      return [
+        `${index + 1}. status=${entry?.outcome?.status || "unknown"} retryAction=${entry?.outcome?.retryAction || "none"} failedPhase=${retryState?.failedPhase || "unknown"} resumeFrom=${retryState?.resumeFromPhase || "plan"}`,
+        `   evidence: ${evidence}`,
+        "   mutate next attempt:",
+        mutation,
+      ].join("\n");
     }).join("\n");
-    return `## REFLECTION MEMORY\nRecent same-lane outcomes to avoid repeating failed approaches:\n${bullets}`;
+    return `## RETRY STATE\nRecent same-lane retry state to mutate this attempt:\n${bullets}`;
   } catch {
     return "";
   }
@@ -185,34 +608,38 @@ async function persistReflectionMemory(config, input: {
   task: string;
   status: string;
   retryAction?: string | null;
-  reason?: string | null;
   failureClass?: string | null;
+  retryState?: Record<string, unknown> | null;
 }) {
   const stateDir = config?.paths?.stateDir || "state";
   const filePath = path.join(stateDir, REFLECTION_MEMORY_FILE);
-  let payload: any = { schemaVersion: 1, updatedAt: null, entries: [] };
+  let payload: any = { schemaVersion: REFLECTION_MEMORY_SCHEMA_VERSION, updatedAt: null, entries: [] };
   try {
     if (existsSync(filePath)) {
       const raw = JSON.parse(readFileSync(filePath, "utf8"));
       if (raw && typeof raw === "object") payload = raw;
     }
   } catch {
-    payload = { schemaVersion: 1, updatedAt: null, entries: [] };
+    payload = { schemaVersion: REFLECTION_MEMORY_SCHEMA_VERSION, updatedAt: null, entries: [] };
   }
   const nextEntries = Array.isArray(payload?.entries) ? payload.entries : [];
+  const recordedAt = new Date().toISOString();
   nextEntries.push({
     roleName: String(input.roleName || ""),
     taskKind: String(input.taskKind || "general"),
-    task: String(input.task || "").slice(0, 240),
-    status: String(input.status || "unknown"),
-    retryAction: input.retryAction ? String(input.retryAction) : null,
-    failureClass: input.failureClass ? String(input.failureClass) : null,
-    reason: input.reason ? String(input.reason).slice(0, 240) : null,
-    recordedAt: new Date().toISOString(),
+    taskFingerprint: buildTaskFingerprint(input.taskKind || "general", input.task || ""),
+    taskSnippet: String(input.task || "").slice(0, 240),
+    outcome: {
+      status: String(input.status || "unknown"),
+      retryAction: input.retryAction ? String(input.retryAction) : null,
+      failureClass: input.failureClass ? String(input.failureClass) : null,
+      recordedAt,
+    },
+    retryState: normalizeStoredRetryState(input.retryState, WORKER_EXECUTION_PHASE.PLAN),
   });
   payload = {
-    schemaVersion: 1,
-    updatedAt: new Date().toISOString(),
+    schemaVersion: REFLECTION_MEMORY_SCHEMA_VERSION,
+    updatedAt: recordedAt,
     entries: nextEntries.slice(-MAX_REFLECTION_ENTRIES),
   };
   await writeJson(filePath, payload);
@@ -2603,6 +3030,19 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     );
     await appendProgress(config, `[WORKER:${roleName}] ${label} reason_code=${reasonCode} retry_class=${retryClass ?? "none"}`);
     const errorMsg = truncate(stderr || stdout || "unknown error", 300);
+    const errorPhaseRetryState = buildPhaseAwareRetryState({
+      instruction,
+      parsed: {
+        status: isTransient ? "transient_error" : "error",
+        summary: errorMsg,
+        fullOutput: `${stdout}\n${stderr}`,
+        filesTouched: [],
+        currentBranch: sessionState?.currentBranch || null,
+        prUrl: null,
+        dispatchBlockReason: null,
+      },
+      statusOverride: isTransient ? "transient_error" : "error",
+    });
 
     // Persist structured escalation for worker errors/timeouts (non-critical write)
     appendEscalation(config, {
@@ -2621,6 +3061,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         blockingReasonClass: BLOCKING_REASON_CLASS.WORKER_ERROR,
         errorMessage: errorMsg,
         logLines: result.timedOut ? ["Process timed out"] : [],
+        failurePhase: errorPhaseRetryState.failedPhase,
+        phaseEvidence: errorPhaseRetryState.evidence,
         taskId: instruction.taskId || null,
         attemptMeta,
       });
@@ -2637,6 +3079,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         blockingReasonClass: BLOCKING_REASON_CLASS.WORKER_ERROR,
         errorMessage: errorMsg,
         logLines: result.timedOut ? ["Process timed out"] : [],
+        failurePhase: errorPhaseRetryState.failedPhase,
+        phaseEvidence: errorPhaseRetryState.evidence,
         taskId: instruction.taskId || null,
         attemptMeta,
       });
@@ -2662,6 +3106,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         blockingReasonClass: BLOCKING_REASON_CLASS.WORKER_ERROR,
         errorMessage: errorMsg,
         logLines: result.timedOut ? ["Process timed out"] : [],
+        failurePhase: errorPhaseRetryState.failedPhase,
+        phaseEvidence: errorPhaseRetryState.evidence,
         taskId: instruction.taskId || null,
         attemptMeta,
       });
@@ -2671,6 +3117,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         terminationCause,
         instruction.taskId || null,
         attemptMeta,
+        errorPhaseRetryState,
       );
       appendFailureClassification(config, { ...envelope, _type: "failure_envelope" }).catch(() => { /* non-fatal */ });
     } catch { /* non-fatal — envelope build must never block worker results */ }
@@ -2686,14 +3133,13 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     } catch {
       // non-critical routing telemetry
     }
-    await persistReflectionMemory(config, {
+    await persistPhaseAwareRetryArtifacts(config, {
       roleName,
-      taskKind: instruction.taskKind,
-      task: instruction.task,
+      instruction,
       status: isTransient ? "transient_error" : "error",
       retryAction: errorRetryDecision?.retryAction || null,
-      reason: errorMsg,
       failureClass: errorRetryDecision?.failureClass || null,
+      retryState: errorPhaseRetryState,
     }).catch(() => {});
     await persistLegacyWorkerSessionArtifacts(config, String(roleName || "worker"), {
       phase: "complete",
@@ -3141,6 +3587,18 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         prUrl: parsed.prUrl
       }).catch(() => { /* non-fatal */ });
     } else if (reworkDecision.shouldRework) {
+      const verificationRetryState = buildPhaseAwareRetryState({
+        instruction,
+        parsed: {
+          ...parsed,
+          verificationEvidence,
+        },
+        statusOverride: "verification_failed",
+        retryAction: RETRY_ACTION.REWORK,
+        failureClass: FAILURE_CLASS.VERIFICATION,
+        failedPhaseOverride: WORKER_EXECUTION_PHASE.TEST,
+        verificationEvidence,
+      });
       // Push the failed attempt into history so the worker sees context on rework
       updatedHistory.push({
         from: roleName,
@@ -3170,6 +3628,14 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       } catch {
         // non-critical routing telemetry
       }
+      await persistPhaseAwareRetryArtifacts(config, {
+        roleName,
+        instruction,
+        status: "verification_failed",
+        retryAction: RETRY_ACTION.REWORK,
+        failureClass: FAILURE_CLASS.VERIFICATION,
+        retryState: verificationRetryState,
+      }).catch(() => {});
       // Re-dispatch with rework instruction; recursive depth is bounded by maxReworkAttempts
       return runWorkerConversation(config, roleName, reworkDecision.instruction, updatedHistory, sessionState);
     }
@@ -3245,9 +3711,18 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // Classify failure for error/blocked/partial statuses (non-critical)
   let failureClassification = null;
   let retryDecision = null;
+  let phaseRetryState = null;
   if (parsed.status === "error" || parsed.status === "blocked" || parsed.status === "partial") {
     const nonRetryablePolicyBlock = parsed.status === "blocked"
       && isNonRetryablePolicyBlockReason(parsed.dispatchBlockReason);
+    phaseRetryState = buildPhaseAwareRetryState({
+      instruction,
+      parsed: {
+        ...parsed,
+        verificationEvidence: parsed.verificationEvidence || null,
+      },
+      verificationEvidence: parsed.verificationEvidence || null,
+    });
 
     // Derive blockingReasonClass from the escalation that was persisted (best-effort)
     let derivedRc = null;
@@ -3272,6 +3747,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       workerStatus: parsed.status,
       blockingReasonClass: derivedRc,
       errorMessage: parsed.summary,
+      failurePhase: phaseRetryState.failedPhase,
+      phaseEvidence: phaseRetryState.evidence,
       taskId: instruction.taskId || null,
     });
     if (cfResult.ok) {
@@ -3321,9 +3798,24 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         retryDecision ? (retryDecision as Record<string, unknown>) : null,
         envCause,
         instruction.taskId || null,
+        attemptMeta,
+        phaseRetryState,
       );
       appendFailureClassification(config, { ...envelope, _type: "failure_envelope" }).catch(() => { /* non-fatal */ });
     } catch { /* non-fatal — envelope build must never block worker results */ }
+  }
+  if (phaseRetryState) {
+    phaseRetryState = buildPhaseAwareRetryState({
+      instruction,
+      parsed: {
+        ...parsed,
+        verificationEvidence: parsed.verificationEvidence || null,
+      },
+      retryAction: retryDecision?.retryAction || null,
+      failureClass: failureClassification?.primaryClass || retryDecision?.failureClass || null,
+      verificationEvidence: parsed.verificationEvidence || null,
+      failedPhaseOverride: phaseRetryState.failedPhase,
+    });
   }
 
   // Produce deterministic per-attempt artifact for the learning loop (non-critical)
@@ -3337,6 +3829,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       failureClassification?.primaryClass ?? retryDecision?.failureClass ?? null,
       retryDecision,
       firstAttemptAt,
+      phaseRetryState,
     );
   } catch { /* non-fatal — artifact build must never block worker results */ }
 
@@ -3362,14 +3855,22 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   }
 
   if (parsed.status !== "done" && parsed.status !== "success") {
-    await persistReflectionMemory(config, {
+    await persistPhaseAwareRetryArtifacts(config, {
       roleName,
-      taskKind: instruction.taskKind,
-      task: instruction.task,
+      instruction,
       status: parsed.status,
       retryAction: retryDecision?.retryAction || null,
-      reason: parsed.summary,
       failureClass: failureClassification?.primaryClass || retryDecision?.failureClass || null,
+      retryState: phaseRetryState || buildPhaseAwareRetryState({
+        instruction,
+        parsed: {
+          ...parsed,
+          verificationEvidence: parsed.verificationEvidence || null,
+        },
+        retryAction: retryDecision?.retryAction || null,
+        failureClass: failureClassification?.primaryClass || retryDecision?.failureClass || null,
+        verificationEvidence: parsed.verificationEvidence || null,
+      }),
     }).catch(() => {});
   }
 

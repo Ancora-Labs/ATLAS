@@ -31,6 +31,7 @@ import {
   resolveRetryAction,
   buildRetryMetric,
   recommendRetryDeliberationMode,
+  buildAttemptArtifact,
 } from "../../src/core/retry_strategy.js";
 
 import { FAILURE_CLASS } from "../../src/core/failure_classifier.js";
@@ -584,6 +585,44 @@ describe("recommendRetryDeliberationMode", () => {
     assert.equal(result.mode, "multi-attempt");
     assert.equal(result.reflection, true);
     assert.ok(result.searchBudget >= 1);
+  });
+});
+
+describe("buildAttemptArtifact", () => {
+  it("preserves structured phase retry state for replay-guided retries", () => {
+    const artifact = buildAttemptArtifact(
+      "run-structured",
+      1,
+      "task-structured",
+      "blocked",
+      FAILURE_CLASS.VERIFICATION,
+      { retryAction: RETRY_ACTION.REWORK },
+      "2024-01-01T00:00:00Z",
+      {
+        failedPhase: "test",
+        resumeFromPhase: "test",
+        mutation: {
+          strategy: "resume_from_failed_phase",
+          instructions: ["Start by reproducing TESTS=fail before more edits."],
+        },
+      },
+    );
+    assert.equal((artifact.phaseRetryState as any)?.failedPhase, "test");
+    assert.equal((artifact.phaseRetryState as any)?.resumeFromPhase, "test");
+    assert.equal((artifact.phaseRetryState as any)?.mutation?.strategy, "resume_from_failed_phase");
+  });
+
+  it("negative: stores null phaseRetryState when no structured retry state is supplied", () => {
+    const artifact = buildAttemptArtifact(
+      "run-basic",
+      0,
+      null,
+      "error",
+      FAILURE_CLASS.ENVIRONMENT,
+      { retryAction: RETRY_ACTION.COOLDOWN_RETRY },
+      "2024-01-01T00:00:00Z",
+    );
+    assert.equal(artifact.phaseRetryState, null);
   });
 });
 

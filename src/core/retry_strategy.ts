@@ -777,6 +777,7 @@ export interface AttemptArtifact {
   decidedAt: string;
   firstAttemptAt: string;
   outcome: string;
+  phaseRetryState: Record<string, unknown> | null;
 }
 
 /**
@@ -795,6 +796,7 @@ export interface AttemptArtifact {
  * @param failureClass   - failure class from classifyFailure, or null
  * @param retryDecision  - resolved retry decision from resolveRetryAction, or null
  * @param firstAttemptAt - ISO timestamp of the first attempt in this lineage
+ * @param phaseRetryState - structured phase-aware retry state captured for the attempt
  * @returns AttemptArtifact conforming to ATTEMPT_ARTIFACT_SCHEMA_VERSION
  */
 export function buildAttemptArtifact(
@@ -805,6 +807,7 @@ export function buildAttemptArtifact(
   failureClass: string | null,
   retryDecision: { retryAction?: string; [key: string]: unknown } | null,
   firstAttemptAt: string,
+  phaseRetryState: Record<string, unknown> | null = null,
 ): AttemptArtifact {
   const decidedAt = new Date().toISOString();
   let policyApplied: AttemptPolicyContract | null = null;
@@ -843,5 +846,8 @@ export function buildAttemptArtifact(
     decidedAt,
     firstAttemptAt: String(firstAttemptAt || decidedAt),
     outcome:        String(outcome || "unknown"),
+    phaseRetryState: phaseRetryState && typeof phaseRetryState === "object"
+      ? { ...phaseRetryState }
+      : null,
   };
 }
