@@ -14,6 +14,8 @@ import { getVerificationProfile, CANONICAL_VERIFICATION_REPORT_TEMPLATE } from "
 import {
   validateDispatchCommands,
   classifyNodeTestGlobWindowsArtifact,
+  checkForbiddenCommands,
+  isNonSpecificVerificationCommand,
   type DispatchCommandValidationResult,
 } from "./verification_command_registry.js";
 import type { CancellationToken } from "./daemon_control.js";
@@ -57,6 +59,9 @@ export const NAMED_TEST_PROOF_PATTERN =
  */
 export const NAMED_TEST_PROOF_GAP =
   "Named test proof missing — the verification field names a specific test file/description that must appear in the worker output before done closure";
+
+export const NON_SPECIFIC_VERIFICATION_GAP =
+  "Verification target is non-specific — merge-oriented work must name a specific test file or exact proof target instead of a generic CLI command";
 
 /**
  * Returns true when a dispatchBlockReason string indicates a runtime hook denial.
@@ -1103,6 +1108,18 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
     });
     evidence.postMergeArtifact = artifact;
     for (const gap of collectArtifactGaps(artifact)) gaps.push(gap);
+  }
+
+  if (options.verificationText && requireArtifact) {
+    const verificationText = String(options.verificationText).trim();
+    const forbiddenVerification = checkForbiddenCommands(verificationText);
+    if (forbiddenVerification.forbidden) {
+      for (const violation of forbiddenVerification.violations) {
+        gaps.push(`Verification target uses a non-portable command: ${violation.reason}`);
+      }
+    } else if (isNonSpecificVerificationCommand(verificationText)) {
+      gaps.push(`${NON_SPECIFIC_VERIFICATION_GAP}: "${verificationText}"`);
+    }
   }
 
   // ── Named test proof gate ────────────────────────────────────────────────
