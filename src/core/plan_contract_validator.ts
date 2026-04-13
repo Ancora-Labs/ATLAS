@@ -975,6 +975,20 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
     { field: "verification", value: String(plan.verification || "") },
   ];
 
+  const extractExecutableVerificationFragment = (value: string): string => {
+    const text = String(value || "").trim();
+    if (!text) return "";
+
+    const directTargetMatch = text.match(
+      /^([^\s"'`]+?\.(?:test|spec)\.[cm]?[jt]sx?)(?=\s|$)/i
+    );
+    if (directTargetMatch?.[1]) return directTargetMatch[1];
+
+    return text
+      .split(/\s+[-—–]\s+test:/i)[0]
+      .trim();
+  };
+
   if (Array.isArray(plan.verification_commands)) {
     plan.verification_commands.forEach((cmd: unknown, idx: number) => {
       commandsToCheck.push({ field: `verification_commands[${idx}]`, value: String(cmd || "") });
@@ -982,7 +996,9 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
   }
 
   for (const { field, value } of commandsToCheck) {
-    const forbidden = checkForbiddenCommands(value);
+    const forbidden = checkForbiddenCommands(
+      field === "verification" ? extractExecutableVerificationFragment(value) : value
+    );
     if (forbidden.forbidden) {
       for (const v of forbidden.violations) {
         violations.push({

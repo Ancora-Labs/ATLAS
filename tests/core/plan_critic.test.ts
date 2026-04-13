@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { critiquePlan, runCriticPass, CRITIC_DIMENSION, CRITIC_PASS_THRESHOLD, evaluateACRichness, repairPlan, dualPassCriticRepair, AC_RICHNESS_THRESHOLD } from "../../src/core/plan_critic.js";
+import { critiquePlan, runCriticPass, CRITIC_DIMENSION, CRITIC_PASS_THRESHOLD, evaluateACRichness, repairPlan, dualPassCriticRepair, AC_RICHNESS_THRESHOLD, scoreCandidateSetWithGates, selectBestCandidateSet } from "../../src/core/plan_critic.js";
 import { MAX_ACCEPTANCE_CRITERIA_PER_TASK, MAX_FILES_IN_SCOPE_PER_TASK } from "../../src/core/plan_contract_validator.js";
 
 describe("plan_critic", () => {
@@ -247,6 +247,46 @@ describe("plan_critic", () => {
     });
   });
 
+  describe("candidate-set gate-aware scoring", () => {
+    const strongPlan = {
+      task: "Wire bounded candidate selection into src/core/prometheus.ts",
+      verification: "npm test -- tests/core/prometheus_parse.test.ts",
+      context: "src/core/prometheus.ts selects a gated candidate plan set before repair",
+      leverage_rank: ["task-quality", "worker-specialization"],
+      capacityDelta: 0.2,
+      requestROI: 1.4,
+      acceptance_criteria: ["candidate selection keeps >= 1 dispatchable plan", "stale candidates are demoted with 0 regressions"],
+      target_files: ["src/core/prometheus.ts", "tests/core/prometheus_parse.test.ts"],
+      riskLevel: "low",
+    };
+
+    it("reduces effectiveScore when freshness penalty and viability loss are present", () => {
+      const base = scoreCandidateSetWithGates([strongPlan]);
+      const gated = scoreCandidateSetWithGates([strongPlan], {
+        contractPassRate: 0.5,
+        viablePlanCount: 0,
+        freshnessPenalty: 0.4,
+      });
+      assert.ok(gated.effectiveScore < base.effectiveScore);
+      assert.equal(gated.contractPassRate, 0.5);
+      assert.equal(gated.viableRatio, 0);
+      assert.equal(gated.freshnessPenalty, 0.4);
+    });
+
+    it("prefers the candidate with stronger gate metrics when critic scores are close", () => {
+      const candidateA = [{ ...strongPlan, task: "Candidate A" }];
+      const candidateB = [{ ...strongPlan, task: "Candidate B" }];
+      const result = selectBestCandidateSet([candidateA, candidateB], {
+        gateMetricsByCandidate: [
+          { contractPassRate: 0.5, viablePlanCount: 1, freshnessPenalty: 0.3 },
+          { contractPassRate: 1, viablePlanCount: 1, freshnessPenalty: 0 },
+        ],
+      });
+      assert.equal(result.bestCandidates, candidateB);
+      assert.ok(result.score > 0);
+    });
+  });
+
   describe("AC_RICHNESS_THRESHOLD", () => {
     it("is a positive number", () => {
       assert.ok(AC_RICHNESS_THRESHOLD > 0);
@@ -360,6 +400,48 @@ describe("plan_critic", () => {
         1.0,
         "non-topic-framed plan must not be penalized by drift detector"
       );
+    });
+  });
+
+  describe("candidate-set gate scoring", () => {
+    const strongPlan = {
+      task: "Wire bounded candidate selection into src/core/prometheus.ts",
+      scope: "src/core/prometheus.ts",
+      target_files: ["src/core/prometheus.ts", "tests/core/prometheus_parse.test.ts"],
+      acceptance_criteria: ["candidate selection picks a dispatchable set", "blocked candidate sets score zero"],
+      verification: "npm test -- tests/core/prometheus_parse.test.ts",
+      leverage_rank: ["task-quality", "cost efficiency"],
+      capacityDelta: 0.2,
+      requestROI: 1.5,
+      riskLevel: "medium",
+    };
+
+    const viablePlan = {
+      ...strongPlan,
+      task: "Keep dispatchable candidate plans ahead of blocked sets",
+      target_files: ["src/core/plan_critic.ts", "tests/core/plan_critic.test.ts"],
+    };
+
+    it("zeroes effective score when a candidate set is fully blocked by gates", () => {
+      const result = scoreCandidateSetWithGates([strongPlan], {
+        contractPassRate: 0,
+        viablePlanCount: 0,
+        freshnessPenalty: 0,
+        allPlansBlocked: true,
+      });
+      assert.equal(result.allPlansBlocked, true);
+      assert.equal(result.effectiveScore, 0);
+    });
+
+    it("prefers a dispatchable candidate set over a higher-rubric blocked set", () => {
+      const result = selectBestCandidateSet([[strongPlan], [viablePlan]], {
+        gateMetricsByCandidate: [
+          { contractPassRate: 0, viablePlanCount: 0, freshnessPenalty: 0, allPlansBlocked: true },
+          { contractPassRate: 1, viablePlanCount: 1, freshnessPenalty: 0, allPlansBlocked: false },
+        ],
+      });
+      assert.deepEqual(result.bestCandidates, [viablePlan]);
+      assert.match(result.reason, /clear_winner|tie_break_applied/);
     });
   });
 });

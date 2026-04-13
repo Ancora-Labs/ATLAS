@@ -13,6 +13,8 @@
  *   ]);
  */
 
+import { createHash } from "node:crypto";
+
 /**
  * Budget partition labels for prompt sections.
  *
@@ -200,6 +202,41 @@ export const COMMON_SECTIONS = Object.freeze({
   ),
 });
 
+export function buildCandidateGenerationSection(opts: {
+  minCandidates?: number;
+  maxCandidates?: number;
+  requireFallbackPlans?: boolean;
+} = {}) {
+  const rawMin = Number(opts.minCandidates);
+  const rawMax = Number(opts.maxCandidates);
+  const minCandidates = Number.isFinite(rawMin) ? Math.max(2, Math.floor(rawMin)) : 2;
+  const maxCandidates = Number.isFinite(rawMax) ? Math.max(minCandidates, Math.floor(rawMax)) : 5;
+  const requireFallbackPlans = opts.requireFallbackPlans !== false;
+
+  return section(
+    "candidate-generation",
+    [
+      "CANDIDATE PLAN GENERATION (bounded multi-draft mode):",
+      `Generate between ${minCandidates} and ${maxCandidates} distinct candidate plan sets.`,
+      "Each candidate set must be a self-contained, complete, and immediately executable plan array.",
+      "Candidates must differ in decomposition strategy, wave ordering, or task granularity.",
+      "Do NOT generate near-duplicate candidates that differ only in phrasing.",
+      "Emit the JSON companion using this exact shape:",
+      `"candidateSets": [`,
+      `  { "label": "candidate-1", "plans": [ ... ] },`,
+      `  { "label": "candidate-2", "plans": [ ... ] }`,
+      `]`,
+      "Each candidateSets[*].plans array must satisfy the full plan contract on its own.",
+      "The orchestrator will score all candidates using critic, contract, and freshness gates, then select the best set deterministically.",
+      "Do not rank the candidates yourself.",
+      requireFallbackPlans
+        ? "Also copy your strongest candidate into the top-level plans array for backward compatibility. The top-level plans must exactly match one candidate set."
+        : "If you also emit top-level plans, they must exactly match one candidate set; otherwise omit top-level plans in multi-draft mode.",
+      "Each candidate must satisfy measurable acceptance criteria, concrete verification, specific target files, positive capacityDelta, and requestROI > 1.",
+    ].join("\n")
+  );
+}
+
 /**
  * Prompt section instructing the planner to generate bounded candidate plan sets
  * rather than a single draft.  Each candidate should be a self-contained,
@@ -211,21 +248,7 @@ export const COMMON_SECTIONS = Object.freeze({
  *
  * Bounded to MAX_CANDIDATE_SETS (default 5) to control token spend.
  */
-export const CANDIDATE_GENERATION_SECTION = section(
-  "candidate-generation",
-  [
-    "CANDIDATE PLAN GENERATION (bounded multi-draft mode):",
-    "Generate between 2 and 5 distinct candidate plan sets. Each candidate set must be a",
-    "self-contained, complete, and immediately executable plan array.",
-    "Candidates must differ in: decomposition strategy, wave ordering, or task granularity.",
-    "Do NOT generate near-duplicate candidates that differ only in phrasing.",
-    "Label each candidate with: [CANDIDATE N] where N starts at 1.",
-    "The orchestrator will score all candidates using the plan critic rubric and select the",
-    "best set deterministically. You do not need to rank or select — generate all candidates.",
-    "Each candidate must satisfy: measurable acceptance criteria, concrete verification command,",
-    "specific target files, positive capacityDelta, and requestROI > 1.",
-  ].join("\n")
-);
+export const CANDIDATE_GENERATION_SECTION = buildCandidateGenerationSection();
 
 /**
  * Estimate token count for a text string.
@@ -494,6 +517,36 @@ export function markCacheableSegments(
     const isStable = CACHE_STABLE_SECTION_NAMES.has(name) || extra.has(name) || s?.cacheable === true;
     return { ...s, cacheable: isStable };
   });
+}
+
+/**
+ * Build a deterministic prompt-family key from cache-eligible sections.
+ *
+ * The key intentionally ignores dynamic sections unless `stableOnly=false` is
+ * requested. This lets callers persist prompt-cache telemetry against a stable
+ * family identifier that survives per-call payload changes.
+ */
+export function derivePromptFamilyKey(
+  sections: Array<{ name: string; content: string; cacheable?: boolean; [key: string]: any }>,
+  opts: { stableOnly?: boolean; salt?: string } = {}
+): string {
+  const stableOnly = opts.stableOnly !== false;
+  const normalized = (sections || [])
+    .filter((section) => {
+      if (!section || typeof section.content !== "string") return false;
+      if (section.content.trim().length === 0) return false;
+      return stableOnly ? section.cacheable === true : true;
+    })
+    .map((section) => ({
+      name: String(section.name || "").trim().toLowerCase(),
+      content: String(section.content || "").replace(/\s+/g, " ").trim(),
+    }));
+
+  const payload = JSON.stringify({
+    salt: String(opts.salt || "prompt-family"),
+    sections: normalized,
+  });
+  return createHash("sha256").update(payload).digest("hex").slice(0, 16);
 }
 
 /**

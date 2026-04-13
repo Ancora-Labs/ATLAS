@@ -14,8 +14,8 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { appendFileSync } from "node:fs";
 import { readJson, writeJson, spawnAsync } from "./fs_utils.js";
-import { appendAlert, appendProgress, appendInterventionOptimizerEntry, recordCapabilityExecution } from "./state_tracker.js";
-import { getRoleRegistry } from "./role_registry.js";
+import { appendAlert, appendProgress, appendInterventionOptimizerEntry, recordCapabilityExecution, appendPromptCacheTelemetry } from "./state_tracker.js";
+import { getRoleRegistry, LANE_WORKER_NAMES } from "./role_registry.js";
 import { buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
 import { addSchemaVersion, STATE_FILE_TYPE } from "./schema_registry.js";
 import { PREMORTEM_RISK_LEVEL } from "./athena_reviewer.js";
@@ -70,6 +70,7 @@ import {
 import {
   section,
   compilePrompt as _compilePrompt,
+  estimateTokens,
   markCacheableSegments as _markCacheableSegments,
   markCycleDeltaSectionsRequired as _markCycleDeltaSectionsRequired,
   analyzePacketDensification as _analyzePacketDensification,
@@ -78,6 +79,8 @@ import {
   boundStructuredList,
   estimateTokenCost,
   compilePrometheusContextShortlist,
+  derivePromptFamilyKey,
+  buildCandidateGenerationSection,
   type ShortlistItem,
 } from "./prompt_compiler.js";
 import {
@@ -90,10 +93,18 @@ import { rewriteVerificationCommand } from "./verification_command_registry.js";
 import { checkCarryForwardGate, hardGateRecurrenceToPolicies } from "./learning_policy_compiler.js";
 import { buildRankedLessonShortlists } from "./lesson_halflife.js";
 import {
+  derivePlanContinuationFamilyKey,
+  extractImplementationEvidencePaths,
+  normalizePlanIdentity,
+  POSTMORTEM_LIFECYCLE_STATE,
+} from "./plan_lifecycle_contract.js";
+import {
   splitWavesIntoMicrowaves as _splitWavesIntoMicrowaves,
   MICROWAVE_MAX_TASKS_DEFAULT as _MICROWAVE_MAX_TASKS_DEFAULT,
   estimatePlanExecutionTokens,
   autoBundleThinRelatedPackets,
+  extractTaskKindPacketTelemetry,
+  resolveAdaptivePacketPlanLimit,
 } from "./worker_batch_planner.js";
 
 // Re-export so existing callers that import from prometheus.ts continue to work
@@ -103,7 +114,7 @@ export type { WaveTaskObject } from "./plan_contract_validator.js";
 
 import { warn, emitEvent } from "./logger.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
-import { computeBenchmarkIntegrityScore, computeBenchmarkPlanningPriors, computeProvenanceRoutingDelta } from "./model_policy.js";
+import { computeBenchmarkIntegrityScore, computeBenchmarkPlanningPriors, computeProvenanceRoutingDelta, deriveCandidatePlanningPolicy } from "./model_policy.js";
 import type { RetryViolationSignal } from "./model_policy.js";
 import {
   computeResearchCapacityGain,
@@ -159,7 +170,7 @@ export function detectModelFallback(rawText) {
   return { agent: match[1], requestedModel: match[2], fallbackModel: match[3] };
 }
 
-export function buildPrometheusPlanningPolicy(config, laneTelemetry?: Record<string, unknown> | null) {
+export function buildPrometheusPlanningPolicy(config, laneTelemetry?: Record<string, unknown> | null, opts: any = {}) {
   const planner = config?.planner || {};
   const configuredMaxWorkersPerWave = Math.max(1, Number(planner.defaultMaxWorkersPerWave || config?.maxParallelWorkers || 10));
   const rawMaxTasks = Number(planner.maxTasks);
@@ -180,11 +191,28 @@ export function buildPrometheusPlanningPolicy(config, laneTelemetry?: Record<str
   const resolvedLaneTelemetry = (laneTelemetry && typeof laneTelemetry === "object")
     ? laneTelemetry
     : null;
+  const taskKindTelemetry = (opts?.taskKindTelemetry && typeof opts.taskKindTelemetry === "object")
+    ? opts.taskKindTelemetry
+    : null;
+  const planningUncertainty = String(opts?.uncertainty || "low").trim().toLowerCase() || "low";
+  const adaptivePacketCaps = Object.fromEntries(
+    ["implementation", "bugfix", "refactor", "test", "rework", "ci-fix"].map((taskKind) => {
+      const adaptive = resolveAdaptivePacketPlanLimit({
+        taskKinds: [taskKind],
+        baseCap: maxPlansPerPacket,
+        uncertainty: planningUncertainty,
+        taskKindTelemetry: taskKindTelemetry ?? undefined,
+      });
+      return [taskKind, adaptive.maxPlansPerPacket];
+    })
+  );
 
   return {
     maxTasks,
     maxWorkersPerWave,
     maxPlansPerPacket,
+    planningUncertainty,
+    adaptivePacketCaps,
     preferFewestWorkers: planner.preferFewestWorkers !== false,
     allowSameCycleFollowUps: Boolean(planner.allowSameCycleFollowUps),
     requireDependencyAwareWaves: planner.requireDependencyAwareWaves !== false,
@@ -233,10 +261,10 @@ export function normalizeTextForContaminationCheck(text: string): string {
  */
 export const PROCESS_NARRATION_LEXICAL_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
   // First-person agent narration of upcoming action at sentence start — tool-use verbs
-  /^(let\s+me|i'?m\s+going\s+to|i\s+am\s+going\s+to|i\s+will\s+now|i'?m\s+now|i\s+am\s+now|now\s+i\s+will|now\s+i'?m|i'?ll\s+now)\s+(read|scan|check|view|analyze|look|open|search|find|examine|browse|explore|fetch|get|inspect)/im,
+  /^(let\s+me|i['’]?m\s+going\s+to|i\s+am\s+going\s+to|i\s+will\s+now|i['’]?m\s+now|i\s+am\s+now|now\s+i\s+will|now\s+i['’]?m|i['’]?ll\s+now|i['’]?m|i\s+am)\s+(read|scan|check|view|analyze|look|open|search|find|examine|browse|explore|fetch|get|inspect|reading|scanning|checking|viewing|analyzing|looking|opening|searching|finding|examining|browsing|exploring|fetching|getting|inspecting)/im,
   // First-person agent narration — investigation/gathering/evidence-collection verbs
   // Catches "I'm going to gather evidence", "I will now collect findings", etc.
-  /^(let\s+me|i'?m\s+going\s+to|i\s+am\s+going\s+to|i\s+will\s+now|i'?m\s+now|i\s+am\s+now|now\s+i\s+will|now\s+i'?m|i'?ll\s+now)\s+(gather|collect|investigate|review|document|compile|assess|evaluate|determine|identify|figure|understand|capture|record)\b/im,
+  /^(let\s+me|i['’]?m\s+going\s+to|i\s+am\s+going\s+to|i\s+will\s+now|i['’]?m\s+now|i\s+am\s+now|now\s+i\s+will|now\s+i['’]?m|i['’]?ll\s+now|i['’]?m|i\s+am)\s+(gather|gathering|collect|collecting|investigate|investigating|review|reviewing|document|documenting|compile|compiling|assess|assessing|evaluate|evaluating|determine|determining|identify|identifying|figure|understand|capture|capturing|record|recording|synthesize|synthesizing|pull|pulling)\b/im,
 ]);
 
 /**
@@ -425,6 +453,88 @@ function normalizeTaskDescriptor(value: unknown): string {
   return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+const MANDATORY_COVERAGE_STOPWORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "this",
+  "that",
+  "from",
+  "into",
+  "when",
+  "where",
+  "must",
+  "should",
+  "cycle",
+  "plan",
+  "task",
+  "finding",
+  "fix",
+  "review",
+]);
+
+function tokenizeMandatoryCoverageText(value: unknown): string[] {
+  return [...new Set(
+    String(value || "")
+      .toLowerCase()
+      .split(/[^a-z0-9_./-]+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 3)
+      .filter((token) => !MANDATORY_COVERAGE_STOPWORDS.has(token))
+  )];
+}
+
+function collectPlanCoverageText(plan: unknown): string {
+  if (!plan || typeof plan !== "object") return "";
+  const entry = plan as Record<string, unknown>;
+  return [
+    entry.task,
+    entry.title,
+    entry.scope,
+    entry.taskKind,
+    entry.capabilityTag,
+    entry.capabilityLane,
+    entry.description,
+    entry.before_state,
+    entry.after_state,
+    ...(Array.isArray(entry.target_files) ? entry.target_files : []),
+    ...(Array.isArray(entry.acceptance_criteria) ? entry.acceptance_criteria : []),
+    ...(Array.isArray(entry.verification_commands) ? entry.verification_commands : []),
+    entry.verification,
+  ].map((value) => String(value || "").trim()).filter(Boolean).join(" ").toLowerCase();
+}
+
+function scoreMandatoryFindingPlanMatch(finding: MandatoryHealthAuditFinding, plan: unknown): number {
+  if (!plan || typeof plan !== "object") return 0;
+  if (isCiCriticalMandatoryFinding(finding) && isCiFixPlan(plan)) return 100;
+
+  const planText = collectPlanCoverageText(plan);
+  if (!planText) return 0;
+
+  let score = 0;
+  const directNeedles = [finding.id, finding.capabilityNeeded]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+  for (const needle of directNeedles) {
+    if (planText.includes(needle)) score += 4;
+  }
+
+  const tokens = tokenizeMandatoryCoverageText([
+    finding.id,
+    finding.area,
+    finding.capabilityNeeded,
+    finding.finding,
+    finding.remediation,
+  ].join(" "));
+  score += tokens.filter((token) => planText.includes(token)).length;
+
+  const normalizedTaskKind = String((plan as Record<string, unknown>).taskKind || "").trim().toLowerCase();
+  if (finding.area && planText.includes(String(finding.area).trim().toLowerCase())) score += 1;
+  if (normalizedTaskKind && String(finding.capabilityNeeded || "").toLowerCase().includes(normalizedTaskKind)) score += 1;
+  return score;
+}
+
 function normalizeMandatoryTaskCoverageEntries(payload: unknown): Array<{
   findingId: string;
   status: "mapped" | "excluded" | "";
@@ -526,6 +636,65 @@ export function buildMandatoryCoverageRetryDiff(result: MandatoryTaskCoverageVal
 invalid=[${sanitizePromptLine(invalidText, 1200)}]`;
 }
 
+export function synthesizeMandatoryTaskCoverage(
+  payload: any,
+  findings: MandatoryHealthAuditFinding[],
+): any {
+  const output = (payload && typeof payload === "object") ? payload : {};
+  const plans = Array.isArray(output.plans) ? output.plans : [];
+  const existingById = new Map(
+    normalizeMandatoryTaskCoverageEntries(output)
+      .filter((entry) => entry.findingId)
+      .map((entry) => [entry.findingId, entry] as const)
+  );
+
+  output.mandatoryTaskCoverage = (Array.isArray(findings) ? findings : []).map((finding) => {
+    const existing = existingById.get(finding.id);
+    if (existing?.status === "mapped" && planReferenceExists(plans, existing.planTask)) {
+      return { findingId: finding.id, status: "mapped", planTask: existing.planTask };
+    }
+    if (existing?.status === "excluded" && isCycleSpecificExclusionJustification(existing.justification)) {
+      return { findingId: finding.id, status: "excluded", justification: existing.justification };
+    }
+
+    let bestPlan: Record<string, unknown> | null = null;
+    let bestScore = 0;
+    for (const plan of plans) {
+      const score = scoreMandatoryFindingPlanMatch(finding, plan);
+      if (score > bestScore) {
+        bestScore = score;
+        bestPlan = (plan && typeof plan === "object") ? plan as Record<string, unknown> : null;
+      }
+    }
+
+    if (bestPlan && bestScore >= 2) {
+      return {
+        findingId: finding.id,
+        status: "mapped",
+        planTask: String(bestPlan.task || bestPlan.title || bestPlan.task_id || bestPlan.id || "").trim(),
+      };
+    }
+
+    if (existing) {
+      return {
+        findingId: finding.id,
+        status: existing.status,
+        planTask: existing.planTask,
+        justification: existing.justification,
+      };
+    }
+
+    return {
+      findingId: finding.id,
+      status: "",
+      planTask: "",
+      justification: "",
+    };
+  });
+
+  return output;
+}
+
 function buildRolePlanCoverageRetryDiff(result: any): string {
   const required = Array.isArray(result?.requiredRoles) ? result.requiredRoles : [];
   const missing = Array.isArray(result?.initialMissingRoles) ? result.initialMissingRoles : [];
@@ -615,6 +784,82 @@ function uniqueStrings(values: unknown[]): string[] {
     out.push(value);
   }
   return out;
+}
+
+function extractTargetFilesFromMandatoryFinding(finding: MandatoryHealthAuditFinding): string[] {
+  const joined = `${String(finding.finding || "")} ${String(finding.remediation || "")}`;
+  const extracted = [...joined.matchAll(/([a-z0-9_./-]+\.(?:ts|tsx|js|mjs|cjs|json|md))/gi)]
+    .map((match) => String(match[1] || "").trim())
+    .filter(Boolean);
+  if (extracted.length > 0) return uniqueStrings(extracted);
+
+  const signals = `${finding.id} ${finding.capabilityNeeded} ${finding.finding} ${finding.remediation}`.toLowerCase();
+  if (/athena|correction|fidelity/.test(signals)) {
+    return ["src/core/athena_reviewer.ts", "tests/core/athena_review_normalization.test.ts"];
+  }
+  if (/governance|dispatchblockreason|dispatch block|lane|pre-wave|token/.test(signals)) {
+    return ["src/core/orchestrator.ts", "tests/core/orchestrator_gate_precedence.test.ts"];
+  }
+  return ["src/core/prometheus.ts", "tests/core/prometheus_parse.test.ts"];
+}
+
+function buildMandatoryFindingFallbackPlan(finding: MandatoryHealthAuditFinding): Record<string, unknown> {
+  const targetFiles = extractTargetFilesFromMandatoryFinding(finding);
+  return {
+    task: `Implement mandatory finding ${finding.id}: ${String(finding.remediation || finding.finding || finding.id).trim()}`,
+    title: `Implement mandatory finding ${finding.id}`,
+    description: `${finding.finding}. Remediation: ${finding.remediation}`,
+    role: "evolution-worker",
+    taskKind: "mandatory-gap",
+    scope: finding.area || "capability-gap",
+    target_files: targetFiles,
+    acceptance_criteria: [
+      `Mandatory finding ${finding.id} is addressed with deterministic behavior changes.`,
+      `Verification proves the remediation for ${finding.id} is active in the runtime path.`,
+    ],
+    verification: `${targetFiles[targetFiles.length - 1]} — test: mandatory finding ${finding.id} remains enforced`,
+    dependencies: [],
+    capacityDelta: 0.15,
+    requestROI: 1.2,
+    capabilityTag: inferPlanningCapabilityTag(
+      String(finding.remediation || finding.finding || finding.id),
+      "implementation",
+      targetFiles,
+      `${finding.id} ${finding.capabilityNeeded} ${finding.area}`,
+    ),
+    implementationEvidence: targetFiles.map((file) => `${file} is in scope for mandatory finding ${finding.id}`),
+  };
+}
+
+export function enforceMandatoryFindingCoveragePackets(
+  payload: any,
+  findings: MandatoryHealthAuditFinding[],
+): { output: any; injectedFindingIds: string[] } {
+  const output = (payload && typeof payload === "object") ? payload : {};
+  if (!Array.isArray(output.plans)) output.plans = [];
+
+  const synthesized = synthesizeMandatoryTaskCoverage(output, findings);
+  const coverage = validateMandatoryTaskCoverageContract(synthesized, findings);
+  if (coverage.ok) {
+    return { output: synthesized, injectedFindingIds: [] };
+  }
+
+  const findingsById = new Map((Array.isArray(findings) ? findings : []).map((finding) => [finding.id, finding] as const));
+  const unresolvedFindingIds = [...new Set([
+    ...coverage.missing,
+    ...coverage.invalid
+      .map((entry) => String(entry || "").split(":")[0].trim())
+      .filter(Boolean),
+  ])];
+  const injectedFindingIds: string[] = [];
+  for (const findingId of unresolvedFindingIds) {
+    const finding = findingsById.get(findingId);
+    if (!finding) continue;
+    output.plans.push(buildMandatoryFindingFallbackPlan(finding));
+    injectedFindingIds.push(findingId);
+  }
+
+  return { output, injectedFindingIds };
 }
 
 export function enforceCiRepairPacketForMandatoryFindings(
@@ -961,6 +1206,7 @@ export function sanitizePlanningFieldForPersistence(text: string): string {
     if (/^(tool_call|tool_result|function_call|assistant:|system:|user:)/i.test(norm)) return false;
     if (/^copilot>/i.test(norm)) return false;
     if (/^\[?(synthesizer_start|synthesizer_end|research_synthesizer_live)\]/i.test(norm)) return false;
+    if (isStrategicFieldToolTraceContaminated(norm)) return false;
     return true;
   });
   return filtered.join("\n").trim();
@@ -1361,10 +1607,13 @@ export function tagStaleDiagnosticsBackedPlans(
     const hasImplementationEvidence =
       Array.isArray(plan.implementationEvidence) &&
       plan.implementationEvidence.some((e: unknown) => String(e || "").trim().length > 0);
+    const hasTargetFileEvidence =
+      (Array.isArray(plan.target_files) && plan.target_files.some((entry: unknown) => String(entry || "").trim().length > 0))
+      || (Array.isArray(plan.targetFiles) && plan.targetFiles.some((entry: unknown) => String(entry || "").trim().length > 0));
     const hasNoveltyScore =
       typeof plan._noveltyScore === "number" && plan._noveltyScore > 0;
 
-    const hasIndependentBacking = hasImplementationEvidence || hasNoveltyScore;
+    const hasIndependentBacking = hasImplementationEvidence || hasTargetFileEvidence || hasNoveltyScore;
 
     if (referencesStaleSource || !hasIndependentBacking) {
       plan._staleDiagnosticsGated = true;
@@ -1426,6 +1675,57 @@ export function applyAdmissionPacketHardFilter(
     filteredCount: rejectedPlanIndices.length,
     warnedOnly: false,
     rejectedPlanIndices,
+  };
+}
+
+export function analyzePlanContractGateOutcome(
+  contractResult: {
+    totalPlans?: number;
+    invalidCount?: number;
+    results?: Array<{
+      planIndex: number;
+      valid: boolean;
+      violations: Array<{ code?: string; severity?: string }>;
+    }>;
+  },
+): {
+  totalPlans: number;
+  criticalInvalidCount: number;
+  allPlansBlocked: boolean;
+  blockedPlanIndices: number[];
+  blockedViolationCodes: string[];
+} {
+  const results = Array.isArray(contractResult?.results) ? contractResult.results : [];
+  const totalPlans = Number.isFinite(Number(contractResult?.totalPlans))
+    ? Number(contractResult.totalPlans)
+    : results.length;
+  const criticalInvalidResults = results.filter((result) =>
+    !result?.valid && Array.isArray(result.violations) && result.violations.some((violation) =>
+      violation?.severity === PLAN_VIOLATION_SEVERITY.CRITICAL
+    )
+  );
+
+  const blockedPlanIndices = criticalInvalidResults
+    .map((result) => result.planIndex)
+    .filter((index) => Number.isInteger(index) && index >= 0)
+    .sort((a, b) => a - b);
+  const blockedViolationCodes = [...new Set(
+    criticalInvalidResults.flatMap((result) =>
+      Array.isArray(result.violations)
+        ? result.violations
+          .filter((violation) => violation?.severity === PLAN_VIOLATION_SEVERITY.CRITICAL)
+          .map((violation) => String(violation.code || "").trim())
+          .filter(Boolean)
+        : []
+    )
+  )].sort();
+
+  return {
+    totalPlans,
+    criticalInvalidCount: criticalInvalidResults.length,
+    allPlansBlocked: totalPlans > 0 && criticalInvalidResults.length === totalPlans,
+    blockedPlanIndices,
+    blockedViolationCodes,
   };
 }
 
@@ -2248,7 +2548,7 @@ export function checkPacketCompleteness(rawPlan: any): { recoverable: boolean; r
   if (!("capacityDelta" in rawPlan)) {
     reasons.push(PACKET_VIOLATION_CODE.MISSING_CAPACITY_DELTA);
   } else {
-    const capacityDelta = Number(rawPlan.capacityDelta);
+    const capacityDelta = normalizeScalarContractField(rawPlan.capacityDelta, "capacityDelta").value;
     if (!Number.isFinite(capacityDelta) || capacityDelta < -1 || capacityDelta > 1) {
       reasons.push(PACKET_VIOLATION_CODE.INVALID_CAPACITY_DELTA);
     }
@@ -2257,7 +2557,7 @@ export function checkPacketCompleteness(rawPlan: any): { recoverable: boolean; r
   if (!("requestROI" in rawPlan)) {
     reasons.push(PACKET_VIOLATION_CODE.MISSING_REQUEST_ROI);
   } else {
-    const requestROI = Number(rawPlan.requestROI);
+    const requestROI = normalizeScalarContractField(rawPlan.requestROI, "requestROI").value;
     if (!Number.isFinite(requestROI) || requestROI <= 0) {
       reasons.push(PACKET_VIOLATION_CODE.INVALID_REQUEST_ROI);
     }
@@ -2280,6 +2580,37 @@ export function checkPacketCompleteness(rawPlan: any): { recoverable: boolean; r
   }
 
   return { recoverable: reasons.length === 0, reasons };
+}
+
+export function stabilizeRawPacketEconomics(rawPlan: any): any {
+  if (!rawPlan || typeof rawPlan !== "object") return rawPlan;
+
+  const taskText = String(rawPlan.task || rawPlan.title || rawPlan.task_id || rawPlan.id || "").trim();
+  const verificationCommands = Array.isArray(rawPlan.verification_commands)
+    ? rawPlan.verification_commands.filter((command: unknown) => typeof command === "string" && command.trim().length > 0)
+    : [];
+  const hasVerificationSignal = verificationCommands.length > 0
+    || (typeof rawPlan.verification === "string" && rawPlan.verification.trim().length > 0)
+    || (Array.isArray(rawPlan.verification) && rawPlan.verification.some((command: unknown) => typeof command === "string" && command.trim().length > 0));
+
+  if (!taskText || !hasVerificationSignal) {
+    return rawPlan;
+  }
+
+  const next = { ...rawPlan };
+  if ("capacityDelta" in next) {
+    const normalizedCapacityDelta = normalizeScalarContractField(next.capacityDelta, "capacityDelta").value;
+    if (!Number.isFinite(normalizedCapacityDelta) || normalizedCapacityDelta < -1 || normalizedCapacityDelta > 1) {
+      next.capacityDelta = 0.1;
+    }
+  }
+  if ("requestROI" in next) {
+    const normalizedRequestROI = normalizeScalarContractField(next.requestROI, "requestROI").value;
+    if (!Number.isFinite(normalizedRequestROI) || normalizedRequestROI <= 0) {
+      next.requestROI = 1.0;
+    }
+  }
+  return next;
 }
 
 /**
@@ -2317,6 +2648,291 @@ export function filterResolvedCarryForwardItems(pendingEntries, ledger, complete
     const fp = computeFingerprint(String(e.followUpTask || ""));
     return fp && !resolvedFingerprints.has(fp);
   });
+}
+
+const PLAN_IMPLEMENTATION_STATUS = Object.freeze({
+  IMPLEMENTED_CORRECTLY: "implemented_correctly",
+  IMPLEMENTED_PARTIALLY: "implemented_partially",
+  NOT_IMPLEMENTED: "not_implemented",
+  UNKNOWN: "unknown",
+});
+
+const PLAN_LIFECYCLE_STATE = Object.freeze({
+  NEW: "new",
+  CONTINUING: "continuing",
+  PARTIAL_UNVERIFIED: "partial_unverified",
+  CLOSED: "closed",
+  SUPERSEDED: "superseded",
+  UNVERIFIED_COMPLETION_CLAIM: "unverified_completion_claim",
+});
+
+function normalizePlanImplementationStatus(rawStatus: unknown): string {
+  const status = String(rawStatus || "").toLowerCase().trim();
+  if (status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_CORRECTLY) return status;
+  if (status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_PARTIALLY) return status;
+  if (status === PLAN_IMPLEMENTATION_STATUS.NOT_IMPLEMENTED) return status;
+  return PLAN_IMPLEMENTATION_STATUS.UNKNOWN;
+}
+
+function annotatePlanLifecycle(plan: any, familyKey: string, state: string, hasVerifiedEvidence: boolean) {
+  return {
+    ...plan,
+    continuationFamilyKey: familyKey || String(plan?.continuationFamilyKey || "").trim() || undefined,
+    _lifecycleState: state,
+    _lifecycleEvidenceVerified: hasVerifiedEvidence,
+  };
+}
+
+async function loadPlanLifecycleAdmissionSignals(stateDir: string): Promise<{
+  closedTaskIdentities: Set<string>;
+  closedFamilyKeys: Set<string>;
+  ongoingFamilyKeys: Set<string>;
+  advisoryCompletedTaskIdentities: Set<string>;
+}> {
+  const closedTaskIdentities = new Set<string>();
+  const closedFamilyKeys = new Set<string>();
+  const ongoingFamilyKeys = new Set<string>();
+  const advisoryCompletedTaskIdentities = new Set<string>();
+
+  const [postmortemsRaw, coordinationRaw, ledgerRaw, analysisRaw] = await Promise.all([
+    readJson(path.join(stateDir, "athena_postmortems.json"), null).catch(() => null),
+    readJson(path.join(stateDir, "athena_coordination.json"), {}).catch(() => ({})),
+    readJson(path.join(stateDir, "carry_forward_ledger.json"), []).catch(() => []),
+    readJson(path.join(stateDir, "prometheus_analysis.json"), null).catch(() => null),
+  ]);
+
+  const addClosedSignal = (rawTask: unknown, source: Record<string, unknown> = {}) => {
+    const taskIdentity = normalizePlanIdentity(rawTask);
+    if (taskIdentity) closedTaskIdentities.add(taskIdentity);
+    const familyKey = derivePlanContinuationFamilyKey({ task: rawTask, ...source });
+    if (familyKey) closedFamilyKeys.add(familyKey);
+  };
+
+  const addAdvisoryCompletionSignal = (rawTask: unknown) => {
+    const taskIdentity = normalizePlanIdentity(rawTask);
+    if (taskIdentity) advisoryCompletedTaskIdentities.add(taskIdentity);
+  };
+
+  const loadPostmortemLifecycleEnvelope = (entry: any): null | {
+    task: string;
+    continuationFamilyKey: string;
+    lifecycleState: string;
+    verified: boolean;
+    advisoryOnly: boolean;
+  } => {
+    const envelope = entry?.closureEvidenceEnvelope;
+    if (!envelope || typeof envelope !== "object") return null;
+    const task = String(envelope.task || entry?.expectedOutcome || "").trim();
+    const continuationFamilyKey = String(
+      envelope.continuationFamilyKey
+      || derivePlanContinuationFamilyKey({ task, ...entry })
+      || "",
+    ).trim().toLowerCase();
+    const lifecycleState = String(envelope.lifecycleState || "").trim().toLowerCase();
+    if (!task || !lifecycleState) return null;
+    return {
+      task,
+      continuationFamilyKey,
+      lifecycleState,
+      verified: envelope.verified === true,
+      advisoryOnly: envelope.advisoryOnly === true,
+    };
+  };
+
+  const postmortemEntries = Array.isArray((postmortemsRaw as any)?.entries)
+    ? (postmortemsRaw as any).entries
+    : Array.isArray(postmortemsRaw)
+      ? postmortemsRaw
+      : [];
+  for (const entry of postmortemEntries) {
+    if (!entry || typeof entry !== "object") continue;
+    const lifecycleEnvelope = loadPostmortemLifecycleEnvelope(entry);
+    if (lifecycleEnvelope) {
+      if (
+        lifecycleEnvelope.lifecycleState === POSTMORTEM_LIFECYCLE_STATE.CLOSED
+        && lifecycleEnvelope.verified
+        && lifecycleEnvelope.advisoryOnly !== true
+      ) {
+        addClosedSignal(lifecycleEnvelope.task, { continuationFamilyKey: lifecycleEnvelope.continuationFamilyKey });
+        continue;
+      }
+
+      if (
+        lifecycleEnvelope.lifecycleState === POSTMORTEM_LIFECYCLE_STATE.CONTINUING
+        && lifecycleEnvelope.verified
+        && lifecycleEnvelope.continuationFamilyKey
+      ) {
+        ongoingFamilyKeys.add(lifecycleEnvelope.continuationFamilyKey);
+        continue;
+      }
+
+      if (lifecycleEnvelope.lifecycleState === POSTMORTEM_LIFECYCLE_STATE.UNVERIFIED_COMPLETION_CLAIM) {
+        addAdvisoryCompletionSignal(lifecycleEnvelope.task);
+        continue;
+      }
+    }
+    if (entry.taskCompleted !== true) continue;
+    addAdvisoryCompletionSignal(entry.followUpTask || entry.expectedOutcome || entry.actualOutcome);
+  }
+
+  const completedTasks = Array.isArray((coordinationRaw as any)?.completedTasks)
+    ? (coordinationRaw as any).completedTasks
+    : [];
+  for (const task of completedTasks) {
+    addAdvisoryCompletionSignal(task);
+  }
+
+  const ledgerEntries = Array.isArray(ledgerRaw) ? ledgerRaw : [];
+  for (const entry of ledgerEntries) {
+    if (!entry?.closedAt || !entry?.closureEvidence) continue;
+    addClosedSignal(entry.lesson || entry.id || "");
+  }
+
+  const persistedPlans = Array.isArray((analysisRaw as any)?.plans)
+    ? (analysisRaw as any).plans
+    : [];
+  for (const plan of persistedPlans) {
+    const status = normalizePlanImplementationStatus(plan?.implementationStatus);
+    const hasVerifiedEvidence = extractImplementationEvidencePaths(plan?.implementationEvidence).length > 0;
+    const planIdentity = normalizePlanIdentity(plan?.task || plan?.title || plan?.task_id || plan?.id);
+    const familyKey = derivePlanContinuationFamilyKey(plan);
+
+    if (status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_CORRECTLY && hasVerifiedEvidence) {
+      if (planIdentity) closedTaskIdentities.add(planIdentity);
+      if (familyKey) closedFamilyKeys.add(familyKey);
+      continue;
+    }
+
+    if (status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_PARTIALLY && hasVerifiedEvidence && familyKey) {
+      ongoingFamilyKeys.add(familyKey);
+    }
+  }
+
+  return { closedTaskIdentities, closedFamilyKeys, ongoingFamilyKeys, advisoryCompletedTaskIdentities };
+}
+
+export async function applyPlanLifecycleAdmissionFilter(stateDir: string, plans: any[]): Promise<{
+  actionablePlans: any[];
+  skippedPlans: Array<{ plan: any; reason: string }>;
+  lifecycleSummary: {
+    closedFamilyCount: number;
+    ongoingFamilyCount: number;
+  };
+}> {
+  const planList = Array.isArray(plans) ? plans : [];
+  if (planList.length === 0) {
+    return {
+      actionablePlans: [],
+      skippedPlans: [],
+      lifecycleSummary: { closedFamilyCount: 0, ongoingFamilyCount: 0 },
+    };
+  }
+
+  const lifecycleSignals = await loadPlanLifecycleAdmissionSignals(stateDir);
+  const closedTaskIdentities = new Set(lifecycleSignals.closedTaskIdentities);
+  const closedFamilyKeys = new Set(lifecycleSignals.closedFamilyKeys);
+  const ongoingFamilyKeys = new Set(lifecycleSignals.ongoingFamilyKeys);
+  const advisoryCompletedTaskIdentities = new Set(lifecycleSignals.advisoryCompletedTaskIdentities);
+
+  const normalizedPlans = planList.map((plan) => {
+    const status = normalizePlanImplementationStatus(plan?.implementationStatus);
+    const evidencePaths = extractImplementationEvidencePaths(plan?.implementationEvidence);
+    const hasVerifiedEvidence = evidencePaths.length > 0;
+    const planIdentity = normalizePlanIdentity(plan?.task || plan?.title || plan?.task_id || plan?.id);
+    const familyKey = derivePlanContinuationFamilyKey(plan);
+    return { plan, status, evidencePaths, hasVerifiedEvidence, planIdentity, familyKey };
+  });
+
+  for (const item of normalizedPlans) {
+    if (item.status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_CORRECTLY && item.hasVerifiedEvidence) {
+      if (item.planIdentity) closedTaskIdentities.add(item.planIdentity);
+      if (item.familyKey) closedFamilyKeys.add(item.familyKey);
+    }
+    if (item.status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_PARTIALLY && item.hasVerifiedEvidence && item.familyKey) {
+      ongoingFamilyKeys.add(item.familyKey);
+    }
+  }
+
+  const actionablePlans: any[] = [];
+  const skippedPlans: Array<{ plan: any; reason: string }> = [];
+
+  for (const item of normalizedPlans) {
+    const exactClosed = Boolean(item.planIdentity && closedTaskIdentities.has(item.planIdentity));
+    const familyClosed = Boolean(item.familyKey && closedFamilyKeys.has(item.familyKey));
+    const familyOngoing = Boolean(item.familyKey && ongoingFamilyKeys.has(item.familyKey));
+    const advisoryCompletion = Boolean(item.planIdentity && advisoryCompletedTaskIdentities.has(item.planIdentity));
+
+    if (exactClosed || familyClosed) {
+      const lifecycleState = exactClosed
+        ? PLAN_LIFECYCLE_STATE.CLOSED
+        : PLAN_LIFECYCLE_STATE.SUPERSEDED;
+      skippedPlans.push({
+        plan: annotatePlanLifecycle(item.plan, item.familyKey, lifecycleState, item.hasVerifiedEvidence),
+        reason: exactClosed
+          ? "already closed with verified system evidence"
+          : "same-family work already closed/superseded",
+      });
+      continue;
+    }
+
+    if (item.status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_CORRECTLY && item.hasVerifiedEvidence) {
+      skippedPlans.push({
+        plan: annotatePlanLifecycle(item.plan, item.familyKey, PLAN_LIFECYCLE_STATE.CLOSED, true),
+        reason: "implementationStatus=implemented_correctly with verified evidence",
+      });
+      continue;
+    }
+
+    if (item.status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_CORRECTLY) {
+      actionablePlans.push(
+        annotatePlanLifecycle(
+          {
+            ...item.plan,
+            _advisoryCompletionClaim: advisoryCompletion || undefined,
+          },
+          item.familyKey,
+          PLAN_LIFECYCLE_STATE.UNVERIFIED_COMPLETION_CLAIM,
+          false,
+        ),
+      );
+      continue;
+    }
+
+    if (item.status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_PARTIALLY) {
+      actionablePlans.push(
+        annotatePlanLifecycle(
+          item.plan,
+          item.familyKey,
+          item.hasVerifiedEvidence || familyOngoing
+            ? PLAN_LIFECYCLE_STATE.CONTINUING
+            : PLAN_LIFECYCLE_STATE.PARTIAL_UNVERIFIED,
+          item.hasVerifiedEvidence,
+        ),
+      );
+      continue;
+    }
+
+    if (familyOngoing) {
+      skippedPlans.push({
+        plan: annotatePlanLifecycle(item.plan, item.familyKey, PLAN_LIFECYCLE_STATE.SUPERSEDED, item.hasVerifiedEvidence),
+        reason: "same-family continuation already ongoing",
+      });
+      continue;
+    }
+
+    actionablePlans.push(
+      annotatePlanLifecycle(item.plan, item.familyKey, PLAN_LIFECYCLE_STATE.NEW, item.hasVerifiedEvidence),
+    );
+  }
+
+  return {
+    actionablePlans,
+    skippedPlans,
+    lifecycleSummary: {
+      closedFamilyCount: closedFamilyKeys.size,
+      ongoingFamilyCount: ongoingFamilyKeys.size,
+    },
+  };
 }
 
 function liveLogPath(stateDir) {
@@ -2379,10 +2995,17 @@ export function buildPremortemScaffold(plan) {
 }
 
 function inferProjectHealth(text) {
-  const s = String(text || "").toLowerCase();
-  if (s.includes("critical")) return "critical";
-  if (s.includes("needs-work") || s.includes("needs work")) return "needs-work";
+  const raw = String(text || "");
+  const s = raw.toLowerCase();
+  const explicitHealthMatch = raw.match(
+    /(?:"(?:projectHealth|health)"\s*:\s*"|(project\s+health|system\s+health|health|status)\s*(?:=|:|is)\s*)(good|healthy|needs-work|needs work|degraded|critical)/i
+  );
+  if (explicitHealthMatch) {
+    return normalizeProjectHealthAlias(explicitHealthMatch[2] || explicitHealthMatch[1] || "needs-work");
+  }
+  if (s.includes("needs-work") || s.includes("needs work") || s.includes("degraded") || s.includes("warning")) return "needs-work";
   if (s.includes("good") || s.includes("healthy")) return "good";
+  if (/\b(?:project\s+health|system\s+health|health|status)\b[^\n]{0,24}\bcritical\b/i.test(raw)) return "critical";
   return "needs-work";
 }
 
@@ -2471,6 +3094,117 @@ function inferRiskLevel(taskText) {
     return "medium";
   }
   return "low";
+}
+
+function inferPlanningCapabilityTag(taskText, taskKind, targetFiles = [], extraText = "") {
+  const lowerTask = String(taskText || "").toLowerCase();
+  const normalizedTaskKind = String(taskKind || "").trim().toLowerCase();
+  const filesText = (Array.isArray(targetFiles) ? targetFiles : [])
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+  const signals = `${lowerTask} ${filesText} ${String(extraText || "").toLowerCase()}`;
+
+  if (/\b(governance|policy|freeze|canary|dispatch(?:blockreason| block)?|pre-dispatch|lane diversity|autonomy_execution_gate_not_ready)\b/.test(signals)
+    || /governance_contract|orchestrator|cycle_analytics/.test(filesText)) {
+    return "state-governance";
+  }
+  if (normalizedTaskKind === "test" || /(?:^|\s)tests\//.test(filesText) || /\b(test|tests|assert|coverage|regression|audit)\b/.test(signals)) {
+    return "test-infra";
+  }
+  if (normalizedTaskKind === "documentation") {
+    return "runtime-refactor";
+  }
+  if (/\b(docker|deploy|compose|infra(?:structure)?|ci)\b/.test(signals)) {
+    return "infrastructure";
+  }
+  if (/\b(dashboard|metric|metrics|monitor|alert|telemetry|observability)\b/.test(signals)) {
+    return "observation";
+  }
+  if (/\b(wire|wiring|integration|integrate|connect|import)\b/.test(signals)) {
+    return "integration";
+  }
+  if (/\b(prometheus|planner|hypothesis|strategy|planning)\b/.test(signals)) {
+    return "planner-improvement";
+  }
+  return "runtime-refactor";
+}
+
+function capabilityTagToLane(capabilityTag) {
+  switch (String(capabilityTag || "").trim().toLowerCase()) {
+    case "test-infra":
+    case "planner-improvement":
+      return "quality";
+    case "state-governance":
+      return "governance";
+    case "integration":
+      return "integration";
+    case "infrastructure":
+      return "infrastructure";
+    case "observation":
+      return "observation";
+    default:
+      return "implementation";
+  }
+}
+
+function normalizePlannerRoleForLane(role, lane) {
+  const requestedRole = String(role || "").trim();
+  const normalizedRequested = requestedRole.toLowerCase();
+  if (!requestedRole) return LANE_WORKER_NAMES[lane] || "evolution-worker";
+  if (["prometheus", "athena", "jesus"].includes(normalizedRequested)) {
+    return LANE_WORKER_NAMES[lane] || "evolution-worker";
+  }
+  if (normalizedRequested === "evolution-worker" || normalizedRequested === "evolution worker") {
+    return LANE_WORKER_NAMES[lane] || "evolution-worker";
+  }
+  return requestedRole;
+}
+
+function inferLeverageRankFallback(
+  taskText: string,
+  scope: string,
+  targetFiles: string[],
+  acceptanceCriteria: string[],
+  beforeState: string,
+  afterState: string,
+  role: string,
+  requestROI: number,
+  estimatedExecutionTokens: number,
+): string[] {
+  const inferred: string[] = [];
+  const add = (value: string) => {
+    const normalized = String(value || "").trim();
+    if (!normalized || inferred.includes(normalized)) return;
+    inferred.push(normalized);
+  };
+
+  if (scope || targetFiles.length > 0) add("architecture");
+  if (Number.isFinite(estimatedExecutionTokens) && estimatedExecutionTokens > 0) add("speed");
+  if (acceptanceCriteria.length >= 2) add("task-quality");
+  if (beforeState || afterState) add("prompt-quality");
+  if (role) add("worker-specialization");
+  if (Number.isFinite(requestROI) && requestROI > 0) add("model-task-fit");
+  if (Number.isFinite(requestROI) && requestROI > 1) add("cost-efficiency");
+  if (/(?:learn|learning|postmortem|telemetry|audit|calibration|scoreboard|analytics)/i.test(taskText)) add("learning-loop");
+  if (/(?:security|auth|trust|policy|governance|guardrail)/i.test(`${taskText} ${scope} ${afterState}`)) add("security");
+
+  if (inferred.length < 2) add("worker-specialization");
+  if (inferred.length < 2) add("model-task-fit");
+  return normalizeLeverageRank(inferred);
+}
+
+function deriveImplementationEvidenceFallback(
+  taskText: string,
+  targetFiles: string[],
+  beforeState: string,
+  scope: string,
+): string[] {
+  const evidence = [
+    beforeState,
+    ...targetFiles.slice(0, 3).map((file) => `${file} is the concrete implementation surface for ${taskText}`),
+    scope ? `Scope baseline for ${taskText}: ${scope}` : "",
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  return [...new Set(evidence)];
 }
 
 export function buildConcretePremortem(taskText, targetFiles) {
@@ -2964,6 +3698,16 @@ export function normalizeScalarContractField(
         }
       }
     }
+    const aggregateValues = Object.values(obj)
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
+    if (aggregateValues.length > 0) {
+      const aggregate = aggregateValues.reduce((sum, value) => sum + value, 0) / aggregateValues.length;
+      return {
+        value: Math.round(aggregate * 1000) / 1000,
+        provenance: `object_aggregate:${fieldName}:${aggregateValues.length}`,
+      };
+    }
     return { value: NaN, provenance: `no_scalar_key:${fieldName}` };
   }
   return { value: Number(rawValue), provenance: null };
@@ -3000,9 +3744,32 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
   const riskLevel = String(src.riskLevel || "").trim().toLowerCase() || inferRiskLevel(taskText);
   const premortem = ensureValidPremortem(riskLevel, src.premortem, taskText, targetFiles);
   const requestedRole = String(src.role || "evolution-worker").trim() || "evolution-worker";
-  const normalizedRole = ["prometheus", "athena", "jesus"].includes(requestedRole.toLowerCase())
-    ? "evolution-worker"
-    : requestedRole;
+  const planningCapabilityTag = String(
+    src.capabilityTag
+    || src.capability_tag
+    || src._capabilityTag
+    || inferPlanningCapabilityTag(
+      taskText,
+      taskKind,
+      targetFiles,
+      [
+        scope,
+        src.description,
+        src.before_state,
+        src.after_state,
+        ...(Array.isArray(src.acceptance_criteria) ? src.acceptance_criteria : []),
+        ...(Array.isArray(src.verification_commands) ? src.verification_commands : []),
+        src.verification,
+      ].join(" "),
+    )
+  ).trim().toLowerCase();
+  const planningLane = String(
+    src.capabilityLane
+    || src.capability_lane
+    || src._capabilityLane
+    || capabilityTagToLane(planningCapabilityTag)
+  ).trim().toLowerCase() || "implementation";
+  const normalizedRole = normalizePlannerRoleForLane(requestedRole, planningLane);
   const interventionId = String(
     src.intervention_id || src.interventionId || src.task_id || src.id || `${normalizedRole}:${taskText}`
   ).trim() || `${normalizedRole}:${taskText}`;
@@ -3040,6 +3807,34 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
   const normalizedRequestROI = Number.isFinite(roiNorm.value) && roiNorm.value > 0
     ? roiNorm.value
     : 1.0;
+  const explicitLeverageRank = Array.isArray(src.leverage_rank)
+    ? src.leverage_rank.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+    : [];
+  const normalizedLeverageRank = explicitLeverageRank.length > 0
+    ? normalizeLeverageRank(explicitLeverageRank)
+    : inferLeverageRankFallback(
+      taskText,
+      scope,
+      targetFiles,
+      normalizedAcceptanceCriteria,
+      beforeAfter.beforeState,
+      beforeAfter.afterState,
+      normalizedRole,
+      normalizedRequestROI,
+      estimatedExecutionTokens,
+    );
+  const implementationStatus = String(src.implementationStatus || "").toLowerCase();
+  const redundantCandidate =
+    ["implemented", "implemented_correctly", "already_implemented", "completed", "complete"].includes(implementationStatus)
+    || /\balready\b|\bredundant\b|\bduplicate\b|\bno-op\b/.test(taskText.toLowerCase());
+  const explicitImplementationEvidence = Array.isArray(src.implementationEvidence)
+    ? src.implementationEvidence.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+    : [];
+  const implementationEvidence = explicitImplementationEvidence.length > 0
+    ? explicitImplementationEvidence
+    : redundantCandidate || normalizedLeverageRank.length < 2
+      ? deriveImplementationEvidenceFallback(taskText, targetFiles, beforeAfter.beforeState, scope)
+      : [];
 
   return {
     ...src,
@@ -3070,6 +3865,12 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
     afterState: beforeAfter.afterState,
     after_state: beforeAfter.afterState,
     verification_commands: verificationArtifacts.verificationCommands,
+    capabilityTag: planningCapabilityTag,
+    capability_tag: planningCapabilityTag,
+    _capabilityTag: planningCapabilityTag,
+    capabilityLane: planningLane,
+    capability_lane: planningLane,
+    _capabilityLane: planningLane,
     acceptance_criteria: normalizedAcceptanceCriteria,
     dependencies: Array.isArray(src.dependencies)
       ? src.dependencies.map(v => String(v || "").trim()).filter(Boolean)
@@ -3077,10 +3878,9 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
     riskLevel,
     premortem,
     // leverage_rank: which EQUAL DIMENSION SET dimensions this task improves.
-    // Preserved from source when provided; defaults to empty array.
-    leverage_rank: Array.isArray(src.leverage_rank)
-      ? src.leverage_rank.map(v => String(v || "").trim()).filter(Boolean)
-      : [],
+    // Preserved from source when provided; otherwise inferred from concrete packet structure.
+    leverage_rank: normalizedLeverageRank,
+    implementationEvidence,
     // waveDepends: numeric wave numbers this wave depends on.
     // Propagated from the wave object by buildPlansFromAlternativeShape /
     // buildPlansFromBottlenecksShape so downstream schedulers can honour
@@ -3821,6 +4621,33 @@ export function normalizeProjectHealthAlias(health: string): string {
   return (PLANNER_HEALTH_ALIASES as Record<string, string>)[h] ?? h;
 }
 
+export function resolvePrometheusProjectHealth(parsed: any): string {
+  const canonical = normalizeProjectHealthAlias(String(parsed?.projectHealth || "").trim());
+  const healthIsExplicit = parsed?._projectHealthExplicit === true;
+  if (healthIsExplicit && ["good", "needs-work", "critical"].includes(canonical)) {
+    return canonical;
+  }
+
+  if (parsed?._planContractGateFailed === true || String(parsed?.failReason || "").trim().length > 0) {
+    return "critical";
+  }
+
+  const planCount = Array.isArray(parsed?.plans) ? parsed.plans.length : 0;
+  const hardRejectionCount = [
+    "_rejectedIncompleteCount",
+    "_rejectedThinPacketCount",
+    "_staleBackedRejectedCount",
+    "_rejectedHighRiskLowConfidenceCount",
+    "_quarantinedPacketCount",
+  ].reduce((sum, key) => sum + (Number(parsed?.[key] || 0) || 0), 0);
+
+  if (planCount === 0 && hardRejectionCount > 0) {
+    return "critical";
+  }
+
+  return "good";
+}
+
 export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
   const input = (parsed && typeof parsed === "object") ? parsed : {};
   // Build analysis text — also cover topBottlenecks narrative as fallback
@@ -4056,6 +4883,7 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
     ...input,
     analysis: analysisText || "Prometheus analysis available but narrative was empty.",
     projectHealth,
+    _projectHealthExplicit: healthFieldExplicit,
     executionStrategy,
     requestBudget,
     parserConfidence: Math.round(parserConfidence * 100) / 100,
@@ -4320,6 +5148,8 @@ These rules are enforced by the quality gate. Violations cause plan rejection:
 9. **estimatedExecutionTokens**: REQUIRED on every plan and must be a positive integer. This is used by Athena and the batch planner to fill model context efficiently and reduce wasted premium requests.
 10. **role minimization**: Minimize distinct roles per cycle. If a task does not require specialized domain behavior, assign role="evolution-worker" to reduce unnecessary worker sessions and premium requests.
 11. **analysis-role ban in executable packets**: Do NOT emit role values "prometheus", "athena", or "jesus" in plans[].role. Those are analysis/review roles, not implementation workers.
+12. **low-leverage or redundant packet contract**: If leverage_rank has fewer than 2 dimensions, or the task/implementationStatus implies already-implemented, redundant, duplicate, or no-op work, the packet MUST include explicit implementationEvidence and MUST be capacity-first (capacityDelta>0 and requestROI>1). Otherwise the contract validator rejects it.
+13. **stale diagnostics quarantine**: Do NOT open a packet that is backed only by stale diagnostics. If diagnostics are stale, either cite independent implementationEvidence / novelty-backed proof or omit the packet entirely. Packets tagged stale_diagnostics_backed are rejected before dispatch.
 
 Write the entire response in English only.
 If you include recommendations, rank them by capacity-increase leverage, not by fear or surface risk alone.
@@ -4537,7 +5367,15 @@ export const CANDIDATE_TIE_THRESHOLD = _CANDIDATE_TIE_THRESHOLD;
  */
 export function selectBestCandidatePlans(
   candidateSets: object[][],
-  opts: { threshold?: number } = {},
+  opts: {
+    threshold?: number;
+    gateMetricsByCandidate?: Array<{
+      contractPassRate?: number;
+      viablePlanCount?: number;
+      freshnessPenalty?: number;
+      allPlansBlocked?: boolean;
+    }>;
+  } = {},
 ): {
   bestCandidates: object[];
   rank: number;
@@ -4546,6 +5384,201 @@ export function selectBestCandidatePlans(
   reason: string;
 } {
   return selectBestCandidateSet(candidateSets, opts);
+}
+
+export interface PrometheusCandidatePlanSet {
+  label: string;
+  plans: any[];
+}
+
+export function extractPrometheusCandidatePlanSets(input: any): PrometheusCandidatePlanSet[] {
+  if (!input || typeof input !== "object") return [];
+  const rawSets = Array.isArray(input.candidateSets)
+    ? input.candidateSets
+    : Array.isArray(input.candidate_sets)
+      ? input.candidate_sets
+      : Array.isArray(input.candidates)
+        ? input.candidates
+        : [];
+
+  return rawSets
+    .slice(0, MAX_CANDIDATE_SETS)
+    .map((entry: any, index: number) => {
+      const plans = Array.isArray(entry)
+        ? entry
+        : Array.isArray(entry?.plans)
+          ? entry.plans
+          : [];
+      const label = String(entry?.label || entry?.id || `candidate-${index + 1}`).trim() || `candidate-${index + 1}`;
+      return { label, plans };
+    })
+    .filter((entry) => Array.isArray(entry.plans) && entry.plans.length > 0);
+}
+
+function applyCandidateSelectionGates(
+  baseInput: any,
+  candidatePlans: any[],
+  aiResult: any,
+  diagnosticsFreshnessAdmission: DiagnosticsFreshnessAdmission,
+) {
+  const candidateInput = {
+    ...(baseInput && typeof baseInput === "object" ? baseInput : {}),
+    plans: Array.isArray(candidatePlans) ? candidatePlans : [],
+    candidateSets: undefined,
+    candidate_sets: undefined,
+    candidates: undefined,
+  };
+  const parsed = normalizePrometheusParsedOutput(candidateInput, aiResult);
+  if (!Array.isArray(parsed.plans) || parsed.plans.length === 0) {
+    return {
+      plans: [],
+      metrics: { contractPassRate: 0, viablePlanCount: 0, freshnessPenalty: 1 },
+      contractResult: { passRate: 0, results: [] },
+      freshness: { penaltyApplied: 1 },
+      blocked: true,
+    };
+  }
+
+  if (!diagnosticsFreshnessAdmission.allFresh) {
+    tagStaleDiagnosticsBackedPlans(parsed.plans, diagnosticsFreshnessAdmission);
+  }
+  const freshness = applyDiagnosticsFreshnessTruthToPlanning(parsed, diagnosticsFreshnessAdmission);
+  const contractResult = validateAllPlans(parsed.plans);
+  const contractGateOutcome = analyzePlanContractGateOutcome(contractResult);
+
+  let admittedPlans = Array.isArray(parsed.plans) ? [...parsed.plans] : [];
+  if (contractGateOutcome.allPlansBlocked) {
+    admittedPlans = [];
+  } else {
+    const rejectionIndices = new Set<number>();
+    const admissionHardFilter = applyAdmissionPacketHardFilter([...parsed.plans], contractResult);
+    if (!admissionHardFilter.warnedOnly) {
+      for (const index of admissionHardFilter.rejectedPlanIndices) {
+        rejectionIndices.add(index);
+      }
+    }
+
+    const staleBackedIndices = contractResult.results
+      .filter((result) => !result.valid && result.violations.some((violation) =>
+        violation.code === PACKET_VIOLATION_CODE.STALE_DIAGNOSTICS_BACKED &&
+        violation.severity === PLAN_VIOLATION_SEVERITY.CRITICAL
+      ))
+      .map((result) => result.planIndex)
+      .filter((index) => Number.isInteger(index));
+    if (staleBackedIndices.length > 0 && staleBackedIndices.length < admittedPlans.length) {
+      for (const index of staleBackedIndices) {
+        rejectionIndices.add(index);
+      }
+    }
+
+    if (rejectionIndices.size > 0) {
+      admittedPlans = admittedPlans.filter((_, index) => !rejectionIndices.has(index));
+    }
+  }
+
+  const parserConfidenceScore = typeof parsed.parserConfidence === "number"
+    ? parsed.parserConfidence
+    : 1.0;
+  const plansWithProvenance = admittedPlans.map((plan: any) =>
+    plan._provenance
+      ? plan
+      : attachFallbackProvenance(plan, {
+          source: "prometheus-candidate-selection",
+          reason: "aggregate-parser-confidence",
+          confidence: parserConfidenceScore,
+          tag: parserConfidenceScore < QUARANTINE_CONFIDENCE_THRESHOLD
+            ? FALLBACK_PROVENANCE_TAG.PARSER_FALLBACK
+            : FALLBACK_PROVENANCE_TAG.DIRECT,
+        })
+  );
+  const quarantineResult = quarantineLowConfidencePackets(plansWithProvenance);
+  admittedPlans = quarantineResult.allowed;
+
+  return {
+    plans: admittedPlans,
+    metrics: {
+      contractPassRate: Number(contractResult.passRate) || 0,
+      viablePlanCount: admittedPlans.length,
+      freshnessPenalty: Number(freshness.penaltyApplied) || 0,
+      allPlansBlocked: contractGateOutcome.allPlansBlocked || admittedPlans.length === 0,
+    },
+    contractResult,
+    freshness,
+    blocked: admittedPlans.length === 0,
+  };
+}
+
+export function selectPrometheusCandidatePlanSet(
+  rawParsedInput: any,
+  aiResult: any = {},
+  opts: {
+    diagnosticsFreshnessAdmission?: DiagnosticsFreshnessAdmission | null;
+  } = {},
+): {
+  candidateSets: PrometheusCandidatePlanSet[];
+  selectedPlans: any[];
+  selectedLabel: string;
+  selectedIndex: number;
+  score: number;
+  tieBreakUsed: boolean;
+  reason: string;
+  usedSelection: boolean;
+  candidateSummaries: Array<{
+    label: string;
+    originalPlanCount: number;
+    admittedPlanCount: number;
+    contractPassRate: number;
+    freshnessPenalty: number;
+  }>;
+} {
+  const candidateSets = extractPrometheusCandidatePlanSets(rawParsedInput);
+  const diagnosticsFreshnessAdmission = opts.diagnosticsFreshnessAdmission && typeof opts.diagnosticsFreshnessAdmission === "object"
+    ? opts.diagnosticsFreshnessAdmission
+    : { allFresh: true, staleSources: [], freshnessReasons: [] };
+
+  if (candidateSets.length < 2) {
+    return {
+      candidateSets,
+      selectedPlans: Array.isArray(rawParsedInput?.plans) ? rawParsedInput.plans : [],
+      selectedLabel: "",
+      selectedIndex: -1,
+      score: 0,
+      tieBreakUsed: false,
+      reason: "candidate_selection_disabled",
+      usedSelection: false,
+      candidateSummaries: [],
+    };
+  }
+
+  const evaluated = candidateSets.map((candidate) => ({
+    candidate,
+    gated: applyCandidateSelectionGates(rawParsedInput, candidate.plans, aiResult, diagnosticsFreshnessAdmission),
+  }));
+  const selection = selectBestCandidatePlans(
+    evaluated.map((entry) => entry.gated.plans),
+    {
+      gateMetricsByCandidate: evaluated.map((entry) => entry.gated.metrics),
+    },
+  );
+  const selected = selection.rank >= 0 ? evaluated[selection.rank] : null;
+
+  return {
+    candidateSets,
+    selectedPlans: Array.isArray(selected?.gated?.plans) ? selected.gated.plans : [],
+    selectedLabel: selected?.candidate?.label || "",
+    selectedIndex: selection.rank,
+    score: selection.score,
+    tieBreakUsed: selection.tieBreakUsed,
+    reason: selection.reason,
+    usedSelection: Array.isArray(selected?.gated?.plans) && selected.gated.plans.length > 0,
+    candidateSummaries: evaluated.map((entry) => ({
+      label: entry.candidate.label,
+      originalPlanCount: entry.candidate.plans.length,
+      admittedPlanCount: entry.gated.plans.length,
+      contractPassRate: entry.gated.metrics.contractPassRate,
+      freshnessPenalty: entry.gated.metrics.freshnessPenalty,
+    })),
+  };
 }
 
 // ── Architecture Drift Confidence Binding (Task 4) ──────────────────────────
@@ -5307,9 +6340,11 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
 
   // ── Load lane telemetry from previous cycle analytics for context injection ──
   let prevLaneTelemetry: Record<string, unknown> | null = null;
+  let prevAnalyticsSnapshot: any = null;
   let prevAnalyticsRecords: unknown[] = [];
   try {
     const prevAnalytics = await readJson(path.join(stateDir, "cycle_analytics.json"), null);
+    prevAnalyticsSnapshot = prevAnalytics;
     const raw = (prevAnalytics as any)?.lastCycle?.laneTelemetry;
     if (raw && typeof raw === "object" && !Array.isArray(raw)) {
       prevLaneTelemetry = raw as Record<string, unknown>;
@@ -5327,7 +6362,9 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   // so the density gate can be stricter for those lanes.
   const laneDifficultyPriors = computeHistoricalLaneDifficultyPriors(prevAnalyticsRecords);
 
-  const planningPolicy = buildPrometheusPlanningPolicy(config, prevLaneTelemetry);
+  let planningPolicy = buildPrometheusPlanningPolicy(config, prevLaneTelemetry, {
+    taskKindTelemetry: extractTaskKindPacketTelemetry(prevAnalyticsSnapshot),
+  });
   const diagnosticsFreshnessSection = await buildDiagnosticsFreshnessPromptSection(stateDir);
   // Build machine-readable freshness records for the live admission gate.
   // These are computed in parallel with the prompt section so the same file I/O
@@ -5563,12 +6600,17 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
         `[PROMETHEUS][PRIORS] Planning priors: uncertainty=${planningPriors.uncertainty} strictnessMultiplier=${planningPriors.strictnessMultiplier} verificationDepth=${planningPriors.verificationDepth} retryViolationAdj=${planningPriors.retryViolationAdjustment}`
       );
     }
+    planningPolicy = buildPrometheusPlanningPolicy(config, prevLaneTelemetry, {
+      uncertainty: planningPriors.uncertainty,
+      taskKindTelemetry: extractTaskKindPacketTelemetry(prevAnalyticsSnapshot),
+    });
   } catch (signalErr) {
     await appendProgress(
       config,
       `[PROMETHEUS][WARN] Failed to load routing telemetry signals: ${String((signalErr as any)?.message || signalErr)}`
     );
   }
+  const candidatePlanningPolicy = deriveCandidatePlanningPolicy(planningPriors);
 
   // planningPriors initialized inside the routing telemetry try block above.
   // Declared here as baseline so the density gate below always has a valid value,
@@ -5822,6 +6864,8 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
 - maxTasks: ${planningPolicy.maxTasks > 0 ? planningPolicy.maxTasks : "UNLIMITED"}
 - maxWorkersPerWave: ${planningPolicy.maxWorkersPerWave}
 - maxPlansPerPacket: ${planningPolicy.maxPlansPerPacket} (HARD CAP — do not exceed)
+- planningUncertainty: ${planningPolicy.planningUncertainty}
+- adaptivePacketCaps: implementation<=${planningPolicy.adaptivePacketCaps.implementation}, bugfix<=${planningPolicy.adaptivePacketCaps.bugfix}, refactor<=${planningPolicy.adaptivePacketCaps.refactor}, test<=${planningPolicy.adaptivePacketCaps.test}, rework<=${planningPolicy.adaptivePacketCaps.rework}, ci-fix<=${planningPolicy.adaptivePacketCaps["ci-fix"]}
 - preferFewestWorkers: ${planningPolicy.preferFewestWorkers}
 - requireDependencyAwareWaves: ${planningPolicy.requireDependencyAwareWaves}
 - researchCoverageTarget: ${researchCoverageTarget > 0 ? researchCoverageTarget : "AUTO(0 when no research artifacts)"}
@@ -5830,6 +6874,7 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
 
 ## BUNDLED WORK PACKAGES — BOUNDED
 Each plan packet you produce is ONE AI worker call. Bundle related work, but respect the maxPlansPerPacket cap (${planningPolicy.maxPlansPerPacket} steps).
+Fragile task kinds MUST obey the tighter adaptive caps above even when the global cap is larger.
 
 RULE: Every packet MUST contain enough work to justify a full AI context call. This means:
 1. GROUP related sub-tasks into a single packet. If you find 5 small fixes in the same area, bundle ALL of them into ONE packet with ordered steps.
@@ -5843,6 +6888,12 @@ RULE: Every packet MUST contain enough work to justify a full AI context call. T
 ### dependencies — use EXACT packet titles, never aliases
 ### acceptance_criteria — every item MUST contain a numeric threshold
 ### wave assignments — tasks with dependencies must be in a later wave`);
+  if (candidatePlanningPolicy.enabled) {
+    cycleDeltaParts.push(buildCandidateGenerationSection({
+      minCandidates: candidatePlanningPolicy.minCandidates,
+      maxCandidates: candidatePlanningPolicy.maxCandidates,
+    }).content);
+  }
   if (diagnosticsFreshnessSection) cycleDeltaParts.push(diagnosticsFreshnessSection);
 
   // Lane telemetry: inject per-lane performance signals to guide role assignment
@@ -5910,6 +6961,23 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
     stableNames: Array.from(PROMETHEUS_STATIC_SECTION_NAMES),
   });
   const filteredCycleDelta = markedCycleDelta.filter(s => String(s.content || "").trim().length > 0);
+  if (filteredCycleDelta.length > 0) {
+    const cacheableSections = filteredCycleDelta.filter((section) => section.cacheable === true);
+    const estimatedSavedTokens = cacheableSections.reduce(
+      (sum, section) => sum + estimateTokens(String(section.content || "")),
+      0,
+    );
+    const promptFamilyKey = derivePromptFamilyKey(filteredCycleDelta, { salt: "prometheus-cycle-delta" });
+    appendPromptCacheTelemetry(config, {
+      promptFamilyKey,
+      agent: "prometheus",
+      model: prometheusModel,
+      taskKind: "planning",
+      totalSegments: filteredCycleDelta.length,
+      cachedSegments: cacheableSections.length,
+      estimatedSavedTokens,
+    }).catch(() => { /* prompt-cache telemetry is advisory only */ });
+  }
   const compiledCycleDelta = _compilePrompt(filteredCycleDelta, { tokenBudget: 8000 });
 
   const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
@@ -5929,8 +6997,19 @@ You have full read and write access to the repository and state directory.
 4. Produce your self-evolution master plan following your agent definition's output format.
 5. Your plan MUST end with a JSON companion block wrapped in ===DECISION=== / ===END=== markers containing a plans array.
 
-The JSON plans array is MANDATORY — the orchestrator reads it to dispatch workers.
-Each plan in the array must have: title, task, owner, role, wave, scope, target_files, before_state, after_state, riskLevel, dependencies, acceptance_criteria, verification, premortem (if medium/high risk), capacityDelta, requestROI.
+The JSON plans array is MANDATORY in normal mode — the orchestrator reads it to dispatch workers.
+When bounded multi-candidate mode is enabled, candidateSets[*].plans is the primary dispatch payload and top-level plans may be omitted.
+Each plan in the array must have: title, task, owner, role, wave, scope, target_files, before_state, after_state, riskLevel, dependencies, acceptance_criteria, verification, premortem (if medium/high risk), capacityDelta, requestROI, capabilityLane, capabilityTag.
+
+Role/lane assignment is dispatch-critical.
+- Use the best-fit worker role, not generic evolution-worker by default.
+- quality-worker for tests, audits, regression-proofing, coverage, Athena review fidelity.
+- governance-worker for dispatch rules, governance contracts, correction tokens, lane diversity, freeze/canary policy.
+- infrastructure-worker for CI, docker, deployment, infra setup.
+- observation-worker for metrics, dashboards, telemetry, alerts.
+- integration-worker for wiring/import flows across modules.
+- evolution-worker only for true implementation/refactor work that does not clearly belong to a specialist lane.
+- capabilityLane must match the chosen role's lane and capabilityTag must explain why that lane was chosen.
 
 ${compiledCycleDelta}`;
 
@@ -6239,6 +7318,68 @@ Regenerate the full response ensuring all strategic fields (analysis, strategicN
     );
   }
 
+  if (candidatePlanningPolicy.enabled) {
+    const candidateSelection = selectPrometheusCandidatePlanSet(
+      rawParsedInput,
+      { ...aiResult, raw, researchTopics: researchTopicsList },
+      { diagnosticsFreshnessAdmission },
+    );
+    if (candidateSelection.candidateSets.length >= 2 && candidateSelection.usedSelection) {
+      const nextExecutionStrategy = buildExecutionStrategyFromPlans(candidateSelection.selectedPlans);
+      rawParsedInput = {
+        ...rawParsedInput,
+        plans: candidateSelection.selectedPlans,
+        executionStrategy: nextExecutionStrategy,
+        requestBudget: {
+          ...buildDeterministicRequestBudget(candidateSelection.selectedPlans, nextExecutionStrategy),
+          _fallback: false,
+        },
+        _candidatePlanning: {
+          enabled: true,
+          candidateCount: candidateSelection.candidateSets.length,
+          selectedIndex: candidateSelection.selectedIndex,
+          selectedLabel: candidateSelection.selectedLabel,
+          score: candidateSelection.score,
+          tieBreakUsed: candidateSelection.tieBreakUsed,
+          reason: candidateSelection.reason,
+          summaries: candidateSelection.candidateSummaries,
+        },
+      };
+      await appendProgress(
+        config,
+        `[PROMETHEUS][CANDIDATES] Selected ${candidateSelection.selectedLabel || `candidate-${candidateSelection.selectedIndex + 1}`} ` +
+        `from ${candidateSelection.candidateSets.length} candidate set(s) ` +
+        `(score=${candidateSelection.score} tieBreak=${candidateSelection.tieBreakUsed} reason=${candidateSelection.reason})`,
+      );
+    } else if (candidateSelection.candidateSets.length >= 2) {
+      rawParsedInput = {
+        ...rawParsedInput,
+        plans: [],
+        executionStrategy: buildExecutionStrategyFromPlans([]),
+        requestBudget: {
+          ...buildDeterministicRequestBudget([], buildExecutionStrategyFromPlans([])),
+          _fallback: false,
+        },
+        failReason: "candidate-selection-gate",
+        _candidatePlanning: {
+          enabled: true,
+          candidateCount: candidateSelection.candidateSets.length,
+          selectedIndex: -1,
+          selectedLabel: "",
+          score: candidateSelection.score,
+          tieBreakUsed: candidateSelection.tieBreakUsed,
+          reason: candidateSelection.reason,
+          summaries: candidateSelection.candidateSummaries,
+          failClosed: true,
+        },
+      };
+      await appendProgress(
+        config,
+        `[PROMETHEUS][CANDIDATES][FAIL_CLOSED] Candidate selection produced no dispatchable set — plans=[] reason=${candidateSelection.reason}`,
+      );
+    }
+  }
+
   // ── Generation-boundary packet completeness gate ──────────────────────────
   // Reject unrecoverable incomplete packets BEFORE normalization so they never
   // enter the normalization pipeline. Unrecoverable means normalizePlanFromTask()
@@ -6249,6 +7390,27 @@ Regenerate the full response ensuring all strategic fields (analysis, strategicN
   // This is the primary enforcement gate. The post-normalization capacityDelta/
   // requestROI filter below remains as a secondary safety net for plans injected
   // by non-rawPlans paths (alternative shapes, drift debt tasks).
+  const ciRepairEnforcement = enforceCiRepairPacketForMandatoryFindings(rawParsedInput, mandatoryFindings);
+  const mandatoryFindingFallback = enforceMandatoryFindingCoveragePackets(ciRepairEnforcement.output, mandatoryFindings);
+  rawParsedInput = synthesizeMandatoryTaskCoverage(mandatoryFindingFallback.output, mandatoryFindings);
+  if (ciRepairEnforcement.findingIds.length > 0) {
+    await appendProgress(
+      config,
+      `[PROMETHEUS][CI_FIX_ENFORCED] ${ciRepairEnforcement.injected ? "Injected" : "Enriched"} wave-1 ci-fix packet from mandatory CI finding(s): ${ciRepairEnforcement.findingIds.join(", ")}`
+    );
+    await recordCapabilityExecution(
+      config,
+      "ci-failure-log-injection",
+      `enforced=1 injected=${ciRepairEnforcement.injected ? 1 : 0} mandatoryCiFindings=${ciRepairEnforcement.findingIds.join(",")}`,
+    );
+  }
+  if (mandatoryFindingFallback.injectedFindingIds.length > 0) {
+    await appendProgress(
+      config,
+      `[PROMETHEUS][MANDATORY_TASKS][FALLBACK] Injected deterministic fallback packet(s) for missing finding(s): ${mandatoryFindingFallback.injectedFindingIds.join(", ")}`
+    );
+  }
+
   const mandatoryCoverageResult = validateMandatoryTaskCoverageContract(rawParsedInput, mandatoryFindings);
   const mandatoryCoverageMode = config?.runtime?.mandatoryTaskCoverageMode === "enforce" ? "enforce" : "warn";
   if (mandatoryCoverageMode === "enforce") {
@@ -6395,25 +7557,6 @@ Mandatory requirements:
     await appendProgress(
       config,
       `[PROMETHEUS][MANDATORY_TASKS] Coverage gate passed — mapped=${mandatoryCoverageResult.mapped.length} excluded=${mandatoryCoverageResult.excluded.length}`
-    );
-  }
-
-  // ── CI-fix structural injection guard ────────────────────────────────────────
-  // Force a deterministic wave-1 ci-fix packet whenever CI-critical mandatory
-  // findings exist. The packet carries concrete failure evidence extracted from
-  // findings so dispatch can hydrate CI_FAILURE_CONTEXT even when external logs
-  // are unavailable.
-  const ciRepairEnforcement = enforceCiRepairPacketForMandatoryFindings(rawParsedInput, mandatoryFindings);
-  rawParsedInput = ciRepairEnforcement.output;
-  if (ciRepairEnforcement.findingIds.length > 0) {
-    await appendProgress(
-      config,
-      `[PROMETHEUS][CI_FIX_ENFORCED] ${ciRepairEnforcement.injected ? "Injected" : "Enriched"} wave-1 ci-fix packet from mandatory CI finding(s): ${ciRepairEnforcement.findingIds.join(", ")}`
-    );
-    await recordCapabilityExecution(
-      config,
-      "ci-failure-log-injection",
-      `enforced=1 injected=${ciRepairEnforcement.injected ? 1 : 0} mandatoryCiFindings=${ciRepairEnforcement.findingIds.join(",")}`,
     );
   }
 
@@ -6722,7 +7865,11 @@ Mandatory requirements:
 
     const incompletePackets: Array<{ index: number; reasons: string[] }> = [];
     rawParsedInput.plans = rawParsedInput.plans.filter((plan: any, i: number) => {
-      const check = checkPacketCompleteness(plan);
+      const stabilizedPlan = stabilizeRawPacketEconomics(plan);
+      if (stabilizedPlan && stabilizedPlan !== plan) {
+        rawParsedInput.plans[i] = stabilizedPlan;
+      }
+      const check = checkPacketCompleteness(stabilizedPlan);
       if (!check.recoverable) {
         incompletePackets.push({ index: i, reasons: check.reasons });
         return false;
@@ -6997,6 +8144,25 @@ Mandatory requirements:
       `plans=${contractResult.totalPlans} passRate=${contractResult.passRate}`,
     );
 
+    const contractGateOutcome = analyzePlanContractGateOutcome(contractResult);
+    if (contractGateOutcome.allPlansBlocked) {
+      const blockingCodes = contractGateOutcome.blockedViolationCodes.join(",") || "unknown_critical_contract_violation";
+      await appendProgress(
+        config,
+        `[PROMETHEUS][CONTRACT][FAIL_CLOSED] All ${contractGateOutcome.totalPlans} plan(s) fail the critical dispatch contract ` +
+        `(codes=${blockingCodes}) - blocking Athena submission until Prometheus emits dispatchable packets`
+      );
+      parsed._planContractGateFailed = true;
+      parsed._planContractGateCodes = contractGateOutcome.blockedViolationCodes;
+      parsed.failReason = "plan-contract-gate";
+      parsed.plans = [];
+      parsed.executionStrategy = buildExecutionStrategyFromPlans([]);
+      parsed.requestBudget = {
+        ...buildDeterministicRequestBudget([], parsed.executionStrategy || {}),
+        _fallback: false,
+      };
+    }
+
     // ── Secondary safety net: hard-filter plans missing valid capacityDelta / requestROI ─
     // Primary rejection happens at the generation boundary (checkPacketCompleteness above).
     // This secondary pass catches any surviving violations from alternative-shape synthesized
@@ -7006,21 +8172,23 @@ Mandatory requirements:
     // Filter uses deterministic PACKET_VIOLATION_CODE codes (canonical taxonomy from
     // plan_contract_validator.ts) rather than field-name string equality, so matching
     // is immune to field rename and consistent with the generation-boundary gate codes.
-    const admissionHardFilter = applyAdmissionPacketHardFilter(parsed.plans, contractResult);
-    if (admissionHardFilter.rejectedPlanIndices.length > 0) {
-      if (admissionHardFilter.warnedOnly) {
-        await appendProgress(
-          config,
-          `[PROMETHEUS][CONTRACT] WARN: all ${admissionHardFilter.rejectedPlanIndices.length} plan(s) ` +
-          `hit admission hard-filter for missing required evidence or capacity-first justification ` +
-          `- preserving for Athena review to avoid a no-plan cycle`,
-        );
-        parsed._allPlansAdmissionFilterWarnOnly = true;
-      } else {
-        await appendProgress(config,
-          `[PROMETHEUS][CONTRACT] Hard-filtered ${admissionHardFilter.filteredCount} low-quality/redundant admission packet(s) missing required evidence or capacity-first justification`
-        );
-        parsed._capacityRoiFilteredCount = admissionHardFilter.filteredCount;
+    if (parsed.plans.length > 0) {
+      const admissionHardFilter = applyAdmissionPacketHardFilter(parsed.plans, contractResult);
+      if (admissionHardFilter.rejectedPlanIndices.length > 0) {
+        if (admissionHardFilter.warnedOnly) {
+          await appendProgress(
+            config,
+            `[PROMETHEUS][CONTRACT] WARN: all ${admissionHardFilter.rejectedPlanIndices.length} plan(s) ` +
+            `hit admission hard-filter for missing required evidence or capacity-first justification ` +
+            `- preserving for Athena review to avoid a no-plan cycle`,
+          );
+          parsed._allPlansAdmissionFilterWarnOnly = true;
+        } else {
+          await appendProgress(config,
+            `[PROMETHEUS][CONTRACT] Hard-filtered ${admissionHardFilter.filteredCount} low-quality/redundant admission packet(s) missing required evidence or capacity-first justification`
+          );
+          parsed._capacityRoiFilteredCount = admissionHardFilter.filteredCount;
+        }
       }
     }
 
@@ -7030,34 +8198,36 @@ Mandatory requirements:
     // validator.  Safety valve: if ALL plans are stale-backed (no fresh
     // alternative exists), preserve them with a warning rather than killing the
     // cycle — Athena will make the final accept/reject decision.
-    const staleBackedIndices = contractResult.results
-      .filter(r => !r.valid && r.violations.some(v =>
-        v.code === PACKET_VIOLATION_CODE.STALE_DIAGNOSTICS_BACKED &&
-        v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL
-      ))
-      .map(r => r.planIndex)
-      .sort((a, b) => b - a);
-    if (staleBackedIndices.length > 0) {
-      const nonStaleCount = parsed.plans.length - staleBackedIndices.length;
-      if (nonStaleCount > 0) {
-        // Non-stale alternatives exist — hard-reject stale-backed plans.
-        for (const idx of staleBackedIndices) {
-          parsed.plans.splice(idx, 1);
+    if (parsed.plans.length > 0) {
+      const staleBackedIndices = contractResult.results
+        .filter(r => !r.valid && r.violations.some(v =>
+          v.code === PACKET_VIOLATION_CODE.STALE_DIAGNOSTICS_BACKED &&
+          v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL
+        ))
+        .map(r => r.planIndex)
+        .sort((a, b) => b - a);
+      if (staleBackedIndices.length > 0) {
+        const nonStaleCount = parsed.plans.length - staleBackedIndices.length;
+        if (nonStaleCount > 0) {
+          // Non-stale alternatives exist — hard-reject stale-backed plans.
+          for (const idx of staleBackedIndices) {
+            parsed.plans.splice(idx, 1);
+          }
+          await appendProgress(
+            config,
+            `[PROMETHEUS][DIAG_FRESHNESS] Hard-rejected ${staleBackedIndices.length} stale-diagnostics-backed packet(s) ` +
+            `(${nonStaleCount} independently-evidenced plan(s) remain)`,
+          );
+          parsed._staleBackedRejectedCount = staleBackedIndices.length;
+        } else {
+          // All plans are stale-backed — preserve with warning to avoid deadlock.
+          await appendProgress(
+            config,
+            `[PROMETHEUS][DIAG_FRESHNESS] WARN: all ${staleBackedIndices.length} plan(s) are stale-diagnostics-backed ` +
+            `— preserving for Athena review (staleSources=${diagnosticsFreshnessAdmission.staleSources.join(",")})`,
+          );
+          parsed._allPlansStale = true;
         }
-        await appendProgress(
-          config,
-          `[PROMETHEUS][DIAG_FRESHNESS] Hard-rejected ${staleBackedIndices.length} stale-diagnostics-backed packet(s) ` +
-          `(${nonStaleCount} independently-evidenced plan(s) remain)`,
-        );
-        parsed._staleBackedRejectedCount = staleBackedIndices.length;
-      } else {
-        // All plans are stale-backed — preserve with warning to avoid deadlock.
-        await appendProgress(
-          config,
-          `[PROMETHEUS][DIAG_FRESHNESS] WARN: all ${staleBackedIndices.length} plan(s) are stale-diagnostics-backed ` +
-          `— preserving for Athena review (staleSources=${diagnosticsFreshnessAdmission.staleSources.join(",")})`,
-        );
-        parsed._allPlansStale = true;
       }
     }
   }
@@ -7157,6 +8327,28 @@ Mandatory requirements:
     parsed.plans = applyPlanningRubric(parsed.plans);
   }
 
+  if (Array.isArray(parsed.plans) && parsed.plans.length > 0) {
+    const lifecycleAdmission = await applyPlanLifecycleAdmissionFilter(stateDir, parsed.plans);
+    if (lifecycleAdmission.skippedPlans.length > 0) {
+      parsed._lifecycleAdmission = {
+        skippedCount: lifecycleAdmission.skippedPlans.length,
+        closedFamilyCount: lifecycleAdmission.lifecycleSummary.closedFamilyCount,
+        ongoingFamilyCount: lifecycleAdmission.lifecycleSummary.ongoingFamilyCount,
+      };
+      parsed._lifecycleSkippedPlans = lifecycleAdmission.skippedPlans.slice(0, 50).map(({ plan, reason }) => ({
+        task: plan?.task || plan?.title || plan?.task_id || null,
+        continuationFamilyKey: plan?.continuationFamilyKey || null,
+        lifecycleState: plan?._lifecycleState || null,
+        reason,
+      }));
+      await appendProgress(
+        config,
+        `[PROMETHEUS][LIFECYCLE] Suppressed ${lifecycleAdmission.skippedPlans.length}/${parsed.plans.length} plan(s) already closed or already continuing in the same family`,
+      );
+    }
+    parsed.plans = lifecycleAdmission.actionablePlans;
+  }
+
   // Ensure execution strategy and request budget remain concrete after plan normalization.
   if (!parsed.executionStrategy || !Array.isArray(parsed.executionStrategy.waves) || parsed.executionStrategy.waves.length === 0) {
     parsed.executionStrategy = buildExecutionStrategyFromPlans(parsed.plans || []);
@@ -7207,6 +8399,8 @@ Mandatory requirements:
     }
   }
 
+  parsed.projectHealth = resolvePrometheusProjectHealth(parsed);
+
   // ── Build analysis result ─────────────────────────────────────────────────
   const analysis = ensurePersistedAnalysisTimestamps({
     ...parsed,
@@ -7232,6 +8426,8 @@ Mandatory requirements:
 
   try {
     // Sanitize plan text fields before persistence to strip operational tool traces.
+    (analysis as any).keyFindings = sanitizePlanningFieldForPersistence(String((analysis as any).keyFindings || ""));
+    (analysis as any).strategicNarrative = sanitizePlanningFieldForPersistence(String((analysis as any).strategicNarrative || ""));
     if (Array.isArray((analysis as any).plans)) {
       (analysis as any).plans = (analysis as any).plans.map((plan: any) => ({
         ...plan,

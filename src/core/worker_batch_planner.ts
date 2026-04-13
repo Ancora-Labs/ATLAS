@@ -32,6 +32,17 @@ import {
 const CHARS_PER_TOKEN = 4;
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 100000;
 const DEFAULT_CONTEXT_RESERVE_TOKENS = 12000;
+const FRAGILE_TASK_KIND_PACKET_CAPS = Object.freeze({
+  test: 3,
+  rework: 2,
+  "ci-fix": 2,
+  qa: 3,
+});
+const MODERATE_TASK_KIND_PACKET_CAPS = Object.freeze({
+  bugfix: 4,
+  refactor: 4,
+  governance: 3,
+});
 
 /**
  * Default minimum context-fill ratio (0–1) for a specialist worker to keep its
@@ -166,6 +177,148 @@ function loadCycleAnalyticsTelemetry(config: any): any | null {
   } catch {
     return null;
   }
+}
+
+function normalizeTaskKindKey(taskKind: unknown): string {
+  return String(taskKind || "implementation")
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, "-") || "implementation";
+}
+
+export function extractTaskKindPacketTelemetry(cycleAnalytics: any): Record<string, {
+  successRate: number | null;
+  sampleCount: number;
+  averageBatchSize: number | null;
+  averageOrderedStepCount: number | null;
+  averageContextUtilizationPercent: number | null;
+}> {
+  const resolved: Record<string, {
+    successRate: number | null;
+    sampleCount: number;
+    averageBatchSize: number | null;
+    averageOrderedStepCount: number | null;
+    averageContextUtilizationPercent: number | null;
+  }> = {};
+
+  const packetCorrelation = cycleAnalytics?.lastCycle?.packetOutcomeCorrelation?.byTaskKind
+    ?? cycleAnalytics?.packetOutcomeCorrelation?.byTaskKind;
+  if (packetCorrelation && typeof packetCorrelation === "object") {
+    for (const [taskKind, value] of Object.entries(packetCorrelation as Record<string, any>)) {
+      const normalizedTaskKind = normalizeTaskKindKey(taskKind);
+      const sampleCount = Number((value as any)?.sampleCount ?? 0);
+      resolved[normalizedTaskKind] = {
+        successRate: Number.isFinite(Number((value as any)?.successRate))
+          ? Math.max(0, Math.min(1, Number((value as any)?.successRate)))
+          : null,
+        sampleCount: Number.isFinite(sampleCount) && sampleCount > 0 ? Math.floor(sampleCount) : 0,
+        averageBatchSize: Number.isFinite(Number((value as any)?.averageBatchSize))
+          ? Number((value as any)?.averageBatchSize)
+          : null,
+        averageOrderedStepCount: Number.isFinite(Number((value as any)?.averageOrderedStepCount))
+          ? Number((value as any)?.averageOrderedStepCount)
+          : null,
+        averageContextUtilizationPercent: Number.isFinite(Number((value as any)?.averageContextUtilizationPercent))
+          ? Number((value as any)?.averageContextUtilizationPercent)
+          : null,
+      };
+    }
+    return resolved;
+  }
+
+  const routingTelemetry = cycleAnalytics?.lastCycle?.modelRoutingTelemetry?.byTaskKind
+    ?? cycleAnalytics?.modelRoutingTelemetry?.byTaskKind;
+  if (!routingTelemetry || typeof routingTelemetry !== "object") {
+    return resolved;
+  }
+  for (const [taskKind, value] of Object.entries(routingTelemetry as Record<string, any>)) {
+    const normalizedTaskKind = normalizeTaskKindKey(taskKind);
+    const sampleCount = Number((value as any)?.sampleCount ?? 0);
+    const defaultPoint = (value as any)?.default;
+    resolved[normalizedTaskKind] = {
+      successRate: Number.isFinite(Number(defaultPoint?.successProbability))
+        ? Math.max(0, Math.min(1, Number(defaultPoint.successProbability)))
+        : null,
+      sampleCount: Number.isFinite(sampleCount) && sampleCount > 0 ? Math.floor(sampleCount) : 0,
+      averageBatchSize: null,
+      averageOrderedStepCount: null,
+      averageContextUtilizationPercent: null,
+    };
+  }
+  return resolved;
+}
+
+export function resolveAdaptivePacketPlanLimit({
+  taskKinds = [],
+  baseCap = 5,
+  uncertainty = null,
+  taskKindTelemetry = null,
+}: {
+  taskKinds?: unknown[];
+  baseCap?: number;
+  uncertainty?: string | null;
+  taskKindTelemetry?: Record<string, {
+    successRate: number | null;
+    sampleCount: number;
+    averageBatchSize: number | null;
+    averageOrderedStepCount: number | null;
+    averageContextUtilizationPercent: number | null;
+  }> | null;
+} = {}): { maxPlansPerPacket: number; reasonCodes: string[] } {
+  const hardCap = Math.max(1, Math.min(20, Math.floor(Number.isFinite(baseCap) ? baseCap : 5)));
+  const normalizedTaskKinds = [...new Set(
+    (Array.isArray(taskKinds) ? taskKinds : [taskKinds])
+      .map(normalizeTaskKindKey)
+      .filter(Boolean)
+  )];
+  const reasons = new Set<string>();
+  let adaptiveCap = hardCap;
+
+  for (const taskKind of normalizedTaskKinds) {
+    if (Object.prototype.hasOwnProperty.call(FRAGILE_TASK_KIND_PACKET_CAPS, taskKind)) {
+      adaptiveCap = Math.min(adaptiveCap, FRAGILE_TASK_KIND_PACKET_CAPS[taskKind as keyof typeof FRAGILE_TASK_KIND_PACKET_CAPS]);
+      reasons.add(`fragile-kind:${taskKind}`);
+    } else if (Object.prototype.hasOwnProperty.call(MODERATE_TASK_KIND_PACKET_CAPS, taskKind)) {
+      adaptiveCap = Math.min(adaptiveCap, MODERATE_TASK_KIND_PACKET_CAPS[taskKind as keyof typeof MODERATE_TASK_KIND_PACKET_CAPS]);
+      reasons.add(`moderate-kind:${taskKind}`);
+    }
+
+    const telemetry = taskKindTelemetry && typeof taskKindTelemetry === "object"
+      ? taskKindTelemetry[taskKind]
+      : null;
+    const successRate = Number(telemetry?.successRate);
+    const sampleCount = Number(telemetry?.sampleCount ?? 0);
+    if (Number.isFinite(successRate) && sampleCount >= 2) {
+      if (successRate < 0.45) {
+        adaptiveCap = Math.min(adaptiveCap, 2);
+        reasons.add(`low-success:${taskKind}`);
+      } else if (successRate < 0.70) {
+        adaptiveCap = Math.min(adaptiveCap, 3);
+        reasons.add(`medium-success:${taskKind}`);
+      }
+    }
+    const avgOrderedSteps = Number(telemetry?.averageOrderedStepCount ?? 0);
+    if (Number.isFinite(avgOrderedSteps) && avgOrderedSteps >= 9) {
+      adaptiveCap = Math.min(adaptiveCap, Math.max(1, hardCap - 1));
+      reasons.add(`high-step-density:${taskKind}`);
+    }
+  }
+
+  const normalizedUncertainty = String(uncertainty || "").trim().toLowerCase();
+  if (normalizedUncertainty === "high") {
+    adaptiveCap = Math.max(1, Math.min(adaptiveCap, hardCap - 1));
+    reasons.add("planning-uncertainty:high");
+  } else if (normalizedUncertainty === "medium") {
+    adaptiveCap = Math.max(1, Math.min(adaptiveCap, hardCap));
+    if (normalizedTaskKinds.length > 0) {
+      reasons.add("planning-uncertainty:medium");
+    }
+  }
+
+  return {
+    maxPlansPerPacket: Math.max(1, Math.min(hardCap, adaptiveCap)),
+    reasonCodes: [...reasons],
+  };
 }
 
 /**
@@ -909,6 +1062,9 @@ export function computeCriticalPathScores(
 }
 
 export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResult = null) {
+  const packetSizePolicy = resolvePacketSizePolicy(config);
+  const cycleAnalyticsTelemetry = loadCycleAnalyticsTelemetry(config);
+  const taskKindPacketTelemetry = extractTaskKindPacketTelemetry(cycleAnalyticsTelemetry);
   // ── Micro-wave splitting ──────────────────────────────────────────────────
   // When config.planner.maxTasksPerMicrowave is set to a positive integer,
   // large waves are split into micro-waves of at most that many tasks.
@@ -1189,6 +1345,14 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
       for (const waveNum of sortedWaves) {
         const wavePlans = plansByWave.get(waveNum)!;
         const selection = chooseModelForRolePlans(config, roleName, wavePlans, taskKind);
+        const adaptivePacketLimit = resolveAdaptivePacketPlanLimit({
+          taskKinds: wavePlans.map((plan) => plan?.taskKind || plan?.kind || taskKind),
+          baseCap: packetSizePolicy.maxPlansPerPacket,
+          taskKindTelemetry: taskKindPacketTelemetry,
+        });
+        const explicitPacketCap = Number((config as any)?.planner?.maxPlansPerPacket);
+        const enforceAdaptivePacketCap = Number.isFinite(explicitPacketCap) && explicitPacketCap > 0
+          || adaptivePacketLimit.reasonCodes.length > 0;
 
         // When nucleus/frontier mode is active, replace the standard sequential
         // batches with nucleus-first / frontier-fill batches.  This reduces the
@@ -1210,10 +1374,16 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
         for (const batch of activeBatches) {
           const batchPlans = batch.plans as any[];
           const hasDeps = batchPlans.some((p) => hasExplicitDependencies(p));
-          if (hasDeps && batchPlans.length > maxDepBatch) {
+          const packetPlanLimit = enforceAdaptivePacketCap
+            ? adaptivePacketLimit.maxPlansPerPacket
+            : Math.max(1, batchPlans.length);
+          const chunkSize = hasDeps
+            ? Math.max(1, Math.min(maxDepBatch, packetPlanLimit))
+            : packetPlanLimit;
+          if (batchPlans.length > chunkSize) {
             // Chunk into groups of maxDepBatch; distribute estimated tokens proportionally
-            for (let offset = 0; offset < batchPlans.length; offset += maxDepBatch) {
-              const chunk = batchPlans.slice(offset, offset + maxDepBatch);
+            for (let offset = 0; offset < batchPlans.length; offset += chunkSize) {
+              const chunk = batchPlans.slice(offset, offset + chunkSize);
               splitBatches.push({
                 plans: chunk,
                 estimatedTokens: Math.round(batch.estimatedTokens * chunk.length / batchPlans.length),
@@ -1245,8 +1415,9 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
             const mergedHasDeps = mergedPlans.some((p) => hasExplicitDependencies(p));
             const withinDepLimit = !mergedHasDeps || mergedPlans.length <= maxDepBatch;
             const withinContextLimit = mergedTokens <= selection.usableContextTokens;
+            const withinPacketPlanLimit = !enforceAdaptivePacketCap || mergedPlans.length <= adaptivePacketLimit.maxPlansPerPacket;
 
-            if (withinDepLimit && withinContextLimit) {
+            if (withinDepLimit && withinContextLimit && withinPacketPlanLimit) {
               const remaining = selection.usableContextTokens - mergedTokens;
               if (remaining < bestFitRemaining) {
                 bestFitIndex = ci;
@@ -1308,6 +1479,8 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
             contextUtilizationPercent: utilization,
             taskKind,
             modelRouting: selection.economicsRouting,
+            adaptivePacketCap: adaptivePacketLimit.maxPlansPerPacket,
+            adaptivePacketCapReasons: adaptivePacketLimit.reasonCodes,
             sharedBranch,
             wave: waveNum,
             roleBatchIndex: index + 1,
