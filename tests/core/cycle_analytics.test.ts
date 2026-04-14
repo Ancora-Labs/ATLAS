@@ -2084,6 +2084,45 @@ describe("modelRoutingTelemetry schema contract", () => {
     assert.equal(telemetry.outcomeScore, 0.656);
   });
 
+  it("buildModelRoutingTelemetry prefers realized route ROI samples over duplicate premium usage rows", () => {
+    const result = buildModelRoutingTelemetry(
+      [
+        { taskId: "task-1", model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "blocked", worker: "evolution-worker", lineageId: "lineage-1" },
+      ],
+      [{ id: "lineage-1", sourceKind: "gap_candidate" }],
+      [
+        {
+          taskId: "task-1",
+          model: "Claude Sonnet 4.6",
+          taskKind: "implementation",
+          outcome: "done",
+          roi: 90,
+          realizedAt: makeTs(10_000),
+          role: "quality-worker",
+          lineageId: "lineage-1",
+        },
+      ],
+    );
+    assert.equal(result.sampleCount, 1);
+    assert.equal(result.byTaskKind.implementation.default.successProbability, 1);
+    assert.ok(result.byTaskKind.implementation.default.outcomeScore > 0.8);
+  });
+
+  it("computeCycleAnalytics classifies autonomy execution dispatch blocks as governance-blocked terminal exits", () => {
+    const record = computeCycleAnalytics(makeConfig(), {
+      phase: CYCLE_PHASE.COMPLETED,
+      dispatchBlockReason: "autonomy_execution_gate_not_ready:insufficient_exploitation_window",
+      workerTopology: {
+        effectiveLaneCount: 1,
+        nominalLaneCount: 2,
+        fallbackCollapseRate: 0.5,
+      },
+    });
+    assert.equal(record.cycleTruthContract.nullEventsTerminalBlockReason, CYCLE_TRUTH_TERMINAL_BLOCK_REASON.GOVERNANCE_BLOCKED);
+    assert.equal(record.workerTopology.effectiveLaneCount, 1);
+    assert.equal(record.workerTopology.nominalLaneCount, 2);
+  });
+
   it("MIN_TELEMETRY_SAMPLE_THRESHOLD is exported and is a positive integer", () => {
     assert.ok(typeof MIN_TELEMETRY_SAMPLE_THRESHOLD === "number", "must be a number");
     assert.ok(MIN_TELEMETRY_SAMPLE_THRESHOLD > 0, "must be positive");

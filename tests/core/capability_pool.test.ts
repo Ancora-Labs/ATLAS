@@ -31,6 +31,16 @@ describe("capability_pool", () => {
     it("falls back to runtime-refactor for generic tasks", () => {
       assert.equal(inferCapabilityTag({ task: "Update code logic" }), "runtime-refactor");
     });
+
+    it("does not misclassify generic capability wording as infrastructure", () => {
+      assert.equal(
+        inferCapabilityTag({
+          task: "Reconcile health audit capability detection with current deep-equality tracking",
+          acceptance_criteria: ["Audit capability verification path remains deterministic"],
+        }),
+        "test-infra",
+      );
+    });
   });
 
   describe("selectWorkerForPlan", () => {
@@ -50,8 +60,16 @@ describe("capability_pool", () => {
       assert.equal(selection.isFallback, false);
     });
 
-    it("preserves explicit evolution-worker role even when task text looks like test-infra", () => {
+    it("upgrades generic evolution-worker role when plan signals clearly require a specialist lane", () => {
       const plan = { task: "Add tests for parser timeout handling", role: "evolution-worker" };
+      const selection = selectWorkerForPlan(plan);
+      assert.equal(selection.role, "quality-worker");
+      assert.equal(selection.lane, "quality");
+      assert.match(selection.reason, /upgraded to specialist lane/i);
+    });
+
+    it("preserves explicit evolution-worker role for generic implementation work", () => {
+      const plan = { task: "Update response parsing logic", role: "evolution-worker" };
       const selection = selectWorkerForPlan(plan);
       assert.equal(selection.role, "evolution-worker");
       assert.equal(selection.lane, "implementation");
@@ -79,6 +97,30 @@ describe("capability_pool", () => {
       const selection = selectWorkerForPlan(plan);
       assert.equal(selection.role, "governance-worker");
       assert.equal(selection.lane, "governance");
+    });
+
+    it("uses target file signals to route governance-heavy generic plans", () => {
+      const plan = {
+        task: "Normalize lane-diversity reason contract with compatibility bridge",
+        role: "evolution-worker",
+        target_files: ["src/core/governance_contract.ts", "src/core/orchestrator.ts"],
+      };
+      const selection = selectWorkerForPlan(plan);
+      assert.equal(selection.role, "governance-worker");
+      assert.equal(selection.lane, "governance");
+    });
+
+    it("routes audit-and-test heavy generic plans to quality instead of infrastructure", () => {
+      const plan = {
+        task: "Reconcile health audit capability detection with current deep-equality tracking",
+        role: "evolution-worker",
+        target_files: ["tests/core/athena_review_normalization.test.ts", "src/core/athena_reviewer.ts"],
+        acceptance_criteria: ["Regression test proves deep-equality behavior remains intact"],
+        verification: "npm test -- tests/core/athena_review_normalization.test.ts",
+      };
+      const selection = selectWorkerForPlan(plan);
+      assert.equal(selection.role, "quality-worker");
+      assert.equal(selection.lane, "quality");
     });
 
     it("infrastructure task routes to infrastructure-worker", () => {
@@ -132,12 +174,30 @@ describe("capability_pool", () => {
 
     it("retains multi-lane topology for mixed explicit roles", () => {
       const plans = [
-        { task: "Add tests around planner", role: "evolution-worker" },
+        { task: "Refactor response aggregation flow", role: "evolution-worker" },
         { task: "Add tests around reviewer", role: "quality-worker" },
       ];
       const result = assignWorkersToPlans(plans);
       assert.equal(result.activeLaneCount, 2);
       assert.equal(result.diversityCheck.meetsMinimum, true);
+    });
+
+    it("tracks effective-lane collapse separately from nominal specialist intent", () => {
+      let lanePerformance = {};
+      for (let i = 0; i < 8; i++) {
+        lanePerformance = recordLaneOutcome(lanePerformance, "quality", { success: false });
+      }
+      const plans = [
+        { task: "Add regression tests for parser", role: "evolution-worker" },
+        { task: "Refactor response aggregation flow", role: "evolution-worker" },
+      ];
+      const result = assignWorkersToPlans(plans, {}, lanePerformance);
+      assert.equal(result.activeLaneCount, 1);
+      assert.equal(result.nominalActiveLaneCount, 2);
+      assert.equal(result.specializationUtilization.fallbackCollapseCount, 1);
+      assert.equal(result.specializationUtilization.collapsedReservedLanes.includes("quality"), true);
+      assert.deepEqual(result.laneCounts, { implementation: 2 });
+      assert.deepEqual(result.nominalLaneCounts, { quality: 1, implementation: 1 });
     });
   });
 
@@ -499,6 +559,23 @@ describe("capability_pool — lane diversity threshold enforcement", () => {
       assert.equal(result.specializationUtilization.total, 3);
       assert.ok(result.specializationUtilization.specializedShare > 0);
       assert.equal(result.specializationUtilization.specializationTargetsMet, true);
+    });
+
+    it("surfaces lane ROI admission so specialist gating can use EV signals", () => {
+      const plans = [
+        { task: "Add test coverage" },
+        { task: "Update Docker configuration" },
+      ];
+      const laneTelemetrySignals = buildLaneTelemetrySignals({
+        quality: { completionRate: 0.82, roi: 0.74 },
+        infrastructure: { completionRate: 0.61, roi: 0.58 },
+      });
+
+      const result = assignWorkersToPlans(plans, null, undefined, { laneTelemetrySignals });
+
+      assert.equal(result.laneROIAdmission.admitted, true);
+      assert.ok(result.laneROIAdmission.passingLanes.includes("quality"));
+      assert.ok(result.laneROIAdmission.passingLanes.includes("infrastructure"));
     });
 
     it("diversityCheck.meetsMinimum=true when lane spread meets default threshold (2)", () => {

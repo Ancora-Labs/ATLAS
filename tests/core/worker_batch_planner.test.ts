@@ -146,6 +146,33 @@ describe("worker_batch_planner", () => {
     const planCBatch = allBatchPlanSets.find(bp => bp.includes(planC));
     assert.ok(planCBatch, "planC should be in some batch");
   });
+
+  it("splits fragile task kinds with a tighter adaptive packet cap", () => {
+    const config = {
+      copilot: {
+        defaultModel: "Claude Sonnet 4.6",
+        modelContextWindows: {
+          "Claude Sonnet 4.6": 100000,
+        },
+        modelContextReserveTokens: 0,
+      },
+      planner: {
+        maxPlansPerPacket: 5,
+      },
+    };
+    const plans = Array.from({ length: 5 }, (_, index) => ({
+      ...buildPlan(index),
+      role: "Evolution Worker",
+      taskKind: "test",
+      acceptance_criteria: ["criterion a", "criterion b"],
+    }));
+
+    const batches = buildRoleExecutionBatches(plans, config);
+
+    assert.equal(batches.flatMap((batch) => batch.plans).length, 5);
+    assert.ok(batches.every((batch) => batch.plans.length <= 3), "fragile task kinds must stay within adaptive cap");
+    assert.ok(batches.every((batch: any) => typeof batch.adaptivePacketCap === "number" && batch.adaptivePacketCap <= 3));
+  });
 });
 
 // ── Task 3: dependency graph wave and conflict integration ────────────────────
@@ -623,10 +650,11 @@ describe("worker_batch_planner — micro-wave integration via config", () => {
       task: `Task ${i}`,
       wave: 1,
     }));
-    // Without the config key, no micro-wave splitting — all 6 plans stay in wave 1 and fit one batch
+    // Without the config key, no micro-wave splitting occurs, but adaptive packet
+    // caps can still break the wave into multiple batches.
     const batches = buildRoleExecutionBatches(plans, config);
-    assert.equal(batches.length, 1, "no splitting without config — all 6 plans in one batch");
-    assert.equal((batches[0].plans as any[]).length, 6);
+    assert.equal([...new Set(batches.map((batch) => batch.wave))].length, 1, "all plans stay in the original wave");
+    assert.equal(batches.flatMap((batch) => batch.plans).length, 6);
   });
 
   it("with maxTasksPerMicrowave=2, a 6-plan wave is split into 3 micro-waves of 2", () => {
@@ -1349,6 +1377,9 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
     assert.equal(typeof target.requiredSpecializedCount, "number");
     assert.equal(typeof target.achievedSpecializedCount, "number");
     assert.equal(typeof target.targetMet, "boolean");
+    assert.equal(Array.isArray(target.reservedSpecialistLanes), true);
+    assert.equal(Array.isArray(target.effectiveSpecialistLanes), true);
+    assert.equal(Array.isArray(target.collapsedReservedLanes), true);
   });
 
   it("adaptiveMinSpecializedShare matches computeAdaptiveSpecializedShareTarget (unified formula)", () => {

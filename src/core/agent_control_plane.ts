@@ -122,3 +122,34 @@ export async function recordAgentHandoff(config, input: {
   state.updatedAt = recordedAt;
   await writeJson(filePath, state);
 }
+
+export async function summarizeAgentControlPlane(config, limit = 25): Promise<{
+  activeAgents: string[];
+  recentSessionCount: number;
+  completionCount: number;
+  failureCount: number;
+  handoffCount: number;
+  lastEventAt: string | null;
+}> {
+  const state = await loadAgentControlPlane(config);
+  const safeLimit = Math.max(1, Math.floor(Number(limit) || 25));
+  const recentSessions = state.sessionEvents.slice(-safeLimit);
+  const activeAgents = Object.values(state.sessions || {})
+    .filter((session: any) => session && typeof session === "object" && String(session.phase || "") === "start")
+    .map((session: any) => String(session.agent || "").trim().toLowerCase())
+    .filter(Boolean);
+  const completionCount = recentSessions.filter((entry: any) => String(entry?.phase || "") === "complete").length;
+  const failureCount = recentSessions.filter((entry: any) => String(entry?.phase || "") === "failed").length;
+  const handoffCount = state.handoffs.slice(-safeLimit).length;
+  const lastSessionAt = recentSessions.length > 0 ? String(recentSessions[recentSessions.length - 1]?.recordedAt || "") : "";
+  const lastHandoffAt = handoffCount > 0 ? String(state.handoffs[state.handoffs.length - 1]?.recordedAt || "") : "";
+  const lastEventAt = [lastSessionAt, lastHandoffAt].filter(Boolean).sort().at(-1) || null;
+  return {
+    activeAgents,
+    recentSessionCount: recentSessions.length,
+    completionCount,
+    failureCount,
+    handoffCount,
+    lastEventAt,
+  };
+}

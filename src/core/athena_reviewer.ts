@@ -33,6 +33,10 @@ import {
   backfillDecisionQualityLabel,
 } from "./schema_registry.js";
 import {
+  AUTONOMY_EXECUTION_GATE_REASON_CODE,
+  resolveAutonomyExecutionGateBlockReason,
+} from "./governance_contract.js";
+import {
   validateLeadershipContract,
   LEADERSHIP_CONTRACT_TYPE,
   TRUST_BOUNDARY_ERROR,
@@ -2440,13 +2444,16 @@ export function computeGateBlockRiskFromSignals(signals: {
   criticalDebtBlocked?: boolean;
   forceCheckpointActive?: boolean;
   autonomyGateNotReady?: boolean;
+  autonomyGateReason?: string | null;
 }): GateBlockRiskAssessment {
+  const autonomyGateReason = signals.autonomyGateReason
+    || (signals.autonomyGateNotReady ? AUTONOMY_EXECUTION_GATE_REASON_CODE : null);
   const activeGateSignals: string[] = [];
   if (signals.freezeActive) activeGateSignals.push("governance_freeze_active");
   if (signals.canaryBreachActive) activeGateSignals.push("governance_canary_breach");
   if (signals.criticalDebtBlocked) activeGateSignals.push("critical_debt_overdue");
   if (signals.forceCheckpointActive) activeGateSignals.push("force_checkpoint_validation_active");
-  if (signals.autonomyGateNotReady) activeGateSignals.push("autonomy_execution_gate_not_ready");
+  if (autonomyGateReason) activeGateSignals.push(AUTONOMY_EXECUTION_GATE_REASON_CODE);
 
   if (signals.freezeActive || signals.canaryBreachActive || signals.forceCheckpointActive) {
     return {
@@ -2466,10 +2473,10 @@ export function computeGateBlockRiskFromSignals(signals: {
     };
   }
 
-  if (signals.autonomyGateNotReady) {
+  if (autonomyGateReason) {
     return {
       gateBlockRisk: GATE_BLOCK_RISK.MEDIUM,
-      reason: "Autonomy execution gate not ready (exploitationReady=false) — system may not be stable enough for full dispatch",
+      reason: `Autonomy execution gate not ready — ${autonomyGateReason}`,
       activeGateSignals,
       requiresCorrection: false,
     };
@@ -2487,16 +2494,11 @@ export async function assessGovernanceGateBlockRisk(config): Promise<GateBlockRi
   // Probe autonomy band executionGate.exploitationReady — used in both the dry-run
   // fast-path and the fallback signal path to ensure approval confidence reflects
   // real dispatch feasibility end-to-end.
-  let autonomyGateNotReady = false;
+  let autonomyGateReason: string | null = null;
   try {
     const stateDir = (config as any)?.paths?.stateDir || "state";
     const autonomy = await readJson(path.join(stateDir, "autonomy_band_status.json"), null);
-    const exploitationReady = autonomy?.executionGate?.exploitationReady;
-    // exploitationReady=false signals the system is in bootstrapping/stabilizing phase.
-    // We treat this as a medium-risk dispatch feasibility signal (advisory, not a hard block).
-    if (exploitationReady === false) {
-      autonomyGateNotReady = true;
-    }
+    autonomyGateReason = resolveAutonomyExecutionGateBlockReason(autonomy).blockReason;
   } catch { /* autonomy_band_status.json absent or unreadable — treat as ready (fail-open) */ }
 
   try {
@@ -2510,11 +2512,11 @@ export async function assessGovernanceGateBlockRisk(config): Promise<GateBlockRi
     if (dryRunDecision && typeof dryRunDecision.blocked === "boolean") {
       if (!dryRunDecision.blocked) {
         // Dry-run passed hard gates; still factor in autonomy band readiness.
-        if (autonomyGateNotReady) {
+        if (autonomyGateReason) {
           return {
             gateBlockRisk: GATE_BLOCK_RISK.MEDIUM,
-            reason: "Governance gates clear but autonomy execution gate not ready (exploitationReady=false)",
-            activeGateSignals: ["autonomy_execution_gate_not_ready"],
+            reason: `Governance gates clear but autonomy execution gate is blocking: ${autonomyGateReason}`,
+            activeGateSignals: [AUTONOMY_EXECUTION_GATE_REASON_CODE],
             requiresCorrection: false,
           };
         }
@@ -2537,6 +2539,7 @@ export async function assessGovernanceGateBlockRisk(config): Promise<GateBlockRi
         "plan_evidence_coupling_invalid",
         "dependency_readiness_incomplete",
         "rolling_yield_throttle",
+        AUTONOMY_EXECUTION_GATE_REASON_CODE,
       ]);
       const risk = highRiskSignals.has(reasonSignal)
         ? GATE_BLOCK_RISK.HIGH
@@ -2544,12 +2547,12 @@ export async function assessGovernanceGateBlockRisk(config): Promise<GateBlockRi
           ? GATE_BLOCK_RISK.MEDIUM
           : GATE_BLOCK_RISK.HIGH;
       const activeSignals = [reasonSignal];
-      if (autonomyGateNotReady) activeSignals.push("autonomy_execution_gate_not_ready");
+      if (autonomyGateReason) activeSignals.push(AUTONOMY_EXECUTION_GATE_REASON_CODE);
       return {
         gateBlockRisk: risk,
         reason: `Dry-run governance gate blocked dispatch: ${String(dryRunDecision.reason || "unknown")}`,
         activeGateSignals: activeSignals,
-        requiresCorrection: true,
+        requiresCorrection: reasonSignal !== AUTONOMY_EXECUTION_GATE_REASON_CODE,
       };
     }
   } catch (err) {
@@ -2561,7 +2564,7 @@ export async function assessGovernanceGateBlockRisk(config): Promise<GateBlockRi
     canaryBreachActive: false,
     criticalDebtBlocked: false,
     forceCheckpointActive: false,
-    autonomyGateNotReady,
+    autonomyGateReason,
   };
 
   try {

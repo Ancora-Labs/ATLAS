@@ -11,7 +11,17 @@
  * optimal worker for each plan.
  */
 
-import { LANE_WORKER_NAMES, WORKER_CAPABILITIES, getLaneForWorkerName, TASK_LANE_KIND, classifyTaskLaneKind, type TaskLaneKind } from "./role_registry.js";
+import {
+  LANE_WORKER_NAMES,
+  WORKER_CAPABILITIES,
+  getLaneForWorkerName,
+  normalizeWorkerName,
+  isSpecialistWorkerName,
+  SPECIALIST_LANE_RESERVATION_ORDER,
+  TASK_LANE_KIND,
+  classifyTaskLaneKind,
+  type TaskLaneKind,
+} from "./role_registry.js";
 import {
   normalizeInterventionLineageContract,
   resolveInterventionLineageJoinKey,
@@ -136,6 +146,7 @@ export function computeAdaptiveSpecializedShareTarget(
 export interface WorkerSelection {
   role: string;
   lane: string;
+  effectiveLane?: string;
   reason: string;
   isFallback: boolean;
   performanceScore: number;
@@ -144,6 +155,8 @@ export interface WorkerSelection {
   lineageJoinKey?: string | null;
   capabilityTag?: string | null;
   specialized?: boolean;
+  specialistEligible?: boolean;
+  reservedSpecialistLane?: string | null;
 }
 
 function buildSelectionLineageContract(plan: any, extras: {
@@ -305,7 +318,40 @@ export function selectWorkerForPlan(plan, config?, lanePerformance?: LanePerform
   const capTag = inferCapabilityTag(plan);
   const customMap = config?.workerPool?.capabilityMap;
   const mapping = customMap?.[capTag] || DEFAULT_CAPABILITY_MAP[capTag] || { lane: "implementation", fallback: "evolution-worker" };
+  const reservedSpecialistLane = mapping.lane && mapping.lane !== "implementation" ? mapping.lane : null;
   if (explicitRole && explicitLane) {
+    const normalizedExplicitRole = normalizeWorkerName(explicitRole);
+    const inferredSpecialistLane = mapping.lane && mapping.lane !== "implementation";
+    if (normalizedExplicitRole === "evolution-worker" && inferredSpecialistLane) {
+      const score = getLaneScore(lanePerformance ?? {}, mapping.lane);
+      const LOW_PERFORMANCE_THRESHOLD = 0.25;
+      const laneWorkerName = LANE_WORKER_NAMES[mapping.lane] || mapping.fallback;
+      const performanceDegraded = score < LOW_PERFORMANCE_THRESHOLD;
+      const selectedRole = performanceDegraded ? mapping.fallback : laneWorkerName;
+      const lineage = buildSelectionLineageContract(plan, {
+        role: selectedRole,
+        lane: mapping.lane,
+        capabilityTag: capTag,
+        rerouteReasonCode: performanceDegraded ? SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED : null,
+      });
+      return {
+        role: selectedRole,
+        lane: mapping.lane,
+        reason: performanceDegraded
+          ? `Generic planner role "${explicitRole}" upgraded to capability lane "${mapping.lane}" for "${capTag}", but performance score ${score.toFixed(2)} fell below threshold so dispatch falls back to "${selectedRole}"`
+          : `Generic planner role "${explicitRole}" upgraded to specialist lane "${mapping.lane}" for capability "${capTag}"`,
+        isFallback: performanceDegraded,
+        performanceScore: score,
+        rerouteReasonCode: performanceDegraded ? SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED : null,
+        lineageContract: lineage.lineageContract,
+        lineageJoinKey: lineage.lineageJoinKey,
+        capabilityTag: capTag,
+        specialized: lineage.specialized,
+        specialistEligible: true,
+        reservedSpecialistLane: mapping.lane,
+        effectiveLane: getLaneForWorkerName(selectedRole, mapping.lane),
+      };
+    }
     const lineage = buildSelectionLineageContract(plan, {
       role: explicitRole,
       lane: explicitLane,
@@ -323,6 +369,9 @@ export function selectWorkerForPlan(plan, config?, lanePerformance?: LanePerform
       lineageJoinKey: lineage.lineageJoinKey,
       capabilityTag: capTag,
       specialized: lineage.specialized,
+      specialistEligible: explicitLane !== "implementation" || inferredSpecialistLane,
+      reservedSpecialistLane: explicitLane !== "implementation" ? explicitLane : reservedSpecialistLane,
+      effectiveLane: getLaneForWorkerName(explicitRole, explicitLane),
     };
   }
 
@@ -346,6 +395,9 @@ export function selectWorkerForPlan(plan, config?, lanePerformance?: LanePerform
       lineageJoinKey: lineage.lineageJoinKey,
       capabilityTag: capTag,
       specialized: lineage.specialized,
+      specialistEligible: explicitLaneKey !== "implementation",
+      reservedSpecialistLane: explicitLaneKey !== "implementation" ? explicitLaneKey : reservedSpecialistLane,
+      effectiveLane: getLaneForWorkerName(canonicalRole, explicitLaneKey),
     };
   }
 
@@ -380,6 +432,9 @@ export function selectWorkerForPlan(plan, config?, lanePerformance?: LanePerform
     lineageJoinKey: lineage.lineageJoinKey,
     capabilityTag: capTag,
     specialized: lineage.specialized,
+    specialistEligible: mapping.lane !== "implementation",
+    reservedSpecialistLane,
+    effectiveLane: getLaneForWorkerName(selectedRole, mapping.lane),
   };
 }
 
@@ -394,6 +449,30 @@ export function selectWorkerForPlan(plan, config?, lanePerformance?: LanePerform
 export interface AssignWorkersOptions {
   diversityThreshold?: number;
   laneTelemetrySignals?: LaneTelemetrySignalMap;
+}
+
+export interface WorkerTopologyUtilization {
+  specializedCount: number;
+  total: number;
+  specializedShare: number;
+  minSpecializedShare: number;
+  adaptiveMinSpecializedShare: number;
+  specializedDeficit: number;
+  admissionReady: boolean;
+  specializationTargetsMet: boolean;
+  specialistEligibleCount: number;
+  specialistEligibleShare: number;
+  reservedSpecialistLaneCount: number;
+  reservedSpecialistLanes: string[];
+  effectiveSpecialistLaneCount: number;
+  effectiveSpecialistLanes: string[];
+  nominalActiveLaneCount: number;
+  effectiveActiveLaneCount: number;
+  nominalLaneCounts: Record<string, number>;
+  effectiveLaneCounts: Record<string, number>;
+  fallbackCollapseCount: number;
+  fallbackCollapseRate: number;
+  collapsedReservedLanes: string[];
 }
 
 /**
@@ -426,6 +505,19 @@ export function assignWorkersToPlans(
         specializedDeficit: 0,
         admissionReady: true,
         specializationTargetsMet: true,
+        specialistEligibleCount: 0,
+        specialistEligibleShare: 0,
+        reservedSpecialistLaneCount: 0,
+        reservedSpecialistLanes: [],
+        effectiveSpecialistLaneCount: 0,
+        effectiveSpecialistLanes: [],
+        nominalActiveLaneCount: 0,
+        effectiveActiveLaneCount: 0,
+        nominalLaneCounts: {},
+        effectiveLaneCounts: {},
+        fallbackCollapseCount: 0,
+        fallbackCollapseRate: 0,
+        collapsedReservedLanes: [],
       },
     };
   }
@@ -438,30 +530,62 @@ export function assignWorkersToPlans(
   // Compute diversity index: 1 - (maxWorkerShare)
   // Lower share of a single worker = higher diversity
   const roleCounts = new Map();
-  const laneCounts = new Map();
+  const nominalLaneCounts = new Map();
+  const effectiveLaneCounts = new Map();
+  const reservedSpecialistLanes = new Set<string>();
+  const effectiveSpecialistLanes = new Set<string>();
+  let specialistEligibleCount = 0;
+  let fallbackCollapseCount = 0;
   for (const a of assignments) {
     const role = a.selection.role;
     const lane = a.selection.lane;
+    const effectiveLane = String(a.selection.effectiveLane || getLaneForWorkerName(role, lane) || "implementation");
     roleCounts.set(role, (roleCounts.get(role) || 0) + 1);
-    laneCounts.set(lane, (laneCounts.get(lane) || 0) + 1);
+    nominalLaneCounts.set(lane, (nominalLaneCounts.get(lane) || 0) + 1);
+    effectiveLaneCounts.set(effectiveLane, (effectiveLaneCounts.get(effectiveLane) || 0) + 1);
+    if (a.selection.specialistEligible) {
+      specialistEligibleCount += 1;
+      if (a.selection.reservedSpecialistLane) reservedSpecialistLanes.add(String(a.selection.reservedSpecialistLane));
+      if (!isSpecialistWorkerName(role) || effectiveLane === "implementation") fallbackCollapseCount += 1;
+    }
+    if (effectiveLane !== "implementation") effectiveSpecialistLanes.add(effectiveLane);
   }
   const maxShare = assignments.length > 0
     ? Math.max(...roleCounts.values()) / assignments.length
     : 1;
   const diversityIndex = Math.round((1 - maxShare) * 100) / 100;
-  const activeLaneCount = laneCounts.size;
+  const activeLaneCount = effectiveLaneCounts.size;
+  const nominalActiveLaneCount = nominalLaneCounts.size;
   const specializedCount = assignments.filter(a => String(a.selection?.role || "") !== "evolution-worker").length;
   const specializedShare = assignments.length > 0
     ? Math.round((specializedCount / assignments.length) * 1000) / 1000
     : 0;
+  const specialistEligibleShare = assignments.length > 0
+    ? Math.round((specialistEligibleCount / assignments.length) * 1000) / 1000
+    : 0;
+  const fallbackCollapseRate = specialistEligibleCount > 0
+    ? Math.round((fallbackCollapseCount / specialistEligibleCount) * 1000) / 1000
+    : 0;
+  const collapsedReservedLanes = SPECIALIST_LANE_RESERVATION_ORDER.filter((lane) =>
+    reservedSpecialistLanes.has(lane) && !effectiveSpecialistLanes.has(lane)
+  );
   const configuredMinSpecializedShare = Number(config?.workerPool?.specializationTargets?.minSpecializedShare ?? DEFAULT_SPECIALIZATION_TARGETS.minSpecializedShare);
   const adaptiveMinSpecializedShare = computeAdaptiveSpecializedShareTarget(configuredMinSpecializedShare, lanePerformance);
-  const specializationTargetsMet = assignments.length === 0 ? true : specializedShare >= adaptiveMinSpecializedShare;
+  const specializationTargetsMet = assignments.length === 0
+    ? true
+    : specializedShare >= adaptiveMinSpecializedShare && collapsedReservedLanes.length === 0;
   const specializedDeficit = assignments.length === 0
     ? 0
     : Math.max(0, Math.ceil(assignments.length * adaptiveMinSpecializedShare) - specializedCount);
 
-  const pool = { assignments, diversityIndex, activeLaneCount, laneCounts: Object.fromEntries(laneCounts) };
+  const pool = {
+    assignments,
+    diversityIndex,
+    activeLaneCount,
+    nominalActiveLaneCount,
+    laneCounts: Object.fromEntries(effectiveLaneCounts),
+    nominalLaneCounts: Object.fromEntries(nominalLaneCounts),
+  };
 
   // Enforce diversity threshold: default 2 lanes minimum.
   // Returns meetsMinimum=false with a warning when the threshold is not met so
@@ -483,6 +607,19 @@ export function assignWorkersToPlans(
       specializedDeficit,
       admissionReady: specializedDeficit === 0,
       specializationTargetsMet,
+      specialistEligibleCount,
+      specialistEligibleShare,
+      reservedSpecialistLaneCount: reservedSpecialistLanes.size,
+      reservedSpecialistLanes: [...reservedSpecialistLanes],
+      effectiveSpecialistLaneCount: effectiveSpecialistLanes.size,
+      effectiveSpecialistLanes: [...effectiveSpecialistLanes],
+      nominalActiveLaneCount,
+      effectiveActiveLaneCount: activeLaneCount,
+      nominalLaneCounts: Object.fromEntries(nominalLaneCounts),
+      effectiveLaneCounts: Object.fromEntries(effectiveLaneCounts),
+      fallbackCollapseCount,
+      fallbackCollapseRate,
+      collapsedReservedLanes,
     },
   };
 }
@@ -501,10 +638,17 @@ export function enforceLaneDiversity(pool, opts: any = {}) {
   if (laneCount >= minLanes) {
     return { meetsMinimum: true, activeLaneCount: laneCount, warning: "" };
   }
+  const nominalLaneCount = Number(pool?.nominalActiveLaneCount || 0);
+  const collapsedReservedLanes = Array.isArray(pool?.specializationUtilization?.collapsedReservedLanes)
+    ? pool.specializationUtilization.collapsedReservedLanes
+    : [];
+  const collapseNote = collapsedReservedLanes.length > 0
+    ? ` Collapsed reserved specialist lanes: ${collapsedReservedLanes.join(", ")}.`
+    : "";
   return {
     meetsMinimum: false,
     activeLaneCount: laneCount,
-    warning: `Only ${laneCount} lane(s) active, minimum is ${minLanes}. Worker topology may be monocultural.`,
+    warning: `Only ${laneCount} effective lane(s) active, minimum is ${minLanes}; nominal lanes=${nominalLaneCount}.${collapseNote} Worker topology may be monocultural.`,
   };
 }
 
@@ -525,7 +669,7 @@ export function computeDispatchMetrics(pool) {
 
   for (const a of pool.assignments) {
     const role = a.selection?.role || "unknown";
-    const lane = a.selection?.lane || "unknown";
+    const lane = a.selection?.effectiveLane || a.selection?.lane || "unknown";
     roleDistribution[role] = (roleDistribution[role] || 0) + 1;
     laneDistribution[lane] = (laneDistribution[lane] || 0) + 1;
   }
@@ -819,6 +963,8 @@ export function computeSpecialistFitThreshold(
 export const SPECIALIST_REROUTE_REASON_CODE = Object.freeze({
   /** Specialist group's token total fell below the adaptive fill threshold. */
   BELOW_FILL_THRESHOLD: "below_fill_threshold",
+  /** Specialist-eligible work collapsed to the implementation lane, erasing reserved specialist coverage. */
+  FALLBACK_TO_GENERALIST_COLLAPSE: "fallback_to_generalist_collapse",
   /**
    * Lane's Laplace-smoothed performance score fell below LOW_PERFORMANCE_THRESHOLD.
    * Indicates a persistent failure pattern — optimizer applies a higher EV penalty.
@@ -966,6 +1112,7 @@ export type ReroutePenaltyLedger = Record<string, Record<string, number>>;
  */
 export const REROUTE_REASON_WEIGHT = Object.freeze({
   [SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD]: 0.05,
+  [SPECIALIST_REROUTE_REASON_CODE.FALLBACK_TO_GENERALIST_COLLAPSE]: 0.12,
   [SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED]: 0.10,
   [SPECIALIST_REROUTE_REASON_CODE.DEPENDENCY_ISOLATION]: 0.03,
   [SPECIALIST_REROUTE_REASON_CODE.INFEASIBLE_TOPOLOGY]:  0.00,
@@ -1049,6 +1196,10 @@ export function computeAdmissionThresholdFromRerouteIntensity(
       if (code === SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD) {
         // Token-packing issue: lower threshold (more lenient)
         delta -= Math.min(n * 0.05, 0.10);
+      } else if (code === SPECIALIST_REROUTE_REASON_CODE.FALLBACK_TO_GENERALIST_COLLAPSE) {
+        // Topology collapsed back to the generalist lane: raise threshold so future
+        // routing must preserve specialist coverage more aggressively.
+        delta += Math.min(n * 0.06, 0.12);
       } else if (code === SPECIALIST_REROUTE_REASON_CODE.PERFORMANCE_DEGRADED) {
         // Quality issue: raise threshold (stricter)
         delta += Math.min(n * 0.05, 0.10);
@@ -1082,21 +1233,24 @@ export function computeAdmissionThresholdFromRerouteIntensity(
 export function computeTopologyFeasibility(
   plans: object[],
   config?: object,
-): { feasible: boolean; specialistEligibleCount: number; totalCount: number } {
+): { feasible: boolean; specialistEligibleCount: number; totalCount: number; specialistEligibleLanes: string[] } {
   if (!Array.isArray(plans) || plans.length === 0) {
-    return { feasible: false, specialistEligibleCount: 0, totalCount: 0 };
+    return { feasible: false, specialistEligibleCount: 0, totalCount: 0, specialistEligibleLanes: [] };
   }
   let specialistEligibleCount = 0;
+  const specialistEligibleLanes = new Set<string>();
   for (const plan of plans) {
     const selection = selectWorkerForPlan(plan, config);
-    if (selection.role !== "evolution-worker") {
+    if (selection.specialistEligible === true) {
       specialistEligibleCount++;
+      if (selection.reservedSpecialistLane) specialistEligibleLanes.add(String(selection.reservedSpecialistLane));
     }
   }
   return {
     feasible: specialistEligibleCount > 0,
     specialistEligibleCount,
     totalCount: plans.length,
+    specialistEligibleLanes: [...specialistEligibleLanes],
   };
 }
 
@@ -1131,11 +1285,13 @@ export function evaluateSpecializationAdmissionGate(
     adaptiveMinSpecializedShare: number;
     specializedDeficit: number;
     admissionReady: boolean;
+    fallbackCollapseRate?: number;
+    collapsedReservedLanes?: string[];
   },
   consecutiveBlockCycles: number = 0,
   maxBlockCycles: number = SPECIALIZATION_ADMISSION_MAX_BLOCK_CYCLES,
   reroutePenaltyLedger?: ReroutePenaltyLedger,
-  topologyFeasibility?: { feasible: boolean; specialistEligibleCount: number; totalCount: number },
+  topologyFeasibility?: { feasible: boolean; specialistEligibleCount: number; totalCount: number; specialistEligibleLanes?: string[] },
 ): { blocked: boolean; reason: string; consecutiveBlockCycles: number; effectiveAdaptiveMin: number; bypassType?: string } {
   if (!specializationUtilization) {
     return { blocked: false, reason: "", consecutiveBlockCycles: 0, effectiveAdaptiveMin: 0 };
@@ -1160,7 +1316,8 @@ export function evaluateSpecializationAdmissionGate(
   // is adjusted up/down based on why specialists were rerouted last cycle.
   const intensityDelta = computeAdmissionThresholdFromRerouteIntensity(reroutePenaltyLedger ?? {});
   const rawAdaptiveMin = Number(specializationUtilization.adaptiveMinSpecializedShare) || 0;
-  const effectiveAdaptiveMin = Math.round(Math.max(0, Math.min(1, rawAdaptiveMin + intensityDelta)) * 1000) / 1000;
+  const collapsePenalty = Math.min(0.15, Math.max(0, Number(specializationUtilization.fallbackCollapseRate || 0)) * 0.15);
+  const effectiveAdaptiveMin = Math.round(Math.max(0, Math.min(1, rawAdaptiveMin + intensityDelta + collapsePenalty)) * 1000) / 1000;
   const effectiveTargetsMet = specializationUtilization.specializedShare >= effectiveAdaptiveMin;
 
   if (effectiveTargetsMet) {
@@ -1185,9 +1342,12 @@ export function evaluateSpecializationAdmissionGate(
   const intensityNote = intensityDelta !== 0
     ? ` intensity_delta=${intensityDelta > 0 ? "+" : ""}${intensityDelta.toFixed(3)}`
     : "";
+  const collapseNote = collapsePenalty > 0
+    ? ` collapse_penalty=+${collapsePenalty.toFixed(3)} collapse_rate=${Number(specializationUtilization.fallbackCollapseRate || 0).toFixed(3)} collapsed_lanes=${(specializationUtilization.collapsedReservedLanes || []).join(",") || "none"}`
+    : "";
   return {
     blocked: true,
-    reason: `${SPECIALIZATION_ADMISSION_BLOCK_REASON}: specialized_share=${pct}% < effective_target=${minPct}%${intensityNote} deficit=${specializationUtilization.specializedDeficit}`,
+    reason: `${SPECIALIZATION_ADMISSION_BLOCK_REASON}: specialized_share=${pct}% < effective_target=${minPct}%${intensityNote}${collapseNote} deficit=${specializationUtilization.specializedDeficit}`,
     consecutiveBlockCycles: consecutiveBlockCycles + 1,
     effectiveAdaptiveMin,
     bypassType: "true_under_utilization",

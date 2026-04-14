@@ -80,6 +80,36 @@ describe("orchestrator governance gate dry-run parity", () => {
     }
   });
 
+  it("blocks dispatch on the canonical autonomy execution gate when exploitationReady=false", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-gate-autonomy-"));
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "autonomy_band_status.json"),
+        JSON.stringify({
+          currentBand: "bootstrapping",
+          executionGate: {
+            exploitationReady: false,
+            reason: "insufficient_exploitation_window",
+          },
+        }),
+        "utf8",
+      );
+      const config = {
+        paths: { stateDir },
+        env: { targetRepo: "CanerDoqdu/Box" },
+        canary: { enabled: false },
+        systemGuardian: { enabled: false },
+        governanceFreeze: { enabled: false, manualOverrideActive: false },
+      };
+      const result = await evaluatePreDispatchGovernanceGate(config, [], "autonomy-execution-block");
+      assert.equal(result.blocked, true);
+      assert.equal(result.gateIndex, GATE_PRECEDENCE.AUTONOMY_EXECUTION);
+      assert.equal(result.dispatchBlockReason, `${BLOCK_REASON.AUTONOMY_EXECUTION_GATE_NOT_READY}:insufficient_exploitation_window`);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("override path: allows dispatch and records override audit when force-checkpoint override is active", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-gate-force-checkpoint-override-"));
     try {

@@ -8,6 +8,7 @@ import {
   loadAgentControlPlane,
   recordAgentHandoff,
   recordAgentSession,
+  summarizeAgentControlPlane,
 } from "../../src/core/agent_control_plane.js";
 
 async function makeConfig() {
@@ -61,6 +62,38 @@ describe("agent_control_plane", () => {
       assert.equal(state.handoffs[0].from, "jesus");
       assert.equal(state.handoffs[0].to, "prometheus");
       assert.equal(state.handoffs[0].artifact, "prometheus_analysis.json");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("summarizes recent agent activity for Jesus context", async () => {
+    const { config, stateDir } = await makeConfig();
+    try {
+      await recordAgentSession(config, {
+        agent: "jesus",
+        cycleId: "cycle-3",
+        phase: "start",
+        status: "running",
+      });
+      await recordAgentSession(config, {
+        agent: "prometheus",
+        cycleId: "cycle-3",
+        phase: "complete",
+        status: "done",
+      });
+      await recordAgentHandoff(config, {
+        from: "jesus",
+        to: "prometheus",
+        cycleId: "cycle-3",
+        status: "ready",
+      });
+
+      const summary = await summarizeAgentControlPlane(config, 10);
+      assert.deepEqual(summary.activeAgents, ["jesus"]);
+      assert.equal(summary.completionCount, 1);
+      assert.equal(summary.handoffCount, 1);
+      assert.equal(typeof summary.lastEventAt, "string");
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }

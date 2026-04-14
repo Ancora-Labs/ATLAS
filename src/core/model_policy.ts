@@ -1877,7 +1877,12 @@ export function rankModelsByTaskKindExpectedValue(
     ? {
         sampleCount: Number((taskTelemetry as any).sampleCount ?? 0),
         successRate: Number((taskTelemetry as any)?.default?.successProbability ?? 0),
-        recentROI: Number((taskTelemetry as any)?.default?.outcomeScore ?? (taskTelemetry as any)?.default?.capacityImpact ?? 0),
+        recentROI: Number(
+          (taskTelemetry as any)?.default?.outcomeScore
+          ?? (taskTelemetry as any)?.default?.capacityImpact
+          ?? cycleAnalytics?.routingROISummary?.overallLinkedROI
+          ?? 0
+        ),
         completionRate: Number((taskTelemetry as any)?.default?.completionRate ?? 0),
         attemptRate: Number((taskTelemetry as any)?.default?.attemptRate ?? 0),
         abstainRate: Number((taskTelemetry as any)?.default?.abstainRate ?? 0),

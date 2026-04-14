@@ -1673,9 +1673,12 @@ export async function appendGovernanceBlockEvent(
 ): Promise<void> {
   const stateDir = config?.paths?.stateDir || "state";
   const filePath = path.join(stateDir, "governance_blocks.jsonl");
+  const blockReason = String(record.blockReason || "");
+  const blockReasonCode = blockReason.split(":")[0]?.trim().toLowerCase() || "unknown";
   const entry = {
     cycleId:     String(record.cycleId || ""),
-    blockReason: String(record.blockReason || ""),
+    blockReason,
+    blockReasonCode,
     blockedAt:   String(record.blockedAt || new Date().toISOString()),
     gateSource:  String(record.gateSource || "unknown"),
     schemaVersion: 1,
@@ -1685,6 +1688,55 @@ export async function appendGovernanceBlockEvent(
   } catch (err) {
     // Non-fatal: telemetry append failure must never block orchestration
     console.error(`[state_tracker] appendGovernanceBlockEvent failed: ${String((err as any)?.message || err)}`);
+  }
+}
+
+export async function loadGovernanceBlockSummary(
+  config,
+  limit = 25,
+): Promise<{
+  recentBlockCount: number;
+  byReasonCode: Record<string, number>;
+  byGateSource: Record<string, number>;
+  latestBlockReason: string | null;
+  latestBlockedAt: string | null;
+}> {
+  const stateDir = config?.paths?.stateDir || "state";
+  const filePath = path.join(stateDir, "governance_blocks.jsonl");
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const lines = raw.split("\n").filter((line) => line.trim().length > 0);
+    const recent = lines.slice(-Math.max(1, Math.floor(Number(limit) || 25))).flatMap((line) => {
+      try {
+        return [JSON.parse(line) as Record<string, unknown>];
+      } catch {
+        return [];
+      }
+    });
+    const byReasonCode: Record<string, number> = {};
+    const byGateSource: Record<string, number> = {};
+    for (const entry of recent) {
+      const reasonCode = String(entry.blockReasonCode || String(entry.blockReason || "").split(":")[0] || "unknown").trim().toLowerCase();
+      const gateSource = String(entry.gateSource || "unknown").trim().toLowerCase();
+      byReasonCode[reasonCode] = (byReasonCode[reasonCode] || 0) + 1;
+      byGateSource[gateSource] = (byGateSource[gateSource] || 0) + 1;
+    }
+    const latest = recent.length > 0 ? recent[recent.length - 1] : null;
+    return {
+      recentBlockCount: recent.length,
+      byReasonCode,
+      byGateSource,
+      latestBlockReason: latest ? String(latest.blockReason || "") || null : null,
+      latestBlockedAt: latest ? String(latest.blockedAt || "") || null : null,
+    };
+  } catch {
+    return {
+      recentBlockCount: 0,
+      byReasonCode: {},
+      byGateSource: {},
+      latestBlockReason: null,
+      latestBlockedAt: null,
+    };
   }
 }
 

@@ -1,4 +1,4 @@
-import { getRoleRegistry, getSpecialistLaneNames } from "./role_registry.js";
+import { getRoleRegistry, getLaneForWorkerName, SPECIALIST_LANE_RESERVATION_ORDER } from "./role_registry.js";
 import { enforceModelPolicy } from "./model_policy.js";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -1589,7 +1589,7 @@ export function buildTokenFirstBatches(
   }> = [];
   let rebalancedCount = 0;
   const laneUtilizationTargets = Object.fromEntries(
-    getSpecialistLaneNames().map((lane) => {
+    SPECIALIST_LANE_RESERVATION_ORDER.map((lane) => {
       const signal = laneTelemetrySignals[lane] ?? { completionRate: 0, roi: 0 };
       return [lane, {
         fitScoreThreshold: computeSpecialistFitThreshold(specialistFitThreshold, lane, laneTelemetrySignals),
@@ -1597,6 +1597,7 @@ export function buildTokenFirstBatches(
         achievedSpecializedCount: 0,
         completionRate: signal.completionRate,
         roi: signal.roi,
+        reservedLane: false,
       }];
     })
   ) as Record<string, {
@@ -1605,6 +1606,7 @@ export function buildTokenFirstBatches(
     achievedSpecializedCount: number;
     completionRate: number;
     roi: number;
+    reservedLane: boolean;
   }>;
 
   // Dispatch-time specialist utilization target:
@@ -1643,14 +1645,30 @@ export function buildTokenFirstBatches(
   // promote top-fit specialist candidates before token-first role packing.
   if (specialistAssignedCount < requiredSpecializedCount && specialistRebalanceCandidates.length > 0) {
     const needed = requiredSpecializedCount - specialistAssignedCount;
-    const promoted = specialistRebalanceCandidates
-      .sort((a, b) => b.selection.fitScore - a.selection.fitScore)
-      .slice(0, needed);
+    const reservedPromotions = [];
+    for (const lane of SPECIALIST_LANE_RESERVATION_ORDER) {
+      if ((laneUtilizationTargets[lane]?.fitEligibleCount || 0) === 0) continue;
+      if ((laneUtilizationTargets[lane]?.achievedSpecializedCount || 0) > 0) continue;
+      const candidate = specialistRebalanceCandidates
+        .filter((entry) => entry.selection.lane === lane)
+        .sort((a, b) => b.selection.fitScore - a.selection.fitScore)[0];
+      if (!candidate || reservedPromotions.includes(candidate)) continue;
+      reservedPromotions.push(candidate);
+      laneUtilizationTargets[lane].reservedLane = true;
+      if (reservedPromotions.length >= needed) break;
+    }
+    const promoted = [
+      ...reservedPromotions,
+      ...specialistRebalanceCandidates
+        .filter((candidate) => !reservedPromotions.includes(candidate))
+        .sort((a, b) => b.selection.fitScore - a.selection.fitScore),
+    ].slice(0, needed);
     for (const candidate of promoted) {
       candidate.plan._originalRole = candidate.plan.role;
       candidate.plan.role = candidate.selection.role;
       candidate.plan._specialistFitLocked = true;
       candidate.plan._specialistRebalanced = true;
+      candidate.plan._reservedSpecialistLane = candidate.selection.lane;
       candidate.plan._fitLane = candidate.selection.lane;
       candidate.plan._fitScore = candidate.selection.fitScore;
       candidate.plan._fitScoreThreshold = candidate.laneFitThreshold;
@@ -1722,6 +1740,9 @@ export function buildTokenFirstBatches(
       const fillRatio = usableTokens > 0
         ? Math.round((groupTokens / usableTokens) * 1000) / 1000
         : 0;
+      const collapseTriggered =
+        (laneUtilizationTargets[groupLane]?.fitEligibleCount || 0) > 0
+        && (laneUtilizationTargets[groupLane]?.achievedSpecializedCount || 0) === 0;
       const rerouteReason: SpecialistRerouteReason = {
         role: group.role,
         lane: groupLane,
@@ -1729,7 +1750,9 @@ export function buildTokenFirstBatches(
         thresholdTokens: minSpecialistTokens,
         fillRatio,
         adaptiveFillThreshold,
-        reasonCode: SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD,
+        reasonCode: collapseTriggered
+          ? SPECIALIST_REROUTE_REASON_CODE.FALLBACK_TO_GENERALIST_COLLAPSE
+          : SPECIALIST_REROUTE_REASON_CODE.BELOW_FILL_THRESHOLD,
         laneScore,
       };
       reroutedRoles.push(`${group.role}(${groupTokens}tok,adaptive=${adaptiveFillThreshold},lane=${groupLane})`);
@@ -1829,6 +1852,20 @@ export function buildTokenFirstBatches(
     }
   }
 
+  const reservedSpecialistLanes = SPECIALIST_LANE_RESERVATION_ORDER.filter(
+    (lane) => (laneUtilizationTargets[lane]?.fitEligibleCount || 0) > 0
+  );
+  const effectiveSpecialistLanes = SPECIALIST_LANE_RESERVATION_ORDER.filter((lane) =>
+    [...byRole.values()].some((group) => group.role !== "evolution-worker" && getLaneForWorkerName(group.role, "implementation") === lane)
+  );
+  const collapsedReservedLanes = reservedSpecialistLanes.filter((lane) => !effectiveSpecialistLanes.includes(lane));
+  const fallbackCollapseCount = specialistRerouteReasons.filter((reason) =>
+    reason.reasonCode === SPECIALIST_REROUTE_REASON_CODE.FALLBACK_TO_GENERALIST_COLLAPSE
+  ).length;
+  const fallbackCollapseRate = reservedSpecialistLanes.length > 0
+    ? Math.round((fallbackCollapseCount / reservedSpecialistLanes.length) * 1000) / 1000
+    : 0;
+
   const mapped = flattened.map((batch, index) => ({
     ...batch,
     bundleIndex: index + 1,
@@ -1848,6 +1885,13 @@ export function buildTokenFirstBatches(
           targetMet: target.achievedSpecializedCount >= target.fitEligibleCount,
         }])
       ),
+      reservedSpecialistLaneCount: reservedSpecialistLanes.length,
+      reservedSpecialistLanes,
+      effectiveSpecialistLaneCount: effectiveSpecialistLanes.length,
+      effectiveSpecialistLanes,
+      fallbackCollapseCount,
+      fallbackCollapseRate,
+      collapsedReservedLanes,
       laneTelemetrySignals,
     },
     ...(reroutedRoles.length > 0 ? { specialistReroutes: reroutedRoles } : {}),

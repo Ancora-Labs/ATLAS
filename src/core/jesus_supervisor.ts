@@ -17,7 +17,7 @@
 import path from "node:path";
 import { appendFileSync } from "node:fs";
 import { readJson, readJsonSafe, writeJson, spawnAsync, buildIncrementalSignatureIndex, READ_JSON_REASON } from "./fs_utils.js";
-import { appendProgress, appendAlert, ALERT_SEVERITY, loadCapabilityExecutionSummary } from "./state_tracker.js";
+import { appendProgress, appendAlert, ALERT_SEVERITY, loadCapabilityExecutionSummary, loadGovernanceBlockSummary } from "./state_tracker.js";
 import { getRoleRegistry } from "./role_registry.js";
 import { buildAgentArgs, parseAgentOutput, logAgentThinking } from "./agent_loader.js";
 import { chatLog, emitEvent, warn } from "./logger.js";
@@ -41,8 +41,10 @@ import {
   selectWorkerCycleRecord,
   extractSessionsFromCycleRecord,
   filterStaleWorkerSessions,
+  readCycleAnalytics,
 } from "./cycle_analytics.js";
 import { buildJesusStrategyBriefArtifact } from "./plan_lifecycle_contract.js";
+import { summarizeAgentControlPlane } from "./agent_control_plane.js";
 
 // ── CI system-learning debt detection ────────────────────────────────────────
 
@@ -1187,6 +1189,30 @@ export async function runJesusCycle(config) {
     }
   } catch { /* non-critical */ }
 
+  let realizedExecutionBlock = "";
+  try {
+    const [cycleAnalyticsState, governanceBlockSummary, agentControlSummary] = await Promise.all([
+      readCycleAnalytics(config),
+      loadGovernanceBlockSummary(config, 20),
+      summarizeAgentControlPlane(config, 20),
+    ]);
+    const lastCycle = cycleAnalyticsState?.lastCycle;
+    const workerTopology = lastCycle?.workerTopology;
+    const routingSummary = lastCycle?.routingROISummary;
+    const modelRoutingTelemetry = lastCycle?.modelRoutingTelemetry?.byTaskKind || {};
+    const topTaskKindEntry = Object.entries(modelRoutingTelemetry)
+      .sort((a: any, b: any) => Number((b?.[1] as any)?.default?.outcomeScore || 0) - Number((a?.[1] as any)?.default?.outcomeScore || 0))[0];
+    realizedExecutionBlock = `\n**Realized Execution Signals (last recorded cycle):**
+  Outcome status: ${String(lastCycle?.outcomes?.status || "unknown")}
+  Dispatch block: ${String(lastCycle?.outcomes?.dispatchBlockReason || governanceBlockSummary.latestBlockReason || "none")}
+  Worker topology: effectiveLanes=${Number(workerTopology?.effectiveLaneCount || 0)} nominalLanes=${Number(workerTopology?.nominalLaneCount || 0)} reservedSpecialistLanes=${Number(workerTopology?.reservedSpecialistLaneCount || 0)} collapseRate=${Number(workerTopology?.fallbackCollapseRate || 0)}
+  Collapsed specialist lanes: ${Array.isArray(workerTopology?.collapsedReservedLanes) && workerTopology.collapsedReservedLanes.length > 0 ? workerTopology.collapsedReservedLanes.join(", ") : "none"}
+  Linked routing ROI: ${routingSummary?.overallLinkedROI ?? "n/a"} across ${routingSummary?.linkedRequests ?? 0} linked requests
+  Strongest realized taskKind: ${topTaskKindEntry ? `${topTaskKindEntry[0]} score=${Number((topTaskKindEntry[1] as any)?.default?.outcomeScore || 0).toFixed(3)}` : "n/a"}
+  Recent governance blocks: ${governanceBlockSummary.recentBlockCount} (${Object.entries(governanceBlockSummary.byReasonCode).map(([code, count]) => `${code}=${count}`).join(", ") || "none"})
+  Agent control plane: active=${agentControlSummary.activeAgents.join(", ") || "none"} completed=${agentControlSummary.completionCount} failed=${agentControlSummary.failureCount} handoffs=${agentControlSummary.handoffCount}`;
+  } catch { /* advisory only */ }
+
   const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
 
 ## CURRENT SYSTEM STATE
@@ -1236,6 +1262,7 @@ ${prometheusAnalysis?.projectClassification ? `  Project type: ${prometheusAnaly
   Optimizer: status=${optimizerStatus} budget=${budgetUsed}/${budgetLimit}
   Prometheus age: ${prometheusAgeHours < Infinity ? `${prometheusAgeHours.toFixed(1)}h` : "never"}
 ${capacityTrendBlock}
+${realizedExecutionBlock}
 
 **Hierarchical System Health Audit (detected by YOU — issues workers/Athena may have missed):**
 ${formatHealthAuditFindings(healthFindings)}

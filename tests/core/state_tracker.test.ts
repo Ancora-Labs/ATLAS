@@ -19,6 +19,7 @@ import {
   loadInterventionOptimizerLog,
   appendInterventionOptimizerEntry,
   appendGovernanceBlockEvent,
+  loadGovernanceBlockSummary,
   STATE_RETENTION_RULES,
 } from "../../src/core/state_tracker.js";
 import {
@@ -439,6 +440,7 @@ describe("appendGovernanceBlockEvent", () => {
     const record = JSON.parse(line);
     assert.equal(record.cycleId, "cycle-12345");
     assert.equal(record.blockReason, "GOVERNANCE_FREEZE_ACTIVE:monthly-freeze");
+    assert.equal(record.blockReasonCode, "governance_freeze_active");
     assert.equal(record.gateSource, "pre_dispatch_gate");
     assert.equal(record.schemaVersion, 1);
   });
@@ -468,6 +470,26 @@ describe("appendGovernanceBlockEvent", () => {
         gateSource: "",
       })
     );
+  });
+
+  it("builds a recent governance block summary with normalized reason codes", async () => {
+    await appendGovernanceBlockEvent(config, {
+      cycleId: "c1",
+      blockReason: "autonomy_execution_gate_not_ready:insufficient_exploitation_window",
+      blockedAt: "2025-01-01T10:00:00Z",
+      gateSource: "pre_dispatch_gate",
+    });
+    await appendGovernanceBlockEvent(config, {
+      cycleId: "c2",
+      blockReason: "lane_diversity_gate_blocked:Only 1 effective lane",
+      blockedAt: "2025-01-01T11:00:00Z",
+      gateSource: "lane_diversity_gate",
+    });
+    const summary = await loadGovernanceBlockSummary(config, 10);
+    assert.equal(summary.recentBlockCount, 2);
+    assert.equal(summary.byReasonCode.autonomy_execution_gate_not_ready, 1);
+    assert.equal(summary.byGateSource.pre_dispatch_gate, 1);
+    assert.equal(summary.latestBlockReason, "lane_diversity_gate_blocked:Only 1 effective lane");
   });
 });
 

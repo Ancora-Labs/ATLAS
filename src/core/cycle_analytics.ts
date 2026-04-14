@@ -54,6 +54,7 @@ import { hasCleanTreeStatusEvidence, hasVerificationReportEvidence } from "./ver
 import { hasFiniteAthenaOverallScore } from "./athena_reviewer.js";
 import { hasPrometheusRuntimeContractSignals, isStrategicFieldToolTraceContaminated, STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH } from "./prometheus.js";
 import { getLaneForWorkerName, isSpecialistLane } from "./role_registry.js";
+import { AUTONOMY_EXECUTION_GATE_REASON_CODE } from "./governance_contract.js";
 import { isAnalyticsCompletedWorkerStatus } from "./worker_runner.js";
 import {
   loadCapabilityExecutionSummary,
@@ -153,6 +154,10 @@ function isAbstainedOutcomeStatus(value: unknown): boolean {
 
 function roundMetric(value: number): number {
   return Math.round(value * 1000) / 1000;
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
 }
 
 function averageMetrics(values: Array<number | null | undefined>): number {
@@ -291,6 +296,7 @@ export const DISPATCH_BLOCK_REASON_CODE = Object.freeze({
   GUARDRAIL_PAUSE_WORKERS_ACTIVE: "guardrail_pause_workers_active",
   GUARDRAIL_FORCE_CHECKPOINT_ACTIVE: "force_checkpoint_validation_active",
   GOVERNANCE_FREEZE_ACTIVE: "governance_freeze_active",
+  AUTONOMY_EXECUTION_GATE_NOT_READY: AUTONOMY_EXECUTION_GATE_REASON_CODE,
   LINEAGE_CYCLE_DETECTED: "lineage_cycle_detected",
   GOVERNANCE_CANARY_BREACH: "governance_canary_breach",
   CLOUD_AGENT_GOVERNANCE_POLICY_VIOLATION: "cloud_agent_governance_policy_violation",
@@ -1599,6 +1605,7 @@ export function computeCycleAnalytics(config, {
   executionAdjustedPremiumEfficiency = null,
   capabilityExecutionSummary = null,
   benchmarkGroundTruth = null,
+  workerTopology = null,
   // ── Violation feedback inputs ─────────────────────────────────────────────
   // Passed by the orchestrator after the dispatch loop so that per-cycle
   // retry/violation/reroute pressure is persisted alongside other KPIs.
@@ -1918,6 +1925,7 @@ export function computeCycleAnalytics(config, {
       nullEventsTerminalBlockReason = (
         code.includes("governance")
         || code.includes("freeze")
+        || code === DISPATCH_BLOCK_REASON_CODE.AUTONOMY_EXECUTION_GATE_NOT_READY
         || code === DISPATCH_BLOCK_REASON_CODE.GUARDRAIL_PAUSE_WORKERS_ACTIVE
         || code === DISPATCH_BLOCK_REASON_CODE.GUARDRAIL_FORCE_CHECKPOINT_ACTIVE
       )
@@ -1995,13 +2003,14 @@ export function computeCycleAnalytics(config, {
     cycleTruthContract,
     structuralAnalytics,
     laneTelemetry,
+    workerTopology: normalizeWorkerTopologyTelemetry(workerTopology),
     optimizerUsage: optimizerUsage ?? null,
     interventionImpactCounters: buildInterventionImpactCounters(optimizerUsage),
     parserBaselineRecovery: parserBaselineRecovery ?? null,
     stageTransitions: Array.isArray(stageTransitions) ? stageTransitions : [],
     dropReasons:      Array.isArray(dropReasons) ? dropReasons : [],
     packetOutcomeCorrelation,
-    modelRoutingTelemetry: buildModelRoutingTelemetry(premiumUsageLog ?? [], lineageLog ?? []),
+    modelRoutingTelemetry: buildModelRoutingTelemetry(premiumUsageLog ?? [], lineageLog ?? [], routeRoiLedger ?? []),
     capabilityExecutionSummary: normalizedCapabilityExecutionSummary,
     interventionLineageTelemetry: buildInterventionLineageTelemetry({
       premiumUsageLog: premiumUsageLog ?? [],
@@ -2013,7 +2022,7 @@ export function computeCycleAnalytics(config, {
     }),
     lineageSummary: buildLineageSummary(lineageLog ?? []),
     memoryHitTelemetry: buildMemoryHitTelemetry(memoryHitLog ?? []),
-    routingROISummary: buildRoutingROISummary(premiumUsageLog ?? [], lineageLog ?? []),
+    routingROISummary: buildRoutingROISummary(premiumUsageLog ?? [], lineageLog ?? [], routeRoiLedger ?? []),
     benchmarkAnalytics: benchmarkGroundTruth != null
       ? computeBenchmarkIntegrityScore(benchmarkGroundTruth)
       : null,
@@ -2031,6 +2040,27 @@ export function computeCycleAnalytics(config, {
  * Consumers: rankModelsByTaskKindExpectedValue in model_policy.ts.
  */
 export { MIN_TELEMETRY_SAMPLE_THRESHOLD } from "./telemetry_thresholds.js";
+
+function normalizeWorkerTopologyTelemetry(workerTopology: unknown) {
+  if (!workerTopology || typeof workerTopology !== "object") return null;
+  const raw = workerTopology as Record<string, unknown>;
+  const asStringArray = (value: unknown) =>
+    Array.isArray(value) ? value.map((entry) => String(entry || "")).filter(Boolean) : [];
+  const asFinite = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : 0;
+  return {
+    effectiveLaneCount: asFinite(raw.effectiveLaneCount ?? raw.effectiveActiveLaneCount),
+    nominalLaneCount: asFinite(raw.nominalLaneCount ?? raw.nominalActiveLaneCount),
+    specializedShare: asFinite(raw.specializedShare),
+    specialistEligibleShare: asFinite(raw.specialistEligibleShare),
+    reservedSpecialistLaneCount: asFinite(raw.reservedSpecialistLaneCount),
+    reservedSpecialistLanes: asStringArray(raw.reservedSpecialistLanes),
+    effectiveSpecialistLaneCount: asFinite(raw.effectiveSpecialistLaneCount),
+    effectiveSpecialistLanes: asStringArray(raw.effectiveSpecialistLanes),
+    fallbackCollapseCount: asFinite(raw.fallbackCollapseCount),
+    fallbackCollapseRate: asFinite(raw.fallbackCollapseRate),
+    collapsedReservedLanes: asStringArray(raw.collapsedReservedLanes),
+  };
+}
 
 /**
  * Aggregate per-task-kind model outcome telemetry from the premium usage log.
@@ -2053,9 +2083,41 @@ export { MIN_TELEMETRY_SAMPLE_THRESHOLD } from "./telemetry_thresholds.js";
  *     }
  *   }
  */
+type RoutingTelemetryAccumulator = {
+  successful: number;
+  total: number;
+  attempted: number;
+  abstained: number;
+  linked: number;
+  hardChainTotal: number;
+  hardChainSuccess: number;
+  laneCounts: Record<string, { total: number; successful: number; attempted: number; abstained: number }>;
+  realizedRoiTotal: number;
+  realizedRoiCount: number;
+};
+
+function buildRoutingTelemetryEntryKey(input: Record<string, unknown>): string {
+  const taskId = String(input.taskId || "").trim();
+  const model = normalizeModelLabel(String(input.model || ""));
+  const taskKind = String(input.taskKind || "").trim().toLowerCase();
+  if (!taskId || !model || !taskKind) return "";
+  return `${taskId}::${model}::${taskKind}`;
+}
+
+function isRealizedRouteRoiEntry(entry: unknown): entry is Record<string, unknown> {
+  if (!entry || typeof entry !== "object") return false;
+  const row = entry as Record<string, unknown>;
+  return typeof row.model === "string"
+    && typeof row.taskKind === "string"
+    && typeof row.outcome === "string"
+    && typeof row.realizedAt === "string"
+    && row.realizedAt.length > 0;
+}
+
 export function buildModelRoutingTelemetry(
   premiumUsageLog: unknown[],
   lineageLog: unknown[] = [],
+  routeRoiLedger: unknown[] = [],
 ): {
   byTaskKind: Record<string, {
     sampleCount: number;
@@ -2090,7 +2152,9 @@ export function buildModelRoutingTelemetry(
   }>;
   sampleCount: number;
 } {
-  if (!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) return { byTaskKind: {}, sampleCount: 0 };
+  if ((!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) && (!Array.isArray(routeRoiLedger) || routeRoiLedger.length === 0)) {
+    return { byTaskKind: {}, sampleCount: 0 };
+  }
 
   type EcoPoint = {
     successProbability: number;
@@ -2106,16 +2170,7 @@ export function buildModelRoutingTelemetry(
     outcomeScore: number;
   };
   type LaneAccumulator = { total: number; successful: number; attempted: number; abstained: number };
-  type Accumulator = {
-    successful: number;
-    total: number;
-    attempted: number;
-    abstained: number;
-    linked: number;
-    hardChainTotal: number;
-    hardChainSuccess: number;
-    laneCounts: Record<string, LaneAccumulator>;
-  };
+  type Accumulator = RoutingTelemetryAccumulator;
   const createAccumulator = (): Accumulator => ({
     successful: 0,
     total: 0,
@@ -2125,12 +2180,15 @@ export function buildModelRoutingTelemetry(
     hardChainTotal: 0,
     hardChainSuccess: 0,
     laneCounts: {},
+    realizedRoiTotal: 0,
+    realizedRoiCount: 0,
   });
   const updateAccumulator = (
     acc: Accumulator,
     lane: string,
     outcome: string,
     linked: boolean,
+    realizedRoi?: number | null,
   ) => {
     const successful = isSuccessfulOutcomeStatus(outcome);
     const attempted = isAttemptedOutcomeStatus(outcome);
@@ -2145,6 +2203,10 @@ export function buildModelRoutingTelemetry(
     if (successful) acc.laneCounts[lane].successful += 1;
     if (attempted) acc.laneCounts[lane].attempted += 1;
     if (abstained) acc.laneCounts[lane].abstained += 1;
+    if (typeof realizedRoi === "number" && Number.isFinite(realizedRoi)) {
+      acc.realizedRoiTotal += realizedRoi;
+      acc.realizedRoiCount += 1;
+    }
   };
   const computeLaneReliability = (laneCounts: Record<string, LaneAccumulator>): number => {
     const lanes = Object.values(laneCounts);
@@ -2180,7 +2242,51 @@ export function buildModelRoutingTelemetry(
     successful: number;
     abstained: number;
   }>();
+  const realizedRouteKeys = new Set<string>();
   let usableEntries = 0;
+
+  for (const entry of Array.isArray(routeRoiLedger) ? routeRoiLedger : []) {
+    if (!isRealizedRouteRoiEntry(entry)) continue;
+    const row = entry as Record<string, unknown>;
+    const taskKind = String(row.taskKind || "").trim().toLowerCase();
+    const normalizedModel = normalizeModelLabel(String(row.model || ""));
+    const outcome = normalizeOutcomeStatus(row.outcome);
+    if (!taskKind || !normalizedModel) continue;
+    const entryKey = buildRoutingTelemetryEntryKey(row);
+    if (entryKey) realizedRouteKeys.add(entryKey);
+    const { joinKey } = resolveLineageContractFromRecord(entry, {
+      lineageId: row.lineageId as string | null,
+      taskId: row.taskId as string | null,
+      taskKind,
+      model: row.model as string | null,
+      role: row.role as string | null,
+    });
+    const linked = !!(joinKey && (!enforceLineageReference || linkageReference.has(joinKey)));
+    const lane = getLaneForWorkerName(row.role, "implementation");
+    const realizedRoi = Number(row.roi);
+
+    byTaskKindModel[taskKind] ??= {};
+    taskAccumulators[taskKind] ??= createAccumulator();
+    byTaskKindModel[taskKind][normalizedModel] ??= createAccumulator();
+    updateAccumulator(taskAccumulators[taskKind], lane, outcome, linked, realizedRoi);
+    updateAccumulator(byTaskKindModel[taskKind][normalizedModel], lane, outcome, linked, realizedRoi);
+    if (joinKey) {
+      const chainKey = `${taskKind}::${joinKey}`;
+      const currentChain = hardChainGroups.get(chainKey) ?? {
+        taskKind,
+        models: new Set<string>(),
+        total: 0,
+        successful: 0,
+        abstained: 0,
+      };
+      currentChain.models.add(normalizedModel);
+      currentChain.total += 1;
+      if (isSuccessfulOutcomeStatus(outcome)) currentChain.successful += 1;
+      if (isAbstainedOutcomeStatus(outcome)) currentChain.abstained += 1;
+      hardChainGroups.set(chainKey, currentChain);
+    }
+    usableEntries++;
+  }
 
   for (const entry of premiumUsageLog) {
     if (
@@ -2194,6 +2300,8 @@ export function buildModelRoutingTelemetry(
     const outcome = normalizeOutcomeStatus((entry as Record<string, unknown>).outcome);
     const normalizedModel = normalizeModelLabel(model);
     if (!taskKind || !normalizedModel) continue;
+    const entryKey = buildRoutingTelemetryEntryKey(entry as Record<string, unknown>);
+    if (entryKey && realizedRouteKeys.has(entryKey)) continue;
     const { joinKey } = resolveLineageContractFromRecord(entry, {
       lineageId: (entry as Record<string, unknown>).lineageId as string | null,
       taskId: (entry as Record<string, unknown>).taskId as string | null,
@@ -2207,8 +2315,8 @@ export function buildModelRoutingTelemetry(
     byTaskKindModel[taskKind] ??= {};
     taskAccumulators[taskKind] ??= createAccumulator();
     byTaskKindModel[taskKind][normalizedModel] ??= createAccumulator();
-    updateAccumulator(taskAccumulators[taskKind], lane, outcome, linked);
-    updateAccumulator(byTaskKindModel[taskKind][normalizedModel], lane, outcome, linked);
+    updateAccumulator(taskAccumulators[taskKind], lane, outcome, linked, null);
+    updateAccumulator(byTaskKindModel[taskKind][normalizedModel], lane, outcome, linked, null);
     if (joinKey) {
       const chainKey = `${taskKind}::${joinKey}`;
       const currentChain = hardChainGroups.get(chainKey) ?? {
@@ -2259,9 +2367,16 @@ export function buildModelRoutingTelemetry(
       hardChainSuccessRate,
       includeHardChain: acc.hardChainTotal > 0,
     });
+    const realizedRoiAverage = acc.realizedRoiCount > 0 ? acc.realizedRoiTotal / acc.realizedRoiCount : null;
+    const normalizedRealizedRoi = realizedRoiAverage !== null
+      ? clamp01(Math.max(0, realizedRoiAverage) / 100)
+      : null;
+    const realizedOutcomeScore = normalizedRealizedRoi !== null
+      ? roundMetric((outcomeScore + normalizedRealizedRoi) / 2)
+      : outcomeScore;
     return {
       successProbability: roundMetric(precisionOnAttempted),
-      capacityImpact: outcomeScore,
+      capacityImpact: realizedOutcomeScore,
       requestCost: 1.0,
       completionRate: roundMetric(completionRate),
       attemptRate: roundMetric(attemptRate),
@@ -2270,7 +2385,7 @@ export function buildModelRoutingTelemetry(
       hardChainSuccessRate: roundMetric(hardChainSuccessRate),
       hardChainSampleCount: acc.hardChainTotal,
       laneReliability,
-      outcomeScore,
+      outcomeScore: realizedOutcomeScore,
     };
   };
 
@@ -3476,6 +3591,7 @@ export function buildInterventionLineageTelemetry({
 export function buildRoutingROISummary(
   premiumUsageLog: unknown[],
   lineageLog: unknown[] = [],
+  routeRoiLedger: unknown[] = [],
 ): {
   totalRequests: number;
   linkedRequests: number;
@@ -3483,7 +3599,7 @@ export function buildRoutingROISummary(
   roiByLineageId: Record<string, { success: number; total: number; roi: number }>;
   overallLinkedROI: number | null;
 } {
-  if (!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) {
+  if ((!Array.isArray(premiumUsageLog) || premiumUsageLog.length === 0) && (!Array.isArray(routeRoiLedger) || routeRoiLedger.length === 0)) {
     return { totalRequests: 0, linkedRequests: 0, linkedRatio: null, roiByLineageId: {}, overallLinkedROI: null };
   }
   const linkageReference = new Set<string>();
@@ -3498,13 +3614,42 @@ export function buildRoutingROISummary(
   const enforceLineageReference = linkageReference.size > 0;
 
   const byLineageId: Record<string, { success: number; total: number }> = {};
+  const realizedRouteKeys = new Set<string>();
   let linkedRequests = 0;
   let linkedDone = 0;
   let linkedTotal = 0;
 
+  for (const entry of Array.isArray(routeRoiLedger) ? routeRoiLedger : []) {
+    if (!isRealizedRouteRoiEntry(entry)) continue;
+    const row = entry as Record<string, unknown>;
+    const entryKey = buildRoutingTelemetryEntryKey(row);
+    if (entryKey) realizedRouteKeys.add(entryKey);
+    const { contract, joinKey } = resolveLineageContractFromRecord(entry, {
+      lineageId: row.lineageId as string | null,
+      taskId: row.taskId as string | null,
+      taskKind: row.taskKind as string | null,
+      model: row.model as string | null,
+      role: row.role as string | null,
+    });
+    const outcome = typeof row.outcome === "string" ? row.outcome : "unknown";
+    const isDone = outcome === "done";
+    const explicitLineageId = String(contract.lineageId || "").trim();
+    const linked = !!(explicitLineageId && joinKey && (!enforceLineageReference || linkageReference.has(joinKey)));
+    if (!linked || !joinKey) continue;
+    const lineageKey = explicitLineageId || joinKey;
+    byLineageId[lineageKey] ??= { success: 0, total: 0 };
+    byLineageId[lineageKey].total++;
+    if (isDone) byLineageId[lineageKey].success++;
+    linkedRequests++;
+    linkedTotal++;
+    if (isDone) linkedDone++;
+  }
+
   for (const entry of premiumUsageLog) {
     if (typeof entry !== "object" || entry === null) continue;
     const row = entry as Record<string, unknown>;
+    const entryKey = buildRoutingTelemetryEntryKey(row);
+    if (entryKey && realizedRouteKeys.has(entryKey)) continue;
     const { contract, joinKey } = resolveLineageContractFromRecord(entry, {
       lineageId: row.lineageId as string | null,
       taskId: row.taskId as string | null,
@@ -3514,17 +3659,11 @@ export function buildRoutingROISummary(
     });
     const outcome = typeof row.outcome === "string" ? row.outcome : "unknown";
     const isDone = outcome === "done";
-    const linked = Boolean(
-      contract.lineageId
-      && joinKey
-      && (
-        (enforceLineageReference && linkageReference.has(joinKey))
-        || !enforceLineageReference
-      )
-    );
+    const explicitLineageId = String(contract.lineageId || "").trim();
+    const linked = !!(explicitLineageId && joinKey && (!enforceLineageReference || linkageReference.has(joinKey)));
 
     if (linked && joinKey) {
-      const lineageKey = contract.lineageId || joinKey;
+      const lineageKey = explicitLineageId || joinKey;
       byLineageId[lineageKey] ??= { success: 0, total: 0 };
       byLineageId[lineageKey].total++;
       if (isDone) byLineageId[lineageKey].success++;
@@ -3543,7 +3682,12 @@ export function buildRoutingROISummary(
     };
   }
 
-  const totalRequests = premiumUsageLog.filter(e => typeof e === "object" && e !== null).length;
+  const premiumFallbackCount = premiumUsageLog.filter((entry) => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const entryKey = buildRoutingTelemetryEntryKey(entry as Record<string, unknown>);
+    return !(entryKey && realizedRouteKeys.has(entryKey));
+  }).length;
+  const totalRequests = premiumFallbackCount + (Array.isArray(routeRoiLedger) ? routeRoiLedger.filter(isRealizedRouteRoiEntry).length : 0);
   const linkedRatio = totalRequests > 0 ? Math.round((linkedRequests / totalRequests) * 1000) / 1000 : null;
   const overallLinkedROI = linkedTotal > 0 ? Math.round((linkedDone / linkedTotal) * 1000) / 1000 : null;
 
