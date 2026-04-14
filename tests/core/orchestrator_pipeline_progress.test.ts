@@ -1992,6 +1992,7 @@ describe("pipeline progress — terminology drift prevention (stage IDs)", () =>
       GUARDRAIL_PAUSE_WORKERS_ACTIVE: "guardrail_pause_workers_active",
       GUARDRAIL_FORCE_CHECKPOINT_ACTIVE: "force_checkpoint_validation_active",
       GOVERNANCE_FREEZE_ACTIVE:       "governance_freeze_active",
+      AUTONOMY_EXECUTION_GATE_NOT_READY: "autonomy_execution_gate_not_ready",
       LINEAGE_CYCLE_DETECTED:         "lineage_cycle_detected",
       GOVERNANCE_CANARY_BREACH:       "governance_canary_breach",
       CLOUD_AGENT_GOVERNANCE_POLICY_VIOLATION: "cloud_agent_governance_policy_violation",

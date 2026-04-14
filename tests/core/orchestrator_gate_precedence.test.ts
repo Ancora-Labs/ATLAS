@@ -496,10 +496,10 @@ describe("resolveAthenaCorrectionDispatchBlockReason precedence", () => {
     );
   });
 
-  it("negative path: ignores non-governance tokens", () => {
+  it("negative path: ignores tokens that are neither canonical governance signals nor block reasons", () => {
     const reason = resolveAthenaCorrectionDispatchBlockReason([
-      "autonomy_execution_gate_not_ready",
       "verification command rewrite requested",
+      "format docs and rerun targeted checks",
     ]);
     assert.equal(reason, null);
   });
@@ -507,11 +507,22 @@ describe("resolveAthenaCorrectionDispatchBlockReason precedence", () => {
   it("treats rolling_yield_throttle correction token as a blocking governance signal", () => {
     const reason = resolveAthenaCorrectionDispatchBlockReason([
       "athena correction: rolling_yield_throttle observed in dispatch telemetry",
-      "autonomy_execution_gate_not_ready (advisory)",
+      "verification command rewrite requested",
     ]);
     assert.equal(
       reason,
       `${BLOCK_REASON.ROLLING_YIELD_THROTTLE}:athena_correction_token=${BLOCK_REASON.ROLLING_YIELD_THROTTLE}`,
+    );
+  });
+
+  it("treats autonomy_execution_gate_not_ready as a canonical blocking governance signal", () => {
+    const reason = resolveAthenaCorrectionDispatchBlockReason([
+      "athena correction: autonomy_execution_gate_not_ready detected in latest pre-dispatch audit",
+      "rolling_yield_throttle observed in dispatch telemetry",
+    ]);
+    assert.equal(
+      reason,
+      `${BLOCK_REASON.AUTONOMY_EXECUTION_GATE_NOT_READY}:athena_correction_token=${BLOCK_REASON.AUTONOMY_EXECUTION_GATE_NOT_READY}`,
     );
   });
 });
