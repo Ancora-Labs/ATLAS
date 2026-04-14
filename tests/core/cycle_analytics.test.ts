@@ -987,6 +987,38 @@ describe("computeCycleAnalytics — lane telemetry outcome quality", () => {
     assert.equal(record.laneTelemetry.quality.precisionOnAttempted, 0.5);
     assert.equal(record.laneTelemetry.quality.reliability, 0.542);
   });
+
+  it("preserves specialist lane telemetry when workerResults carry a lane key instead of a worker slug", () => {
+    const record = computeCycleAnalytics(makeConfig("state"), {
+      workerResults: [
+        { roleName: "quality", status: "done" },
+      ],
+      planCount: 1,
+      phase: CYCLE_PHASE.COMPLETED,
+    });
+
+    assert.equal(record.laneTelemetry.quality.dispatched, 1);
+    assert.equal(record.laneTelemetry.quality.completed, 1);
+    assert.equal(record.laneTelemetry.quality.specialistLane, true);
+    assert.equal("implementation" in record.laneTelemetry, false);
+  });
+
+  it("prefers resolvedRole execution when workerResults carry reroute metadata", () => {
+    const record = computeCycleAnalytics(makeConfig("state"), {
+      workerResults: [
+        { roleName: "evolution-worker", resolvedRole: "observation-worker", status: "done" },
+        { roleName: "evolution-worker", resolvedRole: "observation-worker", status: "failed" },
+      ],
+      planCount: 2,
+      phase: CYCLE_PHASE.COMPLETED,
+    });
+
+    assert.equal(record.laneTelemetry.observation.dispatched, 2);
+    assert.equal(record.laneTelemetry.observation.completed, 1);
+    assert.equal(record.laneTelemetry.observation.failed, 1);
+    assert.equal(record.laneTelemetry.observation.specialistLane, true);
+    assert.equal("implementation" in record.laneTelemetry, false);
+  });
 });
 
 // ── Funnel counts and ratios ───────────────────────────────────────────────────

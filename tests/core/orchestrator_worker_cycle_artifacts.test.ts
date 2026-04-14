@@ -414,6 +414,37 @@ describe("selectWorkerCycleRecord — completedTaskIds accounting", () => {
     );
   });
 
+  it("preserves resolvedRole on workerSessions so analytics can attribute execution to the effective lane", () => {
+    const artifact = {
+      schemaVersion: 1,
+      updatedAt: new Date().toISOString(),
+      latestCycleId: "cycle-resolved-role",
+      cycles: {
+        "cycle-resolved-role": {
+          cycleId: "cycle-resolved-role",
+          status: "dispatching",
+          updatedAt: new Date().toISOString(),
+          workerSessions: {
+            "quality-worker": {
+              status: "idle",
+              lastStatus: "done",
+              resolvedRole: "observation-worker",
+            },
+          },
+          workerActivity: {},
+          completedTaskIds: [],
+        },
+      },
+    };
+    const result = selectWorkerCycleRecord(artifact, "cycle-resolved-role");
+    assert.ok(result.record, "record must be found");
+    assert.equal(
+      (result.record!.workerSessions["quality-worker"] as any).resolvedRole,
+      "observation-worker",
+      "resolvedRole must survive normalization for downstream analytics consumers",
+    );
+  });
+
   it("negative path — returns source=none when artifact is empty", () => {
     // selectWorkerCycleRecord falls back through preferred → latestCycleId → mostRecent.
     // An empty cycles map with no latestCycleId yields source="none".

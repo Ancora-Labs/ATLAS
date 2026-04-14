@@ -97,17 +97,40 @@ function toFiniteNumberOrNull(v: unknown): number | null {
 const ALLOWED_SLO_STATUSES = new Set(["ok", "degraded", "unknown"]);
 
 /**
- * Sanitize a single worker-result entry so that only the two fields consumed
- * by computeCycleAnalytics ({roleName, status}) are propagated.
+ * Sanitize a single worker-result entry so that only the lane-selection fields
+ * consumed by computeCycleAnalytics are propagated.
  * This prevents EvidenceEnvelope fields (verificationEvidence, prChecks, etc.)
  * from silently bleeding into the analytics record as the envelope evolves.
  */
-function sanitizeWorkerResult(w: unknown): { roleName: string; status: string } {
-  if (!w || typeof w !== "object") return { roleName: "unknown", status: "unknown" };
+function sanitizeWorkerResult(w: unknown): {
+  roleName: string;
+  status: string;
+  resolvedRole: string | null;
+  logicalRole: string | null;
+  lane: string | null;
+} {
+  if (!w || typeof w !== "object") {
+    return {
+      roleName: "unknown",
+      status: "unknown",
+      resolvedRole: null,
+      logicalRole: null,
+      lane: null,
+    };
+  }
   const obj = w as Record<string, unknown>;
   return {
     roleName: typeof obj.roleName === "string" ? obj.roleName : "unknown",
     status:   typeof obj.status   === "string" ? obj.status   : "unknown",
+    resolvedRole: typeof obj.resolvedRole === "string" ? obj.resolvedRole : null,
+    logicalRole: typeof obj.logicalRole === "string" ? obj.logicalRole : null,
+    lane: typeof obj.lane === "string"
+      ? obj.lane
+      : typeof obj.effectiveLane === "string"
+        ? obj.effectiveLane
+        : typeof obj.capabilityLane === "string"
+          ? obj.capabilityLane
+          : null,
   };
 }
 
@@ -1087,7 +1110,48 @@ export function computeRuntimeContractProbe(opts: {
   };
 }
 
-function computeLaneTelemetry(workerResults: Array<{ roleName: string; status: string }> | null): Record<string, {
+function normalizeLaneName(value: unknown): string | null {
+  const lane = String(value || "").trim().toLowerCase();
+  if (!lane) return null;
+  if (lane === "implementation" || isSpecialistLane(lane)) return lane;
+  return null;
+}
+
+function getLaneFromWorkerIdentity(value: unknown): string | null {
+  const worker = String(value || "").trim();
+  if (!worker) return null;
+  const lane = getLaneForWorkerName(worker, "");
+  return lane || null;
+}
+
+function resolveWorkerResultLane(result: {
+  roleName: string;
+  resolvedRole: string | null;
+  logicalRole: string | null;
+  lane: string | null;
+}): string {
+  const explicitLane = normalizeLaneName(result.lane);
+  if (explicitLane) return explicitLane;
+
+  const resolvedRoleLane = getLaneFromWorkerIdentity(result.resolvedRole);
+  if (resolvedRoleLane) return resolvedRoleLane;
+
+  const roleLane = normalizeLaneName(result.roleName) || getLaneFromWorkerIdentity(result.roleName);
+  if (roleLane) return roleLane;
+
+  const logicalRoleLane = normalizeLaneName(result.logicalRole) || getLaneFromWorkerIdentity(result.logicalRole);
+  if (logicalRoleLane) return logicalRoleLane;
+
+  return "implementation";
+}
+
+function computeLaneTelemetry(workerResults: Array<{
+  roleName: string;
+  status: string;
+  resolvedRole: string | null;
+  logicalRole: string | null;
+  lane: string | null;
+}> | null): Record<string, {
   dispatched: number;
   completed: number;
   failed: number;
@@ -1109,7 +1173,7 @@ function computeLaneTelemetry(workerResults: Array<{ roleName: string; status: s
     successfulAttempted: number;
   }>();
   for (const result of workerResults) {
-    const lane = getLaneForWorkerName(result?.roleName, "implementation");
+    const lane = resolveWorkerResultLane(result);
     const current = byLane.get(lane) || {
       dispatched: 0,
       completed: 0,
@@ -1638,7 +1702,7 @@ export function computeCycleAnalytics(config, {
   const causalLinks = buildCausalLinks(config, stageTimestamps, missingData);
 
   // Sanitize worker results: strip any extra EvidenceEnvelope fields so that
-  // only {roleName, status} can influence outcome computation.
+  // only outcome and lane-selection metadata can influence analytics.
   const safeWorkerResults = Array.isArray(workerResults)
     ? workerResults.map(sanitizeWorkerResult)
     : workerResults;
@@ -1827,7 +1891,13 @@ export function computeCycleAnalytics(config, {
     doneWorkerCleanTreeEvidenceCount: countDoneWorkersWithCleanTreeEvidence(workerResults),
     blockedWorkerWithReasonCount: countBlockedWorkersWithReason(workerResults),
   };
-  const laneTelemetry = computeLaneTelemetry(safeWorkerResults as Array<{ roleName: string; status: string }> | null);
+  const laneTelemetry = computeLaneTelemetry(safeWorkerResults as Array<{
+    roleName: string;
+    status: string;
+    resolvedRole: string | null;
+    logicalRole: string | null;
+    lane: string | null;
+  }> | null);
 
   const cycleId = pipelineProgress?.startedAt ?? sloRecord?.cycleId ?? null;
 
