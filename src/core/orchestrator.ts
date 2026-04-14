@@ -1596,7 +1596,7 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       diversityMsg = `lane_diversity_gate_error:${String(diversityErr?.message || diversityErr)}`;
     }
     if (diversityBlocked) {
-      const blockReason = `${BLOCK_REASON.LANE_DIVERSITY_GATE_BLOCKED}:${diversityMsg}`;
+      const blockReason = `${BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT}:${diversityMsg}`;
       return {
         blocked: true,
         reason: blockReason,
