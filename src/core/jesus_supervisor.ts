@@ -17,7 +17,7 @@
 import path from "node:path";
 import { appendFileSync } from "node:fs";
 import { readJson, readJsonSafe, writeJson, spawnAsync, buildIncrementalSignatureIndex, READ_JSON_REASON } from "./fs_utils.js";
-import { appendProgress, appendAlert, ALERT_SEVERITY, loadCapabilityExecutionSummary } from "./state_tracker.js";
+import { appendProgress, appendAlert, ALERT_SEVERITY, loadCapabilityExecutionSummary, loadGovernanceBlockSummary } from "./state_tracker.js";
 import { getRoleRegistry } from "./role_registry.js";
 import { buildAgentArgs, parseAgentOutput, logAgentThinking } from "./agent_loader.js";
 import { chatLog, emitEvent, warn } from "./logger.js";
@@ -41,8 +41,14 @@ import {
   selectWorkerCycleRecord,
   extractSessionsFromCycleRecord,
   filterStaleWorkerSessions,
+  readCycleAnalytics,
 } from "./cycle_analytics.js";
 import { buildJesusStrategyBriefArtifact } from "./plan_lifecycle_contract.js";
+import { summarizeAgentControlPlane } from "./agent_control_plane.js";
+import {
+  AUTONOMY_EXECUTION_GATE_REASON_CODE,
+  resolveAutonomyExecutionGateBlockReason,
+} from "./governance_contract.js";
 
 // ── CI system-learning debt detection ────────────────────────────────────────
 
@@ -76,6 +82,81 @@ export function hasCiSystemLearningDebt(findings: unknown[]): boolean {
       || CI_DEBT_PATTERN.test(text)
     );
   });
+}
+
+const AUTONOMY_DEBT_PRIORITY_LEAD = "Resolve autonomy execution debt before feature work";
+
+function normalizeDirectiveStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry || "").trim()).filter(Boolean);
+  }
+  if (typeof value === "string" && value.trim()) {
+    return [value.trim()];
+  }
+  return [];
+}
+
+function buildAutonomyDebtPriority(reasonCode: string, blockReason: string | null): string {
+  const normalizedReasonCode = String(reasonCode || AUTONOMY_EXECUTION_GATE_REASON_CODE).trim() || AUTONOMY_EXECUTION_GATE_REASON_CODE;
+  const normalizedBlockReason = String(blockReason || "").trim();
+  return normalizedBlockReason
+    ? `${AUTONOMY_DEBT_PRIORITY_LEAD} (${normalizedReasonCode}; ${normalizedBlockReason})`
+    : `${AUTONOMY_DEBT_PRIORITY_LEAD} (${normalizedReasonCode})`;
+}
+
+function prependDirectivePriority(directive: Record<string, unknown>, priority: string): Record<string, unknown> {
+  const normalizedPriority = String(priority || "").trim();
+  if (!normalizedPriority) return directive;
+  const existingPriorities = normalizeDirectiveStringList(directive?.priorities);
+  return {
+    ...directive,
+    priorities: [normalizedPriority, ...existingPriorities.filter((entry) => entry !== normalizedPriority)],
+  };
+}
+
+function findAutonomyDebtHealthFinding(findings: unknown[]): Record<string, unknown> | null {
+  if (!Array.isArray(findings)) return null;
+  return findings.find((finding): finding is Record<string, unknown> => {
+    if (!finding || typeof finding !== "object") return false;
+    const findingRecord = finding as Record<string, unknown>;
+    return String(findingRecord.area || "").trim().toLowerCase() === "autonomy-debt"
+      && String(findingRecord.reasonCode || "").trim().toLowerCase() === AUTONOMY_EXECUTION_GATE_REASON_CODE;
+  }) ?? null;
+}
+
+async function readAutonomyDebtHealthFinding(config: unknown): Promise<Record<string, unknown> | null> {
+  const configPaths = config
+    && typeof config === "object"
+    && (config as Record<string, unknown>).paths
+    && typeof (config as Record<string, unknown>).paths === "object"
+    ? (config as Record<string, unknown>).paths as Record<string, unknown>
+    : null;
+  const stateDir = typeof configPaths?.stateDir === "string" && configPaths.stateDir.trim()
+    ? configPaths.stateDir
+    : "state";
+  const autonomyBandStatusPath = path.join(stateDir, "autonomy_band_status.json");
+  const autonomyBandStatusResult = await readJsonSafe(autonomyBandStatusPath);
+  if (!autonomyBandStatusResult.ok) {
+    if (autonomyBandStatusResult.reason === READ_JSON_REASON.INVALID) {
+      warn(`[jesus_supervisor] autonomy band status unreadable: ${autonomyBandStatusPath}`);
+    }
+    return null;
+  }
+  const autonomyExecutionGate = resolveAutonomyExecutionGateBlockReason(autonomyBandStatusResult.data);
+  if (!autonomyExecutionGate.blocked || !autonomyExecutionGate.reasonCode) {
+    return null;
+  }
+  const blockReason = autonomyExecutionGate.blockReason || autonomyExecutionGate.reasonCode;
+  return {
+    area: "autonomy-debt",
+    severity: "warning",
+    finding: `Autonomy execution readiness is not ready for feature delivery (${blockReason})`,
+    remediation: "Prioritize autonomy correction work and subordinate feature work until executionGate.exploitationReady becomes true",
+    capabilityNeeded: "autonomy-correction",
+    reasonCode: autonomyExecutionGate.reasonCode,
+    blockReason,
+    strategyPriority: buildAutonomyDebtPriority(autonomyExecutionGate.reasonCode, blockReason),
+  };
 }
 
 // ── Span contract emitter ─────────────────────────────────────────────────────
@@ -237,7 +318,7 @@ const CAPABILITY_SOURCE_SIGNATURES: Readonly<Record<string, string[]>> = Object.
   "governance-gate-token-enforcement":    ["resolveathenacorrectiondispatchblockreason", "athena_correction_token", "rolling_yield_throttle", "autonomy_execution_gate_not_ready"],
   "packet-granularity-governor":          ["max_actionable_steps_per_packet", "autosplitpacket"],
   "output-fidelity-gate":                 ["detectprocessthoughtmarkers", "output-fidelity-gate"],
-  "pre-wave-diversity-validation":        ["evaluatepredispatchgovernancegate", "lane_diversity_gate_blocked", "pre-dispatch governance gate"],
+  "pre-wave-diversity-validation":        ["evaluatepredispatchgovernancegate", "lane_diversity_insufficient", "pre-dispatch governance gate"],
   "specialization-admission-control":     ["specialization_admission", "laneadmissiongate"],
 });
 
@@ -257,7 +338,7 @@ const CAPABILITY_EXECUTION_EVIDENCE: Readonly<Record<string, readonly Capability
     { capability: "governance-gate-evaluation" },
   ],
   "pre-wave-diversity-validation": [
-    { capability: "dispatch-block-reason-reporting", contextIncludes: ["pre_dispatch_gate", "lane_diversity_gate_blocked"] },
+    { capability: "dispatch-block-reason-reporting", contextIncludes: ["pre_dispatch_gate", "lane_diversity_insufficient"] },
     { capability: "governance-gate-evaluation" },
   ],
 });
@@ -350,6 +431,11 @@ export async function runSystemHealthAudit(
       remediation: "Set up GitHub Actions CI workflow if missing",
       capabilityNeeded: "ci-setup"
     });
+  }
+
+  const autonomyDebtFinding = await readAutonomyDebtHealthFinding(config);
+  if (autonomyDebtFinding) {
+    findings.push(autonomyDebtFinding);
   }
 
   // 2. Failed CI runs on open PR branches
@@ -747,7 +833,19 @@ export function buildDirectiveStrategyBrief(
   expectedOutcome: Record<string, unknown>,
   opts: { repo?: string | null; emittedAt?: string } = {},
 ) {
-  return buildJesusStrategyBriefArtifact(directive, expectedOutcome, opts);
+  const autonomyExecutionDebt = directive?.autonomyExecutionDebt && typeof directive.autonomyExecutionDebt === "object"
+    ? directive.autonomyExecutionDebt as Record<string, unknown>
+    : null;
+  const autonomyPriority = autonomyExecutionDebt?.active === true
+    ? buildAutonomyDebtPriority(
+      String(autonomyExecutionDebt.reasonCode || AUTONOMY_EXECUTION_GATE_REASON_CODE),
+      typeof autonomyExecutionDebt.blockReason === "string" ? autonomyExecutionDebt.blockReason : null,
+    )
+    : "";
+  const prioritizedDirective = autonomyPriority
+    ? prependDirectivePriority(directive, autonomyPriority)
+    : directive;
+  return buildJesusStrategyBriefArtifact(prioritizedDirective, expectedOutcome, opts);
 }
 
 // ── Main Jesus Cycle ─────────────────────────────────────────────────────────
@@ -1187,6 +1285,30 @@ export async function runJesusCycle(config) {
     }
   } catch { /* non-critical */ }
 
+  let realizedExecutionBlock = "";
+  try {
+    const [cycleAnalyticsState, governanceBlockSummary, agentControlSummary] = await Promise.all([
+      readCycleAnalytics(config),
+      loadGovernanceBlockSummary(config, 20),
+      summarizeAgentControlPlane(config, 20),
+    ]);
+    const lastCycle = cycleAnalyticsState?.lastCycle;
+    const workerTopology = lastCycle?.workerTopology;
+    const routingSummary = lastCycle?.routingROISummary;
+    const modelRoutingTelemetry = lastCycle?.modelRoutingTelemetry?.byTaskKind || {};
+    const topTaskKindEntry = Object.entries(modelRoutingTelemetry)
+      .sort((a: any, b: any) => Number((b?.[1] as any)?.default?.outcomeScore || 0) - Number((a?.[1] as any)?.default?.outcomeScore || 0))[0];
+    realizedExecutionBlock = `\n**Realized Execution Signals (last recorded cycle):**
+  Outcome status: ${String(lastCycle?.outcomes?.status || "unknown")}
+  Dispatch block: ${String(lastCycle?.outcomes?.dispatchBlockReason || governanceBlockSummary.latestBlockReason || "none")}
+  Worker topology: effectiveLanes=${Number(workerTopology?.effectiveLaneCount || 0)} nominalLanes=${Number(workerTopology?.nominalLaneCount || 0)} reservedSpecialistLanes=${Number(workerTopology?.reservedSpecialistLaneCount || 0)} collapseRate=${Number(workerTopology?.fallbackCollapseRate || 0)}
+  Collapsed specialist lanes: ${Array.isArray(workerTopology?.collapsedReservedLanes) && workerTopology.collapsedReservedLanes.length > 0 ? workerTopology.collapsedReservedLanes.join(", ") : "none"}
+  Linked routing ROI: ${routingSummary?.overallLinkedROI ?? "n/a"} across ${routingSummary?.linkedRequests ?? 0} linked requests
+  Strongest realized taskKind: ${topTaskKindEntry ? `${topTaskKindEntry[0]} score=${Number((topTaskKindEntry[1] as any)?.default?.outcomeScore || 0).toFixed(3)}` : "n/a"}
+  Recent governance blocks: ${governanceBlockSummary.recentBlockCount} (${Object.entries(governanceBlockSummary.byReasonCode).map(([code, count]) => `${code}=${count}`).join(", ") || "none"})
+  Agent control plane: active=${agentControlSummary.activeAgents.join(", ") || "none"} completed=${agentControlSummary.completionCount} failed=${agentControlSummary.failureCount} handoffs=${agentControlSummary.handoffCount}`;
+  } catch { /* advisory only */ }
+
   const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
 
 ## CURRENT SYSTEM STATE
@@ -1236,6 +1358,7 @@ ${prometheusAnalysis?.projectClassification ? `  Project type: ${prometheusAnaly
   Optimizer: status=${optimizerStatus} budget=${budgetUsed}/${budgetLimit}
   Prometheus age: ${prometheusAgeHours < Infinity ? `${prometheusAgeHours.toFixed(1)}h` : "never"}
 ${capacityTrendBlock}
+${realizedExecutionBlock}
 
 **Hierarchical System Health Audit (detected by YOU — issues workers/Athena may have missed):**
 ${formatHealthAuditFindings(healthFindings)}
@@ -1630,6 +1753,24 @@ ${workersList}`;
   }
 
   const ciFastlaneRequired = hasCiSystemLearningDebt(healthFindings);
+  const autonomyDebtFinding = findAutonomyDebtHealthFinding(healthFindings);
+  if (autonomyDebtFinding) {
+    const autonomyExecutionDebt = {
+      active: true,
+      reasonCode: String(autonomyDebtFinding.reasonCode || AUTONOMY_EXECUTION_GATE_REASON_CODE),
+      blockReason: String(autonomyDebtFinding.blockReason || autonomyDebtFinding.reasonCode || AUTONOMY_EXECUTION_GATE_REASON_CODE),
+    };
+    d.autonomyExecutionDebt = autonomyExecutionDebt;
+    const autonomyPriority = buildAutonomyDebtPriority(
+      autonomyExecutionDebt.reasonCode,
+      autonomyExecutionDebt.blockReason,
+    );
+    d.priorities = prependDirectivePriority({ priorities: d.priorities }, autonomyPriority).priorities;
+    await appendProgress(
+      config,
+      `[JESUS] Feature work subordinated — ${autonomyExecutionDebt.reasonCode} active (${autonomyExecutionDebt.blockReason})`,
+    );
+  }
 
   const strategyBrief = buildDirectiveStrategyBrief(d as Record<string, unknown>, expectedOutcome as unknown as Record<string, unknown>, {
     repo: config.env?.targetRepo || null,

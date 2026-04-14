@@ -150,6 +150,35 @@ export const AGENT_CONTRACT_GOVERNANCE_REASON_CODE = Object.freeze({
   AGENT_SCHEMA_VIOLATION:    "AGENT_SCHEMA_VIOLATION",
 });
 
+export const AUTONOMY_EXECUTION_GATE_REASON_CODE = "autonomy_execution_gate_not_ready" as const;
+
+export function resolveAutonomyExecutionGateBlockReason(autonomyBandStatus: unknown): {
+  blocked: boolean;
+  reasonCode: typeof AUTONOMY_EXECUTION_GATE_REASON_CODE | null;
+  reasonDetail: string | null;
+  blockReason: string | null;
+} {
+  if (!autonomyBandStatus || typeof autonomyBandStatus !== "object") {
+    return { blocked: false, reasonCode: null, reasonDetail: null, blockReason: null };
+  }
+  const executionGate = (autonomyBandStatus as Record<string, unknown>).executionGate;
+  if (!executionGate || typeof executionGate !== "object") {
+    return { blocked: false, reasonCode: null, reasonDetail: null, blockReason: null };
+  }
+  const exploitationReady = (executionGate as Record<string, unknown>).exploitationReady;
+  if (exploitationReady !== false) {
+    return { blocked: false, reasonCode: null, reasonDetail: null, blockReason: null };
+  }
+  const rawReason = String((executionGate as Record<string, unknown>).reason || "").trim().toLowerCase();
+  const reasonDetail = rawReason || "execution_gate_not_ready";
+  return {
+    blocked: true,
+    reasonCode: AUTONOMY_EXECUTION_GATE_REASON_CODE,
+    reasonDetail,
+    blockReason: `${AUTONOMY_EXECUTION_GATE_REASON_CODE}:${reasonDetail}`,
+  };
+}
+
 export const GOVERNANCE_SIGNAL_REGISTRY = Object.freeze({
   budget_exhausted: {
     gateKey: "BUDGET_ELIGIBILITY",
@@ -164,6 +193,11 @@ export const GOVERNANCE_SIGNAL_REGISTRY = Object.freeze({
   force_checkpoint_validation_active: {
     gateKey: "FORCE_CHECKPOINT",
     dispatchBlockReason: "force_checkpoint_validation_active",
+    blocking: true,
+  },
+  autonomy_execution_gate_not_ready: {
+    gateKey: "AUTONOMY_EXECUTION",
+    dispatchBlockReason: AUTONOMY_EXECUTION_GATE_REASON_CODE,
     blocking: true,
   },
   governance_freeze_active: {
@@ -211,9 +245,9 @@ export const GOVERNANCE_SIGNAL_REGISTRY = Object.freeze({
     dispatchBlockReason: "dependency_readiness_incomplete",
     blocking: true,
   },
-  lane_diversity_gate_blocked: {
+  lane_diversity_insufficient: {
     gateKey: "LANE_DIVERSITY",
-    dispatchBlockReason: "lane_diversity_gate_blocked",
+    dispatchBlockReason: "lane_diversity_insufficient",
     blocking: true,
   },
   rolling_yield_throttle: {

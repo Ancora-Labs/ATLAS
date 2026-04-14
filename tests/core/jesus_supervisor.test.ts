@@ -254,6 +254,26 @@ describe("jesus_supervisor — buildDirectiveStrategyBrief", () => {
     assert.equal(artifact.expectedOutcome?.expectedAthenaActivated, null);
     assert.equal(artifact.expectedOutcome?.expectedWorkItemCount, null);
   });
+
+  it("prepends autonomy debt ahead of feature priorities when execution readiness is false", () => {
+    const artifact = buildDirectiveStrategyBrief({
+      ...VALID_DIRECTIVE,
+      priorities: ["Ship feature dashboard", "Clean up docs"],
+      autonomyExecutionDebt: {
+        active: true,
+        reasonCode: "autonomy_execution_gate_not_ready",
+        blockReason: "autonomy_execution_gate_not_ready:insufficient cycle stability",
+      },
+    }, VALID_EXPECTED_OUTCOME, {
+      emittedAt: "2026-04-13T18:05:02.838Z",
+    });
+    assert.equal(
+      artifact.priorities[0],
+      "Resolve autonomy execution debt before feature work (autonomy_execution_gate_not_ready; autonomy_execution_gate_not_ready:insufficient cycle stability)",
+    );
+    assert.equal(artifact.priorities[1], "Ship feature dashboard");
+    assert.equal(artifact.priorities[2], "Clean up docs");
+  });
 });
 
 describe("jesus_supervisor — runSystemHealthAudit", () => {
@@ -318,6 +338,72 @@ describe("jesus_supervisor — runSystemHealthAudit", () => {
       assert.ok(capGap, "capability-gap finding should exist");
       assert.equal(capGap.severity, "info");
       assert.equal(capGap.note, "verified_present_in_source_and_executed");
+    });
+  });
+
+  it("returns a dedicated autonomy-debt finding when the autonomy execution gate is not ready", async () => {
+    await withTempRepo(async ({ stateDir }) => {
+      writeFileSync(
+        path.join(stateDir, "autonomy_band_status.json"),
+        JSON.stringify({
+          currentBand: "bootstrapping",
+          executionGate: {
+            exploitationReady: false,
+            reason: "insufficient cycle stability",
+          },
+        }),
+        "utf8",
+      );
+
+      const findings = await runSystemHealthAudit(
+        { paths: { stateDir } } as any,
+        { latestMainCi: null, failedCiRuns: [], pullRequests: [] },
+        {},
+        {},
+      );
+
+      const autonomyDebt = findings.find((f: any) => f.area === "autonomy-debt");
+      assert.ok(autonomyDebt, "autonomy-debt finding should exist");
+      assert.equal(autonomyDebt.reasonCode, "autonomy_execution_gate_not_ready");
+      assert.equal(
+        autonomyDebt.blockReason,
+        "autonomy_execution_gate_not_ready:insufficient cycle stability",
+      );
+      assert.match(
+        autonomyDebt.remediation,
+        /subordinate feature work/i,
+      );
+    });
+  });
+
+  it("negative path: does not emit autonomy-debt finding when readiness is true or status is absent", async () => {
+    await withTempRepo(async ({ stateDir }) => {
+      const baseConfig = { paths: { stateDir } } as any;
+      const githubState = { latestMainCi: null, failedCiRuns: [], pullRequests: [] };
+
+      const findingsWithoutStatus = await runSystemHealthAudit(baseConfig, githubState, {}, {});
+      assert.equal(
+        findingsWithoutStatus.some((f: any) => f.area === "autonomy-debt"),
+        false,
+      );
+
+      writeFileSync(
+        path.join(stateDir, "autonomy_band_status.json"),
+        JSON.stringify({
+          currentBand: "stabilizing",
+          executionGate: {
+            exploitationReady: true,
+            reason: "stable",
+          },
+        }),
+        "utf8",
+      );
+
+      const findingsReady = await runSystemHealthAudit(baseConfig, githubState, {}, {});
+      assert.equal(
+        findingsReady.some((f: any) => f.area === "autonomy-debt"),
+        false,
+      );
     });
   });
 
@@ -553,7 +639,7 @@ describe("jesus_supervisor — runSystemHealthAudit", () => {
 
       writeFileSync(
         path.join(repoDir, "src", "core", "orchestrator.ts"),
-        "export function resolveAthenaCorrectionDispatchBlockReason(){ return 'rolling_yield_throttle:athena_correction_token=rolling_yield_throttle'; } export async function evaluatePreDispatchGovernanceGate(){} const signals = ['athena_correction_token', 'rolling_yield_throttle', 'autonomy_execution_gate_not_ready', 'lane_diversity_gate_blocked']; const label = 'pre-dispatch governance gate';",
+        "export function resolveAthenaCorrectionDispatchBlockReason(){ return 'rolling_yield_throttle:athena_correction_token=rolling_yield_throttle'; } export async function evaluatePreDispatchGovernanceGate(){} const signals = ['athena_correction_token', 'rolling_yield_throttle', 'autonomy_execution_gate_not_ready', 'lane_diversity_insufficient']; const label = 'pre-dispatch governance gate';",
         "utf8",
       );
 
@@ -570,7 +656,7 @@ describe("jesus_supervisor — runSystemHealthAudit", () => {
       await recordCapabilityExecution(
         { paths: { stateDir } },
         "dispatch-block-reason-reporting",
-        "gateSource=pre_dispatch_gate reason=lane_diversity_gate_blocked:Only 1 lane(s) active, minimum is 2.",
+        "gateSource=pre_dispatch_gate reason=lane_diversity_insufficient:Only 1 lane(s) active, minimum is 2.",
       );
 
       writeFileSync(
@@ -632,7 +718,7 @@ describe("jesus_supervisor — runSystemHealthAudit", () => {
       await recordCapabilityExecution(
         { paths: { stateDir } },
         "dispatch-block-reason-reporting",
-        "gateSource=pre_dispatch_gate reason=lane_diversity_gate_blocked:Only 1 lane(s) active, minimum is 2.",
+        "gateSource=pre_dispatch_gate reason=lane_diversity_insufficient:Only 1 lane(s) active, minimum is 2.",
       );
 
       writeFileSync(

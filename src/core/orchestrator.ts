@@ -128,9 +128,14 @@ import {
   writeBoundaryCheckpoint,
   CHECKPOINT_NS,
 } from "./checkpoint_engine.js";
-import { assessRetryExpectedROI, rankModelsByTaskKindExpectedValue } from "./model_policy.js";
+import { assessRetryExpectedROI, loadRouteROILedger, rankModelsByTaskKindExpectedValue } from "./model_policy.js";
 import { loadHookPolicy, DEFAULT_HOOK_POLICY_PATH } from "./policy_engine.js";
-import { AGENT_CONTRACT_GOVERNANCE_REASON_CODE, GOVERNANCE_SIGNAL_REGISTRY } from "./governance_contract.js";
+import {
+  AGENT_CONTRACT_GOVERNANCE_REASON_CODE,
+  AUTONOMY_EXECUTION_GATE_REASON_CODE,
+  GOVERNANCE_SIGNAL_REGISTRY,
+  resolveAutonomyExecutionGateBlockReason,
+} from "./governance_contract.js";
 
 /**
  * Orchestrator health status enum.
@@ -172,6 +177,7 @@ export const GATE_PRECEDENCE = Object.freeze({
   FORCE_CHECKPOINT:            3.5,
   GOVERNANCE_FREEZE:           3,
   CLOUD_AGENT_GOVERNANCE:      3.25,
+  AUTONOMY_EXECUTION:          3.75,
   LINEAGE_CYCLE:               4,
   GOVERNANCE_CANARY:           5,
   CARRY_FORWARD_DEBT:          6,
@@ -207,6 +213,7 @@ export const BLOCK_REASON = Object.freeze({
   GUARDRAIL_PAUSE_WORKERS_ACTIVE: "guardrail_pause_workers_active",
   GUARDRAIL_FORCE_CHECKPOINT_ACTIVE: "force_checkpoint_validation_active",
   GOVERNANCE_FREEZE_ACTIVE:       "governance_freeze_active",
+  AUTONOMY_EXECUTION_GATE_NOT_READY: AUTONOMY_EXECUTION_GATE_REASON_CODE,
   LINEAGE_CYCLE_DETECTED:         "lineage_cycle_detected",
   GOVERNANCE_CANARY_BREACH:       "governance_canary_breach",
   CLOUD_AGENT_GOVERNANCE_POLICY_VIOLATION: "cloud_agent_governance_policy_violation",
@@ -220,7 +227,7 @@ export const BLOCK_REASON = Object.freeze({
   /** Rolling completion yield fell at or below the throttle threshold. */
   ROLLING_YIELD_THROTTLE:         "rolling_yield_throttle",
   /** Dispatch topology failed lane diversity minimum. */
-  LANE_DIVERSITY_GATE_BLOCKED:    "lane_diversity_gate_blocked",
+  LANE_DIVERSITY_GATE_BLOCKED:    "lane_diversity_insufficient",
   /** Specialist share is below the adaptive lane utilization target. */
   SPECIALIZATION_ADMISSION_GATE:  "specialization_admission_gate_failed",
   /** Per-role plan group exceeds the configured actionable-steps cap — decompose before dispatch. */
@@ -1303,6 +1310,28 @@ export async function evaluatePreDispatchGovernanceGate(config, plans = [], cycl
       gateKey: "GOVERNANCE_FREEZE",
       gateIndex: GATE_PRECEDENCE.GOVERNANCE_FREEZE,
     };
+  }
+
+  if (config?.runtime?.autonomyBand?.enabled !== false) {
+    try {
+      const autonomyBandStatus = await readJson(path.join(stateDir, "autonomy_band_status.json"), null);
+      const autonomyExecutionGate = resolveAutonomyExecutionGateBlockReason(autonomyBandStatus);
+      if (autonomyExecutionGate.blocked && autonomyExecutionGate.blockReason) {
+        return {
+          blocked: true,
+          reason: autonomyExecutionGate.blockReason,
+          action: undefined,
+          dispatchBlockReason: autonomyExecutionGate.blockReason,
+          graphResult: null,
+          cycleId,
+          budgetEligibility,
+          gateKey: "AUTONOMY_EXECUTION",
+          gateIndex: GATE_PRECEDENCE.AUTONOMY_EXECUTION,
+        };
+      }
+    } catch (autonomyErr) {
+      warn(`[orchestrator] autonomy execution governance gate check failed: ${String(autonomyErr?.message || autonomyErr)}`);
+    }
   }
 
   if (config?.runtime?.cloudAgentGovernanceGateEnabled !== false) {
@@ -4923,9 +4952,12 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       const roiNote = poolResult?.laneROIAdmission?.admitted
         ? `, roiGate=pass:${String(poolResult.laneROIAdmission.reason || "pass")}`
         : `, roiGate=block:${String(poolResult?.laneROIAdmission?.reason || "unknown")}`;
+      const collapseNote = Number(poolResult.specializationUtilization.fallbackCollapseCount || 0) > 0
+        ? `, collapsedLanes=${(poolResult.specializationUtilization.collapsedReservedLanes || []).join(",") || "none"}`
+        : "";
       await appendProgress(
         config,
-        `[CAPABILITY_POOL] Specialist utilization below target: ${Math.round(poolResult.specializationUtilization.specializedShare * 100)}% < ${Math.round(poolResult.specializationUtilization.minSpecializedShare * 100)}%${roiNote}`
+        `[CAPABILITY_POOL] Specialist utilization below target: ${Math.round(poolResult.specializationUtilization.specializedShare * 100)}% < ${Math.round(poolResult.specializationUtilization.minSpecializedShare * 100)}%${roiNote}${collapseNote}`
       );
     }
     // Apply pool assignment — update plan.role to the capability-assigned role when it improves on the default.
@@ -5563,6 +5595,13 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         minSpecializedShare: util.minSpecializedShare,
         adaptiveMinSpecializedShare: util.adaptiveMinSpecializedShare,
         poolReportedTargetMet: util.specializationTargetsMet === true,
+        reservedSpecialistLaneCount: util.reservedSpecialistLaneCount,
+        reservedSpecialistLanes: util.reservedSpecialistLanes,
+        effectiveSpecialistLaneCount: util.effectiveSpecialistLaneCount,
+        effectiveSpecialistLanes: util.effectiveSpecialistLanes,
+        fallbackCollapseCount: util.fallbackCollapseCount,
+        fallbackCollapseRate: util.fallbackCollapseRate,
+        collapsedReservedLanes: util.collapsedReservedLanes,
       };
     }
   }
@@ -6260,7 +6299,21 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       reroutedRoles: Array.isArray(cycleRerouteReasons)
         ? cycleRerouteReasons.map((r: any) => String(r?.role || ""))
         : [],
+      fallbackCollapseCount: Number((workerBatches?.[0] as any)?.specialistUtilizationTarget?.fallbackCollapseCount || 0),
+      fallbackCollapseRate: Number((workerBatches?.[0] as any)?.specialistUtilizationTarget?.fallbackCollapseRate || 0),
+      collapsedReservedLanes: Array.isArray((workerBatches?.[0] as any)?.specialistUtilizationTarget?.collapsedReservedLanes)
+        ? (workerBatches[0] as any).specialistUtilizationTarget.collapsedReservedLanes.map((value: unknown) => String(value || ""))
+        : [],
     };
+    const workerTopology = capabilityPoolResult?.specializationUtilization
+      ? {
+          ...capabilityPoolResult.specializationUtilization,
+          effectiveLaneCount: Number(capabilityPoolResult.specializationUtilization.effectiveActiveLaneCount || capabilityPoolResult.activeLaneCount || 0),
+          nominalLaneCount: Number(capabilityPoolResult.specializationUtilization.nominalActiveLaneCount || capabilityPoolResult.nominalActiveLaneCount || 0),
+        }
+      : ((workerBatches?.[0] as any)?.specialistUtilizationTarget
+          ? { ...(workerBatches[0] as any).specialistUtilizationTarget }
+          : null);
 
     const analyticsRecord = computeCycleAnalytics(config, {
       sloRecord,
@@ -6281,6 +6334,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         completed:  allWorkerResults.filter(r => isAnalyticsCompletedWorkerStatus(r.status)).length,
       },
       premiumUsageLog: await readJson(path.join(stateDir, "premium_usage_log.json"), []),
+      routeRoiLedger: await loadRouteROILedger(config),
       lineageLog: ((await readJson(path.join(stateDir, "lineage_graph.json"), { entries: [] }))?.entries) ?? [],
       premiumEfficiencyRaw: _premiumEfficiencyRaw,
       premiumEfficiencyAdjusted: _premiumEfficiencyAdjusted,
@@ -6292,6 +6346,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       contractViolationCounters:  cycleContractViolationCounters,
       rerouteMetrics:             cycleRerouteMetrics,
       assignedLaneDistribution: capabilityPoolResult?.laneCounts ?? null,
+      workerTopology,
       assignedRoleDistribution: capabilityPoolResult?.assignments
         ? capabilityPoolResult.assignments.reduce((acc: Record<string, number>, row: any) => {
             const role = String(row?.selection?.role || "unknown");

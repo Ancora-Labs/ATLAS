@@ -38,11 +38,13 @@ import {
   HEALTH_SCORE,
   CANONICAL_EVENT_NAMES,
   CYCLE_TRUTH_TERMINAL_BLOCK_REASON,
+  DISPATCH_BLOCK_REASON_CODE,
   buildModelRoutingTelemetry,
   buildInterventionLineageTelemetry,
   buildRoutingROISummary,
   MIN_TELEMETRY_SAMPLE_THRESHOLD,
   migrateLegacyEvolutionProgressToCompletedTaskIds,
+  parseDispatchBlockReasonContract,
   WORKER_CYCLE_ARTIFACTS_SCHEMA,
   LEGACY_EVOLUTION_PROGRESS_FILE,
   LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION,
@@ -2084,6 +2086,45 @@ describe("modelRoutingTelemetry schema contract", () => {
     assert.equal(telemetry.outcomeScore, 0.656);
   });
 
+  it("buildModelRoutingTelemetry prefers realized route ROI samples over duplicate premium usage rows", () => {
+    const result = buildModelRoutingTelemetry(
+      [
+        { taskId: "task-1", model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "blocked", worker: "evolution-worker", lineageId: "lineage-1" },
+      ],
+      [{ id: "lineage-1", sourceKind: "gap_candidate" }],
+      [
+        {
+          taskId: "task-1",
+          model: "Claude Sonnet 4.6",
+          taskKind: "implementation",
+          outcome: "done",
+          roi: 90,
+          realizedAt: makeTs(10_000),
+          role: "quality-worker",
+          lineageId: "lineage-1",
+        },
+      ],
+    );
+    assert.equal(result.sampleCount, 1);
+    assert.equal(result.byTaskKind.implementation.default.successProbability, 1);
+    assert.ok(result.byTaskKind.implementation.default.outcomeScore > 0.8);
+  });
+
+  it("computeCycleAnalytics classifies autonomy execution dispatch blocks as governance-blocked terminal exits", () => {
+    const record = computeCycleAnalytics(makeConfig(), {
+      phase: CYCLE_PHASE.COMPLETED,
+      dispatchBlockReason: "autonomy_execution_gate_not_ready:insufficient_exploitation_window",
+      workerTopology: {
+        effectiveLaneCount: 1,
+        nominalLaneCount: 2,
+        fallbackCollapseRate: 0.5,
+      },
+    });
+    assert.equal(record.cycleTruthContract.nullEventsTerminalBlockReason, CYCLE_TRUTH_TERMINAL_BLOCK_REASON.GOVERNANCE_BLOCKED);
+    assert.equal(record.workerTopology.effectiveLaneCount, 1);
+    assert.equal(record.workerTopology.nominalLaneCount, 2);
+  });
+
   it("MIN_TELEMETRY_SAMPLE_THRESHOLD is exported and is a positive integer", () => {
     assert.ok(typeof MIN_TELEMETRY_SAMPLE_THRESHOLD === "number", "must be a number");
     assert.ok(MIN_TELEMETRY_SAMPLE_THRESHOLD > 0, "must be positive");
@@ -2230,6 +2271,36 @@ describe("cycle_analytics — dispatchBlockReason in outcomes (Task 2)", () => {
     });
     assert.equal(record.outcomes.dispatchBlockReason, reason);
     assert.equal(record.phase, CYCLE_PHASE.INCOMPLETE);
+  });
+
+  it("parses the renamed lane diversity dispatch block contract", () => {
+    const reason = "lane_diversity_insufficient:activeLanes=1,minimumLanes=2";
+    assert.deepEqual(parseDispatchBlockReasonContract(reason), {
+      code: DISPATCH_BLOCK_REASON_CODE.LANE_DIVERSITY_GATE_BLOCKED,
+      detail: {
+        rawDetail: "activeLanes=1,minimumLanes=2",
+        activeLanes: "1",
+        minimumLanes: "2",
+      },
+      raw: reason,
+    });
+  });
+
+  it("negative path: treats prose-only lane diversity blocks as unknown analytics codes", () => {
+    const contract = parseDispatchBlockReasonContract("Only 1 lane(s) active, minimum is 2.");
+    assert.equal(contract?.code, DISPATCH_BLOCK_REASON_CODE.UNKNOWN);
+  });
+
+  it("classifies lane_diversity_insufficient as a dispatch-blocked terminal exit", () => {
+    const config = makeConfig("state");
+    const reason = "lane_diversity_insufficient:activeLanes=1,minimumLanes=2";
+    const record = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.COMPLETED,
+      pipelineProgress: makePipelineProgress({ stageTimestamps: {} }),
+      dispatchBlockReason: reason,
+    });
+    assert.equal(record.outcomes.dispatchBlockReason, reason);
+    assert.equal(record.cycleTruthContract.nullEventsTerminalBlockReason, CYCLE_TRUTH_TERMINAL_BLOCK_REASON.DISPATCH_BLOCKED);
   });
 });
 

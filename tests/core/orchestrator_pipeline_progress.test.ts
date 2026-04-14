@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { runOnce, runResumeDispatch, evaluateDispatchResumeReadiness, evaluatePreDispatchGovernanceGate, BLOCK_REASON, processEscalationQueueClosureWorkflow, isDispatchCheckpointResumable, loadStaleTriageRecords, runStaleArtifactClosureFastpath, persistSkippedDispatchCheckpoint, clearAthenaPlanRejectionLatch, recoverStaleWorkerSessions } from "../../src/core/orchestrator.js";
+import { runOnce, runResumeDispatch, evaluateDispatchResumeReadiness, evaluatePreDispatchGovernanceGate, BLOCK_REASON, GATE_PRECEDENCE, processEscalationQueueClosureWorkflow, isDispatchCheckpointResumable, loadStaleTriageRecords, runStaleArtifactClosureFastpath, persistSkippedDispatchCheckpoint, clearAthenaPlanRejectionLatch, recoverStaleWorkerSessions } from "../../src/core/orchestrator.js";
 import { ATHENA_PLAN_REVIEW_REASON_CODE } from "../../src/core/athena_reviewer.js";
 import { readPipelineProgress, PIPELINE_STAGE_ENUM, PIPELINE_STEPS } from "../../src/core/pipeline_progress.js";
 import { EVENTS } from "../../src/core/event_schema.js";
@@ -641,6 +641,73 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
       "complete",
       "dispatch_checkpoint.json must NOT be marked complete when pre-dispatch gate blocks — retry must remain possible"
     );
+  });
+
+  it("blocks one-lane resumed batches before wave dispatch and emits the renamed lane diversity contract", async () => {
+    const patchedPlans = [
+      {
+        id: "T1",
+        task: "task one",
+        role: "evolution-worker",
+        dependsOn: [],
+        filesInScope: [],
+        targetFiles: ["src/core/orchestrator.ts"],
+        scope: "implementation",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["tests pass"],
+      },
+      {
+        id: "T2",
+        task: "task two",
+        role: "evolution-worker",
+        dependsOn: [],
+        filesInScope: [],
+        targetFiles: ["src/core/cycle_analytics.ts"],
+        scope: "implementation",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["tests pass"],
+      },
+    ];
+    await fs.writeFile(
+      path.join(tmpDir, "athena_plan_review.json"),
+      JSON.stringify({ approved: true, patchedPlans }),
+      "utf8",
+    );
+    const diversityConfig = {
+      ...config,
+      systemGuardian: { enabled: false },
+      workerPool: { minLanes: 2 },
+    };
+
+    const gateDecision = await evaluatePreDispatchGovernanceGate(
+      diversityConfig,
+      patchedPlans,
+      "lane-diversity-resume-block",
+    );
+    assert.equal(gateDecision.blocked, true);
+    assert.equal(gateDecision.gateIndex, GATE_PRECEDENCE.LANE_DIVERSITY);
+    assert.ok(
+      gateDecision.dispatchBlockReason?.startsWith(`${BLOCK_REASON.LANE_DIVERSITY_GATE_BLOCKED}:`),
+      `dispatchBlockReason must use the renamed lane diversity token; got ${gateDecision.dispatchBlockReason}`,
+    );
+
+    await assert.doesNotReject(
+      () => runResumeDispatch(diversityConfig),
+      "runResumeDispatch must stop before wave dispatch when lane diversity is insufficient",
+    );
+
+    const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
+    assert.match(progressLog, /\[RESUME\] Pre-dispatch governance gate blocked resumed dispatch/);
+    assert.doesNotMatch(
+      progressLog,
+      /Force-resuming dispatch checkpoint: batch 1\/1|Force-resuming dispatch checkpoint: batch 1\/2/,
+      "resume log must not advance into wave dispatch when lane diversity blocks first",
+    );
+
+    const checkpoint = JSON.parse(await fs.readFile(path.join(tmpDir, "dispatch_checkpoint.json"), "utf8"));
+    assert.equal(checkpoint.completedPlans, 0, "no wave should complete when lane diversity blocks before dispatch");
+    const workerSessionsExists = await fs.access(path.join(tmpDir, "worker_sessions.json")).then(() => true).catch(() => false);
+    assert.equal(workerSessionsExists, false, "worker sessions must not be created before the first wave dispatch");
   });
 
   it("proceeds with resumed dispatch when governance gate is clear", async () => {
@@ -2043,6 +2110,7 @@ describe("pipeline progress — terminology drift prevention (stage IDs)", () =>
       GUARDRAIL_PAUSE_WORKERS_ACTIVE: "guardrail_pause_workers_active",
       GUARDRAIL_FORCE_CHECKPOINT_ACTIVE: "force_checkpoint_validation_active",
       GOVERNANCE_FREEZE_ACTIVE:       "governance_freeze_active",
+      AUTONOMY_EXECUTION_GATE_NOT_READY: "autonomy_execution_gate_not_ready",
       LINEAGE_CYCLE_DETECTED:         "lineage_cycle_detected",
       GOVERNANCE_CANARY_BREACH:       "governance_canary_breach",
       CLOUD_AGENT_GOVERNANCE_POLICY_VIOLATION: "cloud_agent_governance_policy_violation",
@@ -2051,7 +2119,7 @@ describe("pipeline progress — terminology drift prevention (stage IDs)", () =>
       PLAN_EVIDENCE_COUPLING_INVALID: "plan_evidence_coupling_invalid",
       CROSS_CYCLE_PREREQUISITE_UNMET: "cross_cycle_prerequisite_unmet",
       DEPENDENCY_READINESS_INCOMPLETE:"dependency_readiness_incomplete",
-      LANE_DIVERSITY_GATE_BLOCKED:    "lane_diversity_gate_blocked",
+      LANE_DIVERSITY_GATE_BLOCKED:    "lane_diversity_insufficient",
       ROLLING_YIELD_THROTTLE:         "rolling_yield_throttle",
       SPECIALIZATION_ADMISSION_GATE:  "specialization_admission_gate_failed",
       OVERSIZED_PACKET:               "packet_exceeds_actionable_steps_cap",
