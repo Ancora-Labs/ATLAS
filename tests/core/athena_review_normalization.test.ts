@@ -588,7 +588,7 @@ describe("evaluatePreDispatchGovernanceGate — lane diversity outward token", (
         },
       ], "lane-diversity-canonical");
       assert.equal(decision.blocked, true);
-      assert.ok(String(decision.reason || "").startsWith(BLOCK_REASON.LANE_DIVERSITY_GATE_BLOCKED));
+      assert.ok(String(decision.reason || "").startsWith(BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT));
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }

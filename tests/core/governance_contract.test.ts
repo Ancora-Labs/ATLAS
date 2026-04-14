@@ -89,11 +89,15 @@ describe("GOVERNANCE_SIGNAL_REGISTRY dispatchBlockReason contract", () => {
   it("uses canonical outward block reasons for lane diversity while preserving rolling yield and autonomy", () => {
     assert.equal(
       GOVERNANCE_SIGNAL_REGISTRY.lane_diversity_gate_blocked.dispatchBlockReason,
-      GOVERNANCE_DISPATCH_BLOCK_REASON.LANE_DIVERSITY_GATE_BLOCKED,
+      GOVERNANCE_DISPATCH_BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT,
     );
     assert.equal(
       GOVERNANCE_SIGNAL_REGISTRY.lane_diversity_insufficient.dispatchBlockReason,
+      GOVERNANCE_DISPATCH_BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT,
+    );
+    assert.equal(
       GOVERNANCE_DISPATCH_BLOCK_REASON.LANE_DIVERSITY_GATE_BLOCKED,
+      GOVERNANCE_DISPATCH_BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT,
     );
     assert.equal(
       GOVERNANCE_SIGNAL_REGISTRY.rolling_yield_throttle.dispatchBlockReason,

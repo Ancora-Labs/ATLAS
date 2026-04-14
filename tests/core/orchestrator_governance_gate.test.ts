@@ -368,7 +368,17 @@ describe("orchestrator governance correction token mapping", () => {
     ]);
     assert.equal(
       reason,
-      `${BLOCK_REASON.LANE_DIVERSITY_GATE_BLOCKED}:athena_correction_token=lane_diversity_gate_blocked`,
+      `${BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT}:athena_correction_token=lane_diversity_gate_blocked`,
+    );
+  });
+
+  it("maps canonical lane_diversity_insufficient correction tokens to the same outward lane diversity reason", () => {
+    const reason = resolveAthenaCorrectionDispatchBlockReason([
+      "Pre-dispatch governance state infeasible (lane_diversity_insufficient) — diversify active lanes before dispatch",
+    ]);
+    assert.equal(
+      reason,
+      `${BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT}:athena_correction_token=lane_diversity_insufficient`,
     );
   });
 });
