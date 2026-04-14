@@ -116,6 +116,7 @@ export function buildRecurrenceEscalations(matches) {
     count: m.count,
     channel: m.channel,
     tag: m.tag,
+    reason: `Recurring pattern detected ${m.count} time(s) in the recent postmortem window; channel=${m.channel}${m.tag ? ` tag=${m.tag}` : ""}.`,
     detectedAt: new Date().toISOString()
   }));
 }

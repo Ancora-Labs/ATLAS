@@ -394,6 +394,16 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "once") {
+    const existingStopRequest = await readStopRequest(config);
+    if (existingStopRequest?.requestedAt) {
+      await clearStopRequest(config);
+      console.log("[box once] cleared stale stop request before one-shot run");
+    }
+    await runOnce(config);
+    return;
+  }
+
   await runOnce(config);
 }
 

@@ -27,7 +27,7 @@
       "source": "carry_forward_ledger",
       "debtId": "debt-1-0",
       "resolutionEvidence": "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/33a762234d117e329528efa19a3087459d62db09, inline://clean-tree-status, inline://npm-test-output-block]",
-      "reconciledAt": "2026-04-11T07:09:48.564Z"
+      "reconciledAt": "2026-04-14T09:37:46.795Z"
     },
     {
       "id": "CF-002",
@@ -39,7 +39,7 @@
       "source": "carry_forward_ledger",
       "debtId": "debt-1-0",
       "resolutionEvidence": "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/33a762234d117e329528efa19a3087459d62db09, inline://clean-tree-status, inline://npm-test-output-block]",
-      "reconciledAt": "2026-04-11T07:09:48.564Z"
+      "reconciledAt": "2026-04-14T09:37:46.795Z"
     },
     {
       "id": "CF-003",
@@ -51,7 +51,7 @@
       "source": "carry_forward_ledger",
       "debtId": "debt-1-0",
       "resolutionEvidence": "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/33a762234d117e329528efa19a3087459d62db09, inline://clean-tree-status, inline://npm-test-output-block]",
-      "reconciledAt": "2026-04-11T07:09:48.564Z"
+      "reconciledAt": "2026-04-14T09:37:46.795Z"
     },
     {
       "id": "CF-004",
@@ -63,7 +63,7 @@
       "source": "carry_forward_ledger",
       "debtId": "debt-1-0",
       "resolutionEvidence": "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/33a762234d117e329528efa19a3087459d62db09, inline://clean-tree-status, inline://npm-test-output-block]",
-      "reconciledAt": "2026-04-11T07:09:48.564Z"
+      "reconciledAt": "2026-04-14T09:37:46.795Z"
     },
     {
       "id": "CF-005",
@@ -75,8 +75,8 @@
       "source": "carry_forward_ledger",
       "debtId": "debt-1-0",
       "resolutionEvidence": "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/33a762234d117e329528efa19a3087459d62db09, inline://clean-tree-status, inline://npm-test-output-block]",
-      "reconciledAt": "2026-04-11T07:09:48.564Z"
+      "reconciledAt": "2026-04-14T09:37:46.795Z"
     }
   ],
-  "updatedAt": "2026-04-11T07:09:48.564Z"
+  "updatedAt": "2026-04-14T09:37:46.795Z"
 }

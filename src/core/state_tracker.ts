@@ -26,6 +26,15 @@ export const STATE_RETENTION_CLASS = Object.freeze({
 });
 
 export const STATE_RETENTION_RULES = Object.freeze({
+  alerts: {
+    key: "alerts",
+    fileName: "alerts.json",
+    retentionClass: STATE_RETENTION_CLASS.WARM_TELEMETRY,
+    format: "json-history",
+    historyKey: "entries",
+    maxEntries: 120,
+    newestFirst: false,
+  },
   parserBaselineMetrics: {
     key: "parserBaselineMetrics",
     fileName: "parser_baseline_metrics.json",
@@ -476,6 +485,7 @@ export async function appendFailureClassification(config, classification) {
 
 export async function appendAlert(config, alert) {
   const alertsFile = path.join(config.paths.stateDir, "alerts.json");
+  const alertsRule = STATE_RETENTION_RULES.alerts;
   const state = await readJson(alertsFile, {
     entries: [],
     updatedAt: new Date().toISOString()
@@ -492,10 +502,9 @@ export async function appendAlert(config, alert) {
   };
 
   state.entries.push(entry);
-
-  if (state.entries.length > 200) {
-    state.entries = state.entries.slice(-200);
-  }
+  state.entries = applyRetentionCap(state.entries, alertsRule.maxEntries, {
+    newestFirst: alertsRule.newestFirst,
+  });
 
   state.updatedAt = new Date().toISOString();
   await writeJson(alertsFile, state);

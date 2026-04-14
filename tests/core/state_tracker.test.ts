@@ -5,6 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import {
   ALERT_SEVERITY,
+  appendAlert,
   appendProgress,
   loadTestsState,
   updateTaskInTestsState,
@@ -61,6 +62,25 @@ describe("state_tracker", () => {
     const raw = await fs.readFile(config.paths.progressFile, "utf8");
     assert.ok(raw.includes("hello world"));
     assert.equal(ALERT_SEVERITY.CRITICAL, "critical");
+  });
+
+  it("caps alerts history using the centralized retention rule", async () => {
+    const limit = STATE_RETENTION_RULES.alerts.maxEntries;
+
+    for (let index = 0; index < limit + 5; index += 1) {
+      await appendAlert(config, {
+        severity: ALERT_SEVERITY.MEDIUM,
+        source: "test",
+        title: `alert-${index}`,
+        message: `message-${index}`,
+        correlationId: `corr-${index}`,
+      });
+    }
+
+    const snapshot = JSON.parse(await fs.readFile(path.join(stateDir, "alerts.json"), "utf8"));
+    assert.equal(snapshot.entries.length, limit);
+    assert.equal(snapshot.entries[0].id, "corr-5");
+    assert.equal(snapshot.entries.at(-1).id, `corr-${limit + 4}`);
   });
 });
 

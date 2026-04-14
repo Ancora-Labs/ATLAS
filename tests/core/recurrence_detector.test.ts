@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { detectRecurrences } from "../../src/core/recurrence_detector.js";
+import { buildRecurrenceEscalations, detectRecurrences } from "../../src/core/recurrence_detector.js";
 
 describe("recurrence_detector", () => {
   it("sorts recurrences by recurrenceWeightedPriority descending", () => {
@@ -24,5 +24,20 @@ describe("recurrence_detector", () => {
     ];
     const matches = detectRecurrences(postmortems, { threshold: 2, window: 20 });
     assert.equal(matches.length, 0);
+  });
+
+  it("builds human-readable escalation reasons for recurrence alerts", () => {
+    const escalations = buildRecurrenceEscalations([{
+      pattern: "Recurring defect tag: product",
+      count: 4,
+      channel: "product",
+      tag: "product",
+      severity: "warning",
+    }] as any);
+
+    assert.equal(escalations.length, 1);
+    assert.match(escalations[0].reason, /4 time\(s\)/);
+    assert.match(escalations[0].reason, /channel=product/);
+    assert.match(escalations[0].reason, /tag=product/);
   });
 });
