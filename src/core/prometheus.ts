@@ -15,7 +15,15 @@ import fs from "node:fs/promises";
 import { appendFileSync } from "node:fs";
 import { readJson, writeJson, spawnAsync } from "./fs_utils.js";
 import { appendAlert, appendProgress, appendInterventionOptimizerEntry, recordCapabilityExecution, appendPromptCacheTelemetry } from "./state_tracker.js";
-import { getRoleRegistry, LANE_WORKER_NAMES } from "./role_registry.js";
+import {
+  buildWorkerTopologyContract,
+  getRoleRegistry,
+  LANE_WORKER_NAMES,
+  normalizeExecutionPattern,
+  normalizePrometheusPlanningMode,
+  PROMETHEUS_PLANNING_MODE,
+  selectExecutionPatternForPlans,
+} from "./role_registry.js";
 import { buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
 import { addSchemaVersion, STATE_FILE_TYPE } from "./schema_registry.js";
 import { PREMORTEM_RISK_LEVEL } from "./athena_reviewer.js";
@@ -65,6 +73,7 @@ import {
   isCiBreakFinding,
   isSystemLearningCiDebtFinding,
   SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS,
+  validateExecutionStrategyContract,
   type WaveTaskObject,
 } from "./plan_contract_validator.js";
 import {
@@ -80,6 +89,8 @@ import {
   estimateTokenCost,
   compilePrometheusContextShortlist,
   derivePromptFamilyKey,
+  buildPromptLineageMarker,
+  normalizePromptLineageContract,
   buildCandidateGenerationSection,
   type ShortlistItem,
 } from "./prompt_compiler.js";
@@ -169,6 +180,23 @@ export function detectModelFallback(rawText) {
   const match = text.match(/Warning:\s*Custom agent\s+"([^"]+)"\s+specifies model\s+"([^"]+)"\s+which is not available;\s+using\s+"([^"]+)"\s+instead/i);
   if (!match) return null;
   return { agent: match[1], requestedModel: match[2], fallbackModel: match[3] };
+}
+
+export function resolveCapturedAgentRawOutput(
+  resultStdout: unknown,
+  resultStderr: unknown,
+  streamedStdout: unknown,
+  streamedStderr: unknown,
+): string {
+  const resultCombined = `${String(resultStdout || "")}\n${String(resultStderr || "")}`.trim();
+  const streamedCombined = `${String(streamedStdout || "")}\n${String(streamedStderr || "")}`.trim();
+  if (!streamedCombined) return resultCombined;
+  if (!resultCombined) return streamedCombined;
+  const resultHasTerminalMarker = resultCombined.includes("===END===") || resultCombined.includes("===SON===");
+  const streamedHasTerminalMarker = streamedCombined.includes("===END===") || streamedCombined.includes("===SON===");
+  if (streamedHasTerminalMarker && !resultHasTerminalMarker) return streamedCombined;
+  if (streamedCombined.length > resultCombined.length) return streamedCombined;
+  return resultCombined;
 }
 
 export function buildPrometheusPlanningPolicy(config, laneTelemetry?: Record<string, unknown> | null, opts: any = {}) {
@@ -3566,6 +3594,23 @@ export interface ExecutionWave {
   [key: string]: unknown;
 }
 
+function resolvePrometheusPlanningModeFromContext(parsed: any, aiResult: any = {}) {
+  const strategyMode = parsed?.executionStrategy?.planningMode;
+  const directMode = parsed?.planningMode;
+  const aiMode = aiResult?.planningMode;
+  const requestedBy = String(aiResult?.requestedBy || "").toLowerCase();
+  const hasRepairFeedback = aiResult?.repairFeedback != null;
+  return normalizePrometheusPlanningMode(
+    strategyMode
+    || directMode
+    || aiMode
+    || (hasRepairFeedback || /repair|replan|athena.*rejection/.test(requestedBy)
+      ? PROMETHEUS_PLANNING_MODE.REPAIR_PLAN
+      : PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION),
+    PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION,
+  ) || PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION;
+}
+
 /**
  * Normalizes string entries in executionStrategy.waves[*].tasks to the canonical
  * {role, task, task_id} object shape.  This is the single normalization gate:
@@ -3587,10 +3632,34 @@ export function normalizeExecutionStrategyWaveTasks(strategy: any): { waves: Exe
     });
     return { ...w, tasks };
   });
-  return { ...strategy, waves };
+  const normalizedStrategy = { ...strategy, waves };
+  const planningMode = normalizePrometheusPlanningMode(
+    normalizedStrategy.planningMode,
+    PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION,
+  ) || PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION;
+  const seededPlans = waves.flatMap((wave) => (Array.isArray(wave.tasks) ? wave.tasks : []).map((task) => ({
+    role: task.role,
+    wave: wave.wave,
+    capabilityLane: task.capabilityLane,
+  })));
+  const workerTopology = buildWorkerTopologyContract(seededPlans, { planningMode });
+  const executionPattern = normalizeExecutionPattern(
+    normalizedStrategy.executionPattern,
+    selectExecutionPatternForPlans(seededPlans, { planningMode, workerTopology }),
+  );
+  return {
+    ...normalizedStrategy,
+    planningMode,
+    executionPattern,
+    workerTopology,
+  };
 }
 
-function buildExecutionStrategyFromPlans(plans = []) {
+function buildExecutionStrategyFromPlans(plans = [], opts: { planningMode?: unknown } = {}) {
+  const planningMode = normalizePrometheusPlanningMode(
+    opts.planningMode,
+    PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION,
+  ) || PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION;
   const waveMap = new Map();
   for (const plan of plans) {
     const wave = Number.isFinite(Number(plan.wave)) ? Number(plan.wave) : 1;
@@ -3604,7 +3673,11 @@ function buildExecutionStrategyFromPlans(plans = []) {
   }
 
   const sortedWaves = [...waveMap.keys()].sort((a, b) => a - b);
+  const workerTopology = buildWorkerTopologyContract(plans, { planningMode });
   return {
+    planningMode,
+    executionPattern: selectExecutionPatternForPlans(plans, { planningMode, workerTopology }),
+    workerTopology,
     waves: sortedWaves.map((wave, idx) => ({
       wave,
       tasks: waveMap.get(wave),
@@ -4585,6 +4658,18 @@ function buildParserContractRetryDiff(parsed: any): string {
   return `missing=[${missingText}]; invalid=[${invalidText}]`;
 }
 
+function sanitizeParserContractCandidateFields(parsed: any): any {
+  if (!parsed || typeof parsed !== "object") return parsed;
+  const next = { ...parsed };
+  if (typeof next.keyFindings === "string") {
+    next.keyFindings = sanitizePlanningFieldForPersistence(next.keyFindings);
+  }
+  if (typeof next.strategicNarrative === "string") {
+    next.strategicNarrative = sanitizePlanningFieldForPersistence(next.strategicNarrative);
+  }
+  return next;
+}
+
 export async function enforceParserContractBeforeNormalization(
   parsedCandidate: any,
   opts: {
@@ -4594,17 +4679,18 @@ export async function enforceParserContractBeforeNormalization(
     buildRetryCandidate: (diff: string) => Promise<any | null>;
   },
 ): Promise<{ ok: boolean; parsed: any; retried: boolean; violationReason?: string }> {
-  if (hasValidParserContractFields(parsedCandidate)) {
-    return { ok: true, parsed: parsedCandidate, retried: false };
+  const sanitizedInitialCandidate = sanitizeParserContractCandidateFields(parsedCandidate);
+  if (hasValidParserContractFields(sanitizedInitialCandidate)) {
+    return { ok: true, parsed: sanitizedInitialCandidate, retried: false };
   }
-  const parserDiff = buildParserContractRetryDiff(parsedCandidate);
+  const parserDiff = buildParserContractRetryDiff(sanitizedInitialCandidate);
   await opts.onRetryDiff?.(parserDiff);
-  const retryCandidate = await opts.buildRetryCandidate(parserDiff);
+  const retryCandidate = sanitizeParserContractCandidateFields(await opts.buildRetryCandidate(parserDiff));
   if (retryCandidate && hasValidParserContractFields(retryCandidate)) {
     await opts.onRetrySuccess?.();
     return { ok: true, parsed: retryCandidate, retried: true };
   }
-  const secondDiff = buildParserContractRetryDiff(retryCandidate || parsedCandidate);
+  const secondDiff = buildParserContractRetryDiff(retryCandidate || sanitizedInitialCandidate);
   await opts.onRetryViolation?.(secondDiff);
   return {
     ok: false,
@@ -4708,15 +4794,34 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
   const projectHealth = ["good", "needs-work", "critical"].includes(health)
     ? health
     : inferProjectHealth(analysisText);
+  const planningMode = resolvePrometheusPlanningModeFromContext(input, aiResult);
 
   let executionStrategy = (input.executionStrategy && typeof input.executionStrategy === "object")
     ? input.executionStrategy
     : { waves: Array.isArray(input.waves) ? input.waves : [] };
   if (!Array.isArray(executionStrategy.waves) || executionStrategy.waves.length === 0) {
-    executionStrategy = buildExecutionStrategyFromPlans(plans);
+    executionStrategy = buildExecutionStrategyFromPlans(plans, { planningMode });
   }
   // Normalize string tasks to canonical {role, task, task_id} objects — no string ambiguity.
-  executionStrategy = normalizeExecutionStrategyWaveTasks(executionStrategy);
+  executionStrategy = normalizeExecutionStrategyWaveTasks({
+    ...executionStrategy,
+    planningMode: executionStrategy?.planningMode || planningMode,
+  });
+  const executionStrategyContract = validateExecutionStrategyContract({
+    plans,
+    executionStrategy,
+    planningMode,
+  });
+  if (!executionStrategyContract.valid) {
+    executionStrategy = buildExecutionStrategyFromPlans(plans, { planningMode });
+  } else {
+    executionStrategy = {
+      ...executionStrategy,
+      planningMode: executionStrategyContract.planningMode,
+      executionPattern: executionStrategyContract.executionPattern,
+      workerTopology: executionStrategyContract.workerTopology,
+    };
+  }
 
   let requestBudget = (input.requestBudget && Number.isFinite(Number(input.requestBudget.estimatedPremiumRequestsTotal)))
     ? {
@@ -4888,6 +4993,10 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
     ...input,
     analysis: analysisText || "Prometheus analysis available but narrative was empty.",
     projectHealth,
+    planningMode,
+    promptLineage: input?.promptLineage && typeof input.promptLineage === "object"
+      ? normalizePromptLineageContract(input.promptLineage)
+      : null,
     _projectHealthExplicit: healthFieldExplicit,
     executionStrategy,
     requestBudget,
@@ -5094,8 +5203,9 @@ If any link is missing, that packet is incomplete and must be revised before fin
 Do NOT emit shallow recommendations that skip code-level implementation mapping.`),
 
   outputFormat: ivs("output-format", `## OUTPUT FORMAT
-Write a substantial senior-level narrative master plan.
-The plan must be centered on TOTAL SYSTEM CAPACITY INCREASE, not generic hardening.
+When planningMode=master_evolution, write a substantial senior-level narrative master plan.
+When planningMode=repair_plan, write a focused repair plan that fixes the rejected plan contract without widening scope into a new master scan.
+Every plan must still be centered on TOTAL SYSTEM CAPACITY INCREASE, not generic hardening.
 First analyze how BOX can increase its capacity in every dimension, then derive what should change.
 
 Include ALL of these sections (in this order):
@@ -5176,6 +5286,15 @@ The JSON block must contain all of the following fields:
     "byRole": [{ "role": "...", "planCount": <n>, "estimatedRequests": <n> }]
   },
   "executionStrategy": {
+    "planningMode": "master_evolution|repair_plan",
+    "executionPattern": "wave_parallel|single_worker|serial_repair",
+    "workerTopology": {
+      "workerCount": <n>,
+      "laneCount": <n>,
+      "maxParallelWorkers": <n>,
+      "roles": [{ "role": "...", "lane": "...", "taskCount": <n>, "waves": [1], "specialized": true }],
+      "lanes": [{ "lane": "...", "worker": "...", "taskCount": <n>, "roleCount": <n>, "specialized": true }]
+    },
     "waves": [{ "wave": <n>, "tasks": [{"role": "...", "task": "...", "task_id": "..."}], "dependsOnWaves": [], "maxParallelWorkers": <n> }]
   },
   "plans": [{
@@ -6332,7 +6451,7 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   const repoRoot = process.cwd();
   const registry = getRoleRegistry(config);
   const prometheusName = registry?.deepPlanner?.name || "Prometheus";
-  const prometheusModel = registry?.deepPlanner?.model || "gpt-5.3-codex";
+  const prometheusModel = registry?.deepPlanner?.model || "gpt-5.4";
   const command = config.env?.copilotCliCommand || "copilot";
 
   const userPrompt = options.prompt || options.prometheusReason || "Full repository self-evolution analysis";
@@ -6833,6 +6952,9 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
 
     repairFeedbackSection = `\n\n## CRITICAL: ATHENA REJECTION REPAIR FEEDBACK\nThe previous plan was REJECTED by Athena. Self-improvement has analyzed the failure.\nYou MUST address every item below. Repeating the same mistakes will cause a hard stop.\n\n### ROOT CAUSES OF REJECTION\n${causes || "- No root causes identified"}\n\n### BEHAVIOR PATCHES (you MUST follow these)\n${patches || "- No patches specified"}\n\n### PLAN CONSTRAINTS (mandatory for this re-plan)\n- Must include: ${JSON.stringify(constraints.mustInclude || [])}\n- Must NOT repeat: ${JSON.stringify(constraints.mustNotRepeat || [])}\n- Verification standard: ${constraints.verificationStandard || "task-specific, measurable"}\n- Wave strategy: ${constraints.waveStrategy || "explicit inter-wave dependencies required"}\n\n### VERIFICATION UPGRADES REQUIRED\n${upgrades || "- No specific upgrades"}\n\nFAILURE TO COMPLY WITH THESE CONSTRAINTS WILL RESULT IN CYCLE TERMINATION.\n`;
   }
+  const planningMode = options.repairFeedback
+    ? PROMETHEUS_PLANNING_MODE.REPAIR_PLAN
+    : PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION;
 
   // ── Architecture drift summary injection ─────────────────────────────────
   // Inject unresolved stale doc references and deprecated token usage so
@@ -6867,6 +6989,7 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
 
   // Planning policy
   cycleDeltaParts.push(`## PLANNING POLICY
+- planningMode: ${planningMode}
 - maxTasks: ${planningPolicy.maxTasks > 0 ? planningPolicy.maxTasks : "UNLIMITED"}
 - maxWorkersPerWave: ${planningPolicy.maxWorkersPerWave}
 - maxPlansPerPacket: ${planningPolicy.maxPlansPerPacket} (HARD CAP — do not exceed)
@@ -6889,6 +7012,13 @@ RULE: Every packet MUST contain enough work to justify a full AI context call. T
 4. Each packet's scope should cover multiple related files and multiple related behaviors.
 5. Plans covering 5+ target files MUST declare estimatedExecutionTokens >= 8000.
 6. EXCEPTION: Only create separate packets when there is a HARD dependency ordering requirement.
+
+## PLANNING MODE CONTRACT
+- master_evolution = produce the primary capacity-increase plan for the cycle. Favor explicit worker topology and parallel wave structure when evidence supports it.
+- repair_plan = repair a rejected plan with the smallest deterministic changes needed to make it dispatchable. Do NOT widen scope into a fresh repo-wide master plan.
+- You MUST emit executionStrategy.planningMode, executionStrategy.executionPattern, and executionStrategy.workerTopology in the JSON block.
+- executionPattern MUST be one of: wave_parallel | single_worker | serial_repair.
+- workerTopology MUST include workerCount, laneCount, maxParallelWorkers, roles[], and lanes[] derived from the actual plans you emit.
 
 ## STRUCTURAL CORRECTNESS — LEARN THESE PATTERNS
 ### dependencies — use EXACT packet titles, never aliases
@@ -6967,6 +7097,7 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
     stableNames: Array.from(PROMETHEUS_STATIC_SECTION_NAMES),
   });
   const filteredCycleDelta = markedCycleDelta.filter(s => String(s.content || "").trim().length > 0);
+  let promptLineage = null;
   if (filteredCycleDelta.length > 0) {
     const cacheableSections = filteredCycleDelta.filter((section) => section.cacheable === true);
     const estimatedSavedTokens = cacheableSections.reduce(
@@ -6974,6 +7105,24 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
       0,
     );
     const promptFamilyKey = derivePromptFamilyKey(filteredCycleDelta, { salt: "prometheus-cycle-delta" });
+    const priorPromptLineage = options?.promptLineage && typeof options.promptLineage === "object"
+      ? normalizePromptLineageContract(options.promptLineage)
+      : null;
+    promptLineage = normalizePromptLineageContract({
+      lineageId: priorPromptLineage?.lineageId || `planner:${promptFamilyKey}`,
+      parentLineageId: priorPromptLineage?.lineageId || null,
+      promptFamilyKey,
+      familyLabel: "prometheus-cycle-delta",
+      agent: "prometheus",
+      stage: "planner",
+      checkpointNs: "planner",
+      checkpointId: options?.promptCheckpointId || priorPromptLineage?.checkpointId || null,
+      resumeFromCheckpointId: options?.resumeFromCheckpointId || priorPromptLineage?.checkpointId || null,
+      stablePrefixHash: promptFamilyKey,
+      totalSegments: filteredCycleDelta.length,
+      cacheableSegments: cacheableSections.length,
+      estimatedSavedTokens,
+    });
     appendPromptCacheTelemetry(config, {
       promptFamilyKey,
       agent: "prometheus",
@@ -6982,11 +7131,14 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
       totalSegments: filteredCycleDelta.length,
       cachedSegments: cacheableSections.length,
       estimatedSavedTokens,
+      lineageId: promptLineage.lineageId || undefined,
+      cycleId: String((config as any)?.cycleId || ""),
     }).catch(() => { /* prompt-cache telemetry is advisory only */ });
   }
   const compiledCycleDelta = _compilePrompt(filteredCycleDelta, { tokenBudget: 8000 });
 
-  const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
+  const promptLineageMarker = promptLineage ? `${buildPromptLineageMarker(promptLineage)}\n` : "";
+  const contextPrompt = `${promptLineageMarker}TARGET REPO: ${config.env?.targetRepo || "unknown"}
 REPO PATH: ${repoRoot}
 STATE DIR: ${stateDir}
 
@@ -7034,6 +7186,7 @@ ${compiledCycleDelta}`;
     allowAll: true,
     noAskUser: true,
     maxContinues: undefined,
+    runContract: promptLineage ? { promptLineage } : undefined,
   });
 
   appendLiveLogSync(stateDir, `\n[copilot_stream_start] ${ts()}\n`);
@@ -7061,6 +7214,8 @@ ${compiledCycleDelta}`;
     ).catch(() => { /* non-fatal heartbeat logging */ });
   }, heartbeatIntervalMs);
 
+  let streamedStdout = "";
+  let streamedStderr = "";
   let result;
   try {
     result = await spawnAsync(command, args, {
@@ -7071,10 +7226,12 @@ ${compiledCycleDelta}`;
       earlyExitMarker: "===END===",
       onStdout(chunk) {
         const text = chunk.toString("utf8");
+        streamedStdout += text;
         appendLiveLogSync(stateDir, text);
       },
       onStderr(chunk) {
         const text = chunk.toString("utf8");
+        streamedStderr += text;
         appendLiveLogSync(stateDir, text);
       }
     });
@@ -7086,8 +7243,8 @@ ${compiledCycleDelta}`;
 
   const stdout = String((result as any)?.stdout || "");
   const stderr = String((result as any)?.stderr || "");
-  const raw = stdout || stderr;
-  const combinedRaw = `${stdout}\n${stderr}`.trim();
+  const combinedRaw = resolveCapturedAgentRawOutput(stdout, stderr, streamedStdout, streamedStderr);
+  const raw = combinedRaw;
 
   // ── Check for model fallback ──────────────────────────────────────────────
   const fallback = detectModelFallback(combinedRaw);
@@ -7200,18 +7357,23 @@ Mandatory parser fields:
             allowAll: true,
             noAskUser: true,
             maxContinues: undefined,
+            runContract: promptLineage ? { promptLineage } : undefined,
           });
           appendLiveLogSync(stateDir, `\n[copilot_stream_retry_start] ${ts()}\n`);
+          let retryStreamStdout = "";
+          let retryStreamStderr = "";
           const retryResult = await spawnAsync(command, retryArgs, {
             env: process.env,
             timeoutMs: prometheusTimeoutMs,
             earlyExitMarker: "===END===",
             onStdout(chunk) {
               const text = chunk.toString("utf8");
+              retryStreamStdout += text;
               appendLiveLogSync(stateDir, text);
             },
             onStderr(chunk) {
               const text = chunk.toString("utf8");
+              retryStreamStderr += text;
               appendLiveLogSync(stateDir, text);
             }
           });
@@ -7224,9 +7386,12 @@ Mandatory parser fields:
             );
             return null;
           }
-          const retryStdout = String(retryResultObj.stdout || "");
-          const retryStderr = String(retryResultObj.stderr || "");
-          const retryRaw = `${retryStdout}\n${retryStderr}`.trim();
+          const retryRaw = resolveCapturedAgentRawOutput(
+            retryResultObj.stdout,
+            retryResultObj.stderr,
+            retryStreamStdout,
+            retryStreamStderr,
+          );
           retryAiResult = parseAgentOutput(retryRaw);
           return retryAiResult?.parsed || buildNarrativeFallbackParsed({ ...retryAiResult, raw: retryRaw });
         } catch (retryError) {
@@ -7278,18 +7443,34 @@ Regenerate the full response ensuring all strategic fields (analysis, strategicN
           allowAll: true,
           noAskUser: true,
           maxContinues: undefined,
+          runContract: promptLineage ? { promptLineage } : undefined,
         });
         appendLiveLogSync(stateDir, `\n[fidelity_retry_start] ${ts()}\n`);
+        let fidelityRetryStreamStdout = "";
+        let fidelityRetryStreamStderr = "";
         const fidelityRetryResult = await spawnAsync(command, fidelityRetryArgs, {
           env: process.env,
           timeoutMs: prometheusTimeoutMs,
           earlyExitMarker: "===END===",
-          onStdout(chunk) { appendLiveLogSync(stateDir, chunk.toString("utf8")); },
-          onStderr(chunk)  { appendLiveLogSync(stateDir, chunk.toString("utf8")); },
+          onStdout(chunk) {
+            const text = chunk.toString("utf8");
+            fidelityRetryStreamStdout += text;
+            appendLiveLogSync(stateDir, text);
+          },
+          onStderr(chunk)  {
+            const text = chunk.toString("utf8");
+            fidelityRetryStreamStderr += text;
+            appendLiveLogSync(stateDir, text);
+          },
         }) as { status?: number; stdout?: string; stderr?: string };
         appendLiveLogSync(stateDir, `\n[fidelity_retry_end] ${ts()} exit=${fidelityRetryResult.status}\n`);
         if (fidelityRetryResult.status === 0) {
-          const retryRaw = `${String(fidelityRetryResult.stdout || "")}\n${String(fidelityRetryResult.stderr || "")}`.trim();
+          const retryRaw = resolveCapturedAgentRawOutput(
+            fidelityRetryResult.stdout,
+            fidelityRetryResult.stderr,
+            fidelityRetryStreamStdout,
+            fidelityRetryStreamStderr,
+          );
           const retryAi = parseAgentOutput(retryRaw);
           fidelityRetryParsed = retryAi?.parsed || buildNarrativeFallbackParsed({ ...retryAi, raw: retryRaw });
         }
@@ -7327,11 +7508,11 @@ Regenerate the full response ensuring all strategic fields (analysis, strategicN
   if (candidatePlanningPolicy.enabled) {
     const candidateSelection = selectPrometheusCandidatePlanSet(
       rawParsedInput,
-      { ...aiResult, raw, researchTopics: researchTopicsList },
+      { ...aiResult, raw, researchTopics: researchTopicsList, planningMode, repairFeedback: options.repairFeedback, requestedBy: options.requestedBy },
       { diagnosticsFreshnessAdmission },
     );
     if (candidateSelection.candidateSets.length >= 2 && candidateSelection.usedSelection) {
-      const nextExecutionStrategy = buildExecutionStrategyFromPlans(candidateSelection.selectedPlans);
+      const nextExecutionStrategy = buildExecutionStrategyFromPlans(candidateSelection.selectedPlans, { planningMode });
       rawParsedInput = {
         ...rawParsedInput,
         plans: candidateSelection.selectedPlans,
@@ -7361,9 +7542,9 @@ Regenerate the full response ensuring all strategic fields (analysis, strategicN
       rawParsedInput = {
         ...rawParsedInput,
         plans: [],
-        executionStrategy: buildExecutionStrategyFromPlans([]),
+        executionStrategy: buildExecutionStrategyFromPlans([], { planningMode }),
         requestBudget: {
-          ...buildDeterministicRequestBudget([], buildExecutionStrategyFromPlans([])),
+          ...buildDeterministicRequestBudget([], buildExecutionStrategyFromPlans([], { planningMode })),
           _fallback: false,
         },
         failReason: "candidate-selection-gate",
@@ -7468,27 +7649,35 @@ Mandatory requirements:
           allowAll: true,
           noAskUser: true,
           maxContinues: undefined,
+          runContract: promptLineage ? { promptLineage } : undefined,
         });
         appendLiveLogSync(stateDir, `\n[copilot_stream_retry_start] ${ts()}\n`);
+        let retryStreamStdout = "";
+        let retryStreamStderr = "";
         const retryResult = await spawnAsync(command, retryArgs, {
           env: process.env,
           timeoutMs: prometheusTimeoutMs,
           earlyExitMarker: "===END===",
           onStdout(chunk) {
             const text = chunk.toString("utf8");
+            retryStreamStdout += text;
             appendLiveLogSync(stateDir, text);
           },
           onStderr(chunk) {
             const text = chunk.toString("utf8");
+            retryStreamStderr += text;
             appendLiveLogSync(stateDir, text);
           }
         });
         const retryResultObj = retryResult as { status?: number; stdout?: string; stderr?: string };
         appendLiveLogSync(stateDir, `\n[copilot_stream_retry_end] ${ts()} exit=${retryResultObj.status}\n`);
         if (retryResultObj.status === 0) {
-          const retryStdout = String(retryResultObj.stdout || "");
-          const retryStderr = String(retryResultObj.stderr || "");
-          const retryRaw = `${retryStdout}\n${retryStderr}`.trim();
+          const retryRaw = resolveCapturedAgentRawOutput(
+            retryResultObj.stdout,
+            retryResultObj.stderr,
+            retryStreamStdout,
+            retryStreamStderr,
+          );
           const retryAiResult = parseAgentOutput(retryRaw);
           retryRawParsedInput = retryAiResult?.parsed || buildNarrativeFallbackParsed({ ...retryAiResult, raw: retryRaw });
         } else {
@@ -7603,22 +7792,34 @@ Mandatory requirements:
           allowAll: true,
           noAskUser: true,
           maxContinues: undefined,
+          runContract: promptLineage ? { promptLineage } : undefined,
         });
         appendLiveLogSync(stateDir, `\n[copilot_stream_retry_start] ${ts()}\n`);
+        let retryStreamStdout = "";
+        let retryStreamStderr = "";
         const retryResult = await spawnAsync(command, retryArgs, {
           env: process.env,
           timeoutMs: prometheusTimeoutMs,
           earlyExitMarker: "===END===",
           onStdout(chunk) {
-            appendLiveLogSync(stateDir, chunk.toString("utf8"));
+            const text = chunk.toString("utf8");
+            retryStreamStdout += text;
+            appendLiveLogSync(stateDir, text);
           },
           onStderr(chunk) {
-            appendLiveLogSync(stateDir, chunk.toString("utf8"));
+            const text = chunk.toString("utf8");
+            retryStreamStderr += text;
+            appendLiveLogSync(stateDir, text);
           },
         }) as { status?: number; stdout?: string; stderr?: string };
         appendLiveLogSync(stateDir, `\n[copilot_stream_retry_end] ${ts()} exit=${retryResult.status}\n`);
         if (retryResult.status === 0) {
-          const retryRaw = `${String(retryResult.stdout || "")}\n${String(retryResult.stderr || "")}`.trim();
+          const retryRaw = resolveCapturedAgentRawOutput(
+            retryResult.stdout,
+            retryResult.stderr,
+            retryStreamStdout,
+            retryStreamStderr,
+          );
           const retryAiResult = parseAgentOutput(retryRaw);
           retryRoleParsedInput = retryAiResult?.parsed || buildNarrativeFallbackParsed({ ...retryAiResult, raw: retryRaw });
         } else {
@@ -8002,7 +8203,7 @@ Mandatory requirements:
 
   const parsedForValidation = normalizePrometheusParsedOutput(
     rawParsedInput,
-    { ...aiResult, raw, researchTopics: researchTopicsList }
+    { ...aiResult, raw, researchTopics: researchTopicsList, planningMode, repairFeedback: options.repairFeedback, requestedBy: options.requestedBy }
   );
 
   if (planningPolicy.requireDependencyAwareWaves && Array.isArray(parsedForValidation.plans) && parsedForValidation.plans.length > 0) {
@@ -8019,7 +8220,9 @@ Mandatory requirements:
         `[PROMETHEUS][WAVE_COMPACTION] Reduced waves ${uniqueWaveCountBefore} -> ${uniqueWaveCountAfter} using explicit dependency graph`
       );
     }
-    parsedForValidation.executionStrategy = buildExecutionStrategyFromPlans(parsedForValidation.plans);
+    parsedForValidation.executionStrategy = buildExecutionStrategyFromPlans(parsedForValidation.plans, {
+      planningMode: parsedForValidation?.executionStrategy?.planningMode || parsedForValidation?.planningMode || planningMode,
+    });
     parsedForValidation.requestBudget = {
       ...buildDeterministicRequestBudget(parsedForValidation.plans, parsedForValidation.executionStrategy || {}),
       _fallback: false,
@@ -8162,7 +8365,9 @@ Mandatory requirements:
       parsed._planContractGateCodes = contractGateOutcome.blockedViolationCodes;
       parsed.failReason = "plan-contract-gate";
       parsed.plans = [];
-      parsed.executionStrategy = buildExecutionStrategyFromPlans([]);
+      parsed.executionStrategy = buildExecutionStrategyFromPlans([], {
+        planningMode: parsed?.executionStrategy?.planningMode || parsed?.planningMode || planningMode,
+      });
       parsed.requestBudget = {
         ...buildDeterministicRequestBudget([], parsed.executionStrategy || {}),
         _fallback: false,
@@ -8357,7 +8562,9 @@ Mandatory requirements:
 
   // Ensure execution strategy and request budget remain concrete after plan normalization.
   if (!parsed.executionStrategy || !Array.isArray(parsed.executionStrategy.waves) || parsed.executionStrategy.waves.length === 0) {
-    parsed.executionStrategy = buildExecutionStrategyFromPlans(parsed.plans || []);
+    parsed.executionStrategy = buildExecutionStrategyFromPlans(parsed.plans || [], {
+      planningMode: parsed?.executionStrategy?.planningMode || parsed?.planningMode || planningMode,
+    });
   }
   if (!parsed.requestBudget || parsed.requestBudget._fallback) {
     parsed.requestBudget = {
@@ -8414,6 +8621,7 @@ Mandatory requirements:
     model: prometheusModel,
     repo: config.env?.targetRepo,
     requestedBy,
+    promptLineage,
     researchContext: {
       injected: Boolean(researchSectionText),
       topicCount: researchTopicCount,
@@ -8429,6 +8637,10 @@ Mandatory requirements:
       preflightResult: mandatoryFindingsPreflightResult,
     },
   });
+  (analysis as any).executionStrategy = {
+    ...((analysis as any).executionStrategy || {}),
+    promptLineage,
+  };
 
   try {
     // Sanitize plan text fields before persistence to strip operational tool traces.

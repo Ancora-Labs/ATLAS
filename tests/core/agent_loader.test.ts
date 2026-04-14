@@ -51,6 +51,40 @@ describe("buildAgentArgs", () => {
     assert.ok(!args.includes("--allow-all"));
     assert.ok(args.includes("--no-ask-user"));
   });
+
+  it("prepends a stable prompt-lineage preamble when runContract carries lineage", () => {
+    const args = buildAgentArgs({
+      agentSlug: "prometheus",
+      prompt: "TARGET REPO: box",
+      runContract: {
+        promptLineage: {
+          lineageId: "planner:abc",
+          promptFamilyKey: "family-123",
+          agent: "prometheus",
+          stage: "planner",
+          totalSegments: 4,
+          cacheableSegments: 2,
+          estimatedSavedTokens: 80,
+        },
+      },
+    });
+    const promptIndex = args.indexOf("-p");
+    const promptText = String(args[promptIndex + 1] || "");
+    assert.ok(promptText.startsWith("## PROMPT LINEAGE"));
+    assert.ok(promptText.includes("promptFamilyKey=family-123"));
+    assert.ok(promptText.includes("TARGET REPO: box"));
+  });
+
+  it("extracts prompt-lineage metadata from serialized prompt text", () => {
+    const args = buildAgentArgs({
+      agentSlug: "athena",
+      prompt: 'Execution Strategy: {"promptLineage":{"lineageId":"planner:def","promptFamilyKey":"family-456","agent":"prometheus","stage":"planner","totalSegments":3,"cacheableSegments":1,"estimatedSavedTokens":40}}',
+    });
+    const promptIndex = args.indexOf("-p");
+    const promptText = String(args[promptIndex + 1] || "");
+    assert.ok(promptText.startsWith("## PROMPT LINEAGE"));
+    assert.ok(promptText.includes("lineageId=planner:def"));
+  });
 });
 
 describe("agent execution profiles", () => {

@@ -250,6 +250,27 @@ describe("writeCheckpoint — cancellation-scope", () => {
     assert.ok(path.basename(filePath).includes("reviewer"));
   });
 
+  it("writeBoundaryCheckpoint persists normalized prompt-lineage continuity state", async () => {
+    const config = { paths: { stateDir: tmpDir } };
+    const filePath = await writeBoundaryCheckpoint(config, {
+      promptLineage: {
+        lineageId: "planner:abc",
+        promptFamilyKey: "family-123",
+        cacheableSegments: "2.9",
+        totalSegments: -4,
+        estimatedSavedTokens: 60,
+      },
+    }, {
+      thread_id: "cycle-lineage",
+      checkpoint_ns: CHECKPOINT_NS.PLANNER,
+    });
+    const parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
+    assert.equal(parsed.promptLineage.lineageId, "planner:abc");
+    assert.equal(parsed.promptLineage.promptFamilyKey, "family-123");
+    assert.equal(parsed.promptLineage.cacheableSegments, 2);
+    assert.equal(parsed.promptLineage.totalSegments, 0);
+  });
+
   it("negative path: writeBoundaryCheckpoint handles missing thread_id gracefully", async () => {
     const config = { paths: { stateDir: tmpDir } };
     const filePath = await writeBoundaryCheckpoint(config, { data: true }, {

@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { readJsonSafe, READ_JSON_REASON, writeJsonAtomic } from "./fs_utils.js";
 import { unlink } from "node:fs/promises";
 import type { CancellationToken } from "./daemon_control.js";
+import { normalizePromptLineageContract } from "./prompt_compiler.js";
 
 export const CHECKPOINT_SCHEMA_VERSION = 2;
 export const CHECKPOINT_FORMAT = "resumable_v2";
@@ -143,6 +144,17 @@ function extractPayloadFields(checkpoint) {
   return payload;
 }
 
+function normalizeCheckpointPromptLineageFields(payload: Record<string, unknown>) {
+  const output = { ...payload };
+  for (const fieldName of ["promptLineage", "plannerPromptLineage", "reviewerPromptLineage"] as const) {
+    const raw = output[fieldName];
+    if (raw && typeof raw === "object") {
+      output[fieldName] = normalizePromptLineageContract(raw);
+    }
+  }
+  return output;
+}
+
 function computeCheckpointIntegrity(payload) {
   return crypto.createHash(CHECKPOINT_INTEGRITY_ALGORITHM).update(JSON.stringify(payload)).digest("hex");
 }
@@ -248,7 +260,7 @@ export function createVersionedCheckpointEnvelope(checkpoint, previousCheckpoint
     Number((previous as any)?.checkpointVersion || checkpoint?.checkpointVersion || 0) + 1
   );
   const normalizedPayload = {
-    ...payload,
+    ...normalizeCheckpointPromptLineageFields(payload),
     createdAt,
     updatedAt: nowIso,
   };
