@@ -214,7 +214,7 @@ export const DISPATCH_BLOCK_REASON_CODE = Object.freeze({
   ROLLING_YIELD_THROTTLE: "rolling_yield_throttle",
   SPECIALIZATION_ADMISSION_GATE: "specialization_admission_gate_failed",
   OVERSIZED_PACKET: "packet_exceeds_actionable_steps_cap",
-  LANE_DIVERSITY_GATE_BLOCKED: "lane_diversity_gate_blocked",
+  LANE_DIVERSITY_GATE_BLOCKED: "lane_diversity_insufficient",
   ROLE_CAPABILITY_CHECK_FAILED: "role_capability_check_failed",
   ACCESS_BLOCKED: "access_blocked",
   TOOL_POLICY_DENIED: "tool_policy_denied",
