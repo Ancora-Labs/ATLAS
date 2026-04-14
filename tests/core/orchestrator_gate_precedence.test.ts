@@ -680,8 +680,8 @@ describe("evaluatePreDispatchGovernanceGate — lane diversity pre-dispatch gate
     const result = await evaluatePreDispatchGovernanceGate(config, plans, "lane-diversity-test");
     assert.equal(result.blocked, true);
     assert.ok(
-      String(result.reason || "").startsWith(BLOCK_REASON.LANE_DIVERSITY_GATE_BLOCKED),
-      `reason must start with '${BLOCK_REASON.LANE_DIVERSITY_GATE_BLOCKED}' — got: ${result.reason}`,
+      String(result.reason || "").startsWith(BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT),
+      `reason must start with '${BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT}' — got: ${result.reason}`,
     );
     assert.equal(result.gateKey, "LANE_DIVERSITY");
     assert.equal(result.gateIndex, GATE_PRECEDENCE.LANE_DIVERSITY);

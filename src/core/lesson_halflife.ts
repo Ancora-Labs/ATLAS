@@ -11,6 +11,12 @@
  *   - age = 2×half → weight = 0.25
  */
 
+import {
+  classifyLessonRetirementClass,
+  isCarryForwardRetired,
+  LESSON_RETIREMENT_CLASS,
+} from "./carry_forward_ledger.js";
+
 /** Default half-life in days. */
 export const DEFAULT_HALF_LIFE_DAYS = 14;
 
@@ -50,6 +56,13 @@ function normalizeSeverityImpact(value: unknown): number {
 
 function normalizeUnresolved(entry: any): boolean {
   if (!entry || typeof entry !== "object") return false;
+  if (isCarryForwardRetired(entry)) return false;
+  if (
+    classifyLessonRetirementClass(entry) === LESSON_RETIREMENT_CLASS.CI
+    && (entry.closedAt || entry.resolvedAt || entry.taskCompleted === true)
+  ) {
+    return true;
+  }
   if (entry.followUpNeeded === true) return true;
   if (entry.closedAt || entry.resolvedAt) return false;
   const status = String(entry.status || "").toLowerCase().trim();

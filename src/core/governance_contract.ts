@@ -167,7 +167,6 @@ export const GOVERNANCE_DISPATCH_BLOCK_REASON = Object.freeze({
   CROSS_CYCLE_PREREQUISITE_UNMET: "cross_cycle_prerequisite_unmet",
   DEPENDENCY_READINESS_INCOMPLETE: "dependency_readiness_incomplete",
   LANE_DIVERSITY_INSUFFICIENT: "lane_diversity_insufficient",
-  LANE_DIVERSITY_GATE_BLOCKED: "lane_diversity_insufficient",
   ROLLING_YIELD_THROTTLE: "rolling_yield_throttle",
   SPECIALIZATION_ADMISSION_GATE: "specialization_admission_gate_failed",
   OVERSIZED_PACKET: "packet_exceeds_actionable_steps_cap",

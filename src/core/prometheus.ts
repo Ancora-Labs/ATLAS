@@ -99,7 +99,13 @@ import {
   buildSemanticFileCandidatesFromScan,
   rankSemanticFileCandidates,
 } from "./project_scanner.js";
-import { computeFingerprint, classifyCarryForwardByRecurrence } from "./carry_forward_ledger.js";
+import {
+  computeFingerprint,
+  classifyCarryForwardByRecurrence,
+  classifyLessonRetirementClass,
+  isCarryForwardRetired,
+  LESSON_RETIREMENT_CLASS,
+} from "./carry_forward_ledger.js";
 import { rewriteVerificationCommand } from "./verification_command_registry.js";
 import { checkCarryForwardGate, hardGateRecurrenceToPolicies } from "./learning_policy_compiler.js";
 import { buildRankedLessonShortlists } from "./lesson_halflife.js";
@@ -2677,20 +2683,30 @@ export function filterResolvedCarryForwardItems(pendingEntries, ledger, complete
   const ledgerEntries = Array.isArray(ledger) ? ledger : [];
   const completed = Array.isArray(completedTasks) ? completedTasks : [];
 
-  // Ledger retirement requires BOTH closedAt AND non-empty closureEvidence to ensure
-  // the item was actually fixed, not just administratively closed without proof.
-  const resolvedFingerprints = new Set(
-    [
-      ...ledgerEntries
-        .filter(e => e.closedAt && e.closureEvidence)
-        .map(e => e.fingerprint || computeFingerprint(String(e.lesson || ""))),
-      ...completed.map(t => computeFingerprint(String(t || ""))),
-    ].filter(Boolean)
+  const resolvedLedgerFingerprints = new Set(
+    ledgerEntries
+      .filter((entry) => isCarryForwardRetired(entry))
+      .map((entry) => entry.fingerprint || computeFingerprint(String(entry.lesson || "")))
+      .filter(Boolean),
+  );
+  const resolvedCompletedFingerprints = new Set(
+    completed
+      .filter((task) => classifyLessonRetirementClass({ followUpTask: task }) !== LESSON_RETIREMENT_CLASS.CI)
+      .map((task) => computeFingerprint(String(task || "")))
+      .filter(Boolean),
   );
 
   return (Array.isArray(pendingEntries) ? pendingEntries : []).filter(e => {
     const fp = computeFingerprint(String(e.followUpTask || ""));
-    return fp && !resolvedFingerprints.has(fp);
+    if (!fp) return false;
+    if (resolvedLedgerFingerprints.has(fp)) return false;
+    if (
+      classifyLessonRetirementClass(e) !== LESSON_RETIREMENT_CLASS.CI
+      && resolvedCompletedFingerprints.has(fp)
+    ) {
+      return false;
+    }
+    return true;
   });
 }
 

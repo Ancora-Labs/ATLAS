@@ -687,7 +687,7 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
     assert.equal(gateDecision.blocked, true);
     assert.equal(gateDecision.gateIndex, GATE_PRECEDENCE.LANE_DIVERSITY);
     assert.ok(
-      gateDecision.dispatchBlockReason?.startsWith(`${BLOCK_REASON.LANE_DIVERSITY_GATE_BLOCKED}:`),
+      gateDecision.dispatchBlockReason?.startsWith(`${BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT}:`),
       `dispatchBlockReason must use the renamed lane diversity token; got ${gateDecision.dispatchBlockReason}`,
     );
 
@@ -2068,7 +2068,7 @@ describe("pipeline progress — terminology drift prevention (stage IDs)", () =>
       PLAN_EVIDENCE_COUPLING_INVALID: "plan_evidence_coupling_invalid",
       CROSS_CYCLE_PREREQUISITE_UNMET: "cross_cycle_prerequisite_unmet",
       DEPENDENCY_READINESS_INCOMPLETE:"dependency_readiness_incomplete",
-      LANE_DIVERSITY_GATE_BLOCKED:    "lane_diversity_insufficient",
+      LANE_DIVERSITY_INSUFFICIENT:    "lane_diversity_insufficient",
       ROLLING_YIELD_THROTTLE:         "rolling_yield_throttle",
       SPECIALIZATION_ADMISSION_GATE:  "specialization_admission_gate_failed",
       OVERSIZED_PACKET:               "packet_exceeds_actionable_steps_cap",

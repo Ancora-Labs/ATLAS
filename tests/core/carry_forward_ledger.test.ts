@@ -21,6 +21,9 @@ import {
   compressLedger,
   classifyCarryForwardByRecurrence,
 } from "../../src/core/carry_forward_ledger.js";
+import { filterResolvedCarryForwardItems } from "../../src/core/prometheus.js";
+import { buildRankedLessonShortlists } from "../../src/core/lesson_halflife.js";
+import { buildCiUrgencyContext } from "../../src/core/self_improvement.js";
 
 describe("carry_forward_ledger", () => {
   describe("addDebtEntries", () => {
@@ -241,6 +244,36 @@ describe("carry_forward_ledger", () => {
     });
   });
 });
+
+function makeCiReplayContractEvidence(overrides: Record<string, unknown> = {}) {
+  return {
+    workerContract: {
+      passed: true,
+      prUrl: "https://github.com/owner/repo/pull/42",
+      associatedMainCiConclusion: "success",
+      associatedMainCiBranch: "main",
+      associatedMainCiRunUrl: "https://github.com/owner/repo/actions/runs/4242",
+      associatedMainCiHeadSha: "abc1234",
+      artifactDetail: {
+        hasSha: true,
+        hasTestOutput: true,
+        hasCleanTreeEvidence: true,
+        hasUnfilledPlaceholder: false,
+      },
+    },
+    replayClosure: {
+      contractSatisfied: true,
+      executedCommands: ["git rev-parse HEAD", "git status --porcelain", "npm test"],
+      rawArtifactEvidenceLinks: [
+        "inline://post-merge-sha/abc1234",
+        "inline://clean-tree-status",
+        "inline://npm-test-output-block",
+        "https://github.com/owner/repo/actions/runs/4242",
+      ],
+    },
+    ...overrides,
+  };
+}
 
 // ── loadLedgerMeta / saveLedgerFull — persistence layer ──────────────────────
 
@@ -571,6 +604,22 @@ describe("reconcileReplayClosedDebtLineage", () => {
     const ledger = [
       makeReplayClosedEntry("Workers using node --test tests/** glob patterns instead of npm test", "debt-1-3"),
       makeOpenEntry("Completely different unresolved planner issue", "debt-25-99"),
+    ];
+
+    const count = reconcileReplayClosedDebtLineage(ledger);
+
+    assert.equal(count, 0);
+    assert.equal(ledger[1].closedAt, null);
+  });
+
+  it("does not inherit replay-only lineage for CI-class lessons without merged PR and main-CI evidence", () => {
+    const lesson = "Fix CI workflow dispatch flake on main branch";
+    const ledger = [
+      {
+        ...makeReplayClosedEntry(lesson, "debt-1-9"),
+        closureEvidence: "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/abc1234, inline://clean-tree-status, inline://npm-test-output-block]",
+      },
+      makeOpenEntry(lesson, "debt-25-31"),
     ];
 
     const count = reconcileReplayClosedDebtLineage(ledger);
@@ -1229,5 +1278,149 @@ describe("classifyCarryForwardByRecurrence — recurrence classification", () =>
     assert.equal(result.highRecurrence.length, 0);
     assert.equal(result.lowRecurrence.length, 1);
     assert.equal((result.lowRecurrence[0] as any)._recurrenceCount, 1);
+  });
+});
+
+describe("CI-class retirement contract", () => {
+  function makeCiDebt(lesson: string, id = "ci-debt-1"): any {
+    return {
+      id,
+      lesson,
+      fingerprint: computeFingerprint(lesson),
+      owner: "evolution-worker",
+      openedCycle: 1,
+      dueCycle: 4,
+      severity: "critical",
+      closedAt: null,
+      closureEvidence: null,
+      cyclesOpen: 0,
+    };
+  }
+
+  it("does not auto-close CI-class debt on replay-only evidence", () => {
+    const lesson = "Fix CI workflow dispatch flake on main branch";
+    const ledger = [makeCiDebt(lesson)];
+
+    const count = autoCloseVerifiedDebt(ledger, [{
+      taskText: lesson,
+      verificationEvidence: {
+        workerContract: {
+          passed: true,
+          prUrl: "https://github.com/owner/repo/pull/42",
+          artifactDetail: {
+            hasSha: true,
+            hasTestOutput: true,
+            hasCleanTreeEvidence: true,
+            hasUnfilledPlaceholder: false,
+          },
+        },
+        replayClosure: {
+          contractSatisfied: true,
+          executedCommands: ["git rev-parse HEAD", "git status --porcelain", "npm test"],
+          rawArtifactEvidenceLinks: [
+            "inline://post-merge-sha/abc1234",
+            "inline://clean-tree-status",
+            "inline://npm-test-output-block",
+          ],
+        },
+      },
+    }]);
+
+    assert.equal(count, 0);
+    assert.equal(ledger[0].closedAt, null);
+  });
+
+  it("auto-closes CI-class debt only when merged PR and associated main CI success are present", () => {
+    const lesson = "Fix CI workflow dispatch flake on main branch";
+    const ledger = [makeCiDebt(lesson)];
+
+    const count = autoCloseVerifiedDebt(ledger, [{
+      taskText: lesson,
+      verificationEvidence: makeCiReplayContractEvidence(),
+    }]);
+
+    assert.equal(count, 1);
+    assert.ok(ledger[0].closedAt);
+    assert.match(String(ledger[0].closureEvidence || ""), /merged-pr-url=https:\/\/github\.com\/owner\/repo\/pull\/42/);
+    assert.match(String(ledger[0].closureEvidence || ""), /main-ci-conclusion=success/);
+    assert.equal(ledger[0].mergedPrUrl, "https://github.com/owner/repo/pull/42");
+    assert.equal(ledger[0].associatedMainCiConclusion, "success");
+  });
+
+  it("keeps CI-class carry-forward items on the hot shortlist until ledger retirement is CI-backed", () => {
+    const pending = [{ followUpNeeded: true, followUpTask: "Fix CI workflow dispatch flake on main branch" }];
+    const replayOnlyLedger = [{
+      id: "d1",
+      lesson: "Fix CI workflow dispatch flake on main branch",
+      closedAt: "2026-04-01T00:00:00Z",
+      closureEvidence: "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/abc1234, inline://clean-tree-status, inline://npm-test-output-block]",
+    }];
+    const qualifiedLedger = [{
+      ...replayOnlyLedger[0],
+      mergedPrUrl: "https://github.com/owner/repo/pull/42",
+      associatedMainCiConclusion: "success",
+      associatedMainCiBranch: "main",
+      associatedMainCiRunUrl: "https://github.com/owner/repo/actions/runs/4242",
+      closureEvidence: `${replayOnlyLedger[0].closureEvidence} merged-pr-url=https://github.com/owner/repo/pull/42 main-ci-conclusion=success main-ci-branch=main main-ci-run-url=https://github.com/owner/repo/actions/runs/4242`,
+    }];
+
+    const replayOnlyResult = filterResolvedCarryForwardItems(pending, replayOnlyLedger, ["Fix CI workflow dispatch flake on main branch"]);
+    const qualifiedResult = filterResolvedCarryForwardItems(pending, qualifiedLedger, ["Fix CI workflow dispatch flake on main branch"]);
+
+    assert.equal(replayOnlyResult.length, 1, "replay-only CI evidence must not retire shortlist entries");
+    assert.equal(qualifiedResult.length, 0, "CI-backed retirement evidence must retire shortlist entries");
+  });
+
+  it("keeps replay-only CI closures ranked as unresolved until CI-backed retirement exists", () => {
+    const replayOnly = buildRankedLessonShortlists([{
+      followUpTask: "Fix CI workflow dispatch flake on main branch",
+      reviewedAt: "2026-04-01T00:00:00Z",
+      followUpNeeded: false,
+      closedAt: "2026-04-02T00:00:00Z",
+      closureEvidence: "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/abc1234, inline://clean-tree-status, inline://npm-test-output-block]",
+      severity: "critical",
+    }], { limit: 10 });
+    const qualified = buildRankedLessonShortlists([{
+      followUpTask: "Fix CI workflow dispatch flake on main branch",
+      reviewedAt: "2026-04-01T00:00:00Z",
+      followUpNeeded: false,
+      closedAt: "2026-04-02T00:00:00Z",
+      mergedPrUrl: "https://github.com/owner/repo/pull/42",
+      associatedMainCiConclusion: "success",
+      associatedMainCiBranch: "main",
+      associatedMainCiRunUrl: "https://github.com/owner/repo/actions/runs/4242",
+      closureEvidence: "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/abc1234, inline://clean-tree-status, inline://npm-test-output-block] merged-pr-url=https://github.com/owner/repo/pull/42 main-ci-conclusion=success main-ci-branch=main main-ci-run-url=https://github.com/owner/repo/actions/runs/4242",
+      severity: "critical",
+    }], { limit: 10 });
+
+    assert.equal(replayOnly.unresolvedTop10.length, 1);
+    assert.equal(qualified.unresolvedTop10.length, 0);
+  });
+
+  it("keeps CI urgency elevated when a replay-only CI closure is still missing associated main-CI evidence", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ci-urgency-retirement-"));
+
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "carry_forward_ledger.json"),
+        JSON.stringify({
+          cycleCounter: 1,
+          entries: [{
+            id: "ci-debt-1",
+            lesson: "Fix CI workflow dispatch flake on main branch",
+            closedAt: "2026-04-02T00:00:00Z",
+            closureEvidence: "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/abc1234, inline://clean-tree-status, inline://npm-test-output-block]",
+          }],
+        }),
+        "utf8",
+      );
+
+      const result = await buildCiUrgencyContext({ paths: { stateDir } }, stateDir);
+
+      assert.equal(result.allowHistoricalPressure, true);
+      assert.match(String(result.note || ""), /still unresolved/i);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });

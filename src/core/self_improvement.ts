@@ -41,10 +41,12 @@ import { buildPolicyImpactEntry, computePolicyImpactTrend, applyPolicyHalfLifeRe
 import {
   loadLedgerMeta,
   prioritizeStaleDebts,
+  classifyLessonRetirementClass,
+  isCarryForwardRetired,
+  LESSON_RETIREMENT_CLASS,
 } from "./carry_forward_ledger.js";
 import {
   hasFreshCiFailureEvidence,
-  hasUnresolvedCiFollowUpSignal,
   isCiBreakageText,
 } from "./plan_contract_validator.js";
 import { buildRankedLessonShortlists } from "./lesson_halflife.js";
@@ -388,6 +390,26 @@ type CiUrgencyContext = {
   note: string | null;
 };
 
+function hasOutstandingCiFollowUp(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  if (classifyLessonRetirementClass(entry) !== LESSON_RETIREMENT_CLASS.CI) return false;
+  if (isCarryForwardRetired(entry)) return false;
+  const record = entry as Record<string, unknown>;
+  const text = [
+    record.followUpTask,
+    record.lesson,
+    record.lessonLearned,
+    record.expectedOutcome,
+    record.actualOutcome,
+    record.finding,
+    record.remediation,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join("\n");
+  return isCiBreakageText(text);
+}
+
 export async function buildCiUrgencyContext(config, stateDir: string): Promise<CiUrgencyContext> {
   let healthAuditPayload: Record<string, unknown> | null = null;
   let findings: any[] = [];
@@ -411,7 +433,7 @@ export async function buildCiUrgencyContext(config, stateDir: string): Promise<C
   let unresolvedCiFollowUp = false;
   try {
     const { entries: debtLedger } = await loadLedgerMeta(config);
-    unresolvedCiFollowUp = Array.isArray(debtLedger) && debtLedger.some((entry) => hasUnresolvedCiFollowUpSignal(entry));
+    unresolvedCiFollowUp = Array.isArray(debtLedger) && debtLedger.some((entry) => hasOutstandingCiFollowUp(entry));
   } catch (err) {
     warn(`[self-improvement] failed to inspect carry-forward ledger for CI follow-up pressure: ${String(err?.message || err)}`);
   }
@@ -422,7 +444,7 @@ export async function buildCiUrgencyContext(config, stateDir: string): Promise<C
       if (rawPostmortems !== null) {
         const migrated = migrateData(rawPostmortems, STATE_FILE_TYPE.ATHENA_POSTMORTEMS);
         if (migrated.ok) {
-          unresolvedCiFollowUp = extractPostmortemEntries(migrated.data).some((entry) => hasUnresolvedCiFollowUpSignal(entry));
+          unresolvedCiFollowUp = extractPostmortemEntries(migrated.data).some((entry) => hasOutstandingCiFollowUp(entry));
         }
       }
     } catch (err) {

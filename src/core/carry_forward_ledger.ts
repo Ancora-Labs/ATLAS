@@ -10,6 +10,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { readJson, writeJson } from "./fs_utils.js";
 import { CANONICAL_MAIN_BRANCH_REPLAY_COMMANDS, hasReplayClosureEvidence } from "./verification_gate.js";
+import { isCiBreakageText } from "./plan_contract_validator.js";
 
 /**
  * @typedef {object} DebtEntry
@@ -77,6 +78,235 @@ const REPLAY_LINEAGE_MATCHERS: Readonly<Record<string, RegExp[]>> = Object.freez
   "CF-004": [/\bbash\b/i, /\bsh\b/i, /scripts\//i],
   "CF-005": [/placeholder/i, /post_merge_sha_placeholder/i, /post_merge_output_placeholder/i],
 });
+
+export const LESSON_RETIREMENT_CLASS = Object.freeze({
+  GENERAL: "general",
+  CI: "ci",
+});
+
+const MAIN_BRANCH_NAMES = new Set(["main", "master", "trunk"]);
+
+type LessonRetirementQualification = {
+  lessonClass: string;
+  hasClosureEvidence: boolean;
+  mergedPrUrl: string | null;
+  associatedMainCiConclusion: string | null;
+  associatedMainCiBranch: string | null;
+  associatedMainCiRunUrl: string | null;
+  associatedMainCiHeadSha: string | null;
+  mainCiQualified: boolean;
+};
+
+function collectLessonRetirementText(value: unknown): string {
+  if (!value || typeof value !== "object") return String(value || "").trim();
+  const record = value as Record<string, unknown>;
+  return [
+    record.followUpTask,
+    record.lesson,
+    record.lessonLearned,
+    record.expectedOutcome,
+    record.actualOutcome,
+    record.finding,
+    record.remediation,
+  ]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function pickFirstNonEmpty(...values: unknown[]): string | null {
+  for (const value of values) {
+    const normalized = String(value || "").trim();
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function normalizeGithubPrUrl(value: unknown): string | null {
+  const text = String(value || "").trim();
+  if (!/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+(?:[?#][^\s]*)?$/i.test(text)) {
+    return null;
+  }
+  return text;
+}
+
+function normalizeCiConclusion(value: unknown): string | null {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "success" || normalized === "passed" || normalized === "green") return "success";
+  if (normalized === "failure" || normalized === "failed" || normalized === "red") return "failure";
+  return normalized;
+}
+
+function normalizeCiBranch(value: unknown): string | null {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized || null;
+}
+
+function normalizeGithubActionsRunUrl(value: unknown): string | null {
+  const text = String(value || "").trim();
+  if (!/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+(?:[?#][^\s]*)?$/i.test(text)) {
+    return null;
+  }
+  return text;
+}
+
+function normalizeHeadSha(value: unknown): string | null {
+  const text = String(value || "").trim();
+  return /^[0-9a-f]{7,40}$/i.test(text) ? text : null;
+}
+
+function parseMetadataField(text: string, patterns: RegExp[]): string | null {
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) return String(match[1]).trim();
+  }
+  return null;
+}
+
+function collectRawArtifactEvidenceLinks(value: unknown): string[] {
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  const workerContract = record.workerContract && typeof record.workerContract === "object"
+    ? record.workerContract as Record<string, unknown>
+    : null;
+  const replayClosure = record.replayClosure && typeof record.replayClosure === "object"
+    ? record.replayClosure as Record<string, unknown>
+    : workerContract?.replayClosure && typeof workerContract.replayClosure === "object"
+      ? workerContract.replayClosure as Record<string, unknown>
+      : null;
+  const directLinks = Array.isArray(record.rawArtifactEvidenceLinks) ? record.rawArtifactEvidenceLinks : [];
+  const replayLinks = Array.isArray(replayClosure?.rawArtifactEvidenceLinks) ? replayClosure?.rawArtifactEvidenceLinks : [];
+  const output = [...directLinks, ...replayLinks]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  return [...new Set(output)];
+}
+
+export function classifyLessonRetirementClass(value: unknown): string {
+  return isCiBreakageText(collectLessonRetirementText(value))
+    ? LESSON_RETIREMENT_CLASS.CI
+    : LESSON_RETIREMENT_CLASS.GENERAL;
+}
+
+function extractLessonRetirementQualification(
+  source: unknown,
+  lessonHint: unknown = source,
+): LessonRetirementQualification {
+  const lessonClass = classifyLessonRetirementClass(lessonHint);
+  const record = source && typeof source === "object" ? source as Record<string, unknown> : {};
+  const workerContract = record.workerContract && typeof record.workerContract === "object"
+    ? record.workerContract as Record<string, unknown>
+    : null;
+  const associatedMainCi = record.associatedMainCi && typeof record.associatedMainCi === "object"
+    ? record.associatedMainCi as Record<string, unknown>
+    : workerContract?.associatedMainCi && typeof workerContract.associatedMainCi === "object"
+      ? workerContract.associatedMainCi as Record<string, unknown>
+      : null;
+  const closureEvidenceText = String(record.closureEvidence || "").trim();
+  const rawArtifactEvidenceLinks = collectRawArtifactEvidenceLinks(record);
+  const closurePrUrl = normalizeGithubPrUrl(parseMetadataField(closureEvidenceText, [
+    /(?:merged[-_ ]?pr(?:[-_ ]?url)?|pr[-_ ]?url)\s*[:=]\s*(https:\/\/github\.com\/[^\s\]]+)/i,
+    /(https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+(?:[?#][^\s]*)?)/i,
+  ]));
+  const mergedPrUrl = normalizeGithubPrUrl(pickFirstNonEmpty(
+    record.mergedPrUrl,
+    record.prUrl,
+    record.pullRequestUrl,
+    workerContract?.mergedPrUrl,
+    workerContract?.prUrl,
+    associatedMainCi?.prUrl,
+    closurePrUrl,
+  ));
+  const associatedMainCiConclusion = normalizeCiConclusion(pickFirstNonEmpty(
+    record.associatedMainCiConclusion,
+    record.mainCiConclusion,
+    record.latestMainCiConclusion,
+    associatedMainCi?.conclusion,
+    associatedMainCi?.status,
+    workerContract?.associatedMainCiConclusion,
+    workerContract?.mainCiConclusion,
+    parseMetadataField(closureEvidenceText, [
+      /(?:associated[-_ ]?main[-_ ]?ci|main[-_ ]?ci)(?:[-_ ]?(?:conclusion|status))?\s*[:=]\s*([a-z-]+)/i,
+    ]),
+  ));
+  const associatedMainCiBranch = normalizeCiBranch(pickFirstNonEmpty(
+    record.associatedMainCiBranch,
+    record.mainCiBranch,
+    record.latestMainCiBranch,
+    associatedMainCi?.branch,
+    workerContract?.associatedMainCiBranch,
+    workerContract?.mainCiBranch,
+    parseMetadataField(closureEvidenceText, [
+      /(?:associated[-_ ]?main[-_ ]?ci|main[-_ ]?ci)[-_ ]?branch\s*[:=]\s*([a-z0-9._/-]+)/i,
+    ]),
+  ));
+  const associatedMainCiRunUrl = normalizeGithubActionsRunUrl(pickFirstNonEmpty(
+    record.associatedMainCiRunUrl,
+    record.mainCiRunUrl,
+    record.workflowRunUrl,
+    associatedMainCi?.runUrl,
+    associatedMainCi?.url,
+    workerContract?.associatedMainCiRunUrl,
+    workerContract?.mainCiRunUrl,
+    rawArtifactEvidenceLinks.find((link) => /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+/i.test(link)),
+    parseMetadataField(closureEvidenceText, [
+      /(?:associated[-_ ]?main[-_ ]?ci|main[-_ ]?ci)[-_ ]?run[-_ ]?url\s*[:=]\s*(https:\/\/github\.com\/[^\s\]]+)/i,
+      /(https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+(?:[?#][^\s]*)?)/i,
+    ]),
+  ));
+  const associatedMainCiHeadSha = normalizeHeadSha(pickFirstNonEmpty(
+    record.associatedMainCiHeadSha,
+    record.mainCiHeadSha,
+    record.latestMainCiHeadSha,
+    associatedMainCi?.headSha,
+    workerContract?.associatedMainCiHeadSha,
+    workerContract?.mainCiHeadSha,
+    parseMetadataField(closureEvidenceText, [
+      /(?:associated[-_ ]?main[-_ ]?ci|main[-_ ]?ci)[-_ ]?(?:head[-_ ]?sha|sha)\s*[:=]\s*([0-9a-f]{7,40})/i,
+    ]),
+  ));
+  const hasAssociatedCiLink = rawArtifactEvidenceLinks.some((link) =>
+    /^inline:\/\/(?:associated-)?main-ci(?:-run)?(?:\/success)?$/i.test(link)
+    || /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+/i.test(link),
+  );
+  const mainCiQualified = associatedMainCiConclusion === "success" && (
+    Boolean(associatedMainCiRunUrl)
+    || Boolean(associatedMainCiHeadSha)
+    || hasAssociatedCiLink
+    || MAIN_BRANCH_NAMES.has(String(associatedMainCiBranch || "").toLowerCase())
+  );
+
+  return {
+    lessonClass,
+    hasClosureEvidence: closureEvidenceText.length > 0,
+    mergedPrUrl,
+    associatedMainCiConclusion,
+    associatedMainCiBranch,
+    associatedMainCiRunUrl,
+    associatedMainCiHeadSha,
+    mainCiQualified,
+  };
+}
+
+function applyRetirementMetadata(entry: Record<string, unknown>, qualification: LessonRetirementQualification): void {
+  entry.lessonClass = qualification.lessonClass;
+  if (qualification.mergedPrUrl) entry.mergedPrUrl = qualification.mergedPrUrl;
+  if (qualification.associatedMainCiConclusion) entry.associatedMainCiConclusion = qualification.associatedMainCiConclusion;
+  if (qualification.associatedMainCiBranch) entry.associatedMainCiBranch = qualification.associatedMainCiBranch;
+  if (qualification.associatedMainCiRunUrl) entry.associatedMainCiRunUrl = qualification.associatedMainCiRunUrl;
+  if (qualification.associatedMainCiHeadSha) entry.associatedMainCiHeadSha = qualification.associatedMainCiHeadSha;
+}
+
+export function isCarryForwardRetired(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const record = entry as Record<string, unknown>;
+  if (!record.closedAt && !record.resolvedAt) return false;
+  const qualification = extractLessonRetirementQualification(record, record);
+  if (!qualification.hasClosureEvidence) return false;
+  if (qualification.lessonClass !== LESSON_RETIREMENT_CLASS.CI) return true;
+  return Boolean(qualification.mergedPrUrl && qualification.mainCiQualified);
+}
 
 /**
  * Load the carry-forward ledger from state.
@@ -280,7 +510,10 @@ export function autoCloseVerifiedDebt(
       .filter(Boolean);
   };
 
-  const buildClosureEvidence = (rawEvidence: unknown): string | null => {
+  const buildClosureEvidence = (
+    rawEvidence: unknown,
+    taskText: string,
+  ): { evidence: string; qualification: LessonRetirementQualification } | null => {
     if (!rawEvidence || typeof rawEvidence !== "object") return null;
 
     const envelope = rawEvidence as Record<string, unknown>;
@@ -314,18 +547,38 @@ export function autoCloseVerifiedDebt(
     const hasPlaceholder = artifactDetail.hasUnfilledPlaceholder === true;
     if (!hasSha || !hasTestOutput || !hasCleanTree || hasPlaceholder) return null;
 
-    return `replay-closure:v1 commands=[${CANONICAL_MAIN_BRANCH_REPLAY_COMMANDS.join(", ")}] links=[${links.join(", ")}]`;
+    const qualification = extractLessonRetirementQualification(envelope, { followUpTask: taskText });
+    if (
+      qualification.lessonClass === LESSON_RETIREMENT_CLASS.CI
+      && (!qualification.mergedPrUrl || !qualification.mainCiQualified)
+    ) {
+      return null;
+    }
+
+    const ciMetadata = qualification.lessonClass === LESSON_RETIREMENT_CLASS.CI
+      ? [
+          `merged-pr-url=${qualification.mergedPrUrl}`,
+          `main-ci-conclusion=${qualification.associatedMainCiConclusion || "success"}`,
+          `main-ci-branch=${qualification.associatedMainCiBranch || "main"}`,
+          qualification.associatedMainCiRunUrl ? `main-ci-run-url=${qualification.associatedMainCiRunUrl}` : null,
+          qualification.associatedMainCiHeadSha ? `main-ci-head-sha=${qualification.associatedMainCiHeadSha}` : null,
+        ].filter(Boolean).join(" ")
+      : "";
+    return {
+      evidence: `replay-closure:v1 commands=[${CANONICAL_MAIN_BRANCH_REPLAY_COMMANDS.join(", ")}] links=[${links.join(", ")}]${ciMetadata ? ` ${ciMetadata}` : ""}`,
+      qualification,
+    };
   };
 
   // Build fingerprint → closure-evidence map for all resolved items with full replay contract.
-  const resolvedFingerprints = new Map<string, string>();
+  const resolvedFingerprints = new Map<string, { evidence: string; qualification: LessonRetirementQualification }>();
   for (const item of resolvedItems) {
-    const evidence = buildClosureEvidence(item.verificationEvidence);
-    if (!evidence) continue;
+    const resolved = buildClosureEvidence(item.verificationEvidence, String(item.taskText || ""));
+    if (!resolved) continue;
     const fingerprint = computeFingerprint(String(item.taskText || ""));
     if (!fingerprint) continue;
     if (!resolvedFingerprints.has(fingerprint)) {
-      resolvedFingerprints.set(fingerprint, evidence);
+      resolvedFingerprints.set(fingerprint, resolved);
     }
   }
 
@@ -336,10 +589,11 @@ export function autoCloseVerifiedDebt(
     if (entry.closedAt) continue;
     const entryFp = entry.fingerprint || computeFingerprint(String(entry.lesson || ""));
     if (!entryFp) continue;
-    const evidence = resolvedFingerprints.get(entryFp);
-    if (evidence !== undefined) {
+    const resolved = resolvedFingerprints.get(entryFp);
+    if (resolved !== undefined) {
       entry.closedAt = new Date().toISOString();
-      entry.closureEvidence = evidence.slice(0, 500);
+      entry.closureEvidence = resolved.evidence.slice(0, 500);
+      applyRetirementMetadata(entry, resolved.qualification);
       closedCount++;
     }
   }
@@ -350,13 +604,18 @@ export function autoCloseVerifiedDebt(
 export function reconcileReplayClosedDebtLineage(ledger: any[]): number {
   if (!Array.isArray(ledger) || ledger.length === 0) return 0;
 
-  const closedReplayEvidenceByFingerprint = new Map<string, string>();
+  const closedReplayEvidenceByFingerprint = new Map<string, { evidence: string; qualification: LessonRetirementQualification }>();
   for (const entry of ledger) {
     if (!entry?.closedAt) continue;
     if (!hasReplayClosureEvidence(entry?.closureEvidence)) continue;
+    const qualification = extractLessonRetirementQualification(entry, entry);
+    if (qualification.lessonClass === LESSON_RETIREMENT_CLASS.CI && !isCarryForwardRetired(entry)) continue;
     const fingerprint = entry.fingerprint || computeFingerprint(String(entry.lesson || ""));
     if (!fingerprint || closedReplayEvidenceByFingerprint.has(fingerprint)) continue;
-    closedReplayEvidenceByFingerprint.set(fingerprint, String(entry.closureEvidence || ""));
+    closedReplayEvidenceByFingerprint.set(fingerprint, {
+      evidence: String(entry.closureEvidence || ""),
+      qualification,
+    });
   }
 
   if (closedReplayEvidenceByFingerprint.size === 0) return 0;
@@ -366,10 +625,11 @@ export function reconcileReplayClosedDebtLineage(ledger: any[]): number {
     if (entry?.closedAt) continue;
     const fingerprint = entry.fingerprint || computeFingerprint(String(entry.lesson || ""));
     if (!fingerprint) continue;
-    const evidence = closedReplayEvidenceByFingerprint.get(fingerprint);
-    if (!evidence) continue;
+    const resolved = closedReplayEvidenceByFingerprint.get(fingerprint);
+    if (!resolved) continue;
     entry.closedAt = new Date().toISOString();
-    entry.closureEvidence = evidence.slice(0, 500);
+    entry.closureEvidence = resolved.evidence.slice(0, 500);
+    applyRetirementMetadata(entry, resolved.qualification);
     closedCount++;
   }
 
