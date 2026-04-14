@@ -430,6 +430,72 @@ describe("tool access + capability guards", () => {
     assert.ok(prompt.includes("POST_MERGE_TEST_OUTPUT"));
     assert.ok(prompt.includes("Do NOT copy instructional examples verbatim into your final evidence block."));
   });
+
+  it("worker prompt includes scored candidate first moves for bounded deliberation", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Replace linear retry behavior in worker_runner and keep tests deterministic.",
+        taskKind: "implementation",
+        targetFiles: ["src/core/worker_runner.ts", "tests/core/worker_runner.test.ts"],
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-prompt-test") },
+      },
+      "quality",
+      {
+        deliberationMode: "multi-attempt",
+        searchBudget: 3,
+        uncertaintyLevel: "high",
+        recommendedFirstMove: {
+          key: "smallest_verification",
+          summary: "Run the smallest relevant verification slice to confirm the first failing surface.",
+          rationale: "Cheap verification evidence should anchor the first move before deeper implementation work.",
+          cheapSignals: ["sampleCount=1 below threshold 6", "attemptRate=0.00 below 0.7"],
+          signalScores: {
+            uncertaintyReduction: 0.95,
+            cheapVerification: 0.95,
+            executionLeverage: 0.85,
+          },
+          score: 0.925,
+        },
+        candidateFirstMoves: [
+          {
+            key: "smallest_verification",
+            summary: "Run the smallest relevant verification slice to confirm the first failing surface.",
+            rationale: "Cheap verification evidence should anchor the first move before deeper implementation work.",
+            cheapSignals: ["sampleCount=1 below threshold 6", "attemptRate=0.00 below 0.7"],
+            signalScores: {
+              uncertaintyReduction: 0.95,
+              cheapVerification: 0.95,
+              executionLeverage: 0.85,
+            },
+            score: 0.925,
+          },
+          {
+            key: "contract_scan",
+            summary: "Inspect the task contract, target files, and nearest tests before deeper execution.",
+            rationale: "Thin evidence or weak precision favors a cheap contract pass before choosing an edit path.",
+            cheapSignals: ["precisionOnAttempted=0.10 below 0.65"],
+            signalScores: {
+              uncertaintyReduction: 0.75,
+              cheapVerification: 0.95,
+              executionLeverage: 0.75,
+            },
+            score: 0.82,
+          },
+        ],
+      },
+    );
+
+    assert.ok(prompt.includes("Uncertainty classification: high."));
+    assert.ok(prompt.includes("Recommended first move: Run the smallest relevant verification slice to confirm the first failing surface."));
+    assert.ok(prompt.includes("Candidate first moves scored with cheap verification signals:"));
+    assert.ok(prompt.includes("[score=0.925]"));
+    assert.ok(prompt.includes("cheap signals: sampleCount=1 below threshold 6; attemptRate=0.00 below 0.7"));
+  });
 });
 
 // ── detectRepoContamination ──────────────────────────────────────────────────

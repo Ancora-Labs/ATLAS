@@ -14,6 +14,7 @@
 
 import path from "node:path";
 import { readJson, writeJson } from "./fs_utils.js";
+import { scheduleBoundedHypothesisCandidates, type ScheduledHypothesisCandidate } from "./hypothesis_scheduler.js";
 import {
   normalizeInterventionLineageContract,
   resolveInterventionLineageJoinKey,
@@ -22,6 +23,7 @@ import {
 import { MIN_TELEMETRY_SAMPLE_THRESHOLD } from "./telemetry_thresholds.js";
 import { getLaneForWorkerName } from "./role_registry.js";
 export { MIN_TELEMETRY_SAMPLE_THRESHOLD };
+export type { ScheduledHypothesisCandidate } from "./hypothesis_scheduler.js";
 
 // ── Banned model patterns (case-insensitive) ─────────────────────────────────
 // These patterns match against the resolved model slug BEFORE any CLI call.
@@ -136,7 +138,44 @@ export interface DeliberationPolicy {
   reflection: boolean;
   boundedSearch: boolean;
   searchBudget: number;
+  uncertaintyLevel: "low" | "moderate" | "high";
+  executionMode: "direct_execute" | "bounded_deliberation";
+  candidateFirstMoves: ScheduledHypothesisCandidate[];
+  recommendedFirstMove: ScheduledHypothesisCandidate | null;
   reason: string;
+}
+
+interface HardTaskUncertaintyFlags {
+  noSamples: boolean;
+  lowSamples: boolean;
+  weakSuccess: boolean;
+  weakROI: boolean;
+  weakAttemptRate: boolean;
+  highAbstainRate: boolean;
+  weakPrecision: boolean;
+  weakHardChain: boolean;
+  weakLaneReliability: boolean;
+  weakBenchmarkScore: boolean;
+  weakCapacityGain: boolean;
+  highUnresolvedBenchmark: boolean;
+}
+
+interface HardTaskUncertaintyProfile {
+  hardTask: boolean;
+  uncertaintyScore: number;
+  thresholds: typeof HARD_TASK_UNCERTAINTY_THRESHOLDS;
+  outcomeSampleCount: number;
+  outcomeSuccessRate: number;
+  outcomeROI: number;
+  outcomeAttemptRate: number;
+  outcomeAbstainRate: number;
+  precisionOnAttempted: number;
+  hardChainSuccessRate: number;
+  hardChainSampleCount: number;
+  laneReliability: number;
+  benchmarkScore: number;
+  capacityGain: number;
+  flags: HardTaskUncertaintyFlags;
 }
 
 /** Typed overlays for per-task model call settings. */
@@ -1661,6 +1700,53 @@ export function assessHardTaskEscalation(
     thresholds?: Partial<typeof HARD_TASK_UNCERTAINTY_THRESHOLDS>;
   } = {}
 ): HardTaskEscalationSignal {
+  const profile = deriveHardTaskUncertaintyProfile(taskHints, history, signals);
+  if (!profile.hardTask) {
+    return {
+      hardTask: false,
+      escalate: false,
+      severity: "none",
+      reason: "not-hard-task",
+      uncertaintyScore: 0,
+    };
+  }
+
+  if (profile.uncertaintyScore >= 0.60 || (profile.flags.noSamples && profile.flags.highUnresolvedBenchmark)) {
+    return {
+      hardTask: true,
+      escalate: true,
+      severity: "required",
+      reason: `hard-task-uncertainty-required(score=${profile.uncertaintyScore})`,
+      uncertaintyScore: profile.uncertaintyScore,
+    };
+  }
+  if (profile.uncertaintyScore >= 0.35) {
+    return {
+      hardTask: true,
+      escalate: true,
+      severity: "recommended",
+      reason: `hard-task-uncertainty-recommended(score=${profile.uncertaintyScore})`,
+      uncertaintyScore: profile.uncertaintyScore,
+    };
+  }
+  return {
+    hardTask: true,
+    escalate: false,
+    severity: "none",
+    reason: `hard-task-uncertainty-low(score=${profile.uncertaintyScore})`,
+    uncertaintyScore: profile.uncertaintyScore,
+  };
+}
+
+function deriveHardTaskUncertaintyProfile(
+  taskHints: TaskHints = {},
+  history: RoutingHistory = {},
+  signals: {
+    benchmarkGroundTruth?: any;
+    outcomeMetrics?: Partial<RoutingOutcomeMetrics> | null;
+    thresholds?: Partial<typeof HARD_TASK_UNCERTAINTY_THRESHOLDS>;
+  } = {},
+): HardTaskUncertaintyProfile {
   const complexity = String(taskHints.complexity || "").toLowerCase().trim();
   const lines = Number(taskHints.estimatedLines || 0);
   const duration = Number(taskHints.estimatedDurationMinutes || 0);
@@ -1672,10 +1758,33 @@ export function assessHardTaskEscalation(
   if (!hardTask) {
     return {
       hardTask: false,
-      escalate: false,
-      severity: "none",
-      reason: "not-hard-task",
       uncertaintyScore: 0,
+      thresholds: HARD_TASK_UNCERTAINTY_THRESHOLDS,
+      outcomeSampleCount: 0,
+      outcomeSuccessRate: 0,
+      outcomeROI: 0,
+      outcomeAttemptRate: 0,
+      outcomeAbstainRate: 0,
+      precisionOnAttempted: 0,
+      hardChainSuccessRate: 0,
+      hardChainSampleCount: 0,
+      laneReliability: 0,
+      benchmarkScore: 0,
+      capacityGain: 0,
+      flags: {
+        noSamples: false,
+        lowSamples: false,
+        weakSuccess: false,
+        weakROI: false,
+        weakAttemptRate: false,
+        highAbstainRate: false,
+        weakPrecision: false,
+        weakHardChain: false,
+        weakLaneReliability: false,
+        weakBenchmarkScore: false,
+        weakCapacityGain: false,
+        highUnresolvedBenchmark: false,
+      },
     };
   }
 
@@ -1737,31 +1846,176 @@ export function assessHardTaskEscalation(
   ];
   const uncertaintyScore = Math.round(Math.min(1, penalties.reduce((a, b) => a + b, 0)) * 1000) / 1000;
 
-  if (uncertaintyScore >= 0.60 || (noSamples && highUnresolvedBenchmark)) {
-    return {
-      hardTask: true,
-      escalate: true,
-      severity: "required",
-      reason: `hard-task-uncertainty-required(score=${uncertaintyScore})`,
-      uncertaintyScore,
-    };
-  }
-  if (uncertaintyScore >= 0.35) {
-    return {
-      hardTask: true,
-      escalate: true,
-      severity: "recommended",
-      reason: `hard-task-uncertainty-recommended(score=${uncertaintyScore})`,
-      uncertaintyScore,
-    };
-  }
   return {
     hardTask: true,
-    escalate: false,
-    severity: "none",
-    reason: `hard-task-uncertainty-low(score=${uncertaintyScore})`,
     uncertaintyScore,
+    thresholds: t,
+    outcomeSampleCount,
+    outcomeSuccessRate,
+    outcomeROI,
+    outcomeAttemptRate,
+    outcomeAbstainRate,
+    precisionOnAttempted,
+    hardChainSuccessRate,
+    hardChainSampleCount,
+    laneReliability,
+    benchmarkScore: clamp01(Number(benchmark.avgBenchmarkScore ?? 0)),
+    capacityGain: clamp01(Number(benchmark.avgCapacityGain ?? 0)),
+    flags: {
+      noSamples,
+      lowSamples,
+      weakSuccess,
+      weakROI,
+      weakAttemptRate,
+      highAbstainRate,
+      weakPrecision,
+      weakHardChain,
+      weakLaneReliability,
+      weakBenchmarkScore,
+      weakCapacityGain,
+      highUnresolvedBenchmark,
+    },
   };
+}
+
+function classifyDeliberationUncertaintyLevel(
+  uncertaintyScore: number,
+  hardTask: boolean,
+): DeliberationPolicy["uncertaintyLevel"] {
+  if (!hardTask || uncertaintyScore < 0.35) {
+    return "low";
+  }
+  if (uncertaintyScore < 0.60) {
+    return "moderate";
+  }
+  return "high";
+}
+
+function toFixedSignal(value: number): string {
+  return Number(value || 0).toFixed(2);
+}
+
+function buildDeliberationCandidatePool(
+  profile: HardTaskUncertaintyProfile,
+): Array<{
+  key: string;
+  summary: string;
+  rationale: string;
+  cheapSignals: string[];
+  signalScores: {
+    uncertaintyReduction: number;
+    cheapVerification: number;
+    executionLeverage: number;
+  };
+}> {
+  if (!profile.hardTask) {
+    return [];
+  }
+
+  const contractSignals = [
+    profile.flags.noSamples
+      ? "no observed task-kind samples yet"
+      : `sampleCount=${profile.outcomeSampleCount} below threshold ${profile.thresholds.minObservedSamples}`,
+    profile.flags.weakPrecision
+      ? `precisionOnAttempted=${toFixedSignal(profile.precisionOnAttempted)} below ${profile.thresholds.minPrecisionOnAttempted}`
+      : "",
+    profile.flags.highUnresolvedBenchmark ? "benchmark integrity unresolved for comparable hard tasks" : "",
+  ].filter(Boolean);
+
+  const verificationSignals = [
+    profile.flags.weakSuccess
+      ? `successRate=${toFixedSignal(profile.outcomeSuccessRate)} below ${profile.thresholds.minSuccessRate}`
+      : "",
+    profile.flags.weakAttemptRate
+      ? `attemptRate=${toFixedSignal(profile.outcomeAttemptRate)} below ${profile.thresholds.minAttemptRate}`
+      : "",
+    profile.flags.highAbstainRate
+      ? `abstainRate=${toFixedSignal(profile.outcomeAbstainRate)} above ${profile.thresholds.maxAbstainRate}`
+      : "",
+  ].filter(Boolean);
+
+  const surfaceSignals = [
+    profile.flags.weakROI
+      ? `recentROI=${toFixedSignal(profile.outcomeROI)} below ${profile.thresholds.minRecentROI}`
+      : "",
+    profile.flags.weakLaneReliability
+      ? `laneReliability=${toFixedSignal(profile.laneReliability)} below ${profile.thresholds.minLaneReliability}`
+      : "",
+    profile.flags.weakHardChain
+      ? `hardChainSuccessRate=${toFixedSignal(profile.hardChainSuccessRate)} below ${profile.thresholds.minHardChainSuccessRate}`
+      : "",
+  ].filter(Boolean);
+
+  return [
+    {
+      key: "smallest_verification",
+      summary: "Run the smallest relevant verification slice to confirm the first failing surface.",
+      rationale: "Cheap verification evidence should anchor the first move before deeper implementation work.",
+      cheapSignals: verificationSignals,
+      signalScores: {
+        uncertaintyReduction: clamp01(
+          0.5
+          + (profile.flags.weakSuccess ? 0.2 : 0)
+          + (profile.flags.weakAttemptRate ? 0.15 : 0)
+          + (profile.flags.highAbstainRate ? 0.1 : 0)
+        ),
+        cheapVerification: clamp01(0.9 + (profile.outcomeSampleCount > 0 ? 0.05 : 0)),
+        executionLeverage: clamp01(
+          0.6
+          + (profile.flags.weakHardChain ? 0.15 : 0)
+          + (profile.flags.weakROI ? 0.1 : 0)
+        ),
+      },
+    },
+    {
+      key: "contract_scan",
+      summary: "Inspect the task contract, target files, and nearest tests before deeper execution.",
+      rationale: "Thin evidence or weak precision favors a cheap contract pass before choosing an edit path.",
+      cheapSignals: contractSignals,
+      signalScores: {
+        uncertaintyReduction: clamp01(
+          0.55
+          + (profile.flags.noSamples ? 0.25 : 0)
+          + (profile.flags.lowSamples ? 0.1 : 0)
+          + (profile.flags.weakPrecision ? 0.1 : 0)
+        ),
+        cheapVerification: 0.95,
+        executionLeverage: clamp01(
+          0.45
+          + (profile.flags.weakAttemptRate ? 0.15 : 0)
+          + (profile.flags.highAbstainRate ? 0.15 : 0)
+        ),
+      },
+    },
+    {
+      key: "surface_map",
+      summary: "Map the high-risk call path and isolate one reversible edit surface before coding.",
+      rationale: "Hard-task throughput stays bounded when the runner narrows the edit surface before committing.",
+      cheapSignals: surfaceSignals,
+      signalScores: {
+        uncertaintyReduction: clamp01(
+          0.45
+          + (profile.flags.weakLaneReliability ? 0.15 : 0)
+          + (profile.flags.weakBenchmarkScore ? 0.1 : 0)
+        ),
+        cheapVerification: clamp01(
+          0.75
+          + (profile.flags.weakCapacityGain ? 0.05 : 0)
+          + (profile.flags.highUnresolvedBenchmark ? 0.05 : 0)
+        ),
+        executionLeverage: clamp01(
+          0.65
+          + (profile.flags.weakROI ? 0.1 : 0)
+          + (profile.flags.weakHardChain ? 0.1 : 0)
+        ),
+      },
+    },
+  ].map((candidate) => ({
+    ...candidate,
+    cheapSignals: candidate.cheapSignals.length > 0
+      ? candidate.cheapSignals
+      : ["bounded deliberation requested due to hard-task uncertainty"],
+  }));
 }
 
 /**
@@ -1779,6 +2033,7 @@ export function decideDeliberationPolicy(
     outcomeMetrics?: Partial<RoutingOutcomeMetrics> | null;
   } = {}
 ): DeliberationPolicy {
+  const profile = deriveHardTaskUncertaintyProfile(taskHints, history, signals);
   const hard = assessHardTaskEscalation(taskHints, history, signals);
   if (!hard.hardTask || !hard.escalate) {
     return {
@@ -1787,17 +2042,30 @@ export function decideDeliberationPolicy(
       reflection: false,
       boundedSearch: false,
       searchBudget: 0,
+      uncertaintyLevel: classifyDeliberationUncertaintyLevel(profile.uncertaintyScore, profile.hardTask),
+      executionMode: "direct_execute",
+      candidateFirstMoves: [],
+      recommendedFirstMove: null,
       reason: hard.reason,
     };
   }
 
   const required = hard.severity === "required";
+  const searchBudget = required ? 3 : 2;
+  const candidateFirstMoves = scheduleBoundedHypothesisCandidates(
+    buildDeliberationCandidatePool(profile),
+    { limit: searchBudget },
+  );
   return {
     mode: "multi-attempt",
     attempts: required ? 3 : 2,
     reflection: true,
     boundedSearch: true,
-    searchBudget: required ? 3 : 2,
+    searchBudget,
+    uncertaintyLevel: classifyDeliberationUncertaintyLevel(profile.uncertaintyScore, profile.hardTask),
+    executionMode: "bounded_deliberation",
+    candidateFirstMoves,
+    recommendedFirstMove: candidateFirstMoves[0] ?? null,
     reason: hard.reason,
   };
 }

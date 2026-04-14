@@ -101,6 +101,36 @@ export const DEFAULT_TIER_SLOTS = Object.freeze({
  */
 export const HIGH_IMPACT_SCORE_THRESHOLD = 0.7;
 
+const DEFAULT_HYPOTHESIS_CANDIDATE_LIMIT = 3;
+const HYPOTHESIS_CANDIDATE_SCORE_WEIGHTS = Object.freeze({
+  uncertaintyReduction: 0.45,
+  cheapVerification: 0.35,
+  executionLeverage: 0.20,
+});
+
+export interface HypothesisCandidateSignalScores {
+  uncertaintyReduction: number;
+  cheapVerification: number;
+  executionLeverage: number;
+}
+
+export interface HypothesisCandidateInput {
+  key?: unknown;
+  summary?: unknown;
+  rationale?: unknown;
+  cheapSignals?: unknown;
+  signalScores?: Partial<HypothesisCandidateSignalScores> | null;
+}
+
+export interface ScheduledHypothesisCandidate {
+  key: string;
+  summary: string;
+  rationale: string;
+  cheapSignals: string[];
+  signalScores: HypothesisCandidateSignalScores;
+  score: number;
+}
+
 // ── Typedefs ──────────────────────────────────────────────────────────────────
 
 /**
@@ -214,6 +244,111 @@ export function validateSchedulerCandidate(input) {
   }
 
   return { ok: errors.length === 0, errors };
+}
+
+function clamp01(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, numeric));
+}
+
+function roundScore(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function normalizeCheapSignals(input: unknown): string[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const entry of input) {
+    const text = String(entry || "").trim();
+    if (!text || seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    normalized.push(text);
+    if (normalized.length >= DEFAULT_HYPOTHESIS_CANDIDATE_LIMIT) {
+      break;
+    }
+  }
+  return normalized;
+}
+
+/**
+ * Rank a bounded set of candidate first moves using cheap deterministic signals.
+ *
+ * This helper is intentionally generic so other bounded-deliberation controllers
+ * can reuse the same scoring contract without re-implementing tie-breaking.
+ */
+export function scheduleBoundedHypothesisCandidates(
+  candidates: HypothesisCandidateInput[],
+  options: { limit?: number } = {},
+): ScheduledHypothesisCandidate[] {
+  const requestedLimit = Math.floor(Number(options?.limit ?? DEFAULT_HYPOTHESIS_CANDIDATE_LIMIT));
+  const limit = Math.max(0, Math.min(DEFAULT_HYPOTHESIS_CANDIDATE_LIMIT, requestedLimit));
+  if (!Array.isArray(candidates) || limit === 0) {
+    return [];
+  }
+
+  const scored = candidates
+    .map((candidate, index) => {
+      const key = String(candidate?.key || "").trim();
+      const summary = String(candidate?.summary || "").trim();
+      if (!key || !summary) {
+        return null;
+      }
+      const rationale = String(candidate?.rationale || "").trim();
+      const signalScores: HypothesisCandidateSignalScores = {
+        uncertaintyReduction: clamp01(candidate?.signalScores?.uncertaintyReduction),
+        cheapVerification: clamp01(candidate?.signalScores?.cheapVerification),
+        executionLeverage: clamp01(candidate?.signalScores?.executionLeverage),
+      };
+      const score = roundScore(
+        (signalScores.uncertaintyReduction * HYPOTHESIS_CANDIDATE_SCORE_WEIGHTS.uncertaintyReduction)
+        + (signalScores.cheapVerification * HYPOTHESIS_CANDIDATE_SCORE_WEIGHTS.cheapVerification)
+        + (signalScores.executionLeverage * HYPOTHESIS_CANDIDATE_SCORE_WEIGHTS.executionLeverage)
+      );
+      return {
+        index,
+        candidate: {
+          key,
+          summary,
+          rationale,
+          cheapSignals: normalizeCheapSignals(candidate?.cheapSignals),
+          signalScores,
+          score,
+        } satisfies ScheduledHypothesisCandidate,
+      };
+    })
+    .filter((entry): entry is { index: number; candidate: ScheduledHypothesisCandidate } => entry !== null);
+
+  scored.sort((left, right) => {
+    const scoreDelta = right.candidate.score - left.candidate.score;
+    if (scoreDelta !== 0) {
+      return scoreDelta;
+    }
+    const verificationDelta =
+      right.candidate.signalScores.cheapVerification - left.candidate.signalScores.cheapVerification;
+    if (verificationDelta !== 0) {
+      return verificationDelta;
+    }
+    const leverageDelta =
+      right.candidate.signalScores.executionLeverage - left.candidate.signalScores.executionLeverage;
+    if (leverageDelta !== 0) {
+      return leverageDelta;
+    }
+    const keyDelta = left.candidate.key.localeCompare(right.candidate.key);
+    if (keyDelta !== 0) {
+      return keyDelta;
+    }
+    return left.index - right.index;
+  });
+
+  return scored.slice(0, limit).map((entry) => entry.candidate);
 }
 
 // ── High-Impact Classification ─────────────────────────────────────────────────

@@ -44,6 +44,8 @@ import {
   decideDeliberationPolicy,
   QUALITY_FLOOR_DEFAULT,
   resolveModelCallSettingsOverlay,
+  type DeliberationPolicy,
+  type ScheduledHypothesisCandidate,
   type ModelCallSettingsOverlay,
 } from "./model_policy.js";
 import { deriveRoutingAdjustments, buildPromptHardConstraints } from "./learning_policy_compiler.js";
@@ -129,6 +131,9 @@ type PromptControls = {
   hardConstraints?: PromptHardConstraint[];
   deliberationMode?: "single-pass" | "multi-attempt";
   searchBudget?: number;
+  uncertaintyLevel?: DeliberationPolicy["uncertaintyLevel"];
+  candidateFirstMoves?: ScheduledHypothesisCandidate[];
+  recommendedFirstMove?: ScheduledHypothesisCandidate | null;
 };
 
 type WorkerActivityEntry = {
@@ -2046,12 +2051,31 @@ export function buildConversationContext(history, instruction: WorkerInstruction
 
   if (promptControls.deliberationMode === "multi-attempt") {
     const searchBudget = Number(promptControls.searchBudget || 0);
+    const uncertaintyLevel = String(promptControls.uncertaintyLevel || "high");
+    const candidateFirstMoves = Array.isArray(promptControls.candidateFirstMoves)
+      ? promptControls.candidateFirstMoves
+      : [];
+    const recommendedFirstMove = promptControls.recommendedFirstMove ?? candidateFirstMoves[0] ?? null;
     parts.push("\n## SELECTIVE DELIBERATION POLICY");
     parts.push("This task is high-uncertainty. Use bounded multi-attempt reasoning:");
+    parts.push(`Uncertainty classification: ${uncertaintyLevel}.`);
     parts.push("1) Attempt 1: initial implementation pass.");
     parts.push("2) Attempt 2+: reflect on failure signals and revise plan before edits.");
     if (searchBudget > 0) {
       parts.push(`3) Bounded search budget: at most ${searchBudget} focused repository searches before coding.`);
+    }
+    if (recommendedFirstMove?.summary) {
+      parts.push(`Recommended first move: ${recommendedFirstMove.summary}`);
+    }
+    if (candidateFirstMoves.length > 0) {
+      parts.push("Candidate first moves scored with cheap verification signals:");
+      for (const [index, candidate] of candidateFirstMoves.entries()) {
+        const score = Number.isFinite(Number(candidate?.score)) ? ` [score=${Number(candidate.score).toFixed(3)}]` : "";
+        const cheapSignals = Array.isArray(candidate?.cheapSignals) && candidate.cheapSignals.length > 0
+          ? ` — cheap signals: ${candidate.cheapSignals.join("; ")}`
+          : "";
+        parts.push(`${index + 1}) ${candidate.summary}${score}${cheapSignals}`);
+      }
     }
     parts.push("Do not loop indefinitely; converge to a concrete implementation or explicit blocker.");
   }
@@ -2703,6 +2727,9 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       hardConstraints,
       deliberationMode: deliberation.mode,
       searchBudget: deliberation.searchBudget,
+      uncertaintyLevel: deliberation.uncertaintyLevel,
+      candidateFirstMoves: deliberation.candidateFirstMoves,
+      recommendedFirstMove: deliberation.recommendedFirstMove,
     }
   );
 
@@ -2755,7 +2782,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
 
   await appendProgress(
     config,
-    `[WORKER:${roleName}] [${instruction.taskKind || "general"}→${model}] deliberation=${deliberation.mode} ${truncate(instruction.task, 70)}`
+    `[WORKER:${roleName}] [${instruction.taskKind || "general"}→${model}] deliberation=${deliberation.mode}/${deliberation.uncertaintyLevel} ${truncate(instruction.task, 70)}`
   );
 
   await persistLegacyWorkerSessionArtifacts(config, String(roleName || "worker"), {

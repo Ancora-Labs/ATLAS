@@ -594,15 +594,51 @@ export function recommendRetryDeliberationMode(decision: {
   attempts?: number;
 }) {
   const action = String(decision?.retryAction || "");
+  const failureClass = String(decision?.failureClass || "");
   const attempts = Number(decision?.attempts || 0);
   const hardAction = action === RETRY_ACTION.REWORK || action === RETRY_ACTION.SPLIT;
   const highAttempts = attempts >= 1;
+
+  const candidateFirstMoves = hardAction
+    ? [
+        {
+          key: "retry_artifact_review",
+          summary: "Inspect the last failure artifact and identify the smallest reversible correction.",
+          rationale: `Retry action ${action} indicates the next pass should start from explicit failure evidence.`,
+          cheapSignals: [
+            failureClass ? `failureClass=${failureClass}` : "failure evidence available",
+            `retryAction=${action}`,
+          ],
+          score: 0.9,
+        },
+        {
+          key: "targeted_retry_verification",
+          summary: "Re-run the narrowest verification slice that can confirm the retry path.",
+          rationale: "Cheap verification should validate the next move before the worker spends another deep pass.",
+          cheapSignals: [`attempt=${attempts + 1}`, "bounded retry verification"],
+          score: 0.82,
+        },
+      ]
+    : highAttempts
+      ? [
+          {
+            key: "retry_surface_map",
+            summary: "Map the failure surface before repeating the same execution path.",
+            rationale: "A repeated attempt should narrow scope instead of replaying the full path blindly.",
+            cheapSignals: [`attempt=${attempts + 1}`, "single focused repository search"],
+            score: 0.74,
+          },
+        ]
+      : [];
 
   if (hardAction || highAttempts) {
     return {
       mode: "multi-attempt",
       reflection: true,
       searchBudget: hardAction ? 2 : 1,
+      uncertaintyLevel: hardAction ? "high" : "moderate",
+      candidateFirstMoves,
+      recommendedFirstMove: candidateFirstMoves[0] ?? null,
     };
   }
 
@@ -610,6 +646,9 @@ export function recommendRetryDeliberationMode(decision: {
     mode: "single-pass",
     reflection: false,
     searchBudget: 0,
+    uncertaintyLevel: "low",
+    candidateFirstMoves: [],
+    recommendedFirstMove: null,
   };
 }
 

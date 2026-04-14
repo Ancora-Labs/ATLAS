@@ -944,6 +944,10 @@ describe("decideDeliberationPolicy", () => {
     assert.equal(result.mode, "single-pass");
     assert.equal(result.attempts, 1);
     assert.equal(result.boundedSearch, false);
+    assert.equal(result.uncertaintyLevel, "low");
+    assert.equal(result.executionMode, "direct_execute");
+    assert.deepEqual(result.candidateFirstMoves, []);
+    assert.equal(result.recommendedFirstMove, null);
   });
 
   it("returns multi-attempt policy for hard high-uncertainty tasks", () => {
@@ -956,6 +960,15 @@ describe("decideDeliberationPolicy", () => {
     assert.ok(result.attempts >= 2);
     assert.equal(result.reflection, true);
     assert.ok(result.searchBudget >= 2);
+    assert.equal(result.uncertaintyLevel, "high");
+    assert.equal(result.executionMode, "bounded_deliberation");
+    assert.ok(result.candidateFirstMoves.length >= 2);
+    assert.ok(result.candidateFirstMoves.length <= result.searchBudget);
+    assert.equal(result.recommendedFirstMove?.key, "smallest_verification");
+    assert.ok(
+      result.candidateFirstMoves.every((candidate) => candidate.cheapSignals.length > 0),
+      "each candidate must surface cheap verification signals"
+    );
   });
 });
 

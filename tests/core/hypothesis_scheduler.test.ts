@@ -41,6 +41,7 @@ import {
   appendRationale,
   loadRationale,
   buildBudgetSnapshot,
+  scheduleBoundedHypothesisCandidates,
   scheduleNextExperiment,
 } from "../../src/core/hypothesis_scheduler.js";
 
@@ -152,6 +153,63 @@ describe("HIGH_IMPACT_SCORE_THRESHOLD (AC11 — threshold defined)", () => {
 
   it("is 0.7 (the documented threshold)", () => {
     assert.equal(HIGH_IMPACT_SCORE_THRESHOLD, 0.7);
+  });
+});
+
+describe("scheduleBoundedHypothesisCandidates", () => {
+  it("returns the highest-scoring candidate first and respects the configured limit", () => {
+    const result = scheduleBoundedHypothesisCandidates([
+      {
+        key: "surface_map",
+        summary: "Map the high-risk call path.",
+        rationale: "Narrow the edit surface.",
+        cheapSignals: ["laneReliability=0.30 below 0.55"],
+        signalScores: {
+          uncertaintyReduction: 0.6,
+          cheapVerification: 0.7,
+          executionLeverage: 0.7,
+        },
+      },
+      {
+        key: "smallest_verification",
+        summary: "Run the smallest verification slice first.",
+        rationale: "Cheap verification anchors the next move.",
+        cheapSignals: ["successRate=0.10 below 0.55"],
+        signalScores: {
+          uncertaintyReduction: 0.95,
+          cheapVerification: 0.95,
+          executionLeverage: 0.85,
+        },
+      },
+      {
+        key: "contract_scan",
+        summary: "Inspect the contract and nearest tests.",
+        rationale: "Clarify the first edit before coding.",
+        cheapSignals: ["sampleCount=1 below threshold 6"],
+        signalScores: {
+          uncertaintyReduction: 0.75,
+          cheapVerification: 0.95,
+          executionLeverage: 0.75,
+        },
+      },
+    ], { limit: 2 });
+
+    assert.deepEqual(result.map((candidate) => candidate.key), ["smallest_verification", "contract_scan"]);
+    assert.equal(result.length, 2);
+    assert.ok(result[0].score >= result[1].score);
+  });
+
+  it("negative path: drops invalid candidates and returns empty output for zero limit", () => {
+    const invalidOnly = scheduleBoundedHypothesisCandidates([
+      { key: "", summary: "Missing key" },
+      { key: "missing_summary", summary: "" },
+    ], { limit: 3 });
+    const zeroLimit = scheduleBoundedHypothesisCandidates([
+      { key: "contract_scan", summary: "Inspect the contract." },
+    ], { limit: 0 });
+
+    assert.deepEqual(invalidOnly, []);
+    assert.deepEqual(zeroLimit, []);
   });
 });
 
