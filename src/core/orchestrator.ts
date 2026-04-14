@@ -227,7 +227,7 @@ export const BLOCK_REASON = Object.freeze({
   /** Rolling completion yield fell at or below the throttle threshold. */
   ROLLING_YIELD_THROTTLE:         "rolling_yield_throttle",
   /** Dispatch topology failed lane diversity minimum. */
-  LANE_DIVERSITY_GATE_BLOCKED:    "lane_diversity_gate_blocked",
+  LANE_DIVERSITY_GATE_BLOCKED:    "lane_diversity_insufficient",
   /** Specialist share is below the adaptive lane utilization target. */
   SPECIALIZATION_ADMISSION_GATE:  "specialization_admission_gate_failed",
   /** Per-role plan group exceeds the configured actionable-steps cap — decompose before dispatch. */

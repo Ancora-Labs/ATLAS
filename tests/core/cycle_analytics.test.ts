@@ -38,11 +38,13 @@ import {
   HEALTH_SCORE,
   CANONICAL_EVENT_NAMES,
   CYCLE_TRUTH_TERMINAL_BLOCK_REASON,
+  DISPATCH_BLOCK_REASON_CODE,
   buildModelRoutingTelemetry,
   buildInterventionLineageTelemetry,
   buildRoutingROISummary,
   MIN_TELEMETRY_SAMPLE_THRESHOLD,
   migrateLegacyEvolutionProgressToCompletedTaskIds,
+  parseDispatchBlockReasonContract,
   WORKER_CYCLE_ARTIFACTS_SCHEMA,
   LEGACY_EVOLUTION_PROGRESS_FILE,
   LEGACY_EVOLUTION_PROGRESS_SCHEMA_VERSION,
@@ -2269,6 +2271,36 @@ describe("cycle_analytics — dispatchBlockReason in outcomes (Task 2)", () => {
     });
     assert.equal(record.outcomes.dispatchBlockReason, reason);
     assert.equal(record.phase, CYCLE_PHASE.INCOMPLETE);
+  });
+
+  it("parses the renamed lane diversity dispatch block contract", () => {
+    const reason = "lane_diversity_insufficient:activeLanes=1,minimumLanes=2";
+    assert.deepEqual(parseDispatchBlockReasonContract(reason), {
+      code: DISPATCH_BLOCK_REASON_CODE.LANE_DIVERSITY_GATE_BLOCKED,
+      detail: {
+        rawDetail: "activeLanes=1,minimumLanes=2",
+        activeLanes: "1",
+        minimumLanes: "2",
+      },
+      raw: reason,
+    });
+  });
+
+  it("negative path: treats prose-only lane diversity blocks as unknown analytics codes", () => {
+    const contract = parseDispatchBlockReasonContract("Only 1 lane(s) active, minimum is 2.");
+    assert.equal(contract?.code, DISPATCH_BLOCK_REASON_CODE.UNKNOWN);
+  });
+
+  it("classifies lane_diversity_insufficient as a dispatch-blocked terminal exit", () => {
+    const config = makeConfig("state");
+    const reason = "lane_diversity_insufficient:activeLanes=1,minimumLanes=2";
+    const record = computeCycleAnalytics(config, {
+      phase: CYCLE_PHASE.COMPLETED,
+      pipelineProgress: makePipelineProgress({ stageTimestamps: {} }),
+      dispatchBlockReason: reason,
+    });
+    assert.equal(record.outcomes.dispatchBlockReason, reason);
+    assert.equal(record.cycleTruthContract.nullEventsTerminalBlockReason, CYCLE_TRUTH_TERMINAL_BLOCK_REASON.DISPATCH_BLOCKED);
   });
 });
 
