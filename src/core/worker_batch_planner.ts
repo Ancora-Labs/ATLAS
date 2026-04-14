@@ -1,4 +1,10 @@
-import { getRoleRegistry, getLaneForWorkerName, SPECIALIST_LANE_RESERVATION_ORDER } from "./role_registry.js";
+import {
+  buildWorkerTopologyContract,
+  getRoleRegistry,
+  getLaneForWorkerName,
+  selectExecutionPatternForPlans,
+  SPECIALIST_LANE_RESERVATION_ORDER,
+} from "./role_registry.js";
 import { enforceModelPolicy } from "./model_policy.js";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -1063,8 +1069,6 @@ export function computeCriticalPathScores(
 
 export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResult = null) {
   const packetSizePolicy = resolvePacketSizePolicy(config);
-  const rawMaxPlansPerPacket = Number((config as any)?.planner?.maxPlansPerPacket);
-  const hasExplicitMaxPlansPerPacket = Number.isFinite(rawMaxPlansPerPacket) && rawMaxPlansPerPacket > 0;
   const cycleAnalyticsTelemetry = loadCycleAnalyticsTelemetry(config);
   const taskKindPacketTelemetry = extractTaskKindPacketTelemetry(cycleAnalyticsTelemetry);
   // ── Micro-wave splitting ──────────────────────────────────────────────────
@@ -1376,7 +1380,7 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
         for (const batch of activeBatches) {
           const batchPlans = batch.plans as any[];
           const hasDeps = batchPlans.some((p) => hasExplicitDependencies(p));
-          const packetPlanLimit = (hasExplicitMaxPlansPerPacket || enforceAdaptivePacketCap)
+          const packetPlanLimit = enforceAdaptivePacketCap
             ? adaptivePacketLimit.maxPlansPerPacket
             : Math.max(1, batchPlans.length);
           const chunkSize = hasDeps
@@ -1417,8 +1421,7 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
             const mergedHasDeps = mergedPlans.some((p) => hasExplicitDependencies(p));
             const withinDepLimit = !mergedHasDeps || mergedPlans.length <= maxDepBatch;
             const withinContextLimit = mergedTokens <= selection.usableContextTokens;
-            const withinPacketPlanLimit = (!hasExplicitMaxPlansPerPacket && !enforceAdaptivePacketCap)
-              || mergedPlans.length <= adaptivePacketLimit.maxPlansPerPacket;
+            const withinPacketPlanLimit = !enforceAdaptivePacketCap || mergedPlans.length <= adaptivePacketLimit.maxPlansPerPacket;
 
             if (withinDepLimit && withinContextLimit && withinPacketPlanLimit) {
               const remaining = selection.usableContextTokens - mergedTokens;
@@ -1518,11 +1521,16 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
   // produces [A-wave1, A-wave2, B-wave1, B-wave2] — causing wave-2 work to start
   // before all wave-1 work is globally complete.
   flattened.sort((a, b) => (a.wave as number) - (b.wave as number));
+  const topologyPlans = flattened.flatMap((batch) => Array.isArray(batch?.plans) ? batch.plans : []);
+  const workerTopology = buildWorkerTopologyContract(topologyPlans);
+  const executionPattern = selectExecutionPatternForPlans(topologyPlans, { workerTopology });
 
   return flattened.map((batch, index) => ({
     ...batch,
     bundleIndex: index + 1,
     totalBundles: flattened.length,
+    executionPattern,
+    workerTopology,
     diversityViolation,
     orderedStepCount: computeBatchOrderedStepCount(batch.plans as any[]),
     estimatedDurationMinutes: computeBatchEstimatedDurationMinutes(batch.plans as any[]),
@@ -1897,6 +1905,9 @@ export function buildTokenFirstBatches(
     ...(reroutedRoles.length > 0 ? { specialistReroutes: reroutedRoles } : {}),
     ...(specialistRerouteReasons.length > 0 ? { specialistRerouteReasons } : {}),
   }));
+  const topologyPlans = mapped.flatMap((batch) => Array.isArray(batch?.plans) ? batch.plans : []);
+  const workerTopology = buildWorkerTopologyContract(topologyPlans);
+  const executionPattern = selectExecutionPatternForPlans(topologyPlans, { workerTopology });
 
   // ── DAG parallelism bound ──────────────────────────────────────────────────
   // Compute a safe concurrency cap from wave topology: max wave number is a
@@ -1910,6 +1921,8 @@ export function buildTokenFirstBatches(
     ...batch,
     bundleIndex: index + 1,
     totalBundles: mapped.length,
+    executionPattern,
+    workerTopology,
     orderedStepCount: computeBatchOrderedStepCount(batch.plans as any[]),
     estimatedDurationMinutes: computeBatchEstimatedDurationMinutes(batch.plans as any[]),
     ...(index === 0 ? { dagParallelismBound } : {}),

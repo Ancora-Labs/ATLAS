@@ -77,6 +77,7 @@ import { buildRoleExecutionBatches, buildTokenFirstBatches, measureWaveBoundaryI
 import { computeFrontier } from "./dag_scheduler.js";
 import { agentFileExists, nameToSlug, validateCriticalAgentContracts } from "./agent_loader.js";
 import { getRoleRegistry, assertRoleCapabilityForTask, isAthenaReviewOrPostmortemTask } from "./role_registry.js";
+import { normalizePromptLineageContract } from "./prompt_compiler.js";
 import {
   checkArchitectureDrift,
   rankStaleRefsAsRemediationCandidates,
@@ -227,7 +228,7 @@ export const BLOCK_REASON = Object.freeze({
   /** Rolling completion yield fell at or below the throttle threshold. */
   ROLLING_YIELD_THROTTLE:         "rolling_yield_throttle",
   /** Dispatch topology failed lane diversity minimum. */
-  LANE_DIVERSITY_GATE_BLOCKED:    "lane_diversity_gate_blocked",
+  LANE_DIVERSITY_GATE_BLOCKED:    "lane_diversity_insufficient",
   /** Specialist share is below the adaptive lane utilization target. */
   SPECIALIZATION_ADMISSION_GATE:  "specialization_admission_gate_failed",
   /** Per-role plan group exceeds the configured actionable-steps cap — decompose before dispatch. */
@@ -2324,6 +2325,12 @@ export async function evaluateDispatchResumeReadiness(config): Promise<{
   const stateDir = config.paths?.stateDir || "state";
   const athenaReview = await readJson(path.join(stateDir, "athena_plan_review.json"), null);
   const prometheusAnalysis = await readJson(path.join(stateDir, "prometheus_analysis.json"), null);
+  const _plannerPromptLineage = clonePromptLineageState(
+    checkpoint?.plannerPromptLineage || resolvePlannerPromptLineageFromAnalysis(prometheusAnalysis),
+  );
+  const _reviewerPromptLineage = clonePromptLineageState(
+    checkpoint?.reviewerPromptLineage || resolveReviewerPromptLineageFromReview(athenaReview, prometheusAnalysis),
+  );
   const livePlans = Array.isArray(athenaReview?.patchedPlans) && athenaReview.patchedPlans.length > 0
     ? athenaReview.patchedPlans
     : (Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans : []);
@@ -2371,7 +2378,11 @@ async function beginDispatchCheckpoint(
   config,
   plans,
   actualPlanCount?: number,
-  opts: { planAnalyzedAt?: string } = {},
+  opts: {
+    planAnalyzedAt?: string;
+    plannerPromptLineage?: unknown;
+    reviewerPromptLineage?: unknown;
+  } = {},
 ) {
   const nowIso = new Date().toISOString();
   const planSetSignature = computePlanSetSignature(plans);
@@ -2386,6 +2397,8 @@ async function beginDispatchCheckpoint(
     completedPlans: 0,
     planSetSignature,
     planAnalyzedAt: opts?.planAnalyzedAt || null,
+    plannerPromptLineage: clonePromptLineageState(opts?.plannerPromptLineage),
+    reviewerPromptLineage: clonePromptLineageState(opts?.reviewerPromptLineage),
     dispatchPlanSnapshot: cloneCheckpointSnapshot(extractPlansFromWorkerBatches(Array.isArray(plans) ? plans : [])),
     workerBatchesSnapshot: cloneCheckpointSnapshot(Array.isArray(plans) ? plans : []),
   }, {
@@ -2423,14 +2436,26 @@ async function completeDispatchCheckpoint(config, checkpoint) {
   await writeDispatchCheckpoint(config, checkpoint);
 }
 
-export async function persistSkippedDispatchCheckpoint(config, plans, opts: { planAnalyzedAt?: string | null } = {}) {
+export async function persistSkippedDispatchCheckpoint(
+  config,
+  plans,
+  opts: {
+    planAnalyzedAt?: string | null;
+    plannerPromptLineage?: unknown;
+    reviewerPromptLineage?: unknown;
+  } = {},
+) {
   const normalizedPlans = Array.isArray(plans) ? plans : [];
   if (normalizedPlans.length === 0) return null;
   const checkpoint = await beginDispatchCheckpoint(
     config,
     normalizedPlans,
     normalizedPlans.length,
-    { planAnalyzedAt: opts?.planAnalyzedAt || null },
+    {
+      planAnalyzedAt: opts?.planAnalyzedAt || null,
+      plannerPromptLineage: opts?.plannerPromptLineage,
+      reviewerPromptLineage: opts?.reviewerPromptLineage,
+    },
   );
   await completeDispatchCheckpoint(config, checkpoint);
   return checkpoint;
@@ -2472,6 +2497,41 @@ function isDispatchOutcomeSuccessful(workerResult) {
   return isCheckpointAdvanceEligibleStatus(workerResult?.status);
 }
 
+function clonePromptLineageState(value: unknown, defaults: Record<string, unknown> = {}) {
+  if (!value || typeof value !== "object") return null;
+  const normalized = normalizePromptLineageContract(value, defaults);
+  return normalized.promptFamilyKey || normalized.lineageId ? normalized : null;
+}
+
+function resolvePlannerPromptLineageFromAnalysis(analysis: unknown) {
+  const source = analysis && typeof analysis === "object" ? analysis as Record<string, unknown> : {};
+  return clonePromptLineageState(
+    source.promptLineage ?? (source.executionStrategy as Record<string, unknown> | undefined)?.promptLineage,
+    {
+      agent: "prometheus",
+      stage: "planner",
+      checkpointNs: CHECKPOINT_NS.PLANNER,
+    },
+  );
+}
+
+function resolveReviewerPromptLineageFromReview(review: unknown, analysis: unknown) {
+  const reviewSource = review && typeof review === "object" ? review as Record<string, unknown> : {};
+  const analysisLineage = resolvePlannerPromptLineageFromAnalysis(analysis);
+  return clonePromptLineageState(
+    reviewSource.promptLineage ?? analysisLineage,
+    {
+      parentLineageId: analysisLineage?.lineageId ?? null,
+      promptFamilyKey: analysisLineage?.promptFamilyKey ?? null,
+      stablePrefixHash: analysisLineage?.stablePrefixHash ?? null,
+      familyLabel: analysisLineage?.familyLabel ?? "prometheus-cycle-delta",
+      agent: "athena",
+      stage: "reviewer",
+      checkpointNs: CHECKPOINT_NS.REVIEWER,
+    },
+  );
+}
+
 function shouldFailCloseDispatchOutcome(workerResult) {
   const status = String(workerResult?.status || "").toLowerCase();
   if (status !== "error" && status !== "blocked") return false;
@@ -2501,6 +2561,12 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
 
   const athenaReview = await readJson(path.join(stateDir, "athena_plan_review.json"), null);
   const prometheusAnalysis = await readJson(path.join(stateDir, "prometheus_analysis.json"), null);
+  const plannerPromptLineage = clonePromptLineageState(
+    checkpoint?.plannerPromptLineage || resolvePlannerPromptLineageFromAnalysis(prometheusAnalysis),
+  );
+  const reviewerPromptLineage = clonePromptLineageState(
+    checkpoint?.reviewerPromptLineage || resolveReviewerPromptLineageFromReview(athenaReview, prometheusAnalysis),
+  );
   const livePlans = Array.isArray(athenaReview?.patchedPlans) && athenaReview.patchedPlans.length > 0
     ? athenaReview.patchedPlans
     : (Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans : []);
@@ -2541,6 +2607,8 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
     }
     checkpoint = await beginDispatchCheckpoint(config, workerBatches, plans.length, {
       planAnalyzedAt: String(prometheusAnalysis?.analyzedAt || athenaReview?.reviewedAt || ""),
+      plannerPromptLineage,
+      reviewerPromptLineage,
     });
   }
 
@@ -4305,6 +4373,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   }
 
   markPremiumOutcome(primaryPrometheusPremiumEvent.eventId, true);
+  let plannerPromptLineage = resolvePlannerPromptLineageFromAnalysis(prometheusAnalysis);
 
   // ── Mandatory findings preflight admission telemetry ─────────────────────
   // Emit structured log about any findings quarantined by the pre-planning
@@ -4330,10 +4399,29 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   // Planner boundary checkpoint: persist stable snapshot after successful Prometheus analysis.
   {
     const plannerThreadId = String((config as any)?.cycleId || (prometheusAnalysis as any)?.cycleId || Date.now());
+    const plannerCheckpointId = `${plannerThreadId}/${CHECKPOINT_NS.PLANNER}/1`;
+    plannerPromptLineage = clonePromptLineageState(plannerPromptLineage, {
+      checkpointNs: CHECKPOINT_NS.PLANNER,
+      checkpointId: plannerCheckpointId,
+    });
+    if (plannerPromptLineage) {
+      (prometheusAnalysis as any).promptLineage = plannerPromptLineage;
+      (prometheusAnalysis as any).executionStrategy = {
+        ...((prometheusAnalysis as any).executionStrategy || {}),
+        promptLineage: plannerPromptLineage,
+      };
+    }
     await writeBoundaryCheckpoint(config, {
       planCount: Array.isArray(prometheusAnalysis.plans) ? prometheusAnalysis.plans.length : 0,
       planTitles: Array.isArray(prometheusAnalysis.plans) ? prometheusAnalysis.plans.map((p: any) => String(p?.title || "")) : [],
       prometheusCompletedAt: new Date().toISOString(),
+      promptLineage: plannerPromptLineage,
+      promptCache: plannerPromptLineage ? {
+        promptFamilyKey: plannerPromptLineage.promptFamilyKey,
+        cacheableSegments: plannerPromptLineage.cacheableSegments,
+        totalSegments: plannerPromptLineage.totalSegments,
+        estimatedSavedTokens: plannerPromptLineage.estimatedSavedTokens,
+      } : null,
     }, { thread_id: plannerThreadId, checkpoint_ns: CHECKPOINT_NS.PLANNER }).catch(() => { /* non-fatal */ });
   }
 
@@ -4372,6 +4460,8 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
             driftReport: architectureDriftReport,
             bypassCache: true,
             bypassReason: "missing_source_linkage",
+            promptLineage: plannerPromptLineage,
+            resumeFromCheckpointId: plannerPromptLineage?.checkpointId || null,
           });
           markPremiumOutcome(
             linkageReplanPremiumEvent.eventId,
@@ -4388,6 +4478,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
           );
           if (replannedWithLinkage && Array.isArray(replannedWithLinkage.plans) && replannedWithLinkage.plans.length > 0) {
             prometheusAnalysis = replannedWithLinkage;
+            plannerPromptLineage = resolvePlannerPromptLineageFromAnalysis(prometheusAnalysis);
           }
         } catch (err) {
           markPremiumOutcome(linkageReplanPremiumEvent.eventId, false);
@@ -4574,7 +4665,9 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         requestedBy: "OrchestratorNoveltyGate",
         driftReport: architectureDriftReport,
         bypassCache: true,
-        bypassReason: "all_plans_already_implemented_or_completed"
+        bypassReason: "all_plans_already_implemented_or_completed",
+        promptLineage: plannerPromptLineage,
+        resumeFromCheckpointId: plannerPromptLineage?.checkpointId || null,
       });
 
       markPremiumOutcome(
@@ -4617,6 +4710,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
         ...replanned,
         plans: noveltyResult.actionablePlans,
       };
+      plannerPromptLineage = resolvePlannerPromptLineageFromAnalysis(prometheusAnalysis);
     } catch (replanErr) {
       warn(`[orchestrator] Novelty re-plan failed (non-fatal): ${String((replanErr as any)?.message || replanErr)}`);
       await appendProgress(config,
@@ -4630,6 +4724,37 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
       ...prometheusAnalysis,
       plans: noveltyResult.actionablePlans,
     };
+  }
+
+  {
+    const plannerThreadId = String((config as any)?.cycleId || (prometheusAnalysis as any)?.cycleId || Date.now());
+    const plannerCheckpointId = `${plannerThreadId}/${CHECKPOINT_NS.PLANNER}/1`;
+    plannerPromptLineage = clonePromptLineageState(
+      plannerPromptLineage || resolvePlannerPromptLineageFromAnalysis(prometheusAnalysis),
+      {
+        checkpointNs: CHECKPOINT_NS.PLANNER,
+        checkpointId: plannerCheckpointId,
+      },
+    );
+    if (plannerPromptLineage) {
+      (prometheusAnalysis as any).promptLineage = plannerPromptLineage;
+      (prometheusAnalysis as any).executionStrategy = {
+        ...((prometheusAnalysis as any).executionStrategy || {}),
+        promptLineage: plannerPromptLineage,
+      };
+    }
+    await writeBoundaryCheckpoint(config, {
+      planCount: Array.isArray(prometheusAnalysis.plans) ? prometheusAnalysis.plans.length : 0,
+      planTitles: Array.isArray(prometheusAnalysis.plans) ? prometheusAnalysis.plans.map((p: any) => String(p?.title || "")) : [],
+      prometheusCompletedAt: new Date().toISOString(),
+      promptLineage: plannerPromptLineage,
+      promptCache: plannerPromptLineage ? {
+        promptFamilyKey: plannerPromptLineage.promptFamilyKey,
+        cacheableSegments: plannerPromptLineage.cacheableSegments,
+        totalSegments: plannerPromptLineage.totalSegments,
+        estimatedSavedTokens: plannerPromptLineage.estimatedSavedTokens,
+      } : null,
+    }, { thread_id: plannerThreadId, checkpoint_ns: CHECKPOINT_NS.PLANNER }).catch(() => { /* non-fatal */ });
   }
 
   await safeUpdatePipelineProgress(config, "prometheus_done", `Prometheus complete — ${prometheusAnalysis.plans.length} plan(s)`, {
@@ -4815,12 +4940,24 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   // Reviewer boundary checkpoint: persist stable snapshot after Athena approval.
   {
     const reviewerThreadId = String((config as any)?.cycleId || (prometheusAnalysis as any)?.cycleId || Date.now());
+    const reviewerCheckpointId = `${reviewerThreadId}/${CHECKPOINT_NS.REVIEWER}/1`;
+    const reviewerPromptLineage = clonePromptLineageState(
+      resolveReviewerPromptLineageFromReview(planReview, prometheusAnalysis),
+      {
+        checkpointNs: CHECKPOINT_NS.REVIEWER,
+        checkpointId: reviewerCheckpointId,
+      },
+    );
     await writeBoundaryCheckpoint(config, {
       athenaApproved: true,
       overallScore: (planReview as any)?.overallScore ?? null,
       autoApproved: (planReview as any)?.autoApproved ?? false,
       athenaCompletedAt: new Date().toISOString(),
+      promptLineage: reviewerPromptLineage,
     }, { thread_id: reviewerThreadId, checkpoint_ns: CHECKPOINT_NS.REVIEWER }).catch(() => { /* non-fatal */ });
+    if (reviewerPromptLineage) {
+      (planReview as any).promptLineage = reviewerPromptLineage;
+    }
   }
 
   // Record that Athena's gate feasibility check was invoked this cycle.
@@ -5740,6 +5877,8 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
 
   const dispatchCheckpoint = await beginDispatchCheckpoint(config, workerBatches, plans.length, {
     planAnalyzedAt: String(prometheusAnalysis?.analyzedAt || ""),
+    plannerPromptLineage: plannerPromptLineage || resolvePlannerPromptLineageFromAnalysis(prometheusAnalysis),
+    reviewerPromptLineage: resolveReviewerPromptLineageFromReview(planReview, prometheusAnalysis),
   });
   let workersDone = 0;
   let pendingCycleHealthRecord: Record<string, unknown> | null = null;

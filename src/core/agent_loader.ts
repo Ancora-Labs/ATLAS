@@ -16,6 +16,12 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { isModelBanned } from "./model_policy.js";
 import type { ModelCallSettingsOverlay } from "./model_policy.js";
+import {
+  buildPromptLineagePreamble,
+  extractPromptLineageContractFromText,
+  normalizePromptLineageContract,
+  stripPromptLineageMarker,
+} from "./prompt_compiler.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -242,6 +248,15 @@ export function buildAgentArgs({
   const useDensePromptMode = String(process.env.BOX_PROMPT_DENSIFY_MODE || "").toLowerCase() === "true";
   if (useDensePromptMode) {
     promptText = `\n[DENSIFIED_PROMPT_MODE]\nPrioritize dense, high-leverage bundled work packets over thin micro-tasks.\n${promptText}`;
+  }
+  const embeddedPromptLineage = extractPromptLineageContractFromText(promptText);
+  const runContractPromptLineage = runContract?.promptLineage && typeof runContract.promptLineage === "object"
+    ? normalizePromptLineageContract(runContract.promptLineage)
+    : null;
+  const resolvedPromptLineage = runContractPromptLineage || embeddedPromptLineage;
+  if (resolvedPromptLineage && (resolvedPromptLineage.promptFamilyKey || resolvedPromptLineage.lineageId)) {
+    const lineagePreamble = buildPromptLineagePreamble(resolvedPromptLineage);
+    promptText = `${lineagePreamble}\n\n${stripPromptLineageMarker(promptText)}`;
   }
   if (promptText.length > PROMPT_FILE_THRESHOLD) {
     const slug = agentSlug || "agent";

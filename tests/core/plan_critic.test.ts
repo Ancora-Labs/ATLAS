@@ -285,6 +285,28 @@ describe("plan_critic", () => {
       assert.equal(result.bestCandidates, candidateB);
       assert.ok(result.score > 0);
     });
+
+    it("prefers the higher-capacity candidate when structure is otherwise comparable", () => {
+      const lowCapacity = [{
+        ...strongPlan,
+        task: "Low-capacity patch packet",
+        capacityDelta: 0.05,
+        requestROI: 1.05,
+      }];
+      const highCapacity = [{
+        ...strongPlan,
+        task: "Master-plan packet",
+        capacityDelta: 0.3,
+        requestROI: 2.2,
+      }];
+      const result = selectBestCandidateSet([lowCapacity, highCapacity], {
+        gateMetricsByCandidate: [
+          { contractPassRate: 1, viablePlanCount: 1, freshnessPenalty: 0 },
+          { contractPassRate: 1, viablePlanCount: 1, freshnessPenalty: 0 },
+        ],
+      });
+      assert.equal(result.bestCandidates, highCapacity);
+    });
   });
 
   describe("AC_RICHNESS_THRESHOLD", () => {

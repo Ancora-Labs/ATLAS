@@ -42,6 +42,42 @@ export const CRITIC_PASS_THRESHOLD = 0.4;
 /** Minimum AC richness score for Athena acceptance (Packet 9). */
 export const AC_RICHNESS_THRESHOLD = 0.5;
 
+const CRITIC_DIMENSION_WEIGHTS: Readonly<Record<string, number>> = Object.freeze({
+  [CRITIC_DIMENSION.CAPACITY_FIRST]: 2.4,
+  [CRITIC_DIMENSION.BALANCED_DIMENSIONS]: 1.25,
+  [CRITIC_DIMENSION.IMPLEMENTATION_EVIDENCE]: 1.2,
+  [CRITIC_DIMENSION.PACKET_SIZE_COMPLIANT]: 1.1,
+});
+
+function clamp01(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.min(1, value));
+}
+
+function computeWeightedCriticScore(dimensions: Record<string, number>): number {
+  const entries = Object.entries(dimensions);
+  if (entries.length === 0) return 0;
+  let weightedTotal = 0;
+  let totalWeight = 0;
+  for (const [dimension, value] of entries) {
+    const weight = CRITIC_DIMENSION_WEIGHTS[dimension] ?? 1;
+    weightedTotal += value * weight;
+    totalWeight += weight;
+  }
+  return totalWeight > 0 ? weightedTotal / totalWeight : 0;
+}
+
+function computePlanCapacityProfile(plan: any): number {
+  const capacityDelta = Number(plan?.capacityDelta);
+  const requestROI = Number(plan?.requestROI);
+  if (!Number.isFinite(capacityDelta) || capacityDelta <= 0 || !Number.isFinite(requestROI) || requestROI <= 1) {
+    return 0;
+  }
+  const capacitySignal = clamp01(capacityDelta / 0.25, 0);
+  const roiSignal = clamp01((requestROI - 1) / 1.5, 0);
+  return Math.round((((capacitySignal * 0.65) + (roiSignal * 0.35)) * 1000)) / 1000;
+}
+
 /**
  * Evaluate AC (acceptance criteria) richness for a plan.
  * Returns a 0-1 score based on quantity and quality of criteria.
@@ -235,10 +271,8 @@ export function critiquePlan(plan) {
     issues.push("Task appears to be derived from low-signal research topic names without concrete repository evidence — must anchor to specific files or tests");
   }
 
-  // Composite score (equal weight)
-
-  const values = Object.values(dimensions);
-  const score = values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : 0;
+  // Composite score (capacity-first weighted)
+  const score = computeWeightedCriticScore(dimensions);
 
   return {
     passed: score >= CRITIC_PASS_THRESHOLD,
@@ -352,13 +386,17 @@ export function scoreCandidateSet(plans: object[]): {
   setScore: number;
   dimensionCoverage: number;
   planCount: number;
+  capacityScore: number;
 } {
   if (!Array.isArray(plans) || plans.length === 0) {
-    return { setScore: 0, dimensionCoverage: 0, planCount: 0 };
+    return { setScore: 0, dimensionCoverage: 0, planCount: 0, capacityScore: 0 };
   }
   const results = plans.map(p => critiquePlan(p));
   const totalScore = results.reduce((acc, r) => acc + r.score, 0);
   const setScore = Math.round((totalScore / results.length) * 1000) / 1000;
+  const capacityScore = Math.round(
+    (plans.reduce((sum, plan) => sum + computePlanCapacityProfile(plan), 0) / plans.length) * 1000
+  ) / 1000;
 
   // Dimension coverage: fraction of CRITIC_DIMENSION keys that have at least one plan scoring 1.0
   const allDimKeys = Object.values(CRITIC_DIMENSION);
@@ -369,7 +407,7 @@ export function scoreCandidateSet(plans: object[]): {
     ? Math.round((coveredDims.length / allDimKeys.length) * 1000) / 1000
     : 0;
 
-  return { setScore, dimensionCoverage, planCount: plans.length };
+  return { setScore, dimensionCoverage, planCount: plans.length, capacityScore };
 }
 
 export interface CandidateSetGateMetrics {
@@ -383,16 +421,12 @@ export interface CandidateSetScore {
   setScore: number;
   dimensionCoverage: number;
   planCount: number;
+  capacityScore: number;
   contractPassRate: number;
   viableRatio: number;
   freshnessPenalty: number;
   allPlansBlocked: boolean;
   effectiveScore: number;
-}
-
-function clamp01(value: number, fallback: number): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.min(1, value));
 }
 
 export function scoreCandidateSetWithGates(
@@ -429,8 +463,9 @@ export function scoreCandidateSetWithGates(
     };
   }
   const gateMultiplier = 0.6 + (contractPassRate * 0.2) + (viableRatio * 0.2);
+  const capacityMultiplier = 0.55 + (base.capacityScore * 0.45);
   const effectiveScore = Math.round(
-    Math.max(0, Math.min(1, base.setScore * gateMultiplier * (1 - freshnessPenalty))) * 1000
+    Math.max(0, Math.min(1, base.setScore * gateMultiplier * capacityMultiplier * (1 - freshnessPenalty))) * 1000
   ) / 1000;
 
   return {
@@ -503,17 +538,19 @@ export function selectBestCandidateSet(
   scored.sort((a, b) => {
     if (a.allPlansBlocked !== b.allPlansBlocked) return a.allPlansBlocked ? 1 : -1;
     if (b.effectiveScore !== a.effectiveScore) return b.effectiveScore - a.effectiveScore;
-    // Tie-break 1: higher contract pass rate
+    // Tie-break 1: higher capacity profile
+    if (b.capacityScore !== a.capacityScore) return b.capacityScore - a.capacityScore;
+    // Tie-break 2: higher contract pass rate
     if (b.contractPassRate !== a.contractPassRate) return b.contractPassRate - a.contractPassRate;
-    // Tie-break 2: higher viable ratio
+    // Tie-break 3: higher viable ratio
     if (b.viableRatio !== a.viableRatio) return b.viableRatio - a.viableRatio;
-    // Tie-break 3: higher dimensionCoverage
+    // Tie-break 4: higher dimensionCoverage
     if (b.dimensionCoverage !== a.dimensionCoverage) return b.dimensionCoverage - a.dimensionCoverage;
-    // Tie-break 4: lower freshness penalty
+    // Tie-break 5: lower freshness penalty
     if (a.freshnessPenalty !== b.freshnessPenalty) return a.freshnessPenalty - b.freshnessPenalty;
-    // Tie-break 5: fewer plans (lower blast radius)
+    // Tie-break 6: fewer plans (lower blast radius)
     if (a.planCount !== b.planCount) return a.planCount - b.planCount;
-    // Tie-break 6: original index (stable)
+    // Tie-break 7: original index (stable)
     return a.idx - b.idx;
   });
 

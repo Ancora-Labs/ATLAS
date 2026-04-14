@@ -13,6 +13,12 @@ import {
   compileTieredPrompt,
   markCacheableSegments,
   CACHE_STABLE_SECTION_NAMES,
+  derivePromptFamilyKey,
+  buildPromptLineageMarker,
+  buildPromptLineagePreamble,
+  extractPromptLineageContractFromText,
+  stripPromptLineageMarker,
+  normalizePromptLineageContract,
   markCycleDeltaSectionsRequired,
   PROMPT_BUDGET_PARTITION,
   analyzePacketDensification,
@@ -315,6 +321,69 @@ describe("prompt_compiler", () => {
       assert.ok(CACHE_STABLE_SECTION_NAMES instanceof Set);
       assert.ok(CACHE_STABLE_SECTION_NAMES.has("role"));
       assert.ok(CACHE_STABLE_SECTION_NAMES.has("system"));
+    });
+
+    it("derives a stable prompt-family key from cacheable sections only", () => {
+      const first = markCacheableSegments([
+        section("role", "You are Prometheus."),
+        section("context", "dynamic cycle input A"),
+      ]);
+      const second = markCacheableSegments([
+        section("role", "You are Prometheus."),
+        section("context", "dynamic cycle input B"),
+      ]);
+      assert.equal(
+        derivePromptFamilyKey(first, { salt: "test" }),
+        derivePromptFamilyKey(second, { salt: "test" }),
+      );
+    });
+
+    it("changes prompt-family key when a cacheable section changes", () => {
+      const first = markCacheableSegments([section("role", "You are Prometheus.")]);
+      const second = markCacheableSegments([section("role", "You are Athena.")]);
+      assert.notEqual(
+        derivePromptFamilyKey(first, { salt: "test" }),
+        derivePromptFamilyKey(second, { salt: "test" }),
+      );
+    });
+
+    it("builds and extracts a prompt-lineage marker deterministically", () => {
+      const marker = buildPromptLineageMarker({
+        lineageId: "planner:abc",
+        promptFamilyKey: "family-123",
+        agent: "prometheus",
+        stage: "planner",
+        totalSegments: 5,
+        cacheableSegments: 3,
+        estimatedSavedTokens: 120,
+      });
+      const extracted = extractPromptLineageContractFromText(`${marker}\nTARGET REPO: box`);
+      assert.equal(extracted?.lineageId, "planner:abc");
+      assert.equal(extracted?.promptFamilyKey, "family-123");
+      assert.equal(stripPromptLineageMarker(`${marker}\nTARGET REPO: box`), "TARGET REPO: box");
+    });
+
+    it("extracts prompt-lineage from serialized prompt JSON and renders a stable preamble", () => {
+      const raw = `Execution Strategy: {"promptLineage":{"lineageId":"planner:def","promptFamilyKey":"family-456","agent":"prometheus","stage":"planner","totalSegments":4,"cacheableSegments":2,"estimatedSavedTokens":80}}`;
+      const extracted = extractPromptLineageContractFromText(raw);
+      const preamble = buildPromptLineagePreamble(extracted);
+      assert.equal(extracted?.promptFamilyKey, "family-456");
+      assert.ok(preamble.includes("## PROMPT LINEAGE"));
+      assert.ok(preamble.includes("promptFamilyKey=family-456"));
+    });
+
+    it("normalizes prompt-lineage counters and empty scalars fail-closed", () => {
+      const normalized = normalizePromptLineageContract({
+        lineageId: "   ",
+        promptFamilyKey: "family-789",
+        totalSegments: -3,
+        cacheableSegments: "2.7",
+        estimatedSavedTokens: "bad",
+      });
+      assert.equal(normalized.lineageId, null);
+      assert.equal(normalized.totalSegments, 0);
+      assert.equal(normalized.cacheableSegments, 2);
+      assert.equal(normalized.estimatedSavedTokens, 0);
     });
   });
 

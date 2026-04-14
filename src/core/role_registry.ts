@@ -30,11 +30,77 @@ export const WORKER_CAPABILITIES: Readonly<Record<string, readonly string[]>> = 
   "observation-worker":    Object.freeze(["observation"]),
 });
 
+export const PROMETHEUS_PLANNING_MODE = Object.freeze({
+  MASTER_EVOLUTION: "master_evolution",
+  REPAIR_PLAN: "repair_plan",
+} as const);
+
+export type PrometheusPlanningMode =
+  typeof PROMETHEUS_PLANNING_MODE[keyof typeof PROMETHEUS_PLANNING_MODE];
+
+export const EXECUTION_PATTERN = Object.freeze({
+  WAVE_PARALLEL: "wave_parallel",
+  SINGLE_WORKER: "single_worker",
+  SERIAL_REPAIR: "serial_repair",
+} as const);
+
+export type ExecutionPattern =
+  typeof EXECUTION_PATTERN[keyof typeof EXECUTION_PATTERN];
+
+export interface WorkerTopologyRoleContract {
+  role: string;
+  lane: string;
+  taskCount: number;
+  waves: number[];
+  specialized: boolean;
+}
+
+export interface WorkerTopologyLaneContract {
+  lane: string;
+  worker: string;
+  taskCount: number;
+  roleCount: number;
+  specialized: boolean;
+}
+
+export interface WorkerTopologyContract {
+  schemaVersion: 1;
+  planningMode: PrometheusPlanningMode;
+  workerCount: number;
+  laneCount: number;
+  maxParallelWorkers: number;
+  roles: WorkerTopologyRoleContract[];
+  lanes: WorkerTopologyLaneContract[];
+}
+
 export function normalizeWorkerName(name: unknown): string {
   const raw = String(name || "").trim().toLowerCase();
   if (!raw) return "evolution-worker";
   if (raw === "evolution worker" || raw === "evolution-worker") return "evolution-worker";
   return raw.replace(/\s+/g, "-");
+}
+
+export function normalizePrometheusPlanningMode(
+  value: unknown,
+  fallback: PrometheusPlanningMode | null = PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION,
+): PrometheusPlanningMode | null {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION) {
+    return PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION;
+  }
+  if (normalized === PROMETHEUS_PLANNING_MODE.REPAIR_PLAN) {
+    return PROMETHEUS_PLANNING_MODE.REPAIR_PLAN;
+  }
+  return fallback;
+}
+
+export function normalizeExecutionPattern(
+  value: unknown,
+  fallback: ExecutionPattern | null = EXECUTION_PATTERN.WAVE_PARALLEL,
+): ExecutionPattern | null {
+  const normalized = String(value || "").trim().toLowerCase();
+  const valid = Object.values(EXECUTION_PATTERN) as readonly string[];
+  return valid.includes(normalized) ? normalized as ExecutionPattern : fallback;
 }
 
 export function isSpecialistWorkerName(name: unknown): boolean {
@@ -91,6 +157,121 @@ export const SPECIALIST_LANE_RESERVATION_ORDER: readonly string[] = Object.freez
 export function isSpecialistLane(lane: unknown): boolean {
   const normalized = String(lane || "").trim().toLowerCase();
   return normalized.length > 0 && normalized !== "implementation" && normalized in LANE_WORKER_NAMES;
+}
+
+export function buildWorkerTopologyContract(
+  plans: unknown[],
+  opts: { planningMode?: unknown } = {},
+): WorkerTopologyContract {
+  const planningMode = normalizePrometheusPlanningMode(
+    opts.planningMode,
+    PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION,
+  ) || PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION;
+  const roleMap = new Map<string, {
+    role: string;
+    lane: string;
+    taskCount: number;
+    waves: Set<number>;
+    specialized: boolean;
+  }>();
+  const laneMap = new Map<string, {
+    lane: string;
+    worker: string;
+    taskCount: number;
+    roles: Set<string>;
+    specialized: boolean;
+  }>();
+  const waveRoleMap = new Map<number, Set<string>>();
+
+  for (const plan of Array.isArray(plans) ? plans : []) {
+    if (!plan || typeof plan !== "object") continue;
+    const src = plan as Record<string, unknown>;
+    const role = normalizePlanRoleToWorkerName(src.role);
+    const lane = String(src.capabilityLane || getLaneForWorkerName(role, "implementation")).trim().toLowerCase() || "implementation";
+    const wave = Math.max(1, Math.floor(Number(src.wave) || 1));
+
+    if (!roleMap.has(role)) {
+      roleMap.set(role, {
+        role,
+        lane,
+        taskCount: 0,
+        waves: new Set<number>(),
+        specialized: isSpecialistWorkerName(role),
+      });
+    }
+    const roleEntry = roleMap.get(role)!;
+    roleEntry.taskCount += 1;
+    roleEntry.waves.add(wave);
+
+    if (!laneMap.has(lane)) {
+      laneMap.set(lane, {
+        lane,
+        worker: normalizePlanRoleToWorkerName(LANE_WORKER_NAMES[lane] || role),
+        taskCount: 0,
+        roles: new Set<string>(),
+        specialized: isSpecialistLane(lane),
+      });
+    }
+    const laneEntry = laneMap.get(lane)!;
+    laneEntry.taskCount += 1;
+    laneEntry.roles.add(role);
+
+    if (!waveRoleMap.has(wave)) {
+      waveRoleMap.set(wave, new Set<string>());
+    }
+    waveRoleMap.get(wave)!.add(role);
+  }
+
+  const roles = [...roleMap.values()]
+    .map((entry) => ({
+      role: entry.role,
+      lane: entry.lane,
+      taskCount: entry.taskCount,
+      waves: [...entry.waves].sort((a, b) => a - b),
+      specialized: entry.specialized,
+    }))
+    .sort((a, b) => a.role.localeCompare(b.role));
+
+  const lanes = [...laneMap.values()]
+    .map((entry) => ({
+      lane: entry.lane,
+      worker: entry.worker,
+      taskCount: entry.taskCount,
+      roleCount: entry.roles.size,
+      specialized: entry.specialized,
+    }))
+    .sort((a, b) => a.lane.localeCompare(b.lane));
+
+  const maxParallelWorkers = [...waveRoleMap.values()]
+    .reduce((max, rolesInWave) => Math.max(max, rolesInWave.size), 0);
+
+  return {
+    schemaVersion: 1,
+    planningMode,
+    workerCount: roles.length,
+    laneCount: lanes.length,
+    maxParallelWorkers,
+    roles,
+    lanes,
+  };
+}
+
+export function selectExecutionPatternForPlans(
+  plans: unknown[],
+  opts: { planningMode?: unknown; workerTopology?: WorkerTopologyContract | null } = {},
+): ExecutionPattern {
+  const planningMode = normalizePrometheusPlanningMode(
+    opts.planningMode,
+    PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION,
+  ) || PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION;
+  const workerTopology = opts.workerTopology || buildWorkerTopologyContract(plans, { planningMode });
+  if (planningMode === PROMETHEUS_PLANNING_MODE.REPAIR_PLAN) {
+    return EXECUTION_PATTERN.SERIAL_REPAIR;
+  }
+  if (workerTopology.workerCount <= 1 && workerTopology.maxParallelWorkers <= 1) {
+    return EXECUTION_PATTERN.SINGLE_WORKER;
+  }
+  return EXECUTION_PATTERN.WAVE_PARALLEL;
 }
 
 // ── Task-Lane Classification ───────────────────────────────────────────────────

@@ -15,6 +15,9 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import {
   generateDeterministicTaskId,
@@ -27,6 +30,7 @@ import {
 import {
   stampBatchPlanTaskIds,
   extractBatchTaskSummary,
+  persistSkippedDispatchCheckpoint,
 } from "../../src/core/orchestrator.js";
 
 // ── 1. generateDeterministicTaskId ────────────────────────────────────────────
@@ -246,6 +250,41 @@ describe("extractBatchTaskSummary", () => {
     const batch = { role: "evolution-worker", plans: [{ task: longTask }] };
     const summary = extractBatchTaskSummary(batch);
     assert.ok(summary.length <= 120, `summary length ${summary.length} must be ≤ 120`);
+  });
+});
+
+describe("persistSkippedDispatchCheckpoint", () => {
+  it("preserves planner and reviewer prompt lineage in the dispatch snapshot", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-dispatch-lineage-"));
+    try {
+      const config = { paths: { stateDir }, runtime: {} };
+      await persistSkippedDispatchCheckpoint(config, [
+        { role: "evolution-worker", wave: 1, task: "Persist lineage-aware dispatch state" },
+      ], {
+        planAnalyzedAt: "2026-04-04T00:00:00.000Z",
+        plannerPromptLineage: {
+          lineageId: "planner:abc",
+          promptFamilyKey: "family-123",
+          totalSegments: 5,
+          cacheableSegments: 3,
+          estimatedSavedTokens: 120,
+        },
+        reviewerPromptLineage: {
+          lineageId: "reviewer:def",
+          promptFamilyKey: "family-123",
+          totalSegments: 4,
+          cacheableSegments: 2,
+          estimatedSavedTokens: 80,
+        },
+      });
+      const raw = await fs.readFile(path.join(stateDir, "dispatch_checkpoint.json"), "utf8");
+      const parsed = JSON.parse(raw);
+      assert.equal(parsed.plannerPromptLineage.lineageId, "planner:abc");
+      assert.equal(parsed.reviewerPromptLineage.lineageId, "reviewer:def");
+      assert.equal(parsed.reviewerPromptLineage.cacheableSegments, 2);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });
 

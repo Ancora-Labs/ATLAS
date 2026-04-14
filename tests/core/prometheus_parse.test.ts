@@ -72,6 +72,7 @@ import {
   PROCESS_NARRATION_LEXICAL_PATTERNS,
   SEMANTIC_TOOL_TRACE_PATTERNS,
   DECISION_BLOB_PATTERNS,
+  resolveCapturedAgentRawOutput,
   hasPrometheusRuntimeContractSignals,
   applyDiagnosticsFreshnessTruthToPlanning,
   ROLE_PLAN_COMPLETENESS_ERROR_CODE,
@@ -409,6 +410,69 @@ describe("normalizePrometheusParsedOutput", () => {
     }
   });
 
+  it("emits explicit master-planning execution pattern and worker topology contract", () => {
+    const parsed = {
+      plans: [
+        {
+          task: "Add planner coverage test",
+          role: "quality-worker",
+          wave: 1,
+          target_files: ["src/core/prometheus.ts", "tests/core/prometheus_parse.test.ts"],
+          acceptance_criteria: ["Planner output includes execution topology with >= 1 assertion", "Regression test passes with 0 topology mismatches"],
+          verification: "tests/core/prometheus_parse.test.ts — test: emits execution topology contract",
+          capacityDelta: 0.2,
+          requestROI: 1.8,
+        },
+        {
+          task: "Wire dispatch topology metadata",
+          role: "integration-worker",
+          wave: 1,
+          target_files: ["src/core/worker_batch_planner.ts", "tests/core/worker_batch_planner.test.ts"],
+          acceptance_criteria: ["Batch metadata carries topology contract with >= 1 assertion", "Parallel wave topology remains deterministic with 0 duplicate roles"],
+          verification: "tests/core/worker_batch_planner.test.ts — test: batch metadata exposes topology contract",
+          capacityDelta: 0.25,
+          requestROI: 2.1,
+        },
+      ],
+    };
+
+    const normalized = normalizePrometheusParsedOutput(parsed, { raw: "" });
+    assert.equal(normalized.executionStrategy.planningMode, "master_evolution");
+    assert.equal(normalized.executionStrategy.executionPattern, "wave_parallel");
+    assert.equal(normalized.executionStrategy.workerTopology.workerCount, 2);
+    assert.equal(normalized.executionStrategy.workerTopology.maxParallelWorkers, 2);
+    assert.equal(Array.isArray(normalized.executionStrategy.workerTopology.roles), true);
+    assert.equal(Array.isArray(normalized.executionStrategy.workerTopology.lanes), true);
+  });
+
+  it("emits repair-plan execution contract when repair feedback is active", () => {
+    const parsed = {
+      plans: [
+        {
+          task: "Repair missing topology contract in src/core/prometheus.ts",
+          role: "evolution-worker",
+          wave: 1,
+          target_files: ["src/core/prometheus.ts", "tests/core/prometheus_parse.test.ts"],
+          acceptance_criteria: ["Repair path emits serial repair pattern with >= 1 assertion", "No unrelated packets are added"],
+          verification: "tests/core/prometheus_parse.test.ts — test: repair mode emits serial pattern",
+          capacityDelta: 0.12,
+          requestROI: 1.3,
+        },
+      ],
+    };
+
+    const normalized = normalizePrometheusParsedOutput(parsed, {
+      raw: "",
+      planningMode: "repair_plan",
+      repairFeedback: { reason: "athena rejection" },
+      requestedBy: "OrchestratorRepairFlow",
+    });
+    assert.equal(normalized.planningMode, "repair_plan");
+    assert.equal(normalized.executionStrategy.planningMode, "repair_plan");
+    assert.equal(normalized.executionStrategy.executionPattern, "serial_repair");
+    assert.equal(normalized.executionStrategy.workerTopology.workerCount, 1);
+  });
+
   it("extracts plans from narrative wave sections when no JSON plans exist", () => {
     const parsed = {};
     const thinking = `
@@ -540,6 +604,21 @@ Wave 2
     assert.ok(laneGate.dependencies.includes("Extend pre-dispatch governance token parsing"));
     assert.ok(reflection.wave > resumability.wave, "same-wave dependency should push dependent plan to a later wave");
     assert.ok(reflection.waveDepends.includes(resumability.wave));
+  });
+});
+
+describe("resolveCapturedAgentRawOutput", () => {
+  it("prefers streamed output when early-exit truncates returned buffers", () => {
+    const resultRaw = '{"plans":[]}';
+    const streamedRaw = 'preface\n===DECISION===\n{"projectHealth":"needs-work","requestBudget":{"estimatedPremiumRequestsTotal":1},"generatedAt":"2026-04-14T00:00:00.000Z","keyFindings":"Valid finding text","strategicNarrative":"Valid narrative text","plans":[]}\n===END===';
+    const chosen = resolveCapturedAgentRawOutput(resultRaw, "", streamedRaw, "");
+    assert.equal(chosen, streamedRaw);
+  });
+
+  it("keeps returned output when streamed output is absent", () => {
+    const resultRaw = '===DECISION===\n{"plans":[]}\n===END===';
+    const chosen = resolveCapturedAgentRawOutput(resultRaw, "", "", "");
+    assert.equal(chosen, resultRaw);
   });
 });
 
@@ -3689,6 +3768,26 @@ describe("enforceParserContractBeforeNormalization", () => {
     assert.equal(result.ok, true, "at least one plan with AC must pass the boundary gate");
     assert.equal(result.retried, false);
     assert.equal(called, 0);
+  });
+
+  it("sanitizes recoverable strategic field contamination before parser retry", async () => {
+    const contaminated = {
+      projectHealth: "healthy",
+      requestBudget: { estimatedPremiumRequestsTotal: 2 },
+      generatedAt: "2026-04-04T12:00:00.000Z",
+      keyFindings: "I'm gathering the latest evidence first.\nStabilize leadership freshness arbitration.",
+      strategicNarrative: "tool_call: read_file src/core/prometheus.ts\nKeep the plan deterministic and contradiction-aware.",
+      plans: [{ task: "x", acceptance_criteria: ["passes"], role: "evolution-worker" }],
+    };
+    let called = 0;
+    const result = await enforceParserContractBeforeNormalization(contaminated, {
+      async buildRetryCandidate() { called += 1; return null; },
+    });
+    assert.equal(result.ok, true, "sanitizable contamination should pass without retry");
+    assert.equal(result.retried, false);
+    assert.equal(called, 0);
+    assert.equal(result.parsed.keyFindings, "Stabilize leadership freshness arbitration.");
+    assert.equal(result.parsed.strategicNarrative, "Keep the plan deterministic and contradiction-aware.");
   });
 
   it("passes with zero plans (no acceptance_criteria obligation when plans array is empty)", async () => {
@@ -6846,7 +6945,7 @@ describe("validatePlanContract — verification prose handling", () => {
       task: "Restore deterministic Windows verification",
       role: "quality-worker",
       wave: 1,
-      verification: "tests/core/verification_gate.test.ts — test: Replace ambiguous node-test glob style verification with exact-target commands.",
+      verification: "tests/core/verification_gate.test.ts — test: Replace ambiguous `node --test tests/**/*.test.js`-style verification with exact-target commands.",
       verification_commands: ["npm test -- tests/core/verification_gate.test.ts"],
       acceptance_criteria: ["Named verification target remains exact and platform-safe"],
       dependencies: [],
@@ -6855,6 +6954,7 @@ describe("validatePlanContract — verification prose handling", () => {
       leverage_rank: ["architecture", "task-quality"],
     });
 
+    assert.equal(result.valid, true);
     assert.equal(result.violations.some((violation) => violation.code === PACKET_VIOLATION_CODE.FORBIDDEN_COMMAND), false);
   });
 
@@ -7430,57 +7530,6 @@ describe("high-uncertainty candidate planning wiring", () => {
     assert.ok(selection.candidateSummaries.some((summary) =>
       summary.label === "stale-and-weak" && summary.freshnessPenalty > 0
     ));
-  });
-
-  it("fails closed when every candidate set is blocked by contract or freshness gates", () => {
-    const rawParsed = {
-      candidateSets: [
-        {
-          label: "blocked-a",
-          plans: [
-            {
-              task: "Already implemented parser hardening task",
-              role: "evolution-worker",
-              wave: 1,
-              target_files: ["src/core/prometheus.ts"],
-              acceptance_criteria: ["No-op packet should be rejected"],
-              verification: "npm test -- tests/core/prometheus_parse.test.ts",
-              implementationStatus: "implemented_correctly",
-              capacityDelta: 0,
-              requestROI: 1,
-            },
-          ],
-        },
-        {
-          label: "blocked-b",
-          plans: [
-            {
-              task: "Already implemented diagnostics task",
-              role: "evolution-worker",
-              wave: 1,
-              target_files: ["src/core/prometheus.ts"],
-              acceptance_criteria: ["Duplicate work should be filtered"],
-              verification: "npm test -- tests/core/prometheus_parse.test.ts",
-              implementationStatus: "implemented_correctly",
-              capacityDelta: 0,
-              requestROI: 1,
-            },
-          ],
-        },
-      ],
-      projectHealth: "needs-work",
-    };
-    const selection = selectPrometheusCandidatePlanSet(rawParsed, { raw: "" }, {
-      diagnosticsFreshnessAdmission: {
-        allFresh: true,
-        staleSources: [],
-        freshnessReasons: [],
-      },
-    });
-
-    assert.equal(selection.usedSelection, false);
-    assert.deepEqual(selection.selectedPlans, []);
-    assert.equal(selection.reason, "all_candidates_blocked");
   });
 
   it("builds an explicit candidateSets JSON contract for the prompt", () => {

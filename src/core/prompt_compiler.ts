@@ -549,6 +549,159 @@ export function derivePromptFamilyKey(
   return createHash("sha256").update(payload).digest("hex").slice(0, 16);
 }
 
+export const PROMPT_LINEAGE_MARKER_PREFIX = "<!-- BOX_PROMPT_LINEAGE:";
+export const PROMPT_LINEAGE_MARKER_SUFFIX = " -->";
+
+export type PromptLineageContract = {
+  lineageId: string | null;
+  parentLineageId: string | null;
+  promptFamilyKey: string | null;
+  familyLabel: string | null;
+  agent: string | null;
+  stage: string | null;
+  checkpointNs: string | null;
+  checkpointId: string | null;
+  resumeFromCheckpointId: string | null;
+  stablePrefixHash: string | null;
+  totalSegments: number;
+  cacheableSegments: number;
+  estimatedSavedTokens: number;
+};
+
+function normalizePromptLineageScalar(value: unknown, maxChars = 120): string | null {
+  const normalized = String(value || "").trim();
+  return normalized ? normalized.slice(0, maxChars) : null;
+}
+
+function normalizePromptLineageCount(value: unknown): number {
+  return Math.max(0, Math.floor(Number(value) || 0));
+}
+
+export function normalizePromptLineageContract(
+  value: unknown,
+  defaults: Partial<PromptLineageContract> = {},
+): PromptLineageContract {
+  const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    lineageId: normalizePromptLineageScalar(source.lineageId ?? defaults.lineageId),
+    parentLineageId: normalizePromptLineageScalar(source.parentLineageId ?? defaults.parentLineageId),
+    promptFamilyKey: normalizePromptLineageScalar(source.promptFamilyKey ?? defaults.promptFamilyKey),
+    familyLabel: normalizePromptLineageScalar(source.familyLabel ?? defaults.familyLabel),
+    agent: normalizePromptLineageScalar(source.agent ?? defaults.agent),
+    stage: normalizePromptLineageScalar(source.stage ?? defaults.stage),
+    checkpointNs: normalizePromptLineageScalar(source.checkpointNs ?? defaults.checkpointNs),
+    checkpointId: normalizePromptLineageScalar(source.checkpointId ?? defaults.checkpointId, 200),
+    resumeFromCheckpointId: normalizePromptLineageScalar(
+      source.resumeFromCheckpointId ?? defaults.resumeFromCheckpointId,
+      200,
+    ),
+    stablePrefixHash: normalizePromptLineageScalar(source.stablePrefixHash ?? defaults.stablePrefixHash),
+    totalSegments: normalizePromptLineageCount(source.totalSegments ?? defaults.totalSegments),
+    cacheableSegments: normalizePromptLineageCount(source.cacheableSegments ?? defaults.cacheableSegments),
+    estimatedSavedTokens: normalizePromptLineageCount(source.estimatedSavedTokens ?? defaults.estimatedSavedTokens),
+  };
+}
+
+export function buildPromptLineageMarker(
+  value: unknown,
+  defaults: Partial<PromptLineageContract> = {},
+): string {
+  const normalized = normalizePromptLineageContract(value, defaults);
+  return `${PROMPT_LINEAGE_MARKER_PREFIX}${JSON.stringify(normalized)}${PROMPT_LINEAGE_MARKER_SUFFIX}`;
+}
+
+export function extractPromptLineageMarker(text: unknown): PromptLineageContract | null {
+  const raw = String(text || "");
+  if (!raw.includes(PROMPT_LINEAGE_MARKER_PREFIX)) return null;
+  const start = raw.indexOf(PROMPT_LINEAGE_MARKER_PREFIX);
+  const payloadStart = start + PROMPT_LINEAGE_MARKER_PREFIX.length;
+  const end = raw.indexOf(PROMPT_LINEAGE_MARKER_SUFFIX, payloadStart);
+  if (end < 0) return null;
+  const payload = raw.slice(payloadStart, end).trim();
+  try {
+    return normalizePromptLineageContract(JSON.parse(payload));
+  } catch {
+    return null;
+  }
+}
+
+export function stripPromptLineageMarker(text: unknown): string {
+  const raw = String(text || "");
+  if (!raw.includes(PROMPT_LINEAGE_MARKER_PREFIX)) return raw;
+  const markerPattern = /<!-- BOX_PROMPT_LINEAGE:\{.*?\} -->\s*/g;
+  return raw.replace(markerPattern, "").trimStart();
+}
+
+function extractPromptLineageJsonObject(raw: string, fieldName: string): PromptLineageContract | null {
+  const label = `"${fieldName}"`;
+  const fieldIndex = raw.indexOf(label);
+  if (fieldIndex < 0) return null;
+  const colonIndex = raw.indexOf(":", fieldIndex + label.length);
+  const objectStart = raw.indexOf("{", colonIndex + 1);
+  if (colonIndex < 0 || objectStart < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = objectStart; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return normalizePromptLineageContract(JSON.parse(raw.slice(objectStart, index + 1)));
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export function extractPromptLineageContractFromText(text: unknown): PromptLineageContract | null {
+  const raw = String(text || "");
+  return extractPromptLineageMarker(raw)
+    || extractPromptLineageJsonObject(raw, "promptLineage")
+    || extractPromptLineageJsonObject(raw, "reviewerPromptLineage");
+}
+
+export function buildPromptLineagePreamble(
+  value: unknown,
+  defaults: Partial<PromptLineageContract> = {},
+): string {
+  const normalized = normalizePromptLineageContract(value, defaults);
+  const lines = [
+    "## PROMPT LINEAGE",
+    `promptFamilyKey=${normalized.promptFamilyKey || "none"}`,
+    `lineageId=${normalized.lineageId || "none"}`,
+    `parentLineageId=${normalized.parentLineageId || "none"}`,
+    `agent=${normalized.agent || "unknown"}`,
+    `stage=${normalized.stage || "unknown"}`,
+    `checkpointNs=${normalized.checkpointNs || "none"}`,
+    `checkpointId=${normalized.checkpointId || "none"}`,
+    `resumeFromCheckpointId=${normalized.resumeFromCheckpointId || "none"}`,
+    `stablePrefixHash=${normalized.stablePrefixHash || "none"}`,
+    `cacheableSegments=${normalized.cacheableSegments}/${normalized.totalSegments}`,
+    `estimatedSavedTokens=${normalized.estimatedSavedTokens}`,
+  ];
+  return lines.join("\n");
+}
+
 /**
  * Mark sections whose names appear in a cycle-delta name set as `required: true`
  * and `partitionBudget: PROMPT_BUDGET_PARTITION.REQUIRED`, guaranteeing they

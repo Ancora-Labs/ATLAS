@@ -10,6 +10,16 @@
  */
 
 import { checkForbiddenCommands } from "./verification_command_registry.js";
+import {
+  buildWorkerTopologyContract,
+  normalizeExecutionPattern,
+  normalizePlanRoleToWorkerName,
+  normalizePrometheusPlanningMode,
+  PROMETHEUS_PLANNING_MODE,
+  type ExecutionPattern,
+  type PrometheusPlanningMode,
+  type WorkerTopologyContract,
+} from "./role_registry.js";
 
 /**
  * Canonical health-audit severity set that triggers mandatory task obligations.
@@ -131,6 +141,18 @@ export const PACKET_VIOLATION_CODE = Object.freeze({
    * normalization path.
    */
   WAVE_TASK_NOT_OBJECT:          "wave_task_not_object",
+  /** executionStrategy.planningMode is absent. */
+  MISSING_PLANNING_MODE:         "missing_planning_mode",
+  /** executionStrategy.planningMode is not a registered planning mode. */
+  INVALID_PLANNING_MODE:         "invalid_planning_mode",
+  /** executionStrategy.executionPattern is absent. */
+  MISSING_EXECUTION_PATTERN:     "missing_execution_pattern",
+  /** executionStrategy.executionPattern is not a registered pattern. */
+  INVALID_EXECUTION_PATTERN:     "invalid_execution_pattern",
+  /** executionStrategy.workerTopology is absent. */
+  MISSING_WORKER_TOPOLOGY:       "missing_worker_topology",
+  /** executionStrategy.workerTopology does not match the authoritative plan shape. */
+  INVALID_WORKER_TOPOLOGY:       "invalid_worker_topology",
 });
 
 /**
@@ -402,6 +424,121 @@ export interface WaveTaskObject {
   task: string;
   task_id: string;
   [key: string]: unknown;
+}
+
+function buildExecutionStrategyTopologySeedPlans(payload: any): any[] {
+  const plans = Array.isArray(payload?.plans) ? payload.plans.filter(Boolean) : [];
+  if (plans.length > 0) return plans;
+  const waves = Array.isArray(payload?.executionStrategy?.waves) ? payload.executionStrategy.waves : [];
+  const seeded: any[] = [];
+  for (let i = 0; i < waves.length; i += 1) {
+    const waveObj = waves[i] && typeof waves[i] === "object" ? waves[i] : {};
+    const wave = normalizeWaveNumber((waveObj as any).wave, i + 1);
+    const tasks = Array.isArray((waveObj as any).tasks) ? (waveObj as any).tasks : [];
+    for (const task of tasks) {
+      if (!task || typeof task !== "object") continue;
+      seeded.push({
+        role: normalizePlanRoleToWorkerName((task as any).role),
+        wave,
+      });
+    }
+  }
+  return seeded;
+}
+
+export interface ExecutionStrategyContractValidationResult {
+  valid: boolean;
+  planningMode: PrometheusPlanningMode;
+  executionPattern: ExecutionPattern | null;
+  workerTopology: WorkerTopologyContract;
+  violations: PlanViolation[];
+}
+
+export function validateExecutionStrategyContract(payload: any): ExecutionStrategyContractValidationResult {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const executionStrategy = source.executionStrategy && typeof source.executionStrategy === "object"
+    ? source.executionStrategy
+    : {};
+  const rawPlanningMode = (executionStrategy as any).planningMode ?? source.planningMode;
+  const parsedPlanningMode = normalizePrometheusPlanningMode(rawPlanningMode, null);
+  const planningMode = parsedPlanningMode || PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION;
+  const planningModeExplicit = String(rawPlanningMode || "").trim().length > 0;
+  const rawExecutionPattern = (executionStrategy as any).executionPattern;
+  const executionPattern = normalizeExecutionPattern(rawExecutionPattern, null);
+  const seedPlans = buildExecutionStrategyTopologySeedPlans(source);
+  const workerTopology = buildWorkerTopologyContract(seedPlans, { planningMode });
+  const violations: PlanViolation[] = [];
+
+  if (!planningModeExplicit) {
+    violations.push({
+      field: "executionStrategy.planningMode",
+      message: "executionStrategy.planningMode must explicitly declare master_evolution or repair_plan",
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+      code: PACKET_VIOLATION_CODE.MISSING_PLANNING_MODE,
+    });
+  } else if (parsedPlanningMode == null) {
+    violations.push({
+      field: "executionStrategy.planningMode",
+      message: `executionStrategy.planningMode is invalid: "${String(rawPlanningMode).trim()}"`,
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+      code: PACKET_VIOLATION_CODE.INVALID_PLANNING_MODE,
+    });
+  }
+
+  if (!String(rawExecutionPattern || "").trim()) {
+    violations.push({
+      field: "executionStrategy.executionPattern",
+      message: "executionStrategy.executionPattern must explicitly declare the worker execution pattern",
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+      code: PACKET_VIOLATION_CODE.MISSING_EXECUTION_PATTERN,
+    });
+  } else if (!executionPattern) {
+    violations.push({
+      field: "executionStrategy.executionPattern",
+      message: `executionStrategy.executionPattern is invalid: "${String(rawExecutionPattern).trim()}"`,
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+      code: PACKET_VIOLATION_CODE.INVALID_EXECUTION_PATTERN,
+    });
+  }
+
+  const rawTopology = (executionStrategy as any).workerTopology;
+  if (!rawTopology || typeof rawTopology !== "object" || Array.isArray(rawTopology)) {
+    violations.push({
+      field: "executionStrategy.workerTopology",
+      message: "executionStrategy.workerTopology must be an object describing roles, lanes, and max parallel workers",
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+      code: PACKET_VIOLATION_CODE.MISSING_WORKER_TOPOLOGY,
+    });
+  } else {
+    const roleList = Array.isArray((rawTopology as any).roles) ? (rawTopology as any).roles : [];
+    const laneList = Array.isArray((rawTopology as any).lanes) ? (rawTopology as any).lanes : [];
+    const workerCount = Math.floor(Number((rawTopology as any).workerCount || 0));
+    const laneCount = Math.floor(Number((rawTopology as any).laneCount || 0));
+    const maxParallelWorkers = Math.floor(Number((rawTopology as any).maxParallelWorkers || 0));
+    const topologyMatches =
+      workerCount === workerTopology.workerCount &&
+      laneCount === workerTopology.laneCount &&
+      maxParallelWorkers === workerTopology.maxParallelWorkers &&
+      roleList.length === workerTopology.roles.length &&
+      laneList.length === workerTopology.lanes.length;
+    if (!topologyMatches) {
+      violations.push({
+        field: "executionStrategy.workerTopology",
+        message:
+          "executionStrategy.workerTopology must match the authoritative role/lane topology derived from the plan set",
+        severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+        code: PACKET_VIOLATION_CODE.INVALID_WORKER_TOPOLOGY,
+      });
+    }
+  }
+
+  return {
+    valid: violations.length === 0,
+    planningMode,
+    executionPattern,
+    workerTopology,
+    violations,
+  };
 }
 
 export interface PacketDensityThresholds {
