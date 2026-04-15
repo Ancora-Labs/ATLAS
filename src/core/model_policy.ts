@@ -15,10 +15,8 @@
 import path from "node:path";
 import { readJson, writeJson } from "./fs_utils.js";
 import { scheduleBoundedHypothesisCandidates, type ScheduledHypothesisCandidate } from "./hypothesis_scheduler.js";
-import { resolvePromptFamilyLineageJoinKey } from "./prompt_compiler.js";
 import {
-  normalizeInterventionLineageContract,
-  resolveInterventionLineageJoinKey,
+  resolveStableInterventionLineage,
   type InterventionLineageContract,
 } from "./state_tracker.js";
 import { MIN_TELEMETRY_SAMPLE_THRESHOLD } from "./telemetry_thresholds.js";
@@ -543,23 +541,6 @@ export interface RouteROIEntry {
   routingReasonCode?: string | null;
 }
 
-function normalizeRoutingJoinTaskKind(value: unknown): string {
-  return String(value || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
-}
-
-function resolveRoutingLineageJoinKey(
-  contract: InterventionLineageContract,
-  hints: { taskKind?: unknown; role?: unknown; explicitJoinKey?: unknown } = {},
-): string | null {
-  return resolvePromptFamilyLineageJoinKey({
-    promptFamilyKey: contract.promptFamilyKey,
-    taskKind: normalizeRoutingJoinTaskKind(hints.taskKind ?? contract.taskKind),
-    role: hints.role ?? contract.role,
-    explicitJoinKey: hints.explicitJoinKey,
-    fallbackJoinKey: resolveInterventionLineageJoinKey(contract),
-  });
-}
-
 /**
  * Append a new routing decision to the ROI ledger.
  * The realized fields (realizedQuality, outcome, roi, roiDelta, realizedAt)
@@ -579,17 +560,25 @@ export async function appendRouteROIEntry(
 
   const ledger: RouteROIEntry[] = await readJson(filePath, []);
   const safeList: RouteROIEntry[] = Array.isArray(ledger) ? ledger : [];
-  const lineage = normalizeInterventionLineageContract(entry?.lineage, {
-    lineageId: entry?.lineageId ?? null,
-    taskId: entry?.taskId ?? null,
-    cycleId: entry?.cycleId ?? null,
-    taskKind: entry?.taskKind ?? null,
-    promptFamilyKey: entry?.promptFamilyKey ?? null,
-    model: entry?.model ?? null,
-    role: entry?.role ?? null,
-    interventionId: entry?.interventionId ?? null,
-    rerouteReasonCode: entry?.routingReasonCode ?? null,
-  });
+  const { lineage, lineageJoinKey } = resolveStableInterventionLineage(
+    entry?.lineage,
+    {
+      lineageId: entry?.lineageId ?? null,
+      taskId: entry?.taskId ?? null,
+      cycleId: entry?.cycleId ?? null,
+      taskKind: entry?.taskKind ?? null,
+      promptFamilyKey: entry?.promptFamilyKey ?? null,
+      model: entry?.model ?? null,
+      role: entry?.role ?? null,
+      interventionId: entry?.interventionId ?? null,
+      rerouteReasonCode: entry?.routingReasonCode ?? null,
+    },
+    {
+      explicitJoinKey: entry?.lineageJoinKey,
+      taskKind: entry?.taskKind ?? null,
+      role: entry?.role ?? null,
+    },
+  );
 
   const record: RouteROIEntry = {
     taskId:          entry.taskId,
@@ -604,12 +593,8 @@ export async function appendRouteROIEntry(
     routedAt:        entry.routedAt || new Date().toISOString(),
     realizedAt:      entry.realizedAt ?? null,
     lineageId:       lineage.lineageId,
-     lineage,
-     lineageJoinKey:  resolveRoutingLineageJoinKey(lineage, {
-       explicitJoinKey: entry?.lineageJoinKey,
-       taskKind: entry.taskKind ?? lineage.taskKind,
-       role: entry.role ?? lineage.role,
-     }),
+    lineage,
+    lineageJoinKey,
     promptFamilyKey: entry.promptFamilyKey ?? lineage.promptFamilyKey,
     taskKind:        entry.taskKind ?? lineage.taskKind,
     role:            entry.role ?? lineage.role,

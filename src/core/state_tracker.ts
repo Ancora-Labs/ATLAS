@@ -564,6 +564,10 @@ function normalizeLineageBoolean(value: unknown): boolean | null {
   return null;
 }
 
+function normalizeLineageJoinTaskKind(value: unknown): string {
+  return String(value || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
+}
+
 export function normalizeInterventionLineageContract(
   input: unknown,
   defaults: Partial<InterventionLineageContract> = {},
@@ -625,6 +629,31 @@ export function resolveInterventionLineageJoinKey(input: unknown): string | null
   }
   if (contract.interventionId) return `intervention:${contract.interventionId}`;
   return null;
+}
+
+export function resolveStableInterventionLineage(
+  input: unknown,
+  defaults: Partial<InterventionLineageContract> = {},
+  hints: {
+    taskKind?: unknown;
+    role?: unknown;
+    explicitJoinKey?: unknown;
+  } = {},
+): {
+  lineage: InterventionLineageContract;
+  lineageJoinKey: string | null;
+} {
+  const lineage = normalizeInterventionLineageContract(input, defaults);
+  return {
+    lineage,
+    lineageJoinKey: resolvePromptFamilyLineageJoinKey({
+      promptFamilyKey: lineage.promptFamilyKey,
+      taskKind: normalizeLineageJoinTaskKind(hints.taskKind ?? lineage.taskKind),
+      role: hints.role ?? lineage.role,
+      explicitJoinKey: hints.explicitJoinKey,
+      fallbackJoinKey: resolveInterventionLineageJoinKey(lineage),
+    }),
+  };
 }
 
 export function mergeInterventionLineageContracts(
@@ -883,50 +912,95 @@ export async function appendInterventionRetirementEvidence(config, entries) {
   const logFile = path.join(stateDir, "intervention_retirement_evidence.jsonl");
 
   try {
+    const normalizedEntries = entries.map((entry, index) => {
+      const interventionId = String(entry?.interventionId || "").trim();
+      if (!interventionId) {
+        return {
+          ok: false as const,
+          reason: `entries[${index}].interventionId is required`,
+        };
+      }
+      const { lineage, lineageJoinKey } = resolveStableInterventionLineage(
+        entry?.lineage,
+        {
+          lineageId: entry?.lineageId ?? null,
+          taskId: entry?.taskId ?? null,
+          taskIdentity: entry?.taskIdentity ?? null,
+          cycleId: entry?.cycleId ?? null,
+          taskKind: entry?.taskKind ?? null,
+          interventionId,
+          promptFamilyKey: entry?.promptFamilyKey ?? null,
+          role: entry?.role ?? null,
+        },
+        {
+          explicitJoinKey: entry?.lineageJoinKey,
+          taskKind: entry?.taskKind ?? null,
+          role: entry?.role ?? null,
+        },
+      );
+      if (!lineageJoinKey) {
+        return {
+          ok: false as const,
+          reason: `entries[${index}] requires a stable lineage join key`,
+        };
+      }
+      return {
+        ok: true as const,
+        entry,
+        interventionId,
+        lineage,
+        lineageJoinKey,
+      };
+    });
+    const failedEntry = normalizedEntries.find((entry) => entry.ok === false);
+    if (failedEntry?.ok === false) {
+      return { ok: false, reason: failedEntry.reason };
+    }
     await ensureParent(logFile);
     const now = new Date().toISOString();
-    const lines = entries.map((entry) => JSON.stringify({
+    const lines = normalizedEntries.map((normalized) => JSON.stringify({
       schemaVersion: 1,
-      recordedAt: String(entry?.recordedAt || now),
-      cycleId: entry?.cycleId ? String(entry.cycleId).trim() : null,
-      interventionId: String(entry?.interventionId || "").trim(),
-      lineageId: entry?.lineageId ? String(entry.lineageId).trim() : null,
-      lineageJoinKey: entry?.lineageJoinKey ? String(entry.lineageJoinKey).trim() : null,
-      policyId: entry?.policyId ? String(entry.policyId).trim() : null,
-      role: entry?.role ? String(entry.role).trim() : null,
-      interventionCategory: entry?.interventionCategory ? String(entry.interventionCategory).trim() : null,
-      interventionType: entry?.interventionType ? String(entry.interventionType).trim() : null,
-      decision: String(entry?.decision || "hold").trim().toLowerCase() || "hold",
-      decisionMode: entry?.decisionMode ? String(entry.decisionMode).trim() : null,
-      closureMode: String(entry?.closureMode || "observed").trim().toLowerCase() || "observed",
-      outcomeStatus: entry?.outcomeStatus ? String(entry.outcomeStatus).trim().toLowerCase() : null,
-      noSignalOutcome: Boolean(entry?.noSignalOutcome),
-      reason: entry?.reason ? String(entry.reason).trim() : null,
-      outcomeScore: Number.isFinite(Number(entry?.outcomeScore))
-        ? Math.max(0, Math.min(1, Number(entry.outcomeScore)))
+      recordedAt: String(normalized.entry?.recordedAt || now),
+      cycleId: normalized.entry?.cycleId ? String(normalized.entry.cycleId).trim() : normalized.lineage.cycleId,
+      interventionId: normalized.interventionId,
+      lineageId: normalized.lineage.lineageId,
+      lineageJoinKey: normalized.lineageJoinKey,
+      lineage: normalized.lineage,
+      policyId: normalized.entry?.policyId ? String(normalized.entry.policyId).trim() : null,
+      role: normalized.entry?.role ? String(normalized.entry.role).trim() : normalized.lineage.role,
+      interventionCategory: normalized.entry?.interventionCategory ? String(normalized.entry.interventionCategory).trim() : null,
+      interventionType: normalized.entry?.interventionType ? String(normalized.entry.interventionType).trim() : null,
+      decision: String(normalized.entry?.decision || "hold").trim().toLowerCase() || "hold",
+      decisionMode: normalized.entry?.decisionMode ? String(normalized.entry.decisionMode).trim() : null,
+      closureMode: String(normalized.entry?.closureMode || "observed").trim().toLowerCase() || "observed",
+      outcomeStatus: normalized.entry?.outcomeStatus ? String(normalized.entry.outcomeStatus).trim().toLowerCase() : null,
+      noSignalOutcome: Boolean(normalized.entry?.noSignalOutcome),
+      reason: normalized.entry?.reason ? String(normalized.entry.reason).trim() : null,
+      outcomeScore: Number.isFinite(Number(normalized.entry?.outcomeScore))
+        ? Math.max(0, Math.min(1, Number(normalized.entry.outcomeScore)))
         : null,
-      evidenceCount: Number.isFinite(Number(entry?.evidenceCount))
-        ? Math.max(0, Math.floor(Number(entry.evidenceCount)))
+      evidenceCount: Number.isFinite(Number(normalized.entry?.evidenceCount))
+        ? Math.max(0, Math.floor(Number(normalized.entry.evidenceCount)))
         : null,
-      improvedCount: Number.isFinite(Number(entry?.improvedCount))
-        ? Math.max(0, Math.floor(Number(entry.improvedCount)))
+      improvedCount: Number.isFinite(Number(normalized.entry?.improvedCount))
+        ? Math.max(0, Math.floor(Number(normalized.entry.improvedCount)))
         : null,
-      noSignalCount: Number.isFinite(Number(entry?.noSignalCount))
-        ? Math.max(0, Math.floor(Number(entry.noSignalCount)))
+      noSignalCount: Number.isFinite(Number(normalized.entry?.noSignalCount))
+        ? Math.max(0, Math.floor(Number(normalized.entry.noSignalCount)))
         : null,
-      ineffectiveCount: Number.isFinite(Number(entry?.ineffectiveCount))
-        ? Math.max(0, Math.floor(Number(entry.ineffectiveCount)))
+      ineffectiveCount: Number.isFinite(Number(normalized.entry?.ineffectiveCount))
+        ? Math.max(0, Math.floor(Number(normalized.entry.ineffectiveCount)))
         : null,
-      averageOutcomeScore: Number.isFinite(Number(entry?.averageOutcomeScore))
-        ? Math.max(0, Math.min(1, Number(entry.averageOutcomeScore)))
+      averageOutcomeScore: Number.isFinite(Number(normalized.entry?.averageOutcomeScore))
+        ? Math.max(0, Math.min(1, Number(normalized.entry.averageOutcomeScore)))
         : null,
-      shouldRetire: Boolean(entry?.shouldRetire),
-      reversible: entry?.reversible === false ? false : true,
-      reactivateWhen: entry?.reactivateWhen ? String(entry.reactivateWhen).trim() : null,
-      aiConfidence: Number.isFinite(Number(entry?.aiConfidence))
-        ? Math.max(0, Math.min(1, Number(entry.aiConfidence)))
+      shouldRetire: Boolean(normalized.entry?.shouldRetire),
+      reversible: normalized.entry?.reversible === false ? false : true,
+      reactivateWhen: normalized.entry?.reactivateWhen ? String(normalized.entry.reactivateWhen).trim() : null,
+      aiConfidence: Number.isFinite(Number(normalized.entry?.aiConfidence))
+        ? Math.max(0, Math.min(1, Number(normalized.entry.aiConfidence)))
         : null,
-      resolvedPolicy: Boolean(entry?.resolvedPolicy),
+      resolvedPolicy: Boolean(normalized.entry?.resolvedPolicy),
     }));
     await fs.appendFile(logFile, lines.join("\n") + "\n", "utf8");
     return { ok: true, count: lines.length };
@@ -941,7 +1015,36 @@ export async function loadInterventionRetirementEvidence(config): Promise<any[]>
     const raw = await fs.readFile(filePath, "utf8").catch(() => "");
     if (!raw.trim()) return [];
     return raw.trim().split("\n").map((line) => {
-      try { return JSON.parse(line); } catch { return null; }
+      try {
+        const parsed = JSON.parse(line);
+        const { lineage, lineageJoinKey } = resolveStableInterventionLineage(
+          parsed?.lineage,
+          {
+            lineageId: parsed?.lineageId ?? null,
+            taskId: parsed?.taskId ?? null,
+            taskIdentity: parsed?.taskIdentity ?? null,
+            cycleId: parsed?.cycleId ?? null,
+            taskKind: parsed?.taskKind ?? null,
+            interventionId: parsed?.interventionId ?? null,
+            promptFamilyKey: parsed?.promptFamilyKey ?? null,
+            role: parsed?.role ?? null,
+          },
+          {
+            explicitJoinKey: parsed?.lineageJoinKey,
+            taskKind: parsed?.taskKind ?? null,
+            role: parsed?.role ?? null,
+          },
+        );
+        if (!lineageJoinKey) return null;
+        return {
+          ...parsed,
+          lineageId: lineage.lineageId,
+          lineage,
+          lineageJoinKey,
+        };
+      } catch {
+        return null;
+      }
     }).filter(Boolean);
   } catch {
     return [];
@@ -1528,6 +1631,7 @@ export interface CapabilityTraceMetadata {
   outcome?: string | null;
   /** Shared lineage contract tying this trace to routing, usage, and outcomes. */
   lineage?: unknown;
+  lineageJoinKey?: string | null;
   taskId?: string | null;
   cycleId?: string | null;
   taskKind?: string | null;
@@ -1551,17 +1655,25 @@ export async function recordCapabilityExecution(
       const raw = await readJson(filePath, { traces: [] });
       existing = Array.isArray(raw?.traces) ? raw.traces : [];
     } catch { /* first write */ }
-    const lineage = normalizeInterventionLineageContract(meta?.lineage, {
-      taskId: meta?.taskId ?? null,
-      cycleId: meta?.cycleId ?? null,
-      taskKind: meta?.taskKind ?? null,
-      interventionId: meta?.interventionId ?? null,
-      role: meta?.role ?? null,
-      lane: meta?.lane ?? null,
-      capability,
-      specialized: meta?.specialized ?? null,
-      rerouteReasonCode: meta?.rerouteReasonCode ?? null,
-    });
+    const { lineage, lineageJoinKey } = resolveStableInterventionLineage(
+      meta?.lineage,
+      {
+        taskId: meta?.taskId ?? null,
+        cycleId: meta?.cycleId ?? null,
+        taskKind: meta?.taskKind ?? null,
+        interventionId: meta?.interventionId ?? null,
+        role: meta?.role ?? null,
+        lane: meta?.lane ?? null,
+        capability,
+        specialized: meta?.specialized ?? null,
+        rerouteReasonCode: meta?.rerouteReasonCode ?? null,
+      },
+      {
+        explicitJoinKey: meta?.lineageJoinKey ?? null,
+        taskKind: meta?.taskKind ?? null,
+        role: meta?.role ?? null,
+      },
+    );
     const record: CapabilityExecutionTrace = {
       capability: String(capability || "").trim().toLowerCase(),
       observedAt: new Date().toISOString(),
@@ -1571,7 +1683,7 @@ export async function recordCapabilityExecution(
       ...(meta?.gateId != null && { gateId: String(meta.gateId).slice(0, 80) }),
       ...(meta?.outcome != null && { outcome: String(meta.outcome).slice(0, 80) }),
       lineage,
-      lineageJoinKey: resolveInterventionLineageJoinKey(lineage),
+      lineageJoinKey,
     };
     const updated = [...existing, record].slice(-200);
     await writeJson(filePath, { traces: updated });
@@ -1635,24 +1747,32 @@ export async function loadCapabilityExecutionSummary(
 
     const normalizedRecent = recent.map((t) => {
       const rawTrace = t as unknown as Record<string, unknown>;
-      const lineage = normalizeInterventionLineageContract(rawTrace.lineage, {
-        lineageId: normalizeLineageScalar(rawTrace.lineageId),
-        taskId: normalizeLineageScalar(rawTrace.taskId),
-        cycleId: normalizeLineageScalar(rawTrace.cycleId),
-        taskKind: normalizeLineageScalar(rawTrace.taskKind),
-        interventionId: normalizeLineageScalar(rawTrace.interventionId),
-        role: normalizeLineageScalar(rawTrace.role),
-        lane: normalizeLineageScalar(rawTrace.lane),
-        capability: normalizeLineageScalar(rawTrace.capability),
-        specialized: normalizeLineageBoolean(rawTrace.specialized),
-        rerouteReasonCode: normalizeLineageScalar(rawTrace.rerouteReasonCode),
-      });
+      const { lineage, lineageJoinKey } = resolveStableInterventionLineage(
+        rawTrace.lineage,
+        {
+          lineageId: normalizeLineageScalar(rawTrace.lineageId),
+          taskId: normalizeLineageScalar(rawTrace.taskId),
+          cycleId: normalizeLineageScalar(rawTrace.cycleId),
+          taskKind: normalizeLineageScalar(rawTrace.taskKind),
+          interventionId: normalizeLineageScalar(rawTrace.interventionId),
+          role: normalizeLineageScalar(rawTrace.role),
+          lane: normalizeLineageScalar(rawTrace.lane),
+          capability: normalizeLineageScalar(rawTrace.capability),
+          specialized: normalizeLineageBoolean(rawTrace.specialized),
+          rerouteReasonCode: normalizeLineageScalar(rawTrace.rerouteReasonCode),
+        },
+        {
+          explicitJoinKey: rawTrace.lineageJoinKey,
+          taskKind: rawTrace.taskKind,
+          role: rawTrace.role,
+        },
+      );
       const base: CapabilityExecutionTrace = {
         capability: String(t?.capability || "").trim().toLowerCase(),
         observedAt: String(t?.observedAt || ""),
         context: String(t?.context || ""),
         lineage,
-        lineageJoinKey: resolveInterventionLineageJoinKey(lineage),
+        lineageJoinKey,
       };
       if (t?.role != null) base.role = String(t.role).slice(0, 80);
       if (t?.wave != null) base.wave = Number.isFinite(Number(t.wave)) ? Number(t.wave) : null;

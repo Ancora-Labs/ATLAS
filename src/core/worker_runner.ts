@@ -25,8 +25,8 @@ import {
   appendLineageEntry,
   appendFailureClassification,
   readPromptCacheTelemetry,
-  normalizeInterventionLineageContract,
   resolveInterventionLineageJoinKey,
+  resolveStableInterventionLineage,
   type InterventionLineageContract,
 } from "./state_tracker.js";
 import { buildAgentArgs, nameToSlug, resolveAgentExecutionProfile, resolveAgentSessionInputPolicy } from "./agent_loader.js";
@@ -1046,39 +1046,6 @@ function hasMeaningfulLineageContract(lineage: InterventionLineageContract): boo
   return Object.entries(lineage).some(([key, value]) => key !== "schemaVersion" && value !== null);
 }
 
-function normalizeLineageJoinTaskKind(value: unknown): string {
-  return String(value || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
-}
-
-function deriveStableLineageJoinKey(
-  lineage: InterventionLineageContract,
-  opts: { explicitJoinKey?: unknown; taskKind?: unknown; role?: unknown } = {},
-): string | null {
-  const explicitJoinKey = String(opts.explicitJoinKey || "").trim();
-  const taskKind = normalizeLineageJoinTaskKind(opts.taskKind ?? lineage.taskKind);
-  const role = String(opts.role ?? lineage.role ?? "").trim().toLowerCase();
-  const prefersPromptFamily = Boolean(
-    lineage.promptFamilyKey
-    && (
-      taskKind === "planning"
-      || taskKind === "plan-review"
-      || taskKind === "review"
-      || taskKind === "analysis"
-      || role === "prometheus"
-      || role === "athena"
-      || role === "jesus"
-    ),
-  );
-  const derivedJoinKey = prefersPromptFamily
-    ? `prompt-family:${lineage.promptFamilyKey}`
-    : resolveInterventionLineageJoinKey(lineage)
-      || (lineage.promptFamilyKey ? `prompt-family:${lineage.promptFamilyKey}` : null);
-  if (explicitJoinKey && (!derivedJoinKey || explicitJoinKey === derivedJoinKey)) {
-    return explicitJoinKey;
-  }
-  return derivedJoinKey ?? (explicitJoinKey || null);
-}
-
 export function buildWorkerRuntimeLineage(
   instruction: any,
   defaults: {
@@ -1099,7 +1066,7 @@ export function buildWorkerRuntimeLineage(
   const fallbackTaskIdentity = instruction?.semanticKey
     ? String(instruction.semanticKey).trim()
     : `${taskKind}::${buildTaskFingerprint(taskKind, taskText).slice(0, 24)}`;
-  const lineage = normalizeInterventionLineageContract(
+  const { lineage, lineageJoinKey } = resolveStableInterventionLineage(
     instruction?.lineageContract ?? instruction?.lineage ?? instruction,
     {
       lineageId: resolveWorkerExecutionLineageId(instruction),
@@ -1116,6 +1083,13 @@ export function buildWorkerRuntimeLineage(
       specialized: defaults.specialized ?? instruction?.specialized ?? null,
       rerouteReasonCode: defaults.rerouteReasonCode ?? instruction?.rerouteReasonCode ?? null,
     },
+    {
+      explicitJoinKey: instruction?.lineageJoinKey
+        ?? instruction?.lineage?.lineageJoinKey
+        ?? instruction?.lineageContract?.lineageJoinKey,
+      taskKind,
+      role: defaults.roleName ?? null,
+    },
   );
   if (!hasMeaningfulLineageContract(lineage)) {
     return {
@@ -1124,11 +1098,6 @@ export function buildWorkerRuntimeLineage(
       checkpointThreadId: null,
     };
   }
-  const lineageJoinKey = deriveStableLineageJoinKey(lineage, {
-    explicitJoinKey: instruction?.lineageJoinKey ?? instruction?.lineage?.lineageJoinKey ?? instruction?.lineageContract?.lineageJoinKey,
-    taskKind,
-    role: defaults.roleName ?? null,
-  });
   return {
     lineage,
     lineageJoinKey,
@@ -2543,14 +2512,18 @@ export function extractStreamingWorkerResultMarker(stdout, stderr) {
   if (!/BOX_STATUS=(\w+)/i.test(combined)) {
     return null;
   }
-  const hasTerminalVerificationBoundary = /===END_VERIFICATION(?:_REPORT)?===/i.test(combined)
-    || /VERIFICATION_REPORT:/i.test(combined);
-  const hasOutcomeEnvelope = /BOX_EXPECTED_OUTCOME=|BOX_ACTUAL_OUTCOME=|BOX_PR_URL=/i.test(combined);
-  if (!hasTerminalVerificationBoundary && !hasOutcomeEnvelope) {
+  const parsed = parseWorkerResponse(stdout, stderr);
+  if (!parsed.verificationReport) {
     return null;
   }
 
-  const parsed = parseWorkerResponse(stdout, stderr);
+  if (parsed.status === "done") {
+    const artifact = checkPostMergeArtifact(combined, { expectedTargetFiles: [] });
+    if (!artifact.hasArtifact) {
+      return null;
+    }
+  }
+
   return {
     status: parsed.status,
     prUrl: parsed.prUrl,

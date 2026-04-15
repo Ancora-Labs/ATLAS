@@ -13,6 +13,9 @@ import {
   CURRICULUM_PROMOTION_THRESHOLD,
   buildInterventionRubricScore,
   decidePolicyMutationsFromEvidenceWindow,
+  evaluatePolicyLifecycleWindow,
+  reconcilePolicyLifecycleByLineageWindow,
+  LEARNED_POLICY_UPLIFT_SIGNAL,
   POLICY_MUTATION_EVIDENCE_WINDOW,
   POLICY_MUTATION_RETIRE_COMBINED_SCORE,
   retireLowYieldPolicyFamilies,
@@ -1091,5 +1094,53 @@ describe("impact-attributed policy loop", () => {
     assert.equal(result.retired[0]._retirementReversible, true);
     assert.ok(result.retired[0]._retirementLedger);
     assert.ok(result.retired[0]._reactivateWhen.includes("improved evidence point"));
+  });
+});
+
+describe("lineage-backed learned policy lifecycle", () => {
+  it("persists active policies while the verified lineage window is still open", () => {
+    const decision = evaluatePolicyLifecycleWindow(
+      { id: "glob-false-fail", retirementCriteria: { minEvidenceWindow: 3 } },
+      [
+        { policyId: "glob-false-fail", lineageJoinKey: "lineage:l1", outcomeStatus: "no_signal", outcomeScore: 0.4, recordedAt: "2026-04-15T00:00:00.000Z" },
+        { policyId: "glob-false-fail", lineageJoinKey: "lineage:l2", outcomeStatus: "no_signal", outcomeScore: 0.45, recordedAt: "2026-04-15T01:00:00.000Z" },
+      ],
+    );
+
+    assert.equal(decision.shouldRetire, false);
+    assert.equal(decision.upliftSignal, LEARNED_POLICY_UPLIFT_SIGNAL.AWAITING_VERIFIED_OUTCOME_WINDOW);
+  });
+
+  it("retires active policies from a verified low-yield lineage window", () => {
+    const result = reconcilePolicyLifecycleByLineageWindow(
+      [{ id: "glob-false-fail", severity: "critical" }],
+      [],
+      [
+        { policyId: "glob-false-fail", lineageJoinKey: "lineage:l1", outcomeStatus: "should_retire", outcomeScore: 0.1, recordedAt: "2026-04-15T00:00:00.000Z" },
+        { policyId: "glob-false-fail", lineageJoinKey: "lineage:l2", outcomeStatus: "should_retire", outcomeScore: 0.12, recordedAt: "2026-04-15T01:00:00.000Z" },
+        { policyId: "glob-false-fail", lineageJoinKey: "lineage:l3", outcomeStatus: "should_retire", outcomeScore: 0.15, recordedAt: "2026-04-15T02:00:00.000Z" },
+      ],
+    );
+
+    assert.equal(result.active.length, 0);
+    assert.equal(result.retired.length, 1);
+    assert.equal(result.retired[0].upliftSignal, LEARNED_POLICY_UPLIFT_SIGNAL.VERIFIED_RETIRED);
+    assert.equal(result.retired[0]._retirementStrategy, "lineage_verified_window");
+  });
+
+  it("reactivates retired policies after consecutive improved lineage-backed outcomes", () => {
+    const result = reconcilePolicyLifecycleByLineageWindow(
+      [],
+      [{ id: "glob-false-fail", severity: "critical", _retiredAt: "2026-04-14T00:00:00.000Z" }],
+      [
+        { policyId: "glob-false-fail", lineageJoinKey: "lineage:l4", outcomeStatus: "improved", outcomeScore: 0.8, recordedAt: "2026-04-15T00:00:00.000Z" },
+        { policyId: "glob-false-fail", lineageJoinKey: "lineage:l5", outcomeStatus: "improved", outcomeScore: 0.85, recordedAt: "2026-04-15T01:00:00.000Z" },
+        { policyId: "glob-false-fail", lineageJoinKey: "lineage:l6", outcomeStatus: "improved", outcomeScore: 0.9, recordedAt: "2026-04-15T02:00:00.000Z" },
+      ],
+    );
+
+    assert.equal(result.reactivated.length, 1);
+    assert.equal(result.active.length, 1);
+    assert.equal(result.active[0].upliftSignal, LEARNED_POLICY_UPLIFT_SIGNAL.VERIFIED_REACTIVATED);
   });
 });

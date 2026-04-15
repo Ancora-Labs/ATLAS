@@ -18,7 +18,7 @@
 import path from "node:path";
 import fs from "node:fs/promises";
 import { readJson, readJsonSafe, READ_JSON_REASON, writeJson, spawnAsync } from "./fs_utils.js";
-import { appendProgress, loadCapabilityExecutionSummary } from "./state_tracker.js";
+import { appendProgress, loadCapabilityExecutionSummary, loadInterventionRetirementEvidence } from "./state_tracker.js";
 import { buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
 import { chatLog, warn } from "./logger.js";
 import { normalizeDecisionQualityLabel, DECISION_QUALITY_LABEL, PREMORTEM_RISK_LEVEL, computeReviewerPrecisionRecall } from "./athena_reviewer.js";
@@ -40,10 +40,10 @@ import { GUARDRAIL_ACTION } from "./catastrophe_detector.js";
 import {
   buildPolicyImpactEntry,
   computePolicyImpactTrend,
-  applyPolicyHalfLifeRetirement,
   buildPolicyImpactAttribution,
   buildReflectionHeuristicId,
   buildReflectionHeuristicLessonText,
+  reconcilePolicyLifecycleByLineageWindow,
   REFLECTION_HEURISTIC_STATUS,
 } from "./learning_policy_compiler.js";
 import {
@@ -1083,113 +1083,118 @@ function loadCycleHealthSnapshot(stateDir: string) {
   });
 }
 
-function estimateCurrentCapacityScore(outcomes: any): number {
-  const totalPlans = Number.isFinite(Number(outcomes?.totalPlans)) ? Number(outcomes.totalPlans) : 0;
-  const completedCount = Number.isFinite(Number(outcomes?.completedCount)) ? Number(outcomes.completedCount) : 0;
-  const completionRatio = totalPlans > 0 ? completedCount / totalPlans : 0;
-  const decisionScore = Number.isFinite(Number(outcomes?.decisionQuality?.score))
-    ? Number(outcomes.decisionQuality.score)
-    : 0;
-  return Math.round(Math.max(0, Math.min(1, (completionRatio * 0.6) + (decisionScore * 0.4))) * 1000) / 1000;
+async function loadLineageBackedPolicyEvidence(stateDir: string) {
+  try {
+    const entries = await loadInterventionRetirementEvidence({ paths: { stateDir } });
+    return Array.isArray(entries)
+      ? entries.map((entry) => ({
+          policyId: entry?.policyId ? String(entry.policyId).trim() : null,
+          lineageJoinKey: entry?.lineageJoinKey ? String(entry.lineageJoinKey).trim() : null,
+          outcomeStatus: entry?.outcomeStatus ? String(entry.outcomeStatus).trim().toLowerCase() : null,
+          noSignalOutcome: entry?.noSignalOutcome === true,
+          outcomeScore: Number.isFinite(Number(entry?.outcomeScore))
+            ? Math.max(0, Math.min(1, Number(entry.outcomeScore)))
+            : Number.isFinite(Number(entry?.averageOutcomeScore))
+              ? Math.max(0, Math.min(1, Number(entry.averageOutcomeScore)))
+              : null,
+          recordedAt: String(entry?.recordedAt || entry?.cycleId || "").trim() || null,
+        }))
+      : [];
+  } catch (err) {
+    warn(`[self-improvement] failed to load lineage-backed policy evidence: ${String((err as any)?.message || err)}`);
+    return [];
+  }
 }
 
 export async function reconcileLearnedPoliciesWithImpact(stateDir: string, outcomes: any) {
   const learnedPoliciesPath = path.join(stateDir, "learned_policies.json");
+  const retiredPoliciesPath = path.join(stateDir, "retired_policies.json");
   const learnedPolicies = await readJson(learnedPoliciesPath, []);
-  if (!Array.isArray(learnedPolicies) || learnedPolicies.length === 0) {
+  const retiredExisting = await readJson(retiredPoliciesPath, []);
+  const activePolicies = Array.isArray(learnedPolicies) ? learnedPolicies : [];
+  const retiredPolicies = Array.isArray(retiredExisting) ? retiredExisting : [];
+  if (activePolicies.length === 0 && retiredPolicies.length === 0) {
     return { activePolicies: [], retiredPolicies: [], impactEntriesAdded: 0, trends: [] };
   }
 
   const policyImpactLedger = await loadPolicyImpactLedger(stateDir);
   const existingEntries = Array.isArray(policyImpactLedger?.entries) ? policyImpactLedger.entries : [];
-  const capacityScore = estimateCurrentCapacityScore(outcomes);
   const cycleHealth = await loadCycleHealthSnapshot(stateDir);
-  const cycleId = String(outcomes?.timestamp || new Date().toISOString());
+  const lineageEvidence = await loadLineageBackedPolicyEvidence(stateDir);
+  const lifecycle = reconcilePolicyLifecycleByLineageWindow(
+    activePolicies,
+    retiredPolicies,
+    lineageEvidence,
+  );
   const nextEntries = [...existingEntries];
+  let impactEntriesAdded = 0;
 
-  for (const policy of learnedPolicies) {
-    const policyId = String(policy?.id || "").trim();
-    if (!policyId) continue;
-    const samePolicyEntries = nextEntries.filter((entry) => String(entry?.policyId || "") === policyId);
-    const baseline = samePolicyEntries.length > 0
-      ? Number(samePolicyEntries[samePolicyEntries.length - 1]?.current || capacityScore)
-      : Math.max(0, capacityScore - 0.02);
-    const impactEntry = buildPolicyImpactEntry(policyId, "capacity_score", baseline, capacityScore, { cycleId });
-    nextEntries.push(impactEntry);
+  for (const decision of lifecycle.decisions) {
+    if (!decision.latestRecordedAt || decision.evidenceCount <= 0) continue;
+    const duplicate = nextEntries.some((entry) => (
+      String(entry?.policyId || "") === decision.policyId
+      && String(entry?.metric || "") === "lineage_verified_outcome_window"
+      && String(entry?.cycleId || "") === decision.latestRecordedAt
+    ));
+    if (duplicate) continue;
+    const priorEntry = [...nextEntries]
+      .reverse()
+      .find((entry) => String(entry?.policyId || "") === decision.policyId);
+    const baseline = Number.isFinite(Number(priorEntry?.current))
+      ? Number(priorEntry?.current)
+      : decision.averageOutcomeScore;
+    nextEntries.push(buildPolicyImpactEntry(
+      decision.policyId,
+      "lineage_verified_outcome_window",
+      baseline,
+      decision.averageOutcomeScore,
+      {
+        cycleId: decision.latestRecordedAt,
+        measuredAt: decision.latestRecordedAt,
+        minImprovementDelta: 0.01,
+      },
+    ));
+    impactEntriesAdded += 1;
   }
 
   policyImpactLedger.entries = nextEntries.slice(-500);
   await savePolicyImpactLedger(stateDir, policyImpactLedger);
 
+  const trendSourcePolicies = [...lifecycle.active, ...lifecycle.retired];
   const trendByPolicyId = new Map(
-    learnedPolicies.map((policy) => {
+    trendSourcePolicies.map((policy) => {
       const policyId = String(policy?.id || "");
       return [policyId, computePolicyImpactTrend(policyId, policyImpactLedger.entries)];
     }),
   );
   const trends = [...trendByPolicyId.values()];
-
-  const policyAttributions = learnedPolicies.map((policy) => {
-    const policyId = String(policy?.id || "");
-    const trend = trendByPolicyId.get(policyId);
-    const historyForPolicy = policyImpactLedger.entries.filter(
-      (entry) => String(entry?.policyId || "") === policyId,
-    );
-    const baselineFromHistory = historyForPolicy.length > 1
-      ? Number(historyForPolicy[historyForPolicy.length - 2]?.current || capacityScore)
-      : Number(historyForPolicy[historyForPolicy.length - 1]?.baseline || Math.max(0, capacityScore - 0.02));
+  const policyAttributions = lifecycle.decisions.map((decision) => {
+    const trend = trendByPolicyId.get(decision.policyId);
     return buildPolicyImpactAttribution(
-      policy,
+      { id: decision.policyId, _inactiveCycles: decision.outcomeStatus === "improved" ? 0 : 1 },
       trend,
-      baselineFromHistory,
-      capacityScore,
-      { cycleId, halfLifeCycles: 3, minEffectiveness: 0.2, minInactiveCycles: 2 },
+      decision.averageOutcomeScore,
+      decision.averageOutcomeScore,
+      {
+        cycleId: decision.latestRecordedAt || String(outcomes?.timestamp || new Date().toISOString()),
+        minImprovementDelta: 0.01,
+        minInactiveCycles: decision.reactivationEvidenceWindow,
+        minEffectiveness: 0.2,
+      },
     );
   });
 
-  const attributionByPolicyId = new Map(policyAttributions.map((a) => [a.policyId, a]));
-  const policiesWithInactivity = learnedPolicies.map((policy) => {
-    const policyId = String(policy?.id || "");
-    const trend = trendByPolicyId.get(policyId);
-    const attribution = attributionByPolicyId.get(policyId);
-    if (!trend || !attribution) return policy;
-    return {
-      ...policy,
-      interventionKind: String((policy as any)?.interventionKind || "policy-delta"),
-      _inactiveCycles: attribution.inactiveCycles,
-      _impactImprovementRate: trend.improvementRate,
-      _lastDelta: attribution.delta,
-      _lastMeasuredAt: trend.lastMeasuredAt,
-      _halfLifeWeight: attribution.halfLifeWeight,
-      _decayedEffectiveness: attribution.decayedEffectiveness,
-      _impactAttribution: attribution,
-      _retirementStrategy: "measured_uplift",
-    };
-  });
-
-  const retiredByHalfLife = applyPolicyHalfLifeRetirement(policiesWithInactivity, trends, {
-    halfLifeCycles: 3,
-    minEffectiveness: 0.2,
-    minInactiveCycles: 2,
-  });
-
-  const retiredPoliciesPath = path.join(stateDir, "retired_policies.json");
-  const retiredExisting = await readJson(retiredPoliciesPath, []);
-  const retiredCombined = [
-    ...(Array.isArray(retiredExisting) ? retiredExisting : []),
-    ...retiredByHalfLife.retired,
-  ].slice(-500);
-
-  await writeJson(learnedPoliciesPath, retiredByHalfLife.active);
-  await writeJson(retiredPoliciesPath, retiredCombined);
+  await writeJson(learnedPoliciesPath, lifecycle.active.slice(-500));
+  await writeJson(retiredPoliciesPath, lifecycle.retired.slice(-500));
 
   return {
-    activePolicies: retiredByHalfLife.active,
-    retiredPolicies: retiredByHalfLife.retired,
-    impactEntriesAdded: learnedPolicies.length,
+    activePolicies: lifecycle.active,
+    retiredPolicies: lifecycle.retired,
+    impactEntriesAdded,
     trends,
     attributions: policyAttributions,
     cycleHealthSnapshot: cycleHealth,
+    reactivatedPolicies: lifecycle.reactivated,
   };
 }
 
