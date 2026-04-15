@@ -9,6 +9,8 @@
  *
  * Integration: called by orchestrator after postmortem, before next cycle start.
  */
+import path from "node:path";
+import fs from "node:fs/promises";
 import {
   computeDecayedPolicyEffectiveness,
   IMPACT_ATTRIBUTION_OUTCOME,
@@ -16,6 +18,405 @@ import {
 } from "./lesson_halflife.js";
 import { EQUAL_DIMENSION_SET } from "./plan_contract_validator.js";
 import { OPTIMIZATION_INTERVENTION_KIND } from "./model_policy.js";
+import { isResolvedBenchmarkRecommendation } from "./cycle_analytics.js";
+
+const ATHENA_TRACKED_FIELDS_EMPTY_CHECK_PATTERN = /if\s*\(\s*!legacyValue\s*\|\|\s*legacyValue\.length\s*===\s*0\s*\)/;
+const ATHENA_TRACKED_FIELDS_DEEP_EQUALITY_PATTERN = /areTrackedFieldValuesEqual\s*\(\s*origVal\s*,\s*patchedVal\s*\)/;
+const GOVERNANCE_GATE_PATTERN = /export\s+async\s+function\s+evaluatePreDispatchGovernanceGate/;
+const LANE_DIVERSITY_PRE_DISPATCH_PATTERN =
+  /Lane diversity gate[\s\S]{0,220}pre-dispatch governance[\s\S]{0,1200}BLOCK_REASON\.LANE_DIVERSITY_INSUFFICIENT/;
+
+export const TRUTH_MAINTENANCE_REASON_CODE = Object.freeze({
+  STALE_MAIN_CI_DEBT: "STALE_MAIN_CI_DEBT",
+  ATHENA_TRACKED_FIELDS_FIXED: "ATHENA_TRACKED_FIELDS_FIXED",
+  GOVERNANCE_GATE_FIXED: "GOVERNANCE_GATE_FIXED",
+  LANE_DIVERSITY_PRE_DISPATCH_FIXED: "LANE_DIVERSITY_PRE_DISPATCH_FIXED",
+  RESEARCH_RECOMMENDATION_RESOLVED: "RESEARCH_RECOMMENDATION_RESOLVED",
+});
+
+export interface PromptTruthSignals {
+  latestMainCiConclusion: string | null;
+  latestMainCiHealthy: boolean;
+  athenaTrackedFieldsDeepEquality: boolean;
+  preDispatchGovernanceGate: boolean;
+  preDispatchLaneDiversityGate: boolean;
+}
+
+export interface PromptTruthSignalSnapshot {
+  signals: PromptTruthSignals;
+  errors: string[];
+}
+
+export interface PromptTruthRetirement {
+  reasonCode: string;
+  reason: string;
+}
+
+export interface PromptTruthRetiredItem<T = unknown> {
+  id: string;
+  kind: "lesson" | "recommendation" | "priority";
+  text: string;
+  label: string;
+  reasonCode: string;
+  reason: string;
+  payload: T;
+}
+
+export interface PromptTruthMaintenanceGroup<T = unknown> {
+  active: T[];
+  activeText: string[];
+  retired: Array<PromptTruthRetiredItem<T>>;
+}
+
+export interface PromptTruthMaintenanceSnapshot {
+  lessons: PromptTruthMaintenanceGroup;
+  recommendations: PromptTruthMaintenanceGroup;
+  priorities: PromptTruthMaintenanceGroup;
+}
+
+function normalizeTruthText(value: unknown): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[`"'()[\]{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function summarizeTruthLabel(value: unknown, maxLen = 160): string {
+  const compact = String(value || "").replace(/\s+/g, " ").trim();
+  if (!compact) return "";
+  return compact.length > maxLen ? `${compact.slice(0, maxLen - 3)}...` : compact;
+}
+
+function dedupeTruthLines(values: string[]): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const value of values) {
+    const normalized = summarizeTruthLabel(value, 220);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    deduped.push(normalized);
+  }
+  return deduped;
+}
+
+function extractLessonTruthText(item: unknown): string {
+  if (typeof item === "string") return item.trim();
+  if (!item || typeof item !== "object" || Array.isArray(item)) return "";
+  const record = item as Record<string, unknown>;
+  return String(record.lesson || record.lessonLearned || record.followUpTask || record.finding || "").trim();
+}
+
+function extractRecommendationTruthText(item: unknown): string {
+  if (typeof item === "string") return item.trim();
+  if (!item || typeof item !== "object" || Array.isArray(item)) return "";
+  const record = item as Record<string, unknown>;
+  return String(
+    record.summary
+    || record.prometheusReadySummary
+    || record.recommendation
+    || record.description
+    || record.topic
+    || "",
+  ).trim();
+}
+
+function extractRecommendationTruthLabel(item: unknown): string {
+  if (typeof item === "string") return item.trim();
+  if (!item || typeof item !== "object" || Array.isArray(item)) return "";
+  const record = item as Record<string, unknown>;
+  const topic = String(record.topic || "").trim();
+  const summary = extractRecommendationTruthText(item);
+  if (topic && summary && !summary.toLowerCase().includes(topic.toLowerCase())) {
+    return `${topic}: ${summary}`;
+  }
+  return topic || summary;
+}
+
+function extractPriorityTruthText(item: unknown): string {
+  if (typeof item === "string") return item.trim();
+  if (!item || typeof item !== "object" || Array.isArray(item)) return "";
+  const record = item as Record<string, unknown>;
+  return String(record.description || record.task || record.priority || "").trim();
+}
+
+function matchesStaleCiDebt(text: string): boolean {
+  return /\bci\b/.test(text)
+    && /(broken|fail(?:ed|ing)?|repair|fix|consecutive commits|wave 1|wave-1|primary)/.test(text);
+}
+
+function matchesTrackedFieldsDebt(text: string): boolean {
+  return /tracked fields|tracked_fields|legacycorrections|prose executable|verificationcommands rewrites|deep equality/.test(text);
+}
+
+function matchesGovernanceGateDebt(text: string): boolean {
+  if (!/governance|dispatchblockreason|corrections|evaluatepredispatchgovernancegate|rolling yield throttle|autonomy execution gate/.test(text)) {
+    return false;
+  }
+  return /advisory|token|parser|parse|propagate|dispatch/.test(text);
+}
+
+function matchesLaneDiversityTimingDebt(text: string): boolean {
+  if (!/lane diversity|lane_diversity/.test(text)) return false;
+  return /after|timing|pre dispatch|pre-dispatch|pre wave|pre-wave|before wave|before dispatch|monocultural/.test(text);
+}
+
+export async function collectPromptTruthSignals(
+  repoRoot: string,
+  opts: { latestMainCiConclusion?: unknown } = {},
+): Promise<PromptTruthSignalSnapshot> {
+  const errors: string[] = [];
+  const athenaReviewerPath = path.join(repoRoot, "src", "core", "athena_reviewer.ts");
+  const orchestratorPath = path.join(repoRoot, "src", "core", "orchestrator.ts");
+
+  let athenaReviewerSource = "";
+  let orchestratorSource = "";
+
+  try {
+    athenaReviewerSource = await fs.readFile(athenaReviewerPath, "utf8");
+  } catch (error) {
+    errors.push(`athena_reviewer:${String((error as any)?.message || error)}`);
+  }
+
+  try {
+    orchestratorSource = await fs.readFile(orchestratorPath, "utf8");
+  } catch (error) {
+    errors.push(`orchestrator:${String((error as any)?.message || error)}`);
+  }
+
+  const latestMainCiConclusion = String(opts.latestMainCiConclusion || "").trim().toLowerCase() || null;
+  const athenaTrackedFieldsDeepEquality =
+    ATHENA_TRACKED_FIELDS_DEEP_EQUALITY_PATTERN.test(athenaReviewerSource)
+    && !ATHENA_TRACKED_FIELDS_EMPTY_CHECK_PATTERN.test(athenaReviewerSource);
+  const preDispatchGovernanceGate = GOVERNANCE_GATE_PATTERN.test(orchestratorSource);
+  const preDispatchLaneDiversityGate = LANE_DIVERSITY_PRE_DISPATCH_PATTERN.test(orchestratorSource);
+
+  return {
+    signals: {
+      latestMainCiConclusion,
+      latestMainCiHealthy: latestMainCiConclusion === "success",
+      athenaTrackedFieldsDeepEquality,
+      preDispatchGovernanceGate,
+      preDispatchLaneDiversityGate,
+    },
+    errors,
+  };
+}
+
+export function resolvePromptTruthRetirement(
+  text: unknown,
+  signals: PromptTruthSignals,
+): PromptTruthRetirement | null {
+  const normalized = normalizeTruthText(text);
+  if (!normalized) return null;
+
+  if (signals.latestMainCiHealthy && matchesStaleCiDebt(normalized)) {
+    return {
+      reasonCode: TRUTH_MAINTENANCE_REASON_CODE.STALE_MAIN_CI_DEBT,
+      reason: "retired because fresh main-branch CI state is healthy",
+    };
+  }
+
+  if (signals.athenaTrackedFieldsDeepEquality && matchesTrackedFieldsDebt(normalized)) {
+    return {
+      reasonCode: TRUTH_MAINTENANCE_REASON_CODE.ATHENA_TRACKED_FIELDS_FIXED,
+      reason: "retired because athena tracked-field deep-equality is already live in source",
+    };
+  }
+
+  if (signals.preDispatchLaneDiversityGate && matchesLaneDiversityTimingDebt(normalized)) {
+    return {
+      reasonCode: TRUTH_MAINTENANCE_REASON_CODE.LANE_DIVERSITY_PRE_DISPATCH_FIXED,
+      reason: "retired because lane diversity now blocks in pre-dispatch governance",
+    };
+  }
+
+  if (signals.preDispatchGovernanceGate && matchesGovernanceGateDebt(normalized)) {
+    return {
+      reasonCode: TRUTH_MAINTENANCE_REASON_CODE.GOVERNANCE_GATE_FIXED,
+      reason: "retired because pre-dispatch governance gate parsing is already live in source",
+    };
+  }
+
+  return null;
+}
+
+export function reconcilePromptTruthItems<T>(
+  items: T[],
+  opts: {
+    kind: "lesson" | "recommendation" | "priority";
+    signals: PromptTruthSignals;
+    getText: (item: T) => unknown;
+    getId?: (item: T, index: number) => unknown;
+    getLabel?: (item: T) => unknown;
+    retireWhen?: (item: T, text: string, signals: PromptTruthSignals) => PromptTruthRetirement | null;
+  },
+): { active: T[]; retired: Array<PromptTruthRetiredItem<T>> } {
+  const active: T[] = [];
+  const retired: Array<PromptTruthRetiredItem<T>> = [];
+
+  for (const [index, item] of (Array.isArray(items) ? items : []).entries()) {
+    const text = String(opts.getText(item) || "").trim();
+    if (!text) continue;
+    const retirement =
+      opts.retireWhen?.(item, text, opts.signals)
+      || resolvePromptTruthRetirement(text, opts.signals);
+    if (!retirement) {
+      active.push(item);
+      continue;
+    }
+
+    retired.push({
+      id: String(opts.getId?.(item, index) || `${opts.kind}-${index + 1}`),
+      kind: opts.kind,
+      text,
+      label: summarizeTruthLabel(opts.getLabel?.(item) || text),
+      reasonCode: retirement.reasonCode,
+      reason: retirement.reason,
+      payload: item,
+    });
+  }
+
+  return { active, retired };
+}
+
+export function buildPromptTruthMaintenanceSnapshot(
+  input: {
+    lessons?: unknown[];
+    researchRecommendations?: unknown[];
+    leadershipPriorities?: unknown[];
+    signals: PromptTruthSignals;
+  },
+): PromptTruthMaintenanceSnapshot {
+  const lessonsResult = reconcilePromptTruthItems(input.lessons ?? [], {
+    kind: "lesson",
+    signals: input.signals,
+    getText: extractLessonTruthText,
+    getLabel: extractLessonTruthText,
+    getId: (item, index) => (item && typeof item === "object" && !Array.isArray(item)
+      ? (item as Record<string, unknown>).id || (item as Record<string, unknown>).addedAt || (item as Record<string, unknown>).source
+      : null) || `lesson-${index + 1}`,
+  });
+  const recommendationsResult = reconcilePromptTruthItems(input.researchRecommendations ?? [], {
+    kind: "recommendation",
+    signals: input.signals,
+    getText: extractRecommendationTruthText,
+    getLabel: extractRecommendationTruthLabel,
+    getId: (item, index) => (item && typeof item === "object" && !Array.isArray(item)
+      ? (item as Record<string, unknown>).id || (item as Record<string, unknown>).topic
+      : null) || `recommendation-${index + 1}`,
+    retireWhen: (item, text, signals) => {
+      if (isResolvedBenchmarkRecommendation(item)) {
+        return {
+          reasonCode: TRUTH_MAINTENANCE_REASON_CODE.RESEARCH_RECOMMENDATION_RESOLVED,
+          reason: "retired because benchmark tracking marks it implemented or closed",
+        };
+      }
+      return resolvePromptTruthRetirement(text, signals);
+    },
+  });
+  const prioritiesResult = reconcilePromptTruthItems(input.leadershipPriorities ?? [], {
+    kind: "priority",
+    signals: input.signals,
+    getText: extractPriorityTruthText,
+    getLabel: extractPriorityTruthText,
+    getId: (_item, index) => `priority-${index + 1}`,
+  });
+
+  return {
+    lessons: {
+      active: lessonsResult.active,
+      activeText: dedupeTruthLines(lessonsResult.active.map((item) => extractLessonTruthText(item))),
+      retired: lessonsResult.retired,
+    },
+    recommendations: {
+      active: recommendationsResult.active,
+      activeText: dedupeTruthLines(recommendationsResult.active.map((item) => extractRecommendationTruthLabel(item) || extractRecommendationTruthText(item))),
+      retired: recommendationsResult.retired,
+    },
+    priorities: {
+      active: prioritiesResult.active,
+      activeText: dedupeTruthLines(prioritiesResult.active.map((item) => extractPriorityTruthText(item))),
+      retired: prioritiesResult.retired,
+    },
+  };
+}
+
+function formatTruthList(values: string[], maxItems: number): string {
+  return values
+    .slice(0, Math.max(0, maxItems))
+    .map((value, index) => `${index + 1}. ${summarizeTruthLabel(value, 180)}`)
+    .join("\n");
+}
+
+function formatRetiredTruthList(values: Array<{ label: string; reason: string }>, maxItems: number): string {
+  return values
+    .slice(0, Math.max(0, maxItems))
+    .map((value, index) => `${index + 1}. ${summarizeTruthLabel(value.label, 180)} — ${summarizeTruthLabel(value.reason, 120)}`)
+    .join("\n");
+}
+
+export function buildPromptTruthMaintenanceSection(
+  input: {
+    activeLessons?: string[];
+    activeRecommendations?: string[];
+    activePriorities?: string[];
+    retiredLessons?: Array<{ label: string; reason: string }>;
+    retiredRecommendations?: Array<{ label: string; reason: string }>;
+    retiredPriorities?: Array<{ label: string; reason: string }>;
+  },
+  opts: { maxActivePerKind?: number; maxRetiredPerKind?: number } = {},
+): string {
+  const maxActivePerKind = Number.isFinite(Number(opts.maxActivePerKind))
+    ? Math.max(1, Math.floor(Number(opts.maxActivePerKind)))
+    : 3;
+  const maxRetiredPerKind = Number.isFinite(Number(opts.maxRetiredPerKind))
+    ? Math.max(1, Math.floor(Number(opts.maxRetiredPerKind)))
+    : 4;
+  const activeLessons = Array.isArray(input.activeLessons) ? input.activeLessons.filter(Boolean) : [];
+  const activeRecommendations = Array.isArray(input.activeRecommendations) ? input.activeRecommendations.filter(Boolean) : [];
+  const activePriorities = Array.isArray(input.activePriorities) ? input.activePriorities.filter(Boolean) : [];
+  const retiredLessons = Array.isArray(input.retiredLessons) ? input.retiredLessons.filter(Boolean) : [];
+  const retiredRecommendations = Array.isArray(input.retiredRecommendations) ? input.retiredRecommendations.filter(Boolean) : [];
+  const retiredPriorities = Array.isArray(input.retiredPriorities) ? input.retiredPriorities.filter(Boolean) : [];
+
+  if (
+    activeLessons.length === 0
+    && activeRecommendations.length === 0
+    && activePriorities.length === 0
+    && retiredLessons.length === 0
+    && retiredRecommendations.length === 0
+    && retiredPriorities.length === 0
+  ) {
+    return "";
+  }
+
+  const lines = [
+    "## LIVE TRUTH MAINTENANCE",
+    "Treat RETIRED items below as historical context only. They must not become new plan pressure.",
+  ];
+
+  if (activePriorities.length > 0) {
+    lines.push(`\nActive leadership priorities:\n${formatTruthList(activePriorities, maxActivePerKind)}`);
+  }
+  if (activeLessons.length > 0) {
+    lines.push(`\nActive stored lessons:\n${formatTruthList(activeLessons, maxActivePerKind)}`);
+  }
+  if (activeRecommendations.length > 0) {
+    lines.push(`\nActive research recommendations:\n${formatTruthList(activeRecommendations, maxActivePerKind)}`);
+  }
+  if (retiredPriorities.length > 0) {
+    lines.push(`\nRetired leadership priorities:\n${formatRetiredTruthList(retiredPriorities, maxRetiredPerKind)}`);
+  }
+  if (retiredLessons.length > 0) {
+    lines.push(`\nRetired stored lessons:\n${formatRetiredTruthList(retiredLessons, maxRetiredPerKind)}`);
+  }
+  if (retiredRecommendations.length > 0) {
+    lines.push(`\nRetired research recommendations:\n${formatRetiredTruthList(retiredRecommendations, maxRetiredPerKind)}`);
+  }
+
+  return lines.join("\n");
+}
 
 /**
  * Known lesson patterns that can be compiled into policy checks.

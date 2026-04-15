@@ -23,6 +23,7 @@ import {
   normalizePrometheusPlanningMode,
   PROMETHEUS_PLANNING_MODE,
   selectExecutionPatternForPlans,
+  type WorkerTopologyContract,
 } from "./role_registry.js";
 import { buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
 import { addSchemaVersion, STATE_FILE_TYPE } from "./schema_registry.js";
@@ -108,6 +109,11 @@ import {
 } from "./carry_forward_ledger.js";
 import { rewriteVerificationCommand } from "./verification_command_registry.js";
 import { checkCarryForwardGate, hardGateRecurrenceToPolicies } from "./learning_policy_compiler.js";
+import {
+  buildPromptTruthMaintenanceSection,
+  collectPromptTruthSignals,
+  buildPromptTruthMaintenanceSnapshot,
+} from "./learning_policy_compiler.js";
 import { buildRankedLessonShortlists } from "./lesson_halflife.js";
 import {
   buildPrometheusPlanArtifact,
@@ -139,6 +145,7 @@ import {
   computeHistoricalLaneDifficultyPriors,
   buildWorkerCycleArtifactsDiagnosticsRecord,
   isWorkerCycleArtifactsSnapshotContractValid,
+  extractLatestBenchmarkRecommendations,
 } from "./cycle_analytics.js";
 
 // Keep cycle diagnostics contract literals local to avoid circular-import TDZ
@@ -2458,6 +2465,12 @@ export const HIGH_RISK_COMPONENT_GATE_THRESHOLDS: Readonly<Record<string, number
   dependencyGraph: 0.8,
 });
 
+const PARSER_CONTEXT_PENALTY_COMPONENTS: ReadonlySet<string> = new Set([
+  "bottleneckCoverage",
+  "architectureDrift",
+  "diagnosticsFreshness",
+]);
+
 /** Result returned by computeHighRiskComponentGate(). */
 export interface ComponentHighRiskGateResult {
   /** True when at least one component is below its threshold — strict gate is active. */
@@ -4556,8 +4569,18 @@ export function buildTrustedMemoryShortlist(
   const requestedBy = String(opts.requestedBy || "");
   const privilegedCaller = isPrivilegedMemoryRequester(requestedBy);
   const includeLowTrust = opts.includeLowTrust === true && privilegedCaller;
-  const lessons = Array.isArray(knowledgeMemory?.lessons) ? knowledgeMemory.lessons : [];
-  const promptHints = Array.isArray(knowledgeMemory?.promptHints) ? knowledgeMemory.promptHints : [];
+  const workingLessons = Array.isArray(knowledgeMemory?.working?.lessons) ? knowledgeMemory.working.lessons : [];
+  const episodicLessons = Array.isArray(knowledgeMemory?.episodic?.lessons) ? knowledgeMemory.episodic.lessons : [];
+  const flatLessons = Array.isArray(knowledgeMemory?.lessons) ? knowledgeMemory.lessons : [];
+  const workingPromptHints = Array.isArray(knowledgeMemory?.working?.promptHints) ? knowledgeMemory.working.promptHints : [];
+  const episodicPromptHints = Array.isArray(knowledgeMemory?.episodic?.promptHints) ? knowledgeMemory.episodic.promptHints : [];
+  const flatPromptHints = Array.isArray(knowledgeMemory?.promptHints) ? knowledgeMemory.promptHints : [];
+  const lessons = Number(knowledgeMemory?.schemaVersion) >= 2
+    ? [...workingLessons, ...episodicLessons]
+    : flatLessons;
+  const promptHints = Number(knowledgeMemory?.schemaVersion) >= 2
+    ? [...workingPromptHints, ...episodicPromptHints]
+    : flatPromptHints;
 
   const filteredLessons = filterMemoryEntriesByTrust(lessons, {
     includeLowTrust,
@@ -4701,6 +4724,79 @@ function sanitizeParserContractCandidateFields(parsed: any): any {
   return next;
 }
 
+function extractStrategicFieldText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => extractStrategicFieldText(entry))
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of ["keyFindings", "findings", "summary", "text", "narrative", "analysis", "description", "content", "message"]) {
+      const text = extractStrategicFieldText(record[key]);
+      if (text) return text;
+    }
+    for (const nested of Object.values(record)) {
+      const text = extractStrategicFieldText(nested);
+      if (text) return text;
+    }
+  }
+  return "";
+}
+
+function buildStrategicParagraphFallbacks(parsed: any, raw: string): string[] {
+  return [
+    extractStrategicFieldText(parsed?.keyFindings),
+    extractStrategicFieldText(parsed?.strategicNarrative),
+    extractStrategicFieldText(parsed?.analysis),
+    String(raw || "").trim(),
+  ]
+    .flatMap((source) => String(source || "").split(/\n{2,}/))
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph.length > 40);
+}
+
+function repairParserContractCandidate(parsed: any, raw: string): any {
+  if (!parsed || typeof parsed !== "object") return parsed;
+  const next = { ...parsed };
+  if (!String(next.projectHealth ?? "").trim()) {
+    next.projectHealth = inferProjectHealth(raw);
+  }
+  if (!String(next.generatedAt ?? "").trim()) {
+    next.generatedAt = new Date().toISOString();
+  }
+  if (
+    !next.requestBudget ||
+    typeof next.requestBudget !== "object" ||
+    next.requestBudget.estimatedPremiumRequestsTotal == null ||
+    !Number.isFinite(Number(next.requestBudget.estimatedPremiumRequestsTotal))
+  ) {
+    const deterministicBudget = buildDeterministicRequestBudget(
+      Array.isArray(next.plans) ? next.plans : [],
+      next.executionStrategy ?? {},
+    );
+    next.requestBudget = {
+      ...deterministicBudget,
+      ...(next.requestBudget && typeof next.requestBudget === "object" ? next.requestBudget : {}),
+      estimatedPremiumRequestsTotal: deterministicBudget.estimatedPremiumRequestsTotal,
+    };
+  }
+
+  const paragraphs = buildStrategicParagraphFallbacks(next, raw);
+  const normalizedKeyFindings = extractStrategicFieldText(next.keyFindings);
+  next.keyFindings = normalizedKeyFindings || paragraphs[0] || "Analysis complete — see narrative for findings.";
+
+  const normalizedStrategicNarrative = extractStrategicFieldText(next.strategicNarrative);
+  next.strategicNarrative = normalizedStrategicNarrative
+    || paragraphs[paragraphs.length - 1]
+    || String(next.keyFindings || "Analysis complete — see narrative for direction.");
+
+  return sanitizeParserContractCandidateFields(next);
+}
+
 export async function enforceParserContractBeforeNormalization(
   parsedCandidate: any,
   opts: {
@@ -4710,18 +4806,18 @@ export async function enforceParserContractBeforeNormalization(
     buildRetryCandidate: (diff: string) => Promise<any | null>;
   },
 ): Promise<{ ok: boolean; parsed: any; retried: boolean; violationReason?: string }> {
-  const sanitizedInitialCandidate = sanitizeParserContractCandidateFields(parsedCandidate);
-  if (hasValidParserContractFields(sanitizedInitialCandidate)) {
-    return { ok: true, parsed: sanitizedInitialCandidate, retried: false };
+  const repairedInitialCandidate = repairParserContractCandidate(parsedCandidate, "");
+  if (hasValidParserContractFields(repairedInitialCandidate)) {
+    return { ok: true, parsed: repairedInitialCandidate, retried: false };
   }
-  const parserDiff = buildParserContractRetryDiff(sanitizedInitialCandidate);
+  const parserDiff = buildParserContractRetryDiff(repairedInitialCandidate);
   await opts.onRetryDiff?.(parserDiff);
-  const retryCandidate = sanitizeParserContractCandidateFields(await opts.buildRetryCandidate(parserDiff));
+  const retryCandidate = repairParserContractCandidate(await opts.buildRetryCandidate(parserDiff), "");
   if (retryCandidate && hasValidParserContractFields(retryCandidate)) {
     await opts.onRetrySuccess?.();
     return { ok: true, parsed: retryCandidate, retried: true };
   }
-  const secondDiff = buildParserContractRetryDiff(retryCandidate || sanitizedInitialCandidate);
+  const secondDiff = buildParserContractRetryDiff(retryCandidate || repairedInitialCandidate);
   await opts.onRetryViolation?.(secondDiff);
   return {
     ok: false,
@@ -4994,13 +5090,12 @@ export function normalizePrometheusParsedOutput(parsed, aiResult: any = {}) {
   // context-penalty channel: external/contextual signals (bottleneckCoverage,
   //   architectureDrift) applied on top of the core score.
   // parserConfidence remains the aggregate (core − context) for backward compat.
-  const CONTEXT_PENALTY_COMPONENTS = new Set(["bottleneckCoverage", "architectureDrift", "diagnosticsFreshness"]);
   const coreBase = rawPlans.length > 0 ? 1.0 : plans.length > 0 ? 0.5 : 0.1;
   let parserCoreConfidence = coreBase;
   let parserContextPenalty = 0;
   for (const penalty of parserConfidencePenalties) {
     if (penalty.component === "plansShape") continue; // plansShape sets base, not an additive delta
-    if (CONTEXT_PENALTY_COMPONENTS.has(penalty.component)) {
+    if (PARSER_CONTEXT_PENALTY_COMPONENTS.has(penalty.component)) {
       parserContextPenalty += -penalty.delta; // delta is negative; negate to get positive magnitude
     } else {
       parserCoreConfidence = Math.max(0.1, parserCoreConfidence + penalty.delta);
@@ -5378,6 +5473,7 @@ Wrap the JSON companion with markers:
 export const PROMETHEUS_CYCLE_DELTA_SECTION_NAMES: ReadonlySet<string> = new Set([
   "research-intelligence",
   "topic-memory",
+  "truth-maintenance",
   "postmortem-shortlist",
   "behavior-patterns",
   "carry-forward",
@@ -5571,11 +5667,69 @@ export function extractPrometheusCandidatePlanSets(input: any): PrometheusCandid
     .filter((entry) => Array.isArray(entry.plans) && entry.plans.length > 0);
 }
 
+function resolvePrometheusTopologyMinLanes(minLanes: unknown): number | null {
+  const normalized = Number(minLanes);
+  if (!Number.isFinite(normalized) || normalized <= 1) return null;
+  return Math.max(2, Math.floor(normalized));
+}
+
+export function evaluatePrometheusTopologyAdmission(
+  plans: any[],
+  opts: {
+    planningMode?: unknown;
+    minLanes?: unknown;
+  } = {},
+): {
+  admitted: boolean;
+  reason: string;
+  laneCount: number;
+  planCount: number;
+  minLanes: number | null;
+  workerTopology: WorkerTopologyContract;
+} {
+  const normalizedPlans = Array.isArray(plans)
+    ? plans.filter((plan) => plan && typeof plan === "object")
+    : [];
+  const planningMode = normalizePrometheusPlanningMode(
+    opts.planningMode,
+    PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION,
+  ) || PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION;
+  const workerTopology = buildWorkerTopologyContract(normalizedPlans, { planningMode });
+  const requiredMinLanes = resolvePrometheusTopologyMinLanes(opts.minLanes);
+  const planCount = normalizedPlans.length;
+  const laneCount = Number(workerTopology?.laneCount || 0);
+  if (requiredMinLanes === null || planCount < requiredMinLanes || laneCount >= requiredMinLanes) {
+    return {
+      admitted: true,
+      reason: "",
+      laneCount,
+      planCount,
+      minLanes: requiredMinLanes,
+      workerTopology,
+    };
+  }
+  const laneLabels = Array.isArray(workerTopology?.lanes)
+    ? workerTopology.lanes
+      .map((lane) => String(lane?.lane || "").trim())
+      .filter(Boolean)
+    : [];
+  const laneText = laneLabels.length > 0 ? laneLabels.join(",") : "none";
+  return {
+    admitted: false,
+    reason: `worker_topology_insufficient: planCount=${planCount} laneCount=${laneCount} minLanes=${requiredMinLanes} lanes=${laneText}`,
+    laneCount,
+    planCount,
+    minLanes: requiredMinLanes,
+    workerTopology,
+  };
+}
+
 function applyCandidateSelectionGates(
   baseInput: any,
   candidatePlans: any[],
   aiResult: any,
   diagnosticsFreshnessAdmission: DiagnosticsFreshnessAdmission,
+  topologyMinLanes?: unknown,
 ) {
   const candidateInput = {
     ...(baseInput && typeof baseInput === "object" ? baseInput : {}),
@@ -5632,23 +5786,31 @@ function applyCandidateSelectionGates(
     }
   }
 
-  const parserConfidenceScore = typeof parsed.parserConfidence === "number"
-    ? parsed.parserConfidence
-    : 1.0;
-  const plansWithProvenance = admittedPlans.map((plan: any) =>
-    plan._provenance
-      ? plan
+  const plansWithProvenance = admittedPlans.map((plan: any) => {
+    const admissionConfidence = computePacketAdmissionConfidence(plan, parsed);
+    const packetWithProvenance = plan._provenance
+      ? { ...plan }
       : attachFallbackProvenance(plan, {
           source: "prometheus-candidate-selection",
-          reason: "aggregate-parser-confidence",
-          confidence: parserConfidenceScore,
-          tag: parserConfidenceScore < QUARANTINE_CONFIDENCE_THRESHOLD
+          reason: "packet-admission-confidence",
+          confidence: admissionConfidence,
+          tag: admissionConfidence < QUARANTINE_CONFIDENCE_THRESHOLD
             ? FALLBACK_PROVENANCE_TAG.PARSER_FALLBACK
             : FALLBACK_PROVENANCE_TAG.DIRECT,
-        })
-  );
+        });
+    packetWithProvenance._admissionConfidence = admissionConfidence;
+    return packetWithProvenance;
+  });
   const quarantineResult = quarantineLowConfidencePackets(plansWithProvenance);
   admittedPlans = quarantineResult.allowed;
+
+  const topologyAdmission = evaluatePrometheusTopologyAdmission(admittedPlans, {
+    planningMode: resolvePrometheusPlanningModeFromContext(parsed, aiResult),
+    minLanes: topologyMinLanes,
+  });
+  if (!topologyAdmission.admitted) {
+    admittedPlans = [];
+  }
 
   return {
     plans: admittedPlans,
@@ -5660,6 +5822,7 @@ function applyCandidateSelectionGates(
     },
     contractResult,
     freshness,
+    topologyAdmission,
     blocked: admittedPlans.length === 0,
   };
 }
@@ -5669,6 +5832,7 @@ export function selectPrometheusCandidatePlanSet(
   aiResult: any = {},
   opts: {
     diagnosticsFreshnessAdmission?: DiagnosticsFreshnessAdmission | null;
+    topologyMinLanes?: unknown;
   } = {},
 ): {
   candidateSets: PrometheusCandidatePlanSet[];
@@ -5708,7 +5872,13 @@ export function selectPrometheusCandidatePlanSet(
 
   const evaluated = candidateSets.map((candidate) => ({
     candidate,
-    gated: applyCandidateSelectionGates(rawParsedInput, candidate.plans, aiResult, diagnosticsFreshnessAdmission),
+    gated: applyCandidateSelectionGates(
+      rawParsedInput,
+      candidate.plans,
+      aiResult,
+      diagnosticsFreshnessAdmission,
+      opts.topologyMinLanes,
+    ),
   }));
   const selection = selectBestCandidatePlans(
     evaluated.map((entry) => entry.gated.plans),
@@ -6539,14 +6709,50 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   let mandatoryFindingsPreflightResult: MandatoryFindingsPreflightResult | null = null;
   let benchmarkSection = "";
   let routingOutcomeSection = "";
+  let truthMaintenanceSection = "";
+  let truthSignals = null as Awaited<ReturnType<typeof collectPromptTruthSignals>> | null;
+  let latestMainCiConclusionForTruth: string | null = null;
+  let preloadedHealthAuditPayload: unknown;
+  let benchmarkData: unknown = null;
+  let memoryShortlist: ReturnType<typeof buildTrustedMemoryShortlist> | null = null;
   try {
-    const [researchSynthesis, researchScout] = await Promise.all([
+    preloadedHealthAuditPayload = await readJson(path.join(stateDir, "health_audit_findings.json"), null);
+    latestMainCiConclusionForTruth = String((preloadedHealthAuditPayload as any)?.latestMainCiConclusion || "").trim().toLowerCase() || null;
+  } catch {
+    preloadedHealthAuditPayload = undefined;
+  }
+  try {
+    truthSignals = await collectPromptTruthSignals(repoRoot, {
+      latestMainCiConclusion: latestMainCiConclusionForTruth,
+    });
+    if (truthSignals.errors.length > 0) {
+      await appendProgress(
+        config,
+        `[PROMETHEUS][WARN] Truth-maintenance signal collection degraded: ${truthSignals.errors.join("; ")}`,
+      );
+    }
+  } catch (truthErr) {
+    await appendProgress(
+      config,
+      `[PROMETHEUS][WARN] Failed to collect truth-maintenance signals: ${String((truthErr as any)?.message || truthErr)}`,
+    );
+  }
+  try {
+    const [researchSynthesis, researchScout, knowledgeMemory, jesusDirective, loadedBenchmarkData] = await Promise.all([
       readJson(path.join(stateDir, "research_synthesis.json"), null),
       readJson(path.join(stateDir, "research_scout_output.json"), null),
+      readJson(path.join(stateDir, "knowledge_memory.json"), null),
+      readJson(path.join(stateDir, "jesus_directive.json"), null),
+      readBenchmarkGroundTruth(config),
     ]);
+    benchmarkData = loadedBenchmarkData;
     researchSynthesisData = researchSynthesis;
     researchTopicsList = extractResearchTopics(researchSynthesis, researchScout);
     const researchArtifactUpdatedAtMs = await getLatestResearchArtifactUpdatedAtMs(stateDir);
+    memoryShortlist = buildTrustedMemoryShortlist(knowledgeMemory, {
+      requestedBy,
+      includeLowTrust: options.includeLowTrustMemory === true,
+    });
 
     // ── Research quality gate: quarantine low-density topics ─────────────────
     // When the quality gate failed, filter out topics below minimum actionable density
@@ -6597,6 +6803,55 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
           `Plans may have reduced signal quality.`
         );
       }
+    }
+
+    const plannerPriorityActions = Array.isArray((effectiveSynthesis as any)?.plannerSignals?.priorityActions)
+      ? (effectiveSynthesis as any).plannerSignals.priorityActions
+      : [];
+    if (truthSignals && memoryShortlist) {
+      const plannerPrioritySnapshot = buildPromptTruthMaintenanceSnapshot({
+        signals: truthSignals.signals,
+        researchRecommendations: plannerPriorityActions,
+      });
+      const activePlannerPriorityActions = plannerPrioritySnapshot.recommendations.activeText;
+      if (Array.isArray((effectiveSynthesis as any)?.plannerSignals?.priorityActions)) {
+        effectiveSynthesis = {
+          ...(effectiveSynthesis as Record<string, unknown>),
+          plannerSignals: {
+            ...((((effectiveSynthesis as any)?.plannerSignals) && typeof (effectiveSynthesis as any).plannerSignals === "object")
+              ? (effectiveSynthesis as any).plannerSignals
+              : {}),
+            priorityActions: activePlannerPriorityActions,
+          },
+        };
+      }
+      const truthSnapshot = buildPromptTruthMaintenanceSnapshot({
+        signals: truthSignals.signals,
+        lessons: memoryShortlist?.lessons ?? [],
+        researchRecommendations: [
+          ...extractLatestBenchmarkRecommendations(loadedBenchmarkData),
+          ...plannerPriorityActions,
+        ],
+        leadershipPriorities: Array.isArray((jesusDirective as any)?.priorities) ? (jesusDirective as any).priorities : [],
+      });
+      const activeLeadershipPriorities = truthSnapshot.priorities.activeText;
+      const activeTruthLessons = truthSnapshot.lessons.activeText;
+      const activeTruthRecommendations = truthSnapshot.recommendations.activeText;
+      const retiredTruthLessons = truthSnapshot.lessons.retired.map(({ label, reason }) => ({ label, reason }));
+      const retiredTruthRecommendations = truthSnapshot.recommendations.retired.map(({ label, reason }) => ({ label, reason }));
+      const retiredTruthPriorities = truthSnapshot.priorities.retired.map(({ label, reason }) => ({ label, reason }));
+      truthMaintenanceSection = buildPromptTruthMaintenanceSection({
+        activeLessons: activeTruthLessons,
+        activeRecommendations: activeTruthRecommendations,
+        activePriorities: activeLeadershipPriorities,
+        retiredLessons: retiredTruthLessons,
+        retiredRecommendations: retiredTruthRecommendations,
+        retiredPriorities: retiredTruthPriorities,
+      }, { maxActivePerKind: 4, maxRetiredPerKind: 4 });
+      memoryShortlist = {
+        ...memoryShortlist,
+        lessons: truthSnapshot.lessons.active,
+      };
     }
 
     const researchContext = buildResearchPromptSection(effectiveSynthesis, researchScout, planningPolicy, researchArtifactUpdatedAtMs);
@@ -6663,9 +6918,10 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   }
 
   try {
-    const healthAuditPayload = await readJson(path.join(stateDir, "health_audit_findings.json"), null);
+    const healthAuditPayload = preloadedHealthAuditPayload ?? await readJson(path.join(stateDir, "health_audit_findings.json"), null);
     const { payload: normalizedHealthPayload, suppressedCount: ciBreakSuppressedCount } =
       normalizeStaleCiBreakFindings(healthAuditPayload);
+    latestMainCiConclusionForTruth = String((normalizedHealthPayload as any)?.latestMainCiConclusion || "").trim().toLowerCase() || null;
     if (ciBreakSuppressedCount > 0) {
       await appendProgress(
         config,
@@ -6730,11 +6986,12 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   } catch { /* non-fatal — proceed without prior-cycle signal */ }
 
   try {
-    const [benchmarkData, premiumUsageData] = await Promise.all([
-      readBenchmarkGroundTruth(config),
+    const [resolvedBenchmarkData, premiumUsageData] = await Promise.all([
+      benchmarkData ? Promise.resolve(benchmarkData) : readBenchmarkGroundTruth(config),
       readJson(path.join(stateDir, "premium_usage_log.json"), []),
     ]);
-    benchmarkSection = buildBenchmarkSection(benchmarkData);
+    benchmarkData = resolvedBenchmarkData;
+    benchmarkSection = buildBenchmarkSection(resolvedBenchmarkData);
     routingOutcomeSection = buildRoutingOutcomeSection(premiumUsageData);
     if (benchmarkSection || routingOutcomeSection) {
       await appendProgress(
@@ -6745,8 +7002,8 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     // Derive planning priors from the same benchmarkData so we avoid a second disk read.
     // Include prior-cycle violation/retry/reroute signal so observed pressure adjusts
     // strictness on top of the capacity-gain baseline.
-    const benchmarkEntries = Array.isArray((benchmarkData as any)?.entries)
-      ? (benchmarkData as any).entries as unknown[]
+    const benchmarkEntries = Array.isArray((resolvedBenchmarkData as any)?.entries)
+      ? (resolvedBenchmarkData as any).entries as unknown[]
       : [];
     const capacityGainResult = computeResearchCapacityGain(benchmarkEntries as any[]);
     planningPriors = computeBenchmarkPlanningPriors(capacityGainResult, priorCycleViolationSignal);
@@ -6792,12 +7049,14 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   }
 
   try {
-    const knowledgeMemory = await readJson(path.join(stateDir, "knowledge_memory.json"), null);
-    const memoryShortlist = buildTrustedMemoryShortlist(knowledgeMemory, {
-      requestedBy,
-      includeLowTrust: options.includeLowTrustMemory === true,
-    });
-    if (memoryShortlist.lessons.length > 0 || memoryShortlist.promptHints.length > 0) {
+    if (!memoryShortlist) {
+      const knowledgeMemory = await readJson(path.join(stateDir, "knowledge_memory.json"), null);
+      memoryShortlist = buildTrustedMemoryShortlist(knowledgeMemory, {
+        requestedBy,
+        includeLowTrust: options.includeLowTrustMemory === true,
+      });
+    }
+    if (memoryShortlist && (memoryShortlist.lessons.length > 0 || memoryShortlist.promptHints.length > 0)) {
       const lessonLines = memoryShortlist.lessons.map((entry: any, index: number) => {
         const trustLevel = String(entry?.trust?.level || MEMORY_TRUST_LEVEL.MEDIUM);
         return `${index + 1}. ${String(entry?.lesson || "").trim()} [trust=${trustLevel}]`;
@@ -6808,7 +7067,7 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
       }).filter((line: string) => /\S/.test(line));
       trustedMemorySection = `\n\n## TRUST-FILTERED KNOWLEDGE MEMORY\nLessons:\n${lessonLines.length > 0 ? lessonLines.join("\n") : "- (none)"}\n\nPrompt hints:\n${hintLines.length > 0 ? hintLines.join("\n") : "- (none)"}`;
     }
-    if (memoryShortlist.droppedLowTrustLessons > 0 || memoryShortlist.droppedLowTrustHints > 0) {
+    if (memoryShortlist && (memoryShortlist.droppedLowTrustLessons > 0 || memoryShortlist.droppedLowTrustHints > 0)) {
       await appendProgress(
         config,
         `[PROMETHEUS][MEMORY_TRUST] filtered low-trust entries lessons=${memoryShortlist.droppedLowTrustLessons} hints=${memoryShortlist.droppedLowTrustHints} includeLowTrust=${options.includeLowTrustMemory === true && isPrivilegedMemoryRequester(requestedBy)}`
@@ -7086,6 +7345,7 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
 
   // Topic memory (compact)
   if (topicMemorySection) cycleDeltaParts.push(topicMemorySection);
+  if (truthMaintenanceSection) cycleDeltaParts.push(truthMaintenanceSection);
   if (trustedMemorySection) cycleDeltaParts.push(trustedMemorySection);
   if (cycleProofSection) cycleDeltaParts.push(cycleProofSection);
 
@@ -7110,6 +7370,7 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
     [
       section("research-intelligence", researchTopicsList.length > 0 ? cycleDeltaParts.find(p => p.startsWith("## RESEARCH INTELLIGENCE AVAILABLE")) || "" : ""),
       section("topic-memory", topicMemorySection || ""),
+      section("truth-maintenance", truthMaintenanceSection || ""),
       section("trusted-memory", trustedMemorySection || ""),
       section("cycle-proof", cycleProofSection || ""),
       section("behavior-patterns", behaviorPatternsSection || ""),
@@ -7306,46 +7567,11 @@ ${compiledCycleDelta}`;
   //   - strategicNarrative is non-empty
   // Retry once with an explicit diff; fail-closed on second failure.
   const parsedContractCandidate = aiResult?.parsed || buildNarrativeFallbackParsed({ ...aiResult, raw });
-
-  // Pre-fill all four inferrable/derivable mandatory fields before the contract check
-  // so PARSER_CONTRACT never fires for fields that can be recovered from raw text or
-  // computed from the plan list. Each fill is a last-resort fallback — if the model
-  // emitted the field correctly, the existing value is kept (non-empty guard).
-  if (!String(parsedContractCandidate.projectHealth ?? "").trim()) {
-    parsedContractCandidate.projectHealth = inferProjectHealth(raw);
-  }
-  if (!String(parsedContractCandidate.generatedAt ?? "").trim()) {
-    parsedContractCandidate.generatedAt = new Date().toISOString();
-  }
-  if (
-    !parsedContractCandidate.requestBudget ||
-    parsedContractCandidate.requestBudget.estimatedPremiumRequestsTotal == null ||
-    !Number.isFinite(Number(parsedContractCandidate.requestBudget.estimatedPremiumRequestsTotal))
-  ) {
-    const deterministicBudget = buildDeterministicRequestBudget(
-      Array.isArray(parsedContractCandidate.plans) ? parsedContractCandidate.plans : [],
-      parsedContractCandidate.executionStrategy ?? {}
-    );
-    parsedContractCandidate.requestBudget = {
-      ...deterministicBudget,
-      ...(parsedContractCandidate.requestBudget || {}),
-      estimatedPremiumRequestsTotal: deterministicBudget.estimatedPremiumRequestsTotal,
-    };
-  }
-  // keyFindings: extract the first non-empty paragraph from the raw analysis text.
-  if (!String(parsedContractCandidate.keyFindings ?? "").trim()) {
-    const paragraphs = raw.split(/\n{2,}/).map(p => p.trim()).filter(p => p.length > 40);
-    parsedContractCandidate.keyFindings = paragraphs[0] ?? "Analysis complete — see narrative for findings.";
-  }
-  // strategicNarrative: extract the last non-empty paragraph (typically the conclusion/direction).
-  if (!String(parsedContractCandidate.strategicNarrative ?? "").trim()) {
-    const paragraphs = raw.split(/\n{2,}/).map(p => p.trim()).filter(p => p.length > 40);
-    parsedContractCandidate.strategicNarrative = paragraphs[paragraphs.length - 1] ?? parsedContractCandidate.keyFindings ?? "Analysis complete — see narrative for direction.";
-  }
+  const repairedParsedContractCandidate = repairParserContractCandidate(parsedContractCandidate, raw);
 
   let retryAiResult: any = null;
   const parserContractResult = await enforceParserContractBeforeNormalization(
-    parsedContractCandidate,
+    repairedParsedContractCandidate,
     {
       onRetryDiff: async (parserDiff: string) => {
         await appendProgress(
@@ -7424,7 +7650,10 @@ Mandatory parser fields:
             retryStreamStderr,
           );
           retryAiResult = parseAgentOutput(retryRaw);
-          return retryAiResult?.parsed || buildNarrativeFallbackParsed({ ...retryAiResult, raw: retryRaw });
+          return repairParserContractCandidate(
+            retryAiResult?.parsed || buildNarrativeFallbackParsed({ ...retryAiResult, raw: retryRaw }),
+            retryRaw,
+          );
         } catch (retryError) {
           const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
           await appendProgress(
@@ -7536,11 +7765,120 @@ Regenerate the full response ensuring all strategic fields (analysis, strategicN
     );
   }
 
+  const topologyMinLanes = resolvePrometheusTopologyMinLanes(config?.workerPool?.minLanes);
+  let candidateSetsBeforeSelection = candidatePlanningPolicy.enabled
+    ? extractPrometheusCandidatePlanSets(rawParsedInput)
+    : [];
+  if (candidateSetsBeforeSelection.length < 2) {
+    const topologyAdmission = evaluatePrometheusTopologyAdmission(rawParsedInput?.plans, {
+      planningMode,
+      minLanes: topologyMinLanes,
+    });
+    if (!topologyAdmission.admitted) {
+      await appendProgress(
+        config,
+        `[PROMETHEUS][TOPOLOGY] Non-dispatchable worker topology — retrying once: ${topologyAdmission.reason}`,
+      );
+      try {
+        const topologyRetryPrompt = `${contextPrompt}
+
+## TOPOLOGY_CONTRACT_RETRY
+The previous response produced a non-dispatchable worker topology.
+
+Topology diff:
+${topologyAdmission.reason}
+
+Dispatch contract:
+- If you emit ${topologyAdmission.minLanes} or more plans, they MUST span at least ${topologyAdmission.minLanes} distinct capability lanes after normalization.
+- If evidence supports only one real lane of work, emit fewer than ${topologyAdmission.minLanes} plans instead of padding with same-lane packets.
+- executionStrategy.workerTopology MUST match the actual plans you emit.
+- Keep parser-contract fields valid: projectHealth, requestBudget.estimatedPremiumRequestsTotal, generatedAt, keyFindings, strategicNarrative.
+
+Regenerate the full response.`;
+        const topologyRetryArgs = buildAgentArgs({
+          agentSlug: "prometheus",
+          prompt: topologyRetryPrompt,
+          model: prometheusModel,
+          allowAll: true,
+          noAskUser: true,
+          maxContinues: undefined,
+          runContract: promptLineage ? { promptLineage } : undefined,
+        });
+        appendLiveLogSync(stateDir, `\n[topology_retry_start] ${ts()}\n`);
+        let topologyRetryStreamStdout = "";
+        let topologyRetryStreamStderr = "";
+        const topologyRetryResult = await spawnAsync(command, topologyRetryArgs, {
+          env: process.env,
+          timeoutMs: prometheusTimeoutMs,
+          earlyExitMarker: "===END===",
+          onStdout(chunk) {
+            const text = chunk.toString("utf8");
+            topologyRetryStreamStdout += text;
+            appendLiveLogSync(stateDir, text);
+          },
+          onStderr(chunk) {
+            const text = chunk.toString("utf8");
+            topologyRetryStreamStderr += text;
+            appendLiveLogSync(stateDir, text);
+          },
+        }) as { status?: number; stdout?: string; stderr?: string };
+        appendLiveLogSync(stateDir, `\n[topology_retry_end] ${ts()} exit=${topologyRetryResult.status}\n`);
+        if (topologyRetryResult.status === 0) {
+          const topologyRetryRaw = resolveCapturedAgentRawOutput(
+            topologyRetryResult.stdout,
+            topologyRetryResult.stderr,
+            topologyRetryStreamStdout,
+            topologyRetryStreamStderr,
+          );
+          const topologyRetryAi = parseAgentOutput(topologyRetryRaw);
+          rawParsedInput = repairParserContractCandidate(
+            topologyRetryAi?.parsed || buildNarrativeFallbackParsed({ ...topologyRetryAi, raw: topologyRetryRaw }),
+            topologyRetryRaw,
+          );
+          candidateSetsBeforeSelection = candidatePlanningPolicy.enabled
+            ? extractPrometheusCandidatePlanSets(rawParsedInput)
+            : [];
+          await appendProgress(config, "[PROMETHEUS][TOPOLOGY] Retry completed");
+        }
+      } catch (topologyErr) {
+        await appendProgress(
+          config,
+          `[PROMETHEUS][TOPOLOGY] Retry failed: ${String((topologyErr as any)?.message || topologyErr)}`,
+        );
+      }
+      if (candidateSetsBeforeSelection.length < 2) {
+        const topologyRetryAdmission = evaluatePrometheusTopologyAdmission(rawParsedInput?.plans, {
+          planningMode,
+          minLanes: topologyMinLanes,
+        });
+        if (!topologyRetryAdmission.admitted) {
+          const emptyExecutionStrategy = buildExecutionStrategyFromPlans([], { planningMode });
+          rawParsedInput = {
+            ...(rawParsedInput && typeof rawParsedInput === "object" ? rawParsedInput : {}),
+            plans: [],
+            executionStrategy: emptyExecutionStrategy,
+            requestBudget: {
+              ...buildDeterministicRequestBudget([], emptyExecutionStrategy),
+              _fallback: false,
+            },
+            failReason: "topology-contract",
+            _topologyContractFailed: true,
+            _topologyContractReason: topologyRetryAdmission.reason,
+          };
+          await appendProgress(
+            config,
+            `[PROMETHEUS][TOPOLOGY][FAIL_CLOSED] Repeated non-dispatchable worker topology — plans=[] reason=${topologyRetryAdmission.reason}`,
+          );
+        }
+      }
+    }
+  }
+
   if (candidatePlanningPolicy.enabled) {
     const candidateSelection = selectPrometheusCandidatePlanSet(
       rawParsedInput,
       { ...aiResult, raw, researchTopics: researchTopicsList, planningMode, repairFeedback: options.repairFeedback, requestedBy: options.requestedBy },
-      { diagnosticsFreshnessAdmission },
+      { diagnosticsFreshnessAdmission, topologyMinLanes },
     );
     if (candidateSelection.candidateSets.length >= 2 && candidateSelection.usedSelection) {
       const nextExecutionStrategy = buildExecutionStrategyFromPlans(candidateSelection.selectedPlans, { planningMode });
@@ -8485,26 +8823,35 @@ Mandatory requirements:
     const parserConfidenceScore = typeof parsed.parserConfidence === "number"
       ? parsed.parserConfidence
       : 1.0;
-    const plansWithProvenance = parsed.plans.map((plan: any) =>
-      plan._provenance
-        ? plan
+    const plansWithProvenance = parsed.plans.map((plan: any) => {
+      const admissionConfidence = computePacketAdmissionConfidence(plan, parsed);
+      const packetWithProvenance = plan._provenance
+        ? { ...plan }
         : attachFallbackProvenance(plan, {
             source: "prometheus-normalization",
-            reason: "aggregate-parser-confidence",
-            confidence: parserConfidenceScore,
-            tag: parserConfidenceScore < QUARANTINE_CONFIDENCE_THRESHOLD
+            reason: "packet-admission-confidence",
+            confidence: admissionConfidence,
+            tag: admissionConfidence < QUARANTINE_CONFIDENCE_THRESHOLD
               ? FALLBACK_PROVENANCE_TAG.PARSER_FALLBACK
               : FALLBACK_PROVENANCE_TAG.DIRECT,
-          })
-    );
+          });
+      packetWithProvenance._admissionConfidence = admissionConfidence;
+      return packetWithProvenance;
+    });
     const quarantineResult = quarantineLowConfidencePackets(plansWithProvenance);
     if (quarantineResult.quarantined.length > 0) {
       parsed.plans = quarantineResult.allowed;
       parsed._quarantinedPacketCount = quarantineResult.quarantined.length;
       parsed._quarantinedPackets = quarantineResult.quarantined;
+      const minAdmissionConfidence = quarantineResult.quarantined.reduce((min: number, packet: any) => {
+        const confidence = typeof packet?._admissionConfidence === "number"
+          ? packet._admissionConfidence
+          : (typeof packet?._provenance?.confidence === "number" ? packet._provenance.confidence : 1.0);
+        return Math.min(min, confidence);
+      }, 1.0);
       await appendProgress(config,
         `[PROMETHEUS][QUARANTINE] ${quarantineResult.quarantined.length} low-confidence packet(s) excluded from dispatch ` +
-        `(parserConfidence=${parserConfidenceScore} < threshold=${QUARANTINE_CONFIDENCE_THRESHOLD})`
+        `(aggregateParserConfidence=${parserConfidenceScore}; minAdmissionConfidence=${minAdmissionConfidence} < threshold=${QUARANTINE_CONFIDENCE_THRESHOLD})`
       );
     } else {
       parsed.plans = plansWithProvenance;
@@ -9021,10 +9368,49 @@ export function attachFallbackProvenance(
 }
 
 /**
+ * Compute the packet-level admission confidence used by dispatch quarantine.
+ *
+ * Aggregate parserConfidence remains the analytics signal for the whole plan set,
+ * but quarantine must operate on the confidence of the specific surviving packet.
+ * Context penalties that are still applicable to the packet are subtracted from
+ * parserCoreConfidence. Diagnostics-freshness penalties apply only to packets that
+ * are explicitly stale-backed, or when every remaining packet is stale-backed.
+ */
+export function computePacketAdmissionConfidence(packet: any, parsed: any): number {
+  const parserCoreConfidence = typeof parsed?.parserCoreConfidence === "number"
+    ? parsed.parserCoreConfidence
+    : (typeof parsed?.parserConfidence === "number" ? parsed.parserConfidence : 1.0);
+  const penalties = Array.isArray(parsed?.parserConfidencePenalties)
+    ? parsed.parserConfidencePenalties
+    : [];
+
+  let applicableContextPenalty = 0;
+  for (const penalty of penalties) {
+    const component = String(penalty?.component || "").trim();
+    const delta = Number(penalty?.delta);
+    if (!PARSER_CONTEXT_PENALTY_COMPONENTS.has(component) || !Number.isFinite(delta) || delta >= 0) {
+      continue;
+    }
+
+    if (component === "diagnosticsFreshness") {
+      const packetIsStaleBacked = packet?._staleDiagnosticsGated === true || parsed?._allPlansStale === true;
+      if (!packetIsStaleBacked) {
+        continue;
+      }
+    }
+
+    applicableContextPenalty += -delta;
+  }
+
+  return Math.round(Math.max(0.1, parserCoreConfidence - applicableContextPenalty) * 100) / 100;
+}
+
+/**
  * Partition plan packets into allowed and quarantined sets.
  *
- * A packet is quarantined when its `_provenance.confidence` is present and
- * strictly less than `threshold`.  Packets without provenance metadata are
+ * A packet is quarantined when its admission confidence is strictly less than
+ * `threshold`. `_admissionConfidence` takes precedence; `_provenance.confidence`
+ * remains the backward-compatible fallback. Packets without either value are
  * treated as high-confidence (backward compatible with pre-provenance plans).
  *
  * Quarantined packets are tagged with `_quarantined: true` and a
@@ -9048,9 +9434,12 @@ export function quarantineLowConfidencePackets(
   const quarantined: any[] = [];
 
   for (const packet of packets) {
+    const admissionConfidence = packet?._admissionConfidence;
     const provConfidence = packet?._provenance?.confidence;
     // No provenance → assume max confidence (backward compatible)
-    const confidence = typeof provConfidence === "number" ? provConfidence : 1.0;
+    const confidence = typeof admissionConfidence === "number"
+      ? admissionConfidence
+      : (typeof provConfidence === "number" ? provConfidence : 1.0);
 
     if (confidence < threshold) {
       quarantined.push({

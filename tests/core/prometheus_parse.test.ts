@@ -45,6 +45,7 @@ import {
   NOVELTY_COLLAPSE_THRESHOLD,
   NOVELTY_SEED_DIMENSIONS,
   attachFallbackProvenance,
+  computePacketAdmissionConfidence,
   quarantineLowConfidencePackets,
   FALLBACK_PROVENANCE_TAG,
   QUARANTINE_CONFIDENCE_THRESHOLD,
@@ -59,6 +60,7 @@ import {
   enforceMandatoryFindingCoveragePackets,
   buildRoutingOutcomeSection,
   enforceParserContractBeforeNormalization,
+  evaluatePrometheusTopologyAdmission,
   ensurePersistedAnalysisTimestamps,
   validateCycleProofEvidenceSeams,
   buildTrustedMemoryShortlist,
@@ -120,6 +122,10 @@ import {
   type WaveTaskObject,
 } from "../../src/core/plan_contract_validator.js";
 import { auditReplayPolicySignals } from "../../src/core/parser_replay_harness.js";
+import {
+  buildPromptTruthMaintenanceSection,
+  buildPromptTruthMaintenanceSnapshot,
+} from "../../src/core/learning_policy_compiler.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = path.join(__dirname, "..", "fixtures");
@@ -697,6 +703,97 @@ describe("buildTrustedMemoryShortlist", () => {
     }, { requestedBy: "Jesus", includeLowTrust: true });
     assert.equal(shortlist.lessons.length, 1);
     assert.equal(shortlist.promptHints.length, 1);
+  });
+});
+
+describe("buildPromptTruthMaintenanceSnapshot", () => {
+  const liveSignals = {
+    latestMainCiConclusion: "success",
+    latestMainCiHealthy: true,
+    athenaTrackedFieldsDeepEquality: true,
+    preDispatchGovernanceGate: true,
+    preDispatchLaneDiversityGate: true,
+  };
+
+  it("retires contradicted lessons, research recommendations, and leadership priorities", () => {
+    const snapshot = buildPromptTruthMaintenanceSnapshot({
+      signals: liveSignals,
+      lessons: [
+        { id: "lesson-ci", lesson: "CI on main has been broken for 3 consecutive commits", severity: "critical" },
+        { id: "lesson-keep", lesson: "Keep regression tests deterministic and isolated" },
+      ],
+      researchRecommendations: [
+        {
+          id: "rec-implemented",
+          topic: "Verification gate",
+          summary: "Expand verification output to a weighted scorecard",
+          implementationStatus: "implemented_correctly",
+        },
+        "Move lane_diversity_gate check to pre-wave-1 validation before dispatch",
+      ],
+      leadershipPriorities: [
+        "Add governance gate token parser to propagate Athena corrections to dispatchBlockReason",
+        "Preserve benchmark telemetry reporting for future investigations",
+      ],
+    });
+
+    assert.deepEqual(snapshot.lessons.activeText, ["Keep regression tests deterministic and isolated"]);
+    assert.equal(snapshot.lessons.retired.length, 1);
+    assert.match(snapshot.lessons.retired[0].reason, /main-branch ci state is healthy/i);
+
+    assert.equal(snapshot.recommendations.activeText.length, 0);
+    assert.equal(snapshot.recommendations.retired.length, 2);
+    assert.equal(snapshot.recommendations.retired.some((entry) => /implemented or closed/i.test(entry.reason)), true);
+    assert.equal(snapshot.recommendations.retired.some((entry) => /lane diversity now blocks in pre-dispatch governance/i.test(entry.reason)), true);
+
+    assert.deepEqual(snapshot.priorities.activeText, ["Preserve benchmark telemetry reporting for future investigations"]);
+    assert.equal(snapshot.priorities.retired.length, 1);
+
+    const section = buildPromptTruthMaintenanceSection({
+      activeLessons: snapshot.lessons.activeText,
+      activeRecommendations: snapshot.recommendations.activeText,
+      activePriorities: snapshot.priorities.activeText,
+      retiredLessons: snapshot.lessons.retired.map(({ label, reason }) => ({ label, reason })),
+      retiredRecommendations: snapshot.recommendations.retired.map(({ label, reason }) => ({ label, reason })),
+      retiredPriorities: snapshot.priorities.retired.map(({ label, reason }) => ({ label, reason })),
+    });
+
+    assert.match(section, /Retired research recommendations:/);
+    assert.match(section, /Active stored lessons:\n1\. Keep regression tests deterministic and isolated/);
+    assert.match(section, /Retired stored lessons:\n1\. CI on main has been broken for 3 consecutive commits/i);
+  });
+
+  it("keeps unresolved research and leadership inputs active when live state does not contradict them", () => {
+    const snapshot = buildPromptTruthMaintenanceSnapshot({
+      signals: {
+        latestMainCiConclusion: "failure",
+        latestMainCiHealthy: false,
+        athenaTrackedFieldsDeepEquality: false,
+        preDispatchGovernanceGate: false,
+        preDispatchLaneDiversityGate: false,
+      },
+      lessons: [
+        { id: "lesson-active", lesson: "Worker sessions must persist canonical artifacts" },
+      ],
+      researchRecommendations: [
+        {
+          id: "rec-pending",
+          topic: "Worker runtime",
+          summary: "Require SESSION_ID for extension workers",
+          implementationStatus: "pending",
+        },
+      ],
+      leadershipPriorities: [
+        "Harden worker runtime session contracts",
+      ],
+    });
+
+    assert.deepEqual(snapshot.lessons.activeText, ["Worker sessions must persist canonical artifacts"]);
+    assert.equal(snapshot.lessons.retired.length, 0);
+    assert.deepEqual(snapshot.recommendations.activeText, ["Worker runtime: Require SESSION_ID for extension workers"]);
+    assert.equal(snapshot.recommendations.retired.length, 0);
+    assert.deepEqual(snapshot.priorities.activeText, ["Harden worker runtime session contracts"]);
+    assert.equal(snapshot.priorities.retired.length, 0);
   });
 });
 
@@ -3577,7 +3674,7 @@ describe("checkHighRiskPacketConfidence — high-risk low-confidence gate", () =
 });
 
 describe("enforceParserContractBeforeNormalization", () => {
-  it("treats null generatedAt/keyFindings/strategicNarrative as contract-missing and fails closed", async () => {
+  it("repairs null generatedAt/keyFindings/strategicNarrative on the initial pass", async () => {
     const invalid = {
       projectHealth: "healthy",
       requestBudget: { estimatedPremiumRequestsTotal: 1 },
@@ -3595,15 +3692,19 @@ describe("enforceParserContractBeforeNormalization", () => {
         return null;
       },
     });
-    assert.equal(result.ok, false);
-    assert.equal(result.retried, true);
-    assert.ok(violation.includes("generatedAt"));
-    assert.ok(violation.includes("keyFindings"));
-    assert.ok(violation.includes("strategicNarrative"));
+    assert.equal(result.ok, true);
+    assert.equal(result.retried, false);
+    assert.equal(violation, "");
+    assert.ok(!Number.isNaN(new Date(String(result.parsed.generatedAt)).getTime()));
+    assert.ok(String(result.parsed.keyFindings || "").length >= STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH);
+    assert.ok(String(result.parsed.strategicNarrative || "").length >= STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH);
   });
 
-  it("retries once when mandatory fields are missing and passes on repaired payload", async () => {
-    const initial = { plans: [{ task: "x", role: "evolution-worker" }] };
+  it("retries once when unrecoverable mandatory fields are invalid and passes on repaired payload", async () => {
+    const initial = {
+      projectHealth: "unknown",
+      plans: [{ task: "x", role: "evolution-worker" }],
+    };
     const repaired = {
       projectHealth: "degraded",
       requestBudget: { estimatedPremiumRequestsTotal: 2 },
@@ -3620,23 +3721,26 @@ describe("enforceParserContractBeforeNormalization", () => {
       },
       async buildRetryCandidate(diff: string) {
         called += 1;
-        assert.ok(diff.includes("projectHealth"));
-        assert.ok(diff.includes("requestBudget.estimatedPremiumRequestsTotal"));
-        assert.ok(diff.includes("generatedAt"));
-        assert.ok(diff.includes("keyFindings"));
-        assert.ok(diff.includes("strategicNarrative"));
+        assert.ok(diff.includes("projectHealth=unknown"));
+        assert.doesNotMatch(diff, /requestBudget\.estimatedPremiumRequestsTotal/);
+        assert.doesNotMatch(diff, /generatedAt/);
+        assert.doesNotMatch(diff, /keyFindings/);
+        assert.doesNotMatch(diff, /strategicNarrative/);
         return repaired;
       },
     });
     assert.equal(called, 1);
-    assert.ok(seenDiff.includes("missing=[projectHealth"));
+    assert.ok(seenDiff.includes("projectHealth=unknown"));
     assert.equal(result.ok, true);
     assert.equal(result.retried, true);
     assert.equal(result.parsed.projectHealth, "degraded");
   });
 
   it("returns parser contract violation shape after second failure", async () => {
-    const initial = { plans: [{ task: "x", role: "evolution-worker" }] };
+    const initial = {
+      projectHealth: "unknown",
+      plans: [{ task: "x", role: "evolution-worker" }],
+    };
     const stillInvalid = {
       projectHealth: "unknown",
       requestBudget: { estimatedPremiumRequestsTotal: Number.NaN },
@@ -3658,10 +3762,40 @@ describe("enforceParserContractBeforeNormalization", () => {
     assert.equal(result.retried, true);
     assert.ok(violation.includes("projectHealth=unknown"));
     assert.ok(String(result.violationReason || "").includes("projectHealth=unknown"));
-    assert.ok(String(result.violationReason || "").includes("requestBudget.estimatedPremiumRequestsTotal=NaN"));
-    assert.ok(String(result.violationReason || "").includes("generatedAt"));
-    assert.ok(String(result.violationReason || "").includes("keyFindings"));
-    assert.ok(String(result.violationReason || "").includes("strategicNarrative"));
+    assert.doesNotMatch(String(result.violationReason || ""), /requestBudget\.estimatedPremiumRequestsTotal=NaN/);
+    assert.doesNotMatch(String(result.violationReason || ""), /generatedAt/);
+    assert.doesNotMatch(String(result.violationReason || ""), /keyFindings/);
+    assert.doesNotMatch(String(result.violationReason || ""), /strategicNarrative/);
+  });
+
+  it("repairs malformed retry payloads using raw narrative fallbacks", async () => {
+    const initial = {
+      projectHealth: "unknown",
+      plans: [{ task: "x", role: "evolution-worker" }],
+    };
+    const malformedRetry = {
+      projectHealth: "degraded",
+      generatedAt: "",
+      requestBudget: {},
+      keyFindings: {
+        summary: "Stabilize parser contract enforcement before normalization.",
+      },
+      strategicNarrative: "",
+      analysis: "Stabilize parser contract enforcement before normalization.\n\nKeep retry outputs deterministic and preserve request budgets.",
+      plans: [{ task: "x", acceptance_criteria: ["passes"], role: "evolution-worker" }],
+    };
+    const result = await enforceParserContractBeforeNormalization(initial, {
+      async buildRetryCandidate() {
+        return malformedRetry;
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.retried, true);
+    assert.equal(result.parsed.projectHealth, "degraded");
+    assert.ok(!Number.isNaN(new Date(String(result.parsed.generatedAt)).getTime()));
+    assert.equal(result.parsed.requestBudget.estimatedPremiumRequestsTotal, 3);
+    assert.equal(result.parsed.keyFindings, "Stabilize parser contract enforcement before normalization.");
+    assert.equal(result.parsed.strategicNarrative, "Keep retry outputs deterministic and preserve request budgets.");
   });
 
   it("keeps valid mandatory fields on first pass without retry or penalties", async () => {
@@ -3701,27 +3835,26 @@ describe("enforceParserContractBeforeNormalization", () => {
     assert.equal(called, 0);
   });
 
-  it("rejects keyFindings of non-string type (array) at generation boundary — triggers retry", async () => {
+  it("repairs keyFindings arrays on the initial pass without retry", async () => {
     const arrayKeyFindings = {
       projectHealth: "healthy",
       requestBudget: { estimatedPremiumRequestsTotal: 1 },
       generatedAt: "2026-04-04T12:00:00.000Z",
-      // Array instead of string — must be treated as an invalid schema type.
       keyFindings: ["Finding 1: dispatch bottleneck", "Finding 2: missing AC"],
       strategicNarrative: "Strategic narrative — dispatch reliability must be improved.",
       plans: [{ task: "Fix dispatch", acceptance_criteria: ["tests pass"] }],
     };
-    let diffSeen = "";
+    let called = 0;
     const result = await enforceParserContractBeforeNormalization(arrayKeyFindings, {
-      onRetryDiff(diff: string) { diffSeen = diff; },
-      async buildRetryCandidate() { return null; },
+      async buildRetryCandidate() {
+        called += 1;
+        return null;
+      },
     });
-    assert.equal(result.ok, false, "non-string keyFindings must fail contract gate");
-    assert.equal(result.retried, true);
-    assert.ok(
-      diffSeen.includes("keyFindings"),
-      `retry diff must mention keyFindings; got: ${diffSeen}`,
-    );
+    assert.equal(result.ok, true);
+    assert.equal(result.retried, false);
+    assert.equal(called, 0);
+    assert.equal(result.parsed.keyFindings, "Finding 1: dispatch bottleneck Finding 2: missing AC");
   });
 
   it("rejects payload where all plans lack acceptance_criteria at generation boundary", async () => {
@@ -3788,6 +3921,32 @@ describe("enforceParserContractBeforeNormalization", () => {
     assert.equal(called, 0);
     assert.equal(result.parsed.keyFindings, "Stabilize leadership freshness arbitration.");
     assert.equal(result.parsed.strategicNarrative, "Keep the plan deterministic and contradiction-aware.");
+  });
+
+  it("repairs recoverable strategic field objects on the initial pass without retry", async () => {
+    const recoverable = {
+      projectHealth: "healthy",
+      requestBudget: { estimatedPremiumRequestsTotal: 2 },
+      generatedAt: "2026-04-04T12:00:00.000Z",
+      keyFindings: {
+        summary: "Dispatch planning can recover parser contract fields from structured findings.",
+      },
+      strategicNarrative: "",
+      analysis: "Dispatch planning can recover parser contract fields from structured findings.\n\nKeep the first-pass payload dispatchable without burning a retry.",
+      plans: [{ task: "x", acceptance_criteria: ["passes"], role: "evolution-worker" }],
+    };
+    let called = 0;
+    const result = await enforceParserContractBeforeNormalization(recoverable, {
+      async buildRetryCandidate() {
+        called += 1;
+        return null;
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.retried, false);
+    assert.equal(called, 0);
+    assert.equal(result.parsed.keyFindings, "Dispatch planning can recover parser contract fields from structured findings.");
+    assert.equal(result.parsed.strategicNarrative, "Keep the first-pass payload dispatchable without burning a retry.");
   });
 
   it("passes with zero plans (no acceptance_criteria obligation when plans array is empty)", async () => {
@@ -4634,6 +4793,20 @@ describe("quarantineLowConfidencePackets", () => {
     assert.equal(quarantined.length, 1);
   });
 
+  it("uses packet admission confidence ahead of aggregate provenance confidence", () => {
+    const packets = [
+      {
+        task: "fresh survivor",
+        _admissionConfidence: 0.8,
+        _provenance: { confidence: 0.3, tag: "parser-fallback", attachedAt: new Date().toISOString() },
+      },
+    ];
+
+    const { allowed, quarantined } = quarantineLowConfidencePackets(packets);
+    assert.equal(allowed.length, 1);
+    assert.equal(quarantined.length, 0);
+  });
+
   it("QUARANTINE_CONFIDENCE_THRESHOLD is exported as 0.5", () => {
     assert.equal(QUARANTINE_CONFIDENCE_THRESHOLD, 0.5);
   });
@@ -4663,6 +4836,20 @@ describe("filterQuarantinedPlans", () => {
     assert.equal(quarantined.length, 1);
     assert.equal(quarantined[0].task, "low");
     assert.equal(dispatchable.length, 1);
+  });
+
+  it("prefers _admissionConfidence over aggregate provenance confidence", () => {
+    const plans = [
+      {
+        task: "dispatchable survivor",
+        _admissionConfidence: 0.8,
+        _provenance: { confidence: 0.3, tag: "parser-fallback", attachedAt: new Date().toISOString() },
+      },
+    ];
+
+    const { dispatchable, quarantined } = filterQuarantinedPlans(plans);
+    assert.equal(dispatchable.length, 1);
+    assert.equal(quarantined.length, 0);
   });
 
   it("allows plans without provenance (backward compatible)", () => {
@@ -4734,6 +4921,7 @@ describe("quarantine wiring — low-confidence packets excluded from dispatchabl
     assert.equal(isPacketQuarantined({ task: "x" }), false);
     assert.equal(isPacketQuarantined({ task: "x", _provenance: { confidence: 0.3 } }), true);
     assert.equal(isPacketQuarantined({ task: "x", _provenance: { confidence: 0.8 } }), false);
+    assert.equal(isPacketQuarantined({ task: "x", _admissionConfidence: 0.8, _provenance: { confidence: 0.3 } }), false);
   });
 });
 
@@ -5514,6 +5702,45 @@ describe("applyDiagnosticsFreshnessTruthToPlanning", () => {
       parsed.parserConfidencePenalties.some((p: any) => p.component === "diagnosticsFreshness"),
       "diagnosticsFreshness penalty must be emitted",
     );
+  });
+});
+
+describe("computePacketAdmissionConfidence", () => {
+  it("keeps independently evidenced packets dispatchable when only stale diagnostics lower aggregate confidence", () => {
+    const parsed = {
+      parserCoreConfidence: 0.8,
+      parserContextPenalty: 0.4,
+      parserConfidence: 0.4,
+      parserConfidencePenalties: [
+        { component: "diagnosticsFreshness", delta: -0.4 },
+      ],
+    };
+
+    const freshPacket = {
+      task: "dispatchable plan",
+      implementationEvidence: ["tests/core/prometheus_parse.test.ts"],
+    };
+    const stalePacket = {
+      task: "stale-backed plan",
+      _staleDiagnosticsGated: true,
+    };
+
+    assert.equal(computePacketAdmissionConfidence(freshPacket, parsed), 0.8);
+    assert.equal(computePacketAdmissionConfidence(stalePacket, parsed), 0.4);
+  });
+
+  it("keeps non-diagnostics context penalties active for every packet", () => {
+    const parsed = {
+      parserCoreConfidence: 0.9,
+      parserContextPenalty: 0.35,
+      parserConfidence: 0.55,
+      parserConfidencePenalties: [
+        { component: "bottleneckCoverage", delta: -0.15 },
+        { component: "architectureDrift", delta: -0.2 },
+      ],
+    };
+
+    assert.equal(computePacketAdmissionConfidence({ task: "any plan" }, parsed), 0.55);
   });
 });
 
@@ -7532,6 +7759,111 @@ describe("high-uncertainty candidate planning wiring", () => {
     ));
   });
 
+  it("rejects monocultural candidate sets when dispatch requires two distinct lanes", () => {
+    const rawParsed = {
+      candidateSets: [
+        {
+          label: "mono-governance",
+          plans: [
+            {
+              task: "Harden lane-diversity contract wording",
+              role: "governance-worker",
+              wave: 1,
+              target_files: ["src/core/orchestrator.ts", "tests/core/orchestrator_governance_gate.test.ts"],
+              acceptance_criteria: [
+                "dispatch block reason remains deterministic with >= 2 gate cases",
+                "npm test -- tests/core/orchestrator_governance_gate.test.ts exits with code 0",
+              ],
+              verification: "npm test -- tests/core/orchestrator_governance_gate.test.ts",
+              capacityDelta: 0.2,
+              requestROI: 1.4,
+              leverage_rank: ["task-quality", "worker-specialization"],
+              before_state: "planner emits monocultural governance packets",
+              after_state: "planner keeps dispatchable lane mix",
+              riskLevel: "low",
+            },
+            {
+              task: "Retire stale governance-only finding",
+              role: "governance-worker",
+              wave: 2,
+              target_files: ["src/core/governance_contract.ts", "tests/core/orchestrator_gate_precedence.test.ts"],
+              acceptance_criteria: [
+                "retirement path is proven in >= 1 targeted test case",
+                "npm test -- tests/core/orchestrator_gate_precedence.test.ts exits with code 0",
+              ],
+              verification: "npm test -- tests/core/orchestrator_gate_precedence.test.ts",
+              capacityDelta: 0.18,
+              requestROI: 1.3,
+              leverage_rank: ["task-quality", "worker-specialization"],
+              before_state: "stale governance debt reappears in planning",
+              after_state: "planner avoids duplicate governance-only packets",
+              riskLevel: "low",
+            },
+          ],
+        },
+        {
+          label: "diverse-pair",
+          plans: [
+            {
+              task: "Fail closed on specialization no-signal topology",
+              role: "governance-worker",
+              wave: 1,
+              target_files: ["src/core/capability_pool.ts", "src/core/orchestrator.ts"],
+              acceptance_criteria: [
+                "no-signal specialization cannot pass on optimism alone with >= 1 telemetry event",
+                "npm test -- tests/core/orchestrator_specialization_gate.test.ts exits with code 0",
+              ],
+              verification: "npm test -- tests/core/orchestrator_specialization_gate.test.ts",
+              capacityDelta: 0.24,
+              requestROI: 1.5,
+              leverage_rank: ["task-quality", "worker-specialization"],
+              before_state: "missing lane signals still admit specialization",
+              after_state: "specialization requires positive evidence",
+              riskLevel: "low",
+            },
+            {
+              task: "Repair first-pass parser contract recovery",
+              role: "integration-worker",
+              wave: 2,
+              target_files: ["src/core/prometheus.ts", "tests/core/prometheus_parse.test.ts"],
+              acceptance_criteria: [
+                "recoverable strategic fields pass first-pass parser contract without retry with >= 1 targeted test case",
+                "npm test -- tests/core/prometheus_parse.test.ts exits with code 0",
+              ],
+              verification: "npm test -- tests/core/prometheus_parse.test.ts",
+              capacityDelta: 0.22,
+              requestROI: 1.45,
+              leverage_rank: ["task-quality", "worker-specialization"],
+              before_state: "recoverable parser fields still burn retries",
+              after_state: "first-pass parser recovery keeps planning dispatchable",
+              riskLevel: "low",
+            },
+          ],
+        },
+      ],
+      projectHealth: "needs-work",
+      requestBudget: { estimatedPremiumRequestsTotal: 2, errorMarginPercent: 15, hardCapTotal: 3 },
+      generatedAt: "2026-04-13T00:00:00.000Z",
+      keyFindings: "Candidate selection must reject same-lane plan sets when dispatch requires lane diversity.",
+      strategicNarrative: "Prometheus should keep only topology-admissible candidate sets before Athena review.",
+    };
+
+    const selection = selectPrometheusCandidatePlanSet(rawParsed, { raw: "" }, {
+      diagnosticsFreshnessAdmission: {
+        allFresh: true,
+        staleSources: [],
+        freshnessReasons: [],
+      },
+      topologyMinLanes: 2,
+    });
+
+    assert.equal(selection.usedSelection, true);
+    assert.equal(selection.selectedLabel, "diverse-pair");
+    assert.ok(selection.candidateSummaries.some((summary) =>
+      summary.label === "mono-governance" && summary.admittedPlanCount === 0
+    ));
+  });
+
   it("builds an explicit candidateSets JSON contract for the prompt", () => {
     const section = buildCandidateGenerationSection({ minCandidates: 2, maxCandidates: 3 });
     assert.match(section.content, /candidateSets/i);
@@ -7675,6 +8007,32 @@ describe("CANDIDATE_GENERATION_SECTION", () => {
   it("content references candidate generation and rubric constraints", () => {
     assert.ok(/candidate/i.test(CANDIDATE_GENERATION_SECTION.content), "mentions candidates");
     assert.ok(/acceptance.criteria|verification/i.test(CANDIDATE_GENERATION_SECTION.content), "mentions criteria");
+  });
+});
+
+describe("evaluatePrometheusTopologyAdmission", () => {
+  it("blocks plan sets that keep two plans in a single lane when minLanes is two", () => {
+    const result = evaluatePrometheusTopologyAdmission([
+      { task: "A", role: "governance-worker", wave: 1 },
+      { task: "B", role: "governance-worker", wave: 2 },
+    ], {
+      minLanes: 2,
+    });
+
+    assert.equal(result.admitted, false);
+    assert.equal(result.laneCount, 1);
+    assert.match(result.reason, /worker_topology_insufficient/);
+  });
+
+  it("allows plan sets below the lane floor to remain dispatchable", () => {
+    const result = evaluatePrometheusTopologyAdmission([
+      { task: "A", role: "governance-worker", wave: 1 },
+    ], {
+      minLanes: 2,
+    });
+
+    assert.equal(result.admitted, true);
+    assert.equal(result.planCount, 1);
   });
 });
 

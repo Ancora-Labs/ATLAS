@@ -42,6 +42,7 @@ import {
   extractSessionsFromCycleRecord,
   filterStaleWorkerSessions,
   readCycleAnalytics,
+  extractLatestBenchmarkRecommendations,
 } from "./cycle_analytics.js";
 import { buildJesusStrategyBriefArtifact } from "./plan_lifecycle_contract.js";
 import { summarizeAgentControlPlane } from "./agent_control_plane.js";
@@ -49,6 +50,11 @@ import {
   AUTONOMY_EXECUTION_GATE_REASON_CODE,
   resolveAutonomyExecutionGateBlockReason,
 } from "./governance_contract.js";
+import {
+  buildPromptTruthMaintenanceSection,
+  buildPromptTruthMaintenanceSnapshot,
+  collectPromptTruthSignals,
+} from "./learning_policy_compiler.js";
 
 // ── CI system-learning debt detection ────────────────────────────────────────
 
@@ -94,6 +100,21 @@ function normalizeDirectiveStringList(value: unknown): string[] {
     return [value.trim()];
   }
   return [];
+}
+
+function extractKnowledgeMemoryLessons(knowledgeMemory: unknown): unknown[] {
+  if (!knowledgeMemory || typeof knowledgeMemory !== "object" || Array.isArray(knowledgeMemory)) return [];
+  const record = knowledgeMemory as Record<string, unknown>;
+  const workingLessons = record.working && typeof record.working === "object" && Array.isArray((record.working as Record<string, unknown>).lessons)
+    ? (record.working as Record<string, unknown>).lessons as unknown[]
+    : [];
+  const episodicLessons = record.episodic && typeof record.episodic === "object" && Array.isArray((record.episodic as Record<string, unknown>).lessons)
+    ? (record.episodic as Record<string, unknown>).lessons as unknown[]
+    : [];
+  const flatLessons = Array.isArray(record.lessons) ? record.lessons as unknown[] : [];
+  return Number(record.schemaVersion) >= 2
+    ? [...workingLessons, ...episodicLessons]
+    : flatLessons;
 }
 
 function buildAutonomyDebtPriority(reasonCode: string, blockReason: string | null): string {
@@ -1095,6 +1116,7 @@ export async function runJesusCycle(config) {
   const sessionMeta = { source: sessionLoadResult.source, cycleId: sessionLoadResult.cycleId };
   const healthFindings = await runSystemHealthAudit(config, githubState, AthenaCoordination, sessions, sessionMeta);
   chatLog(stateDir, jesusName, `[LIVE] health audit complete findings=${healthFindings.length}`);
+  let promptHealthFindings: typeof healthFindings;
 
   // Always persist the findings file so Prometheus can perform freshness-aware
   // normalization.  Include latestMainCiConclusion and latestMainCiUpdatedAt so
@@ -1134,6 +1156,7 @@ export async function runJesusCycle(config) {
         activeFindings.push(f);
       }
     }
+    promptHealthFindings = activeFindings;
 
     const healthFindingsPayload: Record<string, unknown> = {
       findings: activeFindings,
@@ -1309,6 +1332,49 @@ export async function runJesusCycle(config) {
   Agent control plane: active=${agentControlSummary.activeAgents.join(", ") || "none"} completed=${agentControlSummary.completionCount} failed=${agentControlSummary.failureCount} handoffs=${agentControlSummary.handoffCount}`;
   } catch { /* advisory only */ }
 
+  let truthMaintenanceSection = "";
+  try {
+    const [knowledgeMemory, researchSynthesis, benchmarkData] = await Promise.all([
+      readJson(path.join(stateDir, "knowledge_memory.json"), null),
+      readJson(path.join(stateDir, "research_synthesis.json"), null),
+      readJson(path.join(stateDir, "benchmark_ground_truth.json"), null),
+    ]);
+    const truthSignals = await collectPromptTruthSignals(process.cwd(), {
+      latestMainCiConclusion: githubState.latestMainCi?.conclusion,
+    });
+    if (truthSignals.errors.length > 0) {
+      await appendProgress(
+        config,
+        `[JESUS][WARN] Truth-maintenance signal collection degraded: ${truthSignals.errors.join("; ")}`,
+      );
+    }
+    const plannerPriorityActions = Array.isArray((researchSynthesis as any)?.plannerSignals?.priorityActions)
+      ? (researchSynthesis as any).plannerSignals.priorityActions
+      : [];
+    const truthSnapshot = buildPromptTruthMaintenanceSnapshot({
+      signals: truthSignals.signals,
+      lessons: extractKnowledgeMemoryLessons(knowledgeMemory),
+      researchRecommendations: [
+        ...extractLatestBenchmarkRecommendations(benchmarkData),
+        ...plannerPriorityActions,
+      ],
+      leadershipPriorities: Array.isArray(lastDirective?.priorities) ? lastDirective.priorities : [],
+    });
+    truthMaintenanceSection = buildPromptTruthMaintenanceSection({
+      activeLessons: truthSnapshot.lessons.activeText,
+      activeRecommendations: truthSnapshot.recommendations.activeText,
+      activePriorities: truthSnapshot.priorities.activeText,
+      retiredLessons: truthSnapshot.lessons.retired.map(({ label, reason }) => ({ label, reason })),
+      retiredRecommendations: truthSnapshot.recommendations.retired.map(({ label, reason }) => ({ label, reason })),
+      retiredPriorities: truthSnapshot.priorities.retired.map(({ label, reason }) => ({ label, reason })),
+    }, { maxActivePerKind: 4, maxRetiredPerKind: 4 });
+  } catch (truthErr) {
+    await appendProgress(
+      config,
+      `[JESUS][WARN] Failed to assemble truth-maintenance prompt context: ${String((truthErr as Error)?.message || truthErr)}`,
+    );
+  }
+
   const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
 
 ## CURRENT SYSTEM STATE
@@ -1361,9 +1427,15 @@ ${capacityTrendBlock}
 ${realizedExecutionBlock}
 
 **Hierarchical System Health Audit (detected by YOU — issues workers/Athena may have missed):**
-${formatHealthAuditFindings(healthFindings)}
-${healthFindings.filter(f => f.severity === "critical").length > 0 ? "\n⚠️ CRITICAL FINDINGS ABOVE — these MUST be addressed. Workers and Athena missed them." : ""}
-${healthFindings.filter(f => f.area === "capability-gap").length > 0 ? "\n⚠️ CAPABILITY GAPS DETECTED — the system is missing abilities that caused failures. Consider requesting Prometheus to plan fixes." : ""}
+${formatHealthAuditFindings(promptHealthFindings)}
+${promptHealthFindings.filter(f => f.severity === "critical").length > 0 ? "\n⚠️ CRITICAL FINDINGS ABOVE — these MUST be addressed. Workers and Athena missed them." : ""}
+${promptHealthFindings.filter(f => f.area === "capability-gap").length > 0 ? "\n⚠️ CAPABILITY GAPS DETECTED — the system is missing abilities that caused failures. Consider requesting Prometheus to plan fixes." : ""}
+${truthMaintenanceSection ? `\n\n${truthMaintenanceSection}` : ""}
+
+**Leadership Fast Path Rules:**
+  - Use the supplied state artifacts, health findings, GitHub state, and prior analysis as the source of truth.
+  - Do not run repository-wide validation commands such as npm test, npm run lint, or npm run typecheck during Jesus analysis.
+  - If CI/test health is unclear, say so explicitly and delegate verification work to Prometheus/workers instead of re-running the full suite here.
 
 **Available Workers:**
 ${workersList}`;
@@ -1694,7 +1766,7 @@ ${workersList}`;
 
   // ── Capacity Delta Report (Packet 13) ──────────────────────────────────
   // Extract top bottlenecks and projected gains from Jesus's analysis.
-  const capacityDelta = buildCapacityDeltaReport(d, healthFindings, {
+  const capacityDelta = buildCapacityDeltaReport(d, promptHealthFindings, {
     parserConfidence, planCount, optimizerStatus, budgetUsed, budgetLimit
   });
 
@@ -1752,8 +1824,8 @@ ${workersList}`;
     };
   }
 
-  const ciFastlaneRequired = hasCiSystemLearningDebt(healthFindings);
-  const autonomyDebtFinding = findAutonomyDebtHealthFinding(healthFindings);
+  const ciFastlaneRequired = hasCiSystemLearningDebt(promptHealthFindings);
+  const autonomyDebtFinding = findAutonomyDebtHealthFinding(promptHealthFindings);
   if (autonomyDebtFinding) {
     const autonomyExecutionDebt = {
       active: true,

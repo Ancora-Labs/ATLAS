@@ -2986,6 +2986,41 @@ export const BENCHMARK_SCHEMA = Object.freeze({
   ]),
 });
 
+const RESOLVED_BENCHMARK_RECOMMENDATION_STATUSES = new Set([
+  "implemented",
+  "implemented_correctly",
+  "retired",
+]);
+
+export function extractLatestBenchmarkRecommendations(benchmarkData: unknown): Record<string, unknown>[] {
+  if (!benchmarkData || typeof benchmarkData !== "object" || Array.isArray(benchmarkData)) return [];
+  const entries = Array.isArray((benchmarkData as Record<string, unknown>).entries)
+    ? (benchmarkData as Record<string, unknown>).entries as unknown[]
+    : [];
+  if (entries.length === 0) return [];
+  const latest = entries[0];
+  if (!latest || typeof latest !== "object" || Array.isArray(latest)) return [];
+  const recommendations = Array.isArray((latest as Record<string, unknown>).recommendations)
+    ? (latest as Record<string, unknown>).recommendations as unknown[]
+    : [];
+  return recommendations
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object" && !Array.isArray(entry));
+}
+
+export function extractActiveBenchmarkRecommendations(benchmarkData: unknown): Record<string, unknown>[] {
+  return extractLatestBenchmarkRecommendations(benchmarkData)
+    .filter((recommendation) => !isResolvedBenchmarkRecommendation(recommendation));
+}
+
+export function isResolvedBenchmarkRecommendation(recommendation: unknown): boolean {
+  if (!recommendation || typeof recommendation !== "object" || Array.isArray(recommendation)) return false;
+  const record = recommendation as Record<string, unknown>;
+  const implementationStatus = String(record.implementationStatus || "").trim().toLowerCase();
+  if (RESOLVED_BENCHMARK_RECOMMENDATION_STATUSES.has(implementationStatus)) return true;
+  if (record.ciClosed === true) return true;
+  return String(record.mergedSha || "").trim().length > 0;
+}
+
 /**
  * Evaluate benchmark ground-truth entries against a cycle outcome.
  *
