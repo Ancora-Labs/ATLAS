@@ -533,11 +533,41 @@ export interface RouteROIEntry {
   lineage: InterventionLineageContract | null;
   /** Deterministic join key derived from the lineage contract. */
   lineageJoinKey: string | null;
+  /** Stable prompt family key used for cache/request-efficiency joins. */
+  promptFamilyKey?: string | null;
   taskKind?: string | null;
   role?: string | null;
   cycleId?: string | null;
   interventionId?: string | null;
   routingReasonCode?: string | null;
+}
+
+function normalizeRoutingJoinTaskKind(value: unknown): string {
+  return String(value || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
+}
+
+function resolveRoutingLineageJoinKey(
+  contract: InterventionLineageContract,
+  hints: { taskKind?: unknown; role?: unknown } = {},
+): string | null {
+  const taskKind = normalizeRoutingJoinTaskKind(hints.taskKind ?? contract.taskKind);
+  const role = String(hints.role ?? contract.role ?? "").trim().toLowerCase();
+  if (
+    contract.promptFamilyKey
+    && (
+      taskKind === "planning"
+      || taskKind === "plan-review"
+      || taskKind === "review"
+      || taskKind === "analysis"
+      || role === "prometheus"
+      || role === "athena"
+      || role === "jesus"
+    )
+  ) {
+    return `prompt-family:${contract.promptFamilyKey}`;
+  }
+  return resolveInterventionLineageJoinKey(contract)
+    || (contract.promptFamilyKey ? `prompt-family:${contract.promptFamilyKey}` : null);
 }
 
 /**
@@ -564,6 +594,7 @@ export async function appendRouteROIEntry(
     taskId: entry?.taskId ?? null,
     cycleId: entry?.cycleId ?? null,
     taskKind: entry?.taskKind ?? null,
+    promptFamilyKey: entry?.promptFamilyKey ?? null,
     model: entry?.model ?? null,
     role: entry?.role ?? null,
     interventionId: entry?.interventionId ?? null,
@@ -584,7 +615,11 @@ export async function appendRouteROIEntry(
     realizedAt:      entry.realizedAt ?? null,
     lineageId:       lineage.lineageId,
     lineage,
-    lineageJoinKey:  resolveInterventionLineageJoinKey(lineage),
+    lineageJoinKey:  resolveRoutingLineageJoinKey(lineage, {
+      taskKind: entry.taskKind ?? lineage.taskKind,
+      role: entry.role ?? lineage.role,
+    }),
+    promptFamilyKey: entry.promptFamilyKey ?? lineage.promptFamilyKey,
     taskKind:        entry.taskKind ?? lineage.taskKind,
     role:            entry.role ?? lineage.role,
     cycleId:         entry.cycleId ?? lineage.cycleId,

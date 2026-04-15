@@ -300,6 +300,16 @@ describe("prompt_compiler", () => {
       assert.equal(result[0].cacheable, true);
     });
 
+    it("marks invariant prompt sections as cacheable without extra names", () => {
+      const result = markCacheableSegments([
+        {
+          ...section("evolution-directive", "Stable planning contract"),
+          partitionBudget: PROMPT_BUDGET_PARTITION.INVARIANT,
+        },
+      ]);
+      assert.equal(result[0].cacheable, true);
+    });
+
     it("preserves sections already marked cacheable: true", () => {
       const sections = [{ name: "custom", content: "text", cacheable: true }];
       const result = markCacheableSegments(sections);
@@ -332,6 +342,23 @@ describe("prompt_compiler", () => {
         section("role", "You are Prometheus."),
         section("context", "dynamic cycle input B"),
       ]);
+      assert.equal(
+        derivePromptFamilyKey(first, { salt: "test" }),
+        derivePromptFamilyKey(second, { salt: "test" }),
+      );
+    });
+
+    it("keeps prompt-family key stable when cacheable invariant section order changes", () => {
+      const invariantA = {
+        ...section("output-format", "Always emit structured packets."),
+        partitionBudget: PROMPT_BUDGET_PARTITION.INVARIANT,
+      };
+      const invariantB = {
+        ...section("evolution-directive", "Optimize for capacity growth."),
+        partitionBudget: PROMPT_BUDGET_PARTITION.INVARIANT,
+      };
+      const first = markCacheableSegments([invariantA, invariantB, section("context", "dynamic A")]);
+      const second = markCacheableSegments([invariantB, invariantA, section("context", "dynamic B")]);
       assert.equal(
         derivePromptFamilyKey(first, { salt: "test" }),
         derivePromptFamilyKey(second, { salt: "test" }),
@@ -385,6 +412,7 @@ describe("prompt_compiler", () => {
       assert.equal(normalized.cacheableSegments, 2);
       assert.equal(normalized.estimatedSavedTokens, 0);
     });
+
   });
 
   describe("compileRankedContextSection()", () => {

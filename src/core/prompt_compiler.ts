@@ -490,6 +490,21 @@ export const CACHE_STABLE_SECTION_NAMES: ReadonlySet<string> = new Set([
   "leverage-ranked-alternatives",
 ]);
 
+function isInvariantPromptSection(section: { partitionBudget?: string; required?: boolean } | null | undefined): boolean {
+  return section?.partitionBudget === PROMPT_BUDGET_PARTITION.INVARIANT;
+}
+
+function isCacheablePromptSection(
+  section: { name?: string; cacheable?: boolean; partitionBudget?: string; required?: boolean } | null | undefined,
+  extraStableNames: ReadonlySet<string>,
+): boolean {
+  const name = String(section?.name || "").toLowerCase();
+  return CACHE_STABLE_SECTION_NAMES.has(name)
+    || extraStableNames.has(name)
+    || section?.cacheable === true
+    || isInvariantPromptSection(section);
+}
+
 /**
  * Mark prompt sections as cache-eligible based on naming heuristics.
  *
@@ -513,8 +528,7 @@ export function markCacheableSegments(
 ): Array<{ name: string; content: string; cacheable: boolean; [key: string]: any }> {
   const extra = new Set((opts.stableNames || []).map(n => String(n).toLowerCase()));
   return (sections || []).map(s => {
-    const name = String(s?.name || "").toLowerCase();
-    const isStable = CACHE_STABLE_SECTION_NAMES.has(name) || extra.has(name) || s?.cacheable === true;
+    const isStable = isCacheablePromptSection(s, extra);
     return { ...s, cacheable: isStable };
   });
 }
@@ -531,16 +545,18 @@ export function derivePromptFamilyKey(
   opts: { stableOnly?: boolean; salt?: string } = {}
 ): string {
   const stableOnly = opts.stableOnly !== false;
+  const emptyStableNames = new Set<string>();
   const normalized = (sections || [])
     .filter((section) => {
       if (!section || typeof section.content !== "string") return false;
       if (section.content.trim().length === 0) return false;
-      return stableOnly ? section.cacheable === true : true;
+      return stableOnly ? isCacheablePromptSection(section, emptyStableNames) : true;
     })
     .map((section) => ({
       name: String(section.name || "").trim().toLowerCase(),
       content: String(section.content || "").replace(/\s+/g, " ").trim(),
-    }));
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name) || left.content.localeCompare(right.content));
 
   const payload = JSON.stringify({
     salt: String(opts.salt || "prompt-family"),

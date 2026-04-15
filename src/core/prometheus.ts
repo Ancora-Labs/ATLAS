@@ -7385,18 +7385,29 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
     ],
     PROMETHEUS_CYCLE_DELTA_SECTION_NAMES
   );
+  const markedStaticPromptSections = _markCacheableSegments(
+    Object.values(PROMETHEUS_STATIC_SECTIONS).map((promptSection) => ({ ...promptSection })),
+    {
+      stableNames: Array.from(PROMETHEUS_STATIC_SECTION_NAMES),
+    },
+  );
+  const filteredStaticPromptSections = markedStaticPromptSections.filter(
+    (promptSection) => String(promptSection.content || "").trim().length > 0,
+  );
   const markedCycleDelta = _markCacheableSegments(cycleDeltaSections, {
     stableNames: Array.from(PROMETHEUS_STATIC_SECTION_NAMES),
   });
   const filteredCycleDelta = markedCycleDelta.filter(s => String(s.content || "").trim().length > 0);
+  const promptTelemetrySections = [...filteredStaticPromptSections, ...filteredCycleDelta];
+  const promptFamilyLabel = `prometheus-${planningMode || PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION}`;
   let promptLineage = null;
-  if (filteredCycleDelta.length > 0) {
-    const cacheableSections = filteredCycleDelta.filter((section) => section.cacheable === true);
+  if (promptTelemetrySections.length > 0) {
+    const cacheableSections = promptTelemetrySections.filter((section) => section.cacheable === true);
     const estimatedSavedTokens = cacheableSections.reduce(
       (sum, section) => sum + estimateTokens(String(section.content || "")),
       0,
     );
-    const promptFamilyKey = derivePromptFamilyKey(filteredCycleDelta, { salt: "prometheus-cycle-delta" });
+    const promptFamilyKey = derivePromptFamilyKey(promptTelemetrySections, { salt: promptFamilyLabel });
     const priorPromptLineage = options?.promptLineage && typeof options.promptLineage === "object"
       ? normalizePromptLineageContract(options.promptLineage)
       : null;
@@ -7404,14 +7415,14 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
       lineageId: priorPromptLineage?.lineageId || `planner:${promptFamilyKey}`,
       parentLineageId: priorPromptLineage?.lineageId || null,
       promptFamilyKey,
-      familyLabel: "prometheus-cycle-delta",
+      familyLabel: promptFamilyLabel,
       agent: "prometheus",
       stage: "planner",
       checkpointNs: "planner",
       checkpointId: options?.promptCheckpointId || priorPromptLineage?.checkpointId || null,
       resumeFromCheckpointId: options?.resumeFromCheckpointId || priorPromptLineage?.checkpointId || null,
       stablePrefixHash: promptFamilyKey,
-      totalSegments: filteredCycleDelta.length,
+      totalSegments: promptTelemetrySections.length,
       cacheableSegments: cacheableSections.length,
       estimatedSavedTokens,
     });
@@ -7420,19 +7431,29 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
       agent: "prometheus",
       model: prometheusModel,
       taskKind: "planning",
-      totalSegments: filteredCycleDelta.length,
+      totalSegments: promptTelemetrySections.length,
       cachedSegments: cacheableSections.length,
       estimatedSavedTokens,
       lineageId: promptLineage.lineageId || undefined,
       cycleId: String((config as any)?.cycleId || ""),
+      lineage: {
+        lineageId: promptLineage.lineageId || null,
+        promptFamilyKey,
+        cycleId: String((config as any)?.cycleId || ""),
+        taskKind: "planning",
+        role: "prometheus",
+      },
     }).catch(() => { /* prompt-cache telemetry is advisory only */ });
   }
+  const compiledStaticPromptSections = _compilePrompt(filteredStaticPromptSections);
   const compiledCycleDelta = _compilePrompt(filteredCycleDelta, { tokenBudget: 8000 });
 
   const promptLineageMarker = promptLineage ? `${buildPromptLineageMarker(promptLineage)}\n` : "";
   const contextPrompt = `${promptLineageMarker}TARGET REPO: ${config.env?.targetRepo || "unknown"}
 REPO PATH: ${repoRoot}
 STATE DIR: ${stateDir}
+
+${compiledStaticPromptSections}
 
 ## OPERATOR OBJECTIVE
 ${userPrompt}

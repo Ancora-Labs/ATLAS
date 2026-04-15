@@ -254,8 +254,9 @@ export function buildAgentArgs({
     ? normalizePromptLineageContract(runContract.promptLineage)
     : null;
   const resolvedPromptLineage = runContractPromptLineage || embeddedPromptLineage;
+  let lineagePreamble = "";
   if (resolvedPromptLineage && (resolvedPromptLineage.promptFamilyKey || resolvedPromptLineage.lineageId)) {
-    const lineagePreamble = buildPromptLineagePreamble(resolvedPromptLineage);
+    lineagePreamble = buildPromptLineagePreamble(resolvedPromptLineage);
     promptText = `${lineagePreamble}\n\n${stripPromptLineageMarker(promptText)}`;
   }
   if (promptText.length > PROMPT_FILE_THRESHOLD) {
@@ -263,7 +264,7 @@ export function buildAgentArgs({
     const promptFile = path.join(STATE_DIR, `prompt_${slug}_${Date.now()}.md`);
     writeFileSync(promptFile, promptText, "utf8");
     pruneOldPromptFiles(slug);
-    promptText = `Your full instructions are in the file: ${promptFile}\nRead that file NOW with your read_file / view tool, then follow every instruction in it.`;
+    promptText = `${lineagePreamble ? `${lineagePreamble}\n\n` : ""}Your full instructions are in the file: ${promptFile}\nRead that file NOW with your read_file / view tool, then follow every instruction in it.`;
   }
   args.push("-p", promptText);
   return args;
