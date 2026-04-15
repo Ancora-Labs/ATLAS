@@ -289,6 +289,21 @@ describe("appendInterventionRetirementEvidence / loadInterventionRetirementEvide
     assert.equal(history[0].interventionId, "plan-17");
     assert.equal(history[0].closureMode, "no_signal");
     assert.equal(history[0].noSignalOutcome, true);
+    assert.equal(history[0].lineageJoinKey, "cycle-intervention:cycle-1:plan-17");
+    assert.equal(history[0].lineage?.interventionId, "plan-17");
+    assert.equal(history[0].lineage?.cycleId, "cycle-1");
+  });
+
+  it("negative path: rejects retirement evidence without a stable lineage seed", async () => {
+    const config = { paths: { stateDir: retirementStateDir } };
+    const result = await appendInterventionRetirementEvidence(config, [{
+      cycleId: null,
+      interventionId: "",
+      policyId: "policy-parser-guard",
+    }]);
+
+    assert.equal(result.ok, false);
+    assert.match(String(result.reason || ""), /interventionId is required/i);
   });
 });
 

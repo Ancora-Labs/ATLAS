@@ -670,7 +670,7 @@ export function compileLessonsToPolicies(postmortems, opts: any = {}) {
           detectedAt: pm.reviewedAt || new Date().toISOString(),
           interventionKind: template.interventionKind || OPTIMIZATION_INTERVENTION_KIND.POLICY_DELTA,
           optimizationMode: "impact-attributed-loop",
-          upliftSignal: "pending_measurement",
+          upliftSignal: LEARNED_POLICY_UPLIFT_SIGNAL.AWAITING_VERIFIED_OUTCOME_WINDOW,
           impactAttribution: {
             evidenceType: "postmortem_lesson",
             baselineQualityScore: Number.isFinite(Number(pm?.qualityScore))
@@ -1622,6 +1622,13 @@ export function buildPolicyImpactAttribution(
 export const POLICY_MUTATION_EVIDENCE_WINDOW = 3;
 export const POLICY_MUTATION_MIN_COMBINED_SCORE = 0.55;
 export const POLICY_MUTATION_RETIRE_COMBINED_SCORE = 0.25;
+export const LEARNED_POLICY_UPLIFT_SIGNAL = Object.freeze({
+  AWAITING_VERIFIED_OUTCOME_WINDOW: "awaiting_verified_outcome_window",
+  VERIFIED_IMPROVEMENT: "verified_improvement",
+  VERIFIED_WINDOW_OPEN: "verified_window_open",
+  VERIFIED_RETIRED: "verified_retired",
+  VERIFIED_REACTIVATED: "verified_reactivated",
+});
 
 export interface InterventionRubricScore {
   interventionId: string;
@@ -1955,6 +1962,260 @@ export function decidePolicyMutationsFromEvidenceWindow(
     promptConstraints: buildPromptHardConstraints(mutablePolicies),
     decisions,
     deferred,
+  };
+}
+
+export interface PolicyLifecycleWindowEvidence {
+  policyId?: string | null;
+  lineageJoinKey?: string | null;
+  outcomeStatus?: string | null;
+  noSignalOutcome?: boolean | null;
+  outcomeScore?: number | null;
+  recordedAt?: string | null;
+}
+
+export interface PolicyLifecycleWindowDecision {
+  policyId: string;
+  evidenceCount: number;
+  latestRecordedAt: string | null;
+  outcomeStatus: string;
+  shouldRetire: boolean;
+  reactivationSatisfied: boolean;
+  improvedCount: number;
+  noSignalCount: number;
+  ineffectiveCount: number;
+  averageOutcomeScore: number;
+  reactivateWhen: string;
+  reactivationThreshold: number;
+  reactivationEvidenceWindow: number;
+  retirementReason: string;
+  lineageJoinKeys: string[];
+  upliftSignal: string;
+}
+
+function stripRetirementMetadata(policy: any) {
+  const {
+    _retiredAt,
+    _retirementReason,
+    _retirementReversible,
+    _reactivateWhen,
+    ...rest
+  } = policy || {};
+  return rest;
+}
+
+export function evaluatePolicyLifecycleWindow(
+  policy: any,
+  evidenceRecords: PolicyLifecycleWindowEvidence[],
+  opts: {
+    evidenceWindowCycles?: number;
+    improvedThreshold?: number;
+    retireThreshold?: number;
+    reactivationEvidenceWindow?: number;
+  } = {},
+): PolicyLifecycleWindowDecision {
+  const policyId = String(policy?.id || "").trim();
+  const minEvidenceWindow = Number.isFinite(Number(opts.evidenceWindowCycles))
+    ? Math.max(1, Math.floor(Number(opts.evidenceWindowCycles)))
+    : Math.max(1, Math.floor(Number(policy?.retirementCriteria?.minEvidenceWindow) || POLICY_MUTATION_EVIDENCE_WINDOW));
+  const reactivationEvidenceWindow = Number.isFinite(Number(opts.reactivationEvidenceWindow))
+    ? Math.max(1, Math.floor(Number(opts.reactivationEvidenceWindow)))
+    : Math.min(2, minEvidenceWindow);
+  const filteredEvidence = (Array.isArray(evidenceRecords) ? evidenceRecords : [])
+    .filter((entry) => String(entry?.policyId || "").trim() === policyId)
+    .filter((entry) => String(entry?.lineageJoinKey || "").trim().length > 0)
+    .slice(-Math.max(minEvidenceWindow, reactivationEvidenceWindow));
+  const summary = summarizeImpactAttributionWindow(
+    filteredEvidence.map((entry) => ({
+      outcomeScore: entry?.outcomeScore,
+      noSignalOutcome: entry?.noSignalOutcome,
+      outcomeStatus: entry?.outcomeStatus,
+    })),
+    {
+      minEvidenceWindow,
+      improvedThreshold: Number.isFinite(Number(opts.improvedThreshold))
+        ? Number(opts.improvedThreshold)
+        : POLICY_MUTATION_MIN_COMBINED_SCORE,
+      retireThreshold: Number.isFinite(Number(opts.retireThreshold))
+        ? Number(opts.retireThreshold)
+        : POLICY_MUTATION_RETIRE_COMBINED_SCORE,
+      reactivationEvidenceWindow,
+    },
+  );
+  const lineageJoinKeys = [...new Set(
+    filteredEvidence
+      .map((entry) => String(entry?.lineageJoinKey || "").trim())
+      .filter(Boolean),
+  )];
+  const upliftSignal = !summary.evidenceWindowSatisfied
+    ? LEARNED_POLICY_UPLIFT_SIGNAL.AWAITING_VERIFIED_OUTCOME_WINDOW
+    : summary.shouldRetire
+      ? LEARNED_POLICY_UPLIFT_SIGNAL.VERIFIED_RETIRED
+      : summary.reactivationSatisfied
+        ? LEARNED_POLICY_UPLIFT_SIGNAL.VERIFIED_REACTIVATED
+        : summary.outcomeStatus === IMPACT_ATTRIBUTION_OUTCOME.IMPROVED
+          ? LEARNED_POLICY_UPLIFT_SIGNAL.VERIFIED_IMPROVEMENT
+          : LEARNED_POLICY_UPLIFT_SIGNAL.VERIFIED_WINDOW_OPEN;
+  return {
+    policyId,
+    evidenceCount: summary.evidenceCount,
+    latestRecordedAt: filteredEvidence.length > 0
+      ? String(filteredEvidence[filteredEvidence.length - 1]?.recordedAt || "").trim() || null
+      : null,
+    outcomeStatus: summary.outcomeStatus,
+    shouldRetire: summary.shouldRetire,
+    reactivationSatisfied: summary.reactivationSatisfied,
+    improvedCount: summary.improvedCount,
+    noSignalCount: summary.noSignalCount,
+    ineffectiveCount: summary.ineffectiveCount,
+    averageOutcomeScore: summary.averageOutcomeScore,
+    reactivateWhen: summary.reactivateWhen,
+    reactivationThreshold: summary.reactivationThreshold,
+    reactivationEvidenceWindow: summary.reactivationEvidenceWindow,
+    retirementReason: summary.retirementReason,
+    lineageJoinKeys,
+    upliftSignal,
+  };
+}
+
+export function reconcilePolicyLifecycleByLineageWindow(
+  activePolicies: any[],
+  retiredPolicies: any[],
+  evidenceRecords: PolicyLifecycleWindowEvidence[],
+  opts: {
+    evidenceWindowCycles?: number;
+    improvedThreshold?: number;
+    retireThreshold?: number;
+    reactivationEvidenceWindow?: number;
+  } = {},
+): {
+  active: any[];
+  retired: any[];
+  decisions: PolicyLifecycleWindowDecision[];
+  reactivated: any[];
+} {
+  const decisions: PolicyLifecycleWindowDecision[] = [];
+  const nextActive: any[] = [];
+  const nextRetired: any[] = [];
+  const reactivated: any[] = [];
+
+  for (const policy of Array.isArray(activePolicies) ? activePolicies : []) {
+    const decision = evaluatePolicyLifecycleWindow(policy, evidenceRecords, opts);
+    decisions.push(decision);
+    if (decision.shouldRetire) {
+      nextRetired.push({
+        ...policy,
+        upliftSignal: decision.upliftSignal,
+        _retiredAt: new Date().toISOString(),
+        _retirementReason: decision.retirementReason,
+        _retirementReversible: true,
+        _reactivateWhen: decision.reactivateWhen,
+        _impactAttribution: {
+          policyId: decision.policyId,
+          evidenceCount: decision.evidenceCount,
+          improvedCount: decision.improvedCount,
+          noSignalCount: decision.noSignalCount,
+          ineffectiveCount: decision.ineffectiveCount,
+          averageOutcomeScore: decision.averageOutcomeScore,
+          outcomeStatus: decision.outcomeStatus,
+          shouldRetire: decision.shouldRetire,
+          reversible: true,
+          retirementReason: decision.retirementReason,
+          reactivateWhen: decision.reactivateWhen,
+          reactivationThreshold: decision.reactivationThreshold,
+          reactivationEvidenceWindow: decision.reactivationEvidenceWindow,
+          reactivationSatisfied: decision.reactivationSatisfied,
+          lineageJoinKeys: decision.lineageJoinKeys,
+        },
+        _retirementStrategy: "lineage_verified_window",
+      });
+      continue;
+    }
+    nextActive.push({
+      ...policy,
+      upliftSignal: decision.upliftSignal,
+      _impactAttribution: {
+        policyId: decision.policyId,
+        evidenceCount: decision.evidenceCount,
+        improvedCount: decision.improvedCount,
+        noSignalCount: decision.noSignalCount,
+        ineffectiveCount: decision.ineffectiveCount,
+        averageOutcomeScore: decision.averageOutcomeScore,
+        outcomeStatus: decision.outcomeStatus,
+        shouldRetire: decision.shouldRetire,
+        reversible: true,
+        retirementReason: decision.retirementReason,
+        reactivateWhen: decision.reactivateWhen,
+        reactivationThreshold: decision.reactivationThreshold,
+        reactivationEvidenceWindow: decision.reactivationEvidenceWindow,
+        reactivationSatisfied: decision.reactivationSatisfied,
+        lineageJoinKeys: decision.lineageJoinKeys,
+      },
+      _retirementStrategy: "lineage_verified_window",
+    });
+  }
+
+  for (const policy of Array.isArray(retiredPolicies) ? retiredPolicies : []) {
+    const decision = evaluatePolicyLifecycleWindow(policy, evidenceRecords, opts);
+    decisions.push(decision);
+    if (decision.reactivationSatisfied) {
+      const restored = {
+        ...stripRetirementMetadata(policy),
+        upliftSignal: decision.upliftSignal,
+        _reactivatedAt: new Date().toISOString(),
+        _reactivationReason: decision.retirementReason,
+        _impactAttribution: {
+          policyId: decision.policyId,
+          evidenceCount: decision.evidenceCount,
+          improvedCount: decision.improvedCount,
+          noSignalCount: decision.noSignalCount,
+          ineffectiveCount: decision.ineffectiveCount,
+          averageOutcomeScore: decision.averageOutcomeScore,
+          outcomeStatus: decision.outcomeStatus,
+          shouldRetire: decision.shouldRetire,
+          reversible: true,
+          retirementReason: decision.retirementReason,
+          reactivateWhen: decision.reactivateWhen,
+          reactivationThreshold: decision.reactivationThreshold,
+          reactivationEvidenceWindow: decision.reactivationEvidenceWindow,
+          reactivationSatisfied: decision.reactivationSatisfied,
+          lineageJoinKeys: decision.lineageJoinKeys,
+        },
+        _retirementStrategy: "lineage_verified_window",
+      };
+      nextActive.push(restored);
+      reactivated.push(restored);
+      continue;
+    }
+    nextRetired.push({
+      ...policy,
+      upliftSignal: decision.upliftSignal,
+      _impactAttribution: {
+        policyId: decision.policyId,
+        evidenceCount: decision.evidenceCount,
+        improvedCount: decision.improvedCount,
+        noSignalCount: decision.noSignalCount,
+        ineffectiveCount: decision.ineffectiveCount,
+        averageOutcomeScore: decision.averageOutcomeScore,
+        outcomeStatus: decision.outcomeStatus,
+        shouldRetire: decision.shouldRetire,
+        reversible: true,
+        retirementReason: decision.retirementReason,
+        reactivateWhen: decision.reactivateWhen,
+        reactivationThreshold: decision.reactivationThreshold,
+        reactivationEvidenceWindow: decision.reactivationEvidenceWindow,
+        reactivationSatisfied: decision.reactivationSatisfied,
+        lineageJoinKeys: decision.lineageJoinKeys,
+      },
+      _retirementStrategy: "lineage_verified_window",
+    });
+  }
+
+  return {
+    active: nextActive,
+    retired: nextRetired,
+    decisions,
+    reactivated,
   };
 }
 

@@ -910,7 +910,7 @@ describe("runSelfImprovementCycle — policy impact attribution", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("persists attributions and retires ineffective policies via half-life", async () => {
+  it("persists lineage-backed attributions and retires ineffective policies from verified outcome windows", async () => {
     const mockCopilotPath = path.join(tmpDir, "mock-copilot.cmd");
     await fs.writeFile(
       mockCopilotPath,
@@ -925,6 +925,42 @@ describe("runSelfImprovementCycle — policy impact attribution", () => {
       runtime: { mandatoryTaskCoverageMode: "warn" },
       env: { copilotCliCommand: mockCopilotPath },
     };
+    await fs.writeFile(
+      path.join(tmpDir, "intervention_retirement_evidence.jsonl"),
+      [
+        {
+          schemaVersion: 1,
+          recordedAt: "2026-04-15T00:00:00.000Z",
+          cycleId: "cycle-1",
+          interventionId: "plan-1",
+          policyId: "glob-false-fail",
+          lineageJoinKey: "lineage:policy-1",
+          outcomeStatus: "should_retire",
+          outcomeScore: 0.1,
+        },
+        {
+          schemaVersion: 1,
+          recordedAt: "2026-04-15T01:00:00.000Z",
+          cycleId: "cycle-2",
+          interventionId: "plan-2",
+          policyId: "glob-false-fail",
+          lineageJoinKey: "lineage:policy-2",
+          outcomeStatus: "should_retire",
+          outcomeScore: 0.12,
+        },
+        {
+          schemaVersion: 1,
+          recordedAt: "2026-04-15T02:00:00.000Z",
+          cycleId: "cycle-3",
+          interventionId: "plan-3",
+          policyId: "glob-false-fail",
+          lineageJoinKey: "lineage:policy-3",
+          outcomeStatus: "should_retire",
+          outcomeScore: 0.15,
+        },
+      ].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+      "utf8",
+    );
     await writeTestJson(tmpDir, "worker_evolution-worker.json", {
       activityLog: [{ status: "done", taskId: "T-001", at: new Date().toISOString() }],
     });

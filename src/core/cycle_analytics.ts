@@ -68,6 +68,7 @@ import {
   mergeInterventionLineageContracts,
   normalizeInterventionLineageContract,
   resolveInterventionLineageJoinKey,
+  resolveStableInterventionLineage,
   type InterventionLineageContract,
 } from "./state_tracker.js";
 import { loadRouteROILedger, normalizeModelLabel, computeBenchmarkIntegrityScore } from "./model_policy.js";
@@ -3567,37 +3568,6 @@ type LineageAggregate = {
   postmortemRecurredCount: number;
 };
 
-function normalizeAnalyticsJoinTaskKind(value: unknown): string {
-  return String(value || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
-}
-
-function shouldPreferPromptFamilyJoinKey(
-  contract: InterventionLineageContract,
-  hints: { taskKind?: unknown; role?: unknown } = {},
-): boolean {
-  if (!contract.promptFamilyKey) return false;
-  const taskKind = normalizeAnalyticsJoinTaskKind(hints.taskKind ?? contract.taskKind);
-  const role = String(hints.role ?? contract.role ?? "").trim().toLowerCase();
-  return taskKind === "planning"
-    || taskKind === "plan-review"
-    || taskKind === "review"
-    || taskKind === "analysis"
-    || role === "prometheus"
-    || role === "athena"
-    || role === "jesus";
-}
-
-function resolveAnalyticsLineageJoinKey(
-  contract: InterventionLineageContract,
-  hints: { taskKind?: unknown; role?: unknown } = {},
-): string | null {
-  if (shouldPreferPromptFamilyJoinKey(contract, hints)) {
-    return `prompt-family:${contract.promptFamilyKey}`;
-  }
-  return resolveInterventionLineageJoinKey(contract)
-    || (contract.promptFamilyKey ? `prompt-family:${contract.promptFamilyKey}` : null);
-}
-
 function createLineageAggregate(joinKey: string, contract: InterventionLineageContract): LineageAggregate {
   return {
     joinKey,
@@ -3655,22 +3625,23 @@ function resolveLineageContractFromRecord(
     : src.lineageContract && typeof src.lineageContract === "object"
       ? src.lineageContract
       : src;
-  const contract = normalizeInterventionLineageContract(lineage, {
-    ...defaults,
-    promptFamilyKey: (src.promptFamilyKey as string | null | undefined) ?? defaults.promptFamilyKey,
-    role: (src.agent ?? src.worker ?? src.role ?? defaults.role) as string | null,
-    taskKind: (src.taskKind ?? src.kind ?? defaults.taskKind) as string | null,
-  });
-  const explicitJoinKey = String(src.lineageJoinKey || "").trim();
-  const derivedJoinKey = resolveAnalyticsLineageJoinKey(contract, {
-    taskKind: src.taskKind ?? src.kind ?? defaults.taskKind,
-    role: src.agent ?? src.worker ?? src.role ?? defaults.role,
-  });
+  const { lineage: contract, lineageJoinKey } = resolveStableInterventionLineage(
+    lineage,
+    {
+      ...defaults,
+      promptFamilyKey: (src.promptFamilyKey as string | null | undefined) ?? defaults.promptFamilyKey,
+      role: (src.agent ?? src.worker ?? src.role ?? defaults.role) as string | null,
+      taskKind: (src.taskKind ?? src.kind ?? defaults.taskKind) as string | null,
+    },
+    {
+      explicitJoinKey: src.lineageJoinKey,
+      taskKind: src.taskKind ?? src.kind ?? defaults.taskKind,
+      role: src.agent ?? src.worker ?? src.role ?? defaults.role,
+    },
+  );
   return {
     contract,
-    joinKey: explicitJoinKey && (!derivedJoinKey || explicitJoinKey === derivedJoinKey)
-      ? explicitJoinKey
-      : derivedJoinKey ?? (explicitJoinKey || null),
+    joinKey: lineageJoinKey,
   };
 }
 

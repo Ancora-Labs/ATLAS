@@ -204,8 +204,39 @@ describe("extractStreamingWorkerResultMarker", () => {
     assert.equal(marker, null);
   });
 
+  it("does not emit a marker from BOX_PR_URL alone before verification output completes", () => {
+    const stdout = [
+      "BOX_STATUS=done",
+      "BOX_PR_URL=https://github.com/org/repo/pull/42",
+      "BOX_EXPECTED_OUTCOME=join keys propagated",
+      "BOX_ACTUAL_OUTCOME=runner and analytics updated",
+    ].join("\n");
+    const marker = extractStreamingWorkerResultMarker(stdout, "");
+    assert.equal(marker, null);
+  });
+
+  it("does not emit a marker from a verification template without parsed evidence", () => {
+    const stdout = [
+      "BOX_STATUS=done",
+      "3. Include a complete VERIFICATION_REPORT in your response using this exact block template:",
+      "===VERIFICATION_REPORT===",
+      "BUILD=<pass|fail|n/a>",
+      "TESTS=<pass|fail|n/a>",
+      "===END_VERIFICATION===",
+    ].join("\n");
+    const marker = extractStreamingWorkerResultMarker(stdout, "");
+    assert.equal(marker, null);
+  });
+
   it("emits a marker once BOX_STATUS and verification boundary are present", () => {
     const stdout = [
+      "BOX_MERGED_SHA=abc123d",
+      "CLEAN_TREE_STATUS=clean",
+      "===NPM TEST OUTPUT START===",
+      "# tests 5",
+      "# pass 5",
+      "# fail 0",
+      "===NPM TEST OUTPUT END===",
       "===VERIFICATION_REPORT===",
       "BUILD=pass",
       "TESTS=pass",
@@ -230,6 +261,13 @@ describe("extractStreamingWorkerResultMarker", () => {
 describe("shouldTreatAbortedWorkerRunAsTerminalResult", () => {
   it("accepts an aborted process when final worker markers were already emitted", () => {
     const stdout = [
+      "BOX_MERGED_SHA=abc123d",
+      "CLEAN_TREE_STATUS=clean",
+      "===NPM TEST OUTPUT START===",
+      "# tests 5",
+      "# pass 5",
+      "# fail 0",
+      "===NPM TEST OUTPUT END===",
       "===VERIFICATION_REPORT===",
       "BUILD=pass",
       "TESTS=pass",
