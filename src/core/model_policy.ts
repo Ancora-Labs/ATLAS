@@ -22,6 +22,7 @@ import {
 } from "./state_tracker.js";
 import { MIN_TELEMETRY_SAMPLE_THRESHOLD } from "./telemetry_thresholds.js";
 import { getLaneForWorkerName } from "./role_registry.js";
+import { VERIFICATION_FAILURE_CODE } from "./verification_gate.js";
 export { MIN_TELEMETRY_SAMPLE_THRESHOLD };
 export type { ScheduledHypothesisCandidate } from "./hypothesis_scheduler.js";
 
@@ -2120,6 +2121,48 @@ export function normalizeModelLabel(name: string | null | undefined): string {
     .trim();
 }
 
+const VERIFICATION_ROUTING_FAILURE_PENALTY = Object.freeze({
+  [VERIFICATION_FAILURE_CODE.CLE]: 0.18,
+  [VERIFICATION_FAILURE_CODE.IA]: 0.24,
+  [VERIFICATION_FAILURE_CODE.INVALID_FORMAT]: 0.14,
+  [VERIFICATION_FAILURE_CODE.TLE]: 0.16,
+  [VERIFICATION_FAILURE_CODE.POLICY_VIOLATION]: 0.28,
+  [VERIFICATION_FAILURE_CODE.HARNESS_ARTIFACT]: 0.06,
+} as const);
+
+function deriveVerificationRoutingAdjustment(taskKind: string, cycleAnalytics: any): {
+  multiplier: number;
+  reason: string;
+} | null {
+  const key = toTaskKindKey(taskKind);
+  const taskTelemetry = cycleAnalytics?.verificationTelemetry?.byTaskKind?.[key];
+  if (!taskTelemetry || typeof taskTelemetry !== "object") return null;
+
+  const sampleCount = Number((taskTelemetry as any).sampleCount ?? 0);
+  if (!Number.isFinite(sampleCount) || sampleCount < MIN_TELEMETRY_SAMPLE_THRESHOLD) {
+    return null;
+  }
+
+  const averageWeightedScore = clamp01(Number((taskTelemetry as any).averageWeightedScore ?? 1));
+  const failureCodeCounts = (taskTelemetry as any).failureCodeCounts && typeof (taskTelemetry as any).failureCodeCounts === "object"
+    ? (taskTelemetry as any).failureCodeCounts as Record<string, unknown>
+    : {};
+  let burden = 0;
+  for (const [code, penalty] of Object.entries(VERIFICATION_ROUTING_FAILURE_PENALTY)) {
+    const count = Number(failureCodeCounts[code] ?? 0);
+    if (!Number.isFinite(count) || count <= 0) continue;
+    const rate = clamp01(count / Math.max(1, sampleCount));
+    burden += rate * penalty;
+  }
+  const multiplier = Math.max(0.1, Math.round(clamp01(averageWeightedScore - burden) * 1000) / 1000);
+  const dominantFailureCode = String((taskTelemetry as any).dominantFailureCode || "").trim() || "none";
+
+  return {
+    multiplier,
+    reason: `verification-penalty(score=${averageWeightedScore.toFixed(2)}, burden=${Math.round(burden * 1000) / 1000}, dominant=${dominantFailureCode})`,
+  };
+}
+
 export function rankModelsByTaskKindExpectedValue(
   taskKind: string,
   models: string[],
@@ -2217,6 +2260,7 @@ export function rankModelsByTaskKindExpectedValue(
   const modelPoints = (taskTelemetry as any).models && typeof (taskTelemetry as any).models === "object"
     ? (taskTelemetry as any).models
     : {};
+  const verificationAdjustment = deriveVerificationRoutingAdjustment(taskKind, cycleAnalytics);
 
   const scoreByModel: Record<string, number> = {};
   let usableScores = 0;
@@ -2226,7 +2270,11 @@ export function rankModelsByTaskKindExpectedValue(
     const canonical = normalizeEconomicsPoint(modelPoints[normalizeModelLabel(model)]);
     const point = direct || lower || canonical || defaultPoint;
     if (!point) continue;
-    scoreByModel[model] = Math.round(computeExpectedValue(point) * 1000) / 1000;
+    const baseScore = computeExpectedValue(point);
+    const adjustedScore = verificationAdjustment
+      ? baseScore * verificationAdjustment.multiplier
+      : baseScore;
+    scoreByModel[model] = Math.round(adjustedScore * 1000) / 1000;
     usableScores += 1;
   }
   if (usableScores === 0) {
@@ -2244,7 +2292,9 @@ export function rankModelsByTaskKindExpectedValue(
     rankedModels,
     scoreByModel,
     usedTelemetry: true,
-    reason: "expected-value(taskKind)",
+    reason: verificationAdjustment
+      ? `expected-value(taskKind)+${verificationAdjustment.reason}`
+      : "expected-value(taskKind)",
   };
 }
 

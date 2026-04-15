@@ -50,7 +50,12 @@ import { readJson, writeJson } from "./fs_utils.js";
 import { warn, emitEvent } from "./logger.js";
 import { EVENTS, EVENT_DOMAIN } from "./event_schema.js";
 import { SLO_TIMESTAMP_CONTRACT, SLO_METRIC } from "./slo_checker.js";
-import { hasCleanTreeStatusEvidence, hasVerificationReportEvidence } from "./verification_gate.js";
+import {
+  hasCleanTreeStatusEvidence,
+  hasVerificationReportEvidence,
+  buildVerificationScorecard,
+  VERIFICATION_FAILURE_CODE,
+} from "./verification_gate.js";
 import { hasFiniteAthenaOverallScore } from "./athena_reviewer.js";
 import { hasPrometheusRuntimeContractSignals, isStrategicFieldToolTraceContaminated, STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH } from "./prometheus.js";
 import { getLaneForWorkerName, isSpecialistLane } from "./role_registry.js";
@@ -1624,6 +1629,151 @@ function buildPacketOutcomeCorrelation(workerResults: any): {
   };
 }
 
+function createVerificationFailureCodeCounts(): Record<string, number> {
+  return Object.fromEntries(
+    Object.values(VERIFICATION_FAILURE_CODE).map((code) => [code, 0]),
+  );
+}
+
+function normalizeVerificationTelemetryTaskKind(value: unknown): string {
+  return String(value || "general")
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, "-") || "general";
+}
+
+function normalizeVerificationReportSnapshot(value: unknown): Record<string, string> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const report: Record<string, string> = {};
+  for (const field of ["build", "tests", "responsive", "api", "edgeCases", "security"]) {
+    const normalized = String(raw[field] || "").trim().toLowerCase();
+    if (normalized) report[field] = normalized;
+  }
+  return Object.keys(report).length > 0 ? report : null;
+}
+
+function normalizeArtifactSnapshot(value: unknown): { hasArtifact?: boolean } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  return {
+    hasArtifact: raw.hasArtifact === true || (
+      raw.hasSha === true
+      && raw.hasTestOutput === true
+      && raw.hasCleanTreeEvidence === true
+      && raw.hasUnfilledPlaceholder !== true
+    ),
+  };
+}
+
+export function buildVerificationScorecardTelemetry(workerResults: unknown[]): {
+  sampleCount: number;
+  passCount: number;
+  passRate: number;
+  averageWeightedScore: number;
+  failureCodeCounts: Record<string, number>;
+  dominantFailureCode: string | null;
+  byTaskKind: Record<string, {
+    sampleCount: number;
+    passCount: number;
+    passRate: number;
+    averageWeightedScore: number;
+    failureCodeCounts: Record<string, number>;
+    dominantFailureCode: string | null;
+  }>;
+} {
+  const safeRows = Array.isArray(workerResults)
+    ? workerResults.filter((row) => row && typeof row === "object" && !Array.isArray(row))
+        .map((row) => row as Record<string, unknown>)
+    : [];
+  const totals = {
+    sampleCount: 0,
+    passCount: 0,
+    weightedScoreTotal: 0,
+    failureCodeCounts: createVerificationFailureCodeCounts(),
+  };
+  const byTaskKind = new Map<string, {
+    sampleCount: number;
+    passCount: number;
+    weightedScoreTotal: number;
+    failureCodeCounts: Record<string, number>;
+  }>();
+
+  for (const row of safeRows) {
+    const status = String(row.status || "").trim().toLowerCase();
+    const verificationEvidence = row.verificationEvidence && typeof row.verificationEvidence === "object" && !Array.isArray(row.verificationEvidence)
+      ? row.verificationEvidence as Record<string, unknown>
+      : null;
+    const shouldInclude = verificationEvidence !== null || status === "timeout";
+    if (!shouldInclude) continue;
+
+    const taskKind = normalizeVerificationTelemetryTaskKind(row.taskKind || row.kind);
+    const entry = byTaskKind.get(taskKind) ?? {
+      sampleCount: 0,
+      passCount: 0,
+      weightedScoreTotal: 0,
+      failureCodeCounts: createVerificationFailureCodeCounts(),
+    };
+    const scorecard = buildVerificationScorecard({
+      status,
+      passed: verificationEvidence?.passed === true,
+      report: normalizeVerificationReportSnapshot(verificationEvidence?.report),
+      artifact: normalizeArtifactSnapshot(verificationEvidence?.artifactDetail),
+      prUrl: verificationEvidence?.prUrl,
+      gaps: Array.isArray(verificationEvidence?.gaps) ? verificationEvidence?.gaps : [],
+      toolTelemetry: verificationEvidence?.toolExecutionTelemetry as {
+        gaps?: string[];
+        deniedDecisions?: Array<Record<string, unknown>>;
+      } | null,
+    });
+    totals.sampleCount += 1;
+    totals.weightedScoreTotal += scorecard.normalizedScore;
+    entry.sampleCount += 1;
+    entry.weightedScoreTotal += scorecard.normalizedScore;
+    if (scorecard.status === "pass") {
+      totals.passCount += 1;
+      entry.passCount += 1;
+    }
+    for (const code of scorecard.blockingFailureCodes) {
+      totals.failureCodeCounts[code] = (totals.failureCodeCounts[code] || 0) + 1;
+      entry.failureCodeCounts[code] = (entry.failureCodeCounts[code] || 0) + 1;
+    }
+    byTaskKind.set(taskKind, entry);
+  }
+
+  const selectDominantFailureCode = (counts: Record<string, number>): string | null => {
+    let dominant: string | null = null;
+    let maxCount = 0;
+    for (const code of Object.values(VERIFICATION_FAILURE_CODE)) {
+      const count = Math.max(0, Number(counts[code] || 0));
+      if (count > maxCount) {
+        dominant = code;
+        maxCount = count;
+      }
+    }
+    return dominant;
+  };
+
+  return {
+    sampleCount: totals.sampleCount,
+    passCount: totals.passCount,
+    passRate: totals.sampleCount > 0 ? roundMetric(totals.passCount / totals.sampleCount) : 0,
+    averageWeightedScore: totals.sampleCount > 0 ? roundMetric(totals.weightedScoreTotal / totals.sampleCount) : 0,
+    failureCodeCounts: totals.failureCodeCounts,
+    dominantFailureCode: selectDominantFailureCode(totals.failureCodeCounts),
+    byTaskKind: Object.fromEntries(
+      [...byTaskKind.entries()].map(([taskKind, entry]) => [taskKind, {
+        sampleCount: entry.sampleCount,
+        passCount: entry.passCount,
+        passRate: entry.sampleCount > 0 ? roundMetric(entry.passCount / entry.sampleCount) : 0,
+        averageWeightedScore: entry.sampleCount > 0 ? roundMetric(entry.weightedScoreTotal / entry.sampleCount) : 0,
+        failureCodeCounts: entry.failureCodeCounts,
+        dominantFailureCode: selectDominantFailureCode(entry.failureCodeCounts),
+      }]),
+    ),
+  };
+}
+
 // ── Core computation ──────────────────────────────────────────────────────────
 
 /**
@@ -2078,6 +2228,7 @@ export function computeCycleAnalytics(config, {
     rerouteRate:             dispatched !== null ? Math.round((specialistRerouteCount / dispatched) * 1000) / 1000 : null,
   };
   const packetOutcomeCorrelation = buildPacketOutcomeCorrelation(workerResults);
+  const verificationTelemetry = buildVerificationScorecardTelemetry(workerResults ?? []);
 
   return {
     cycleId,
@@ -2103,6 +2254,7 @@ export function computeCycleAnalytics(config, {
     stageTransitions: Array.isArray(stageTransitions) ? stageTransitions : [],
     dropReasons:      Array.isArray(dropReasons) ? dropReasons : [],
     packetOutcomeCorrelation,
+    verificationTelemetry,
     modelRoutingTelemetry: buildModelRoutingTelemetry(premiumUsageLog ?? [], lineageLog ?? [], routeRoiLedger ?? []),
     capabilityExecutionSummary: normalizedCapabilityExecutionSummary,
     interventionLineageTelemetry: buildInterventionLineageTelemetry({

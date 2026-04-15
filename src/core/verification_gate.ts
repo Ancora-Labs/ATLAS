@@ -787,6 +787,62 @@ export const VERIFICATION_REPORT_TEMPLATE_GAP =
   "VERIFICATION_REPORT template placeholders are still present — replace every <pass|fail|n/a> placeholder with pass, fail, or n/a";
 export const VERIFICATION_REPORT_MALFORMED_GAP =
   "VERIFICATION_REPORT marker found but report is malformed/unparseable — use the canonical ===VERIFICATION_REPORT=== block";
+export const VERIFICATION_SCORECARD_SCHEMA_VERSION = 1;
+export const VERIFICATION_FAILURE_CODE = Object.freeze({
+  CLE: "CLE",
+  IA: "IA",
+  INVALID_FORMAT: "InvalidFormat",
+  TLE: "TLE",
+  POLICY_VIOLATION: "PolicyViolation",
+  HARNESS_ARTIFACT: "HarnessArtifact",
+} as const);
+
+export interface VerificationFailureCodeSummary {
+  observed: string[];
+  blocking: string[];
+  primary: string | null;
+}
+
+export interface VerificationScorecardCriterion {
+  key: string;
+  weight: number;
+  applicable: boolean;
+  passed: boolean;
+  actual: string;
+}
+
+export interface VerificationScorecard {
+  schemaVersion: typeof VERIFICATION_SCORECARD_SCHEMA_VERSION;
+  status: "pass" | "fail";
+  normalizedScore: number;
+  earnedWeight: number;
+  availableWeight: number;
+  criteria: VerificationScorecardCriterion[];
+  observedFailureCodes: string[];
+  blockingFailureCodes: string[];
+  primaryFailureCode: string | null;
+}
+
+const VERIFICATION_SCORECARD_WEIGHTS = Object.freeze({
+  build: 0.18,
+  tests: 0.24,
+  responsive: 0.10,
+  api: 0.08,
+  edgeCases: 0.14,
+  security: 0.10,
+  artifact: 0.08,
+  prUrl: 0.04,
+  contract: 0.04,
+} as const);
+
+const VERIFICATION_FAILURE_CODE_PRIORITY = Object.freeze([
+  VERIFICATION_FAILURE_CODE.POLICY_VIOLATION,
+  VERIFICATION_FAILURE_CODE.TLE,
+  VERIFICATION_FAILURE_CODE.INVALID_FORMAT,
+  VERIFICATION_FAILURE_CODE.IA,
+  VERIFICATION_FAILURE_CODE.CLE,
+  VERIFICATION_FAILURE_CODE.HARNESS_ARTIFACT,
+]);
 
 /**
  * Normalize a raw VERIFICATION_REPORT field value to its canonical form.
@@ -905,6 +961,255 @@ function hasMalformedVerificationReportEnvelope(output: string, report: Record<s
     || /===VERIFICATION[_\s]?REPORT===/i.test(text)
     || /===END[_\s]?VERIFICATION(?:[_\s]?REPORT)?===/i.test(text);
   return hasMarker && !report;
+}
+
+function pushUniqueCode(target: string[], code: string): void {
+  if (!target.includes(code)) target.push(code);
+}
+
+function selectPrimaryFailureCode(codes: string[]): string | null {
+  for (const code of VERIFICATION_FAILURE_CODE_PRIORITY) {
+    if (codes.includes(code)) return code;
+  }
+  return codes.length > 0 ? codes[0] : null;
+}
+
+export function deriveVerificationFailureCodes(input: {
+  status?: unknown;
+  gaps?: unknown;
+  report?: Record<string, string> | null;
+  hasReportPlaceholders?: boolean;
+  hasMalformedReportEnvelope?: boolean;
+  toolTelemetry?: {
+    gaps?: string[];
+    deniedDecisions?: Array<{ reasonCode?: unknown }>;
+  } | null;
+  artifact?: {
+    hasArtifact?: boolean;
+    hasCleanTreeEvidence?: boolean;
+    hasSha?: boolean;
+    hasTestOutput?: boolean;
+    hasUnfilledPlaceholder?: boolean;
+  } | null;
+  windowsNodeTestArtifact?: {
+    isArtifact?: boolean;
+    hasNpmTestPassEvidence?: boolean;
+  } | null;
+  prUrl?: unknown;
+  responsiveMatrix?: Record<string, string> | null;
+}): VerificationFailureCodeSummary {
+  const observed: string[] = [];
+  const blocking: string[] = [];
+  const status = String(input?.status || "").trim().toLowerCase();
+  const gaps = Array.isArray(input?.gaps) ? input.gaps.map((gap) => String(gap)) : [];
+  const report = input?.report && typeof input.report === "object" ? input.report : null;
+  const toolTelemetry = input?.toolTelemetry ?? null;
+  const artifact = input?.artifact ?? null;
+  const windowsNodeTestArtifact = input?.windowsNodeTestArtifact ?? null;
+  const reportValues = report ? Object.values(report) : [];
+  const hasExplicitFailureReport = reportValues.some((value) => String(value || "").trim().toLowerCase() === "fail");
+  const hasMissingEvidenceGap = gaps.some((gap) => (
+    /missing/i.test(gap)
+    || /required but was/i.test(gap)
+    || gap.includes(NAMED_TEST_PROOF_GAP)
+    || gap.includes("RESPONSIVE_MATRIX missing")
+    || gap.includes("BOX_PR_URL missing")
+    || gap.includes("VERIFICATION_REPORT missing")
+    || gap === ARTIFACT_GAP.MISSING_SHA
+    || gap === ARTIFACT_GAP.MISSING_TEST_OUTPUT
+    || gap === ARTIFACT_GAP.DIRTY_TREE
+  ));
+  const hasInvalidFormatGap = Boolean(input?.hasReportPlaceholders)
+    || Boolean(input?.hasMalformedReportEnvelope)
+    || gaps.some((gap) => (
+      gap === VERIFICATION_REPORT_TEMPLATE_GAP
+      || gap === VERIFICATION_REPORT_MALFORMED_GAP
+      || /non-canonical value/i.test(gap)
+      || gap.includes(NON_SPECIFIC_VERIFICATION_GAP)
+      || /HOOK_DECISION malformed/i.test(gap)
+      || /TOOL_INTENT envelope malformed/i.test(gap)
+      || /HOOK_TELEMETRY_MISMATCH/i.test(gap)
+      || /HOOK_TELEMETRY_UNPAIRED/i.test(gap)
+    ));
+  const hasPolicyViolation = gaps.some((gap) => (
+    /TOOL_POLICY denied execute call/i.test(gap)
+    || /non-portable command/i.test(gap)
+    || /runtime_hook_denied:/i.test(gap)
+  )) || Boolean(toolTelemetry?.deniedDecisions && toolTelemetry.deniedDecisions.length > 0);
+  const hasHarnessArtifact = Boolean(windowsNodeTestArtifact?.isArtifact)
+    || gaps.some((gap) => /harness/i.test(gap));
+  const hasTimeout = status === "timeout"
+    || gaps.some((gap) => /\btimeout\b|\btimed out\b|\btime limit\b/i.test(gap));
+
+  if (hasMissingEvidenceGap || (artifact && artifact.hasArtifact === false)) {
+    pushUniqueCode(observed, VERIFICATION_FAILURE_CODE.CLE);
+    if (hasMissingEvidenceGap || artifact?.hasArtifact === false) pushUniqueCode(blocking, VERIFICATION_FAILURE_CODE.CLE);
+  }
+  if (hasExplicitFailureReport || gaps.some((gap) => /reported as FAIL/i.test(gap) || /viewports passed/i.test(gap))) {
+    pushUniqueCode(observed, VERIFICATION_FAILURE_CODE.IA);
+    pushUniqueCode(blocking, VERIFICATION_FAILURE_CODE.IA);
+  }
+  if (hasInvalidFormatGap) {
+    pushUniqueCode(observed, VERIFICATION_FAILURE_CODE.INVALID_FORMAT);
+    pushUniqueCode(blocking, VERIFICATION_FAILURE_CODE.INVALID_FORMAT);
+  }
+  if (hasTimeout) {
+    pushUniqueCode(observed, VERIFICATION_FAILURE_CODE.TLE);
+    pushUniqueCode(blocking, VERIFICATION_FAILURE_CODE.TLE);
+  }
+  if (hasPolicyViolation) {
+    pushUniqueCode(observed, VERIFICATION_FAILURE_CODE.POLICY_VIOLATION);
+    pushUniqueCode(blocking, VERIFICATION_FAILURE_CODE.POLICY_VIOLATION);
+  }
+  if (hasHarnessArtifact) {
+    pushUniqueCode(observed, VERIFICATION_FAILURE_CODE.HARNESS_ARTIFACT);
+    if (!windowsNodeTestArtifact?.hasNpmTestPassEvidence) {
+      pushUniqueCode(blocking, VERIFICATION_FAILURE_CODE.HARNESS_ARTIFACT);
+    }
+  }
+
+  return {
+    observed,
+    blocking,
+    primary: selectPrimaryFailureCode(blocking.length > 0 ? blocking : observed),
+  };
+}
+
+export function buildVerificationScorecard(input: {
+  status?: unknown;
+  passed?: unknown;
+  report?: Record<string, string> | null;
+  profileEvidence?: Record<string, string> | null;
+  promotedFields?: Set<string> | null;
+  requireArtifact?: boolean;
+  artifact?: {
+    hasArtifact?: boolean;
+  } | null;
+  requirePrUrl?: boolean;
+  prUrl?: unknown;
+  gaps?: unknown;
+  hasReportPlaceholders?: boolean;
+  hasMalformedReportEnvelope?: boolean;
+  toolTelemetry?: {
+    gaps?: string[];
+    deniedDecisions?: Array<{ reasonCode?: unknown }>;
+  } | null;
+  windowsNodeTestArtifact?: {
+    isArtifact?: boolean;
+    hasNpmTestPassEvidence?: boolean;
+  } | null;
+}): VerificationScorecard {
+  const status = String(input?.status || "").trim().toLowerCase();
+  if (status && status !== "done" && input?.passed === true) {
+    return {
+      schemaVersion: VERIFICATION_SCORECARD_SCHEMA_VERSION,
+      status: "pass",
+      normalizedScore: 1,
+      earnedWeight: 0,
+      availableWeight: 0,
+      criteria: [],
+      observedFailureCodes: [],
+      blockingFailureCodes: [],
+      primaryFailureCode: null,
+    };
+  }
+  const report = input?.report && typeof input.report === "object" ? input.report : null;
+  const profileEvidence = input?.profileEvidence && typeof input.profileEvidence === "object" ? input.profileEvidence : null;
+  const promotedFields = input?.promotedFields instanceof Set ? input.promotedFields : new Set<string>();
+  const failureCodes = deriveVerificationFailureCodes({
+    status,
+    gaps: input?.gaps,
+    report,
+    hasReportPlaceholders: input?.hasReportPlaceholders,
+    hasMalformedReportEnvelope: input?.hasMalformedReportEnvelope,
+    toolTelemetry: input?.toolTelemetry,
+    artifact: input?.artifact,
+    windowsNodeTestArtifact: input?.windowsNodeTestArtifact,
+    prUrl: input?.prUrl,
+  });
+
+  const criteria: VerificationScorecardCriterion[] = [];
+  const pushCriterion = (criterion: VerificationScorecardCriterion) => {
+    criteria.push(criterion);
+  };
+  const reportFields: Array<keyof typeof VERIFICATION_SCORECARD_WEIGHTS> = [
+    "build",
+    "tests",
+    "responsive",
+    "api",
+    "edgeCases",
+    "security",
+  ];
+  for (const field of reportFields) {
+    const profileRequirement = profileEvidence?.[field];
+    const value = String(report?.[field] || "").trim().toLowerCase();
+    const applicable = profileRequirement === "required"
+      || Boolean(value)
+      || promotedFields.has(field);
+    if (!applicable) continue;
+    const passed = value === "pass"
+      || value === "n/a"
+      || (field === "tests"
+        && value === "fail"
+        && input?.windowsNodeTestArtifact?.isArtifact === true
+        && input?.windowsNodeTestArtifact?.hasNpmTestPassEvidence === true);
+    pushCriterion({
+      key: field,
+      weight: VERIFICATION_SCORECARD_WEIGHTS[field],
+      applicable: true,
+      passed,
+      actual: value || "missing",
+    });
+  }
+
+  const requireArtifact = input?.requireArtifact === true || input?.artifact != null;
+  if (requireArtifact) {
+    pushCriterion({
+      key: "artifact",
+      weight: VERIFICATION_SCORECARD_WEIGHTS.artifact,
+      applicable: true,
+      passed: input?.artifact?.hasArtifact === true,
+      actual: input?.artifact?.hasArtifact === true ? "pass" : "fail",
+    });
+  }
+
+  const requirePrUrl = input?.requirePrUrl === true || String(input?.prUrl || "").trim().length > 0;
+  if (requirePrUrl) {
+    pushCriterion({
+      key: "prUrl",
+      weight: VERIFICATION_SCORECARD_WEIGHTS.prUrl,
+      applicable: true,
+      passed: String(input?.prUrl || "").trim().length > 0,
+      actual: String(input?.prUrl || "").trim().length > 0 ? "pass" : "missing",
+    });
+  }
+
+  pushCriterion({
+    key: "contract",
+    weight: VERIFICATION_SCORECARD_WEIGHTS.contract,
+    applicable: true,
+    passed: failureCodes.blocking.length === 0,
+    actual: failureCodes.primary || "pass",
+  });
+
+  const availableWeight = criteria.reduce((sum, criterion) => sum + (criterion.applicable ? criterion.weight : 0), 0);
+  const earnedWeight = criteria.reduce((sum, criterion) => (
+    sum + (criterion.applicable && criterion.passed ? criterion.weight : 0)
+  ), 0);
+  const normalizedScore = availableWeight > 0 ? Math.round((earnedWeight / availableWeight) * 1000) / 1000 : 1;
+  const passed = input?.passed === true && failureCodes.blocking.length === 0;
+
+  return {
+    schemaVersion: VERIFICATION_SCORECARD_SCHEMA_VERSION,
+    status: passed ? "pass" : "fail",
+    normalizedScore,
+    earnedWeight: Math.round(earnedWeight * 1000) / 1000,
+    availableWeight: Math.round(availableWeight * 1000) / 1000,
+    criteria,
+    observedFailureCodes: failureCodes.observed,
+    blockingFailureCodes: failureCodes.blocking,
+    primaryFailureCode: failureCodes.primary,
+  };
 }
 
 /**
@@ -1070,35 +1375,71 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
     optionalFieldFailures: [] as string[],
     toolExecutionTelemetry: toolTelemetry,
   };
+  const status = String(parsedResponse?.status || "done").toLowerCase();
+  const allExempt = Object.values(profile.evidence).every(v => v === "exempt");
+  const hasRequiredFields = Object.values(profile.evidence).some(v => v === "required");
+  const requireArtifact = hasRequiredFields
+    && isArtifactGateRequired(workerKind, options.taskKind);
+  const finalizeValidation = (passed: boolean, reason: string) => {
+    const failureCodes = deriveVerificationFailureCodes({
+      status,
+      gaps,
+      report,
+      hasReportPlaceholders,
+      hasMalformedReportEnvelope,
+      toolTelemetry,
+      artifact: evidence.postMergeArtifact as ReturnType<typeof checkPostMergeArtifact> | null,
+      windowsNodeTestArtifact,
+      prUrl,
+      responsiveMatrix,
+    });
+    evidence.failureCodes = failureCodes;
+    evidence.scorecard = buildVerificationScorecard({
+      status,
+      passed,
+      report,
+      profileEvidence: profile.evidence,
+      promotedFields: profile.promotedFields instanceof Set ? profile.promotedFields : null,
+      requireArtifact,
+      artifact: evidence.postMergeArtifact as ReturnType<typeof checkPostMergeArtifact> | null,
+      requirePrUrl: profile.evidence.prUrl === "required",
+      prUrl,
+      gaps,
+      hasReportPlaceholders,
+      hasMalformedReportEnvelope,
+      toolTelemetry,
+      windowsNodeTestArtifact,
+    });
+    return {
+      passed,
+      gaps,
+      evidence,
+      reason,
+    };
+  };
 
   // If worker reported skipped (already-merged), pass immediately
-  const status = String(parsedResponse?.status || "done").toLowerCase();
   if (status === "skipped") {
-    return { passed: true, gaps: [], evidence, reason: "status=skipped, worker reported task already done" };
+    return finalizeValidation(true, "status=skipped, worker reported task already done");
   }
 
   // If worker reported a non-done status, skip verification
   if (status !== "done") {
-    return { passed: true, gaps: [], evidence, reason: `status=${status}, verification skipped` };
+    return finalizeValidation(true, `status=${status}, verification skipped`);
   }
 
   // Scan/doc roles are exempt from verification
-  const allExempt = Object.values(profile.evidence).every(v => v === "exempt");
   if (allExempt) {
-    return { passed: true, gaps: [], evidence, reason: "role exempt from verification" };
+    return finalizeValidation(true, "role exempt from verification");
   }
 
   // Roles with at least one required evidence field are "done-capable lanes"
-  const hasRequiredFields = Object.values(profile.evidence).some(v => v === "required");
-
   // ── Post-merge verification artifact gate ───────────────────────────────
   // Done-capable lanes (roles with at least one required evidence field) must
   // include a git SHA + raw test output when reporting done, UNLESS the task
   // kind is a non-merge kind (scan, doc, observation, diagnosis) — those tasks
   // do not produce a merged commit and are exempt from artifact requirements.
   // This gate is NON-BYPASSABLE — no caller option can disable it.
-  const requireArtifact = hasRequiredFields
-    && isArtifactGateRequired(workerKind, options.taskKind);
   if (requireArtifact) {
     // Reuse a pre-computed artifact object when the caller already evaluated
     // the same output (e.g., the hard-block gate in worker_runner), avoiding
@@ -1148,14 +1489,14 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
   if (!report && hasRequiredFields) {
     if (hasReportPlaceholders) {
       gaps.push(VERIFICATION_REPORT_TEMPLATE_GAP);
-      return { passed: false, gaps, evidence, reason: "verification report placeholders not replaced" };
+      return finalizeValidation(false, "verification report placeholders not replaced");
     }
     if (hasMalformedReportEnvelope) {
       gaps.push(VERIFICATION_REPORT_MALFORMED_GAP);
-      return { passed: false, gaps, evidence, reason: "malformed verification report" };
+      return finalizeValidation(false, "malformed verification report");
     }
     gaps.push("VERIFICATION_REPORT missing — worker did not provide any verification evidence");
-    return { passed: false, gaps, evidence, reason: "no verification report" };
+    return finalizeValidation(false, "no verification report");
   }
 
   if (hasReportPlaceholders) {
@@ -1228,12 +1569,10 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
     }
   }
 
-  return {
-    passed: gaps.length === 0,
-    gaps,
-    evidence,
-    reason: gaps.length === 0 ? "all required evidence present and passing" : `${gaps.length} verification gap(s)`
-  };
+  return finalizeValidation(
+    gaps.length === 0,
+    gaps.length === 0 ? "all required evidence present and passing" : `${gaps.length} verification gap(s)`,
+  );
 }
 
 /**

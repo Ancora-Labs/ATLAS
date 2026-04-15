@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildVerificationScorecard,
   buildReworkInstruction,
   decideRework,
   parseResponsiveMatrix,
@@ -28,7 +29,10 @@ import {
   NON_SPECIFIC_VERIFICATION_GAP,
   parseToolExecutionTelemetry,
   checkHookEnvelopeDecisionPairing,
+  VERIFICATION_FAILURE_CODE,
 } from "../../src/core/verification_gate.js";
+import { buildVerificationScorecardTelemetry } from "../../src/core/cycle_analytics.js";
+import { rankModelsByTaskKindExpectedValue } from "../../src/core/model_policy.js";
 
 describe("verification_gate parse helpers", () => {
   it("parses canonical VERIFICATION_REPORT fields", () => {
@@ -330,6 +334,135 @@ describe("verification_gate worker contract enforcement", () => {
     const result = validateWorkerContract("backend", parsedResponse);
     assert.equal(result.passed, true);
     assert.equal(result.gaps.length, 0);
+  });
+});
+
+describe("verification_gate weighted scorecard", () => {
+  it("builds a weighted scorecard with standardized failure codes for failed evidence", () => {
+    const scorecard = buildVerificationScorecard({
+      status: "done",
+      passed: false,
+      report: {
+        build: "pass",
+        tests: "fail",
+        edgeCases: "pass",
+        security: "pass",
+      },
+      artifact: { hasArtifact: false },
+      prUrl: "",
+      gaps: [
+        "TESTS reported as FAIL — worker must fix before done",
+        "BOX_PR_URL missing — worker must push a branch and open a real GitHub PR. Prose claims of completion are not accepted.",
+      ],
+    });
+    assert.equal(scorecard.status, "fail");
+    assert.equal(scorecard.primaryFailureCode, VERIFICATION_FAILURE_CODE.IA);
+    assert.ok(scorecard.blockingFailureCodes.includes(VERIFICATION_FAILURE_CODE.IA));
+    assert.ok(scorecard.blockingFailureCodes.includes(VERIFICATION_FAILURE_CODE.CLE));
+    assert.ok(scorecard.normalizedScore < 1);
+  });
+
+  it("validateWorkerContract includes scorecard and failure-code evidence for malformed reports", () => {
+    const result = validateWorkerContract("backend", {
+      status: "done",
+      fullOutput: [
+        "BOX_MERGED_SHA=abc1234",
+        "CLEAN_TREE_STATUS=clean",
+        "===NPM TEST OUTPUT START===",
+        "# pass 10",
+        "===NPM TEST OUTPUT END===",
+        "===VERIFICATION_REPORT===",
+        "BUILD=<pass|fail|n/a>",
+        "===END_VERIFICATION===",
+        "BOX_PR_URL=https://github.com/org/repo/pull/88",
+      ].join("\n"),
+    });
+    const scorecard = result.evidence.scorecard as {
+      primaryFailureCode: string | null;
+      blockingFailureCodes: string[];
+      normalizedScore: number;
+    };
+    assert.equal(scorecard.primaryFailureCode, VERIFICATION_FAILURE_CODE.INVALID_FORMAT);
+    assert.ok(scorecard.blockingFailureCodes.includes(VERIFICATION_FAILURE_CODE.INVALID_FORMAT));
+    assert.ok(scorecard.normalizedScore < 1);
+  });
+});
+
+describe("verification telemetry routing feedback", () => {
+  it("aggregates verification failure codes by task kind, including timeout failures", () => {
+    const telemetry = buildVerificationScorecardTelemetry([
+      {
+        status: "done",
+        taskKind: "backend",
+        verificationEvidence: {
+          passed: false,
+          report: { build: "pass", tests: "fail", edgeCases: "pass", security: "pass" },
+          gaps: ["TESTS reported as FAIL — worker must fix before done"],
+          prUrl: "https://github.com/org/repo/pull/1",
+        },
+      },
+      {
+        status: "timeout",
+        taskKind: "backend",
+      },
+    ]);
+    assert.equal(telemetry.sampleCount, 2);
+    assert.equal(telemetry.byTaskKind.backend.sampleCount, 2);
+    assert.equal(telemetry.byTaskKind.backend.failureCodeCounts[VERIFICATION_FAILURE_CODE.IA], 1);
+    assert.equal(telemetry.byTaskKind.backend.failureCodeCounts[VERIFICATION_FAILURE_CODE.TLE], 1);
+    assert.ok(telemetry.byTaskKind.backend.averageWeightedScore < 1);
+  });
+
+  it("penalizes expected-value routing when verification telemetry shows repeated policy failures", () => {
+    const analyticsBase = {
+      modelRoutingTelemetry: {
+        byTaskKind: {
+          backend: {
+            sampleCount: 6,
+            lineageLinkedSampleCount: 6,
+            lineageLinkedRatio: 1,
+            default: { successProbability: 0.8, capacityImpact: 0.9, requestCost: 1 },
+            models: {
+              "Claude Sonnet 4.6": { successProbability: 0.85, capacityImpact: 0.95, requestCost: 1 },
+              "Claude Haiku 4": { successProbability: 0.7, capacityImpact: 0.75, requestCost: 1 },
+            },
+          },
+        },
+      },
+      routingROISummary: { linkedRatio: 1, overallLinkedROI: 0.8 },
+    };
+    const withoutPenalty = rankModelsByTaskKindExpectedValue(
+      "backend",
+      ["Claude Sonnet 4.6", "Claude Haiku 4"],
+      analyticsBase,
+    );
+    const withPenalty = rankModelsByTaskKindExpectedValue(
+      "backend",
+      ["Claude Sonnet 4.6", "Claude Haiku 4"],
+      {
+        ...analyticsBase,
+        verificationTelemetry: {
+          byTaskKind: {
+            backend: {
+              sampleCount: 6,
+              averageWeightedScore: 0.5,
+              dominantFailureCode: VERIFICATION_FAILURE_CODE.POLICY_VIOLATION,
+              failureCodeCounts: {
+                [VERIFICATION_FAILURE_CODE.CLE]: 0,
+                [VERIFICATION_FAILURE_CODE.IA]: 1,
+                [VERIFICATION_FAILURE_CODE.INVALID_FORMAT]: 0,
+                [VERIFICATION_FAILURE_CODE.TLE]: 0,
+                [VERIFICATION_FAILURE_CODE.POLICY_VIOLATION]: 3,
+                [VERIFICATION_FAILURE_CODE.HARNESS_ARTIFACT]: 0,
+              },
+            },
+          },
+        },
+      },
+    );
+    assert.ok(withPenalty.reason.includes("verification-penalty"));
+    assert.ok(withPenalty.scoreByModel["Claude Sonnet 4.6"] < withoutPenalty.scoreByModel["Claude Sonnet 4.6"]);
+    assert.ok(withPenalty.scoreByModel["Claude Haiku 4"] < withoutPenalty.scoreByModel["Claude Haiku 4"]);
   });
 });
 
