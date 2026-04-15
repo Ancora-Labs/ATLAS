@@ -154,6 +154,12 @@ export const PACKET_VIOLATION_CODE = Object.freeze({
   MISSING_WORKER_TOPOLOGY:       "missing_worker_topology",
   /** executionStrategy.workerTopology does not match the authoritative plan shape. */
   INVALID_WORKER_TOPOLOGY:       "invalid_worker_topology",
+  /** executionStrategy wave-role assignments diverge from the emitted plans[]. */
+  EXECUTION_STRATEGY_ROLE_WAVE_MISMATCH: "execution_strategy_role_wave_mismatch",
+  /** executionStrategy/plans exceed the actionable-step complexity cap before dispatch. */
+  EXECUTION_STRATEGY_ACTIONABLE_LIMIT: "execution_strategy_actionable_limit",
+  /** wave_parallel is reserved for plans with explicit independent-execution evidence. */
+  WAVE_PARALLEL_EVIDENCE_REQUIRED: "wave_parallel_evidence_required",
 });
 
 /**
@@ -502,6 +508,229 @@ function buildExecutionStrategyTopologySeedPlans(payload: any): any[] {
   return seeded;
 }
 
+function normalizeWaveRoleRefKey(role: string, wave: number): string {
+  return `${wave}:${role}`;
+}
+
+function collectPlanRoleWaveRefs(plans: any[]): Array<{ role: string; wave: number }> {
+  if (!Array.isArray(plans) || plans.length === 0) return [];
+  const refs = new Map<string, { role: string; wave: number }>();
+  for (const plan of plans) {
+    const role = normalizePlanRoleToWorkerName(plan?.role);
+    if (!role) continue;
+    const wave = normalizeWaveNumber(plan?.wave, 1);
+    const key = normalizeWaveRoleRefKey(role, wave);
+    if (!refs.has(key)) refs.set(key, { role, wave });
+  }
+  return [...refs.values()].sort((left, right) => left.wave - right.wave || left.role.localeCompare(right.role));
+}
+
+function collectExecutionStrategyWaveRoleRefs(payload: any): Array<{ role: string; wave: number }> {
+  const executionStrategy = payload?.executionStrategy;
+  const waves = Array.isArray(executionStrategy?.waves) ? executionStrategy.waves : [];
+  const refs = new Map<string, { role: string; wave: number }>();
+  for (let index = 0; index < waves.length; index += 1) {
+    const waveObj = waves[index] && typeof waves[index] === "object" ? waves[index] : {};
+    const wave = normalizeWaveNumber((waveObj as any).wave, index + 1);
+    const tasks = Array.isArray((waveObj as any).tasks) ? (waveObj as any).tasks : [];
+    for (const rawTask of tasks) {
+      if (!rawTask || typeof rawTask !== "object") continue;
+      const role = normalizePlanRoleToWorkerName((rawTask as any).role);
+      if (!role) continue;
+      const key = normalizeWaveRoleRefKey(role, wave);
+      if (!refs.has(key)) refs.set(key, { role, wave });
+    }
+  }
+  return [...refs.values()].sort((left, right) => left.wave - right.wave || left.role.localeCompare(right.role));
+}
+
+function normalizePlanScopeFiles(plan: any): string[] {
+  const raw = Array.isArray(plan?.target_files)
+    ? plan.target_files
+    : Array.isArray(plan?.targetFiles)
+      ? plan.targetFiles
+      : Array.isArray(plan?.filesInScope)
+        ? plan.filesInScope
+        : [];
+  const normalizedValues: string[] = [];
+  for (const value of raw) {
+    const normalizedValue = String(value || "").trim().toLowerCase();
+    if (normalizedValue) normalizedValues.push(normalizedValue);
+  }
+  return [...new Set(normalizedValues)];
+}
+
+function buildPlanIdentitySet(plans: any[]): Set<string> {
+  const ids = new Set<string>();
+  for (const plan of plans) {
+    const tokens = [
+      String(plan?.task_id || "").trim(),
+      String(plan?.task || "").trim(),
+      String(plan?.title || "").trim(),
+      String(plan?.id || "").trim(),
+    ].filter(Boolean);
+    for (const token of tokens) ids.add(token);
+  }
+  return ids;
+}
+
+function hasInternalWaveDependencies(plans: any[]): boolean {
+  const identitySet = buildPlanIdentitySet(plans);
+  if (identitySet.size === 0) return false;
+  for (const plan of plans) {
+    const dependencies = [
+      ...(Array.isArray(plan?.dependencies) ? plan.dependencies : []),
+      ...(Array.isArray(plan?.dependsOn) ? plan.dependsOn : []),
+    ].map((value: unknown) => String(value || "").trim()).filter(Boolean);
+    if (dependencies.some((dependency) => identitySet.has(dependency))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function hasEvidenceBackedWaveParallelPlans(
+  plans: any[],
+  opts: { workerTopology?: WorkerTopologyContract | null } = {},
+): boolean {
+  const workerTopology = opts.workerTopology ?? null;
+  if (workerTopology?.continuation?.preservesMultiLaneAdmission === true) {
+    return true;
+  }
+  if (!Array.isArray(plans) || plans.length < 2) return false;
+  const plansByWave = new Map<number, any[]>();
+  for (const plan of plans) {
+    const wave = normalizeWaveNumber(plan?.wave, 1);
+    const bucket = plansByWave.get(wave) ?? [];
+    bucket.push(plan);
+    plansByWave.set(wave, bucket);
+  }
+  for (const wavePlans of plansByWave.values()) {
+    if (wavePlans.length < 2) continue;
+    if (hasInternalWaveDependencies(wavePlans)) continue;
+    const scopedPlans = wavePlans.map((plan) => normalizePlanScopeFiles(plan));
+    if (scopedPlans.some((scope) => scope.length === 0)) continue;
+    let overlapping = false;
+    for (let leftIndex = 0; leftIndex < scopedPlans.length && !overlapping; leftIndex += 1) {
+      const left = new Set(scopedPlans[leftIndex]);
+      for (let rightIndex = leftIndex + 1; rightIndex < scopedPlans.length; rightIndex += 1) {
+        if (scopedPlans[rightIndex].some((file) => left.has(file))) {
+          overlapping = true;
+          break;
+        }
+      }
+    }
+    if (!overlapping) return true;
+  }
+  return false;
+}
+
+export function resolveEvidenceBackedExecutionPattern(
+  plans: any[],
+  opts: {
+    planningMode?: unknown;
+    workerTopology?: WorkerTopologyContract | null;
+    uncertainty?: unknown;
+  } = {},
+): ExecutionPattern | null {
+  const planningMode = normalizePrometheusPlanningMode(
+    opts.planningMode,
+    PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION,
+  ) || PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION;
+  const workerTopology = opts.workerTopology ?? buildWorkerTopologyContract(plans, { planningMode });
+  const selected = selectExecutionPatternForPlans(plans, {
+    planningMode,
+    workerTopology,
+    uncertainty: opts.uncertainty,
+  });
+  if (selected !== "wave_parallel") return selected;
+  if (hasEvidenceBackedWaveParallelPlans(plans, { workerTopology })) return selected;
+  return workerTopology.workerCount > 1 ? "bounded_chain" : "single_worker";
+}
+
+export interface ExecutionStrategyStructureValidationResult {
+  ok: boolean;
+  expectedExecutionPattern: ExecutionPattern | null;
+  waveRoleDiffs: string[];
+  actionableStepReason: string | null;
+  violations: PlanViolation[];
+}
+
+export function validateExecutionStrategyStructure(
+  payload: any,
+  opts: { maxActionableStepsPerPacket?: number } = {},
+): ExecutionStrategyStructureValidationResult {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const executionStrategy = source.executionStrategy && typeof source.executionStrategy === "object"
+    ? source.executionStrategy
+    : {};
+  const rawPlanningMode = (executionStrategy as any).planningMode ?? source.planningMode;
+  const planningMode = normalizePrometheusPlanningMode(rawPlanningMode, PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION)
+    || PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION;
+  const seedPlans = buildExecutionStrategyTopologySeedPlans(source);
+  const workerTopology = buildWorkerTopologyContract(seedPlans, { planningMode });
+  const expectedExecutionPattern = resolveEvidenceBackedExecutionPattern(seedPlans, {
+    planningMode,
+    workerTopology,
+    uncertainty:
+      (executionStrategy as any).planningUncertainty
+      ?? source.planningUncertainty
+      ?? source.uncertainty,
+  });
+  const executionRefs = collectExecutionStrategyWaveRoleRefs(source);
+  const planRefs = collectPlanRoleWaveRefs(Array.isArray(source.plans) ? source.plans : []);
+  const executionRefKeys = new Set(executionRefs.map((ref) => normalizeWaveRoleRefKey(ref.role, ref.wave)));
+  const planRefKeys = new Set(planRefs.map((ref) => normalizeWaveRoleRefKey(ref.role, ref.wave)));
+  const missingPlanCoverage = executionRefs
+    .filter((ref) => !planRefKeys.has(normalizeWaveRoleRefKey(ref.role, ref.wave)))
+    .map((ref) => `executionStrategy wave ${ref.wave} declares role "${ref.role}" without a matching plans[] role/wave entry`);
+  const extraPlanCoverage = planRefs
+    .filter((ref) => !executionRefKeys.has(normalizeWaveRoleRefKey(ref.role, ref.wave)))
+    .map((ref) => `plans[] contains role "${ref.role}" in wave ${ref.wave} but executionStrategy omits that role/wave assignment`);
+  const waveRoleDiffs = [...missingPlanCoverage, ...extraPlanCoverage];
+  const actionableCap = Number.isFinite(Number(opts.maxActionableStepsPerPacket)) && Number(opts.maxActionableStepsPerPacket) > 0
+    ? Math.floor(Number(opts.maxActionableStepsPerPacket))
+    : MAX_ACTIONABLE_STEPS_PER_PACKET;
+  const actionableStepGate = validatePacketBatchAdmission(Array.isArray(source.plans) ? source.plans : [], actionableCap);
+  const violations: PlanViolation[] = [];
+  if (waveRoleDiffs.length > 0) {
+    violations.push({
+      field: "executionStrategy.waves",
+      message: waveRoleDiffs.join("; "),
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+      code: PACKET_VIOLATION_CODE.EXECUTION_STRATEGY_ROLE_WAVE_MISMATCH,
+    });
+  }
+  if (actionableStepGate.blocked && actionableStepGate.reason) {
+    violations.push({
+      field: "plans",
+      message: actionableStepGate.reason,
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+      code: PACKET_VIOLATION_CODE.EXECUTION_STRATEGY_ACTIONABLE_LIMIT,
+    });
+  }
+  if (
+    normalizeExecutionPattern((executionStrategy as any).executionPattern, null) === "wave_parallel"
+    && expectedExecutionPattern !== "wave_parallel"
+  ) {
+    violations.push({
+      field: "executionStrategy.executionPattern",
+      message:
+        `executionStrategy.executionPattern="wave_parallel" requires evidence-backed independent scopes; `
+        + `authoritative pattern resolved to "${expectedExecutionPattern}"`,
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+      code: PACKET_VIOLATION_CODE.WAVE_PARALLEL_EVIDENCE_REQUIRED,
+    });
+  }
+  return {
+    ok: violations.length === 0,
+    expectedExecutionPattern,
+    waveRoleDiffs,
+    actionableStepReason: actionableStepGate.reason,
+    violations,
+  };
+}
+
 export interface ExecutionStrategyContractValidationResult {
   valid: boolean;
   planningMode: PrometheusPlanningMode;
@@ -523,7 +752,7 @@ export function validateExecutionStrategyContract(payload: any): ExecutionStrate
   const executionPattern = normalizeExecutionPattern(rawExecutionPattern, null);
   const seedPlans = buildExecutionStrategyTopologySeedPlans(source);
   const workerTopology = buildWorkerTopologyContract(seedPlans, { planningMode });
-  const expectedExecutionPattern = selectExecutionPatternForPlans(seedPlans, {
+  const expectedExecutionPattern = resolveEvidenceBackedExecutionPattern(seedPlans, {
     planningMode,
     workerTopology,
     uncertainty:
@@ -604,6 +833,11 @@ export function validateExecutionStrategyContract(payload: any): ExecutionStrate
       });
     }
   }
+
+  const structureValidation = validateExecutionStrategyStructure(source, {
+    maxActionableStepsPerPacket: source?.maxActionableStepsPerPacket,
+  });
+  violations.push(...structureValidation.violations);
 
   return {
     valid: violations.length === 0,

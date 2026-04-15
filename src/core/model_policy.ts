@@ -16,7 +16,7 @@ import path from "node:path";
 import { readJson, writeJson } from "./fs_utils.js";
 import { scheduleBoundedHypothesisCandidates, type ScheduledHypothesisCandidate } from "./hypothesis_scheduler.js";
 import {
-  resolveStableInterventionLineage,
+  requireStableInterventionLineage,
   type InterventionLineageContract,
 } from "./state_tracker.js";
 import { MIN_TELEMETRY_SAMPLE_THRESHOLD } from "./telemetry_thresholds.js";
@@ -560,7 +560,7 @@ export async function appendRouteROIEntry(
 
   const ledger: RouteROIEntry[] = await readJson(filePath, []);
   const safeList: RouteROIEntry[] = Array.isArray(ledger) ? ledger : [];
-  const { lineage, lineageJoinKey } = resolveStableInterventionLineage(
+  const { lineage, lineageJoinKey } = requireStableInterventionLineage(
     entry?.lineage,
     {
       lineageId: entry?.lineageId ?? null,

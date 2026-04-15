@@ -30,6 +30,10 @@ import {
   parseToolExecutionTelemetry,
   checkHookEnvelopeDecisionPairing,
   VERIFICATION_FAILURE_CODE,
+  FINISH_CODE,
+  LIFECYCLE_OUTCOME,
+  deriveFinishCode,
+  deriveLifecycleOutcome,
 } from "../../src/core/verification_gate.js";
 import { buildVerificationScorecardTelemetry } from "../../src/core/cycle_analytics.js";
 import { rankModelsByTaskKindExpectedValue } from "../../src/core/model_policy.js";
@@ -115,6 +119,29 @@ describe("verification_gate tool execution telemetry", () => {
     });
     assert.equal(result.passed, false);
     assert.ok(result.gaps.some((g) => g.includes("TOOL_POLICY denied execute call")));
+  });
+});
+
+describe("verification_gate lifecycle taxonomy", () => {
+  it("derives verified completion when done includes verification evidence", () => {
+    const finishCode = deriveFinishCode({
+      status: "done",
+      verificationEvidence: { build: "pass", tests: "pass" },
+    });
+
+    assert.equal(finishCode, FINISH_CODE.VERIFIED_DONE);
+    assert.equal(deriveLifecycleOutcome(finishCode), LIFECYCLE_OUTCOME.CLOSED);
+  });
+
+  it("keeps unverified done claims in a continuing lifecycle", () => {
+    const finishCode = deriveFinishCode({
+      status: "done",
+      verificationEvidence: { build: "fail", tests: "fail" },
+      fullOutput: "worker said done without verification markers",
+    });
+
+    assert.equal(finishCode, FINISH_CODE.UNVERIFIED_DONE_CLAIM);
+    assert.equal(deriveLifecycleOutcome(finishCode), LIFECYCLE_OUTCOME.CONTINUING);
   });
 });
 

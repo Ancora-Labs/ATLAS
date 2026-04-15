@@ -2129,6 +2129,62 @@ describe("modelRoutingTelemetry schema contract", () => {
     assert.ok(telemetry.joinedLineages[0]?.surfaces.includes("workerOutcome"));
   });
 
+  it("derives postmortem lineage joins from closure evidence envelopes", () => {
+    const telemetry = buildInterventionLineageTelemetry({
+      premiumUsageLog: [
+        {
+          worker: "quality-worker",
+          model: "Claude Sonnet 4.6",
+          taskKind: "test",
+          outcome: "done",
+          lineage: {
+            taskId: "task-postmortem-join",
+            taskKind: "test",
+            role: "quality-worker",
+          },
+          lineageJoinKey: "task:task-postmortem-join",
+        },
+      ],
+      workerResults: [
+        {
+          roleName: "quality-worker",
+          status: "done",
+          taskId: "task-postmortem-join",
+          verificationEvidence: { build: "pass", tests: "pass" },
+          lineage: {
+            taskId: "task-postmortem-join",
+            taskKind: "test",
+            role: "quality-worker",
+          },
+          lineageJoinKey: "task:task-postmortem-join",
+        },
+      ],
+      postmortemOutcomes: [
+        {
+          workerName: "quality-worker",
+          finishCode: "verified_done",
+          lifecycleOutcome: "closed",
+          recommendation: "proceed",
+          closureEvidenceEnvelope: {
+            task: "Backfill closure joins",
+            taskIdentity: "test::task-postmortem-join",
+            continuationFamilyKey: "task-postmortem-join",
+            taskKind: "test",
+            lifecycleState: "closed",
+          },
+          lineageJoinKey: "task:task-postmortem-join",
+        },
+      ],
+    });
+
+    assert.equal(telemetry.surfaceCoverage.postmortem, 1);
+    assert.equal(telemetry.surfaceCoverage.workerOutcome, 1);
+    assert.equal(telemetry.verifiedCapacityPerPremiumRequest, 1);
+    assert.equal(telemetry.joinedLineages[0]?.joinKey, "task:task-postmortem-join");
+    assert.equal(telemetry.byInterventionType.postmortem.finishCodeCounts.verified_done, 1);
+    assert.equal(telemetry.byInterventionType.postmortem.lifecycleOutcomeCounts.closed, 1);
+  });
+
   it("buildModelRoutingTelemetry aggregates usage entries by taskKind and model", () => {
     const log = [
       { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done", lineageId: "impl-1" },

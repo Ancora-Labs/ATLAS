@@ -803,6 +803,80 @@ export interface VerificationFailureCodeSummary {
   primary: string | null;
 }
 
+export const FINISH_CODE = Object.freeze({
+  VERIFIED_DONE: "verified_done",
+  VERIFIED_SKIPPED: "verified_skipped",
+  UNVERIFIED_DONE_CLAIM: "unverified_done_claim",
+  VERIFICATION_REWORK: "verification_rework",
+  CONTINUING_PARTIAL: "continuing_partial",
+  BLOCKED: "blocked",
+  EXECUTION_FAILED: "execution_failed",
+  TIMEOUT: "timeout",
+  NO_SIGNAL: "no_signal",
+} as const);
+
+export const LIFECYCLE_OUTCOME = Object.freeze({
+  CLOSED: "closed",
+  CONTINUING: "continuing",
+  BLOCKED: "blocked",
+  FAILED: "failed",
+  NO_SIGNAL: "no_signal",
+} as const);
+
+export function deriveFinishCode(input: {
+  status?: unknown;
+  verificationEvidence?: unknown;
+  verificationReport?: Record<string, string> | null;
+  dispatchContract?: { doneWorkerWithVerificationReportEvidence?: unknown } | null;
+  fullOutput?: unknown;
+}): string {
+  const status = String(input?.status || "").trim().toLowerCase();
+  const verificationEvidence = input?.verificationEvidence && typeof input.verificationEvidence === "object"
+    ? input.verificationEvidence as Record<string, unknown>
+    : null;
+  const report = input?.verificationReport && typeof input.verificationReport === "object"
+    ? input.verificationReport
+    : null;
+  const hasVerificationEvidence =
+    input?.dispatchContract?.doneWorkerWithVerificationReportEvidence === true
+    || String(verificationEvidence?.build || "").trim().toLowerCase() === "pass"
+    || String(verificationEvidence?.tests || "").trim().toLowerCase() === "pass"
+    || Boolean(report && Object.values(report).some((value) => String(value || "").trim().toLowerCase() === "pass"))
+    || hasVerificationReportEvidence(input?.fullOutput);
+
+  if (status === "done" || status === "success") {
+    return hasVerificationEvidence ? FINISH_CODE.VERIFIED_DONE : FINISH_CODE.UNVERIFIED_DONE_CLAIM;
+  }
+  if (status === "skipped") return FINISH_CODE.VERIFIED_SKIPPED;
+  if (status === "verification_failed") return FINISH_CODE.VERIFICATION_REWORK;
+  if (status === "partial") return FINISH_CODE.CONTINUING_PARTIAL;
+  if (status === "blocked") return FINISH_CODE.BLOCKED;
+  if (status === "timeout") return FINISH_CODE.TIMEOUT;
+  if (status === "error" || status === "failed" || status === "transient_error" || status === "rollback") {
+    return FINISH_CODE.EXECUTION_FAILED;
+  }
+  return FINISH_CODE.NO_SIGNAL;
+}
+
+export function deriveLifecycleOutcome(finishCode: unknown): string {
+  switch (String(finishCode || "").trim().toLowerCase()) {
+    case FINISH_CODE.VERIFIED_DONE:
+    case FINISH_CODE.VERIFIED_SKIPPED:
+      return LIFECYCLE_OUTCOME.CLOSED;
+    case FINISH_CODE.UNVERIFIED_DONE_CLAIM:
+    case FINISH_CODE.VERIFICATION_REWORK:
+    case FINISH_CODE.CONTINUING_PARTIAL:
+      return LIFECYCLE_OUTCOME.CONTINUING;
+    case FINISH_CODE.BLOCKED:
+      return LIFECYCLE_OUTCOME.BLOCKED;
+    case FINISH_CODE.EXECUTION_FAILED:
+    case FINISH_CODE.TIMEOUT:
+      return LIFECYCLE_OUTCOME.FAILED;
+    default:
+      return LIFECYCLE_OUTCOME.NO_SIGNAL;
+  }
+}
+
 export interface VerificationScorecardCriterion {
   key: string;
   weight: number;

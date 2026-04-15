@@ -24,15 +24,15 @@ import {
   appendProgress,
   appendLineageEntry,
   appendFailureClassification,
+  requireStableInterventionLineage,
   readPromptCacheTelemetry,
   resolveInterventionLineageJoinKey,
-  resolveStableInterventionLineage,
   type InterventionLineageContract,
 } from "./state_tracker.js";
 import { buildAgentArgs, nameToSlug, resolveAgentExecutionProfile, resolveAgentSessionInputPolicy } from "./agent_loader.js";
 import { buildVerificationChecklist, CANONICAL_VERIFICATION_REPORT_TEMPLATE } from "./verification_profiles.js";
 import { getVerificationCommands, classifyNodeTestGlobWindowsArtifact } from "./verification_command_registry.js";
-import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence, parseToolExecutionTelemetry, checkCancellationAtVerification, auditRuntimeHookEnforcement } from "./verification_gate.js";
+import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence, parseToolExecutionTelemetry, checkCancellationAtVerification, auditRuntimeHookEnforcement, deriveFinishCode, deriveLifecycleOutcome } from "./verification_gate.js";
 import {
   writeBoundaryCheckpoint,
   resetAttemptBoundary,
@@ -337,6 +337,8 @@ function normalizeReflectionMemoryEntry(entry) {
       status: String(outcome?.status || "unknown"),
       retryAction: outcome?.retryAction != null ? String(outcome.retryAction) : null,
       failureClass: outcome?.failureClass != null ? String(outcome.failureClass) : null,
+      finishCode: outcome?.finishCode != null ? String(outcome.finishCode) : null,
+      lifecycleOutcome: outcome?.lifecycleOutcome != null ? String(outcome.lifecycleOutcome) : null,
       recordedAt: String(outcome?.recordedAt || entry.recordedAt || new Date(0).toISOString()),
     },
     retryState,
@@ -677,6 +679,9 @@ async function persistReflectionMemory(config, input: {
   }
   const nextEntries = Array.isArray(payload?.entries) ? payload.entries : [];
   const recordedAt = new Date().toISOString();
+  const lifecycle = buildWorkerLifecycleResult({
+    status: input.status,
+  });
   nextEntries.push({
     roleName: String(input.roleName || ""),
     taskKind: String(input.taskKind || "general"),
@@ -686,6 +691,8 @@ async function persistReflectionMemory(config, input: {
       status: String(input.status || "unknown"),
       retryAction: input.retryAction ? String(input.retryAction) : null,
       failureClass: input.failureClass ? String(input.failureClass) : null,
+      finishCode: lifecycle.finishCode,
+      lifecycleOutcome: lifecycle.lifecycleOutcome,
       recordedAt,
     },
     retryState: normalizeStoredRetryState(input.retryState, WORKER_EXECUTION_PHASE.PLAN),
@@ -767,6 +774,26 @@ export function resolvePostVerificationTelemetryOutcome(
   if (reworkDecision?.shouldRework) return TERMINATION_CAUSE.VERIFICATION_FAILED;
   if (reworkDecision?.shouldEscalate && normalizedStatus === "done") return "blocked";
   return normalizedStatus || "unknown";
+}
+
+function buildWorkerLifecycleResult(input: {
+  status?: unknown;
+  verificationEvidence?: unknown;
+  verificationReport?: Record<string, string> | null;
+  dispatchContract?: DispatchVerificationContract | null;
+  fullOutput?: unknown;
+}): { finishCode: string; lifecycleOutcome: string } {
+  const finishCode = deriveFinishCode({
+    status: input?.status,
+    verificationEvidence: input?.verificationEvidence,
+    verificationReport: input?.verificationReport ?? null,
+    dispatchContract: input?.dispatchContract ?? null,
+    fullOutput: input?.fullOutput,
+  });
+  return {
+    finishCode,
+    lifecycleOutcome: deriveLifecycleOutcome(finishCode),
+  };
 }
 
 type SpawnAsyncResult = {
@@ -1042,10 +1069,6 @@ export function resolveWorkerExecutionLineageId(instruction: any): string | null
   return buildLineageId(fingerprint, rawTaskId, attempt);
 }
 
-function hasMeaningfulLineageContract(lineage: InterventionLineageContract): boolean {
-  return Object.entries(lineage).some(([key, value]) => key !== "schemaVersion" && value !== null);
-}
-
 export function buildWorkerRuntimeLineage(
   instruction: any,
   defaults: {
@@ -1057,16 +1080,16 @@ export function buildWorkerRuntimeLineage(
     rerouteReasonCode?: string | null;
   } = {},
 ): {
-  lineage: InterventionLineageContract | null;
-  lineageJoinKey: string | null;
-  checkpointThreadId: string | null;
+  lineage: InterventionLineageContract;
+  lineageJoinKey: string;
+  checkpointThreadId: string;
 } {
   const taskKind = String(instruction?.taskKind || "general").trim() || "general";
   const taskText = String(instruction?.task || "").trim();
   const fallbackTaskIdentity = instruction?.semanticKey
     ? String(instruction.semanticKey).trim()
     : `${taskKind}::${buildTaskFingerprint(taskKind, taskText).slice(0, 24)}`;
-  const { lineage, lineageJoinKey } = resolveStableInterventionLineage(
+  const { lineage, lineageJoinKey } = requireStableInterventionLineage(
     instruction?.lineageContract ?? instruction?.lineage ?? instruction,
     {
       lineageId: resolveWorkerExecutionLineageId(instruction),
@@ -1091,17 +1114,10 @@ export function buildWorkerRuntimeLineage(
       role: defaults.roleName ?? null,
     },
   );
-  if (!hasMeaningfulLineageContract(lineage)) {
-    return {
-      lineage: null,
-      lineageJoinKey: null,
-      checkpointThreadId: null,
-    };
-  }
   return {
     lineage,
     lineageJoinKey,
-    checkpointThreadId: lineageJoinKey || lineage.lineageId || lineage.taskId || lineage.taskIdentity || null,
+    checkpointThreadId: lineageJoinKey,
   };
 }
 
@@ -3951,6 +3967,13 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   }
 
   const finalTelemetryOutcome = resolvePostVerificationTelemetryOutcome(parsed.status);
+  const lifecycleResult = buildWorkerLifecycleResult({
+    status: parsed.status,
+    verificationEvidence: parsed.verificationEvidence || null,
+    verificationReport: parsed.verificationReport || null,
+    dispatchContract,
+    fullOutput: parsed.fullOutput,
+  });
   logPremiumUsage(config, roleName, model, instruction.taskKind, Date.now() - startMs, {
     outcome: finalTelemetryOutcome,
     taskId: instruction.taskId || instruction.task || null,
@@ -4210,6 +4233,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     verificationReport: parsed.verificationReport,
     responsiveMatrix: parsed.responsiveMatrix,
     verificationEvidence: parsed.verificationEvidence || null,
+    finishCode: lifecycleResult.finishCode,
+    lifecycleOutcome: lifecycleResult.lifecycleOutcome,
     dispatchContract,
     lineage: runtimeLineage.lineage,
     lineageJoinKey: runtimeLineage.lineageJoinKey,

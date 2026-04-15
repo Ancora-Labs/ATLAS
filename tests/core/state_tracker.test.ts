@@ -16,9 +16,11 @@ import {
   appendInterventionRetirementEvidence,
   appendPolicyClosureEvidence,
   enforceStateRetention,
+  hasMeaningfulInterventionLineageContract,
   loadInterventionRetirementEvidence,
   loadPolicyClosureHistory,
   loadInterventionOptimizerLog,
+  requireStableInterventionLineage,
   appendInterventionOptimizerEntry,
   appendGovernanceBlockEvent,
   loadGovernanceBlockSummary,
@@ -95,6 +97,33 @@ describe("CACHE_COMPLETION_OUTCOME enum", () => {
     assert.equal(CACHE_COMPLETION_OUTCOME.TIMEOUT,  "timeout");
     assert.equal(CACHE_COMPLETION_OUTCOME.UNKNOWN,  "unknown");
     assert.ok(Object.isFrozen(CACHE_COMPLETION_OUTCOME), "must be frozen");
+  });
+});
+
+describe("intervention lineage helpers", () => {
+  it("requires a stable join key when the defaults contain deterministic task identity", () => {
+    const result = requireStableInterventionLineage(
+      null,
+      {
+        taskId: "task-17",
+        taskKind: "implementation",
+        role: "integration-worker",
+      },
+      {
+        taskKind: "implementation",
+        role: "integration-worker",
+      },
+    );
+
+    assert.equal(result.lineageJoinKey, "task:task-17");
+    assert.equal(hasMeaningfulInterventionLineageContract(result.lineage), true);
+  });
+
+  it("negative path: throws when no lineage fields are available", () => {
+    assert.throws(
+      () => requireStableInterventionLineage(null),
+      /must include at least one non-null field/i,
+    );
   });
 });
 

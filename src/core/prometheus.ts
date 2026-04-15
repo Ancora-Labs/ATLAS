@@ -22,7 +22,6 @@ import {
   normalizeExecutionPattern,
   normalizePrometheusPlanningMode,
   PROMETHEUS_PLANNING_MODE,
-  selectExecutionPatternForPlans,
   type WorkerTopologyContract,
 } from "./role_registry.js";
 import { buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
@@ -74,7 +73,9 @@ import {
   isCiBreakFinding,
   isSystemLearningCiDebtFinding,
   SYSTEM_LEARNING_CI_DEBT_AUDIT_MAX_AGE_MS,
+  resolveEvidenceBackedExecutionPattern,
   validateExecutionStrategyContract,
+  validateExecutionStrategyStructure,
   type WaveTaskObject,
 } from "./plan_contract_validator.js";
 import {
@@ -754,11 +755,22 @@ missing_roles=[${sanitizePromptLine(missingText, 600)}]
 invalid_role_plans=[${sanitizePromptLine(invalidText, 600)}]`;
 }
 
+function buildExecutionStrategyStructureRetryDiff(result: any): string {
+  const waveRoleDiffs = Array.isArray(result?.waveRoleDiffs) ? result.waveRoleDiffs : [];
+  const actionableStepReason = String(result?.actionableStepReason || "").trim() || "none";
+  const expectedExecutionPattern = String(result?.expectedExecutionPattern || "").trim() || "unknown";
+  const waveRoleText = waveRoleDiffs.length > 0 ? waveRoleDiffs.join(" | ") : "none";
+  return `wave_role_diffs=[${sanitizePromptLine(waveRoleText, 800)}]
+actionable_step_reason=[${sanitizePromptLine(actionableStepReason, 600)}]
+expected_execution_pattern=[${sanitizePromptLine(expectedExecutionPattern, 120)}]`;
+}
+
 export const MANDATORY_COVERAGE_ENFORCE_REJECT_TOKEN = "ENFORCE_REJECT";
 export const MANDATORY_COVERAGE_ENFORCE_EXIT_CODE = 2;
 
 /** Error code emitted when role-plan coverage is incomplete after retry. */
 export const ROLE_PLAN_COMPLETENESS_ERROR_CODE = "ROLE_PLAN_COVERAGE_INCOMPLETE";
+export const EXECUTION_STRATEGY_STRUCTURE_ERROR_CODE = "EXECUTION_STRATEGY_STRUCTURE_INVALID";
 
 /**
  * Thrown by the execution-strategy role coverage gate when required roles have no
@@ -783,6 +795,23 @@ export class RolePlanCompletenessError extends Error {
     this.missingRoles = Array.isArray(missingRoles) ? [...missingRoles] : [];
     this.requiredRoles = Array.isArray(requiredRoles) ? [...requiredRoles] : [];
     this.retried = Boolean(retried);
+  }
+}
+
+export class ExecutionStrategyStructureError extends Error {
+  readonly errorCode = EXECUTION_STRATEGY_STRUCTURE_ERROR_CODE;
+  readonly issues: string[];
+  readonly retried: boolean;
+
+  constructor(issues: string[], retried: boolean) {
+    const preview = Array.isArray(issues) ? issues.slice(0, 5).join(" | ") : "";
+    super(
+      `Execution strategy structure validation failed${retried ? " after retry" : ""}`
+      + (preview ? `: ${preview}` : "")
+    );
+    this.name = "ExecutionStrategyStructureError";
+    this.issues = Array.isArray(issues) ? issues : [];
+    this.retried = retried;
   }
 }
 
@@ -3722,7 +3751,7 @@ export function normalizeExecutionStrategyWaveTasks(
   const workerTopology = buildWorkerTopologyContract(seededPlans, { planningMode });
   const executionPattern = normalizeExecutionPattern(
     normalizedStrategy.executionPattern,
-    selectExecutionPatternForPlans(seededPlans, {
+    resolveEvidenceBackedExecutionPattern(seededPlans, {
       planningMode,
       workerTopology,
       uncertainty: planningUncertainty,
@@ -3766,7 +3795,7 @@ function buildExecutionStrategyFromPlans(
   return {
     planningMode,
     planningUncertainty,
-    executionPattern: selectExecutionPatternForPlans(plans, {
+    executionPattern: resolveEvidenceBackedExecutionPattern(plans, {
       planningMode,
       workerTopology,
       uncertainty: planningUncertainty,
@@ -8254,35 +8283,47 @@ Mandatory requirements:
     );
   }
 
-  // ── Execution-strategy role coverage gate (post-LLM, pre-Athena) ─────────────
-  // Ensure every role declared by executionStrategy.waves[*].tasks has at least one
-  // contract-valid plans[] entry. Retry once with an explicit diff; on repeated
-  // failure throw RolePlanCompletenessError (fail-closed) — never silently inject
-  // skeleton plans, as that would give downstream postmortems a false clean-pass signal.
+  // ── Execution-strategy structural gate (post-LLM, pre-Athena) ─────────────────
+  // Validate role/wave coverage, actionable-step admission, and evidence-backed
+  // execution-pattern selection before Athena sees the packet. Retry once with a
+  // targeted diff; on repeated failure, fail closed.
   {
     const roleCoverageResult = validateAndInjectRolePlans(rawParsedInput, { injectMissing: false });
-    if (!roleCoverageResult.ok && roleCoverageResult.initialMissingRoles.length > 0) {
+    const structureValidation = validateExecutionStrategyStructure(rawParsedInput, {
+      maxActionableStepsPerPacket: config?.planner?.maxActionableStepsPerPacket,
+    });
+    const requiresStructureRetry =
+      (!roleCoverageResult.ok && roleCoverageResult.initialMissingRoles.length > 0)
+      || !structureValidation.ok;
+    if (requiresStructureRetry) {
       const roleDiff = buildRolePlanCoverageRetryDiff(roleCoverageResult);
+      const structureDiff = buildExecutionStrategyStructureRetryDiff(structureValidation);
       await appendProgress(
         config,
-        `[PROMETHEUS][ROLE_PLAN_COVERAGE] Missing executionStrategy role coverage — retrying once with diff: ${roleDiff}`
+        `[PROMETHEUS][EXECUTION_STRATEGY_STRUCTURE] Structural mismatch detected — retrying once with role diff: ${roleDiff} | structure diff: ${structureDiff}`
       );
 
       let retryRoleParsedInput: unknown = null;
       try {
         const retryPrompt = `${contextPrompt}
 
-## EXECUTION_STRATEGY_ROLE_PLAN_RETRY
-The previous response failed execution-strategy role coverage validation.
+## EXECUTION_STRATEGY_STRUCTURE_RETRY
+The previous response failed execution-strategy structural validation.
 Regenerate the full response and companion JSON, then satisfy this contract exactly.
 
 Role coverage diff:
 ${roleDiff}
 
+Structure diff:
+${structureDiff}
+
 Mandatory requirements:
 - Every role declared in executionStrategy.waves[*].tasks objects must have at least one contract-valid plans[] entry.
+- executionStrategy wave/role assignments must match the role/wave pairs in plans[] exactly.
+- Do not exceed the actionable-step cap implied by the emitted plans.
 - Keep role names deterministic and consistent between executionStrategy and plans[].
-- Do not remove existing valid plans unless required to repair invalid role coverage.`;
+- Use wave_parallel only when the same-wave plans carry explicit, non-overlapping file-scope evidence for independent execution.
+- Do not remove existing valid plans unless required to repair structural inconsistencies.`;
 
         const retryArgs = buildAgentArgs({
           agentSlug: "prometheus",
@@ -8337,7 +8378,10 @@ Mandatory requirements:
 
       if (retryRoleParsedInput) {
         const retryCoverage = validateAndInjectRolePlans(retryRoleParsedInput, { injectMissing: false });
-        if (retryCoverage.ok) {
+        const retryStructureValidation = validateExecutionStrategyStructure(retryRoleParsedInput, {
+          maxActionableStepsPerPacket: config?.planner?.maxActionableStepsPerPacket,
+        });
+        if (retryCoverage.ok && retryStructureValidation.ok) {
           rawParsedInput = retryCoverage.output;
           rawParsedInput._executionStrategyRolePlanGate = {
             ok: true,
@@ -8350,20 +8394,50 @@ Mandatory requirements:
             invalidRolePlans: retryCoverage.invalidRolePlans,
             _retryAttempted: true,
           };
+          rawParsedInput._executionStrategyStructureGate = {
+            ok: true,
+            waveRoleDiffs: [],
+            actionableStepReason: null,
+            expectedExecutionPattern: retryStructureValidation.expectedExecutionPattern,
+            violations: [],
+            _retryAttempted: true,
+          };
           await appendProgress(
             config,
-            `[PROMETHEUS][ROLE_PLAN_COVERAGE] Retry succeeded — roles=${retryCoverage.requiredRoles.length}`
+            `[PROMETHEUS][EXECUTION_STRATEGY_STRUCTURE] Retry succeeded — roles=${retryCoverage.requiredRoles.length} pattern=${retryStructureValidation.expectedExecutionPattern || "unknown"}`
           );
         } else {
-          // Fail-closed: retry produced output but still missing roles.
-          // Emit per-missing-role telemetry, then block Athena submission.
           const failedMissingRoles = Array.isArray(retryCoverage.initialMissingRoles) ? retryCoverage.initialMissingRoles : [];
           const failedRequiredRoles = Array.isArray(retryCoverage.requiredRoles) ? retryCoverage.requiredRoles : [];
+          const structureIssues = Array.isArray(retryStructureValidation.violations)
+            ? retryStructureValidation.violations.map((violation: any) => String(violation?.message || "")).filter(Boolean)
+            : [];
           for (const missingRole of failedMissingRoles) {
             await appendProgress(
               config,
               `[PROMETHEUS][ROLE_PLAN_COVERAGE][FAIL_CLOSED] missing_role=${missingRole} required_roles=${failedRequiredRoles.length} retry_attempted=true`
             );
+          }
+          for (const issue of structureIssues) {
+            await appendProgress(
+              config,
+              `[PROMETHEUS][EXECUTION_STRATEGY_STRUCTURE][FAIL_CLOSED] issue=${sanitizePromptLine(issue, 400)} retry_attempted=true`
+            );
+          }
+          rawParsedInput._executionStrategyStructureGate = {
+            ok: false,
+            waveRoleDiffs: retryStructureValidation.waveRoleDiffs,
+            actionableStepReason: retryStructureValidation.actionableStepReason,
+            expectedExecutionPattern: retryStructureValidation.expectedExecutionPattern,
+            violations: retryStructureValidation.violations,
+            _retryAttempted: true,
+          };
+          if (structureIssues.length > 0) {
+            await appendProgress(
+              config,
+              `[PROMETHEUS][EXECUTION_STRATEGY_STRUCTURE][${EXECUTION_STRATEGY_STRUCTURE_ERROR_CODE}] Blocking plan submission: issues=${structureIssues.length}`
+            );
+            throw new ExecutionStrategyStructureError(structureIssues, true);
           }
           await appendProgress(
             config,
@@ -8372,15 +8446,37 @@ Mandatory requirements:
           throw new RolePlanCompletenessError(failedMissingRoles, failedRequiredRoles, true);
         }
       } else {
-        // Fail-closed: retry produced no parsable output; original missing roles remain.
-        // Emit per-missing-role telemetry, then block Athena submission.
         const failedMissingRoles = Array.isArray(roleCoverageResult.initialMissingRoles) ? roleCoverageResult.initialMissingRoles : [];
         const failedRequiredRoles = Array.isArray(roleCoverageResult.requiredRoles) ? roleCoverageResult.requiredRoles : [];
+        const structureIssues = Array.isArray(structureValidation.violations)
+          ? structureValidation.violations.map((violation: any) => String(violation?.message || "")).filter(Boolean)
+          : [];
         for (const missingRole of failedMissingRoles) {
           await appendProgress(
             config,
             `[PROMETHEUS][ROLE_PLAN_COVERAGE][FAIL_CLOSED] missing_role=${missingRole} required_roles=${failedRequiredRoles.length} retry_attempted=true`
           );
+        }
+        for (const issue of structureIssues) {
+          await appendProgress(
+            config,
+            `[PROMETHEUS][EXECUTION_STRATEGY_STRUCTURE][FAIL_CLOSED] issue=${sanitizePromptLine(issue, 400)} retry_attempted=true`
+          );
+        }
+        rawParsedInput._executionStrategyStructureGate = {
+          ok: false,
+          waveRoleDiffs: structureValidation.waveRoleDiffs,
+          actionableStepReason: structureValidation.actionableStepReason,
+          expectedExecutionPattern: structureValidation.expectedExecutionPattern,
+          violations: structureValidation.violations,
+          _retryAttempted: true,
+        };
+        if (structureIssues.length > 0) {
+          await appendProgress(
+            config,
+            `[PROMETHEUS][EXECUTION_STRATEGY_STRUCTURE][${EXECUTION_STRATEGY_STRUCTURE_ERROR_CODE}] Blocking plan submission: issues=${structureIssues.length}`
+          );
+          throw new ExecutionStrategyStructureError(structureIssues, true);
         }
         await appendProgress(
           config,
@@ -8401,13 +8497,22 @@ Mandatory requirements:
         invalidRolePlans: roleCoverageResult.invalidRolePlans,
         _retryAttempted: false,
       };
+      rawParsedInput._executionStrategyStructureGate = {
+        ok: true,
+        waveRoleDiffs: [],
+        actionableStepReason: null,
+        expectedExecutionPattern: structureValidation.expectedExecutionPattern,
+        violations: [],
+        _retryAttempted: false,
+      };
     }
 
     const roleGateMeta = (rawParsedInput as any)._executionStrategyRolePlanGate || {};
+    const structureGateMeta = (rawParsedInput as any)._executionStrategyStructureGate || {};
     await recordCapabilityExecution(
       config,
       "execution-strategy-role-plan-validation",
-      `required=${Array.isArray(roleGateMeta.requiredRoles) ? roleGateMeta.requiredRoles.length : 0} missing=${Array.isArray(roleGateMeta.missingRoles) ? roleGateMeta.missingRoles.length : 0} injected=${Array.isArray(roleGateMeta.injectedRoles) ? roleGateMeta.injectedRoles.length : 0} retried=${roleGateMeta._retryAttempted === true}`,
+      `required=${Array.isArray(roleGateMeta.requiredRoles) ? roleGateMeta.requiredRoles.length : 0} missing=${Array.isArray(roleGateMeta.missingRoles) ? roleGateMeta.missingRoles.length : 0} structural_issues=${Array.isArray(structureGateMeta.violations) ? structureGateMeta.violations.length : 0} expected_pattern=${structureGateMeta.expectedExecutionPattern || "unknown"} retried=${roleGateMeta._retryAttempted === true || structureGateMeta._retryAttempted === true}`,
     );
   }
 

@@ -45,6 +45,7 @@ import { checkForbiddenCommands, normalizeCommandBatch } from "./verification_co
 import { buildWorkerExecutionReportArtifact, validateEvidenceEnvelope } from "./evidence_envelope.js";
 import type { DispatchContractSnapshot, EvidenceEnvelope } from "./evidence_envelope.js";
 import { isEnvelopeUnambiguous } from "./evidence_envelope.js";
+import { deriveFinishCode, deriveLifecycleOutcome } from "./verification_gate.js";
 import {
   buildAthenaReviewFindingArtifact,
   derivePlanContinuationFamilyKey,
@@ -3772,6 +3773,29 @@ function buildPostmortemLifecycleEvidenceEnvelope(
   };
 }
 
+function enrichPostmortemLifecycleTaxonomy(
+  workerResult: EvidenceEnvelope,
+  postmortem: Record<string, unknown>,
+): Record<string, unknown> {
+  const workerRecord = workerResult as Record<string, unknown>;
+  const finishCode = deriveFinishCode({
+    status: workerResult?.status,
+    verificationEvidence: workerResult?.verificationEvidence,
+    verificationReport: workerRecord.verificationReport && typeof workerRecord.verificationReport === "object"
+      ? workerRecord.verificationReport as Record<string, string>
+      : null,
+    dispatchContract: workerResult?.dispatchContract && typeof workerResult.dispatchContract === "object"
+      ? workerResult.dispatchContract as { doneWorkerWithVerificationReportEvidence?: unknown }
+      : null,
+    fullOutput: workerRecord.fullOutput,
+  });
+  return {
+    ...postmortem,
+    finishCode,
+    lifecycleOutcome: deriveLifecycleOutcome(finishCode),
+  };
+}
+
 function scoreRecurrenceWeightedPriority(postmortem: any): number {
   const rec = Number(postmortem?.recurrenceCount || 1);
   const followUp = postmortem?.followUpNeeded === true || String(postmortem?.followUpTask || "").trim().length > 0 ? 1 : 0;
@@ -3918,7 +3942,10 @@ export async function runAthenaPostmortem(
   const isCleanPass = envelopeCheck.unambiguous;
 
   if (isCleanPass && !forceAi) {
-    const postmortem = computeDeterministicPostmortem(workerResult, originalPlan, dql);
+    const postmortem = enrichPostmortemLifecycleTaxonomy(
+      workerResult,
+      computeDeterministicPostmortem(workerResult, originalPlan, dql),
+    );
     await appendProgress(config,
       `[ATHENA] Deterministic postmortem (fast-path): ${workerName} — score=${postmortem.qualityScore}/10 deviation=none recommendation=proceed model=deterministic`
     );
@@ -4039,7 +4066,7 @@ export async function runAthenaPostmortem(
   // ── Review-on-delta: skip AI call if result is identical to last postmortem ──
   if (isDuplicateResult(workerResult, pastPostmortems)) {
     const lastPm = pastPostmortems[pastPostmortems.length - 1];
-    const dupPm = {
+    const dupPm = enrichPostmortemLifecycleTaxonomy(workerResult, {
       ...lastPm,
       taskFingerprint: String(lastPm?.taskFingerprint || taskFingerprint),
       reviewedAt: new Date().toISOString(),
@@ -4047,7 +4074,7 @@ export async function runAthenaPostmortem(
       decisionQualityLabel: dql.label,
       decisionQualityLabelReason: dql.reason,
       decisionQualityStatus: dql.status,
-    };
+    });
     await appendProgress(config, `[ATHENA] Duplicate result detected for ${workerName} — reusing last postmortem (review-on-delta)`);
     chatLog(stateDir, athenaName, `Duplicate result: ${workerName} — AI call skipped`);
     const dupRecurrences = detectRecurrences(pastPostmortems, { window: 50, threshold: 2 });
@@ -4143,7 +4170,7 @@ ${recurrenceContext}
     const aiError = String((aiResult as any).error || "no JSON");
     await appendProgress(config, `[ATHENA] Postmortem AI call failed — ${aiError}`);
     chatLog(stateDir, athenaName, `Postmortem AI failed: ${aiError}`);
-    const degradedPostmortem = applyPostmortemLearningGradeStatus({
+    const degradedPostmortem = enrichPostmortemLifecycleTaxonomy(workerResult, applyPostmortemLearningGradeStatus({
       workerName,
       taskCompleted: workerStatus === "done",
       expectedOutcome: String(planTask || "pending replay closure"),
@@ -4168,7 +4195,7 @@ ${recurrenceContext}
     }, {
       forceDegraded: true,
       degradedReason: DEGRADED_POSTMORTEM_REVIEW_REASON.AI_POSTMORTEM_FAILURE,
-    });
+    }));
 
     const fallbackRecurrences = detectRecurrences(pastPostmortems, { window: 50, threshold: 2 });
     const fallbackClosureMeta = buildPostmortemInterventionClosure(degradedPostmortem, fallbackRecurrences);
@@ -4277,7 +4304,10 @@ ${recurrenceContext}
       );
     }
   }
-  const postmortem = applyPostmortemLearningGradeStatus(rawPostmortem, { closureValidation });
+  const postmortem = enrichPostmortemLifecycleTaxonomy(
+    workerResult,
+    applyPostmortemLearningGradeStatus(rawPostmortem, { closureValidation }),
+  );
   // Propagate boundary violation flag through to the enriched postmortem
   if ((rawPostmortem as any).closureBoundaryViolation) {
     (postmortem as any).closureBoundaryViolation = true;

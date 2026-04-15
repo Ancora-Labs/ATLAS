@@ -150,6 +150,29 @@ describe("worker_batch_planner", () => {
     assert.equal((batches[0] as any).workerTopology.laneCount, 1);
   });
 
+  it("demotes wave_parallel batch metadata when same-wave plans overlap on the same files", () => {
+    const config = { copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 } };
+    const plans = [
+      {
+        ...buildPlan(0),
+        role: "quality-worker",
+        wave: 1,
+        target_files: ["src/core/prometheus.ts"],
+      },
+      {
+        ...buildPlan(1),
+        role: "integration-worker",
+        wave: 1,
+        target_files: ["src/core/prometheus.ts"],
+      },
+    ];
+
+    const batches = buildRoleExecutionBatches(plans, config);
+
+    assert.ok(batches.length >= 1);
+    assert.ok(batches.every((batch: any) => batch.executionPattern === "bounded_chain"));
+  });
+
   it("produces the same result when capabilityPoolResult is null (backward-compatible)", () => {
     const config = { copilot: { defaultModel: "Claude Sonnet 4.6", modelContextReserveTokens: 0 } };
     const plans = [buildPlan(0), buildPlan(1), buildPlan(2)];

@@ -656,6 +656,38 @@ export function resolveStableInterventionLineage(
   };
 }
 
+export function hasMeaningfulInterventionLineageContract(
+  lineage: InterventionLineageContract | null | undefined,
+): lineage is InterventionLineageContract {
+  if (!lineage || typeof lineage !== "object") return false;
+  return Object.entries(lineage).some(([key, value]) => key !== "schemaVersion" && value !== null);
+}
+
+export function requireStableInterventionLineage(
+  input: unknown,
+  defaults: Partial<InterventionLineageContract> = {},
+  hints: {
+    taskKind?: unknown;
+    role?: unknown;
+    explicitJoinKey?: unknown;
+  } = {},
+): {
+  lineage: InterventionLineageContract;
+  lineageJoinKey: string;
+} {
+  const { lineage, lineageJoinKey } = resolveStableInterventionLineage(input, defaults, hints);
+  if (!hasMeaningfulInterventionLineageContract(lineage)) {
+    throw new Error("intervention lineage contract must include at least one non-null field");
+  }
+  if (!lineageJoinKey) {
+    throw new Error("intervention lineage contract must resolve a stable join key");
+  }
+  return {
+    lineage,
+    lineageJoinKey,
+  };
+}
+
 export function mergeInterventionLineageContracts(
   ...values: unknown[]
 ): InterventionLineageContract {

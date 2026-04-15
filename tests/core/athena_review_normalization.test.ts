@@ -273,6 +273,8 @@ describe("runAthenaPostmortem — recurrence weighted intervention metadata", ()
       assert.ok(typeof result.interventionId === "string");
       assert.ok(["open", "closed"].includes(String(result.interventionClosureStatus)));
       assert.ok("interventionDuplicateSuppressed" in result);
+      assert.equal(result.finishCode, "verified_done");
+      assert.equal(result.lifecycleOutcome, "closed");
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }

@@ -55,6 +55,8 @@ import {
   hasVerificationReportEvidence,
   buildVerificationScorecard,
   VERIFICATION_FAILURE_CODE,
+  deriveFinishCode,
+  deriveLifecycleOutcome,
 } from "./verification_gate.js";
 import { hasFiniteAthenaOverallScore } from "./athena_reviewer.js";
 import { hasPrometheusRuntimeContractSignals, isStrategicFieldToolTraceContaminated, STRATEGIC_FIELD_MIN_SEMANTIC_LENGTH } from "./prometheus.js";
@@ -3519,6 +3521,8 @@ export interface InterventionLineageJoinedSample {
     outcomeCount: number;
     closedOutcomeCount: number;
     recurredCount: number;
+    finishCodeCounts: Record<string, number>;
+    lifecycleOutcomeCounts: Record<string, number>;
   };
 }
 
@@ -3542,7 +3546,14 @@ export interface InterventionLineageTelemetry {
     promptCache: InterventionLineageTelemetrySummary & { averageHitRate: number | null; averageSavedTokens: number | null; };
     modelRouting: InterventionLineageTelemetrySummary & { realizedCount: number; positiveRoiDeltaCount: number; positiveRoiDeltaRate: number | null; };
     specializationRouting: InterventionLineageTelemetrySummary & { specialistAssignmentCount: number; specialistLineages: number; lanesObserved: string[]; };
-    postmortem: InterventionLineageTelemetrySummary & { outcomeCount: number; closedOutcomeCount: number; recurredCount: number; recurrenceRate: number | null; };
+    postmortem: InterventionLineageTelemetrySummary & {
+      outcomeCount: number;
+      closedOutcomeCount: number;
+      recurredCount: number;
+      recurrenceRate: number | null;
+      finishCodeCounts: Record<string, number>;
+      lifecycleOutcomeCounts: Record<string, number>;
+    };
   };
   joinedLineages: InterventionLineageJoinedSample[];
 }
@@ -3566,6 +3577,8 @@ type LineageAggregate = {
   postmortemOutcomeCount: number;
   postmortemClosedOutcomeCount: number;
   postmortemRecurredCount: number;
+  finishCodeCounts: Map<string, number>;
+  lifecycleOutcomeCounts: Map<string, number>;
 };
 
 function createLineageAggregate(joinKey: string, contract: InterventionLineageContract): LineageAggregate {
@@ -3588,6 +3601,8 @@ function createLineageAggregate(joinKey: string, contract: InterventionLineageCo
     postmortemOutcomeCount: 0,
     postmortemClosedOutcomeCount: 0,
     postmortemRecurredCount: 0,
+    finishCodeCounts: new Map<string, number>(),
+    lifecycleOutcomeCounts: new Map<string, number>(),
   };
 }
 
@@ -3596,6 +3611,39 @@ function mergeLineageAggregateContract(
   contract: InterventionLineageContract,
 ) {
   aggregate.contract = mergeInterventionLineageContracts(aggregate.contract, contract);
+}
+
+function incrementHistogram(map: Map<string, number>, key: unknown) {
+  const normalizedKey = String(key || "").trim().toLowerCase();
+  if (!normalizedKey) return;
+  map.set(normalizedKey, (map.get(normalizedKey) || 0) + 1);
+}
+
+function mapToSortedCountRecord(map: Map<string, number>): Record<string, number> {
+  return Object.fromEntries([...map.entries()].sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function resolveLifecycleTelemetry(record: unknown): { finishCode: string; lifecycleOutcome: string } {
+  const row = record && typeof record === "object" && !Array.isArray(record)
+    ? record as Record<string, unknown>
+    : {};
+  const finishCode = typeof row.finishCode === "string" && row.finishCode.trim()
+    ? row.finishCode.trim().toLowerCase()
+    : deriveFinishCode({
+      status: row.status,
+      verificationEvidence: row.verificationEvidence,
+      verificationReport: row.verificationReport && typeof row.verificationReport === "object"
+        ? row.verificationReport as Record<string, string>
+        : null,
+      dispatchContract: row.dispatchContract && typeof row.dispatchContract === "object"
+        ? row.dispatchContract as { doneWorkerWithVerificationReportEvidence?: unknown }
+        : null,
+      fullOutput: row.fullOutput,
+    });
+  const lifecycleOutcome = typeof row.lifecycleOutcome === "string" && row.lifecycleOutcome.trim()
+    ? row.lifecycleOutcome.trim().toLowerCase()
+    : deriveLifecycleOutcome(finishCode);
+  return { finishCode, lifecycleOutcome };
 }
 
 function buildLineageSummaryFromAggregates(aggregates: LineageAggregate[]): InterventionLineageTelemetrySummary {
@@ -3620,8 +3668,18 @@ function resolveLineageContractFromRecord(
   const src = record && typeof record === "object" && !Array.isArray(record)
     ? record as Record<string, unknown>
     : {};
+  const executionReport = src.executionReport && typeof src.executionReport === "object"
+    ? src.executionReport as Record<string, unknown>
+    : {};
+  const closureEvidenceEnvelope = src.closureEvidenceEnvelope && typeof src.closureEvidenceEnvelope === "object"
+    ? src.closureEvidenceEnvelope as Record<string, unknown>
+    : {};
   const lineage = src.lineage && typeof src.lineage === "object"
     ? src.lineage
+    : executionReport.lineage && typeof executionReport.lineage === "object"
+      ? executionReport.lineage
+      : closureEvidenceEnvelope.lineage && typeof closureEvidenceEnvelope.lineage === "object"
+        ? closureEvidenceEnvelope.lineage
     : src.lineageContract && typeof src.lineageContract === "object"
       ? src.lineageContract
       : src;
@@ -3629,20 +3687,67 @@ function resolveLineageContractFromRecord(
     lineage,
     {
       ...defaults,
-      promptFamilyKey: (src.promptFamilyKey as string | null | undefined) ?? defaults.promptFamilyKey,
-      role: (src.agent ?? src.worker ?? src.role ?? defaults.role) as string | null,
-      taskKind: (src.taskKind ?? src.kind ?? defaults.taskKind) as string | null,
+      taskId: (src.taskId ?? executionReport.taskId ?? defaults.taskId) as string | null,
+      taskIdentity: (
+        src.taskIdentity
+        ?? closureEvidenceEnvelope.taskIdentity
+        ?? closureEvidenceEnvelope.task
+        ?? defaults.taskIdentity
+      ) as string | null,
+      continuationFamilyKey: (
+        src.continuationFamilyKey
+        ?? closureEvidenceEnvelope.continuationFamilyKey
+        ?? defaults.continuationFamilyKey
+      ) as string | null,
+      cycleId: (src.cycleId ?? closureEvidenceEnvelope.cycleId ?? defaults.cycleId) as string | null,
+      promptFamilyKey: (
+        src.promptFamilyKey
+        ?? executionReport.promptFamilyKey
+        ?? defaults.promptFamilyKey
+      ) as string | null | undefined,
+      role: (
+        src.agent
+        ?? src.worker
+        ?? src.role
+        ?? src.workerName
+        ?? executionReport.roleName
+        ?? defaults.role
+      ) as string | null,
+      taskKind: (
+        src.taskKind
+        ?? src.kind
+        ?? closureEvidenceEnvelope.taskKind
+        ?? defaults.taskKind
+      ) as string | null,
     },
     {
-      explicitJoinKey: src.lineageJoinKey,
-      taskKind: src.taskKind ?? src.kind ?? defaults.taskKind,
-      role: src.agent ?? src.worker ?? src.role ?? defaults.role,
+      explicitJoinKey: src.lineageJoinKey ?? executionReport.lineageJoinKey ?? closureEvidenceEnvelope.lineageJoinKey,
+      taskKind: src.taskKind ?? src.kind ?? closureEvidenceEnvelope.taskKind ?? defaults.taskKind,
+      role: src.agent ?? src.worker ?? src.role ?? src.workerName ?? executionReport.roleName ?? defaults.role,
     },
   );
   return {
     contract,
     joinKey: lineageJoinKey,
   };
+}
+
+function hasVerifiedWorkerOutcomeEvidence(record: unknown, status: unknown): boolean {
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+  if (!isAnalyticsCompletedWorkerStatus(normalizedStatus)) return false;
+  if (!record || typeof record !== "object" || Array.isArray(record)) return false;
+  const row = record as Record<string, unknown>;
+  if (String(row.status || "").trim().toLowerCase() === "passed") return true;
+  const dispatchContract = row.dispatchContract && typeof row.dispatchContract === "object"
+    ? row.dispatchContract as Record<string, unknown>
+    : null;
+  if (dispatchContract?.doneWorkerWithVerificationReportEvidence === true) return true;
+  const verificationEvidence = row.verificationEvidence && typeof row.verificationEvidence === "object"
+    ? row.verificationEvidence as Record<string, unknown>
+    : null;
+  if (String(verificationEvidence?.build || "").trim().toLowerCase() === "pass") return true;
+  if (String(verificationEvidence?.tests || "").trim().toLowerCase() === "pass") return true;
+  return hasVerificationReportEvidence(String(row.fullOutput || ""));
 }
 
 export function buildInterventionLineageTelemetry({
@@ -3689,7 +3794,7 @@ export function buildInterventionLineageTelemetry({
     const aggregate = getAggregate(record, defaults);
     if (!aggregate) return;
     aggregate.surfaces.add("workerOutcome");
-    if (isAnalyticsCompletedWorkerStatus(status) && !verifiedWorkerOutcomeJoinKeys.has(joinKey)) {
+    if (hasVerifiedWorkerOutcomeEvidence(record, status) && !verifiedWorkerOutcomeJoinKeys.has(joinKey)) {
       aggregate.verifiedOutcomeCount += 1;
       verifiedWorkerOutcomeJoinKeys.add(joinKey);
     }
@@ -3828,13 +3933,21 @@ export function buildInterventionLineageTelemetry({
   for (const entry of Array.isArray(postmortemOutcomes) ? postmortemOutcomes : []) {
     if (!entry || typeof entry !== "object") continue;
     const row = entry as Record<string, unknown>;
+    const closureEvidenceEnvelope = row.closureEvidenceEnvelope && typeof row.closureEvidenceEnvelope === "object"
+      ? row.closureEvidenceEnvelope as Record<string, unknown>
+      : {};
     const aggregate = getAggregate(entry, {
       lineageId: row.lineageId as string | null,
       taskId: row.taskId as string | null,
-      taskIdentity: row.taskIdentity as string | null,
-      continuationFamilyKey: row.continuationFamilyKey as string | null,
+      taskIdentity: (row.taskIdentity ?? closureEvidenceEnvelope.taskIdentity ?? closureEvidenceEnvelope.task) as string | null,
+      continuationFamilyKey: (
+        row.continuationFamilyKey
+        ?? closureEvidenceEnvelope.continuationFamilyKey
+      ) as string | null,
       interventionId: row.interventionId as string | null,
-      cycleId: row.cycleId as string | null,
+      cycleId: (row.cycleId ?? closureEvidenceEnvelope.cycleId) as string | null,
+      role: (row.workerName ?? row.roleName ?? row.role) as string | null,
+      taskKind: (row.taskKind ?? closureEvidenceEnvelope.taskKind) as string | null,
     });
     if (!aggregate) continue;
     aggregate.surfaces.add("postmortem");
@@ -3852,6 +3965,9 @@ export function buildInterventionLineageTelemetry({
     if (row.recurred === true) {
       aggregate.postmortemRecurredCount += 1;
     }
+    const lifecycle = resolveLifecycleTelemetry(entry);
+    incrementHistogram(aggregate.finishCodeCounts, lifecycle.finishCode);
+    incrementHistogram(aggregate.lifecycleOutcomeCounts, lifecycle.lifecycleOutcome);
   }
 
   const aggregateList = [...aggregates.values()];
@@ -3936,6 +4052,18 @@ export function buildInterventionLineageTelemetry({
             / postmortemAggregates.reduce((sum, aggregate) => sum + aggregate.postmortemOutcomeCount, 0)
           ) * 1000) / 1000
           : null,
+        finishCodeCounts: mapToSortedCountRecord(postmortemAggregates.reduce((counts, aggregate) => {
+          for (const [code, count] of aggregate.finishCodeCounts.entries()) {
+            counts.set(code, (counts.get(code) || 0) + count);
+          }
+          return counts;
+        }, new Map<string, number>())),
+        lifecycleOutcomeCounts: mapToSortedCountRecord(postmortemAggregates.reduce((counts, aggregate) => {
+          for (const [outcome, count] of aggregate.lifecycleOutcomeCounts.entries()) {
+            counts.set(outcome, (counts.get(outcome) || 0) + count);
+          }
+          return counts;
+        }, new Map<string, number>())),
       },
     },
     joinedLineages: aggregateList
@@ -3971,6 +4099,8 @@ export function buildInterventionLineageTelemetry({
           outcomeCount: aggregate.postmortemOutcomeCount,
           closedOutcomeCount: aggregate.postmortemClosedOutcomeCount,
           recurredCount: aggregate.postmortemRecurredCount,
+          finishCodeCounts: mapToSortedCountRecord(aggregate.finishCodeCounts),
+          lifecycleOutcomeCounts: mapToSortedCountRecord(aggregate.lifecycleOutcomeCounts),
         },
       })),
   };
@@ -4027,7 +4157,7 @@ export function buildRoutingROISummary(
     const row = entry as Record<string, unknown>;
     const entryKey = buildRoutingTelemetryEntryKey(row);
     if (entryKey) realizedRouteKeys.add(entryKey);
-    const { contract, joinKey } = resolveLineageContractFromRecord(entry, {
+    const { joinKey } = resolveLineageContractFromRecord(entry, {
       lineageId: row.lineageId as string | null,
       taskId: row.taskId as string | null,
       taskKind: row.taskKind as string | null,
@@ -4036,9 +4166,8 @@ export function buildRoutingROISummary(
     });
     const outcome = typeof row.outcome === "string" ? row.outcome : "unknown";
     const isDone = outcome === "done";
-    const explicitLineageId = String(contract.lineageId || "").trim();
-    const lineageKey = joinKey || explicitLineageId;
-    const linked = !!(lineageKey && (!enforceLineageReference || !!(joinKey && linkageReference.has(joinKey))));
+    const lineageKey = joinKey;
+    const linked = !!(lineageKey && (!enforceLineageReference || linkageReference.has(lineageKey)));
     if (!linked || !lineageKey) continue;
     byLineageId[lineageKey] ??= { success: 0, total: 0 };
     byLineageId[lineageKey].total++;
@@ -4053,7 +4182,7 @@ export function buildRoutingROISummary(
     const row = entry as Record<string, unknown>;
     const entryKey = buildRoutingTelemetryEntryKey(row);
     if (entryKey && realizedRouteKeys.has(entryKey)) continue;
-    const { contract, joinKey } = resolveLineageContractFromRecord(entry, {
+    const { joinKey } = resolveLineageContractFromRecord(entry, {
       lineageId: row.lineageId as string | null,
       taskId: row.taskId as string | null,
       taskKind: row.taskKind as string | null,
@@ -4062,9 +4191,8 @@ export function buildRoutingROISummary(
     });
     const outcome = typeof row.outcome === "string" ? row.outcome : "unknown";
     const isDone = outcome === "done";
-    const explicitLineageId = String(contract.lineageId || "").trim();
-    const lineageKey = joinKey || explicitLineageId;
-    const linked = !!(lineageKey && (!enforceLineageReference || !!(joinKey && linkageReference.has(joinKey))));
+    const lineageKey = joinKey;
+    const linked = !!(lineageKey && (!enforceLineageReference || linkageReference.has(lineageKey)));
 
     if (linked && lineageKey) {
       byLineageId[lineageKey] ??= { success: 0, total: 0 };

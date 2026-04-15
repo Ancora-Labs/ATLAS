@@ -120,6 +120,7 @@ import {
   PACKET_VIOLATION_CODE,
   NON_SPECIFIC_VERIFICATION_PATTERNS,
   NON_SPECIFIC_VERIFICATION_CANONICAL_FIXTURES,
+  validateExecutionStrategyStructure,
   type WaveTaskObject,
 } from "../../src/core/plan_contract_validator.js";
 import { auditReplayPolicySignals } from "../../src/core/parser_replay_harness.js";
@@ -333,9 +334,9 @@ describe("normalizePrometheusParsedOutput", () => {
     assert.equal(Number(normalized.requestBudget.hardCapTotal) >= 1, true);
   });
 
-  it("normalizes string tasks in executionStrategy.waves to canonical {role,task,task_id} objects", () => {
-    // If the LLM emits string tasks in executionStrategy.waves (legacy format),
-    // the parser must upgrade them to objects so the validator sees no ambiguity.
+  it("normalizes legacy string wave tasks into the authoritative plan-aligned object contract", () => {
+    // String wave tasks are first upgraded to objects, then the structure gate
+    // reconciles executionStrategy to the normalized plans[] contract.
     const parsed = {
       projectHealth: "needs-work",
       plans: [{ task: "Fix dispatch", role: "evolution-worker", wave: 1 }],
@@ -350,18 +351,20 @@ describe("normalizePrometheusParsedOutput", () => {
 
     const waveTasks = normalized.executionStrategy?.waves?.[0]?.tasks;
     assert.ok(Array.isArray(waveTasks), "wave tasks must be an array");
-    assert.equal(waveTasks.length, 2, "both string tasks must be preserved after normalization");
+    assert.equal(waveTasks.length, 1, "executionStrategy must reconcile to the authoritative plans[] shape");
     for (const t of waveTasks) {
       assert.equal(typeof t, "object", "every wave task must be an object after normalization");
       assert.ok(typeof t.task === "string" && t.task.length > 0, "task field must be a non-empty string");
       assert.ok(typeof t.role === "string" && t.role.length > 0, "role field must be present after normalization");
       assert.ok(typeof t.task_id === "string" && t.task_id.length > 0, "task_id field must be present after normalization");
     }
+    assert.equal(waveTasks[0].task, normalized.plans[0].task);
+    assert.equal(waveTasks[0].role, normalized.plans[0].role);
   });
 
-  it("preserves object tasks in executionStrategy.waves unchanged through normalization", () => {
-    // Object tasks that already satisfy the WaveTaskObject contract must pass
-    // through normalizePrometheusParsedOutput without mutation.
+  it("reconciles object wave tasks to the normalized plan roles without changing task identity", () => {
+    // Explicit task objects keep their task/task_id identity, but the structure
+    // gate rewrites lane ownership when normalized plans resolve to a different role.
     const objectTask: WaveTaskObject = {
       role: "evolution-worker",
       task: "Harden trust boundary",
@@ -381,7 +384,7 @@ describe("normalizePrometheusParsedOutput", () => {
     assert.ok(Array.isArray(waveTasks), "wave tasks array must be present");
     assert.equal(waveTasks.length, 1, "single object task must be preserved");
     const t = waveTasks[0];
-    assert.equal(t.role, "evolution-worker", "role must be unchanged");
+    assert.equal(t.role, normalized.plans[0].role, "role must align with the authoritative normalized plan");
     assert.equal(t.task, "Harden trust boundary", "task must be unchanged");
     assert.equal(t.task_id, "T-HTB-001", "task_id must be unchanged");
   });
@@ -524,6 +527,88 @@ describe("normalizePrometheusParsedOutput", () => {
     assert.equal(normalized.executionStrategy.planningUncertainty, "high");
     assert.equal(normalized.executionStrategy.executionPattern, "bounded_chain");
     assert.ok(normalized.plans.every((plan: any) => plan.planningUncertainty === "high"));
+  });
+
+  it("demotes wave_parallel when same-wave plans lack independent scope evidence", () => {
+    const parsed = {
+      plans: [
+        {
+          task: "Refine shared dispatch guard",
+          task_id: "shared-dispatch-guard",
+          role: "quality-worker",
+          wave: 1,
+          target_files: ["src/core/prometheus.ts"],
+          acceptance_criteria: ["Guard stays deterministic"],
+          verification: "tests/core/prometheus_parse.test.ts — test: demotes unsupported wave_parallel",
+          capacityDelta: 0.1,
+          requestROI: 1.2,
+        },
+        {
+          task: "Update shared dispatch telemetry",
+          task_id: "shared-dispatch-telemetry",
+          role: "integration-worker",
+          wave: 1,
+          target_files: ["src/core/prometheus.ts"],
+          acceptance_criteria: ["Telemetry remains stable"],
+          verification: "tests/core/prometheus_parse.test.ts — test: demotes unsupported wave_parallel",
+          capacityDelta: 0.11,
+          requestROI: 1.25,
+        },
+      ],
+      executionStrategy: {
+        planningMode: "master_evolution",
+        executionPattern: "wave_parallel",
+        waves: [
+          {
+            wave: 1,
+            tasks: [
+              { role: "quality-worker", task: "Refine shared dispatch guard", task_id: "shared-dispatch-guard" },
+              { role: "integration-worker", task: "Update shared dispatch telemetry", task_id: "shared-dispatch-telemetry" },
+            ],
+          },
+        ],
+      },
+    };
+
+    const structure = validateExecutionStrategyStructure(parsed, { maxActionableStepsPerPacket: 3 });
+    const normalized = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    assert.equal(structure.ok, false);
+    assert.ok(structure.violations.some((violation: any) => violation.code === PACKET_VIOLATION_CODE.WAVE_PARALLEL_EVIDENCE_REQUIRED));
+    assert.equal(normalized.executionStrategy.executionPattern, "bounded_chain");
+  });
+
+  it("flags execution strategy packets that exceed the actionable-step cap", () => {
+    const plans = Array.from({ length: 4 }, (_, index) => ({
+      task: `Repair packet ${index + 1}`,
+      task_id: `repair-packet-${index + 1}`,
+      role: "evolution-worker",
+      wave: 1,
+      acceptance_criteria: ["Keeps packet actionable"],
+      verification: "tests/core/prometheus_parse.test.ts — test: flags actionable-step overflow",
+      capacityDelta: 0.1,
+      requestROI: 1.1,
+    }));
+    const structure = validateExecutionStrategyStructure({
+      plans,
+      executionStrategy: {
+        planningMode: "master_evolution",
+        executionPattern: "single_worker",
+        waves: [
+          {
+            wave: 1,
+            tasks: plans.map((plan) => ({
+              role: plan.role,
+              task: plan.task,
+              task_id: plan.task_id,
+            })),
+          },
+        ],
+      },
+    }, { maxActionableStepsPerPacket: 3 });
+
+    assert.equal(structure.ok, false);
+    assert.ok(structure.violations.some((violation: any) => violation.code === PACKET_VIOLATION_CODE.EXECUTION_STRATEGY_ACTIONABLE_LIMIT));
   });
 
   it("extracts plans from narrative wave sections when no JSON plans exist", () => {

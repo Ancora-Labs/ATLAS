@@ -2,7 +2,6 @@ import {
   buildWorkerTopologyContract,
   getRoleRegistry,
   getLaneForWorkerName,
-  selectExecutionPatternForPlans,
   SPECIALIST_LANE_RESERVATION_ORDER,
 } from "./role_registry.js";
 import { enforceModelPolicy } from "./model_policy.js";
@@ -27,6 +26,7 @@ import {
 import { compactSingletonWaves, computeWaveParallelismBound } from "./dag_scheduler.js";
 import { rankModelsByTaskKindExpectedValue } from "./model_policy.js";
 import {
+  resolveEvidenceBackedExecutionPattern,
   buildThinPacketRejectionReason,
   computePacketDensityMetrics,
   isThinPacketForAdmission,
@@ -1534,7 +1534,7 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
   flattened.sort((a, b) => (a.wave as number) - (b.wave as number));
   const topologyPlans = flattened.flatMap((batch) => Array.isArray(batch?.plans) ? batch.plans : []);
   const workerTopology = buildWorkerTopologyContract(topologyPlans);
-  const executionPattern = selectExecutionPatternForPlans(topologyPlans, {
+  const executionPattern = resolveEvidenceBackedExecutionPattern(topologyPlans, {
     workerTopology,
     uncertainty: resolveBatchPlanningUncertainty(topologyPlans),
   });
@@ -1921,7 +1921,7 @@ export function buildTokenFirstBatches(
   }));
   const topologyPlans = mapped.flatMap((batch) => Array.isArray(batch?.plans) ? batch.plans : []);
   const workerTopology = buildWorkerTopologyContract(topologyPlans);
-  const executionPattern = selectExecutionPatternForPlans(topologyPlans, {
+  const executionPattern = resolveEvidenceBackedExecutionPattern(topologyPlans, {
     workerTopology,
     uncertainty: resolveBatchPlanningUncertainty(topologyPlans),
   });

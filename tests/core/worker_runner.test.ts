@@ -1099,6 +1099,21 @@ describe("runtime lineage contract", () => {
     assert.equal(runtimeLineage.lineageJoinKey, "prompt-family:planner-cycle-7");
     assert.equal(runtimeLineage.checkpointThreadId, "prompt-family:planner-cycle-7");
   });
+
+  it("requires a non-null runtime lineage contract even without embedded lineage metadata", () => {
+    const runtimeLineage = buildWorkerRuntimeLineage(
+      {
+        task: "Normalize lineage joins for worker telemetry",
+        taskKind: "implementation",
+      },
+      { roleName: "evolution-worker", model: "GPT-5.4" },
+    );
+
+    assert.equal(runtimeLineage.lineageJoinKey.startsWith("identity:implementation::"), true);
+    assert.equal(runtimeLineage.checkpointThreadId, runtimeLineage.lineageJoinKey);
+    assert.equal(runtimeLineage.lineage.role, "evolution-worker");
+    assert.equal(runtimeLineage.lineage.model, "GPT-5.4");
+  });
 });
 
 // ── buildRoutingROISummary — lineage-key join for premium usage + routing ROI ──
