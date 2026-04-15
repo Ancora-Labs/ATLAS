@@ -301,6 +301,43 @@ describe("assessRetryExpectedROI", () => {
     assert.equal(result.allowRetry, false);
     assert.equal(result.expectedGain, 0);
   });
+
+  it("boosts retry expected gain when cache savings make another attempt cheap", () => {
+    const result = assessRetryExpectedROI({
+      attempt: 1,
+      maxRetries: 3,
+      taskKind: "implementation",
+      premiumUsageData: [
+        { taskKind: "implementation", outcome: "done" },
+        { taskKind: "implementation", outcome: "partial" },
+      ],
+      benchmarkGroundTruth,
+      minExpectedGain: 0.18,
+      promptCacheHitRate: 0.8,
+      promptCacheSavedTokens: 220,
+    });
+    assert.equal(result.allowRetry, true);
+    assert.ok(result.reason.includes("cache_bonus="));
+  });
+
+  it("penalizes retry expected gain for repeated low-roi verification finishes", () => {
+    const result = assessRetryExpectedROI({
+      attempt: 1,
+      maxRetries: 3,
+      taskKind: "implementation",
+      premiumUsageData: [
+        { taskKind: "implementation", outcome: "done" },
+        { taskKind: "implementation", outcome: "done" },
+      ],
+      benchmarkGroundTruth,
+      minExpectedGain: 0.18,
+      lowRoiSignalCount: 2,
+      failureClass: "verification",
+      finishCode: "verification_report_fail:tests",
+    });
+    assert.equal(result.allowRetry, false);
+    assert.ok(result.reason.includes("lineage_penalty="));
+  });
 });
 
 // ── Route ROI Ledger — Packet 14 persistence ─────────────────────────────────
@@ -981,6 +1018,67 @@ describe("routeModelWithRealizedROI", () => {
     assert.ok(result.reason.includes("tier="), `reason should include tier=, got: ${result.reason}`);
     await fs.rm((config as any).paths.stateDir, { recursive: true, force: true });
   });
+
+  it("downgrades strong routing to a constraint-first default model for policy-style finishes", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-roi-constraint-"));
+    const config = { paths: { stateDir: tmpDir } };
+    const result = await routeModelWithRealizedROI(
+      config,
+      { complexity: "critical", estimatedLines: 5000 },
+      {
+        efficientModel: "Claude Haiku 4",
+        defaultModel: "Claude Sonnet 4.6",
+        strongModel: "Claude Opus 4.6",
+        qualityByModel: {
+          "Claude Haiku 4": 0.7,
+          "Claude Sonnet 4.6": 0.85,
+          "Claude Opus 4.6": 0.95,
+        },
+      },
+      {
+        qualityFloor: 0.9,
+        lineageSignals: {
+          latestFailureClass: "policy",
+          latestFinishCode: "target_execution_guard:planned_scope",
+        },
+      },
+    );
+    assert.equal(result.selectionPattern, "constraint-first");
+    assert.equal(result.model, "Claude Sonnet 4.6");
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("upgrades to a reasoning-recovery pattern when logic defects stay cheap to retry", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-roi-reasoning-"));
+    const config = { paths: { stateDir: tmpDir } };
+    const result = await routeModelWithRealizedROI(
+      config,
+      { complexity: "medium", estimatedLines: 900 },
+      {
+        efficientModel: "Claude Haiku 4",
+        defaultModel: "Claude Sonnet 4.6",
+        strongModel: "Claude Opus 4.6",
+        qualityByModel: {
+          "Claude Haiku 4": 0.7,
+          "Claude Sonnet 4.6": 0.85,
+          "Claude Opus 4.6": 0.95,
+        },
+      },
+      {
+        qualityFloor: 0.8,
+        promptCacheHitRate: 0.75,
+        promptCacheSavedTokens: 240,
+        lineageSignals: {
+          latestFailureClass: "logic_defect",
+          latestFinishCode: "verification_report_fail:tests",
+          lowRoiSignalCount: 0,
+        },
+      },
+    );
+    assert.equal(result.selectionPattern, "reasoning-recovery");
+    assert.equal(result.model, "Claude Opus 4.6");
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
 });
 
 describe("decideDeliberationPolicy", () => {
@@ -1018,6 +1116,42 @@ describe("decideDeliberationPolicy", () => {
       result.candidateFirstMoves.every((candidate) => candidate.cheapSignals.length > 0),
       "each candidate must surface cheap verification signals"
     );
+  });
+
+  it("gates hard-task deliberation back to single-pass when lineage low-roi signals pile up", () => {
+    const result = decideDeliberationPolicy(
+      { complexity: "critical", estimatedLines: 4200 },
+      { recentROI: 0.1 },
+      {
+        outcomeMetrics: { sampleCount: 1, successRate: 0.1, recentROI: 0.1 },
+        lineageSignals: {
+          lowRoiSignalCount: 2,
+          latestFailureClass: "verification",
+          latestFinishCode: "verification_report_fail:tests",
+        },
+      },
+    );
+    assert.equal(result.mode, "single-pass");
+    assert.ok(result.reason.includes("lineage-low-roi-gate"));
+  });
+
+  it("prioritizes contract scanning when failure evidence points to constraint handling", () => {
+    const result = decideDeliberationPolicy(
+      { complexity: "critical", estimatedLines: 4200 },
+      { recentROI: 0.1 },
+      {
+        outcomeMetrics: { sampleCount: 1, successRate: 0.1, recentROI: 0.1 },
+        lineageSignals: {
+          lowRoiSignalCount: 0,
+          promptCacheHitRate: 0.8,
+          promptCacheSavedTokens: 220,
+          latestFailureClass: "policy",
+          latestFinishCode: "self_dev_guard_breach:planned_scope",
+        },
+      },
+    );
+    assert.equal(result.mode, "multi-attempt");
+    assert.equal(result.recommendedFirstMove?.key, "contract_scan");
   });
 });
 

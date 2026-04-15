@@ -685,6 +685,89 @@ export function applyRetryROIGate(
   };
 }
 
+export interface RetrySignalTuningInput {
+  promptCacheHitRate?: number;
+  promptCacheSavedTokens?: number;
+  retryExpectedGain?: number;
+  retryThreshold?: number;
+  lowRoiSignalCount?: number;
+  latestFailureClass?: string | null;
+  latestFinishCode?: string | null;
+}
+
+function clampCooldownMs(value: number): number {
+  const rounded = Math.round(value / 60_000) * 60_000;
+  return Math.max(60_000, Math.min(24 * 60 * 60 * 1000, rounded));
+}
+
+export function applyRetrySignalTuning(
+  decision: { retryAction: string; cooldownMs?: number | null; cooldownUntilMs?: number | null; reason: string; failureClass?: string | null; [key: string]: unknown },
+  tuning: RetrySignalTuningInput = {},
+): { cooldownTuning: string; retryAction: string; reason: string; [key: string]: unknown } {
+  const baseCooldownMs = Number(decision.cooldownMs);
+  if (decision.retryAction !== RETRY_ACTION.COOLDOWN_RETRY || !Number.isFinite(baseCooldownMs) || baseCooldownMs <= 0) {
+    return { ...decision, cooldownTuning: "none" };
+  }
+  const promptCacheHitRate = Number.isFinite(Number(tuning.promptCacheHitRate))
+    ? Math.max(0, Math.min(1, Number(tuning.promptCacheHitRate)))
+    : 0;
+  const promptCacheSavedTokens = Number.isFinite(Number(tuning.promptCacheSavedTokens))
+    ? Math.max(0, Math.round(Number(tuning.promptCacheSavedTokens)))
+    : 0;
+  const retryExpectedGain = Number.isFinite(Number(tuning.retryExpectedGain))
+    ? Math.max(0, Number(tuning.retryExpectedGain))
+    : null;
+  const retryThreshold = Number.isFinite(Number(tuning.retryThreshold))
+    ? Math.max(0, Number(tuning.retryThreshold))
+    : null;
+  const lowRoiSignalCount = Math.max(0, Math.floor(Number(tuning.lowRoiSignalCount || 0)));
+  const latestFailureClass = String(tuning.latestFailureClass || decision.failureClass || "").trim().toLowerCase();
+  const latestFinishCode = String(tuning.latestFinishCode || "").trim().toLowerCase();
+  let multiplier = 1;
+  const reasons: string[] = [];
+  if (promptCacheHitRate >= 0.60 || promptCacheSavedTokens >= 180) {
+    multiplier -= 0.25;
+    reasons.push("cache-cheap");
+  }
+  if (retryExpectedGain !== null && retryThreshold !== null && retryExpectedGain > retryThreshold + 0.12) {
+    multiplier -= 0.10;
+    reasons.push("retry-roi-strong");
+  }
+  if (retryExpectedGain !== null && retryThreshold !== null && retryExpectedGain < retryThreshold) {
+    multiplier += 0.35;
+    reasons.push("retry-roi-weak");
+  }
+  if (lowRoiSignalCount > 0) {
+    multiplier += Math.min(0.45, lowRoiSignalCount * 0.15);
+    reasons.push(`lineage-low-roi=${lowRoiSignalCount}`);
+  }
+  if (
+    latestFailureClass === FAILURE_CLASS.MODEL
+    || latestFailureClass === FAILURE_CLASS.EXTERNAL_API
+    || /rate|quota|429|503|timeout|provider/.test(latestFinishCode)
+  ) {
+    multiplier += 0.25;
+    reasons.push("provider-backoff");
+  } else if (
+    latestFailureClass === FAILURE_CLASS.ENVIRONMENT
+    || /network|filesystem|permission|dns|infra/.test(latestFinishCode)
+  ) {
+    multiplier += 0.15;
+    reasons.push("environment-backoff");
+  }
+  const nextCooldownMs = clampCooldownMs(baseCooldownMs * Math.max(0.5, Math.min(2.5, multiplier)));
+  if (nextCooldownMs === baseCooldownMs) {
+    return { ...decision, cooldownTuning: reasons.join("+") || "none" };
+  }
+  return {
+    ...decision,
+    cooldownMs: nextCooldownMs,
+    cooldownUntilMs: Date.now() + nextCooldownMs,
+    cooldownTuning: reasons.join("+") || "adjusted",
+    reason: `${decision.reason} [cooldown-tuned: ${reasons.join(", ") || "adjusted"} -> ${Math.round(nextCooldownMs / 60_000)}min]`,
+  };
+}
+
 // ── Per-step retryability class ───────────────────────────────────────────────
 
 /**

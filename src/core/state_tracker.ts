@@ -484,6 +484,92 @@ export async function appendFailureClassification(config, classification) {
   }
 }
 
+export interface RoutingTelemetryScope {
+  lineageJoinKey?: string | null;
+  lineageId?: string | null;
+  taskKind?: string | null;
+  role?: string | null;
+  limit?: number;
+}
+
+export interface PromptCacheRoutingSignal {
+  sampleCount: number;
+  hitRate: number;
+  avgSavedTokens: number;
+  matchMode: string;
+}
+
+export interface FailureFinishEvidenceSignal {
+  sampleCount: number;
+  matchMode: string;
+  lowRoiSignalCount: number;
+  latestFailureClass: string | null;
+  latestFinishCode: string | null;
+  latestFinishStatus: string | null;
+  verificationFailureCount: number;
+  policyBlockCount: number;
+  modelFailureCount: number;
+  logicDefectCount: number;
+}
+
+function selectScopedTelemetryRecords<T>(
+  records: T[],
+  scope: RoutingTelemetryScope,
+  projector: (record: T) => {
+    lineageJoinKey: string | null;
+    lineageId: string | null;
+    taskKind: string | null;
+    role: string | null;
+  },
+): { records: T[]; matchMode: string } {
+  const allRecords = Array.isArray(records) ? records : [];
+  const limit = Number.isFinite(Number(scope?.limit))
+    ? Math.max(1, Math.floor(Number(scope?.limit)))
+    : 20;
+  const lineageJoinKey = normalizeLineageScalar(scope?.lineageJoinKey);
+  const lineageId = normalizeLineageScalar(scope?.lineageId);
+  const taskKind = normalizeLineageScalar(scope?.taskKind);
+  const role = normalizeLineageScalar(scope?.role);
+  const modes = [
+    {
+      mode: "lineageJoinKey",
+      enabled: Boolean(lineageJoinKey),
+      match: (record: T) => projector(record).lineageJoinKey === lineageJoinKey,
+    },
+    {
+      mode: "lineageId",
+      enabled: Boolean(lineageId),
+      match: (record: T) => projector(record).lineageId === lineageId,
+    },
+    {
+      mode: "taskKind+role",
+      enabled: Boolean(taskKind && role),
+      match: (record: T) => projector(record).taskKind === taskKind && projector(record).role === role,
+    },
+    {
+      mode: "taskKind",
+      enabled: Boolean(taskKind),
+      match: (record: T) => projector(record).taskKind === taskKind,
+    },
+    {
+      mode: "role",
+      enabled: Boolean(role),
+      match: (record: T) => projector(record).role === role,
+    },
+  ];
+  for (const candidate of modes) {
+    if (!candidate.enabled) continue;
+    const matched = allRecords.filter(candidate.match);
+    if (matched.length > 0) {
+      return {
+        records: matched.slice(-limit),
+        matchMode: candidate.mode,
+      };
+    }
+  }
+  return { records: [], matchMode: "none" };
+}
+
 export async function appendAlert(config, alert) {
   const alertsFile = path.join(config.paths.stateDir, "alerts.json");
   const alertsRule = STATE_RETENTION_RULES.alerts;
@@ -898,6 +984,136 @@ export async function readPromptCacheTelemetry(config): Promise<any[]> {
   } catch {
     return [];
   }
+}
+
+export async function summarizePromptCacheTelemetryForScope(
+  config,
+  scope: RoutingTelemetryScope = {},
+): Promise<PromptCacheRoutingSignal> {
+  const entries = await readPromptCacheTelemetry(config);
+  const selected = selectScopedTelemetryRecords(entries, scope, (entry) => ({
+    lineageJoinKey: normalizeLineageScalar((entry as any)?.lineageJoinKey),
+    lineageId: normalizeLineageScalar((entry as any)?.lineageId ?? (entry as any)?.lineage?.lineageId),
+    taskKind: normalizeLineageScalar((entry as any)?.taskKind),
+    role: normalizeLineageScalar((entry as any)?.agent ?? (entry as any)?.role),
+  }));
+  if (selected.records.length === 0) {
+    return { sampleCount: 0, hitRate: 0, avgSavedTokens: 0, matchMode: selected.matchMode };
+  }
+  let hitRateSum = 0;
+  let savedTokensSum = 0;
+  for (const entry of selected.records) {
+    const totalSegments = Number((entry as any)?.totalSegments || 0);
+    const cachedSegments = Number((entry as any)?.cachedSegments || 0);
+    const hitRate = totalSegments > 0
+      ? Math.max(0, Math.min(1, cachedSegments / totalSegments))
+      : Math.max(0, Math.min(1, Number((entry as any)?.hitRate || 0)));
+    hitRateSum += hitRate;
+    savedTokensSum += Math.max(0, Number((entry as any)?.estimatedSavedTokens || 0));
+  }
+  const sampleCount = selected.records.length;
+  return {
+    sampleCount,
+    hitRate: Math.round((hitRateSum / sampleCount) * 1000) / 1000,
+    avgSavedTokens: Math.round(savedTokensSum / sampleCount),
+    matchMode: selected.matchMode,
+  };
+}
+
+export async function readFailureClassificationHistory(config): Promise<any[]> {
+  const filePath = path.join(config?.paths?.stateDir || "state", "failure_classifications.json");
+  try {
+    const snapshot = await readJson(filePath, { entries: [] });
+    return Array.isArray((snapshot as any)?.entries)
+      ? (snapshot as any).entries.filter((entry) => entry && typeof entry === "object")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function summarizeFailureFinishEvidenceForScope(
+  config,
+  scope: RoutingTelemetryScope = {},
+): Promise<FailureFinishEvidenceSignal> {
+  const history = await readFailureClassificationHistory(config);
+  const selected = selectScopedTelemetryRecords(history, scope, (entry) => ({
+    lineageJoinKey: normalizeLineageScalar((entry as any)?.lineageJoinKey ?? (entry as any)?.lineage?.lineageJoinKey),
+    lineageId: normalizeLineageScalar((entry as any)?.lineageId ?? (entry as any)?.lineage?.lineageId),
+    taskKind: normalizeLineageScalar((entry as any)?.taskKind ?? (entry as any)?.lineage?.taskKind),
+    role: normalizeLineageScalar((entry as any)?.roleName ?? (entry as any)?.role ?? (entry as any)?.lineage?.role),
+  }));
+  if (selected.records.length === 0) {
+    return {
+      sampleCount: 0,
+      matchMode: selected.matchMode,
+      lowRoiSignalCount: 0,
+      latestFailureClass: null,
+      latestFinishCode: null,
+      latestFinishStatus: null,
+      verificationFailureCount: 0,
+      policyBlockCount: 0,
+      modelFailureCount: 0,
+      logicDefectCount: 0,
+    };
+  }
+  let lowRoiSignalCount = 0;
+  let verificationFailureCount = 0;
+  let policyBlockCount = 0;
+  let modelFailureCount = 0;
+  let logicDefectCount = 0;
+  let latestFailureClass: string | null = null;
+  let latestFinishCode: string | null = null;
+  let latestFinishStatus: string | null = null;
+  for (const entry of selected.records) {
+    const primaryClass = normalizeLineageScalar((entry as any)?.primaryClass ?? (entry as any)?.classification?.primaryClass);
+    const finishCode = normalizeLineageScalar((entry as any)?.finishCode ?? (entry as any)?.dispatchBlockReason, 200);
+    const finishStatus = normalizeLineageScalar((entry as any)?.finishStatus ?? (entry as any)?.workerStatus, 80);
+    const retryRoiAllowed = (entry as any)?.retryRoiAllowed === true
+      ? true
+      : (entry as any)?.retryRoiAllowed === false
+        ? false
+        : null;
+    const retryRoiExpectedGain = Number((entry as any)?.retryRoiExpectedGain);
+    const retryRoiThreshold = Number((entry as any)?.retryRoiThreshold);
+    if (
+      retryRoiAllowed === false
+      || (
+        Number.isFinite(retryRoiExpectedGain)
+        && Number.isFinite(retryRoiThreshold)
+        && retryRoiExpectedGain < retryRoiThreshold
+      )
+    ) {
+      lowRoiSignalCount += 1;
+    }
+    if (primaryClass === "verification" || /^verification_report_fail:/i.test(String(finishCode || ""))) {
+      verificationFailureCount += 1;
+    }
+    if (primaryClass === "policy" || /policy|guard|capability_check/i.test(String(finishCode || ""))) {
+      policyBlockCount += 1;
+    }
+    if (primaryClass === "model" || /rate|quota|429|503|timeout|provider/i.test(String(finishCode || ""))) {
+      modelFailureCount += 1;
+    }
+    if (primaryClass === "logic_defect") {
+      logicDefectCount += 1;
+    }
+    latestFailureClass = primaryClass ?? latestFailureClass;
+    latestFinishCode = finishCode ?? latestFinishCode;
+    latestFinishStatus = finishStatus ?? latestFinishStatus;
+  }
+  return {
+    sampleCount: selected.records.length,
+    matchMode: selected.matchMode,
+    lowRoiSignalCount,
+    latestFailureClass,
+    latestFinishCode,
+    latestFinishStatus,
+    verificationFailureCount,
+    policyBlockCount,
+    modelFailureCount,
+    logicDefectCount,
+  };
 }
 
 export async function appendInterventionApplicationEntries(config, entries) {
