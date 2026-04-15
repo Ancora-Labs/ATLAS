@@ -20,7 +20,15 @@ import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { spawnAsync, writeJson } from "./fs_utils.js";
 import { addSchemaVersion, STATE_FILE_TYPE } from "./schema_registry.js";
 import { getRoleRegistry, assertRoleCapabilityForTask, isAthenaReviewOrPostmortemTask, normalizeTaskKindLabel } from "./role_registry.js";
-import { appendProgress, appendLineageEntry, appendFailureClassification, readPromptCacheTelemetry } from "./state_tracker.js";
+import {
+  appendProgress,
+  appendLineageEntry,
+  appendFailureClassification,
+  readPromptCacheTelemetry,
+  normalizeInterventionLineageContract,
+  resolveInterventionLineageJoinKey,
+  type InterventionLineageContract,
+} from "./state_tracker.js";
 import { buildAgentArgs, nameToSlug, resolveAgentExecutionProfile, resolveAgentSessionInputPolicy } from "./agent_loader.js";
 import { buildVerificationChecklist, CANONICAL_VERIFICATION_REPORT_TEMPLATE } from "./verification_profiles.js";
 import { getVerificationCommands, classifyNodeTestGlobWindowsArtifact } from "./verification_command_registry.js";
@@ -82,6 +90,10 @@ type PremiumUsageMeta = {
   taskId?: string | number | null;
   /** Shared lineage key linking this premium request to lineage_graph and routing events. */
   lineageId?: string | null;
+  /** Normalized lineage contract spanning dispatch, checkpoints, evidence, and analytics. */
+  lineage?: InterventionLineageContract | null;
+  /** Stable join key derived from the lineage contract. */
+  lineageJoinKey?: string | null;
 };
 
 type WorkerRegistryEntry = {
@@ -169,6 +181,29 @@ function buildRetryEvidence(code, detail, source = "worker_output") {
 function resolveVerificationFieldStatus(report: unknown, key: "build" | "tests") {
   const raw = String((report as any)?.[key] || "").toLowerCase().trim();
   return raw === "pass" || raw === "fail" || raw === "n/a" ? raw : null;
+}
+
+const UNSUPPORTED_UPSTREAM_CI_DEFERRAL_REASON = "unsupported_upstream_ci_deferral";
+
+function detectUnsupportedUpstreamCiDeferral(
+  output: string,
+  details: {
+    status: string;
+    prUrl: string | null;
+    mergedSha: string | null;
+    hasBlockedAccess: boolean;
+  },
+): boolean {
+  const normalizedStatus = String(details.status || "").toLowerCase().trim();
+  if (!details.prUrl || details.mergedSha || details.hasBlockedAccess) return false;
+  if (normalizedStatus !== "partial" && normalizedStatus !== "blocked") return false;
+
+  const text = String(output || "");
+  const hasCiFailureContext = /ci failed|failed check|checks failed|workflow log|github ci|required .*check|merge is blocked/i.test(text);
+  const hasUpstreamDeferralClaim = /blocked upstream|unrelated to (?:this|the) change|same assertion(?:s)?|same failure(?:s)?|latest .*main.*fail(?:s|ed).*same|main ci run .*same/i.test(text);
+  const hasExplicitExternalBlocker = /access_blocked|permission denied|\b(?:401|403|429|500|502|503|504)\b|rate limit|service unavailable|network error|dns|timed out|timeout|outage/i.test(text);
+
+  return hasCiFailureContext && hasUpstreamDeferralClaim && !hasExplicitExternalBlocker;
 }
 
 function inferLegacyFailurePhase(entry): WorkerExecutionPhase {
@@ -333,7 +368,12 @@ function buildRetryMutationInstructions(failedPhase: WorkerExecutionPhase, detai
     if (details.buildStatus) instructions.push(`Repair BUILD=${details.buildStatus} before entering push.`);
     if (details.testsStatus) instructions.push(`Repair TESTS=${details.testsStatus} before entering push.`);
   } else if (failedPhase === WORKER_EXECUTION_PHASE.PUSH) {
-    instructions.push("Reuse the recorded branch/PR context and resolve git or clean-tree blockers before another push.");
+    if (details.dispatchBlockReason === UNSUPPORTED_UPSTREAM_CI_DEFERRAL_REASON) {
+      instructions.push("Do not stop because main shows the same CI signature. Reproduce the failing PR check on your branch, patch it, rerun targeted verification, and push the repair to the existing PR.");
+      instructions.push("Only report partial/blocked if an external outage or permission/access block prevents action, and cite that blocker exactly.");
+    } else {
+      instructions.push("Reuse the recorded branch/PR context and resolve git or clean-tree blockers before another push.");
+    }
     if (details.currentBranch) instructions.push(`Continue from branch: ${details.currentBranch}.`);
     if (details.prUrl) instructions.push(`Update the existing PR instead of opening a duplicate: ${details.prUrl}.`);
   }
@@ -537,7 +577,10 @@ async function persistPhaseAwareRetryArtifacts(config, input: {
     failureClass: input.failureClass || null,
     retryState: input.retryState,
   });
-  const checkpointThreadId = String(input.instruction?.taskId || input.instruction?.lineageId || input.roleName || "");
+  const runtimeLineage = buildWorkerRuntimeLineage(input.instruction, {
+    roleName: input.roleName,
+  });
+  const checkpointThreadId = String(runtimeLineage.checkpointThreadId || "");
   if (!checkpointThreadId) return;
   await writeBoundaryCheckpoint(
     config,
@@ -547,6 +590,8 @@ async function persistPhaseAwareRetryArtifacts(config, input: {
       status: input.status,
       retryAction: input.retryAction || null,
       failureClass: input.failureClass || null,
+      lineage: runtimeLineage.lineage,
+      lineageJoinKey: runtimeLineage.lineageJoinKey,
     }),
     {
       thread_id: checkpointThreadId,
@@ -765,6 +810,30 @@ type ParsedWorkerResponse = ReturnType<typeof parseWorkerResponse> & {
   verificationEvidence?: VerificationEvidence | null;
 };
 
+export function shouldRecordHookCoverageAudit(input: {
+  telemetry?: {
+    envelopes?: unknown[];
+    hookDecisions?: unknown[];
+    gaps?: unknown[];
+    hasDeterministicCoverage?: boolean;
+  } | null;
+  runtimeDecisions?: unknown[];
+  runtimeAuditGaps?: unknown[];
+}): boolean {
+  const telemetry = input?.telemetry;
+  const envelopeCount = Array.isArray(telemetry?.envelopes) ? telemetry.envelopes.length : 0;
+  const workerDecisionCount = Array.isArray(telemetry?.hookDecisions) ? telemetry.hookDecisions.length : 0;
+  const telemetryGapCount = Array.isArray(telemetry?.gaps) ? telemetry.gaps.filter(Boolean).length : 0;
+  const runtimeDecisionCount = Array.isArray(input?.runtimeDecisions) ? input.runtimeDecisions.length : 0;
+  const runtimeAuditGapCount = Array.isArray(input?.runtimeAuditGaps) ? input.runtimeAuditGaps.filter(Boolean).length : 0;
+  return telemetry?.hasDeterministicCoverage === true
+    || envelopeCount > 0
+    || workerDecisionCount > 0
+    || telemetryGapCount > 0
+    || runtimeDecisionCount > 0
+    || runtimeAuditGapCount > 0;
+}
+
 type DispatchVerificationContract = {
   doneWorkerWithVerificationReportEvidence: boolean;
   doneWorkerWithCleanTreeStatusEvidence: boolean;
@@ -904,7 +973,14 @@ export function emitWorkerSpanDrop(
 
 // ── Premium usage tracking ──────────────────────────────────────────────────
 
-function logPremiumUsage(config, roleName, model, taskKind, durationMs, { outcome, taskId, lineageId }: PremiumUsageMeta = {}) {
+function logPremiumUsage(
+  config,
+  roleName,
+  model,
+  taskKind,
+  durationMs,
+  { outcome, taskId, lineageId, lineage, lineageJoinKey }: PremiumUsageMeta = {},
+) {
   const logPath = path.join(config.paths?.stateDir || "state", "premium_usage_log.json");
   let entries = [];
   try {
@@ -923,6 +999,8 @@ function logPremiumUsage(config, roleName, model, taskKind, durationMs, { outcom
     outcome: outcome || "unknown",
     taskId: taskId || null,
     lineageId: lineageId || null,
+    lineage: lineage || null,
+    lineageJoinKey: lineageJoinKey || resolveInterventionLineageJoinKey(lineage || null),
   });
   // Keep last 500 entries to prevent unbounded growth
   if (entries.length > 500) entries = entries.slice(-500);
@@ -943,6 +1021,12 @@ function logPremiumUsage(config, roleName, model, taskKind, durationMs, { outcom
 export function resolveWorkerExecutionLineageId(instruction: any): string | null {
   const explicit = typeof instruction?.lineageId === "string" ? instruction.lineageId.trim() : "";
   if (explicit) return explicit;
+  const embedded = typeof instruction?.lineage?.lineageId === "string"
+    ? instruction.lineage.lineageId.trim()
+    : typeof instruction?.lineageContract?.lineageId === "string"
+      ? instruction.lineageContract.lineageId.trim()
+      : "";
+  if (embedded) return embedded;
 
   const parent = typeof instruction?.parentLineageId === "string" ? instruction.parentLineageId.trim() : "";
   if (parent) return parent;
@@ -953,6 +1037,63 @@ export function resolveWorkerExecutionLineageId(instruction: any): string | null
   const fingerprint = buildTaskFingerprint(instruction?.taskKind || "general", instruction?.task || "");
   const attempt = Number(instruction?.reworkAttempt || 0) + 1;
   return buildLineageId(fingerprint, rawTaskId, attempt);
+}
+
+function hasMeaningfulLineageContract(lineage: InterventionLineageContract): boolean {
+  return Object.entries(lineage).some(([key, value]) => key !== "schemaVersion" && value !== null);
+}
+
+export function buildWorkerRuntimeLineage(
+  instruction: any,
+  defaults: {
+    roleName?: string | null;
+    model?: string | null;
+    lane?: string | null;
+    capability?: string | null;
+    specialized?: boolean | null;
+    rerouteReasonCode?: string | null;
+  } = {},
+): {
+  lineage: InterventionLineageContract | null;
+  lineageJoinKey: string | null;
+  checkpointThreadId: string | null;
+} {
+  const taskKind = String(instruction?.taskKind || "general").trim() || "general";
+  const taskText = String(instruction?.task || "").trim();
+  const fallbackTaskIdentity = instruction?.semanticKey
+    ? String(instruction.semanticKey).trim()
+    : `${taskKind}::${buildTaskFingerprint(taskKind, taskText).slice(0, 24)}`;
+  const lineage = normalizeInterventionLineageContract(
+    instruction?.lineageContract ?? instruction?.lineage ?? instruction,
+    {
+      lineageId: resolveWorkerExecutionLineageId(instruction),
+      taskId: instruction?.taskId != null ? String(instruction.taskId) : null,
+      taskIdentity: fallbackTaskIdentity,
+      cycleId: instruction?.cycleId ?? null,
+      taskKind,
+      interventionId: instruction?.interventionId ?? instruction?.taskId ?? null,
+      promptFamilyKey: instruction?.promptFamilyKey ?? null,
+      model: defaults.model ?? null,
+      role: defaults.roleName ?? null,
+      lane: defaults.lane ?? instruction?.lane ?? instruction?.effectiveLane ?? instruction?.capabilityLane ?? null,
+      capability: defaults.capability ?? instruction?.capability ?? instruction?.capabilityTag ?? null,
+      specialized: defaults.specialized ?? instruction?.specialized ?? null,
+      rerouteReasonCode: defaults.rerouteReasonCode ?? instruction?.rerouteReasonCode ?? null,
+    },
+  );
+  if (!hasMeaningfulLineageContract(lineage)) {
+    return {
+      lineage: null,
+      lineageJoinKey: null,
+      checkpointThreadId: null,
+    };
+  }
+  const lineageJoinKey = resolveInterventionLineageJoinKey(lineage);
+  return {
+    lineage,
+    lineageJoinKey,
+    checkpointThreadId: lineageJoinKey || lineage.lineageId || lineage.taskId || lineage.taskIdentity || null,
+  };
 }
 
 // ── Memory-hit telemetry ─────────────────────────────────────────────────────
@@ -1960,6 +2101,7 @@ export function buildConversationContext(history, instruction: WorkerInstruction
   parts.push("5) Prefer permanent deterministic fixes over temporary bypasses.");
   parts.push("6) PR ownership is yours end-to-end: create/update your PR for your task, monitor GitHub checks, fix failures you see, and when checks are green merge it yourself.");
   parts.push("7) If checks remain pending, keep watching until green or report the exact failing/pending checks.");
+  parts.push("8) A red PR is NOT resolved by saying main is red too. If your PR checks fail, reproduce the failing branch check, patch what is actionable on your branch, rerun targeted verification, and update the same PR. Only stop as partial/blocked when an external outage, permission block, or missing access prevents action, and cite that blocker explicitly.");
 
   parts.push("\n## INDEPENDENT THINKING — VERIFY YOUR ORDERS");
   parts.push("You are a senior engineer, not a blind executor. Before implementing your instructions:");
@@ -2293,8 +2435,22 @@ export function parseWorkerResponse(stdout, stderr) {
   // Extract explicit merged SHA marker (BOX_MERGED_SHA=<sha>).
   // Stored for audit and lineage — also surfaced in the done-path artifact check.
   const mergedSha = extractMergedSha(output);
+  const unsupportedUpstreamCiDeferral = detectUnsupportedUpstreamCiDeferral(combined, {
+    status: normalizedStatus,
+    prUrl,
+    mergedSha,
+    hasBlockedAccess,
+  });
+  if (unsupportedUpstreamCiDeferral && !dispatchBlockReason) {
+    dispatchBlockReason = UNSUPPORTED_UPSTREAM_CI_DEFERRAL_REASON;
+  }
+  // Self-reported hook telemetry is retained for audit/debug purposes only.
+  // Pairing/coverage gaps must not drive status because the current worker
+  // runner does not receive authoritative per-tool execution events from the
+  // Copilot CLI. However, an explicit self-reported execute deny remains a
+  // hard stop so downstream safety gates do not accept an apparently "done"
+  // worker that also claims its execution was denied.
   const toolExecutionTelemetry = parseToolExecutionTelemetry(combined);
-
   if (
     toolExecutionTelemetry.deniedDecisions.length > 0
     && normalizedStatus !== "blocked"
@@ -2305,22 +2461,6 @@ export function parseWorkerResponse(stdout, stderr) {
       const firstDenied = toolExecutionTelemetry.deniedDecisions[0];
       dispatchBlockReason = `tool_policy_denied:${String(firstDenied?.reasonCode || "unknown")}`;
     }
-  }
-
-  // Track hook telemetry pairing gaps for observability.
-  // These gaps flow through validateWorkerContract for rework; we record them
-  // here so dispatchBlockReason surfaces the issue in session artifacts.
-  if (
-    toolExecutionTelemetry.gaps.some(
-      (g) => g.startsWith("HOOK_TELEMETRY_UNPAIRED") || g.startsWith("HOOK_TELEMETRY_MISMATCH"),
-    ) &&
-    !dispatchBlockReason &&
-    normalizedStatus !== "skipped"
-  ) {
-    const firstPairingGap = toolExecutionTelemetry.gaps.find(
-      (g) => g.startsWith("HOOK_TELEMETRY_UNPAIRED") || g.startsWith("HOOK_TELEMETRY_MISMATCH"),
-    );
-    dispatchBlockReason = `hook_telemetry_inconsistent:${String(firstPairingGap || "pairing-gap").slice(0, 100)}`;
   }
 
   return {
@@ -2338,7 +2478,27 @@ export function parseWorkerResponse(stdout, stderr) {
     responsiveMatrix,
     cleanTreeStatus,
     mergedSha,
+    unsupportedUpstreamCiDeferral,
     toolExecutionTelemetry,
+  };
+}
+
+export function extractStreamingWorkerResultMarker(stdout, stderr) {
+  const combined = `${String(stdout || "")}\n${String(stderr || "")}`;
+  if (!/BOX_STATUS=(\w+)/i.test(combined)) {
+    return null;
+  }
+  const hasTerminalVerificationBoundary = /===END_VERIFICATION(?:_REPORT)?===/i.test(combined)
+    || /VERIFICATION_REPORT:/i.test(combined);
+  const hasOutcomeEnvelope = /BOX_EXPECTED_OUTCOME=|BOX_ACTUAL_OUTCOME=|BOX_PR_URL=/i.test(combined);
+  if (!hasTerminalVerificationBoundary && !hasOutcomeEnvelope) {
+    return null;
+  }
+
+  const parsed = parseWorkerResponse(stdout, stderr);
+  return {
+    status: parsed.status,
+    prUrl: parsed.prUrl,
   };
 }
 
@@ -2583,7 +2743,10 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // firstAttemptAt is only set once and carried forward across retries.
   const attempt = Number(instruction?.reworkAttempt ?? 0);
   const runId = buildRunId(instruction?.taskId, attempt);
-  const _dispatchLineageId: string | null = resolveWorkerExecutionLineageId(instruction);
+  let runtimeLineage = buildWorkerRuntimeLineage(instruction, {
+    roleName: String(roleName || "worker"),
+  });
+  const _dispatchLineageId: string | null = runtimeLineage.lineage?.lineageId || null;
   const firstAttemptAt: string = String(
     instruction?.firstAttemptAt ?? new Date().toISOString()
   );
@@ -2666,6 +2829,10 @@ export async function runWorkerConversation(config, roleName, instruction, histo
 
   // Classify complexity tier for prompt budget injection
   const { tier } = classifyComplexityTier(taskHints);
+  runtimeLineage = buildWorkerRuntimeLineage(instruction, {
+    roleName: String(roleName || "worker"),
+    model,
+  });
 
   // ── Cooperative cancellation: check before spawning subprocess ───────────
   if (_token?.cancelled) {
@@ -2686,6 +2853,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       routingReasonCode: deliberation.mode === "multi-attempt" ? "hard-task-escalation" : "standard",
       taskKind: instruction.taskKind || "general",
       lineageId: _dispatchLineageId,
+      lineageJoinKey: runtimeLineage.lineageJoinKey,
+      lineage: runtimeLineage.lineage,
       meetsQualityFloor: !policyResult.downgraded,
     });
   } catch { /* telemetry is non-critical */ }
@@ -2841,6 +3010,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       responsiveMatrix: null,
       verificationEvidence: null,
       dispatchContract,
+      lineage: runtimeLineage.lineage,
+      lineageJoinKey: runtimeLineage.lineageJoinKey,
       fullOutput: summary,
       failureClassification: null,
       retryDecision: null
@@ -2894,6 +3065,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       responsiveMatrix: null,
       verificationEvidence: null,
       dispatchContract,
+      lineage: runtimeLineage.lineage,
+      lineageJoinKey: runtimeLineage.lineageJoinKey,
       fullOutput: summary,
       failureClassification: null,
       retryDecision: null
@@ -2946,12 +3119,34 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       estimatedTokens: estimatedPromptTokens,
       expectedQuality: estimateModelExpectedQuality(config, model),
       lineageId: _dispatchLineageId,
+      lineage: runtimeLineage.lineage,
+      lineageJoinKey: runtimeLineage.lineageJoinKey,
+      taskKind: instruction.taskKind || "general",
+      role: String(roleName || "worker"),
     });
   } catch {
     // non-critical routing telemetry
   }
 
   const startMs = Date.now();
+  let streamedStdout = "";
+  let streamedStderr = "";
+  let streamedResultEmitted = false;
+
+  const emitStreamingResultMarker = () => {
+    if (streamedResultEmitted) return;
+    const marker = extractStreamingWorkerResultMarker(streamedStdout, streamedStderr);
+    if (!marker) return;
+    streamedResultEmitted = true;
+    appendLiveWorkerLog(
+      liveLogPath,
+      `\n[${new Date().toISOString()}] RESULT_EMITTED status=${marker.status}${marker.prUrl ? ` pr=${marker.prUrl}` : ""} exit_pending=true\n`
+    ).catch(() => {});
+    appendProgress(
+      config,
+      `[WORKER:${roleName}] Final output emitted status=${marker.status}${marker.prUrl ? ` PR=${marker.prUrl}` : ""} (process exit pending)`
+    ).catch(() => {});
+  };
 
   // Circuit breaker: detect consecutive transient API errors from the Copilot CLI
   // and abort the process early instead of waiting for 45-minute timeout.
@@ -2992,6 +3187,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     signal: abortController.signal,
     onStdout: (chunk) => {
       const text = String(chunk);
+      streamedStdout += text;
       appendLiveWorkerLog(liveLogPath, text).catch(() => {});
       if (/transient API error/i.test(text)) {
         transientErrorCount++;
@@ -3004,9 +3200,11 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         // Reset counter on meaningful (non-error) output
         transientErrorCount = 0;
       }
+      emitStreamingResultMarker();
     },
     onStderr: (chunk) => {
       const text = String(chunk);
+      streamedStderr += text;
       appendLiveWorkerLog(liveLogPath, `[stderr] ${text}`).catch(() => {});
       if (/transient API error/i.test(text)) {
         transientErrorCount++;
@@ -3016,6 +3214,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
           );
         }
       }
+      emitStreamingResultMarker();
     }
   }) as SpawnAsyncResult;
 
@@ -3358,40 +3557,34 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       }).catch(() => { /* non-fatal */ });
     }
 
-    // Runtime hook enforcement: evaluate TOOL_INTENT envelopes from worker output
-    // against the loaded policy. Done responses from execute-capable sessions must
-    // carry deterministic hook coverage before BOX accepts them as complete.
+    // Runtime hook telemetry is currently advisory only. The runner can audit
+    // self-reported TOOL_INTENT / HOOK_DECISION lines when present, but Copilot
+    // CLI does not expose authoritative per-tool execution events here. That
+    // means missing or malformed pseudo-telemetry must not downgrade a done
+    // result; otherwise checkpoint resume can loop forever after successful work.
     const hookTelemetry = parsed.toolExecutionTelemetry && typeof parsed.toolExecutionTelemetry === "object"
       ? parsed.toolExecutionTelemetry
       : { envelopes: [], hookDecisions: [], deniedDecisions: [], gaps: [], hasDeterministicCoverage: false };
     if (Array.isArray(hookTelemetry.envelopes)) {
       const hookEnforcement = enforcePreExecuteHookDecisions(policy, roleName, hookTelemetry.envelopes);
-      if (!hookEnforcement.allowed && parsed.status !== "blocked" && parsed.status !== "skipped") {
-        parsed.status = "blocked";
-        if (!parsed.dispatchBlockReason) {
-          parsed.dispatchBlockReason = hookEnforcement.blockReason ?? "runtime_hook_denied:unknown";
-        }
-      }
       const hookAudit = auditRuntimeHookEnforcement(hookEnforcement.decisions, hookTelemetry.hookDecisions);
-      const hookCoverageAudit = auditAuthoritativeHookCoverage({
-        sessionInputPolicy: effectiveSessionInputPolicy,
-        hookCoverage: agentProfile.hookCoverage,
+      const recordHookCoverageAudit = shouldRecordHookCoverageAudit({
         telemetry: hookTelemetry,
         runtimeDecisions: hookEnforcement.decisions,
         runtimeAuditGaps: hookAudit.gaps,
       });
-      if (!hookCoverageAudit.covered && parsed.status === "done") {
-        parsed.status = "blocked";
-        parsed.dispatchBlockReason = `hook_coverage_incomplete:${hookCoverageAudit.reasonCode ?? "unknown"}`;
-        parsed.summary = `[HOOK COVERAGE] missing authoritative hook coverage for ${roleName}: ${hookCoverageAudit.gaps.join("; ")}\n${parsed.summary}`;
-      } else if (!hookAudit.consistent) {
-        const auditNote = `runtime_hook_audit_gaps:${hookAudit.gaps.length}`;
-        if (!parsed.dispatchBlockReason && parsed.status !== "skipped") {
-          parsed.dispatchBlockReason = auditNote;
-        }
-      }
+      const hookCoverageAudit = recordHookCoverageAudit
+        ? auditAuthoritativeHookCoverage({
+            sessionInputPolicy: effectiveSessionInputPolicy,
+            hookCoverage: agentProfile.hookCoverage,
+            telemetry: hookTelemetry,
+            runtimeDecisions: hookEnforcement.decisions,
+            runtimeAuditGaps: hookAudit.gaps,
+          })
+        : null;
       parsed.toolExecutionTelemetry = hookTelemetry;
       (parsed as any).hookCoverageAudit = hookCoverageAudit;
+      (parsed as any).runtimeHookAudit = recordHookCoverageAudit ? hookAudit : null;
     }
   } catch {
     // Non-fatal: if policy cannot be read, keep existing worker result.
@@ -3423,6 +3616,17 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   const maxReworkAttempts = Number(config?.runtime?.maxReworkAttempts ?? 2);
   // reworkAttempt is set by buildReworkInstruction on re-dispatches; 0 on the first call
   const currentAttempt = Number(instruction.reworkAttempt || 0);
+
+  if ((parsed as any).unsupportedUpstreamCiDeferral === true) {
+    const canRetry = currentAttempt < maxReworkAttempts;
+    parsed.status = canRetry ? "partial" : "blocked";
+    parsed.dispatchBlockReason = UNSUPPORTED_UPSTREAM_CI_DEFERRAL_REASON;
+    parsed.summary = `[CI OWNERSHIP] Unsupported upstream-only PR failure deferral. A red PR must be reproduced and repaired on the task branch unless an external outage, permission block, or missing access prevents action.\n${parsed.summary}`;
+    await appendProgress(
+      config,
+      `[WORKER:${roleName}] CI_OWNERSHIP_ENFORCED upstream-only PR deferral rejected retry=${canRetry ? "queued" : "exhausted"}`
+    );
+  }
 
   // ── Unconditional artifact gate (strict merge evidence gate) ─────────────────
   // For any worker+task combination that requires a post-merge artifact
@@ -3643,6 +3847,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         outcome: telemetryOutcome,
         taskId: instruction.taskId || instruction.task || null,
         lineageId: _dispatchLineageId,
+        lineage: runtimeLineage.lineage,
+        lineageJoinKey: runtimeLineage.lineageJoinKey,
       });
       updateMemoryHitOutcome(config, _memoryHitTaskId || null, telemetryOutcome);
       try {
@@ -3675,6 +3881,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     outcome: finalTelemetryOutcome,
     taskId: instruction.taskId || instruction.task || null,
     lineageId: _dispatchLineageId,
+    lineage: runtimeLineage.lineage,
+    lineageJoinKey: runtimeLineage.lineageJoinKey,
   });
   updateMemoryHitOutcome(config, _memoryHitTaskId || null, finalTelemetryOutcome);
 
@@ -3903,7 +4111,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
 
   // Verification boundary checkpoint: persist stable snapshot after worker completes.
   {
-    const verificationThreadId = String(instruction.taskId || instruction.task || Date.now()).slice(0, 48).replace(/[^a-zA-Z0-9_-]/g, "-");
+    const verificationThreadId = String(runtimeLineage.checkpointThreadId || instruction.taskId || instruction.task || Date.now());
     await writeBoundaryCheckpoint(config, {
       roleName,
       status: parsed.status,
@@ -3911,6 +4119,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       filesTouched: parsed.filesTouched || [],
       reworkAttempt: Number(instruction.reworkAttempt || 0),
       workerCompletedAt: new Date().toISOString(),
+      lineage: runtimeLineage.lineage,
+      lineageJoinKey: runtimeLineage.lineageJoinKey,
     }, { thread_id: verificationThreadId, checkpoint_ns: CHECKPOINT_NS.VERIFICATION }).catch(() => { /* non-fatal */ });
   }
 
@@ -3927,6 +4137,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     responsiveMatrix: parsed.responsiveMatrix,
     verificationEvidence: parsed.verificationEvidence || null,
     dispatchContract,
+    lineage: runtimeLineage.lineage,
+    lineageJoinKey: runtimeLineage.lineageJoinKey,
     fullOutput: parsed.fullOutput,
     failureClassification,
     retryDecision,

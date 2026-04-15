@@ -4,6 +4,11 @@ import { readJsonSafe, READ_JSON_REASON, writeJsonAtomic } from "./fs_utils.js";
 import { unlink } from "node:fs/promises";
 import type { CancellationToken } from "./daemon_control.js";
 import { normalizePromptLineageContract } from "./prompt_compiler.js";
+import {
+  normalizeInterventionLineageContract,
+  resolveInterventionLineageJoinKey,
+  type InterventionLineageContract,
+} from "./state_tracker.js";
 
 export const CHECKPOINT_SCHEMA_VERSION = 2;
 export const CHECKPOINT_FORMAT = "resumable_v2";
@@ -75,6 +80,45 @@ function normalizePhaseCheckpointStates(value: unknown) {
   return output;
 }
 
+function hasMeaningfulLineageContract(lineage: InterventionLineageContract): boolean {
+  return Object.entries(lineage).some(([key, value]) => key !== "schemaVersion" && value !== null);
+}
+
+function normalizeCheckpointLineageFields(payload: Record<string, unknown>) {
+  const output = { ...payload };
+  const lineage = normalizeInterventionLineageContract(
+    output.lineage && typeof output.lineage === "object"
+      ? output.lineage
+      : output.lineageContract && typeof output.lineageContract === "object"
+        ? output.lineageContract
+        : output,
+    {
+      lineageId: output.lineageId as string | null,
+      taskId: output.taskId as string | null,
+      taskIdentity: output.taskIdentity as string | null,
+      cycleId: output.cycleId as string | null,
+      taskKind: output.taskKind as string | null,
+      interventionId: output.interventionId as string | null,
+      promptFamilyKey: output.promptFamilyKey as string | null,
+      model: output.model as string | null,
+      role: (output.roleName ?? output.role) as string | null,
+      lane: output.lane as string | null,
+      capability: output.capability as string | null,
+      specialized: typeof output.specialized === "boolean" ? output.specialized : null,
+      rerouteReasonCode: output.rerouteReasonCode as string | null,
+    },
+  );
+  if (!hasMeaningfulLineageContract(lineage)) {
+    return output;
+  }
+  const lineageJoinKey = resolveInterventionLineageJoinKey(lineage);
+  output.lineage = lineage;
+  output.lineageContract = lineage;
+  output.lineageId = lineage.lineageId;
+  output.lineageJoinKey = lineageJoinKey;
+  return output;
+}
+
 export function buildPhaseAwareAttemptCheckpoint(
   retryState: unknown,
   meta: {
@@ -83,6 +127,8 @@ export function buildPhaseAwareAttemptCheckpoint(
     status?: string | null;
     retryAction?: string | null;
     failureClass?: string | null;
+    lineage?: InterventionLineageContract | null;
+    lineageJoinKey?: string | null;
   } = {},
 ) {
   const input = retryState && typeof retryState === "object" ? retryState as Record<string, unknown> : {};
@@ -92,7 +138,7 @@ export function buildPhaseAwareAttemptCheckpoint(
       .filter(Boolean)
     : [...WORKER_EXECUTION_PHASE_ORDER];
   const effectivePhaseOrder = phaseOrder.length > 0 ? phaseOrder : [...WORKER_EXECUTION_PHASE_ORDER];
-  return {
+  return normalizeCheckpointLineageFields({
     schemaVersion: PHASE_AWARE_RETRY_STATE_SCHEMA_VERSION,
     retryStateKind: "phase_aware_retry_v1",
     phaseOrder: effectivePhaseOrder,
@@ -121,8 +167,10 @@ export function buildPhaseAwareAttemptCheckpoint(
     status: meta.status != null ? String(meta.status) : null,
     retryAction: meta.retryAction != null ? String(meta.retryAction) : null,
     failureClass: meta.failureClass != null ? String(meta.failureClass) : null,
+    lineage: meta.lineage ?? null,
+    lineageJoinKey: meta.lineageJoinKey ?? null,
     recordedAt: new Date().toISOString(),
-  };
+  });
 }
 
 const CHECKPOINT_META_KEYS = new Set([
@@ -260,7 +308,7 @@ export function createVersionedCheckpointEnvelope(checkpoint, previousCheckpoint
     Number((previous as any)?.checkpointVersion || checkpoint?.checkpointVersion || 0) + 1
   );
   const normalizedPayload = {
-    ...normalizeCheckpointPromptLineageFields(payload),
+    ...normalizeCheckpointLineageFields(normalizeCheckpointPromptLineageFields(payload)),
     createdAt,
     updatedAt: nowIso,
   };

@@ -98,7 +98,7 @@ const ALLOWED_SLO_STATUSES = new Set(["ok", "degraded", "unknown"]);
 
 /**
  * Sanitize a single worker-result entry so that only the lane-selection fields
- * consumed by computeCycleAnalytics are propagated.
+ * and runtime lineage join metadata consumed by computeCycleAnalytics are propagated.
  * This prevents EvidenceEnvelope fields (verificationEvidence, prChecks, etc.)
  * from silently bleeding into the analytics record as the envelope evolves.
  */
@@ -108,6 +108,8 @@ function sanitizeWorkerResult(w: unknown): {
   resolvedRole: string | null;
   logicalRole: string | null;
   lane: string | null;
+  lineage: InterventionLineageContract | null;
+  lineageJoinKey: string | null;
 } {
   if (!w || typeof w !== "object") {
     return {
@@ -116,9 +118,28 @@ function sanitizeWorkerResult(w: unknown): {
       resolvedRole: null,
       logicalRole: null,
       lane: null,
+      lineage: null,
+      lineageJoinKey: null,
     };
   }
   const obj = w as Record<string, unknown>;
+  const lineage = normalizeInterventionLineageContract(
+    obj.lineage && typeof obj.lineage === "object"
+      ? obj.lineage
+      : obj.lineageContract && typeof obj.lineageContract === "object"
+        ? obj.lineageContract
+        : obj,
+    {
+      lineageId: obj.lineageId as string | null,
+      taskId: obj.taskId as string | null,
+      taskKind: obj.taskKind as string | null,
+      role: (obj.roleName ?? obj.role) as string | null,
+      lane: (obj.lane ?? obj.effectiveLane ?? obj.capabilityLane) as string | null,
+      specialized: typeof obj.specialized === "boolean" ? obj.specialized : null,
+      rerouteReasonCode: obj.rerouteReasonCode as string | null,
+    },
+  );
+  const lineageJoinKey = resolveInterventionLineageJoinKey(lineage);
   return {
     roleName: typeof obj.roleName === "string" ? obj.roleName : "unknown",
     status:   typeof obj.status   === "string" ? obj.status   : "unknown",
@@ -131,6 +152,8 @@ function sanitizeWorkerResult(w: unknown): {
         : typeof obj.capabilityLane === "string"
           ? obj.capabilityLane
           : null,
+    lineage: lineageJoinKey ? lineage : null,
+    lineageJoinKey,
   };
 }
 
@@ -2089,6 +2112,7 @@ export function computeCycleAnalytics(config, {
       capabilityExecutionSummary: normalizedCapabilityExecutionSummary,
       lineageLog: lineageLog ?? [],
       postmortemOutcomes: postmortemOutcomes ?? [],
+      workerResults: Array.isArray(safeWorkerResults) ? safeWorkerResults : [],
     }),
     lineageSummary: buildLineageSummary(lineageLog ?? []),
     memoryHitTelemetry: buildMemoryHitTelemetry(memoryHitLog ?? []),
@@ -3387,6 +3411,7 @@ export function buildInterventionLineageTelemetry({
   capabilityExecutionSummary = null,
   lineageLog = [],
   postmortemOutcomes = [],
+  workerResults = [],
 }: {
   premiumUsageLog?: unknown[];
   promptCacheTelemetry?: unknown[];
@@ -3394,8 +3419,10 @@ export function buildInterventionLineageTelemetry({
   capabilityExecutionSummary?: unknown;
   lineageLog?: unknown[];
   postmortemOutcomes?: unknown[];
+  workerResults?: unknown[];
 } = {}): InterventionLineageTelemetry {
   const aggregates = new Map<string, LineageAggregate>();
+  const verifiedWorkerOutcomeJoinKeys = new Set<string>();
   const getAggregate = (
     record: unknown,
     defaults: Partial<InterventionLineageContract> = {},
@@ -3410,6 +3437,22 @@ export function buildInterventionLineageTelemetry({
     const created = createLineageAggregate(joinKey, contract);
     aggregates.set(joinKey, created);
     return created;
+  };
+  const recordWorkerOutcome = (
+    record: unknown,
+    defaults: Partial<InterventionLineageContract>,
+    status: unknown,
+  ) => {
+    const { contract, joinKey } = resolveLineageContractFromRecord(record, defaults);
+    if (!joinKey) return;
+    const aggregate = getAggregate(record, defaults);
+    if (!aggregate) return;
+    aggregate.surfaces.add("workerOutcome");
+    if (isAnalyticsCompletedWorkerStatus(status) && !verifiedWorkerOutcomeJoinKeys.has(joinKey)) {
+      aggregate.verifiedOutcomeCount += 1;
+      verifiedWorkerOutcomeJoinKeys.add(joinKey);
+    }
+    mergeLineageAggregateContract(aggregate, contract);
   };
 
   for (const entry of Array.isArray(premiumUsageLog) ? premiumUsageLog : []) {
@@ -3513,19 +3556,32 @@ export function buildInterventionLineageTelemetry({
     aggregate.surfaces.add("specializationRouting");
   }
 
+  for (const entry of Array.isArray(workerResults) ? workerResults : []) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const lane = typeof row.lane === "string"
+      ? row.lane
+      : typeof row.roleName === "string"
+        ? getLaneForWorkerName(String(row.roleName), "")
+        : "";
+    recordWorkerOutcome(entry, {
+      lineageId: row.lineageId as string | null,
+      taskId: row.taskId as string | null,
+      taskKind: row.taskKind as string | null,
+      role: (row.roleName ?? row.role) as string | null,
+      lane: lane || null,
+      specialized: lane ? isSpecialistLane(lane) : null,
+    }, row.status);
+  }
+
   for (const entry of Array.isArray(lineageLog) ? lineageLog : []) {
     if (!entry || typeof entry !== "object") continue;
     const row = entry as Record<string, unknown>;
-    const aggregate = getAggregate(entry, {
+    recordWorkerOutcome(entry, {
       lineageId: row.id as string | null,
       taskId: row.taskId != null ? String(row.taskId) : null,
       taskIdentity: row.semanticKey as string | null,
-    });
-    if (!aggregate) continue;
-    aggregate.surfaces.add("workerOutcome");
-    if (String(row.status || "").toLowerCase() === "passed") {
-      aggregate.verifiedOutcomeCount += 1;
-    }
+    }, String(row.status || "").toLowerCase() === "passed" ? "done" : row.status);
   }
 
   for (const entry of Array.isArray(postmortemOutcomes) ? postmortemOutcomes : []) {
@@ -3739,9 +3795,9 @@ export function buildRoutingROISummary(
     const outcome = typeof row.outcome === "string" ? row.outcome : "unknown";
     const isDone = outcome === "done";
     const explicitLineageId = String(contract.lineageId || "").trim();
-    const linked = !!(explicitLineageId && joinKey && (!enforceLineageReference || linkageReference.has(joinKey)));
-    if (!linked || !joinKey) continue;
     const lineageKey = explicitLineageId || joinKey;
+    const linked = !!(lineageKey && (!enforceLineageReference || !!(joinKey && linkageReference.has(joinKey))));
+    if (!linked || !lineageKey) continue;
     byLineageId[lineageKey] ??= { success: 0, total: 0 };
     byLineageId[lineageKey].total++;
     if (isDone) byLineageId[lineageKey].success++;
@@ -3765,10 +3821,10 @@ export function buildRoutingROISummary(
     const outcome = typeof row.outcome === "string" ? row.outcome : "unknown";
     const isDone = outcome === "done";
     const explicitLineageId = String(contract.lineageId || "").trim();
-    const linked = !!(explicitLineageId && joinKey && (!enforceLineageReference || linkageReference.has(joinKey)));
+    const lineageKey = explicitLineageId || joinKey;
+    const linked = !!(lineageKey && (!enforceLineageReference || !!(joinKey && linkageReference.has(joinKey))));
 
-    if (linked && joinKey) {
-      const lineageKey = explicitLineageId || joinKey;
+    if (linked && lineageKey) {
       byLineageId[lineageKey] ??= { success: 0, total: 0 };
       byLineageId[lineageKey].total++;
       if (isDone) byLineageId[lineageKey].success++;

@@ -5,7 +5,9 @@ import path from "node:path";
 import os from "node:os";
 import {
   buildConversationContext,
+  buildWorkerRuntimeLineage,
   parseWorkerResponse,
+  extractStreamingWorkerResultMarker,
   deriveDeterministicCleanTreeEvidence,
   resolveCleanTreeEvidenceTargets,
   inferWorkerReportedTaskScopedCleanTreeEvidence,
@@ -17,11 +19,14 @@ import {
   applyMemoryTrustFilter,
   computeMemoryHitRatio,
   isTerminalWorkerStatus,
+  resolveWorkerExecutionLineageId,
   shouldResolveRecoveredWorkerEscalations,
   extractWorkerViolationSummary,
 } from "../../src/core/worker_runner.js";
 import { isProcessAlive } from "../../src/core/daemon_control.js";
-import { buildRoutingROISummary } from "../../src/core/cycle_analytics.js";
+import { createVersionedCheckpointEnvelope } from "../../src/core/checkpoint_engine.js";
+import { buildWorkerExecutionReportArtifact } from "../../src/core/evidence_envelope.js";
+import { buildInterventionLineageTelemetry, buildRoutingROISummary } from "../../src/core/cycle_analytics.js";
 
 // ── parseWorkerResponse ──────────────────────────────────────────────────────
 
@@ -116,6 +121,20 @@ describe("parseWorkerResponse", () => {
     assert.equal(result.dispatchBlockReason, "governance_freeze_active:manual_freeze");
   });
 
+  it("flags unsupported upstream-only CI deferrals for red PRs", () => {
+    const stdout = [
+      "BOX_STATUS=partial",
+      "BOX_PR_URL=https://github.com/org/repo/pull/42",
+      "CI failed on the PR, so I'm pulling the workflow logs.",
+      "Merge is blocked upstream, not by this change.",
+      "The latest main CI run fails with the same assertions.",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "partial");
+    assert.equal(result.dispatchBlockReason, "unsupported_upstream_ci_deferral");
+    assert.equal(result.unsupportedUpstreamCiDeferral, true);
+  });
+
   it("derives dispatch block reason from BOX_ACCESS blocked scopes when BOX_BLOCKER is absent", () => {
     const stdout = "BOX_STATUS=done\nBOX_ACCESS=repo:blocked;files:ok;tools:ok;api:ok";
     const result = parseWorkerResponse(stdout, "");
@@ -175,6 +194,35 @@ describe("parseWorkerResponse", () => {
     const raw = "BOX_STATUS=done\nSome text";
     const result = parseWorkerResponse(raw, "");
     assert.equal(result.fullOutput, raw);
+  });
+});
+
+describe("extractStreamingWorkerResultMarker", () => {
+  it("returns null before terminal verification evidence appears", () => {
+    const marker = extractStreamingWorkerResultMarker("BOX_STATUS=partial\nStill writing...", "");
+    assert.equal(marker, null);
+  });
+
+  it("emits a marker once BOX_STATUS and verification boundary are present", () => {
+    const stdout = [
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=pass",
+      "===END_VERIFICATION===",
+      "BOX_STATUS=partial",
+    ].join("\n");
+    const marker = extractStreamingWorkerResultMarker(stdout, "");
+    assert.deepEqual(marker, { status: "partial", prUrl: null });
+  });
+
+  it("uses normalized parsed status when access evidence forces a block", () => {
+    const stdout = [
+      "BOX_ACCESS=repo:ok;files:ok;tools:blocked;api:ok",
+      "VERIFICATION_REPORT: BUILD=pass; TESTS=pass; RESPONSIVE=n/a; API=pass; EDGE_CASES=pass; SECURITY=n/a",
+      "BOX_STATUS=done",
+    ].join("\n");
+    const marker = extractStreamingWorkerResultMarker(stdout, "");
+    assert.deepEqual(marker, { status: "blocked", prUrl: null });
   });
 });
 
@@ -403,6 +451,28 @@ describe("tool access + capability guards", () => {
     assert.ok(prompt.includes("Do not print TOOL_INTENT or HOOK_DECISION pseudo-telemetry lines in your response."));
     assert.ok(!prompt.includes("Before every execute tool call, emit one explicit tool-intent envelope:"));
     assert.ok(!prompt.includes("[TOOL_INTENT] scope=<repo-path-or-subsystem> intent=<goal> impact=<low|medium|high|critical> clearance=<read|write|admin>"));
+  });
+
+  it("worker prompt forbids upstream-only deferrals for red PRs", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Repair a red PR by investigating its failing checks and shipping the fix.",
+        taskKind: "implementation",
+        verification: "1. npm test -- tests/core/worker_runner.test.ts",
+        targetFiles: ["src/core/worker_runner.ts", "tests/core/worker_runner.test.ts"],
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-prompt-test") },
+      },
+      "quality",
+      {},
+    );
+
+    assert.ok(prompt.includes("A red PR is NOT resolved by saying main is red too."));
+    assert.ok(prompt.includes("reproduce the failing branch check"));
   });
 
   it("worker prompt adds a final placeholder self-check before done responses", () => {
@@ -833,6 +903,106 @@ describe("computeMemoryHitRatio", () => {
   });
 });
 
+describe("runtime lineage contract", () => {
+  it("derives a stable join key from an embedded lineage contract", () => {
+    const lineage = buildWorkerRuntimeLineage(
+      {
+        task: "Extend runtime lineage joins across checkpoints and analytics",
+        taskKind: "implementation",
+        lineageContract: {
+          lineageId: "lineage-42",
+          taskId: "task-42",
+          taskKind: "implementation",
+        },
+      },
+      { roleName: "integration-worker", model: "GPT-5.4" },
+    );
+
+    assert.equal(resolveWorkerExecutionLineageId({ lineageContract: { lineageId: "lineage-42" } }), "lineage-42");
+    assert.equal(lineage.lineageJoinKey, "lineage:lineage-42");
+    assert.equal(lineage.checkpointThreadId, "lineage:lineage-42");
+    assert.equal(lineage.lineage?.role, "integration-worker");
+    assert.equal(lineage.lineage?.model, "GPT-5.4");
+  });
+
+  it("keeps checkpoint, evidence, and analytics lineage joins aligned", () => {
+    const runtimeLineage = buildWorkerRuntimeLineage(
+      {
+        task: "Persist worker lineage through runtime boundaries",
+        taskKind: "implementation",
+        lineageContract: {
+          lineageId: "lineage-99",
+          taskId: "task-99",
+          taskKind: "implementation",
+        },
+      },
+      { roleName: "integration-worker", model: "GPT-5.4" },
+    );
+
+    const checkpoint = createVersionedCheckpointEnvelope(
+      {
+        status: "partial",
+        taskId: "task-99",
+        lineage: runtimeLineage.lineage,
+      },
+      null,
+      "boundary:attempt",
+      {
+        thread_id: runtimeLineage.checkpointThreadId || "lineage:lineage-99",
+        checkpoint_ns: "attempt",
+        checkpoint_id: "lineage-99/attempt/1",
+      },
+    );
+    const executionReport = buildWorkerExecutionReportArtifact({
+      roleName: "integration-worker",
+      status: "partial",
+      summary: "Runtime lineage captured.",
+      verificationEvidence: { build: "pass", tests: "pass", lint: "n/a" },
+      lineage: runtimeLineage.lineage,
+      lineageJoinKey: runtimeLineage.lineageJoinKey,
+    });
+    const telemetry = buildInterventionLineageTelemetry({
+      premiumUsageLog: [{
+        worker: "integration-worker",
+        model: "GPT-5.4",
+        taskKind: "implementation",
+        outcome: "done",
+        lineage: runtimeLineage.lineage,
+        lineageJoinKey: runtimeLineage.lineageJoinKey,
+        lineageId: runtimeLineage.lineage?.lineageId,
+      }],
+      routeRoiLedger: [{
+        taskId: "task-99",
+        model: "GPT-5.4",
+        tier: "T2",
+        estimatedTokens: 900,
+        expectedQuality: 0.8,
+        realizedQuality: 0.92,
+        outcome: "done",
+        roi: 0.92,
+        roiDelta: 0.12,
+        routedAt: "2026-04-15T08:33:53.721Z",
+        realizedAt: "2026-04-15T08:34:53.721Z",
+        lineage: runtimeLineage.lineage,
+        lineageJoinKey: runtimeLineage.lineageJoinKey,
+        lineageId: runtimeLineage.lineage?.lineageId,
+      }],
+      workerResults: [{
+        roleName: "integration-worker",
+        status: "done",
+        lineage: runtimeLineage.lineage,
+        lineageJoinKey: runtimeLineage.lineageJoinKey,
+      }],
+    });
+
+    assert.equal(checkpoint.lineageJoinKey, runtimeLineage.lineageJoinKey);
+    assert.equal(executionReport.lineageJoinKey, runtimeLineage.lineageJoinKey);
+    assert.equal(telemetry.joinedLineages[0]?.joinKey, runtimeLineage.lineageJoinKey);
+    assert.ok(telemetry.joinedLineages[0]?.surfaces.includes("modelRouting"));
+    assert.ok(telemetry.joinedLineages[0]?.surfaces.includes("workerOutcome"));
+  });
+});
+
 // ── buildRoutingROISummary — lineage-key join for premium usage + routing ROI ──
 // These tests verify that premium usage log entries are correctly joined via
 // the shared lineageId key and that ROI is computed per-lineage group.
@@ -847,10 +1017,10 @@ describe("buildRoutingROISummary — lineage-keyed routing ROI", () => {
     assert.equal(result.overallLinkedROI, null);
   });
 
-  it("counts entries without lineageId as unlinked", () => {
+  it("counts entries without any lineage contract signals as unlinked", () => {
     const log = [
-      { worker: "king-david", model: "Claude Sonnet 4.6", taskKind: "backend", outcome: "done", taskId: "1", lineageId: null },
-      { worker: "esther",     model: "Claude Sonnet 4.6", taskKind: "backend", outcome: "done", taskId: "2", lineageId: null },
+      { worker: "king-david", model: "Claude Sonnet 4.6", taskKind: "backend", outcome: "done", lineageId: null },
+      { worker: "esther",     model: "Claude Sonnet 4.6", taskKind: "backend", outcome: "done", lineageId: null },
     ];
     const result = buildRoutingROISummary(log);
     assert.equal(result.totalRequests, 2);
@@ -900,6 +1070,43 @@ describe("buildRoutingROISummary — lineage-keyed routing ROI", () => {
     const result = buildRoutingROISummary(log as unknown[]);
     assert.equal(result.linkedRequests, 1);
     assert.ok(result.totalRequests >= 1);
+  });
+
+  it("links join-key-only routing records when lineageId is absent", () => {
+    const result = buildRoutingROISummary(
+      [
+        {
+          worker: "integration-worker",
+          model: "GPT-5.4",
+          taskKind: "implementation",
+          outcome: "done",
+          taskId: "task-join-only",
+          lineage: { taskId: "task-join-only", taskKind: "implementation" },
+          lineageJoinKey: "task:task-join-only",
+        },
+      ],
+      [],
+      [
+        {
+          taskId: "task-join-only",
+          model: "GPT-5.4",
+          tier: "T2",
+          estimatedTokens: 500,
+          expectedQuality: 0.8,
+          realizedQuality: 0.9,
+          outcome: "done",
+          roi: 0.9,
+          roiDelta: 0.1,
+          routedAt: "2026-04-15T08:33:53.721Z",
+          realizedAt: "2026-04-15T08:34:53.721Z",
+          lineage: { taskId: "task-join-only", taskKind: "implementation" },
+          lineageJoinKey: "task:task-join-only",
+        },
+      ],
+    );
+
+    assert.equal(result.linkedRequests, 1);
+    assert.equal(result.roiByLineageId["task:task-join-only"]?.roi, 1);
   });
 });
 

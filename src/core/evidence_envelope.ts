@@ -12,6 +12,11 @@ import type {
   PrometheusPlanArtifact,
 } from "./plan_lifecycle_contract.js";
 import { getPrometheusPlanArtifact } from "./plan_lifecycle_contract.js";
+import {
+  normalizeInterventionLineageContract,
+  resolveInterventionLineageJoinKey,
+  type InterventionLineageContract,
+} from "./state_tracker.js";
 
 // ── Verification evidence ──────────────────────────────────────────────────────
 
@@ -64,6 +69,8 @@ export type WorkerExecutionReportArtifact = {
   preReviewAssessment: string | null;
   preReviewIssues: string[];
   dispatchBlockReason: string | null;
+  lineage: InterventionLineageContract | null;
+  lineageJoinKey: string | null;
   emittedAt: string;
 };
 
@@ -111,6 +118,10 @@ export type EvidenceEnvelope = {
   preReviewIssues?: string[];
   /** Worker runner verification contract used by lifecycle admission gates. */
   dispatchContract?: DispatchContractSnapshot;
+  /** Normalized runtime lineage contract shared across checkpoints, routing, and analytics. */
+  lineage?: InterventionLineageContract | null;
+  /** Deterministic join key derived from the runtime lineage contract. */
+  lineageJoinKey?: string | null;
   /** Optional typed leadership artifact emitted by Jesus. */
   strategyBrief?: JesusStrategyBriefArtifact | null;
   /** Optional typed plan artifact emitted by Prometheus. */
@@ -150,6 +161,63 @@ function validateNestedVerificationEvidence(
     }
   }
   return errors;
+}
+
+function hasMeaningfulLineageContract(lineage: InterventionLineageContract): boolean {
+  return Object.entries(lineage).some(([key, value]) => key !== "schemaVersion" && value !== null);
+}
+
+function normalizeEnvelopeLineage(
+  envelope: Partial<EvidenceEnvelope> & Record<string, unknown>,
+): { lineage: InterventionLineageContract | null; lineageJoinKey: string | null } {
+  const lineage = normalizeInterventionLineageContract(
+    envelope.lineage && typeof envelope.lineage === "object"
+      ? envelope.lineage
+      : envelope.lineageContract && typeof envelope.lineageContract === "object"
+        ? envelope.lineageContract
+        : envelope,
+    {
+      taskId: typeof envelope.taskId === "string" ? envelope.taskId : null,
+      taskKind: typeof envelope.taskKind === "string" ? envelope.taskKind : null,
+      role: typeof envelope.roleName === "string" ? envelope.roleName : null,
+    },
+  );
+  if (!hasMeaningfulLineageContract(lineage)) {
+    return { lineage: null, lineageJoinKey: null };
+  }
+  return {
+    lineage,
+    lineageJoinKey: resolveInterventionLineageJoinKey(lineage),
+  };
+}
+
+function validateLineageSnapshot(
+  value: unknown,
+  joinKeyValue: unknown,
+  fieldPrefix: string,
+): string[] {
+  if (value == null && joinKeyValue == null) return [];
+  if (value == null && joinKeyValue != null) {
+    return [`${fieldPrefix} must be a non-null object when ${fieldPrefix}JoinKey is provided`];
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [`${fieldPrefix} must be a non-null object`];
+  }
+  const normalized = normalizeInterventionLineageContract(value);
+  if (!hasMeaningfulLineageContract(normalized)) {
+    return [`${fieldPrefix} must include at least one non-null lineage field`];
+  }
+  const derivedJoinKey = resolveInterventionLineageJoinKey(normalized);
+  if (joinKeyValue != null) {
+    const normalizedJoinKey = String(joinKeyValue).trim();
+    if (!normalizedJoinKey) {
+      return [`${fieldPrefix}JoinKey must be a non-empty string when provided`];
+    }
+    if (derivedJoinKey && normalizedJoinKey !== derivedJoinKey) {
+      return [`${fieldPrefix}JoinKey must match the normalized ${fieldPrefix} contract`];
+    }
+  }
+  return [];
 }
 
 function validatePlanArtifact(planArtifact: unknown): string[] {
@@ -213,6 +281,7 @@ function validateExecutionReportArtifact(executionReport: unknown): string[] {
     errors.push("executionReport.filesTouched must be an array");
   }
   errors.push(...validateNestedVerificationEvidence(report.verificationEvidence, "executionReport.verificationEvidence"));
+  errors.push(...validateLineageSnapshot(report.lineage, report.lineageJoinKey, "executionReport.lineage"));
   return errors;
 }
 
@@ -226,6 +295,7 @@ export function buildWorkerExecutionReportArtifact(
   const dispatchContract = envelope.dispatchContract && typeof envelope.dispatchContract === "object"
     ? envelope.dispatchContract as DispatchContractSnapshot
     : {};
+  const { lineage, lineageJoinKey } = normalizeEnvelopeLineage(envelope);
   return {
     schemaVersion: 1,
     source: "worker_execution_report",
@@ -243,6 +313,8 @@ export function buildWorkerExecutionReportArtifact(
     dispatchBlockReason: typeof dispatchContract.dispatchBlockReason === "string" && dispatchContract.dispatchBlockReason.trim()
       ? dispatchContract.dispatchBlockReason.trim()
       : null,
+    lineage,
+    lineageJoinKey,
     emittedAt: String(opts.emittedAt || new Date().toISOString()),
   };
 }
@@ -320,6 +392,7 @@ export function validateEvidenceEnvelope(envelope: unknown): { valid: boolean; e
 
   const ev = e.verificationEvidence;
   errors.push(...validateNestedVerificationEvidence(ev, "verificationEvidence"));
+  errors.push(...validateLineageSnapshot(e.lineage, e.lineageJoinKey, "lineage"));
 
   if (e.planArtifact != null) {
     errors.push(...validatePlanArtifact(e.planArtifact));
