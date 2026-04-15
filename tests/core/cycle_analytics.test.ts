@@ -2072,6 +2072,63 @@ describe("modelRoutingTelemetry schema contract", () => {
     assert.equal(telemetry.byInterventionType.postmortem.closedOutcomeCount, 1);
   });
 
+  it("buildInterventionLineageTelemetry honors explicit stable join keys across surfaces", () => {
+    const telemetry = buildInterventionLineageTelemetry({
+      premiumUsageLog: [
+        {
+          worker: "prometheus",
+          model: "GPT-5.4",
+          taskKind: "planning",
+          outcome: "done",
+          lineage: {
+            lineageId: "lineage-premium-1",
+            taskKind: "planning",
+            promptFamilyKey: "planner-family-1",
+          },
+          lineageJoinKey: "prompt-family:planner-family-1",
+        },
+      ],
+      routeRoiLedger: [
+        {
+          taskId: "plan-1",
+          model: "GPT-5.4",
+          tier: "T2",
+          estimatedTokens: 800,
+          expectedQuality: 0.8,
+          realizedQuality: 0.9,
+          outcome: "done",
+          roi: 1.125,
+          roiDelta: 0.125,
+          routedAt: makeTs(0),
+          realizedAt: makeTs(60_000),
+          lineage: {
+            lineageId: "lineage-routing-1",
+            taskKind: "planning",
+            promptFamilyKey: "planner-family-1",
+          },
+          lineageJoinKey: "prompt-family:planner-family-1",
+        },
+      ],
+      workerResults: [
+        {
+          roleName: "prometheus",
+          status: "done",
+          lineage: {
+            lineageId: "lineage-worker-1",
+            taskKind: "planning",
+            promptFamilyKey: "planner-family-1",
+          },
+          lineageJoinKey: "prompt-family:planner-family-1",
+        },
+      ],
+    });
+
+    assert.equal(telemetry.lineageCount, 1);
+    assert.equal(telemetry.joinedLineages[0]?.joinKey, "prompt-family:planner-family-1");
+    assert.ok(telemetry.joinedLineages[0]?.surfaces.includes("modelRouting"));
+    assert.ok(telemetry.joinedLineages[0]?.surfaces.includes("workerOutcome"));
+  });
+
   it("buildModelRoutingTelemetry aggregates usage entries by taskKind and model", () => {
     const log = [
       { model: "Claude Sonnet 4.6", taskKind: "implementation", outcome: "done", lineageId: "impl-1" },
@@ -2288,7 +2345,7 @@ describe("buildRoutingROISummary", () => {
     assert.equal(summary.totalRequests, 3);
     assert.equal(summary.linkedRequests, 1);
     assert.equal(summary.linkedRatio, 0.333);
-    assert.equal(summary.roiByLineageId["impl-1"]?.roi, 1);
+    assert.equal(summary.roiByLineageId["lineage:impl-1"]?.roi, 1);
     assert.equal(summary.overallLinkedROI, 1);
   });
 });

@@ -167,6 +167,39 @@ function hasMeaningfulLineageContract(lineage: InterventionLineageContract): boo
   return Object.entries(lineage).some(([key, value]) => key !== "schemaVersion" && value !== null);
 }
 
+function normalizeLineageJoinTaskKind(value: unknown): string {
+  return String(value || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
+}
+
+function resolveEnvelopeLineageJoinKey(
+  lineage: InterventionLineageContract,
+  opts: { explicitJoinKey?: unknown; taskKind?: unknown; role?: unknown } = {},
+): string | null {
+  const explicitJoinKey = String(opts.explicitJoinKey || "").trim();
+  const taskKind = normalizeLineageJoinTaskKind(opts.taskKind ?? lineage.taskKind);
+  const role = String(opts.role ?? lineage.role ?? "").trim().toLowerCase();
+  const prefersPromptFamily = Boolean(
+    lineage.promptFamilyKey
+    && (
+      taskKind === "planning"
+      || taskKind === "plan-review"
+      || taskKind === "review"
+      || taskKind === "analysis"
+      || role === "prometheus"
+      || role === "athena"
+      || role === "jesus"
+    ),
+  );
+  const derivedJoinKey = prefersPromptFamily
+    ? `prompt-family:${lineage.promptFamilyKey}`
+    : resolveInterventionLineageJoinKey(lineage)
+      || (lineage.promptFamilyKey ? `prompt-family:${lineage.promptFamilyKey}` : null);
+  if (explicitJoinKey && (!derivedJoinKey || explicitJoinKey === derivedJoinKey)) {
+    return explicitJoinKey;
+  }
+  return derivedJoinKey ?? (explicitJoinKey || null);
+}
+
 function normalizeEnvelopeLineage(
   envelope: Partial<EvidenceEnvelope> & Record<string, unknown>,
 ): { lineage: InterventionLineageContract | null; lineageJoinKey: string | null } {
@@ -187,7 +220,11 @@ function normalizeEnvelopeLineage(
   }
   return {
     lineage,
-    lineageJoinKey: resolveInterventionLineageJoinKey(lineage),
+    lineageJoinKey: resolveEnvelopeLineageJoinKey(lineage, {
+      explicitJoinKey: envelope.lineageJoinKey,
+      taskKind: envelope.taskKind,
+      role: envelope.roleName,
+    }),
   };
 }
 
@@ -195,6 +232,7 @@ function validateLineageSnapshot(
   value: unknown,
   joinKeyValue: unknown,
   fieldPrefix: string,
+  opts: { taskKind?: unknown; role?: unknown } = {},
 ): string[] {
   if (value == null && joinKeyValue == null) return [];
   if (value == null && joinKeyValue != null) {
@@ -207,7 +245,10 @@ function validateLineageSnapshot(
   if (!hasMeaningfulLineageContract(normalized)) {
     return [`${fieldPrefix} must include at least one non-null lineage field`];
   }
-  const derivedJoinKey = resolveInterventionLineageJoinKey(normalized);
+  const derivedJoinKey = resolveEnvelopeLineageJoinKey(normalized, {
+    taskKind: opts.taskKind,
+    role: opts.role,
+  });
   if (joinKeyValue != null) {
     const normalizedJoinKey = String(joinKeyValue).trim();
     if (!normalizedJoinKey) {
@@ -281,7 +322,9 @@ function validateExecutionReportArtifact(executionReport: unknown): string[] {
     errors.push("executionReport.filesTouched must be an array");
   }
   errors.push(...validateNestedVerificationEvidence(report.verificationEvidence, "executionReport.verificationEvidence"));
-  errors.push(...validateLineageSnapshot(report.lineage, report.lineageJoinKey, "executionReport.lineage"));
+  errors.push(...validateLineageSnapshot(report.lineage, report.lineageJoinKey, "executionReport.lineage", {
+    role: report.roleName,
+  }));
   return errors;
 }
 
@@ -392,7 +435,10 @@ export function validateEvidenceEnvelope(envelope: unknown): { valid: boolean; e
 
   const ev = e.verificationEvidence;
   errors.push(...validateNestedVerificationEvidence(ev, "verificationEvidence"));
-  errors.push(...validateLineageSnapshot(e.lineage, e.lineageJoinKey, "lineage"));
+  errors.push(...validateLineageSnapshot(e.lineage, e.lineageJoinKey, "lineage", {
+    taskKind: e.taskKind,
+    role: e.roleName,
+  }));
 
   if (e.planArtifact != null) {
     errors.push(...validatePlanArtifact(e.planArtifact));

@@ -271,6 +271,19 @@ describe("writeCheckpoint — cancellation-scope", () => {
     assert.equal(parsed.promptLineage.totalSegments, 0);
   });
 
+  it("createVersionedCheckpointEnvelope keeps stable prompt-family lineage joins", () => {
+    const envelope = createVersionedCheckpointEnvelope({
+      taskKind: "planning",
+      roleName: "prometheus",
+      lineage: {
+        lineageId: "lineage-501",
+        taskKind: "planning",
+        promptFamilyKey: "planner-batch-5",
+      },
+    });
+    assert.equal(envelope.lineageJoinKey, "prompt-family:planner-batch-5");
+  });
+
   it("negative path: writeBoundaryCheckpoint handles missing thread_id gracefully", async () => {
     const config = { paths: { stateDir: tmpDir } };
     const filePath = await writeBoundaryCheckpoint(config, { data: true }, {

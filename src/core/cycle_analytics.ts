@@ -144,7 +144,8 @@ function sanitizeWorkerResult(w: unknown): {
       rerouteReasonCode: obj.rerouteReasonCode as string | null,
     },
   );
-  const lineageJoinKey = resolveInterventionLineageJoinKey(lineage);
+  const explicitJoinKey = typeof obj.lineageJoinKey === "string" ? obj.lineageJoinKey.trim() : "";
+  const lineageJoinKey = explicitJoinKey || resolveInterventionLineageJoinKey(lineage);
   return {
     roleName: typeof obj.roleName === "string" ? obj.roleName : "unknown",
     status:   typeof obj.status   === "string" ? obj.status   : "unknown",
@@ -3660,12 +3661,16 @@ function resolveLineageContractFromRecord(
     role: (src.agent ?? src.worker ?? src.role ?? defaults.role) as string | null,
     taskKind: (src.taskKind ?? src.kind ?? defaults.taskKind) as string | null,
   });
+  const explicitJoinKey = String(src.lineageJoinKey || "").trim();
+  const derivedJoinKey = resolveAnalyticsLineageJoinKey(contract, {
+    taskKind: src.taskKind ?? src.kind ?? defaults.taskKind,
+    role: src.agent ?? src.worker ?? src.role ?? defaults.role,
+  });
   return {
     contract,
-    joinKey: resolveAnalyticsLineageJoinKey(contract, {
-      taskKind: src.taskKind ?? src.kind ?? defaults.taskKind,
-      role: src.agent ?? src.worker ?? src.role ?? defaults.role,
-    }),
+    joinKey: explicitJoinKey && (!derivedJoinKey || explicitJoinKey === derivedJoinKey)
+      ? explicitJoinKey
+      : derivedJoinKey ?? (explicitJoinKey || null),
   };
 }
 
@@ -4001,17 +4006,18 @@ export function buildInterventionLineageTelemetry({
 }
 
 /**
- * Join premium usage log and lineage log entries by shared lineageId to compute
- * per-lineage-key routing ROI.
+ * Join premium usage log and lineage log entries by the stable lineage join key
+ * to compute per-lineage routing ROI.
  *
  * ROI is defined as the fraction of "done" outcomes among all requests sharing
- * the same lineageId.  Entries without a lineageId are tallied separately.
+ * the same stable join key. Entries without any joinable lineage signal are
+ * tallied separately.
  *
  * Returns:
  *   totalRequests    — total entries in premiumUsageLog
- *   linkedRequests   — entries that carry a non-null lineageId
+ *   linkedRequests   — entries that carry a non-null stable join key
  *   linkedRatio      — linkedRequests / totalRequests (null when totalRequests = 0)
- *   roiByLineageId   — per-key { success, total, roi } tally
+ *   roiByLineageId   — per-key { success, total, roi } tally keyed by stable join key
  *   overallLinkedROI — done / total across all linked entries (null when none)
  */
 export function buildRoutingROISummary(
@@ -4060,7 +4066,7 @@ export function buildRoutingROISummary(
     const outcome = typeof row.outcome === "string" ? row.outcome : "unknown";
     const isDone = outcome === "done";
     const explicitLineageId = String(contract.lineageId || "").trim();
-    const lineageKey = explicitLineageId || joinKey;
+    const lineageKey = joinKey || explicitLineageId;
     const linked = !!(lineageKey && (!enforceLineageReference || !!(joinKey && linkageReference.has(joinKey))));
     if (!linked || !lineageKey) continue;
     byLineageId[lineageKey] ??= { success: 0, total: 0 };
@@ -4086,7 +4092,7 @@ export function buildRoutingROISummary(
     const outcome = typeof row.outcome === "string" ? row.outcome : "unknown";
     const isDone = outcome === "done";
     const explicitLineageId = String(contract.lineageId || "").trim();
-    const lineageKey = explicitLineageId || joinKey;
+    const lineageKey = joinKey || explicitLineageId;
     const linked = !!(lineageKey && (!enforceLineageReference || !!(joinKey && linkageReference.has(joinKey))));
 
     if (linked && lineageKey) {

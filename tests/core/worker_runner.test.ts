@@ -8,6 +8,7 @@ import {
   buildWorkerRuntimeLineage,
   parseWorkerResponse,
   extractStreamingWorkerResultMarker,
+  shouldTreatAbortedWorkerRunAsTerminalResult,
   deriveDeterministicCleanTreeEvidence,
   resolveCleanTreeEvidenceTargets,
   inferWorkerReportedTaskScopedCleanTreeEvidence,
@@ -223,6 +224,46 @@ describe("extractStreamingWorkerResultMarker", () => {
     ].join("\n");
     const marker = extractStreamingWorkerResultMarker(stdout, "");
     assert.deepEqual(marker, { status: "blocked", prUrl: null });
+  });
+});
+
+describe("shouldTreatAbortedWorkerRunAsTerminalResult", () => {
+  it("accepts an aborted process when final worker markers were already emitted", () => {
+    const stdout = [
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=pass",
+      "===END_VERIFICATION===",
+      "BOX_STATUS=done",
+      "BOX_PR_URL=https://github.com/org/repo/pull/42",
+    ].join("\n");
+
+    const marker = shouldTreatAbortedWorkerRunAsTerminalResult(
+      {
+        aborted: true,
+        stderr: "[BOX] Post-final-output grace expired after 30000ms",
+      },
+      stdout,
+      "[BOX] Post-final-output grace expired after 30000ms",
+    );
+
+    assert.deepEqual(marker, {
+      status: "done",
+      prUrl: "https://github.com/org/repo/pull/42",
+    });
+  });
+
+  it("rejects aborted processes that never emitted a terminal worker result", () => {
+    const marker = shouldTreatAbortedWorkerRunAsTerminalResult(
+      {
+        aborted: true,
+        stderr: "[BOX] Post-final-output grace expired after 30000ms",
+      },
+      "BOX_STATUS=done\nStill streaming",
+      "[BOX] Post-final-output grace expired after 30000ms",
+    );
+
+    assert.equal(marker, null);
   });
 });
 
@@ -1001,6 +1042,25 @@ describe("runtime lineage contract", () => {
     assert.ok(telemetry.joinedLineages[0]?.surfaces.includes("modelRouting"));
     assert.ok(telemetry.joinedLineages[0]?.surfaces.includes("workerOutcome"));
   });
+
+  it("prefers prompt-family join keys for planning lineage contracts", () => {
+    const runtimeLineage = buildWorkerRuntimeLineage(
+      {
+        task: "Assemble planning brief",
+        taskKind: "planning",
+        promptFamilyKey: "planner-cycle-7",
+        lineageContract: {
+          lineageId: "lineage-77",
+          taskKind: "planning",
+          promptFamilyKey: "planner-cycle-7",
+        },
+      },
+      { roleName: "prometheus", model: "GPT-5.4" },
+    );
+
+    assert.equal(runtimeLineage.lineageJoinKey, "prompt-family:planner-cycle-7");
+    assert.equal(runtimeLineage.checkpointThreadId, "prompt-family:planner-cycle-7");
+  });
 });
 
 // ── buildRoutingROISummary — lineage-key join for premium usage + routing ROI ──
@@ -1039,12 +1099,12 @@ describe("buildRoutingROISummary — lineage-keyed routing ROI", () => {
     assert.equal(result.totalRequests, 3);
     assert.equal(result.linkedRequests, 3);
     assert.equal(result.linkedRatio, 1);
-    // lid-abc: 1 done / 2 total = 0.5
-    assert.equal(result.roiByLineageId["lid-abc"]?.roi, 0.5);
-    assert.equal(result.roiByLineageId["lid-abc"]?.success, 1);
-    assert.equal(result.roiByLineageId["lid-abc"]?.total, 2);
-    // lid-xyz: 1 done / 1 total = 1.0
-    assert.equal(result.roiByLineageId["lid-xyz"]?.roi, 1);
+    // lineage:lid-abc: 1 done / 2 total = 0.5
+    assert.equal(result.roiByLineageId["lineage:lid-abc"]?.roi, 0.5);
+    assert.equal(result.roiByLineageId["lineage:lid-abc"]?.success, 1);
+    assert.equal(result.roiByLineageId["lineage:lid-abc"]?.total, 2);
+    // lineage:lid-xyz: 1 done / 1 total = 1.0
+    assert.equal(result.roiByLineageId["lineage:lid-xyz"]?.roi, 1);
     // overallLinkedROI: 2 done / 3 total = 0.667
     assert.ok(typeof result.overallLinkedROI === "number");
     assert.ok(result.overallLinkedROI > 0.6 && result.overallLinkedROI < 0.7);

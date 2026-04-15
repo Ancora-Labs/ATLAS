@@ -84,6 +84,39 @@ function hasMeaningfulLineageContract(lineage: InterventionLineageContract): boo
   return Object.entries(lineage).some(([key, value]) => key !== "schemaVersion" && value !== null);
 }
 
+function normalizeLineageJoinTaskKind(value: unknown): string {
+  return String(value || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
+}
+
+function resolveCheckpointLineageJoinKey(
+  lineage: InterventionLineageContract,
+  payload: Record<string, unknown>,
+): string | null {
+  const explicitJoinKey = String(payload.lineageJoinKey || "").trim();
+  const taskKind = normalizeLineageJoinTaskKind(payload.taskKind ?? lineage.taskKind);
+  const role = String(payload.roleName ?? payload.role ?? lineage.role ?? "").trim().toLowerCase();
+  const prefersPromptFamily = Boolean(
+    lineage.promptFamilyKey
+    && (
+      taskKind === "planning"
+      || taskKind === "plan-review"
+      || taskKind === "review"
+      || taskKind === "analysis"
+      || role === "prometheus"
+      || role === "athena"
+      || role === "jesus"
+    ),
+  );
+  const derivedJoinKey = prefersPromptFamily
+    ? `prompt-family:${lineage.promptFamilyKey}`
+    : resolveInterventionLineageJoinKey(lineage)
+      || (lineage.promptFamilyKey ? `prompt-family:${lineage.promptFamilyKey}` : null);
+  if (explicitJoinKey && (!derivedJoinKey || explicitJoinKey === derivedJoinKey)) {
+    return explicitJoinKey;
+  }
+  return derivedJoinKey ?? (explicitJoinKey || null);
+}
+
 function normalizeCheckpointLineageFields(payload: Record<string, unknown>) {
   const output = { ...payload };
   const lineage = normalizeInterventionLineageContract(
@@ -111,7 +144,7 @@ function normalizeCheckpointLineageFields(payload: Record<string, unknown>) {
   if (!hasMeaningfulLineageContract(lineage)) {
     return output;
   }
-  const lineageJoinKey = resolveInterventionLineageJoinKey(lineage);
+  const lineageJoinKey = resolveCheckpointLineageJoinKey(lineage, output);
   output.lineage = lineage;
   output.lineageContract = lineage;
   output.lineageId = lineage.lineageId;

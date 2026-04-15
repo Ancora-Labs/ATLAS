@@ -340,6 +340,31 @@ describe("Route ROI Ledger — persist uncertainty and realized ROI per route", 
     }
   });
 
+  it("appendRouteROIEntry preserves the stable lineage join key provided by the runner", async () => {
+    const { config, dir } = await makeTmpConfig();
+    try {
+      await appendRouteROIEntry(config, {
+        taskId: "T-001A",
+        model: "Claude Sonnet 4.6",
+        tier: "T2",
+        estimatedTokens: 1500,
+        expectedQuality: 0.8,
+        taskKind: "planning",
+        role: "prometheus",
+        lineage: {
+          lineageId: "lineage-200",
+          taskKind: "planning",
+          promptFamilyKey: "planner-wave-9",
+        },
+        lineageJoinKey: "prompt-family:planner-wave-9",
+      });
+      const ledger = await loadRouteROILedger(config);
+      assert.equal(ledger[0].lineageJoinKey, "prompt-family:planner-wave-9");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("realizeRouteROIEntry updates the unrealized entry with quality score and outcome", async () => {
     const { config, dir } = await makeTmpConfig();
     try {

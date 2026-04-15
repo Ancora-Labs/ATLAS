@@ -166,6 +166,9 @@ type WorkerSessionState = {
   [key: string]: unknown;
 };
 
+const POST_FINAL_OUTPUT_ABORT_REASON = "[BOX] Post-final-output grace expired";
+const DEFAULT_FINAL_OUTPUT_EXIT_GRACE_MS = 30 * 1000;
+
 const REFLECTION_MEMORY_FILE = "reflection_memory.json";
 const MAX_REFLECTION_ENTRIES = 200;
 const REFLECTION_MEMORY_SCHEMA_VERSION = 2;
@@ -1043,6 +1046,39 @@ function hasMeaningfulLineageContract(lineage: InterventionLineageContract): boo
   return Object.entries(lineage).some(([key, value]) => key !== "schemaVersion" && value !== null);
 }
 
+function normalizeLineageJoinTaskKind(value: unknown): string {
+  return String(value || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
+}
+
+function deriveStableLineageJoinKey(
+  lineage: InterventionLineageContract,
+  opts: { explicitJoinKey?: unknown; taskKind?: unknown; role?: unknown } = {},
+): string | null {
+  const explicitJoinKey = String(opts.explicitJoinKey || "").trim();
+  const taskKind = normalizeLineageJoinTaskKind(opts.taskKind ?? lineage.taskKind);
+  const role = String(opts.role ?? lineage.role ?? "").trim().toLowerCase();
+  const prefersPromptFamily = Boolean(
+    lineage.promptFamilyKey
+    && (
+      taskKind === "planning"
+      || taskKind === "plan-review"
+      || taskKind === "review"
+      || taskKind === "analysis"
+      || role === "prometheus"
+      || role === "athena"
+      || role === "jesus"
+    ),
+  );
+  const derivedJoinKey = prefersPromptFamily
+    ? `prompt-family:${lineage.promptFamilyKey}`
+    : resolveInterventionLineageJoinKey(lineage)
+      || (lineage.promptFamilyKey ? `prompt-family:${lineage.promptFamilyKey}` : null);
+  if (explicitJoinKey && (!derivedJoinKey || explicitJoinKey === derivedJoinKey)) {
+    return explicitJoinKey;
+  }
+  return derivedJoinKey ?? (explicitJoinKey || null);
+}
+
 export function buildWorkerRuntimeLineage(
   instruction: any,
   defaults: {
@@ -1088,7 +1124,11 @@ export function buildWorkerRuntimeLineage(
       checkpointThreadId: null,
     };
   }
-  const lineageJoinKey = resolveInterventionLineageJoinKey(lineage);
+  const lineageJoinKey = deriveStableLineageJoinKey(lineage, {
+    explicitJoinKey: instruction?.lineageJoinKey ?? instruction?.lineage?.lineageJoinKey ?? instruction?.lineageContract?.lineageJoinKey,
+    taskKind,
+    role: defaults.roleName ?? null,
+  });
   return {
     lineage,
     lineageJoinKey,
@@ -1607,6 +1647,19 @@ async function persistLegacyWorkerSessionArtifacts(
         lastStatus: String(input.status || "unknown").toLowerCase(),
         updatedAt: nowIso,
       };
+
+      for (const [aliasRole, aliasSession] of Object.entries(sessions)) {
+        if (aliasRole === roleName) continue;
+        if (!aliasSession || typeof aliasSession !== "object") continue;
+        if (String((aliasSession as any).resolvedRole || "") !== roleName) continue;
+        if (String((aliasSession as any).status || "") !== "working") continue;
+        sessions[aliasRole] = {
+          ...(aliasSession as Record<string, unknown>),
+          status: "idle",
+          lastStatus: String(input.status || "unknown").toLowerCase(),
+          updatedAt: nowIso,
+        };
+      }
     }
 
     await writeJson(
@@ -1905,11 +1958,13 @@ async function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {
       // Use explicit Sonnet — not defaultModel, which may itself be Codex/Opus.
       // force-sonnet means "this failure class is tooling, not reasoning — Sonnet is sufficient".
       candidate = sonnetModel;
-      try {
-        appendProgress(config,
-          `[POLICY_ROUTE] ${roleName}: ${previous} → ${sonnetModel} (policy=${adj.policyId}: ${adj.reason})`
-        );
-      } catch { /* non-critical */ }
+      if (String(previous || "") !== String(sonnetModel || "")) {
+        try {
+          appendProgress(config,
+            `[POLICY_ROUTE] ${roleName}: ${previous} → ${sonnetModel} (policy=${adj.policyId}: ${adj.reason})`
+          );
+        } catch { /* non-critical */ }
+      }
       break; // First critical policy override wins
     }
     if (adj.modelOverride === "block-opus" && /opus/i.test(String(candidate || ""))) {
@@ -2500,6 +2555,20 @@ export function extractStreamingWorkerResultMarker(stdout, stderr) {
     status: parsed.status,
     prUrl: parsed.prUrl,
   };
+}
+
+export function shouldTreatAbortedWorkerRunAsTerminalResult(result, stdout, stderr) {
+  if (!result || result.aborted !== true) return null;
+
+  const abortReason = String(result.stderr || "");
+  if (!abortReason.includes(POST_FINAL_OUTPUT_ABORT_REASON)) {
+    return null;
+  }
+
+  const marker = extractStreamingWorkerResultMarker(stdout, stderr);
+  if (!marker) return null;
+
+  return marker;
 }
 
 /**
@@ -3132,6 +3201,11 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   let streamedStdout = "";
   let streamedStderr = "";
   let streamedResultEmitted = false;
+  let finalOutputExitTimer: NodeJS.Timeout | null = null;
+  const configuredFinalOutputGraceMs = Number(config?.runtime?.workerFinalOutputExitGraceMs ?? DEFAULT_FINAL_OUTPUT_EXIT_GRACE_MS);
+  const finalOutputExitGraceMs = Number.isFinite(configuredFinalOutputGraceMs) && configuredFinalOutputGraceMs > 0
+    ? configuredFinalOutputGraceMs
+    : 0;
 
   const emitStreamingResultMarker = () => {
     if (streamedResultEmitted) return;
@@ -3146,6 +3220,13 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       config,
       `[WORKER:${roleName}] Final output emitted status=${marker.status}${marker.prUrl ? ` PR=${marker.prUrl}` : ""} (process exit pending)`
     ).catch(() => {});
+
+    if (finalOutputExitGraceMs > 0) {
+      finalOutputExitTimer = setTimeout(() => {
+        if (abortController.signal.aborted) return;
+        abortController.abort(`${POST_FINAL_OUTPUT_ABORT_REASON} after ${finalOutputExitGraceMs}ms`);
+      }, finalOutputExitGraceMs);
+    }
   };
 
   // Circuit breaker: detect consecutive transient API errors from the Copilot CLI
@@ -3218,8 +3299,17 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     }
   }) as SpawnAsyncResult;
 
+  if (finalOutputExitTimer) {
+    clearTimeout(finalOutputExitTimer);
+  }
+
   const stdout = String(result?.stdout || "");
   const stderr = String(result?.stderr || "");
+  const forcedTerminalMarker = shouldTreatAbortedWorkerRunAsTerminalResult(result, stdout, stderr);
+  const effectiveStatusCode = forcedTerminalMarker ? 0 : result.status;
+  const effectiveStderr = forcedTerminalMarker
+    ? stderr.replace(String(result?.stderr || ""), "").trim()
+    : stderr;
   try {
     emitWorkerModelCallHookEvent(
       WORKER_MODEL_CALL_HOOK.AFTER_MODEL_CALL,
@@ -3230,12 +3320,23 @@ export async function runWorkerConversation(config, roleName, instruction, histo
         taskId: instruction?.taskId ?? null,
         taskKind: instruction?.taskKind ?? "general",
         runId,
-        exitCode: typeof result?.status === "number" ? result.status : null,
+        exitCode: typeof effectiveStatusCode === "number" ? effectiveStatusCode : null,
         timedOut: result?.timedOut === true,
         aborted: result?.aborted === true,
       },
     );
   } catch { /* telemetry is non-critical */ }
+
+  if (forcedTerminalMarker) {
+    await appendLiveWorkerLog(
+      liveLogPath,
+      `\n[${new Date().toISOString()}] PROCESS_EXIT_FORCED status=${forcedTerminalMarker.status}${forcedTerminalMarker.prUrl ? ` pr=${forcedTerminalMarker.prUrl}` : ""} reason=post-final-output-grace\n`
+    );
+    await appendProgress(
+      config,
+      `[WORKER:${roleName}] Final output grace expired — forced process exit accepted as status=${forcedTerminalMarker.status}`
+    );
+  }
 
   // Cooperative cancellation: if the orchestrator cancelled while the worker was
   // running, don't advance into the verification / audit path — the cycle is being
@@ -3244,24 +3345,24 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     throw new CancelledError(_token.reason || "cancelled-after-worker-spawn");
   }
 
-  if (result.status !== 0) {
-    const isTransient = result.aborted === true && /transient API error circuit breaker/i.test(stderr);
-    const exitCodeInfo = classifyExitCode(result.status);
+  if (effectiveStatusCode !== 0) {
+    const isTransient = result.aborted === true && /transient API error circuit breaker/i.test(effectiveStderr);
+    const exitCodeInfo = classifyExitCode(effectiveStatusCode);
     const reasonCode = isTransient ? "TRANSIENT_API_ERROR" : exitCodeInfo?.reasonCode ?? (result.timedOut ? "PROCESS_TIMEOUT" : "UNKNOWN_EXIT");
     const retryClass = isTransient ? "cooldown" : exitCodeInfo?.retryClass ?? (result.timedOut ? "cooldown" : null);
-    const label = isTransient ? `TransientAPIError` : result.timedOut ? `Timeout` : `Error exit=${result.status}`;
+    const label = isTransient ? `TransientAPIError` : result.timedOut ? `Timeout` : `Error exit=${effectiveStatusCode}`;
     await appendLiveWorkerLog(
       liveLogPath,
-      `\n[${new Date().toISOString()}] END status=error exit=${result.status} reason_code=${reasonCode} retry_class=${retryClass ?? "none"}${result.timedOut ? " timeout=true" : ""}${isTransient ? " transient=true" : ""}\n`
+      `\n[${new Date().toISOString()}] END status=error exit=${effectiveStatusCode} reason_code=${reasonCode} retry_class=${retryClass ?? "none"}${result.timedOut ? " timeout=true" : ""}${isTransient ? " transient=true" : ""}\n`
     );
     await appendProgress(config, `[WORKER:${roleName}] ${label} reason_code=${reasonCode} retry_class=${retryClass ?? "none"}`);
-    const errorMsg = truncate(stderr || stdout || "unknown error", 300);
+    const errorMsg = truncate(effectiveStderr || stdout || "unknown error", 300);
     const errorPhaseRetryState = buildPhaseAwareRetryState({
       instruction,
       parsed: {
         status: isTransient ? "transient_error" : "error",
         summary: errorMsg,
-        fullOutput: `${stdout}\n${stderr}`,
+        fullOutput: `${stdout}\n${effectiveStderr}`,
         filesTouched: [],
         currentBranch: sessionState?.currentBranch || null,
         prUrl: null,

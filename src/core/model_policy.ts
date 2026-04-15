@@ -548,11 +548,12 @@ function normalizeRoutingJoinTaskKind(value: unknown): string {
 
 function resolveRoutingLineageJoinKey(
   contract: InterventionLineageContract,
-  hints: { taskKind?: unknown; role?: unknown } = {},
+  hints: { taskKind?: unknown; role?: unknown; explicitJoinKey?: unknown } = {},
 ): string | null {
+  const explicitJoinKey = String(hints.explicitJoinKey || "").trim();
   const taskKind = normalizeRoutingJoinTaskKind(hints.taskKind ?? contract.taskKind);
   const role = String(hints.role ?? contract.role ?? "").trim().toLowerCase();
-  if (
+  const derivedJoinKey = (
     contract.promptFamilyKey
     && (
       taskKind === "planning"
@@ -563,11 +564,14 @@ function resolveRoutingLineageJoinKey(
       || role === "athena"
       || role === "jesus"
     )
-  ) {
-    return `prompt-family:${contract.promptFamilyKey}`;
+  )
+    ? `prompt-family:${contract.promptFamilyKey}`
+    : resolveInterventionLineageJoinKey(contract)
+      || (contract.promptFamilyKey ? `prompt-family:${contract.promptFamilyKey}` : null);
+  if (explicitJoinKey && (!derivedJoinKey || explicitJoinKey === derivedJoinKey)) {
+    return explicitJoinKey;
   }
-  return resolveInterventionLineageJoinKey(contract)
-    || (contract.promptFamilyKey ? `prompt-family:${contract.promptFamilyKey}` : null);
+  return derivedJoinKey ?? (explicitJoinKey || null);
 }
 
 /**
@@ -614,11 +618,12 @@ export async function appendRouteROIEntry(
     routedAt:        entry.routedAt || new Date().toISOString(),
     realizedAt:      entry.realizedAt ?? null,
     lineageId:       lineage.lineageId,
-    lineage,
-    lineageJoinKey:  resolveRoutingLineageJoinKey(lineage, {
-      taskKind: entry.taskKind ?? lineage.taskKind,
-      role: entry.role ?? lineage.role,
-    }),
+     lineage,
+     lineageJoinKey:  resolveRoutingLineageJoinKey(lineage, {
+       explicitJoinKey: entry?.lineageJoinKey,
+       taskKind: entry.taskKind ?? lineage.taskKind,
+       role: entry.role ?? lineage.role,
+     }),
     promptFamilyKey: entry.promptFamilyKey ?? lineage.promptFamilyKey,
     taskKind:        entry.taskKind ?? lineage.taskKind,
     role:            entry.role ?? lineage.role,

@@ -130,6 +130,23 @@ describe("validateEvidenceEnvelope", () => {
     assert.deepEqual(executionReport.filesTouched, ["src/core/evidence_envelope.ts"]);
   });
 
+  it("preserves stable prompt-family lineage joins in worker execution reports", () => {
+    const executionReport = buildWorkerExecutionReportArtifact({
+      ...validEnvelope(),
+      roleName: "prometheus",
+      taskKind: "planning",
+      lineage: {
+        lineageId: "lineage-314",
+        taskKind: "planning",
+        promptFamilyKey: "planner-wave-3",
+      },
+      lineageJoinKey: "prompt-family:planner-wave-3",
+    }, {
+      emittedAt: "2026-04-13T18:05:02.838Z",
+    });
+    assert.equal(executionReport.lineageJoinKey, "prompt-family:planner-wave-3");
+  });
+
   it("rejects null", () => {
     const result = validateEvidenceEnvelope(null);
     assert.equal(result.valid, false);
