@@ -618,6 +618,7 @@ describe("recordCapabilityExecution", () => {
     assert.equal(parsed.lineageJoinKey, "lineage:lineage-1");
     assert.equal(parsed.stablePrefixHash, "planner");
     assert.equal(parsed.cacheableSegments, 6);
+    assert.equal(parsed.prefixReuseRate, 0.6);
     assert.equal(parsed.lineage.taskId, "task-1");
     assert.equal(parsed.lineage.role, "quality-worker");
     assert.equal(parsed.lineage.lane, "quality");
@@ -643,6 +644,30 @@ describe("recordCapabilityExecution", () => {
     assert.equal(entries[0].cacheableSegments, 3);
     assert.equal(entries[0].lineageJoinKey, "prompt-family:review-family");
     assert.equal(entries[0].stablePrefixHash, "review-family");
+    assert.equal(entries[0].prefixReuseRate, entries[0].hitRate);
+  });
+
+  it("normalizes legacy prompt-cache telemetry aliases symmetrically on read", async () => {
+    const config = { paths: { stateDir } };
+    await fs.writeFile(
+      path.join(stateDir, "prompt_cache_usage.jsonl"),
+      `${JSON.stringify({
+        promptFamilyKey: "plan-family",
+        agent: "prometheus",
+        taskKind: "planning",
+        totalSegments: 8,
+        cachedSegments: 5,
+        estimatedSavedTokens: 144,
+      })}\n`,
+      "utf8",
+    );
+
+    const entries = await readPromptCacheTelemetry(config);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].cacheableSegments, 5);
+    assert.equal(entries[0].cachedSegments, 5);
+    assert.equal(entries[0].stablePrefixHash, "plan-family");
+    assert.equal(entries[0].prefixReuseRate, 0.625);
   });
 
   it("retains capability-execution lineage metadata in the runtime summary", async () => {

@@ -1129,8 +1129,12 @@ export async function routeModelWithRealizedROI(
 }> {
   const qualityFloor    = opts.qualityFloor    ?? 0.7;
   const explorationBound = opts.explorationBound ?? EXPLORATION_LIMIT_THRESHOLD;
-  const promptCacheHitRate = Number(opts.promptCacheHitRate ?? 0);
-  const promptCacheSavedTokens = Number(opts.promptCacheSavedTokens ?? 0);
+  const promptCacheHitRate = Number.isFinite(Number(opts.promptCacheHitRate))
+    ? Math.max(0, Math.min(1, Number(opts.promptCacheHitRate)))
+    : 0;
+  const promptCacheSavedTokens = Number.isFinite(Number(opts.promptCacheSavedTokens))
+    ? Math.max(0, Math.round(Number(opts.promptCacheSavedTokens)))
+    : 0;
 
   const { tier } = classifyComplexityTier(taskHints);
 

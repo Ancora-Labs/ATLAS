@@ -670,6 +670,25 @@ export type PromptLineageContract = {
   estimatedSavedTokens: number;
 };
 
+const PROMPT_LINEAGE_INVARIANT_FIELDS: ReadonlyArray<keyof PromptLineageContract> = Object.freeze([
+  "promptFamilyKey",
+  "familyLabel",
+  "agent",
+  "stage",
+  "stablePrefixHash",
+  "totalSegments",
+  "cacheableSegments",
+  "estimatedSavedTokens",
+]);
+
+const PROMPT_LINEAGE_RUNTIME_FIELDS: ReadonlyArray<keyof PromptLineageContract> = Object.freeze([
+  "lineageId",
+  "parentLineageId",
+  "checkpointNs",
+  "checkpointId",
+  "resumeFromCheckpointId",
+]);
+
 function normalizePromptLineageScalar(value: unknown, maxChars = 120): string | null {
   const normalized = String(value || "").trim();
   return normalized ? normalized.slice(0, maxChars) : null;
@@ -684,24 +703,59 @@ export function normalizePromptLineageContract(
   defaults: Partial<PromptLineageContract> = {},
 ): PromptLineageContract {
   const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const promptFamilyKey = normalizePromptLineageScalar(source.promptFamilyKey ?? defaults.promptFamilyKey);
+  const stablePrefixHash = normalizePromptLineageScalar(
+    source.stablePrefixHash
+    ?? promptFamilyKey
+    ?? defaults.stablePrefixHash
+    ?? defaults.promptFamilyKey,
+  );
   return {
-    lineageId: normalizePromptLineageScalar(source.lineageId ?? defaults.lineageId),
-    parentLineageId: normalizePromptLineageScalar(source.parentLineageId ?? defaults.parentLineageId),
-    promptFamilyKey: normalizePromptLineageScalar(source.promptFamilyKey ?? defaults.promptFamilyKey),
+    promptFamilyKey,
     familyLabel: normalizePromptLineageScalar(source.familyLabel ?? defaults.familyLabel),
     agent: normalizePromptLineageScalar(source.agent ?? defaults.agent),
     stage: normalizePromptLineageScalar(source.stage ?? defaults.stage),
+    stablePrefixHash,
+    totalSegments: normalizePromptLineageCount(source.totalSegments ?? defaults.totalSegments),
+    cacheableSegments: normalizePromptLineageCount(source.cacheableSegments ?? defaults.cacheableSegments),
+    estimatedSavedTokens: normalizePromptLineageCount(source.estimatedSavedTokens ?? defaults.estimatedSavedTokens),
+    lineageId: normalizePromptLineageScalar(source.lineageId ?? defaults.lineageId),
+    parentLineageId: normalizePromptLineageScalar(source.parentLineageId ?? defaults.parentLineageId),
     checkpointNs: normalizePromptLineageScalar(source.checkpointNs ?? defaults.checkpointNs),
     checkpointId: normalizePromptLineageScalar(source.checkpointId ?? defaults.checkpointId, 200),
     resumeFromCheckpointId: normalizePromptLineageScalar(
       source.resumeFromCheckpointId ?? defaults.resumeFromCheckpointId,
       200,
     ),
-    stablePrefixHash: normalizePromptLineageScalar(source.stablePrefixHash ?? defaults.stablePrefixHash),
-    totalSegments: normalizePromptLineageCount(source.totalSegments ?? defaults.totalSegments),
-    cacheableSegments: normalizePromptLineageCount(source.cacheableSegments ?? defaults.cacheableSegments),
-    estimatedSavedTokens: normalizePromptLineageCount(source.estimatedSavedTokens ?? defaults.estimatedSavedTokens),
   };
+}
+
+function shouldIncludePromptLineageField(
+  field: keyof PromptLineageContract,
+  value: PromptLineageContract[keyof PromptLineageContract],
+): boolean {
+  if (typeof value === "number") {
+    return value > 0 || field === "totalSegments" || field === "cacheableSegments";
+  }
+  return value != null;
+}
+
+function buildPromptLineagePayload(
+  normalized: PromptLineageContract,
+  opts: { includeRuntime?: boolean } = {},
+): Partial<PromptLineageContract> {
+  const includeRuntime = opts.includeRuntime !== false;
+  const payload: Partial<PromptLineageContract> = {};
+  const orderedFields = includeRuntime
+    ? [...PROMPT_LINEAGE_INVARIANT_FIELDS, ...PROMPT_LINEAGE_RUNTIME_FIELDS]
+    : [...PROMPT_LINEAGE_INVARIANT_FIELDS];
+  for (const field of orderedFields) {
+    const value = normalized[field];
+    if (shouldIncludePromptLineageField(field, value)) {
+      (payload as Record<string, unknown>)[field] = value;
+    }
+  }
+  return payload;
 }
 
 export function buildPromptLineageMarker(
@@ -709,7 +763,8 @@ export function buildPromptLineageMarker(
   defaults: Partial<PromptLineageContract> = {},
 ): string {
   const normalized = normalizePromptLineageContract(value, defaults);
-  return `${PROMPT_LINEAGE_MARKER_PREFIX}${JSON.stringify(normalized)}${PROMPT_LINEAGE_MARKER_SUFFIX}`;
+  const payload = buildPromptLineagePayload(normalized);
+  return `${PROMPT_LINEAGE_MARKER_PREFIX}${JSON.stringify(payload)}${PROMPT_LINEAGE_MARKER_SUFFIX}`;
 }
 
 export function extractPromptLineageMarker(text: unknown): PromptLineageContract | null {
@@ -787,21 +842,30 @@ export function buildPromptLineagePreamble(
   defaults: Partial<PromptLineageContract> = {},
 ): string {
   const normalized = normalizePromptLineageContract(value, defaults);
-  const lines = [
-    "## PROMPT LINEAGE",
-    `promptFamilyKey=${normalized.promptFamilyKey || "none"}`,
-    `lineageId=${normalized.lineageId || "none"}`,
-    `parentLineageId=${normalized.parentLineageId || "none"}`,
-    `agent=${normalized.agent || "unknown"}`,
-    `stage=${normalized.stage || "unknown"}`,
-    `checkpointNs=${normalized.checkpointNs || "none"}`,
-    `checkpointId=${normalized.checkpointId || "none"}`,
-    `resumeFromCheckpointId=${normalized.resumeFromCheckpointId || "none"}`,
-    `stablePrefixHash=${normalized.stablePrefixHash || "none"}`,
-    `cacheableSegments=${normalized.cacheableSegments}/${normalized.totalSegments}`,
-    `estimatedSavedTokens=${normalized.estimatedSavedTokens}`,
-  ];
-  return lines.join("\n");
+  const stableLines = ["## PROMPT LINEAGE"];
+  if (normalized.promptFamilyKey) stableLines.push(`promptFamilyKey=${normalized.promptFamilyKey}`);
+  if (normalized.familyLabel) stableLines.push(`familyLabel=${normalized.familyLabel}`);
+  if (normalized.agent) stableLines.push(`agent=${normalized.agent}`);
+  if (normalized.stage) stableLines.push(`stage=${normalized.stage}`);
+  if (normalized.stablePrefixHash) stableLines.push(`stablePrefixHash=${normalized.stablePrefixHash}`);
+  if (normalized.totalSegments > 0 || normalized.cacheableSegments > 0) {
+    stableLines.push(`cacheableSegments=${normalized.cacheableSegments}/${normalized.totalSegments}`);
+  }
+  if (normalized.estimatedSavedTokens > 0) {
+    stableLines.push(`estimatedSavedTokens=${normalized.estimatedSavedTokens}`);
+  }
+
+  const runtimeLines: string[] = [];
+  if (normalized.lineageId) runtimeLines.push(`lineageId=${normalized.lineageId}`);
+  if (normalized.parentLineageId) runtimeLines.push(`parentLineageId=${normalized.parentLineageId}`);
+  if (normalized.checkpointNs) runtimeLines.push(`checkpointNs=${normalized.checkpointNs}`);
+  if (normalized.checkpointId) runtimeLines.push(`checkpointId=${normalized.checkpointId}`);
+  if (normalized.resumeFromCheckpointId) runtimeLines.push(`resumeFromCheckpointId=${normalized.resumeFromCheckpointId}`);
+
+  if (runtimeLines.length === 0) {
+    return stableLines.join("\n");
+  }
+  return [...stableLines, "## PROMPT LINEAGE RUNTIME", ...runtimeLines].join("\n");
 }
 
 /**

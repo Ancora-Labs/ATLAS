@@ -415,6 +415,18 @@ describe("prompt_compiler", () => {
       assert.equal(stripPromptLineageMarker(`${marker}\nTARGET REPO: box`), "TARGET REPO: box");
     });
 
+    it("serializes stable lineage fields before volatile runtime fields", () => {
+      const marker = buildPromptLineageMarker({
+        promptFamilyKey: "family-123",
+        lineageId: "planner:abc",
+        checkpointId: "checkpoint-1",
+        agent: "prometheus",
+        stage: "planner",
+      });
+      assert.ok(marker.indexOf("\"promptFamilyKey\"") < marker.indexOf("\"lineageId\""));
+      assert.ok(marker.indexOf("\"stage\"") < marker.indexOf("\"checkpointId\""));
+    });
+
     it("extracts prompt-lineage from serialized prompt JSON and renders a stable preamble", () => {
       const raw = `Execution Strategy: {"promptLineage":{"lineageId":"planner:def","promptFamilyKey":"family-456","agent":"prometheus","stage":"planner","totalSegments":4,"cacheableSegments":2,"estimatedSavedTokens":80}}`;
       const extracted = extractPromptLineageContractFromText(raw);
@@ -422,6 +434,20 @@ describe("prompt_compiler", () => {
       assert.equal(extracted?.promptFamilyKey, "family-456");
       assert.ok(preamble.includes("## PROMPT LINEAGE"));
       assert.ok(preamble.includes("promptFamilyKey=family-456"));
+    });
+
+    it("renders invariant lineage preamble lines ahead of runtime-only fields", () => {
+      const preamble = buildPromptLineagePreamble({
+        promptFamilyKey: "family-456",
+        stablePrefixHash: "family-456",
+        agent: "prometheus",
+        stage: "planner",
+        lineageId: "planner:def",
+        checkpointId: "checkpoint-7",
+      });
+      assert.ok(preamble.indexOf("promptFamilyKey=family-456") < preamble.indexOf("## PROMPT LINEAGE RUNTIME"));
+      assert.ok(preamble.indexOf("stablePrefixHash=family-456") < preamble.indexOf("lineageId=planner:def"));
+      assert.ok(!preamble.includes("=none"));
     });
 
     it("normalizes prompt-lineage counters and empty scalars fail-closed", () => {
@@ -436,6 +462,7 @@ describe("prompt_compiler", () => {
       assert.equal(normalized.totalSegments, 0);
       assert.equal(normalized.cacheableSegments, 2);
       assert.equal(normalized.estimatedSavedTokens, 0);
+      assert.equal(normalized.stablePrefixHash, "family-789");
     });
 
   });

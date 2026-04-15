@@ -737,63 +737,84 @@ export async function appendPromptCacheTelemetry(
 ): Promise<{ ok: boolean; reason?: string }> {
   const filePath = path.join(config?.paths?.stateDir || "state", "prompt_cache_usage.jsonl");
   try {
-    const totalSegments = Math.max(0, Math.floor(Number(record?.totalSegments || 0)));
-    const cacheableSegments = Math.max(
-      0,
-      Math.floor(Number(record?.cacheableSegments ?? record?.cachedSegments ?? 0)),
-    );
-    if (!String(record?.promptFamilyKey || "").trim()) {
-      return { ok: false, reason: "promptFamilyKey is required" };
-    }
-    if (totalSegments <= 0) {
-      return { ok: false, reason: "totalSegments must be > 0" };
-    }
-    const promptFamilyKey = String(record.promptFamilyKey).trim();
-    const boundedCachedSegments = Math.min(totalSegments, cacheableSegments);
-    const estimatedSavedTokens = Math.max(0, Math.round(Number(record?.estimatedSavedTokens || 0)));
-    const lineage = normalizeInterventionLineageContract(record?.lineage, {
-      lineageId: record?.lineageId ?? null,
-      taskId: record?.taskId ?? null,
-      cycleId: record?.cycleId ?? null,
-      taskKind: record?.taskKind ?? null,
-      interventionId: record?.interventionId ?? null,
-      promptFamilyKey: record?.promptFamilyKey ?? null,
-      model: record?.model ?? null,
-      role: record?.agent ?? null,
-      lane: record?.lane ?? null,
-      capability: record?.capability ?? null,
-      specialized: record?.specialized ?? null,
-      rerouteReasonCode: record?.rerouteReasonCode ?? null,
-    });
-    const lineageJoinKey = resolvePromptFamilyLineageJoinKey({
-      promptFamilyKey,
-      taskKind: record?.taskKind ?? lineage.taskKind,
-      role: record?.agent ?? lineage.role,
-      explicitJoinKey: record?.lineageJoinKey,
-      fallbackJoinKey: resolveInterventionLineageJoinKey(lineage),
-    });
-    const entry = {
-      promptFamilyKey,
-      stablePrefixHash: normalizeLineageScalar(record?.stablePrefixHash ?? promptFamilyKey),
-      agent: String(record?.agent || "unknown"),
-      model: String(record?.model || "unknown"),
-      taskKind: String(record?.taskKind || "general"),
-      totalSegments,
-      cachedSegments: boundedCachedSegments,
-      cacheableSegments: boundedCachedSegments,
-      hitRate: Math.round((boundedCachedSegments / totalSegments) * 1000) / 1000,
-      estimatedSavedTokens,
-      lineageId: lineage.lineageId,
-      lineageJoinKey,
-      lineage,
+    const normalized = normalizePromptCacheTelemetryEntry(record, {
       recordedAt: new Date().toISOString(),
-    };
+    });
+    if (normalized.ok === false) {
+      return { ok: false, reason: normalized.reason };
+    }
     await ensureParent(filePath);
-    await fs.appendFile(filePath, JSON.stringify(entry) + "\n", "utf8");
+    await fs.appendFile(filePath, JSON.stringify(normalized.entry) + "\n", "utf8");
     return { ok: true };
   } catch (err) {
     return { ok: false, reason: String((err as any)?.message || err) };
   }
+}
+
+function normalizePromptCacheTelemetryEntry(
+  record: unknown,
+  defaults: { recordedAt?: string } = {},
+): { ok: true; entry: Record<string, unknown> } | { ok: false; reason: string } {
+  const source = record && typeof record === "object" && !Array.isArray(record)
+    ? record as Record<string, unknown>
+    : {};
+  const promptFamilyKey = normalizeLineageScalar(source.promptFamilyKey);
+  if (!promptFamilyKey) {
+    return { ok: false, reason: "promptFamilyKey is required" };
+  }
+  const totalSegments = Math.max(0, Math.floor(Number(source.totalSegments || 0)));
+  if (totalSegments <= 0) {
+    return { ok: false, reason: "totalSegments must be > 0" };
+  }
+  const cacheableSegments = Math.max(
+    0,
+    Math.floor(Number(source.cacheableSegments ?? source.cachedSegments ?? 0)),
+  );
+  const boundedCachedSegments = Math.min(totalSegments, cacheableSegments);
+  const estimatedSavedTokens = Math.max(0, Math.round(Number(source.estimatedSavedTokens || 0)));
+  const lineage = normalizeInterventionLineageContract(source.lineage, {
+    lineageId: normalizeLineageScalar(source.lineageId),
+    taskId: normalizeLineageScalar(source.taskId),
+    cycleId: normalizeLineageScalar(source.cycleId),
+    taskKind: normalizeLineageScalar(source.taskKind),
+    interventionId: normalizeLineageScalar(source.interventionId),
+    promptFamilyKey,
+    model: normalizeLineageScalar(source.model),
+    role: normalizeLineageScalar(source.agent ?? source.role),
+    lane: normalizeLineageScalar(source.lane),
+    capability: normalizeLineageScalar(source.capability),
+    specialized: normalizeLineageBoolean(source.specialized),
+    rerouteReasonCode: normalizeLineageScalar(source.rerouteReasonCode),
+  });
+  const lineageJoinKey = resolvePromptFamilyLineageJoinKey({
+    promptFamilyKey,
+    taskKind: source.taskKind ?? lineage.taskKind,
+    role: source.agent ?? source.role ?? lineage.role,
+    explicitJoinKey: source.lineageJoinKey,
+    fallbackJoinKey: resolveInterventionLineageJoinKey(lineage),
+  });
+  const hitRate = Math.round((boundedCachedSegments / totalSegments) * 1000) / 1000;
+  return {
+    ok: true,
+    entry: {
+      ...source,
+      promptFamilyKey,
+      stablePrefixHash: normalizeLineageScalar(source.stablePrefixHash ?? promptFamilyKey),
+      agent: String(source.agent || source.role || "unknown"),
+      model: String(source.model || "unknown"),
+      taskKind: String(source.taskKind || "general"),
+      totalSegments,
+      cachedSegments: boundedCachedSegments,
+      cacheableSegments: boundedCachedSegments,
+      hitRate,
+      prefixReuseRate: hitRate,
+      estimatedSavedTokens,
+      lineageId: lineage.lineageId,
+      lineageJoinKey,
+      lineage,
+      recordedAt: String(source.recordedAt || defaults.recordedAt || new Date().toISOString()),
+    },
+  };
 }
 
 export async function readPromptCacheTelemetry(config): Promise<any[]> {
@@ -806,44 +827,8 @@ export async function readPromptCacheTelemetry(config): Promise<any[]> {
       .filter(Boolean)
       .map((line) => {
         try {
-          const entry = JSON.parse(line);
-          const promptFamilyKey = String(entry?.promptFamilyKey || "").trim();
-          const lineage = normalizeInterventionLineageContract(entry?.lineage, {
-            lineageId: normalizeLineageScalar(entry?.lineageId),
-            taskId: normalizeLineageScalar(entry?.taskId),
-            cycleId: normalizeLineageScalar(entry?.cycleId),
-            taskKind: normalizeLineageScalar(entry?.taskKind),
-            interventionId: normalizeLineageScalar(entry?.interventionId),
-            promptFamilyKey: promptFamilyKey || null,
-            model: normalizeLineageScalar(entry?.model),
-            role: normalizeLineageScalar(entry?.agent ?? entry?.role),
-            lane: normalizeLineageScalar(entry?.lane),
-            capability: normalizeLineageScalar(entry?.capability),
-            specialized: normalizeLineageBoolean(entry?.specialized),
-            rerouteReasonCode: normalizeLineageScalar(entry?.rerouteReasonCode),
-          });
-          const totalSegments = Math.max(0, Math.floor(Number(entry?.totalSegments || 0)));
-          const cacheableSegments = Math.min(
-            totalSegments,
-            Math.max(0, Math.floor(Number(entry?.cacheableSegments ?? entry?.cachedSegments ?? 0))),
-          );
-          return {
-            ...entry,
-            promptFamilyKey,
-            stablePrefixHash: normalizeLineageScalar(entry?.stablePrefixHash ?? promptFamilyKey),
-            totalSegments,
-            cachedSegments: cacheableSegments,
-            cacheableSegments,
-            lineageId: lineage.lineageId,
-            lineageJoinKey: resolvePromptFamilyLineageJoinKey({
-              promptFamilyKey,
-              taskKind: entry?.taskKind ?? lineage.taskKind,
-              role: entry?.agent ?? entry?.role ?? lineage.role,
-              explicitJoinKey: entry?.lineageJoinKey,
-              fallbackJoinKey: resolveInterventionLineageJoinKey(lineage),
-            }),
-            lineage,
-          };
+          const normalized = normalizePromptCacheTelemetryEntry(JSON.parse(line));
+          return normalized.ok ? normalized.entry : null;
         } catch {
           return null;
         }
