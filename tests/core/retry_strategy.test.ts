@@ -32,6 +32,8 @@ import {
   buildRetryMetric,
   recommendRetryDeliberationMode,
   buildAttemptArtifact,
+  applyRetryROIGate,
+  applyRetrySignalTuning,
 } from "../../src/core/retry_strategy.js";
 
 import { FAILURE_CLASS } from "../../src/core/failure_classifier.js";
@@ -626,10 +628,6 @@ describe("buildAttemptArtifact", () => {
   });
 });
 
-// ── applyRetryROIGate ─────────────────────────────────────────────────────────
-
-import { applyRetryROIGate } from "../../src/core/retry_strategy.js";
-
 describe("applyRetryROIGate", () => {
   const baseDecision = {
     retryAction: RETRY_ACTION.REWORK,
@@ -704,6 +702,70 @@ describe("applyRetryROIGate", () => {
     const result = applyRetryROIGate(baseDecision, roiDeny());
     assert.ok(result.reason.includes("0.050"), `reason should include gain: ${result.reason}`);
     assert.ok(result.reason.includes("0.180"), `reason should include threshold: ${result.reason}`);
+  });
+});
+
+describe("applyRetrySignalTuning", () => {
+  it("shortens cooldown when retries are cheap because cache savings and roi are strong", () => {
+    const result = applyRetrySignalTuning(
+      {
+        retryAction: RETRY_ACTION.COOLDOWN_RETRY,
+        cooldownMs: 30 * 60 * 1000,
+        cooldownUntilMs: Date.now() + (30 * 60 * 1000),
+        reason: "model blocker",
+        failureClass: FAILURE_CLASS.MODEL,
+      },
+      {
+        promptCacheHitRate: 0.9,
+        promptCacheSavedTokens: 240,
+        retryExpectedGain: 0.45,
+        retryThreshold: 0.18,
+        lowRoiSignalCount: 0,
+      },
+    );
+    assert.ok(Number(result.cooldownMs) < 30 * 60 * 1000);
+    assert.equal(result.cooldownTuning.includes("cache-cheap"), true);
+  });
+
+  it("lengthens cooldown when low-roi lineage evidence and provider failures accumulate", () => {
+    const result = applyRetrySignalTuning(
+      {
+        retryAction: RETRY_ACTION.COOLDOWN_RETRY,
+        cooldownMs: 15 * 60 * 1000,
+        cooldownUntilMs: Date.now() + (15 * 60 * 1000),
+        reason: "external api blocker",
+        failureClass: FAILURE_CLASS.EXTERNAL_API,
+      },
+      {
+        promptCacheHitRate: 0.1,
+        promptCacheSavedTokens: 0,
+        retryExpectedGain: 0.05,
+        retryThreshold: 0.18,
+        lowRoiSignalCount: 2,
+        latestFailureClass: FAILURE_CLASS.EXTERNAL_API,
+        latestFinishCode: "provider_timeout_503",
+      },
+    );
+    assert.ok(Number(result.cooldownMs) > 15 * 60 * 1000);
+    assert.equal(result.cooldownTuning.includes("provider-backoff"), true);
+    assert.equal(result.cooldownTuning.includes("lineage-low-roi=2"), true);
+  });
+
+  it("negative path: leaves non-cooldown actions unchanged", () => {
+    const result = applyRetrySignalTuning(
+      {
+        retryAction: RETRY_ACTION.REWORK,
+        cooldownMs: null,
+        cooldownUntilMs: null,
+        reason: "logic defect",
+      },
+      {
+        promptCacheHitRate: 0.8,
+        retryExpectedGain: 0.5,
+      },
+    );
+    assert.equal(result.retryAction, RETRY_ACTION.REWORK);
+    assert.equal(result.cooldownTuning, "none");
   });
 });
 

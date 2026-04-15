@@ -25,8 +25,11 @@ import {
   appendLineageEntry,
   appendFailureClassification,
   requireStableInterventionLineage,
-  readPromptCacheTelemetry,
+  summarizePromptCacheTelemetryForScope,
+  summarizeFailureFinishEvidenceForScope,
   resolveInterventionLineageJoinKey,
+  type PromptCacheRoutingSignal,
+  type FailureFinishEvidenceSignal,
   type InterventionLineageContract,
 } from "./state_tracker.js";
 import { buildAgentArgs, nameToSlug, resolveAgentExecutionProfile, resolveAgentSessionInputPolicy } from "./agent_loader.js";
@@ -50,6 +53,7 @@ import {
   classifyComplexityTier,
   COMPLEXITY_TIER,
   decideDeliberationPolicy,
+  assessRetryExpectedROI,
   QUALITY_FLOOR_DEFAULT,
   resolveModelCallSettingsOverlay,
   type DeliberationPolicy,
@@ -69,7 +73,7 @@ import { buildTaskFingerprint, buildLineageId, LINEAGE_ENTRY_STATUS } from "./li
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
 import { classifyFailure, classifyExitCode, buildFailureEnvelope, TERMINATION_CAUSE, FAILURE_CLASS } from "./failure_classifier.js";
 import type { AttemptMeta } from "./failure_classifier.js";
-import { resolveRetryAction, persistRetryMetric, RETRY_ACTION, RETRY_STRATEGY_SCHEMA_VERSION, buildAttemptArtifact } from "./retry_strategy.js";
+import { resolveRetryAction, persistRetryMetric, RETRY_ACTION, RETRY_STRATEGY_SCHEMA_VERSION, DEFAULT_RETRY_POLICIES, buildAttemptArtifact, applyRetryROIGate, applyRetrySignalTuning } from "./retry_strategy.js";
 import { filterMemoryEntriesByTrust, isPrivilegedMemoryRequester, buildMemoryHitRecord } from "./trust_boundary.js";
 import type { MemoryHitRecord } from "./trust_boundary.js";
 import { emitEvent } from "./logger.js";
@@ -1253,54 +1257,65 @@ function computeOutcomeMetrics(config, taskKind: string) {
   }
 }
 
-async function computePromptCacheRoutingSignal(
+function loadPremiumUsageEntries(config): any[] {
+  try {
+    const logPath = path.join(config.paths?.stateDir || "state", "premium_usage_log.json");
+    if (!existsSync(logPath)) return [];
+    const entries = JSON.parse(readFileSync(logPath, "utf8"));
+    return Array.isArray(entries) ? entries : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function computePromptCacheRoutingSignal(
   config: WorkerRunnerConfig,
   taskKind: string,
   roleName: string,
-): Promise<{ sampleCount: number; hitRate: number; avgSavedTokens: number }> {
-  try {
-    const records = await readPromptCacheTelemetry(config);
-    if (!Array.isArray(records) || records.length === 0) {
-      return { sampleCount: 0, hitRate: 0, avgSavedTokens: 0 };
-    }
-    const normalizedTaskKind = String(taskKind || "").trim().toLowerCase();
-    const normalizedRoleName = String(roleName || "").trim().toLowerCase();
-    const matching = records.filter((record: any) => {
-      const recordTaskKind = String(record?.taskKind || "").trim().toLowerCase();
-      const recordAgent = String(record?.agent || "").trim().toLowerCase();
-      return (
-        (normalizedTaskKind && recordTaskKind === normalizedTaskKind)
-        || (normalizedRoleName && recordAgent === normalizedRoleName)
-      );
-    });
-    const recent = (matching.length > 0 ? matching : records).slice(-20);
-    if (recent.length === 0) {
-      return { sampleCount: 0, hitRate: 0, avgSavedTokens: 0 };
-    }
-    let hitRateSum = 0;
-    let savedTokenSum = 0;
-    let usableCount = 0;
-    for (const record of recent) {
-      const totalSegments = Number(record?.totalSegments || 0);
-      const cachedSegments = Number(record?.cachedSegments || 0);
-      const ratio = totalSegments > 0
-        ? Math.max(0, Math.min(1, cachedSegments / totalSegments))
-        : Math.max(0, Math.min(1, Number(record?.hitRate || 0)));
-      hitRateSum += ratio;
-      savedTokenSum += Math.max(0, Number(record?.estimatedSavedTokens || 0));
-      usableCount += 1;
-    }
-    if (usableCount === 0) {
-      return { sampleCount: 0, hitRate: 0, avgSavedTokens: 0 };
-    }
-    return {
-      sampleCount: usableCount,
-      hitRate: Math.round((hitRateSum / usableCount) * 1000) / 1000,
-      avgSavedTokens: Math.round(savedTokenSum / usableCount),
-    };
-  } catch {
-    return { sampleCount: 0, hitRate: 0, avgSavedTokens: 0 };
-  }
+  lineage: { lineageId?: string | null; lineageJoinKey?: string | null } = {},
+): Promise<PromptCacheRoutingSignal> {
+  return summarizePromptCacheTelemetryForScope(config, {
+    taskKind,
+    role: roleName,
+    lineageId: lineage.lineageId ?? null,
+    lineageJoinKey: lineage.lineageJoinKey ?? null,
+  });
+}
+
+export async function computeFailureFinishRoutingSignal(
+  config: WorkerRunnerConfig,
+  taskKind: string,
+  roleName: string,
+  lineage: { lineageId?: string | null; lineageJoinKey?: string | null } = {},
+): Promise<FailureFinishEvidenceSignal> {
+  return summarizeFailureFinishEvidenceForScope(config, {
+    taskKind,
+    role: roleName,
+    lineageId: lineage.lineageId ?? null,
+    lineageJoinKey: lineage.lineageJoinKey ?? null,
+  });
+}
+
+export function deriveWorkerFinishCode(parsed: Partial<ParsedWorkerResponse> & Record<string, unknown>, fallbackCode: string | null = null): string {
+  const dispatchBlockReason = String(parsed?.dispatchBlockReason || "").trim();
+  if (dispatchBlockReason) return dispatchBlockReason;
+  const report = parsed?.verificationReport;
+  const buildStatus = resolveVerificationFieldStatus(report, "build");
+  if (buildStatus === "fail") return "verification_report_fail:build";
+  const testsStatus = resolveVerificationFieldStatus(report, "tests");
+  if (testsStatus === "fail") return "verification_report_fail:tests";
+  const status = String(parsed?.status || fallbackCode || "unknown").trim().toLowerCase();
+  return status || "unknown";
+}
+
+function resolveAdaptiveRetryCap(failureClass: string, config: WorkerRunnerConfig): number {
+  const policyOverride = (config as any)?.runtime?.adaptiveRetry?.[failureClass];
+  const basePolicy = DEFAULT_RETRY_POLICIES[failureClass];
+  const source = policyOverride && typeof policyOverride === "object"
+    ? { ...basePolicy, ...policyOverride }
+    : basePolicy;
+  const cap = Number((source as any)?.escalateAfter ?? (source as any)?.maxRetries ?? (source as any)?.maxReworkAttempts ?? 3);
+  return Number.isFinite(cap) ? Math.max(1, Math.floor(cap)) : 3;
 }
 
 function loadBenchmarkGroundTruthSignal(config) {
@@ -1870,7 +1885,17 @@ export async function attemptBranchCleanlinessRecovery(
 // Priority: taskKind → role preference → worker model → uncertainty-aware routing → default
 // Policy adjustments from compiled lessons may override the candidate after selection.
 
-async function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {}, routingAdjustments: RoutingAdjustment[] = []) {
+async function resolveModel(
+  config,
+  roleName,
+  taskKind,
+  taskHints: TaskHints = {},
+  routingAdjustments: RoutingAdjustment[] = [],
+  routingSignals: {
+    promptCacheSignal?: PromptCacheRoutingSignal | null;
+    failureFinishSignal?: FailureFinishEvidenceSignal | null;
+  } = {},
+) {
   const defaultModel = config?.copilot?.defaultModel || "Claude Sonnet 4.6";
   const strongModel = config?.copilot?.strongModel || defaultModel;
   const efficientModel = config?.copilot?.efficientModel || defaultModel;
@@ -1897,7 +1922,9 @@ async function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {
   if (!candidate) {
     const recentROI = computeRecentROI(config, taskKind);
     const outcomeMetrics = computeOutcomeMetrics(config, taskKind);
-    const promptCacheSignal = await computePromptCacheRoutingSignal(config, taskKind, roleName);
+    const promptCacheSignal = routingSignals.promptCacheSignal
+      ?? await computePromptCacheRoutingSignal(config, taskKind, roleName);
+    const failureFinishSignal = routingSignals.failureFinishSignal || null;
     const benchmarkSignal = analyzeBenchmarkReadiness(config, taskHints);
     const dynamicQualityFloor = computeDynamicQualityFloor(config, taskHints);
     const qualityFloorRoute = await routeModelWithRealizedROI(
@@ -1908,12 +1935,22 @@ async function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {
         qualityFloor: dynamicQualityFloor,
         promptCacheHitRate: promptCacheSignal.hitRate,
         promptCacheSavedTokens: promptCacheSignal.avgSavedTokens,
+        lineageSignals: failureFinishSignal ? {
+          lowRoiSignalCount: failureFinishSignal.lowRoiSignalCount,
+          promptCacheHitRate: promptCacheSignal.hitRate,
+          promptCacheSavedTokens: promptCacheSignal.avgSavedTokens,
+          latestFailureClass: failureFinishSignal.latestFailureClass,
+          latestFinishCode: failureFinishSignal.latestFinishCode,
+          latestFinishStatus: failureFinishSignal.latestFinishStatus,
+        } : undefined,
       },
     );
     candidate = qualityFloorRoute.model;
     if (
       benchmarkSignal.hasSignal &&
       benchmarkSignal.highUncertainty &&
+      qualityFloorRoute.selectionPattern !== "constraint-first" &&
+      qualityFloorRoute.selectionPattern !== "cooldown-stability" &&
       (qualityFloorRoute.tier === COMPLEXITY_TIER.T3 || String(taskHints.complexity || "").toLowerCase() === "critical")
     ) {
       candidate = strongModel;
@@ -1924,10 +1961,10 @@ async function resolveModel(config, roleName, taskKind, taskHints: TaskHints = {
         );
       } catch { /* non-critical */ }
     }
-    if (qualityFloorRoute.uncertainty !== "low" || !qualityFloorRoute.meetsQualityFloor) {
+    if (qualityFloorRoute.uncertainty !== "low" || !qualityFloorRoute.meetsQualityFloor || qualityFloorRoute.selectionPattern !== "balanced") {
       try {
         appendProgress(config,
-          `[QUALITY_FLOOR_ROUTE] ${roleName}: tier=${qualityFloorRoute.tier} uncertainty=${qualityFloorRoute.uncertainty} meetsFloor=${qualityFloorRoute.meetsQualityFloor} realizedROI=${qualityFloorRoute.realizedROI.toFixed(2)} dynamicFloor=${dynamicQualityFloor.toFixed(2)} recentROI=${recentROI.toFixed(2)} cacheHitRate=${promptCacheSignal.hitRate.toFixed(2)} cacheSavedTokens=${promptCacheSignal.avgSavedTokens} → ${candidate}`
+          `[QUALITY_FLOOR_ROUTE] ${roleName}: tier=${qualityFloorRoute.tier} uncertainty=${qualityFloorRoute.uncertainty} pattern=${qualityFloorRoute.selectionPattern} meetsFloor=${qualityFloorRoute.meetsQualityFloor} realizedROI=${qualityFloorRoute.realizedROI.toFixed(2)} dynamicFloor=${dynamicQualityFloor.toFixed(2)} recentROI=${recentROI.toFixed(2)} cacheHitRate=${promptCacheSignal.hitRate.toFixed(2)} cacheSavedTokens=${promptCacheSignal.avgSavedTokens} → ${candidate}`
         );
       } catch { /* non-critical */ }
     }
@@ -2826,12 +2863,38 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   const recentROI = computeRecentROI(config, instruction.taskKind);
   const outcomeMetrics = computeOutcomeMetrics(config, instruction.taskKind);
   const _benchmarkSignal = analyzeBenchmarkReadiness(config, taskHints);
+  const promptCacheSignal = await computePromptCacheRoutingSignal(
+    config,
+    instruction.taskKind || "general",
+    String(roleName || "worker"),
+    {
+      lineageId: _dispatchLineageId,
+      lineageJoinKey: runtimeLineage.lineageJoinKey,
+    },
+  );
+  const failureFinishSignal = await computeFailureFinishRoutingSignal(
+    config,
+    instruction.taskKind || "general",
+    String(roleName || "worker"),
+    {
+      lineageId: _dispatchLineageId,
+      lineageJoinKey: runtimeLineage.lineageJoinKey,
+    },
+  );
   const deliberation = decideDeliberationPolicy(
     taskHints,
     { recentROI },
     {
       benchmarkGroundTruth: loadBenchmarkGroundTruthSignal(config),
       outcomeMetrics,
+      lineageSignals: {
+        lowRoiSignalCount: failureFinishSignal.lowRoiSignalCount,
+        promptCacheHitRate: promptCacheSignal.hitRate,
+        promptCacheSavedTokens: promptCacheSignal.avgSavedTokens,
+        latestFailureClass: failureFinishSignal.latestFailureClass,
+        latestFinishCode: failureFinishSignal.latestFinishCode,
+        latestFinishStatus: failureFinishSignal.latestFinishStatus,
+      },
     }
   );
   const modelCallSettings: ModelCallSettingsOverlay = resolveModelCallSettingsOverlay(
@@ -2855,7 +2918,17 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // ── Task 1: Uncertainty-aware model selection ─────────────────────────────
   // resolveModel now uses routeModelWithUncertainty (backed by historical ROI)
   // and applies policy routing adjustments from recurring failure lessons.
-  let model = await resolveModel(config, roleName, instruction.taskKind, taskHints, routingAdjustments);
+  let model = await resolveModel(
+    config,
+    roleName,
+    instruction.taskKind,
+    taskHints,
+    routingAdjustments,
+    {
+      promptCacheSignal,
+      failureFinishSignal,
+    },
+  );
 
   // ── Hard-task escalation: deliberation.mode → strong model upgrade ─────────
   // assessHardTaskEscalation (called inside decideDeliberationPolicy) can signal
@@ -3408,8 +3481,44 @@ export async function runWorkerConversation(config, roleName, instruction, histo
           instruction.taskId || null
         );
         if (rd.ok) {
-          errorRetryDecision = rd.decision;
-          persistRetryMetric(config, rd.decision);
+          const finishCode = deriveWorkerFinishCode({ status: isTransient ? "transient_error" : "error" }, reasonCode);
+          const errorRetryROI = assessRetryExpectedROI({
+            attempt: Number(instruction.reworkAttempt || 0) + 1,
+            maxRetries: resolveAdaptiveRetryCap(exitClassification.classification.primaryClass, config),
+            taskKind: instruction.taskKind || "general",
+            premiumUsageData: loadPremiumUsageEntries(config),
+            benchmarkGroundTruth: loadBenchmarkGroundTruthSignal(config),
+            promptCacheHitRate: promptCacheSignal.hitRate,
+            promptCacheSavedTokens: promptCacheSignal.avgSavedTokens,
+            lowRoiSignalCount: failureFinishSignal.lowRoiSignalCount,
+            failureClass: exitClassification.classification.primaryClass,
+            finishCode,
+          });
+          errorRetryDecision = applyRetrySignalTuning(rd.decision, {
+            promptCacheHitRate: promptCacheSignal.hitRate,
+            promptCacheSavedTokens: promptCacheSignal.avgSavedTokens,
+            retryExpectedGain: errorRetryROI.expectedGain,
+            retryThreshold: errorRetryROI.threshold,
+            lowRoiSignalCount: failureFinishSignal.lowRoiSignalCount,
+            latestFailureClass: exitClassification.classification.primaryClass,
+            latestFinishCode: finishCode,
+          });
+          errorRetryDecision = applyRetryROIGate(errorRetryDecision, errorRetryROI);
+          persistRetryMetric(config, errorRetryDecision);
+          appendFailureClassification(config, {
+            ...exitClassification.classification,
+            taskKind: instruction.taskKind || "general",
+            roleName: String(roleName || "worker"),
+            lineageId: _dispatchLineageId,
+            lineage: runtimeLineage.lineage,
+            lineageJoinKey: runtimeLineage.lineageJoinKey,
+            finishStatus: isTransient ? "transient_error" : "error",
+            finishCode,
+            retryRoiExpectedGain: errorRetryROI.expectedGain,
+            retryRoiThreshold: errorRetryROI.threshold,
+            retryRoiAllowed: errorRetryROI.allowRetry,
+            retryAction: errorRetryDecision?.retryAction ?? null,
+          }).catch(() => { /* non-fatal */ });
         }
       }
     } catch { /* non-fatal */ }
@@ -4047,6 +4156,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   if (parsed.status === "error" || parsed.status === "blocked" || parsed.status === "partial") {
     const nonRetryablePolicyBlock = parsed.status === "blocked"
       && isNonRetryablePolicyBlockReason(parsed.dispatchBlockReason);
+    const finishCode = deriveWorkerFinishCode(parsed, parsed.dispatchBlockReason || null);
     phaseRetryState = buildPhaseAwareRetryState({
       instruction,
       parsed: {
@@ -4085,7 +4195,6 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     });
     if (cfResult.ok) {
       failureClassification = cfResult.classification;
-      appendFailureClassification(config, cfResult.classification).catch(() => { /* non-fatal */ });
 
       // Resolve adaptive retry decision based on failure class (non-critical)
       try {
@@ -4107,6 +4216,18 @@ export async function runWorkerConversation(config, roleName, instruction, histo
           };
           persistRetryMetric(config, retryDecision);
         } else {
+          const retryRoiSignal = assessRetryExpectedROI({
+            attempt: Number(instruction.reworkAttempt || 0) + 1,
+            maxRetries: resolveAdaptiveRetryCap(cfResult.classification.primaryClass, config),
+            taskKind: instruction.taskKind || "general",
+            premiumUsageData: loadPremiumUsageEntries(config),
+            benchmarkGroundTruth: loadBenchmarkGroundTruthSignal(config),
+            promptCacheHitRate: promptCacheSignal.hitRate,
+            promptCacheSavedTokens: promptCacheSignal.avgSavedTokens,
+            lowRoiSignalCount: failureFinishSignal.lowRoiSignalCount,
+            failureClass: cfResult.classification.primaryClass,
+            finishCode,
+          });
           const rd = resolveRetryAction(
             cfResult.classification.primaryClass,
             Number(instruction.reworkAttempt || 0),
@@ -4114,11 +4235,48 @@ export async function runWorkerConversation(config, roleName, instruction, histo
             instruction.taskId || null
           );
           if (rd.ok) {
-            retryDecision = rd.decision;
-            persistRetryMetric(config, rd.decision);
+            retryDecision = applyRetrySignalTuning(rd.decision, {
+              promptCacheHitRate: promptCacheSignal.hitRate,
+              promptCacheSavedTokens: promptCacheSignal.avgSavedTokens,
+              retryExpectedGain: retryRoiSignal.expectedGain,
+              retryThreshold: retryRoiSignal.threshold,
+              lowRoiSignalCount: failureFinishSignal.lowRoiSignalCount,
+              latestFailureClass: cfResult.classification.primaryClass,
+              latestFinishCode: finishCode,
+            });
+            retryDecision = applyRetryROIGate(retryDecision, retryRoiSignal);
+            persistRetryMetric(config, retryDecision);
+            failureClassification = {
+              ...cfResult.classification,
+              taskKind: instruction.taskKind || "general",
+              roleName: String(roleName || "worker"),
+              lineageId: _dispatchLineageId,
+              lineage: runtimeLineage.lineage,
+              lineageJoinKey: runtimeLineage.lineageJoinKey,
+              finishStatus: parsed.status,
+              finishCode,
+              retryRoiExpectedGain: retryRoiSignal.expectedGain,
+              retryRoiThreshold: retryRoiSignal.threshold,
+              retryRoiAllowed: retryRoiSignal.allowRetry,
+              retryAction: retryDecision?.retryAction ?? null,
+            };
           }
         }
       } catch { /* non-fatal — retry resolution must never block worker results */ }
+      if (!failureClassification) {
+        failureClassification = {
+          ...cfResult.classification,
+          taskKind: instruction.taskKind || "general",
+          roleName: String(roleName || "worker"),
+          lineageId: _dispatchLineageId,
+          lineage: runtimeLineage.lineage,
+          lineageJoinKey: runtimeLineage.lineageJoinKey,
+          finishStatus: parsed.status,
+          finishCode,
+          retryAction: retryDecision?.retryAction ?? null,
+        };
+      }
+      appendFailureClassification(config, failureClassification).catch(() => { /* non-fatal */ });
     }
 
     // Build unified failure envelope for observability and postmortem analysis
