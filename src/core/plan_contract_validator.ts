@@ -1242,12 +1242,38 @@ export function validateAllPlans(plans) {
  */
 export const QUARANTINE_CONFIDENCE_THRESHOLD = 0.5 as const;
 
+function getOwnPacketConfidence(packet: unknown): number | undefined {
+  if (!packet || typeof packet !== "object") return undefined;
+  if (Object.prototype.hasOwnProperty.call(packet, "_admissionConfidence")) {
+    const admissionConfidence = (packet as { _admissionConfidence?: unknown })._admissionConfidence;
+    if (typeof admissionConfidence === "number") {
+      return admissionConfidence;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(packet, "_provenance")) {
+    const provenance = (packet as { _provenance?: unknown })._provenance;
+    if (
+      provenance &&
+      typeof provenance === "object" &&
+      Object.prototype.hasOwnProperty.call(provenance, "confidence")
+    ) {
+      const confidence = (provenance as { confidence?: unknown }).confidence;
+      if (typeof confidence === "number") {
+        return confidence;
+      }
+    }
+  }
+  return undefined;
+}
+
 /**
  * Determine whether a plan packet should be quarantined from dispatch.
  *
  * A packet is quarantined when:
  *   1. It carries `_quarantined: true` (explicitly set by quarantineLowConfidencePackets), or
- *   2. It has a `_provenance.confidence` value that is strictly below QUARANTINE_CONFIDENCE_THRESHOLD.
+ *   2. It has a packet admission confidence below QUARANTINE_CONFIDENCE_THRESHOLD.
+ *      `_admissionConfidence` takes precedence when present; `_provenance.confidence`
+ *      remains the backward-compatible fallback.
  *
  * Packets without provenance metadata pass through (backward compatible).
  *
@@ -1256,9 +1282,15 @@ export const QUARANTINE_CONFIDENCE_THRESHOLD = 0.5 as const;
  */
 export function isPacketQuarantined(packet: any): boolean {
   if (!packet || typeof packet !== "object") return false;
-  if (packet._quarantined === true) return true;
-  if (typeof packet._provenance?.confidence === "number") {
-    return packet._provenance.confidence < QUARANTINE_CONFIDENCE_THRESHOLD;
+  if (
+    Object.prototype.hasOwnProperty.call(packet, "_quarantined") &&
+    packet._quarantined === true
+  ) {
+    return true;
+  }
+  const confidence = getOwnPacketConfidence(packet);
+  if (typeof confidence === "number") {
+    return confidence < QUARANTINE_CONFIDENCE_THRESHOLD;
   }
   return false;
 }

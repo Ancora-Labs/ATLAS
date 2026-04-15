@@ -4865,6 +4865,21 @@ describe("filterQuarantinedPlans", () => {
     assert.deepEqual(quarantined, []);
   });
 
+  it("ignores inherited quarantine metadata on untrusted packet objects", () => {
+    const inheritedPlan = Object.create({
+      _quarantined: true,
+      _admissionConfidence: 0.1,
+      _provenance: { confidence: 0.1 },
+    });
+    inheritedPlan.task = "own-task";
+
+    assert.equal(isPacketQuarantined(inheritedPlan), false);
+
+    const { dispatchable, quarantined } = filterQuarantinedPlans([inheritedPlan]);
+    assert.equal(dispatchable.length, 1);
+    assert.equal(quarantined.length, 0);
+  });
+
   it("PCV_QUARANTINE_THRESHOLD matches prometheus QUARANTINE_CONFIDENCE_THRESHOLD", () => {
     assert.equal(PCV_QUARANTINE_THRESHOLD, 0.5, "thresholds must be consistent across modules");
     assert.equal(PCV_QUARANTINE_THRESHOLD, QUARANTINE_CONFIDENCE_THRESHOLD);
