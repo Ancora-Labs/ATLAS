@@ -126,7 +126,7 @@ export interface Result<T = unknown> {
 }
 
 // ─── Worker ────────────────────────────────────────────────────────
-export type WorkerStatus = "done" | "partial" | "blocked" | "error";
+export type WorkerStatus = "done" | "partial" | "blocked" | "error" | "skipped";
 
 export interface WorkerInstruction {
   task: string;

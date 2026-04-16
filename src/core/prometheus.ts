@@ -47,6 +47,8 @@ import {
 } from "./dependency_graph_resolver.js";
 import { dualPassCriticRepair, selectBestCandidateSet, CANDIDATE_TIE_THRESHOLD as _CANDIDATE_TIE_THRESHOLD, MAX_CANDIDATE_SETS as _MAX_CANDIDATE_SETS } from "./plan_critic.js";
 import { compileAcceptanceCriteria, enrichPlansWithAC } from "./ac_compiler.js";
+import { buildPromptAssemblyPrompt } from "./prompt_overlay.js";
+import { PLATFORM_MODE } from "./mode_state.js";
 import {
   validateLeadershipContract,
   LEADERSHIP_CONTRACT_TYPE,
@@ -1328,11 +1330,17 @@ function computeResearchCoverageTarget(topicCount: number, sourceCount: number, 
   return boundedByResearch;
 }
 
+export function isSingleTargetPromptIsolationActive(config: any): boolean {
+  return config?.platformModeState?.currentMode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY
+    && Boolean(config?.activeTargetSession?.sessionId);
+}
+
 function buildResearchPromptSection(
   synthesis: unknown,
   scout: unknown,
   planningPolicy: { maxTasks?: number } | Record<string, unknown>,
-  artifactAgeMs?: number
+  artifactAgeMs?: number,
+  config?: any,
 ): {
   sectionText: string;
   topicCount: number;
@@ -1344,6 +1352,15 @@ function buildResearchPromptSection(
     && (Date.now() - artifactAgeMs) > STALE_THRESHOLD_MS;
   const synthesisObj = (synthesis && typeof synthesis === "object") ? synthesis as Record<string, unknown> : {};
   const scoutObj = (scout && typeof scout === "object") ? scout as Record<string, unknown> : {};
+  const targetModeActive = config?.platformModeState?.currentMode === "single_target_delivery"
+    && config?.selfDev?.futureModeFlags?.singleTargetDelivery === true;
+  const activeTargetSession = config?.activeTargetSession;
+  const synthesisAligned = isResearchArtifactAlignedToTargetSession(synthesisObj, activeTargetSession);
+  const scoutAligned = isResearchArtifactAlignedToTargetSession(scoutObj, activeTargetSession);
+
+  if (targetModeActive && activeTargetSession && !synthesisAligned) {
+    return { sectionText: "", topicCount: 0, sourceCount: 0, coverageTarget: 0 };
+  }
 
   // ── Applicability filtering ─────────────────────────────────────────────────
   // Exclude topics marked not_applicable (non-BOX platform research) from the
@@ -1352,9 +1369,11 @@ function buildResearchPromptSection(
   const rawSynthesisTopics = Array.isArray(synthesisObj.topics)
     ? synthesisObj.topics as Array<Record<string, unknown>>
     : [];
-  const applicableTopics = rawSynthesisTopics.filter(
-    t => String(t?.applicabilityScore || "") !== "not_applicable"
-  );
+  const applicableTopics = targetModeActive
+    ? rawSynthesisTopics
+    : rawSynthesisTopics.filter(
+      t => String(t?.applicabilityScore || "") !== "not_applicable"
+    );
   const excludedCount = rawSynthesisTopics.length - applicableTopics.length;
   const filteredSynthesisObj = { ...synthesisObj, topics: applicableTopics };
 
@@ -1379,6 +1398,7 @@ function buildResearchPromptSection(
   const topicLines = boundedTopics.map((topic, i) => `${i + 1}. ${topic}`).join("\n");
   const _hiddenTopicCount = 0; // all topics always shown
   const sourceSignals = (Array.isArray(scoutObj.sources) ? scoutObj.sources : [])
+    .filter(() => !targetModeActive || !activeTargetSession || scoutAligned)
     .slice(0, sourcePreviewLimit)
     .map((source, i: number) => {
       const sourceObj = (source && typeof source === "object") ? source as Record<string, unknown> : {};
@@ -1418,13 +1438,31 @@ function buildResearchPromptSection(
     ? `\n⚠️  STALE: Research artifacts are >72 h old. Do NOT produce redundant plans for topics already in ACCUMULATED TOPIC KNOWLEDGE. Only generate NEW packets for genuinely unaddressed gaps.`
     : "";
 
-  const excludedNote = excludedCount > 0
+  const excludedNote = excludedCount > 0 && !targetModeActive
     ? `\n⚠️  ${excludedCount} topic(s) excluded as not_applicable to BOX platform (non-BOX runtime detected — Temporal, Kubernetes, Go, JVM, etc.). Do NOT generate plans for excluded topics.`
     : "";
 
   const sectionText = `\n\n## EXTERNAL RESEARCH INTELLIGENCE${stalenessNote}${excludedNote}\nResearch signal available for this cycle: ${topicCount} topic(s), ${sourceCount} source(s).\n\nResearch coverage target: ${coverageTarget > 0 ? coverageTarget : "AUTO"} research-backed packet(s) when materially applicable.\nDo NOT ignore this section. For each high-confidence unresolved topic, either:\n1) produce an actionable packet with concrete target_files and verification, or\n2) state that it is already implemented and cite exact file evidence in before_state/after_state.\n\nAll research topics:\n${topicLines || "(none)"}${crossTopicLines ? `\n\nCross-topic implementation dependencies (act on these together — these are your highest-priority planning inputs):\n${crossTopicLines}` : ""}${priorityActionLines ? `\n\nPlanner-ready priority actions (distilled):\n${priorityActionLines}` : ""}${riskFlagLines ? `\n\nPlanner risk flags:\n${riskFlagLines}` : ""}${sourceSignals ? `\n\nSource signals:\n${sourceSignals}` : ""}${gapsPreview ? `\n\nResearch gaps to address next (areas the Scout did NOT cover — generate packets for these):\n${gapsPreview}` : ""}`;
 
   return { sectionText, topicCount, sourceCount, coverageTarget };
+}
+
+export function isResearchArtifactAlignedToTargetSession(
+  artifact: Record<string, unknown> | null | undefined,
+  activeTargetSession: any,
+): boolean {
+  if (!artifact || typeof artifact !== "object") return true;
+  if (!activeTargetSession || typeof activeTargetSession !== "object") {
+    return !artifact.targetSession;
+  }
+
+  const targetStamp = artifact.targetSession && typeof artifact.targetSession === "object"
+    ? artifact.targetSession as Record<string, unknown>
+    : null;
+  if (!targetStamp) return false;
+
+  return String(targetStamp.sessionId || "") === String(activeTargetSession.sessionId || "")
+    && String(targetStamp.projectId || "") === String(activeTargetSession.projectId || "");
 }
 
 async function getLatestResearchArtifactUpdatedAtMs(stateDir: string): Promise<number> {
@@ -2772,11 +2810,29 @@ async function loadPlanLifecycleAdmissionSignals(stateDir: string): Promise<{
   const ongoingFamilyKeys = new Set<string>();
   const advisoryCompletedTaskIdentities = new Set<string>();
 
-  const [postmortemsRaw, coordinationRaw, ledgerRaw, analysisRaw] = await Promise.all([
+  const isAlreadyCompletedWorkerArtifact = (entry: any): boolean => {
+    const status = String(entry?.status || "").trim().toLowerCase();
+    if (status !== "skipped") return false;
+    const skipReason = String(entry?.skipReason || "").trim().toLowerCase();
+    const blockReason = String(entry?.dispatchBlockReason || "").trim().toLowerCase();
+    return [
+      "already-merged",
+      "already_done",
+      "already-done",
+      "already-completed",
+      "already-complete",
+      "already-implemented",
+    ].includes(skipReason)
+      || blockReason.startsWith("already_done:")
+      || /already (?:completed|merged|implemented)/i.test(blockReason);
+  };
+
+  const [postmortemsRaw, coordinationRaw, ledgerRaw, analysisRaw, workerCycleArtifactsRaw] = await Promise.all([
     readJson(path.join(stateDir, "athena_postmortems.json"), null).catch(() => null),
     readJson(path.join(stateDir, "athena_coordination.json"), {}).catch(() => ({})),
     readJson(path.join(stateDir, "carry_forward_ledger.json"), []).catch(() => []),
     readJson(path.join(stateDir, "prometheus_analysis.json"), null).catch(() => null),
+    readJson(path.join(stateDir, "worker_cycle_artifacts.json"), null).catch(() => null),
   ]);
 
   const addClosedSignal = (rawTask: unknown, source: Record<string, unknown> = {}) => {
@@ -2883,6 +2939,30 @@ async function loadPlanLifecycleAdmissionSignals(stateDir: string): Promise<{
 
     if (status === PLAN_IMPLEMENTATION_STATUS.IMPLEMENTED_PARTIALLY && hasVerifiedEvidence && familyKey) {
       ongoingFamilyKeys.add(familyKey);
+    }
+  }
+
+  const workerCycles = workerCycleArtifactsRaw && typeof workerCycleArtifactsRaw === "object" && !Array.isArray(workerCycleArtifactsRaw)
+    ? ((workerCycleArtifactsRaw as any).cycles && typeof (workerCycleArtifactsRaw as any).cycles === "object" && !Array.isArray((workerCycleArtifactsRaw as any).cycles)
+      ? Object.values((workerCycleArtifactsRaw as any).cycles)
+      : [])
+    : [];
+
+  for (const cycleRecord of workerCycles) {
+    const cycleRecordObject = cycleRecord && typeof cycleRecord === "object"
+      ? cycleRecord as { workerActivity?: Record<string, unknown> }
+      : null;
+    const workerActivity = cycleRecordObject?.workerActivity && typeof cycleRecordObject.workerActivity === "object" && !Array.isArray(cycleRecordObject.workerActivity)
+      ? Object.values(cycleRecordObject.workerActivity)
+      : [];
+    for (const activityLog of workerActivity) {
+      const entries = Array.isArray(activityLog) ? activityLog : [];
+      for (const entry of entries) {
+        if (!entry || typeof entry !== "object") continue;
+        if (isAlreadyCompletedWorkerArtifact(entry)) {
+          addClosedSignal((entry as any).task, { continuationFamilyKey: (entry as any).continuationFamilyKey });
+        }
+      }
     }
   }
 
@@ -5565,6 +5645,20 @@ Wrap the JSON companion with markers:
 ===END===`),
 });
 
+export const TARGET_PROMETHEUS_STATIC_SECTIONS = Object.freeze({
+  targetDeliveryDirective: ivs("target-delivery-directive", `## TARGET DELIVERY DIRECTIVE
+You are planning only for the active target session.
+Do NOT propose work for BOX internals, BOX src/core, prompt authority, lineage taxonomy, retry economics, or any other BOX self-improvement surface.
+Treat the active target repo objective, target session gates, and isolated workspace as the only planning scope.
+The BOX repository is orchestration infrastructure for this cycle, not the delivery target.`),
+
+  targetOutputFormat: ivs("target-output-format", `## TARGET DELIVERY OUTPUT FORMAT
+Produce a target-repo delivery plan only.
+Respect the operator objective's locked stack, file boundary, stage gates, and workspace path.
+Emit only concrete target-session packets and the required JSON companion block for the active target session.
+Do NOT include BOX-wide self-critique, BOX master-evolution analysis, or self-improvement packets unless the operator objective explicitly asks for them.`),
+});
+
 /**
  * Section names that carry per-cycle data in the Prometheus planning prompt.
  *
@@ -5596,6 +5690,10 @@ export const PROMETHEUS_STATIC_SECTION_NAMES: ReadonlySet<string> = new Set(
   Object.values(PROMETHEUS_STATIC_SECTIONS).map(s => s.name)
 );
 
+export const TARGET_PROMETHEUS_STATIC_SECTION_NAMES: ReadonlySet<string> = new Set(
+  Object.values(TARGET_PROMETHEUS_STATIC_SECTIONS).map(s => s.name)
+);
+
 /**
  * Canonical list of state files that Prometheus reads during its planning workflow.
  * Used in the context prompt (step 2) and exported for test verification.
@@ -5623,6 +5721,69 @@ export const PROMETHEUS_PROMPT_DENSITY_MIN = Object.freeze({
   // token floor prevents valid plans from being rejected on every cycle.
   minExecutionTokens: 0,
 });
+
+export function resolvePrometheusPromptPlanningMode(config: any, options: { repairFeedback?: unknown } = {}) {
+  if (options.repairFeedback) {
+    return PROMETHEUS_PLANNING_MODE.REPAIR_PLAN;
+  }
+  return PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION;
+}
+
+export function resolvePrometheusPromptFamilyLabel(
+  config: any,
+  options: { repairFeedback?: unknown } = {},
+): string {
+  if (isSingleTargetPromptIsolationActive(config)) {
+    return "prometheus-single_target_delivery";
+  }
+  return `prometheus-${resolvePrometheusPromptPlanningMode(config, options) || PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION}`;
+}
+
+export function resolvePrometheusPromptRepoPath(config: any, repoRoot: string): string {
+  if (!isSingleTargetPromptIsolationActive(config)) {
+    return repoRoot;
+  }
+
+  const targetWorkspacePath = String(
+    config?.activeTargetSession?.workspace?.path
+      || config?.activeTargetSession?.repo?.localPath
+      || "",
+  ).trim();
+
+  return targetWorkspacePath || repoRoot;
+}
+
+export function resolvePrometheusStaticSections(config: any) {
+  return isSingleTargetPromptIsolationActive(config)
+    ? TARGET_PROMETHEUS_STATIC_SECTIONS
+    : PROMETHEUS_STATIC_SECTIONS;
+}
+
+export function buildPrometheusWorkflowPrompt(config: any, repoRoot: string): string {
+  const promptRepoPath = resolvePrometheusPromptRepoPath(config, repoRoot);
+  if (isSingleTargetPromptIsolationActive(config)) {
+    return `## YOUR WORKFLOW
+You have full read and write access to the state directory and the isolated target workspace.
+ACTIVE TARGET WORKSPACE: ${promptRepoPath}
+1. Read state/research_synthesis.json for the latest research intelligence (extracted content from internet sources).
+2. Read key state files to understand target-session health: ${PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES.join(", ")}
+   - state/worker_cycle_artifacts.json is the canonical cycle snapshot (schemaVersion=1, fields: latestCycleId, cycles{}, updatedAt). Check the updatedAt field for freshness — records older than 6 hours are historical context only, not live planning truth.
+   - Use diagnostics freshness metadata (freshness.staleAfterMs + timestamp fields) and do NOT treat stale diagnostics entries as live planning truth.
+3. Inspect the isolated target workspace and target-session artifacts needed to plan delivery. Do NOT browse BOX src/core or propose BOX-internal work while single-target delivery mode is active.
+4. Produce a delivery plan only for the active target session following the operator objective and session gates.
+5. Your plan MUST end with a JSON companion block wrapped in ===DECISION=== / ===END=== markers containing a plans array.`;
+  }
+
+  return `## YOUR WORKFLOW
+You have full read and write access to the repository and state directory.
+1. Read state/research_synthesis.json for the latest research intelligence (extracted content from internet sources).
+2. Read key state files to understand system health: ${PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES.join(", ")}
+   - state/worker_cycle_artifacts.json is the canonical cycle snapshot (schemaVersion=1, fields: latestCycleId, cycles{}, updatedAt). Check the updatedAt field for freshness — records older than 6 hours are historical context only, not live planning truth.
+   - Use diagnostics freshness metadata (freshness.staleAfterMs + timestamp fields) and do NOT treat stale diagnostics entries as live planning truth.
+3. Read source files you need to understand for planning — browse src/core/, src/workers/, src/types/ as needed.
+4. Produce your self-evolution master plan following your agent definition's output format.
+5. Your plan MUST end with a JSON companion block wrapped in ===DECISION=== / ===END=== markers containing a plans array.`;
+}
 
 export const RIGIDITY_PENALTY = 0.15 as const;
 
@@ -6817,6 +6978,7 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   let benchmarkSection = "";
   let routingOutcomeSection = "";
   let truthMaintenanceSection = "";
+  const targetModePlanningActive = isSingleTargetPromptIsolationActive(config);
   let truthSignals = null as Awaited<ReturnType<typeof collectPromptTruthSignals>> | null;
   let latestMainCiConclusionForTruth: string | null = null;
   let preloadedHealthAuditPayload: unknown;
@@ -6844,6 +7006,12 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
       `[PROMETHEUS][WARN] Failed to collect truth-maintenance signals: ${String((truthErr as any)?.message || truthErr)}`,
     );
   }
+  if (targetModePlanningActive) {
+    await appendProgress(
+      config,
+      "[PROMETHEUS][TARGET_MODE] Suppressing BOX self-dev planning context for active target session planning",
+    );
+  }
   try {
     const [researchSynthesis, researchScout, knowledgeMemory, jesusDirective, loadedBenchmarkData] = await Promise.all([
       readJson(path.join(stateDir, "research_synthesis.json"), null),
@@ -6854,7 +7022,9 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     ]);
     benchmarkData = loadedBenchmarkData;
     researchSynthesisData = researchSynthesis;
-    researchTopicsList = extractResearchTopics(researchSynthesis, researchScout);
+    const researchArtifactsAligned = !targetModePlanningActive
+      || isResearchArtifactAlignedToTargetSession(researchSynthesis as Record<string, unknown>, config?.activeTargetSession);
+    researchTopicsList = researchArtifactsAligned ? extractResearchTopics(researchSynthesis, researchScout) : [];
     const researchArtifactUpdatedAtMs = await getLatestResearchArtifactUpdatedAtMs(stateDir);
     memoryShortlist = buildTrustedMemoryShortlist(knowledgeMemory, {
       requestedBy,
@@ -6915,7 +7085,7 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     const plannerPriorityActions = Array.isArray((effectiveSynthesis as any)?.plannerSignals?.priorityActions)
       ? (effectiveSynthesis as any).plannerSignals.priorityActions
       : [];
-    if (truthSignals && memoryShortlist) {
+    if (!targetModePlanningActive && truthSignals && memoryShortlist) {
       const reconciledPromptMemory = reconcilePromptMemoryShortlistByTruth(memoryShortlist, truthSignals.signals);
       const plannerPrioritySnapshot = buildPromptTruthMaintenanceSnapshot({
         signals: truthSignals.signals,
@@ -6963,7 +7133,7 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
       };
     }
 
-    const researchContext = buildResearchPromptSection(effectiveSynthesis, researchScout, planningPolicy, researchArtifactUpdatedAtMs);
+    const researchContext = buildResearchPromptSection(effectiveSynthesis, researchScout, planningPolicy, researchArtifactUpdatedAtMs, config);
     researchSectionText = researchContext.sectionText;
     // Prepend degraded-mode warning so Prometheus knows its research context is incomplete.
     // When ALL topics are quarantined, researchSectionText may be empty — inject the
@@ -7015,7 +7185,11 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
       try {
         const synthPath = path.join(stateDir, "research_synthesis.json");
         const synthRaw = await readJson(synthPath, null);
-        if (synthRaw && typeof synthRaw === "object") {
+        if (
+          synthRaw
+          && typeof synthRaw === "object"
+          && isResearchArtifactAlignedToTargetSession(synthRaw as Record<string, unknown>, config?.activeTargetSession)
+        ) {
           const updated = { ...(synthRaw as Record<string, unknown>), lastConsumedAt: new Date().toISOString() };
           const { writeFile } = await import("node:fs/promises");
           await writeFile(synthPath, JSON.stringify(updated, null, 2), "utf8");
@@ -7026,52 +7200,54 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     // Optional signal; continue without research injection.
   }
 
-  try {
-    const healthAuditPayload = preloadedHealthAuditPayload ?? await readJson(path.join(stateDir, "health_audit_findings.json"), null);
-    const { payload: normalizedHealthPayload, suppressedCount: ciBreakSuppressedCount } =
-      normalizeStaleCiBreakFindings(healthAuditPayload);
-    latestMainCiConclusionForTruth = String((normalizedHealthPayload as any)?.latestMainCiConclusion || "").trim().toLowerCase() || null;
-    if (ciBreakSuppressedCount > 0) {
-      await appendProgress(
-        config,
-        `[PROMETHEUS][FRESHNESS] Suppressed ${ciBreakSuppressedCount} stale CI-break finding(s) — main-branch CI was healthy at audit time (latestMainCiConclusion=success)`,
-      );
-    }
-    const allExtractedFindings = extractMandatoryHealthAuditFindings(normalizedHealthPayload);
+  if (!targetModePlanningActive) {
+    try {
+      const healthAuditPayload = preloadedHealthAuditPayload ?? await readJson(path.join(stateDir, "health_audit_findings.json"), null);
+      const { payload: normalizedHealthPayload, suppressedCount: ciBreakSuppressedCount } =
+        normalizeStaleCiBreakFindings(healthAuditPayload);
+      latestMainCiConclusionForTruth = String((normalizedHealthPayload as any)?.latestMainCiConclusion || "").trim().toLowerCase() || null;
+      if (ciBreakSuppressedCount > 0) {
+        await appendProgress(
+          config,
+          `[PROMETHEUS][FRESHNESS] Suppressed ${ciBreakSuppressedCount} stale CI-break finding(s) — main-branch CI was healthy at audit time (latestMainCiConclusion=success)`,
+        );
+      }
+      const allExtractedFindings = extractMandatoryHealthAuditFindings(normalizedHealthPayload);
 
-    // ── Pre-planning truth preflight ─────────────────────────────────────────
-    // Quarantine CI-related findings when the source payload is too old or lacks
-    // a parseable auditedAt timestamp.  Non-CI findings (capability gaps,
-    // architecture debt) are structural and remain trusted regardless of age.
-    // This prevents stale CI-break evidence from driving unnecessary premium requests.
-    mandatoryFindingsPreflightResult = computeMandatoryFindingsPreflight(
-      allExtractedFindings,
-      normalizedHealthPayload,
-    );
-    if (mandatoryFindingsPreflightResult.quarantinedCount > 0) {
-      await appendProgress(
-        config,
-        `[PROMETHEUS][PREFLIGHT_TRUTH] Quarantined ${mandatoryFindingsPreflightResult.quarantinedCount} stale CI finding(s) — ` +
-        `preflightStatus=${mandatoryFindingsPreflightResult.preflightStatus} ` +
-        `sourceAgeMs=${Number.isFinite(mandatoryFindingsPreflightResult.sourceAgeMs) ? Math.round(mandatoryFindingsPreflightResult.sourceAgeMs) : "unknown"} ` +
-        `threshold=${MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS}ms`,
+      // ── Pre-planning truth preflight ─────────────────────────────────────────
+      // Quarantine CI-related findings when the source payload is too old or lacks
+      // a parseable auditedAt timestamp.  Non-CI findings (capability gaps,
+      // architecture debt) are structural and remain trusted regardless of age.
+      // This prevents stale CI-break evidence from driving unnecessary premium requests.
+      mandatoryFindingsPreflightResult = computeMandatoryFindingsPreflight(
+        allExtractedFindings,
+        normalizedHealthPayload,
       );
-    }
+      if (mandatoryFindingsPreflightResult.quarantinedCount > 0) {
+        await appendProgress(
+          config,
+          `[PROMETHEUS][PREFLIGHT_TRUTH] Quarantined ${mandatoryFindingsPreflightResult.quarantinedCount} stale CI finding(s) — ` +
+          `preflightStatus=${mandatoryFindingsPreflightResult.preflightStatus} ` +
+          `sourceAgeMs=${Number.isFinite(mandatoryFindingsPreflightResult.sourceAgeMs) ? Math.round(mandatoryFindingsPreflightResult.sourceAgeMs) : "unknown"} ` +
+          `threshold=${MANDATORY_FINDINGS_PREFLIGHT_MAX_AGE_MS}ms`,
+        );
+      }
 
-    // Only inject trusted (non-quarantined) findings into the planning prompt.
-    mandatoryFindings = mandatoryFindingsPreflightResult.trustedFindings;
-    mandatoryTasksSection = buildMandatoryTasksPromptSection(mandatoryFindings);
-    if (mandatoryFindings.length > 0) {
+      // Only inject trusted (non-quarantined) findings into the planning prompt.
+      mandatoryFindings = mandatoryFindingsPreflightResult.trustedFindings;
+      mandatoryTasksSection = buildMandatoryTasksPromptSection(mandatoryFindings);
+      if (mandatoryFindings.length > 0) {
+        await appendProgress(
+          config,
+          `[PROMETHEUS] Injecting mandatory health-audit tasks: ${mandatoryFindings.length} finding(s) from state/health_audit_findings.json`
+        );
+      }
+    } catch (error) {
       await appendProgress(
         config,
-        `[PROMETHEUS] Injecting mandatory health-audit tasks: ${mandatoryFindings.length} finding(s) from state/health_audit_findings.json`
+        `[PROMETHEUS][WARN] Failed to load health audit findings for mandatory-task injection: ${String((error as any)?.message || error)}`
       );
     }
-  } catch (error) {
-    await appendProgress(
-      config,
-      `[PROMETHEUS][WARN] Failed to load health audit findings for mandatory-task injection: ${String((error as any)?.message || error)}`
-    );
   }
 
   // ── Compute benchmark planning priors (co-loaded with routing telemetry) ─────
@@ -7094,43 +7270,45 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     }
   } catch { /* non-fatal — proceed without prior-cycle signal */ }
 
-  try {
-    const [resolvedBenchmarkData, premiumUsageData] = await Promise.all([
-      benchmarkData ? Promise.resolve(benchmarkData) : readBenchmarkGroundTruth(config),
-      readJson(path.join(stateDir, "premium_usage_log.json"), []),
-    ]);
-    benchmarkData = resolvedBenchmarkData;
-    benchmarkSection = buildBenchmarkSection(resolvedBenchmarkData);
-    routingOutcomeSection = buildRoutingOutcomeSection(premiumUsageData);
-    if (benchmarkSection || routingOutcomeSection) {
+  if (!targetModePlanningActive) {
+    try {
+      const [resolvedBenchmarkData, premiumUsageData] = await Promise.all([
+        benchmarkData ? Promise.resolve(benchmarkData) : readBenchmarkGroundTruth(config),
+        readJson(path.join(stateDir, "premium_usage_log.json"), []),
+      ]);
+      benchmarkData = resolvedBenchmarkData;
+      benchmarkSection = buildBenchmarkSection(resolvedBenchmarkData);
+      routingOutcomeSection = buildRoutingOutcomeSection(premiumUsageData);
+      if (benchmarkSection || routingOutcomeSection) {
+        await appendProgress(
+          config,
+          `[PROMETHEUS] Injecting routing telemetry signals: benchmark=${benchmarkSection ? "yes" : "no"} outcomes=${routingOutcomeSection ? "yes" : "no"}`
+        );
+      }
+      // Derive planning priors from the same benchmarkData so we avoid a second disk read.
+      // Include prior-cycle violation/retry/reroute signal so observed pressure adjusts
+      // strictness on top of the capacity-gain baseline.
+      const benchmarkEntries = Array.isArray((resolvedBenchmarkData as any)?.entries)
+        ? (resolvedBenchmarkData as any).entries as unknown[]
+        : [];
+      const capacityGainResult = computeResearchCapacityGain(benchmarkEntries as any[]);
+      planningPriors = computeBenchmarkPlanningPriors(capacityGainResult, priorCycleViolationSignal);
+      if (planningPriors.uncertainty !== "low" || planningPriors.retryViolationAdjustment > 0) {
+        await appendProgress(
+          config,
+          `[PROMETHEUS][PRIORS] Planning priors: uncertainty=${planningPriors.uncertainty} strictnessMultiplier=${planningPriors.strictnessMultiplier} verificationDepth=${planningPriors.verificationDepth} retryViolationAdj=${planningPriors.retryViolationAdjustment}`
+        );
+      }
+      planningPolicy = buildPrometheusPlanningPolicy(config, prevLaneTelemetry, {
+        uncertainty: planningPriors.uncertainty,
+        taskKindTelemetry: extractTaskKindPacketTelemetry(prevAnalyticsSnapshot),
+      });
+    } catch (signalErr) {
       await appendProgress(
         config,
-        `[PROMETHEUS] Injecting routing telemetry signals: benchmark=${benchmarkSection ? "yes" : "no"} outcomes=${routingOutcomeSection ? "yes" : "no"}`
+        `[PROMETHEUS][WARN] Failed to load routing telemetry signals: ${String((signalErr as any)?.message || signalErr)}`
       );
     }
-    // Derive planning priors from the same benchmarkData so we avoid a second disk read.
-    // Include prior-cycle violation/retry/reroute signal so observed pressure adjusts
-    // strictness on top of the capacity-gain baseline.
-    const benchmarkEntries = Array.isArray((resolvedBenchmarkData as any)?.entries)
-      ? (resolvedBenchmarkData as any).entries as unknown[]
-      : [];
-    const capacityGainResult = computeResearchCapacityGain(benchmarkEntries as any[]);
-    planningPriors = computeBenchmarkPlanningPriors(capacityGainResult, priorCycleViolationSignal);
-    if (planningPriors.uncertainty !== "low" || planningPriors.retryViolationAdjustment > 0) {
-      await appendProgress(
-        config,
-        `[PROMETHEUS][PRIORS] Planning priors: uncertainty=${planningPriors.uncertainty} strictnessMultiplier=${planningPriors.strictnessMultiplier} verificationDepth=${planningPriors.verificationDepth} retryViolationAdj=${planningPriors.retryViolationAdjustment}`
-      );
-    }
-    planningPolicy = buildPrometheusPlanningPolicy(config, prevLaneTelemetry, {
-      uncertainty: planningPriors.uncertainty,
-      taskKindTelemetry: extractTaskKindPacketTelemetry(prevAnalyticsSnapshot),
-    });
-  } catch (signalErr) {
-    await appendProgress(
-      config,
-      `[PROMETHEUS][WARN] Failed to load routing telemetry signals: ${String((signalErr as any)?.message || signalErr)}`
-    );
   }
   const candidatePlanningPolicy = deriveCandidatePlanningPolicy(planningPriors);
 
@@ -7139,70 +7317,72 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   // even when benchmarkData loading fails.
   // (If the try block above succeeded, planningPriors is already overwritten.)
   // ── Load accumulated topic memory ─────────────────────────────────────────
-  let topicMemory = await loadTopicMemory(stateDir);
+  let topicMemory = targetModePlanningActive ? { topics: {} } as Awaited<ReturnType<typeof loadTopicMemory>> : await loadTopicMemory(stateDir);
   let topicMemorySection = "";
   let trustedMemorySection = "";
   let cycleProofSection = "";
-  try {
-    topicMemorySection = buildTopicMemoryPromptSection(topicMemory);
-    const activeCount = Object.values(topicMemory.topics).filter(t => t.status === "active").length;
-    const completedCount = Object.values(topicMemory.topics).filter(t => t.status === "completed").length;
-    const archivedCount = Object.values(topicMemory.topics).filter(t => t.status === "archived").length;
-    if (activeCount > 0 || completedCount > 0 || archivedCount > 0) {
-      await appendProgress(config,
-        `[PROMETHEUS] Topic memory loaded: ${activeCount} active, ${completedCount} completed, ${archivedCount} archived topic(s)`
-      );
+  if (!targetModePlanningActive) {
+    try {
+      topicMemorySection = buildTopicMemoryPromptSection(topicMemory);
+      const activeCount = Object.values(topicMemory.topics).filter(t => t.status === "active").length;
+      const completedCount = Object.values(topicMemory.topics).filter(t => t.status === "completed").length;
+      const archivedCount = Object.values(topicMemory.topics).filter(t => t.status === "archived").length;
+      if (activeCount > 0 || completedCount > 0 || archivedCount > 0) {
+        await appendProgress(config,
+          `[PROMETHEUS] Topic memory loaded: ${activeCount} active, ${completedCount} completed, ${archivedCount} archived topic(s)`
+        );
+      }
+    } catch {
+      // Non-fatal — proceed without topic memory.
     }
-  } catch {
-    // Non-fatal — proceed without topic memory.
-  }
 
-  try {
-    if (!memoryShortlist) {
-      const knowledgeMemory = await readJson(path.join(stateDir, "knowledge_memory.json"), null);
-      memoryShortlist = buildTrustedMemoryShortlist(knowledgeMemory, {
-        requestedBy,
-        includeLowTrust: options.includeLowTrustMemory === true,
-      });
-    }
-    if (memoryShortlist && (memoryShortlist.lessons.length > 0 || memoryShortlist.promptHints.length > 0)) {
-      const lessonLines = memoryShortlist.lessons.map((entry: any, index: number) => {
-        const trustLevel = String(entry?.trust?.level || MEMORY_TRUST_LEVEL.MEDIUM);
-        return `${index + 1}. ${String(entry?.lesson || "").trim()} [trust=${trustLevel}]`;
-      }).filter((line: string) => /\S/.test(line));
-      const hintLines = memoryShortlist.promptHints.map((entry: any, index: number) => {
-        const trustLevel = String(entry?.trust?.level || MEMORY_TRUST_LEVEL.MEDIUM);
-        return `${index + 1}. ${String(entry?.hint || "").trim()} [trust=${trustLevel}]`;
-      }).filter((line: string) => /\S/.test(line));
-      trustedMemorySection = `\n\n## TRUST-FILTERED KNOWLEDGE MEMORY\nLessons:\n${lessonLines.length > 0 ? lessonLines.join("\n") : "- (none)"}\n\nPrompt hints:\n${hintLines.length > 0 ? hintLines.join("\n") : "- (none)"}`;
-    }
-    if (memoryShortlist && (memoryShortlist.droppedLowTrustLessons > 0 || memoryShortlist.droppedLowTrustHints > 0)) {
+    try {
+      if (!memoryShortlist) {
+        const knowledgeMemory = await readJson(path.join(stateDir, "knowledge_memory.json"), null);
+        memoryShortlist = buildTrustedMemoryShortlist(knowledgeMemory, {
+          requestedBy,
+          includeLowTrust: options.includeLowTrustMemory === true,
+        });
+      }
+      if (memoryShortlist && (memoryShortlist.lessons.length > 0 || memoryShortlist.promptHints.length > 0)) {
+        const lessonLines = memoryShortlist.lessons.map((entry: any, index: number) => {
+          const trustLevel = String(entry?.trust?.level || MEMORY_TRUST_LEVEL.MEDIUM);
+          return `${index + 1}. ${String(entry?.lesson || "").trim()} [trust=${trustLevel}]`;
+        }).filter((line: string) => /\S/.test(line));
+        const hintLines = memoryShortlist.promptHints.map((entry: any, index: number) => {
+          const trustLevel = String(entry?.trust?.level || MEMORY_TRUST_LEVEL.MEDIUM);
+          return `${index + 1}. ${String(entry?.hint || "").trim()} [trust=${trustLevel}]`;
+        }).filter((line: string) => /\S/.test(line));
+        trustedMemorySection = `\n\n## TRUST-FILTERED KNOWLEDGE MEMORY\nLessons:\n${lessonLines.length > 0 ? lessonLines.join("\n") : "- (none)"}\n\nPrompt hints:\n${hintLines.length > 0 ? hintLines.join("\n") : "- (none)"}`;
+      }
+      if (memoryShortlist && (memoryShortlist.droppedLowTrustLessons > 0 || memoryShortlist.droppedLowTrustHints > 0)) {
+        await appendProgress(
+          config,
+          `[PROMETHEUS][MEMORY_TRUST] filtered low-trust entries lessons=${memoryShortlist.droppedLowTrustLessons} hints=${memoryShortlist.droppedLowTrustHints} includeLowTrust=${options.includeLowTrustMemory === true && isPrivilegedMemoryRequester(requestedBy)}`
+        );
+      }
+    } catch (memoryErr) {
       await appendProgress(
         config,
-        `[PROMETHEUS][MEMORY_TRUST] filtered low-trust entries lessons=${memoryShortlist.droppedLowTrustLessons} hints=${memoryShortlist.droppedLowTrustHints} includeLowTrust=${options.includeLowTrustMemory === true && isPrivilegedMemoryRequester(requestedBy)}`
+        `[PROMETHEUS][WARN] Failed to load trust-filtered knowledge memory: ${String((memoryErr as any)?.message || memoryErr)}`
       );
     }
-  } catch (memoryErr) {
-    await appendProgress(
-      config,
-      `[PROMETHEUS][WARN] Failed to load trust-filtered knowledge memory: ${String((memoryErr as any)?.message || memoryErr)}`
-    );
-  }
 
-  try {
-    const cycleProofEvidence = await readJson(path.join(stateDir, "cycle_proof_evidence.json"), null);
-    const seamValidation = validateCycleProofEvidenceSeams(cycleProofEvidence);
-    if (!seamValidation.ok) {
-      await appendProgress(
-        config,
-        `[PROMETHEUS][CYCLE_PROOF] rejected incomplete cycle_proof_evidence artifact: ${seamValidation.failReasons.slice(0, 5).join("; ")}`
-      );
-    } else {
-      const failedSeams = CYCLE_PROOF_SEAM_KEYS.filter((key) => seamValidation.seamChecks[key]?.pass !== true);
-      cycleProofSection = `\n\n## CYCLE PROOF EVIDENCE\ncycleId=${seamValidation.cycleId}\nseamStatus=${failedSeams.length === 0 ? "all-pass" : `failed(${failedSeams.join(",")})`}`;
+    try {
+      const cycleProofEvidence = await readJson(path.join(stateDir, "cycle_proof_evidence.json"), null);
+      const seamValidation = validateCycleProofEvidenceSeams(cycleProofEvidence);
+      if (!seamValidation.ok) {
+        await appendProgress(
+          config,
+          `[PROMETHEUS][CYCLE_PROOF] rejected incomplete cycle_proof_evidence artifact: ${seamValidation.failReasons.slice(0, 5).join("; ")}`
+        );
+      } else {
+        const failedSeams = CYCLE_PROOF_SEAM_KEYS.filter((key) => seamValidation.seamChecks[key]?.pass !== true);
+        cycleProofSection = `\n\n## CYCLE PROOF EVIDENCE\ncycleId=${seamValidation.cycleId}\nseamStatus=${failedSeams.length === 0 ? "all-pass" : `failed(${failedSeams.join(",")})`}`;
+      }
+    } catch {
+      // Optional signal — proceed without cycle proof evidence section.
     }
-  } catch {
-    // Optional signal — proceed without cycle proof evidence section.
   }
 
   // ── Extract behavior patterns from postmortems ────────────────────────────
@@ -7212,24 +7392,25 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   // Postmortem entries lifted to function scope so the carry-forward gate can
   // evaluate them after plan generation and validation.
   let postmortemEntries: any[] = [];
-  try {
-    // Load carry-forward ledger and coordination data in parallel for retirement check
-    const [postmortems, cfLedgerData, coordinationData] = await Promise.all([
-      readJson(path.join(stateDir, "athena_postmortems.json"), null),
-      readJson(path.join(stateDir, "carry_forward_ledger.json"), { entries: [] }),
-      readJson(path.join(stateDir, "athena_coordination.json"), {}),
-    ]);
-    const cfLedger = Array.isArray(cfLedgerData?.entries) ? cfLedgerData.entries : [];
-    const coordinationCompletedTasks = Array.isArray(coordinationData?.completedTasks)
-      ? coordinationData.completedTasks : [];
-    const entries = Array.isArray(postmortems?.entries) ? postmortems.entries : [];
-    postmortemEntries = entries; // expose to carry-forward gate after plan validation
-    const shortlist = buildRankedLessonShortlists(entries, { limit: 10 });
-    const unresolvedShortlistLessons = new Set(
-      shortlist.unresolvedTop10.map((item) => String(item.lesson || "").toLowerCase().replace(/\s+/g, " ").trim()).filter(Boolean),
-    );
-    
-    if (entries.length > 0) {
+  if (!targetModePlanningActive) {
+    try {
+      // Load carry-forward ledger and coordination data in parallel for retirement check
+      const [postmortems, cfLedgerData, coordinationData] = await Promise.all([
+        readJson(path.join(stateDir, "athena_postmortems.json"), null),
+        readJson(path.join(stateDir, "carry_forward_ledger.json"), { entries: [] }),
+        readJson(path.join(stateDir, "athena_coordination.json"), {}),
+      ]);
+      const cfLedger = Array.isArray(cfLedgerData?.entries) ? cfLedgerData.entries : [];
+      const coordinationCompletedTasks = Array.isArray(coordinationData?.completedTasks)
+        ? coordinationData.completedTasks : [];
+      const entries = Array.isArray(postmortems?.entries) ? postmortems.entries : [];
+      postmortemEntries = entries; // expose to carry-forward gate after plan validation
+      const shortlist = buildRankedLessonShortlists(entries, { limit: 10 });
+      const unresolvedShortlistLessons = new Set(
+        shortlist.unresolvedTop10.map((item) => String(item.lesson || "").toLowerCase().replace(/\s+/g, " ").trim()).filter(Boolean),
+      );
+      
+      if (entries.length > 0) {
       // ── Token-partitioned postmortem shortlist (compilePrometheusContextShortlist) ──
       // Converts ranked lesson entries into ShortlistItem[] and enforces the
       // TOKEN_PARTITION_LIMITS.behaviorPatterns cap so repeated long-tail blocks
@@ -7310,8 +7491,9 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
         ).join("\n");
         carryForwardSection = `\n\n## MANDATORY_CARRY_FORWARD\nThe following follow-up tasks from previous Athena postmortems have NOT been addressed yet.\nYou MUST include these in your plan unless they are already resolved in the codebase:${suppressedNote}:\n${items}\n`;
       }
-    }
-  } catch { /* non-fatal — proceed without pattern analysis */ }
+      }
+    } catch { /* non-fatal — proceed without pattern analysis */ }
+  }
 
   // ── Deterministic semantic retrieval for planner context ───────────────────
   let semanticRetrievalSection = "";
@@ -7342,7 +7524,7 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
 
   // ── Self-improvement repair feedback injection ────────────────────────────
   let repairFeedbackSection = "";
-  if (options.repairFeedback) {
+  if (!targetModePlanningActive && options.repairFeedback) {
     const rf = options.repairFeedback;
     const causes = (rf.rootCauses || []).map((c, i) => `${i + 1}. [${c.severity}] ${c.cause} (affects: ${c.affectedComponent})`).join("\n");
     const patches = (rf.behaviorPatches || []).map((p, i) => `${i + 1}. [${p.target}] ${p.patch} \u2014 rationale: ${p.rationale}`).join("\n");
@@ -7351,16 +7533,14 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
 
     repairFeedbackSection = `\n\n## CRITICAL: ATHENA REJECTION REPAIR FEEDBACK\nThe previous plan was REJECTED by Athena. Self-improvement has analyzed the failure.\nYou MUST address every item below. Repeating the same mistakes will cause a hard stop.\n\n### ROOT CAUSES OF REJECTION\n${causes || "- No root causes identified"}\n\n### BEHAVIOR PATCHES (you MUST follow these)\n${patches || "- No patches specified"}\n\n### PLAN CONSTRAINTS (mandatory for this re-plan)\n- Must include: ${JSON.stringify(constraints.mustInclude || [])}\n- Must NOT repeat: ${JSON.stringify(constraints.mustNotRepeat || [])}\n- Verification standard: ${constraints.verificationStandard || "task-specific, measurable"}\n- Wave strategy: ${constraints.waveStrategy || "explicit inter-wave dependencies required"}\n\n### VERIFICATION UPGRADES REQUIRED\n${upgrades || "- No specific upgrades"}\n\nFAILURE TO COMPLY WITH THESE CONSTRAINTS WILL RESULT IN CYCLE TERMINATION.\n`;
   }
-  const planningMode = options.repairFeedback
-    ? PROMETHEUS_PLANNING_MODE.REPAIR_PLAN
-    : PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION;
+  const planningMode = resolvePrometheusPromptPlanningMode(config, options);
 
   // ── Architecture drift summary injection ─────────────────────────────────
   // Inject unresolved stale doc references and deprecated token usage so
   // Prometheus can include remediation tasks in the plan.
   let driftSummarySection = "";
   const driftReport = options.driftReport;
-  if (driftReport && (driftReport.staleCount > 0 || driftReport.deprecatedTokenCount > 0)) {
+  if (!targetModePlanningActive && driftReport && (driftReport.staleCount > 0 || driftReport.deprecatedTokenCount > 0)) {
     const staleLines = (driftReport.staleReferences || []).slice(0, 20).map(
       (r, i) => `${i + 1}. [${r.docPath}:${r.line}] references missing file: ${r.referencedPath}`
     ).join("\n");
@@ -7387,6 +7567,8 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   const cycleDeltaParts: string[] = [];
 
   // Planning policy
+  cycleDeltaParts.push(buildPromptAssemblyPrompt({ agentName: "prometheus", config }));
+
   cycleDeltaParts.push(`## PLANNING POLICY
 - planningMode: ${planningMode}
 - maxTasks: ${planningPolicy.maxTasks > 0 ? planningPolicy.maxTasks : "UNLIMITED"}
@@ -7494,21 +7676,25 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
     ],
     PROMETHEUS_CYCLE_DELTA_SECTION_NAMES
   );
+  const resolvedStaticSections = resolvePrometheusStaticSections(config);
+  const resolvedStaticSectionNames = resolvedStaticSections === TARGET_PROMETHEUS_STATIC_SECTIONS
+    ? TARGET_PROMETHEUS_STATIC_SECTION_NAMES
+    : PROMETHEUS_STATIC_SECTION_NAMES;
   const markedStaticPromptSections = _markCacheableSegments(
-    Object.values(PROMETHEUS_STATIC_SECTIONS).map((promptSection) => ({ ...promptSection })),
+    Object.values(resolvedStaticSections).map((promptSection) => ({ ...promptSection })),
     {
-      stableNames: Array.from(PROMETHEUS_STATIC_SECTION_NAMES),
+      stableNames: Array.from(resolvedStaticSectionNames),
     },
   );
   const filteredStaticPromptSections = markedStaticPromptSections.filter(
     (promptSection) => String(promptSection.content || "").trim().length > 0,
   );
   const markedCycleDelta = _markCacheableSegments(cycleDeltaSections, {
-    stableNames: Array.from(PROMETHEUS_STATIC_SECTION_NAMES),
+    stableNames: Array.from(resolvedStaticSectionNames),
   });
   const filteredCycleDelta = markedCycleDelta.filter(s => String(s.content || "").trim().length > 0);
   const promptTelemetrySections = [...filteredStaticPromptSections, ...filteredCycleDelta];
-  const promptFamilyLabel = `prometheus-${planningMode || PROMETHEUS_PLANNING_MODE.MASTER_EVOLUTION}`;
+  const promptFamilyLabel = resolvePrometheusPromptFamilyLabel(config, options);
   let promptLineage = null;
   if (promptTelemetrySections.length > 0) {
     const cacheableSections = promptTelemetrySections.filter((section) => section.cacheable === true);
@@ -7558,8 +7744,9 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
   const compiledCycleDelta = _compilePrompt(filteredCycleDelta, { tokenBudget: 8000 });
 
   const promptLineageMarker = promptLineage ? `${buildPromptLineageMarker(promptLineage)}\n` : "";
+  const promptRepoPath = resolvePrometheusPromptRepoPath(config, repoRoot);
   const contextPrompt = `${promptLineageMarker}TARGET REPO: ${config.env?.targetRepo || "unknown"}
-REPO PATH: ${repoRoot}
+REPO PATH: ${promptRepoPath}
 STATE DIR: ${stateDir}
 
 ${compiledStaticPromptSections}
@@ -7567,15 +7754,7 @@ ${compiledStaticPromptSections}
 ## OPERATOR OBJECTIVE
 ${userPrompt}
 
-## YOUR WORKFLOW
-You have full read and write access to the repository and state directory.
-1. Read state/research_synthesis.json for the latest research intelligence (extracted content from internet sources).
-2. Read key state files to understand system health: ${PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES.join(", ")}
-   - state/worker_cycle_artifacts.json is the canonical cycle snapshot (schemaVersion=1, fields: latestCycleId, cycles{}, updatedAt). Check the updatedAt field for freshness — records older than 6 hours are historical context only, not live planning truth.
-   - Use diagnostics freshness metadata (freshness.staleAfterMs + timestamp fields) and do NOT treat stale diagnostics entries as live planning truth.
-3. Read source files you need to understand for planning — browse src/core/, src/workers/, src/types/ as needed.
-4. Produce your self-evolution master plan following your agent definition's output format.
-5. Your plan MUST end with a JSON companion block wrapped in ===DECISION=== / ===END=== markers containing a plans array.
+${buildPrometheusWorkflowPrompt(config, repoRoot)}
 
 The JSON plans array is MANDATORY in normal mode — the orchestrator reads it to dispatch workers.
 When bounded multi-candidate mode is enabled, candidateSets[*].plans is the primary dispatch payload and top-level plans may be omitted.

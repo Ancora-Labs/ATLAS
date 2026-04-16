@@ -259,6 +259,16 @@ describe("capability_pool", () => {
         assert.ok(stage.task);
       }
     });
+
+    it("uses the authoritative runtime contract for implementation output", () => {
+      const result = buildWorkerChain({ task: "Refactor auth" }, { complexity: "high" });
+      const implementationStage = result.chain.find((stage) => stage.stage === "implementation");
+      assert.ok(implementationStage);
+      assert.match(implementationStage.task, /authoritative runtime completion contract/i);
+      assert.match(implementationStage.task, /BOX_\* closure markers/i);
+      assert.match(implementationStage.task, /do not emit TOOL_INTENT or HOOK_DECISION/i);
+      assert.doesNotMatch(implementationStage.task, /Output BOX_STATUS and VERIFICATION_REPORT/i);
+    });
   });
 
   describe("detectLaneConflicts", () => {

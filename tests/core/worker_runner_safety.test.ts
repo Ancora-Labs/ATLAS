@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildWorkerRunContract, parseWorkerResponse, shouldEnableFullToolAccess } from "../../src/core/worker_runner.js";
+import { buildWorkerRunContract, parseWorkerResponse, shouldEnableFullToolAccess, shouldRecordHookCoverageAudit } from "../../src/core/worker_runner.js";
 import { checkPostMergeArtifact, ARTIFACT_GAP, POST_MERGE_PLACEHOLDER } from "../../src/core/verification_gate.js";
 
 describe("worker_runner safety seam", () => {
@@ -33,7 +33,7 @@ describe("worker_runner safety seam", () => {
     assert.equal(parsed.status, "blocked");
   });
 
-  it("forces blocked status when hook telemetry reports execute deny", () => {
+  it("treats explicit self-reported execute deny telemetry as blocked", () => {
     const output = [
       "BOX_STATUS=done",
       "[TOOL_INTENT] scope=src/core intent=patch-policy impact=high clearance=admin",
@@ -41,7 +41,8 @@ describe("worker_runner safety seam", () => {
     ].join("\n");
     const parsed = parseWorkerResponse(output, "");
     assert.equal(parsed.status, "blocked");
-    assert.ok(String(parsed.dispatchBlockReason || "").includes("tool_policy_denied"));
+    assert.equal(parsed.dispatchBlockReason, "tool_policy_denied:HOOK_DENY_SCHEMA_DROP");
+    assert.equal(parsed.toolExecutionTelemetry.deniedDecisions.length, 1);
   });
 
   it("keeps done status when hook telemetry reports execute allow", () => {
@@ -54,6 +55,17 @@ describe("worker_runner safety seam", () => {
     assert.equal(parsed.status, "done");
   });
 
+  it("does not surface unpaired pseudo-telemetry as a dispatch block reason", () => {
+    const output = [
+      "BOX_STATUS=done",
+      "[TOOL_INTENT] scope=tests/core intent=run-targeted-tests impact=low clearance=read",
+    ].join("\n");
+    const parsed = parseWorkerResponse(output, "");
+    assert.equal(parsed.status, "done");
+    assert.equal(parsed.dispatchBlockReason, null);
+    assert.ok(parsed.toolExecutionTelemetry.gaps.some((gap) => gap.includes("HOOK_TELEMETRY_UNPAIRED")));
+  });
+
   it("defaults sessionInputPolicy to auto for new worker dispatches", () => {
     const contract = buildWorkerRunContract({}, {});
     assert.equal(contract.sessionInputPolicy, "auto");
@@ -62,6 +74,34 @@ describe("worker_runner safety seam", () => {
   it("keeps planner sessions least-privilege through the agent profile", () => {
     const allowAll = shouldEnableFullToolAccess("prometheus", "analysis", "Read repository state and produce a plan");
     assert.equal(allowAll, false);
+  });
+
+  it("suppresses hook coverage audit residue when no hook evidence exists", () => {
+    const shouldRecord = shouldRecordHookCoverageAudit({
+      telemetry: {
+        envelopes: [],
+        hookDecisions: [],
+        gaps: [],
+        hasDeterministicCoverage: false,
+      },
+      runtimeDecisions: [],
+      runtimeAuditGaps: [],
+    });
+    assert.equal(shouldRecord, false);
+  });
+
+  it("retains hook coverage audit when hook evidence exists", () => {
+    const shouldRecord = shouldRecordHookCoverageAudit({
+      telemetry: {
+        envelopes: [{ scope: "src/core", intent: "patch", impact: "high", clearance: "admin" }],
+        hookDecisions: [],
+        gaps: [],
+        hasDeterministicCoverage: false,
+      },
+      runtimeDecisions: [],
+      runtimeAuditGaps: [],
+    });
+    assert.equal(shouldRecord, true);
   });
 });
 

@@ -960,6 +960,144 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
     assert.equal(readiness.planCount, 1);
     assert.equal(readiness.workerBatchCount, 1);
   });
+
+  it("rejects checkpoint snapshot auto-resume when the checkpoint belongs to a different target session", async () => {
+    config.platformModeState = { currentMode: "single_target_delivery" };
+    config.activeTargetSession = {
+      projectId: "portal",
+      sessionId: "sess_active",
+      currentStage: "active",
+      repo: { repoUrl: "https://github.com/acme/portal" },
+    };
+
+    const checkpoint = {
+      status: "dispatching",
+      createdAt: "2026-04-11T07:31:14.738Z",
+      updatedAt: "2026-04-11T07:58:39.727Z",
+      totalPlans: 1,
+      planCount: 1,
+      completedPlans: 0,
+      planSetSignature: "resume-readiness-foreign-session",
+      targetSession: {
+        projectId: "portal",
+        sessionId: "sess_old",
+        currentStage: "active",
+        repoUrl: "https://github.com/acme/portal",
+      },
+      dispatchPlanSnapshot: [
+        {
+          id: "T1",
+          task_id: "T1",
+          task: "task one",
+          role: "evolution-worker",
+          wave: 1,
+          targetFiles: ["src/core/orchestrator.ts"],
+          scope: "implementation",
+          verification_commands: ["npm test"],
+          acceptance_criteria: ["tests pass"],
+        },
+      ],
+      workerBatchesSnapshot: [
+        {
+          role: "evolution-worker",
+          wave: 1,
+          plans: [
+            {
+              id: "T1",
+              task_id: "T1",
+              task: "task one",
+              role: "evolution-worker",
+              wave: 1,
+              targetFiles: ["src/core/orchestrator.ts"],
+              scope: "implementation",
+              verification_commands: ["npm test"],
+              acceptance_criteria: ["tests pass"],
+            },
+          ],
+        },
+      ],
+    };
+
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify(checkpoint, null, 2),
+      "utf8",
+    );
+
+    const readiness = await evaluateDispatchResumeReadiness(config);
+    assert.equal(readiness.interrupted, false);
+    assert.equal(readiness.ready, false);
+    assert.equal(readiness.reason, "runtime_target_mismatch");
+    assert.equal(readiness.planSource, "none");
+  });
+
+  it("refuses force-resume when the approved live review belongs to a different target session", async () => {
+    config.platformModeState = { currentMode: "single_target_delivery" };
+    config.activeTargetSession = {
+      projectId: "portal",
+      sessionId: "sess_active",
+      currentStage: "active",
+      repo: { repoUrl: "https://github.com/acme/portal" },
+    };
+
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify({
+        status: "dispatching",
+        createdAt: "2026-04-11T07:31:14.738Z",
+        updatedAt: "2026-04-11T07:58:39.727Z",
+        totalPlans: 1,
+        planCount: 1,
+        completedPlans: 0,
+        planSetSignature: "resume-live-review-foreign-session",
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_active",
+          currentStage: "active",
+          repoUrl: "https://github.com/acme/portal",
+        },
+      }, null, 2),
+      "utf8",
+    );
+
+    await fs.writeFile(
+      path.join(tmpDir, "athena_plan_review.json"),
+      JSON.stringify({
+        approved: true,
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_old",
+          currentStage: "active",
+          repoUrl: "https://github.com/acme/portal",
+        },
+        patchedPlans: [
+          {
+            id: "T1",
+            task: "task one",
+            role: "evolution-worker",
+            dependsOn: [],
+            filesInScope: [],
+            targetFiles: ["src/core/orchestrator.ts"],
+            scope: "implementation",
+            acceptance_criteria: ["tests pass"],
+          },
+        ],
+      }, null, 2),
+      "utf8",
+    );
+
+    await assert.rejects(
+      () => runResumeDispatch(config),
+      /No resumable Step-4 checkpoint found/,
+      "runResumeDispatch must refuse cross-session approved reviews",
+    );
+
+    const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
+    assert.match(progressLog, /Athena plan review belongs to a different target session\/runtime/);
+
+    const workerSessionsExists = await fs.access(path.join(tmpDir, "worker_sessions.json")).then(() => true).catch(() => false);
+    assert.equal(workerSessionsExists, false, "worker sessions must not be created when resume is rejected for target-session mismatch");
+  });
 });
 
 // ── Task 2: Typed event emission ──────────────────────────────────────────────
@@ -3709,7 +3847,7 @@ describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
   it("returns eligible=false when no triage records exist (even if CI were green)", async () => {
     // No GitHub token → fetchMainBranchCiStatus returns green=false, and no records.
     const cfg = { paths: { stateDir: tmpDir }, env: {} };
-    const result = await runStaleArtifactClosureFastpath(cfg);
+    const result = await runStaleArtifactClosureFastpath(cfg, []);
     assert.equal(result.eligible, false);
     assert.equal(result.stalePrCount, 0);
     assert.equal(result.reason, "no_stale_pr_records");
@@ -3729,7 +3867,7 @@ describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
       env: {},
       runtime: { staleArtifactClosureRecencyMs: 60 * 60 * 1000 },
     };
-    const result = await runStaleArtifactClosureFastpath(cfg);
+    const result = await runStaleArtifactClosureFastpath(cfg, [{ task: "Close stale PR debt" }]);
     assert.equal(result.eligible, false);
     assert.equal(result.stalePrCount, 1);
     assert.equal(result.mainCiGreen, false);
@@ -3743,7 +3881,7 @@ describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
       "utf8",
     );
     const cfg = { paths: { stateDir: tmpDir }, env: {} };
-    const result = await runStaleArtifactClosureFastpath(cfg);
+    const result = await runStaleArtifactClosureFastpath(cfg, [{ task: "Close stale PR debt" }]);
     assert.equal(result.eligible, false);
     assert.equal(result.stalePrCount, 1);
     assert.equal(result.reason, "non_terminal_stale_pr_records");
@@ -3751,7 +3889,7 @@ describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
 
   it("result always includes stalePrCount and mainCiGreen fields", async () => {
     const cfg = { paths: { stateDir: tmpDir }, env: {} };
-    const result = await runStaleArtifactClosureFastpath(cfg);
+    const result = await runStaleArtifactClosureFastpath(cfg, []);
     assert.ok("stalePrCount" in result, "stalePrCount must be present");
     assert.ok("mainCiGreen" in result, "mainCiGreen must be present");
     assert.ok("eligible" in result, "eligible must be present");
@@ -3767,7 +3905,7 @@ describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
       );
     }
     const cfg = { paths: { stateDir: tmpDir }, env: {} };
-    const result = await runStaleArtifactClosureFastpath(cfg);
+    const result = await runStaleArtifactClosureFastpath(cfg, [{ task: "Close stale PR debt" }]);
     assert.equal(result.eligible, false);
     assert.equal(result.reason, "non_terminal_stale_pr_records");
   });
@@ -3792,7 +3930,7 @@ describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
       env: {},
       runtime: { staleArtifactClosureRecencyMs: 60 * 60 * 1000 },
     };
-    const result = await runStaleArtifactClosureFastpath(cfg);
+    const result = await runStaleArtifactClosureFastpath(cfg, [{ task: "Close stale PR debt" }]);
 
     assert.equal(result.eligible, false);
     assert.equal(result.stalePrCount, 2);
@@ -3818,12 +3956,34 @@ describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
       env: {},
       runtime: { staleArtifactClosureRecencyMs: 60 * 60 * 1000 },
     };
-    const result = await runStaleArtifactClosureFastpath(cfg);
+    const result = await runStaleArtifactClosureFastpath(cfg, [{ task: "Close stale PR debt" }]);
 
     assert.equal(result.eligible, false);
     assert.equal(result.stalePrCount, 2);
     assert.equal(result.mainCiGreen, false);
     assert.equal(result.reason, "main_ci_not_green");
+  });
+
+  it("returns eligible=false when current plans are unrelated fresh work", async () => {
+    const recentTimestamp = new Date(Date.now() - (5 * 60 * 1000)).toISOString();
+
+    await fs.writeFile(
+      path.join(tmpDir, "pr_triage_1.json"),
+      JSON.stringify({ applyState: "superseded", triageTimestamp: recentTimestamp }),
+      "utf8",
+    );
+
+    const result = await runStaleArtifactClosureFastpath(
+      {
+        paths: { stateDir: tmpDir },
+        env: {},
+        runtime: { staleArtifactClosureRecencyMs: 60 * 60 * 1000 },
+      },
+      [{ task: "Propagate lineage join keys through analytics and routing" }],
+    );
+
+    assert.equal(result.eligible, false);
+    assert.equal(result.reason, "current_plans_not_stale_artifact_closure");
   });
 
   it("persists a complete checkpoint for a skipped dispatch plan set", async () => {

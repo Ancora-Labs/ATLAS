@@ -754,6 +754,7 @@ function buildInstruction(task, athenaHints = null) {
     `OUTPUT PROTOCOL:`,
     `  - Output BOX_STATUS=done when all acceptance criteria are met`,
     `  - Output BOX_STATUS=partial if blocked on external dependency`,
+    `  - Output BOX_STATUS=skipped with BOX_SKIP_REASON=already-merged|already-done when the requested change is already landed safely`,
     `  - Output BOX_FILES_TOUCHED=<comma-separated list of changed files>`,
     `  - Output BOX_BRANCH=<branch-name> if you create/switch a branch`,
     `  - Include a canonical VERIFICATION_REPORT block with pass/fail/n/a values`,

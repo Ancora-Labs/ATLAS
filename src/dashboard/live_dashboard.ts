@@ -10,6 +10,8 @@ import { readPipelineProgress, SYSTEM_STATUS_REASON_CODE } from "../core/pipelin
 import { parseTypedEvent } from "../core/event_schema.js";
 import { readCycleAnalytics } from "../core/cycle_analytics.js";
 import { collectHypothesisScorecard } from "../core/hypothesis_scorecard.js";
+import { normalizePlatformModeState, PLATFORM_MODE } from "../core/mode_state.js";
+import { getTargetSessionProgressLogPath, normalizeActiveTargetSession } from "../core/target_session_state.js";
 
 dotenv.config();
 
@@ -1189,6 +1191,119 @@ function deriveProjectLabel(targetRepo: string, packageName: string | null): str
   return String(packageName || "unknown");
 }
 
+function normalizeStringList(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  return values.map((value) => String(value || "").trim()).filter(Boolean);
+}
+
+export function deriveTargetRuntimeView(input: {
+  platformModeState?: Record<string, any> | null;
+  activeTargetSession?: Record<string, any> | null;
+  targetRepo?: string | null;
+  rootDir?: string | null;
+}) {
+  const platformModeState = input?.platformModeState && typeof input.platformModeState === "object"
+    ? input.platformModeState
+    : {};
+  const activeTargetSession = input?.activeTargetSession && typeof input.activeTargetSession === "object"
+    ? input.activeTargetSession
+    : null;
+  const currentMode = String(platformModeState.currentMode || PLATFORM_MODE.SELF_DEV);
+  const targetRepo = String(activeTargetSession?.repo?.repoUrl || input?.targetRepo || "").trim();
+  const projectLabel = deriveProjectLabel(targetRepo, String(activeTargetSession?.repo?.name || "").trim() || null);
+  const stage = activeTargetSession ? String(activeTargetSession.currentStage || "unknown") : null;
+  const objectiveSummary = String(activeTargetSession?.objective?.summary || "").trim() || null;
+  const missing = normalizeStringList(activeTargetSession?.prerequisites?.missing);
+  const requiredNow = normalizeStringList(activeTargetSession?.prerequisites?.requiredNow);
+  const requiredHumanInputs = normalizeStringList(activeTargetSession?.handoff?.requiredHumanInputs);
+  const warnings = normalizeStringList(activeTargetSession?.warnings);
+  const repoState = String(activeTargetSession?.repoProfile?.repoState || "").trim() || null;
+  const repoStateReason = String(activeTargetSession?.repoProfile?.repoStateReason || "").trim() || null;
+  const selectedOnboardingAgent = String(activeTargetSession?.repoProfile?.selectedOnboardingAgent || "").trim() || null;
+  const clarificationStatus = String(activeTargetSession?.clarification?.status || "").trim() || null;
+  const clarificationMode = String(activeTargetSession?.clarification?.mode || "").trim() || null;
+  const clarificationAgent = String(activeTargetSession?.clarification?.selectedAgentSlug || "").trim() || null;
+  const clarificationPendingQuestions = normalizeStringList(activeTargetSession?.clarification?.pendingQuestions);
+  const clarificationPacketPath = String(activeTargetSession?.clarification?.packetPath || "").trim() || null;
+  const clarificationTranscriptPath = String(activeTargetSession?.clarification?.transcriptPath || "").trim() || null;
+  const intentContractPath = String(activeTargetSession?.clarification?.intentContractPath || "").trim() || null;
+  const blockers = [
+    String(activeTargetSession?.prerequisites?.blockedReason || "").trim(),
+    String(activeTargetSession?.gates?.quarantineReason || "").trim(),
+    ...missing,
+    ...requiredHumanInputs,
+    ...warnings,
+  ].filter(Boolean);
+
+  let waitingReason = "none";
+  if (currentMode === PLATFORM_MODE.SELF_DEV) {
+    waitingReason = "BOX is operating in self_dev mode.";
+  } else if (currentMode === PLATFORM_MODE.IDLE) {
+    waitingReason = "BOX is idle and waiting for the next target intake.";
+  } else if (!activeTargetSession) {
+    waitingReason = "single_target_delivery is active but no active target session is loaded.";
+  } else if (stage === "awaiting_credentials") {
+    waitingReason = blockers[0] || requiredNow[0] || "Waiting for credentials before planning or execution can continue.";
+  } else if (stage === "awaiting_manual_step") {
+    waitingReason = requiredHumanInputs[0] || blockers[0] || "Waiting for a required manual step before resuming the target session.";
+  } else if (stage === "awaiting_intent_clarification") {
+    waitingReason = requiredHumanInputs[0]
+      || String(activeTargetSession?.handoff?.nextAction || "").trim()
+      || "Waiting for the target onboarding clarification session to finish before planning can begin.";
+  } else if (stage === "quarantined") {
+    waitingReason = blockers[0] || "Target session is quarantined pending human review.";
+  } else if (stage === "onboarding") {
+    waitingReason = "Onboarding is evaluating readiness, prerequisites, and risk.";
+  } else if (stage === "shadow") {
+    waitingReason = String(activeTargetSession?.handoff?.nextAction || "Running shadow validation before active delivery opens.").trim();
+  } else if (stage === "active") {
+    waitingReason = String(activeTargetSession?.handoff?.nextAction || "Target delivery is active.").trim();
+  }
+
+  const targetWorkspacePath = String(activeTargetSession?.workspace?.path || "").trim() || null;
+  const boxWorkspacePath = String(input?.rootDir || ROOT).trim() || ROOT;
+  const executionWorkspacePath = currentMode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY && targetWorkspacePath
+    ? targetWorkspacePath
+    : boxWorkspacePath;
+  const bootstrap = activeTargetSession?.workspace?.bootstrap && typeof activeTargetSession.workspace.bootstrap === "object"
+    ? activeTargetSession.workspace.bootstrap
+    : {};
+
+  return {
+    currentMode,
+    fallbackModeAfterCompletion: String(platformModeState.fallbackModeAfterCompletion || PLATFORM_MODE.SELF_DEV),
+    projectLabel,
+    targetRepo,
+    activeProjectId: String(activeTargetSession?.projectId || "").trim() || null,
+    sessionId: String(activeTargetSession?.sessionId || "").trim() || null,
+    stage,
+    objectiveSummary,
+    readiness: String(activeTargetSession?.onboarding?.readiness || "").trim() || null,
+    readinessScore: Number(activeTargetSession?.onboarding?.readinessScore ?? 0),
+    blockers,
+    waitingReason,
+    requiredHumanInputs,
+    repoState,
+    repoStateReason,
+    selectedOnboardingAgent,
+    clarificationStatus,
+    clarificationMode,
+    clarificationAgent,
+    clarificationPendingQuestions,
+    clarificationPacketPath,
+    clarificationTranscriptPath,
+    intentContractPath,
+    boxWorkspacePath,
+    targetWorkspacePath,
+    executionWorkspacePath,
+    bootstrapStatus: String(bootstrap.status || "pending").trim() || null,
+    bootstrapStrategy: String(bootstrap.strategy || "pending").trim() || null,
+    bootstrapLastError: String(bootstrap.lastError || "").trim() || null,
+    hasActiveTargetSession: activeTargetSession != null,
+    canOpenNewSession: activeTargetSession == null,
+  };
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function deriveTasks(prometheusAnalysis: Record<string, any>, workerSessions: Record<string, any>): Record<string, any> {
   const allPlans = Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans : [];
@@ -1301,6 +1416,8 @@ async function collectDashboardData() {
     progressTail,
     oneTimeCost,
     copilotApiUsage,
+    rawPlatformModeState,
+    rawActiveTargetSession,
     workerSessions,
     athenaState,
     jesusDirective,
@@ -1315,6 +1432,8 @@ async function collectDashboardData() {
     readTailLines(path.join(STATE_DIR, "progress.txt"), 80),
     getHourlyClaudeCost(),
     getHourlyCopilotUsage(),
+    readJsonSafe(path.join(STATE_DIR, "platform", "mode_state.json"), null),
+    readJsonSafe(path.join(STATE_DIR, "active_target_session.json"), null),
     readJsonSafe(path.join(STATE_DIR, "worker_sessions.json"), {}),
     readJsonSafe(path.join(STATE_DIR, "athena_plan_review.json"), {}),
     readJsonSafe(path.join(STATE_DIR, "jesus_directive.json"), {}),
@@ -1347,6 +1466,30 @@ async function collectDashboardData() {
   ]);
 
   const [daemonStatus, prDeltaResult, gitActivity] = await Promise.all([getDaemonStatus(), getHourlyPrDeltaStats(), Promise.resolve(getGitActivity())]);
+  const normalizedConfig = {
+    ...boxConfig,
+    paths: {
+      ...(boxConfig?.paths && typeof boxConfig.paths === "object" ? boxConfig.paths : {}),
+      stateDir: STATE_DIR,
+      workspaceDir: String(boxConfig?.paths?.workspaceDir || path.join(ROOT, ".box-work")),
+    },
+    rootDir: ROOT,
+  };
+  const normalizedActiveTargetSessionResult = normalizeActiveTargetSession(rawActiveTargetSession, normalizedConfig);
+  const normalizedActiveTargetSession = normalizedActiveTargetSessionResult.session;
+  const normalizedPlatformModeState = normalizePlatformModeState(rawPlatformModeState, normalizedActiveTargetSession, normalizedConfig);
+  const targetRuntime = deriveTargetRuntimeView({
+    platformModeState: normalizedPlatformModeState,
+    activeTargetSession: normalizedActiveTargetSession,
+    targetRepo: TARGET_REPO,
+    rootDir: ROOT,
+  });
+  const targetSessionProgressPath = normalizedActiveTargetSession?.projectId && normalizedActiveTargetSession?.sessionId
+    ? getTargetSessionProgressLogPath(STATE_DIR, normalizedActiveTargetSession.projectId, normalizedActiveTargetSession.sessionId)
+    : null;
+  const targetSessionLogTail = targetSessionProgressPath
+    ? await readTailLines(targetSessionProgressPath, 80).catch(() => [])
+    : [];
 
   // Read last thinking snippet from each worker's debug file
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1417,10 +1560,16 @@ async function collectDashboardData() {
     generatedAt: new Date().toISOString(),
     monthKey: currentMonth,
     runtime: {
-      targetRepo: TARGET_REPO,
-      projectLabel: deriveProjectLabel(TARGET_REPO, ""),
+      targetRepo: targetRuntime.targetRepo || TARGET_REPO,
+      projectLabel: targetRuntime.projectLabel,
       systemStatus,
       systemStatusText,
+      currentMode: targetRuntime.currentMode,
+      fallbackModeAfterCompletion: targetRuntime.fallbackModeAfterCompletion,
+      activeTarget: {
+        ...targetRuntime,
+        sessionProgressLogPath: targetSessionProgressPath,
+      },
       /** Source freshness timestamp from the authoritative event-driven state file. */
       statusFreshnessAt: statusResult.statusFreshnessAt,
       /** "event-driven" when status came from pipeline_progress/orchestrator_health; "fallback-heuristic" otherwise. */
@@ -1558,6 +1707,7 @@ async function collectDashboardData() {
     },
     decisionQualityTrend,
     logs: progressTail,
+    targetSessionLogs: targetSessionLogTail,
     projectCompleted: completedEntry ? {
       repo: completedEntry.repo,
       completionTag: completedEntry.completionTag || null,
@@ -2375,6 +2525,8 @@ function renderHtml() {
 
     <section class="grid">
       <article class="card"><div class="k">Project</div><div class="v" id="m-project">-</div><div class="sub" id="m-role-head">CEO: - | Lead: -</div></article>
+      <article class="card"><div class="k">Mode / Stage</div><div class="v" id="m-mode">-</div><div class="sub" id="m-mode-sub">stage: -</div></article>
+      <article class="card"><div class="k">Active Target</div><div class="v" id="m-target">-</div><div class="sub" id="m-target-sub">waiting: -</div></article>
       <article class="card"><div class="k">Tasks Total</div><div class="v" id="m-tasks">0</div><div class="sub" id="m-tasks-sub">queued: 0 | running: 0</div></article>
       <article class="card"><div class="k">Workers Active</div><div class="v" id="m-qr">0 / 0</div><div class="sub" id="m-qr-sub">working / total</div></article>
       <article class="card"><div class="k">Passed / Failed</div><div class="v" id="m-pf">0 / 0</div></article>
@@ -2645,6 +2797,10 @@ function renderHtml() {
         <div class="panel" style="box-shadow:none">
           <h2>Live Runtime Log (state/progress.txt tail)</h2>
           <pre id="log-view">Waiting for log stream...</pre>
+        </div>
+        <div class="panel" style="box-shadow:none">
+          <h2>Active Target Session Log</h2>
+          <pre id="target-log-view">No active target session log.</pre>
         </div>
       </section>
     </details>
@@ -3919,10 +4075,42 @@ function renderHtml() {
         dStatusSpan.textContent = daemonRunning ? "PID " + data.runtime.daemonPid : "";
       }
 
-      document.getElementById("m-project").textContent = data.runtime.projectLabel || data.runtime.targetRepo || "unknown";
+      var activeTarget = (data.runtime && data.runtime.activeTarget) ? data.runtime.activeTarget : {};
+      var modeLabel = String((activeTarget.currentMode || data.runtime.currentMode || "self_dev") || "self_dev").replace(/_/g, ' ');
+      var stageLabel = String(activeTarget.stage || (modeLabel === 'self dev' ? 'self_dev_home' : 'none')).replace(/_/g, ' ');
+      var blockers = Array.isArray(activeTarget.blockers) ? activeTarget.blockers.filter(Boolean) : [];
+      var waitingReason = String(activeTarget.waitingReason || 'none');
+      var executionWorkspace = String(activeTarget.executionWorkspacePath || '').trim();
+      var repoState = String(activeTarget.repoState || '').trim();
+      var clarificationAgent = String(activeTarget.clarificationAgent || activeTarget.selectedOnboardingAgent || '').trim();
+      var clarificationStatus = String(activeTarget.clarificationStatus || '').trim();
+      var targetLabel = activeTarget.hasActiveTargetSession
+        ? (activeTarget.projectLabel || activeTarget.targetRepo || activeTarget.activeProjectId || 'active target')
+        : 'No active target';
+      var targetSub = '';
+      if (blockers.length > 0) {
+        targetSub = 'blocked: ' + String(blockers[0]).slice(0, 96);
+      } else if (clarificationAgent) {
+        targetSub = 'onboarding: ' + clarificationAgent
+          + (repoState ? (' | repo: ' + repoState) : '')
+          + (clarificationStatus ? (' | status: ' + clarificationStatus) : '');
+      } else if (repoState) {
+        targetSub = 'repo: ' + repoState
+          + (waitingReason && waitingReason !== 'none' ? (' | waiting: ' + waitingReason.slice(0, 48)) : '');
+      } else if (waitingReason && waitingReason !== 'none') {
+        targetSub = 'waiting: ' + waitingReason.slice(0, 96);
+      } else {
+        targetSub = 'workspace: ' + (executionWorkspace || 'n/a');
+      }
+
+      document.getElementById("m-project").textContent = activeTarget.projectLabel || data.runtime.projectLabel || data.runtime.targetRepo || "unknown";
       var roleRegistry = (data.runtime && data.runtime.roleRegistry) ? data.runtime.roleRegistry : {};
       var roleLayerMap = buildRoleLayerMap(roleRegistry);
       document.getElementById("m-role-head").textContent = 'CEO: ' + String(roleRegistry.ceo || '-') + ' | Lead: ' + String(roleRegistry.lead || '-');
+      document.getElementById("m-mode").textContent = modeLabel;
+      document.getElementById("m-mode-sub").textContent = 'stage: ' + stageLabel + ' | fallback: ' + String(activeTarget.fallbackModeAfterCompletion || 'self_dev').replace(/_/g, ' ') + (activeTarget.bootstrapStatus ? ' | bootstrap: ' + String(activeTarget.bootstrapStatus).replace(/_/g, ' ') : '');
+      document.getElementById("m-target").textContent = targetLabel;
+      document.getElementById("m-target-sub").textContent = targetSub;
       document.getElementById("m-tasks").textContent = String(data.tasks.total || 0);
       document.getElementById("m-tasks-sub").textContent = 'queued: ' + queued + ' | running: ' + running;
 
@@ -4132,6 +4320,15 @@ function renderHtml() {
           return '<span style="' + style + '">' + text + '</span>';
         }).join('\\n');
       })(data.logs || []);
+
+      document.getElementById("target-log-view").textContent = (function(lines, activeTarget) {
+        if (!Array.isArray(lines) || lines.length === 0) {
+          return activeTarget && activeTarget.hasActiveTargetSession
+            ? 'Active target session has no dedicated log lines yet.'
+            : 'No active target session log.';
+        }
+        return lines.join('\\n');
+      })(data.targetSessionLogs || [], activeTarget);
     }
 
     async function triggerForceRebase() {
@@ -4338,6 +4535,9 @@ async function serve(req: http.IncomingMessage, res: http.ServerResponse): Promi
       // Trim the largest arrays in-place and re-serialise.
       if (Array.isArray(data.logs)) {
         data.logs = data.logs.slice(-20);
+      }
+      if (Array.isArray(data.targetSessionLogs)) {
+        data.targetSessionLogs = data.targetSessionLogs.slice(-20);
       }
       if (data.premiumUsageByWorker?.byWorker) {
         for (const w of Object.keys(data.premiumUsageByWorker.byWorker)) {

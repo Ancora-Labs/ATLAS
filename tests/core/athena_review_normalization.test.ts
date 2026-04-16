@@ -21,6 +21,7 @@ import {
   buildPatchedPlanCorrectionTracking,
   PATCHED_PLAN_MUTATION_KIND,
   ATHENA_FAST_PATH_REASON,
+  isAthenaReviewAlignedToTargetSession,
   evaluateStaleArtifactClosureFastpath,
 } from "../../src/core/athena_reviewer.js";
 import { evaluatePreDispatchGovernanceGate, BLOCK_REASON } from "../../src/core/orchestrator.js";
@@ -243,6 +244,50 @@ describe("computeGateBlockRiskFromSignals", () => {
     assert.equal(result.gateBlockRisk, GATE_BLOCK_RISK.LOW);
     assert.equal(result.requiresCorrection, false);
     assert.equal(result.activeGateSignals.length, 0);
+  });
+});
+
+describe("athena_reviewer — single-target review alignment", () => {
+  const singleTargetConfig = {
+    platformModeState: { currentMode: "single_target_delivery" },
+    activeTargetSession: {
+      projectId: "portal",
+      sessionId: "sess_active",
+    },
+  };
+
+  it("accepts aligned review artifacts in single-target mode", () => {
+    assert.equal(
+      isAthenaReviewAlignedToTargetSession(singleTargetConfig, {
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_active",
+        },
+      }),
+      true,
+    );
+  });
+
+  it("rejects cached reviews from a different target session in single-target mode", () => {
+    assert.equal(
+      isAthenaReviewAlignedToTargetSession(singleTargetConfig, {
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_old",
+        },
+      }),
+      false,
+    );
+  });
+
+  it("accepts legacy reviews without targetSession outside single-target mode", () => {
+    assert.equal(
+      isAthenaReviewAlignedToTargetSession(
+        { platformModeState: { currentMode: "self_dev" }, activeTargetSession: null },
+        { approved: true },
+      ),
+      true,
+    );
   });
 });
 
@@ -1185,6 +1230,9 @@ describe("evaluateStaleArtifactClosureFastpath — eligibility contract", () => 
         { applyState: "applied", appliedAt: "2026-04-11T17:10:00.000Z" },
       ],
       mainCiGreen: true,
+      currentPlans: [
+        { task: "Close stale PR debt after automated triage settles" },
+      ],
       nowMs: Date.parse("2026-04-11T17:15:00.000Z"),
       recencyWindowMs: 60 * 60 * 1000,
     });
@@ -1206,6 +1254,22 @@ describe("evaluateStaleArtifactClosureFastpath — eligibility contract", () => 
     assert.equal(result.reason, "archival_terminal_stale_pr_records");
   });
 
+  it("returns eligible=false when current plans are unrelated fresh work", () => {
+    const result = evaluateStaleArtifactClosureFastpath({
+      staleTriageRecords: [
+        { applyState: "superseded", triageTimestamp: "2026-04-11T17:00:00.000Z" },
+      ],
+      mainCiGreen: true,
+      currentPlans: [
+        { task: "Propagate lineage join keys through analytics and routing" },
+      ],
+      nowMs: Date.parse("2026-04-11T17:15:00.000Z"),
+      recencyWindowMs: 60 * 60 * 1000,
+    });
+    assert.equal(result.eligible, false);
+    assert.equal(result.reason, "current_plans_not_stale_artifact_closure");
+  });
+
   it("returns eligible=false when there are no triage records", () => {
     const result = evaluateStaleArtifactClosureFastpath({
       staleTriageRecords: [],
@@ -1219,6 +1283,7 @@ describe("evaluateStaleArtifactClosureFastpath — eligibility contract", () => 
     const result = evaluateStaleArtifactClosureFastpath({
       staleTriageRecords: [{ applyState: "superseded", triageTimestamp: "2026-04-11T17:00:00.000Z" }],
       mainCiGreen: false,
+      currentPlans: [{ task: "Close stale PR debt" }],
       nowMs: Date.parse("2026-04-11T17:15:00.000Z"),
       recencyWindowMs: 60 * 60 * 1000,
     });
@@ -1259,6 +1324,7 @@ describe("evaluateStaleArtifactClosureFastpath — eligibility contract", () => 
     const result = evaluateStaleArtifactClosureFastpath({
       staleTriageRecords: [{ applyState: "superseded", triageTimestamp: "2026-04-11T17:00:00.000Z" }],
       mainCiGreen: true,
+      currentPlans: [{ title: "Archive superseded artifacts after stale PR closure" }],
       nowMs: Date.parse("2026-04-11T17:15:00.000Z"),
       recencyWindowMs: 60 * 60 * 1000,
     });
@@ -1273,6 +1339,10 @@ describe("evaluateStaleArtifactClosureFastpath — eligibility contract", () => 
         { applyState: "applied", appliedAt: "2026-04-11T17:03:00.000Z" },
       ],
       mainCiGreen: true,
+      currentPlans: [
+        { task: "Close stale PR debt" },
+        { title: "Archive superseded artifacts" },
+      ],
       nowMs: Date.parse("2026-04-11T17:15:00.000Z"),
       recencyWindowMs: 60 * 60 * 1000,
     });

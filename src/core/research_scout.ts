@@ -17,6 +17,7 @@ import { buildAgentArgs } from "./agent_loader.js";
 import { section, compilePrompt, estimateTokens } from "./prompt_compiler.js";
 import { appendAgentContextUsage, resolveMaxPromptBudget } from "./context_usage.js";
 import { appendAggregateLiveLogSync } from "./live_log.js";
+import { buildPromptAssemblySections, resolvePromptRuntimeContext } from "./prompt_overlay.js";
 
 const SCOUT_SEEN_URLS_FILE = "research_scout_seen_urls.json";
 const SCOUT_TOPIC_SITE_STATUS_FILE = "research_scout_topic_site_status.json";
@@ -244,6 +245,8 @@ async function buildScoutContext(config: any): Promise<string> {
   ]);
 
   const sections: Array<{ name: string; content: string }> = [];
+  const promptRuntime = resolvePromptRuntimeContext(config);
+  const activeTargetSession = promptRuntime.activeTargetSession;
 
   if (seenUrls.size > 0 || topicSiteState.entries.length > 0) {
     sections.push(section("blocked-sources", buildBlockedSourcesSection(seenUrls, topicSiteState)));
@@ -253,14 +256,34 @@ async function buildScoutContext(config: any): Promise<string> {
   }
 
   // System identity and purpose
-  sections.push(section("system-identity", `## SYSTEM CONTEXT
+  if (promptRuntime.mode.effectiveMode === "single_target_delivery" && activeTargetSession) {
+    sections.push(section("system-identity", `## SYSTEM CONTEXT
+You are searching for knowledge for the active target repo while BOX remains the control plane.
+BOX still runs the same loop: Jesus (strategy) → Prometheus (planning) → Athena (review) → Workers (execution) → postmortem → repeat.
+Your job is to find external knowledge that helps BOX deliver against the current target objective without rediscovering facts already held in session state.
+Do NOT spend tokens producing repository file inventories; focus on external research evidence for the target repo's stack, integrations, blockers, and objective.`));
+
+    sections.push(section("repo-goals-static", `## TARGET DELIVERY GOALS (CURRENT SESSION)
+Active target repo: ${promptRuntime.targetRepo}
+Objective: ${String(activeTargetSession.objective?.summary || "unknown")}
+Current stage: ${String(activeTargetSession.currentStage || "unknown")}
+Readiness: ${String(activeTargetSession.onboarding?.readiness || "pending")} (score=${String(activeTargetSession.onboarding?.readinessScore ?? 0)})
+Recommended next stage: ${String(activeTargetSession.onboarding?.recommendedNextStage || "unknown")}
+Required human inputs: ${(Array.isArray(activeTargetSession.handoff?.requiredHumanInputs) ? activeTargetSession.handoff.requiredHumanInputs : []).join(", ") || "none"}
+Carried context: ${String(activeTargetSession.handoff?.carriedContextSummary || "none")}
+Research should improve target delivery readiness and planning quality for this session, not BOX self-improvement in general.`));
+
+    sections.push(section("target-intent-contract", buildTargetIntentResearchSection(activeTargetSession)));
+    sections.push(section("target-research-mode", buildTargetResearchModeSection(activeTargetSession)));
+  } else {
+    sections.push(section("system-identity", `## SYSTEM CONTEXT
 You are searching for knowledge to improve BOX — an autonomous software delivery system.
 BOX runs a continuous loop: Jesus (strategy) → Prometheus (planning) → Athena (review) → Workers (execution) → postmortem → repeat.
 The system evolves itself: it reads its own code, plans improvements, executes them, and measures results.
 Your job is finding external knowledge that makes this system significantly better.
 Do NOT spend tokens producing repository file inventories; focus on external research evidence.`));
 
-  sections.push(section("repo-goals-static", `## REPOSITORY GOALS (STATIC)
+    sections.push(section("repo-goals-static", `## REPOSITORY GOALS (STATIC)
 This repository is the BOX orchestrator and worker runtime for autonomous software delivery.
 Primary goal: increase end-to-end autonomous delivery capacity with production-oriented, minimal, reversible changes.
 Key behavior targets for research relevance:
@@ -269,6 +292,9 @@ Key behavior targets for research relevance:
 - Better model utilization (quality-per-request, token efficiency, context strategy).
 - Better governance and deterministic control loops without slowing delivery.
 Treat these goals as fixed context. Do not generate file lists or repository inventories.`));
+  }
+
+  sections.push(...buildPromptAssemblySections({ agentName: "research-scout", config }));
 
   // Current system health and direction (lightweight — don't overload Scout)
   if (jesusDirective?.thinking) {
@@ -302,6 +328,79 @@ ${String(previousResearch.researchGaps).slice(0, 1000)}`));
   return compilePrompt(sections, {
     tokenBudget: promptTokenBudget > 0 ? promptTokenBudget : undefined,
   });
+}
+
+export function buildTargetResearchSessionStamp(activeTargetSession: any): Record<string, unknown> | null {
+  if (!activeTargetSession || typeof activeTargetSession !== "object") {
+    return null;
+  }
+
+  const repoState = String(activeTargetSession?.intent?.repoState || activeTargetSession?.repoProfile?.repoState || "unknown").trim() || "unknown";
+  const researchMode = repoState === "empty"
+    ? "empty_repo_discovery"
+    : repoState === "existing"
+      ? "existing_repo_support"
+      : "generic_target_research";
+
+  return {
+    projectId: activeTargetSession.projectId || null,
+    sessionId: activeTargetSession.sessionId || null,
+    currentStage: activeTargetSession.currentStage || null,
+    repoState,
+    intentStatus: activeTargetSession?.intent?.status || null,
+    planningMode: activeTargetSession?.intent?.planningMode || null,
+    researchMode,
+  };
+}
+
+function buildTargetResearchModeSection(activeTargetSession: any): string {
+  const stamp = buildTargetResearchSessionStamp(activeTargetSession);
+  const researchMode = String(stamp?.researchMode || "generic_target_research");
+  if (researchMode === "empty_repo_discovery") {
+    return `## TARGET RESEARCH MODE
+Mode: empty_repo_discovery
+The target repository is effectively empty. Do NOT waste effort inferring a current stack from the repo.
+Your job is to reduce build-direction uncertainty from the clarified product intent.
+Prioritize:
+- best-fit stack choices for this product type
+- initial architecture shape
+- hosting/deployment options appropriate for v1
+- common implementation patterns and integration choices
+- tradeoffs that keep MVP delivery fast without painting the system into a corner
+After research, BOX must move forward into planning in the same cycle. Do not behave as if research itself is the final stop.`;
+  }
+
+  if (researchMode === "existing_repo_support") {
+    return `## TARGET RESEARCH MODE
+Mode: existing_repo_support
+The target repository already contains product material.
+Prioritize:
+- current stack constraints
+- known integration behavior
+- safe change patterns
+- migration or extension risks
+- evidence that helps BOX modify the repo without breaking protected areas`;
+  }
+
+  return `## TARGET RESEARCH MODE
+Mode: generic_target_research
+Use the target intent contract as the boundary. Reduce planning uncertainty directly and avoid unrelated exploration.`;
+}
+
+export function buildTargetIntentResearchSection(activeTargetSession: any): string {
+  return `## TARGET INTENT CONTRACT
+Intent status: ${String(activeTargetSession?.intent?.status || "pending")}
+Intent summary: ${String(activeTargetSession?.intent?.summary || "none")}
+Planning mode: ${String(activeTargetSession?.intent?.planningMode || "none")}
+Product type: ${String(activeTargetSession?.intent?.productType || "none")}
+Target users: ${(Array.isArray(activeTargetSession?.intent?.targetUsers) ? activeTargetSession.intent.targetUsers : []).join(", ") || "none"}
+Must-have flows: ${(Array.isArray(activeTargetSession?.intent?.mustHaveFlows) ? activeTargetSession.intent.mustHaveFlows : []).join(", ") || "none"}
+Scope in: ${(Array.isArray(activeTargetSession?.intent?.scopeIn) ? activeTargetSession.intent.scopeIn : []).join(", ") || "none"}
+Scope out: ${(Array.isArray(activeTargetSession?.intent?.scopeOut) ? activeTargetSession.intent.scopeOut : []).join(", ") || "none"}
+Protected areas: ${(Array.isArray(activeTargetSession?.intent?.protectedAreas) ? activeTargetSession.intent.protectedAreas : []).join(", ") || "none"}
+Success criteria: ${(Array.isArray(activeTargetSession?.intent?.successCriteria) ? activeTargetSession.intent.successCriteria : []).join(", ") || "none"}
+Open questions: ${(Array.isArray(activeTargetSession?.intent?.openQuestions) ? activeTargetSession.intent.openQuestions : []).join(", ") || "none"}
+Research should directly reduce uncertainty around this contract. Do not broaden scope beyond the declared target intent.`;
 }
 
 /**
@@ -378,6 +477,7 @@ export interface ResearchScoutResult {
   rawText: string;
   scoutedAt: string;
   model: string;
+  targetSession?: Record<string, unknown> | null;
   error?: string;
 }
 
@@ -475,6 +575,7 @@ Follow the output format specified in your agent definition exactly.`;
       rawText: raw,
       scoutedAt: new Date().toISOString(),
       model,
+      targetSession: buildTargetResearchSessionStamp(config?.activeTargetSession),
       error,
     };
   }
@@ -559,6 +660,7 @@ Follow the output format specified in your agent definition exactly.`;
     rawText: raw,
     scoutedAt: new Date().toISOString(),
     model,
+    targetSession: buildTargetResearchSessionStamp(config?.activeTargetSession),
   };
 
   // Persist raw research package

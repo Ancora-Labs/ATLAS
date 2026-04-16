@@ -71,6 +71,7 @@ import {
   getUsableModelContextTokens as _getUsableModelContextTokens,
 } from "./worker_batch_planner.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
+import { buildPromptAssemblyPrompt, resolvePromptTargetRepo } from "./prompt_overlay.js";
 
 // ── Span contract emitter ─────────────────────────────────────────────────────
 
@@ -111,6 +112,46 @@ export const ATHENA_FAST_PATH_REASON = Object.freeze({
    */
   STALE_SUPERSEDED_CI_GREEN: "STALE_SUPERSEDED_CI_GREEN",
 } as const);
+
+function stampAthenaArtifactTargetSession(config: any, artifact: any): any {
+  if (!artifact || typeof artifact !== "object") return artifact;
+
+  if (
+    config?.platformModeState?.currentMode !== "single_target_delivery"
+    || !config?.activeTargetSession?.sessionId
+  ) {
+    if (artifact.targetSession) {
+      delete artifact.targetSession;
+    }
+    return artifact;
+  }
+
+  artifact.targetSession = {
+    projectId: config.activeTargetSession.projectId,
+    sessionId: config.activeTargetSession.sessionId,
+    currentStage: config.activeTargetSession.currentStage,
+    repoUrl: config.activeTargetSession.repo?.repoUrl || null,
+  };
+  return artifact;
+}
+
+export function isAthenaReviewAlignedToTargetSession(config: any, review: any): boolean {
+  const runtimeSingleTarget = config?.platformModeState?.currentMode === "single_target_delivery"
+    && Boolean(config?.activeTargetSession?.sessionId);
+  const reviewTargetSession = review?.targetSession && typeof review.targetSession === "object"
+    ? review.targetSession
+    : null;
+
+  if (!runtimeSingleTarget) {
+    return !reviewTargetSession;
+  }
+  if (!reviewTargetSession) {
+    return false;
+  }
+
+  return String(reviewTargetSession.projectId || "") === String(config?.activeTargetSession?.projectId || "")
+    && String(reviewTargetSession.sessionId || "") === String(config?.activeTargetSession?.sessionId || "");
+}
 
 // ── Deterministic plan-batch fingerprinting ───────────────────────────────────
 
@@ -2906,10 +2947,13 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
     const batchFingerprint = computePlanBatchFingerprint(plans);
     let cachedReviewExists = false;
     try {
-      const lastReview = await readJson(
+      const lastReviewRaw = await readJson(
         path.join(stateDir, "athena_plan_review.json"),
         null
       );
+      const lastReview = isAthenaReviewAlignedToTargetSession(config, lastReviewRaw)
+        ? lastReviewRaw
+        : null;
       if (lastReview !== null) {
         cachedReviewExists = true;
       }
@@ -3099,8 +3143,13 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
        verification="${truncatePromptText(p.verification || "NONE", 120)}"`;
   }).join("\n");
 
-  const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
+  const athenaLayerPrompt = buildPromptAssemblyPrompt({ agentName: "athena", config });
+  const effectivePromptTargetRepo = resolvePromptTargetRepo(config);
+
+  const contextPrompt = `TARGET REPO: ${effectivePromptTargetRepo}
 ${similarityWarning}
+${athenaLayerPrompt}
+
 ## YOUR MISSION — PLAN QUALITY REVIEW & IN-PLACE REPAIR
 
 You are Athena — BOX Quality Gate & Plan Editor.
@@ -3587,11 +3636,17 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
   }
 
   const enrichedResult = attachReviewArtifact(result, plans, gateRisk);
-  await writeJson(path.join(stateDir, "athena_plan_review.json"), {
+  const persistedReview = stampAthenaArtifactTargetSession(config, {
     ...enrichedResult,
     summary: sanitizeAthenaReviewFieldForPersistence(String(enrichedResult.summary || "")),
     planBatchFingerprint: computePlanBatchFingerprint(plans),
   });
+  await writeJson(path.join(stateDir, "athena_plan_review.json"), persistedReview);
+  if (persistedReview.targetSession) {
+    (enrichedResult as any).targetSession = persistedReview.targetSession;
+  } else if ((enrichedResult as any).targetSession) {
+    delete (enrichedResult as any).targetSession;
+  }
 
   if (enrichedResult.approved) {
     const fixCount = enrichedResult.appliedFixes.length;
@@ -4071,7 +4126,7 @@ export async function runAthenaPostmortem(
     return enrichedDupPm;
   }
 
-  const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
+  const contextPrompt = `TARGET REPO: ${resolvePromptTargetRepo(config)}
 
 ## YOUR MISSION — POSTMORTEM REVIEW
 
@@ -4825,14 +4880,51 @@ export function computeRecurrenceQualityScore(postmortems: unknown[]): {
 export function evaluateStaleArtifactClosureFastpath(opts: {
   staleTriageRecords: Array<Record<string, unknown>>;
   mainCiGreen: boolean;
+  currentPlans?: Array<Record<string, unknown>>;
   nowMs?: number;
   recencyWindowMs?: number;
 }): { eligible: boolean; reason: string } {
   const records = Array.isArray(opts.staleTriageRecords) ? opts.staleTriageRecords : [];
+  const currentPlans = Array.isArray(opts.currentPlans) ? opts.currentPlans : [];
   const nowMs = Number.isFinite(Number(opts.nowMs)) ? Number(opts.nowMs) : Date.now();
   const recencyWindowMs = Number.isFinite(Number(opts.recencyWindowMs))
     ? Math.max(0, Number(opts.recencyWindowMs))
     : 60 * 60 * 1000;
+
+  const normalizeFastpathText = (value: unknown): string => String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+  const planLooksLikeStaleArtifactClosure = (plan: Record<string, unknown>): boolean => {
+    const text = [
+      plan.task,
+      plan.title,
+      plan.scope,
+      plan.context,
+      plan.verification,
+      plan.capabilityTag,
+      plan.capability_tag,
+      plan.continuationFamilyKey,
+      ...(Array.isArray(plan.acceptance_criteria) ? plan.acceptance_criteria : []),
+      ...(Array.isArray(plan.acceptanceCriteria) ? plan.acceptanceCriteria : []),
+    ]
+      .map(normalizeFastpathText)
+      .filter(Boolean)
+      .join(" ");
+
+    return [
+      /stale pr/,
+      /stale artifact/,
+      /artifact closure/,
+      /automated pr debt/,
+      /superseded pr/,
+      /superseded artifact/,
+      /close stale/,
+      /archive superseded/,
+      /stale pr guard/,
+    ].some((pattern) => pattern.test(text));
+  };
 
   const extractRecordTimestampMs = (record: Record<string, unknown>): number | null => {
     const candidates = [
@@ -4870,6 +4962,12 @@ export function evaluateStaleArtifactClosureFastpath(opts: {
   });
   if (!hasRecentTerminalRecord) {
     return { eligible: false, reason: "archival_terminal_stale_pr_records" };
+  }
+
+  const plansAreStaleClosureWork = currentPlans.length > 0
+    && currentPlans.every((plan) => planLooksLikeStaleArtifactClosure(plan));
+  if (!plansAreStaleClosureWork) {
+    return { eligible: false, reason: "current_plans_not_stale_artifact_closure" };
   }
 
   // Main CI must be green.

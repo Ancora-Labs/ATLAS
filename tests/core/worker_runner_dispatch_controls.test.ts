@@ -327,6 +327,24 @@ describe("worker_runner dispatch controls — model routing", () => {
   });
 });
 
+describe("worker_runner dispatch controls — target worker agent fallback", () => {
+  it("detects missing custom-agent errors so target worker calls can retry without --agent", async () => {
+    const { isWorkerAgentResolutionFailure } = await import("../../src/core/worker_runner.js");
+
+    assert.equal(isWorkerAgentResolutionFailure("No such agent: evolution-worker, available:"), true);
+    assert.equal(isWorkerAgentResolutionFailure("Authorization error, you may need to run /login"), false);
+  });
+
+  it("embeds the worker persona into the fallback prompt when --agent cannot be resolved in the target cwd", async () => {
+    const { buildWorkerPersonaFallbackPrompt } = await import("../../src/core/worker_runner.js");
+
+    const prompt = buildWorkerPersonaFallbackPrompt("evolution-worker", "Implement the assigned packet.");
+
+    assert.match(prompt, /You are the Evolution Worker for BOX\./);
+    assert.match(prompt, /Implement the assigned packet\./);
+  });
+});
+
 
 // ── routeModelUnderQualityFloor — uncertainty-aware selection under quality-floor ──
 

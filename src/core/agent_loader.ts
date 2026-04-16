@@ -624,6 +624,21 @@ export function validateAllAgentContracts(): {
   return { allValid: violations.length === 0, results, violations };
 }
 
+export function validateRequiredAgentContracts(slugs: string[]): {
+  allValid: boolean;
+  results: AgentContractValidation[];
+  violations: AgentContractValidation[];
+} {
+  const normalizedSlugs = Array.from(new Set(
+    (Array.isArray(slugs) ? slugs : [])
+      .map((slug) => String(slug || "").trim())
+      .filter(Boolean),
+  ));
+  const results = normalizedSlugs.map(validateAgentContract);
+  const violations = results.filter((result) => !result.valid);
+  return { allValid: violations.length === 0, results, violations };
+}
+
 /**
  * Validate only the agents critical to the planning dispatch pipeline.
  * Prometheus and Athena are the minimum required; if either is invalid,
@@ -635,9 +650,7 @@ export function validateCriticalAgentContracts(): {
   violations: AgentContractValidation[];
 } {
   const criticalSlugs = ["prometheus", "athena"];
-  const results = criticalSlugs.map(validateAgentContract);
-  const violations = results.filter(r => !r.valid);
-  return { allValid: violations.length === 0, results, violations };
+  return validateRequiredAgentContracts(criticalSlugs);
 }
 
 // ─── Log agent thinking to a visible file ─────────────────────────────────────

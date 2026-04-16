@@ -7,6 +7,7 @@ import {
   ALERT_SEVERITY,
   appendAlert,
   appendProgress,
+  buildProgressLogPrefix,
   loadTestsState,
   updateTaskInTestsState,
   CACHE_COMPLETION_OUTCOME,
@@ -24,6 +25,7 @@ import {
   loadGovernanceBlockSummary,
   STATE_RETENTION_RULES,
 } from "../../src/core/state_tracker.js";
+import { getTargetSessionProgressLogPath } from "../../src/core/target_session_state.js";
 import {
   OPTIMIZER_LOG_JSONL_SCHEMA,
   OPTIMIZER_LOG_RECORD_TYPE,
@@ -63,6 +65,27 @@ describe("state_tracker", () => {
     const raw = await fs.readFile(config.paths.progressFile, "utf8");
     assert.ok(raw.includes("hello world"));
     assert.equal(ALERT_SEVERITY.CRITICAL, "critical");
+  });
+
+  it("fans out target-mode progress into a per-session summary log with mode context", async () => {
+    config.platformModeState = { currentMode: "single_target_delivery" };
+    config.activeTargetSession = {
+      projectId: "target_portal",
+      sessionId: "sess_123",
+    };
+
+    await appendProgress(config, "target lifecycle advanced");
+
+    const globalLog = await fs.readFile(config.paths.progressFile, "utf8");
+    const sessionLogPath = getTargetSessionProgressLogPath(stateDir, "target_portal", "sess_123");
+    const sessionLog = await fs.readFile(sessionLogPath, "utf8");
+
+    assert.ok(globalLog.includes("target lifecycle advanced"));
+    assert.ok(globalLog.includes(buildProgressLogPrefix(config)));
+    assert.match(globalLog, /target lifecycle advanced \[mode=single_target_delivery projectId=target_portal sessionId=sess_123\]/);
+    assert.ok(sessionLog.includes("target lifecycle advanced"));
+    assert.ok(sessionLog.includes("projectId=target_portal"));
+    assert.ok(sessionLog.includes("sessionId=sess_123"));
   });
 
   it("caps alerts history using the centralized retention rule", async () => {

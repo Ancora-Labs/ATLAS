@@ -24,6 +24,7 @@ import { buildAgentArgs } from "./agent_loader.js";
 import { section, compilePrompt } from "./prompt_compiler.js";
 import { appendAgentContextUsage, resolveMaxPromptBudget } from "./context_usage.js";
 import { appendAggregateLiveLogSync } from "./live_log.js";
+import { buildPromptAssemblySections } from "./prompt_overlay.js";
 
 function liveLogPath(stateDir: string): string {
   return path.join(stateDir, "live_worker_research-synthesizer.log");
@@ -705,6 +706,7 @@ export function sanitizeResearchSynthesisForPersistence(payload: {
   model: string;
   lastConsumedAt?: string;
   qualityGate?: SynthesisQualityGate;
+  targetSession?: Record<string, unknown> | null;
 }): Record<string, unknown> {
   const rawTopics = Array.isArray(payload.topics) ? payload.topics : [];
   const topics = rawTopics.slice(0, MAX_SYNTHESIS_TOPICS).map((topic) => {
@@ -793,6 +795,9 @@ export function sanitizeResearchSynthesisForPersistence(payload: {
     plannerSignals,
     ...(payload.qualityGate ? { qualityGate: payload.qualityGate } : {}),
     ...(payload.lastConsumedAt ? { lastConsumedAt: String(payload.lastConsumedAt) } : {}),
+    ...(payload.targetSession && typeof payload.targetSession === "object"
+      ? { targetSession: payload.targetSession }
+      : {}),
   };
 }
 
@@ -806,6 +811,7 @@ export interface ResearchSynthesisResult {
   synthesizedAt: string;
   scoutSourceCount: number;
   model: string;
+  targetSession?: Record<string, unknown> | null;
   error?: string;
   qualityGate?: SynthesisQualityGate;
 }
@@ -833,8 +839,13 @@ export async function runResearchSynthesizer(config: any, scoutOutput: any): Pro
   // Build prompt with the Scout's raw output as input
   const scoutRawText = String(scoutOutput?.rawText || "");
   const sourceCount = scoutOutput?.sourceCount || 0;
+  const synthesizerAssemblySections = buildPromptAssemblySections({
+    agentName: "research-synthesizer",
+    config,
+  });
 
   const compiledPrompt = compilePrompt([
+    ...synthesizerAssemblySections,
     section("task", `## YOUR TASK
 Below is the raw research output from the Research Scout.
 It contains ${sourceCount} source(s) with extracted findings.
@@ -934,6 +945,7 @@ ${scoutRawText}`),
 
     const deficientTopicNames = lowDensityTopics.map(d => `- ${d.topic}`).join("\n");
     const repairPrompt = compilePrompt([
+      ...synthesizerAssemblySections,
       section("task", `## REPAIR TASK
 The previous synthesis run produced topics with insufficient actionable content.
 Each topic MUST have at least one concrete finding, applicable idea, or prometheus-ready summary.
@@ -1046,6 +1058,9 @@ Follow your agent definition's output format exactly.`),
     synthesizedAt: new Date().toISOString(),
     scoutSourceCount: sourceCount,
     model,
+    targetSession: scoutOutput?.targetSession && typeof scoutOutput.targetSession === "object"
+      ? scoutOutput.targetSession
+      : null,
     qualityGate,
   };
 

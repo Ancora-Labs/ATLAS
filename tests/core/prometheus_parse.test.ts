@@ -94,8 +94,14 @@ import {
   MANDATORY_FINDINGS_PREFLIGHT_STATUS,
   PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES,
   applyPlanLifecycleAdmissionFilter,
+  TARGET_PROMETHEUS_STATIC_SECTIONS,
+  resolvePrometheusPromptFamilyLabel,
+  resolvePrometheusPromptRepoPath,
+  resolvePrometheusStaticSections,
+  buildPrometheusWorkflowPrompt,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments, CANDIDATE_GENERATION_SECTION, buildCandidateGenerationSection } from "../../src/core/prompt_compiler.js";
+import { PLATFORM_MODE } from "../../src/core/mode_state.js";
 import {
   scoreCandidateSet,
   selectBestCandidateSet,
@@ -1734,6 +1740,60 @@ describe("applyPlanLifecycleAdmissionFilter", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("suppresses duplicate plans when worker_cycle_artifacts records an already-completed skipped task", async () => {
+    const stateDir = await makeStateDir("lifecycle-filter-");
+
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "worker_cycle_artifacts.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          updatedAt: "2026-04-16T17:27:47.331Z",
+          latestCycleId: "cycle-1",
+          cycles: {
+            "cycle-1": {
+              cycleId: "cycle-1",
+              status: "dispatching",
+              updatedAt: "2026-04-16T17:27:47.331Z",
+              workerSessions: {},
+              workerActivity: {
+                "evolution-worker": [
+                  {
+                    at: "2026-04-16T17:27:47.331Z",
+                    status: "skipped",
+                    task: "If wave 1 passes, merge PR #2 to main and verify the target app still passes lint, build, and focused tests",
+                    taskIds: ["plan-1"],
+                    skipReason: "already-merged",
+                    dispatchBlockReason: "already_done:already-merged",
+                    wave: 1,
+                  },
+                ],
+              },
+              completedTaskIds: ["plan-1"],
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      const result = await applyPlanLifecycleAdmissionFilter(stateDir, [
+        {
+          task: "If wave 1 passes, merge PR #2 to main and verify the target app still passes lint, build, and focused tests",
+          scope: "target repo main",
+          target_files: ["src/app.tsx"],
+          implementationStatus: "not_implemented",
+          implementationEvidence: [],
+        },
+      ]);
+
+      assert.equal(result.actionablePlans.length, 0);
+      assert.equal(result.skippedPlans.length, 1);
+      assert.match(result.skippedPlans[0].reason, /already (closed|completed)/i);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
   it("handles empty pendingEntries gracefully", () => {
     const result = filterResolvedCarryForwardItems([], [{ id: "d1", lesson: "anything", closedAt: "2025-01-01", closureEvidence: "done" }], []);
@@ -1773,6 +1833,54 @@ describe("PROMETHEUS_STATIC_SECTIONS", () => {
     assert.ok(content.includes("===DECISION==="), "should contain JSON output markers");
     assert.ok(content.includes("\"projectHealth\": \"<good|healthy|needs-work|degraded|critical>\""));
     assert.ok(content.includes("\"estimatedPremiumRequestsTotal\": 6"));
+  });
+});
+
+describe("single-target prompt isolation helpers", () => {
+  const targetConfig = {
+    selfDev: {
+      futureModeFlags: {
+        singleTargetDelivery: true,
+      },
+    },
+    platformModeState: {
+      currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+    },
+    activeTargetSession: {
+      sessionId: "sess_target_1",
+      workspace: {
+        path: "C:\\isolated\\target-workspace",
+      },
+      repo: {
+        localPath: "C:\\isolated\\target-workspace",
+      },
+    },
+  };
+
+  it("selects target-only static sections for single-target planning", () => {
+    const sections = resolvePrometheusStaticSections(targetConfig);
+
+    assert.equal(sections, TARGET_PROMETHEUS_STATIC_SECTIONS);
+    const combined = Object.values(sections).map((entry: any) => String(entry.content || "")).join("\n");
+    assert.match(combined, /Do NOT propose work for BOX internals/i);
+    assert.doesNotMatch(combined, /META-IMPROVER/i);
+  });
+
+  it("uses a single-target prompt family label and workspace path in target mode", () => {
+    assert.equal(resolvePrometheusPromptFamilyLabel(targetConfig), "prometheus-single_target_delivery");
+    assert.equal(
+      resolvePrometheusPromptRepoPath(targetConfig, "C:\\Users\\caner\\Desktop\\Box"),
+      "C:\\isolated\\target-workspace",
+    );
+  });
+
+  it("builds a target-only workflow that avoids BOX src/core browsing", () => {
+    const workflow = buildPrometheusWorkflowPrompt(targetConfig, "C:\\Users\\caner\\Desktop\\Box");
+
+    assert.match(workflow, /isolated target workspace/i);
+    assert.match(workflow, /ACTIVE TARGET WORKSPACE: C:\\isolated\\target-workspace/);
+    assert.match(workflow, /Do NOT browse BOX src\/core/i);
+    assert.doesNotMatch(workflow, /browse src\/core\/, src\/workers\/, src\/types\//i);
   });
 });
 

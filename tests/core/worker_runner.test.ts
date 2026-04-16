@@ -1,11 +1,15 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import { execFile } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
+import { promisify } from "node:util";
 import {
+  buildLiveWorkerLogStamp,
   buildConversationContext,
   buildWorkerRuntimeLineage,
+  formatLiveWorkerLogChunk,
   parseWorkerResponse,
   extractStreamingWorkerResultMarker,
   shouldTreatAbortedWorkerRunAsTerminalResult,
@@ -19,6 +23,9 @@ import {
   injectCiFailureContextIfMissing,
   applyMemoryTrustFilter,
   computeMemoryHitRatio,
+  computePromptCacheRoutingSignal,
+  computeFailureFinishRoutingSignal,
+  deriveWorkerFinishCode,
   isTerminalWorkerStatus,
   resolveWorkerExecutionLineageId,
   shouldResolveRecoveredWorkerEscalations,
@@ -28,6 +35,11 @@ import { isProcessAlive } from "../../src/core/daemon_control.js";
 import { createVersionedCheckpointEnvelope } from "../../src/core/checkpoint_engine.js";
 import { buildWorkerExecutionReportArtifact } from "../../src/core/evidence_envelope.js";
 import { buildInterventionLineageTelemetry, buildRoutingROISummary } from "../../src/core/cycle_analytics.js";
+import { appendPromptCacheTelemetry, appendFailureClassification } from "../../src/core/state_tracker.js";
+import { PLATFORM_MODE } from "../../src/core/mode_state.js";
+import { TARGET_SESSION_STAGE } from "../../src/core/target_session_state.js";
+
+const execFileAsync = promisify(execFile);
 
 // ── parseWorkerResponse ──────────────────────────────────────────────────────
 
@@ -50,6 +62,60 @@ describe("parseWorkerResponse", () => {
   it("parses partial status", () => {
     const result = parseWorkerResponse("BOX_STATUS=partial", "");
     assert.equal(result.status, "partial");
+  });
+
+  it("promotes inspection-only partial output to done when all checks passed", () => {
+    const stdout = [
+      "The existing shadow artifact passes inspection as a simple static todo-list MVP.",
+      "index.html — PASS",
+      "style.css — PASS",
+      "app.js — PASS",
+      "README.md — PASS",
+      "Because the only ordered work item was an inspection pass, I did not create a no-op PR.",
+      "BOX_STATUS=partial",
+      "BOX_ACCESS=repo:ok;files:ok;tools:ok;api:ok",
+      "BOX_EXPECTED_OUTCOME=Inspect the artifact and emit PASS/FAIL checks.",
+      "BOX_ACTUAL_OUTCOME=Completed an evidence-backed inspection with all checks passing.",
+      "BOX_DEVIATION=minor",
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=pass",
+      "EDGE_CASES=pass",
+      "===END_VERIFICATION===",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "done");
+  });
+
+  it("keeps partial when inspection output contains an actual fail", () => {
+    const stdout = [
+      "The artifact failed inspection.",
+      "index.html — PASS",
+      "app.js — FAIL",
+      "Because the only ordered work item was an inspection pass, I did not create a no-op PR.",
+      "BOX_STATUS=partial",
+      "BOX_EXPECTED_OUTCOME=Inspect the artifact and emit PASS/FAIL checks.",
+      "BOX_ACTUAL_OUTCOME=Inspection found a failing app.js check.",
+      "BOX_DEVIATION=major",
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=pass",
+      "EDGE_CASES=pass",
+      "===END_VERIFICATION===",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "partial");
+  });
+
+  it("normalizes already-completed partial output to skipped", () => {
+    const stdout = [
+      "BOX_STATUS=partial",
+      "BOX_SKIP_REASON=already-merged",
+      "BOX_BLOCKER=Task was already completed in a prior wave via merged PR #2",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "skipped");
+    assert.equal(result.skipReason, "already-merged");
   });
 
   it("parses error status", () => {
@@ -195,6 +261,30 @@ describe("parseWorkerResponse", () => {
     const raw = "BOX_STATUS=done\nSome text";
     const result = parseWorkerResponse(raw, "");
     assert.equal(result.fullOutput, raw);
+  });
+});
+
+describe("target-aware worker live log formatting", () => {
+  it("stamps worker live log lines with mode, role, projectId, and sessionId in target mode", () => {
+    const config = {
+      platformModeState: {
+        currentMode: "single_target_delivery",
+      },
+      activeTargetSession: {
+        projectId: "target_portal",
+        sessionId: "sess_123",
+      },
+    };
+
+    const stamp = buildLiveWorkerLogStamp(config, "integration-worker");
+    const formatted = formatLiveWorkerLogChunk(config, "integration-worker", "line one\nline two\n");
+
+    assert.ok(stamp.includes("mode=single_target_delivery"));
+    assert.ok(stamp.includes("projectId=target_portal"));
+    assert.ok(stamp.includes("sessionId=sess_123"));
+    assert.ok(formatted.includes("role=integration-worker"));
+    assert.ok(formatted.includes("line one"));
+    assert.ok(formatted.includes("line two"));
   });
 });
 
@@ -756,6 +846,63 @@ describe("attemptBranchCleanlinessRecovery", () => {
     assert.equal(result.attemptsMade, 2);
     assert.equal(result.recovered, false);
   });
+
+  it("uses the isolated target workspace cwd in single-target mode", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-worker-recovery-"));
+    const boxRoot = path.join(tempRoot, "box-root");
+    const targetWorkspace = path.join(tempRoot, "target-workspace");
+    const previousCwd = process.cwd();
+
+    try {
+      await fs.mkdir(boxRoot, { recursive: true });
+      await fs.mkdir(targetWorkspace, { recursive: true });
+      process.chdir(boxRoot);
+
+      await execFileAsync("git", ["init"], { cwd: targetWorkspace });
+      await execFileAsync("git", ["config", "user.email", "box@example.com"], { cwd: targetWorkspace });
+      await execFileAsync("git", ["config", "user.name", "BOX Test"], { cwd: targetWorkspace });
+
+      const trackedFile = path.join(targetWorkspace, "tracked.txt");
+      await fs.writeFile(trackedFile, "original\n", "utf8");
+      await execFileAsync("git", ["add", "tracked.txt"], { cwd: targetWorkspace });
+      await execFileAsync("git", ["commit", "-m", "init"], { cwd: targetWorkspace });
+
+      await fs.writeFile(trackedFile, "modified\n", "utf8");
+
+      const config = {
+        rootDir: boxRoot,
+        selfDev: {
+          futureModeFlags: {
+            singleTargetDelivery: true,
+            targetSessionState: true,
+            targetWorkspaceLifecycle: true,
+          },
+        },
+        platformModeState: {
+          currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+        },
+        activeTargetSession: {
+          currentStage: TARGET_SESSION_STAGE.SHADOW,
+          workspace: {
+            path: targetWorkspace,
+          },
+          gates: {
+            allowShadowExecution: true,
+            allowActiveExecution: false,
+          },
+        },
+      };
+
+      const result = await attemptBranchCleanlinessRecovery(config, ["tracked.txt"], 1);
+      const recoveredContent = await fs.readFile(trackedFile, "utf8");
+
+      assert.equal(result.recovered, true);
+      assert.equal(recoveredContent.replace(/\r\n/g, "\n"), "original\n");
+    } finally {
+      process.chdir(previousCwd);
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── daemon-control: isProcessAlive ──────────────────────────────────────────
@@ -979,6 +1126,104 @@ describe("computeMemoryHitRatio", () => {
     const config = { paths: { stateDir: tmpDir } };
     const ratio = await computeMemoryHitRatio(config);
     assert.equal(ratio, 0, "corrupt log must yield ratio=0 without throwing");
+  });
+});
+
+describe("lineage-scoped routing signals", () => {
+  let stateDir: string;
+
+  beforeEach(async () => {
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-worker-routing-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("prefers lineage-joined prompt cache telemetry over broader task-kind history", async () => {
+    const config = { paths: { stateDir } };
+    await appendPromptCacheTelemetry(config, {
+      promptFamilyKey: "family-a",
+      agent: "integration-worker",
+      taskKind: "implementation",
+      totalSegments: 10,
+      cacheableSegments: 2,
+      estimatedSavedTokens: 40,
+      lineageJoinKey: "lineage:other",
+      lineageId: "other",
+    });
+    await appendPromptCacheTelemetry(config, {
+      promptFamilyKey: "family-b",
+      agent: "integration-worker",
+      taskKind: "implementation",
+      totalSegments: 10,
+      cacheableSegments: 8,
+      estimatedSavedTokens: 220,
+      lineageJoinKey: "lineage:match",
+      lineageId: "match",
+    });
+
+    const signal = await computePromptCacheRoutingSignal(
+      config,
+      "implementation",
+      "integration-worker",
+      { lineageJoinKey: "lineage:match", lineageId: "match" },
+    );
+    assert.equal(signal.matchMode, "lineageJoinKey");
+    assert.equal(signal.sampleCount, 1);
+    assert.equal(signal.hitRate, 0.8);
+    assert.equal(signal.avgSavedTokens, 220);
+  });
+
+  it("summarizes low-roi failure evidence for the active lineage", async () => {
+    const config = { paths: { stateDir } };
+    await appendFailureClassification(config, {
+      primaryClass: "verification",
+      taskKind: "implementation",
+      roleName: "integration-worker",
+      lineageJoinKey: "lineage:match",
+      lineageId: "match",
+      finishStatus: "partial",
+      finishCode: "verification_report_fail:tests",
+      retryRoiExpectedGain: 0.05,
+      retryRoiThreshold: 0.18,
+      retryRoiAllowed: false,
+    });
+    await appendFailureClassification(config, {
+      primaryClass: "policy",
+      taskKind: "implementation",
+      roleName: "integration-worker",
+      lineageJoinKey: "lineage:other",
+      lineageId: "other",
+      finishStatus: "blocked",
+      finishCode: "self_dev_guard_breach:planned_scope",
+      retryRoiExpectedGain: 0.25,
+      retryRoiThreshold: 0.18,
+      retryRoiAllowed: true,
+    });
+
+    const signal = await computeFailureFinishRoutingSignal(
+      config,
+      "implementation",
+      "integration-worker",
+      { lineageJoinKey: "lineage:match", lineageId: "match" },
+    );
+    assert.equal(signal.matchMode, "lineageJoinKey");
+    assert.equal(signal.lowRoiSignalCount, 1);
+    assert.equal(signal.latestFailureClass, "verification");
+    assert.equal(signal.latestFinishCode, "verification_report_fail:tests");
+    assert.equal(signal.verificationFailureCount, 1);
+  });
+
+  it("derives finish codes from verification evidence when no dispatch block exists", () => {
+    const finishCode = deriveWorkerFinishCode({
+      status: "partial",
+      verificationReport: {
+        build: "pass",
+        tests: "fail",
+      },
+    });
+    assert.equal(finishCode, "verification_report_fail:tests");
   });
 });
 

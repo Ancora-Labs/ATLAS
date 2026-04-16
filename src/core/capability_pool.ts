@@ -716,7 +716,7 @@ export function buildWorkerChain(plan, hints: any = {}) {
       {
         stage: "implementation",
         lane: "implementation",
-        task: `[IMPLEMENT] Execute the architect's plan for: ${task}. Follow the decomposed steps exactly. Output BOX_STATUS and VERIFICATION_REPORT.`,
+        task: `[IMPLEMENT] Execute the architect's plan for: ${task}. Follow the decomposed steps exactly. Follow the authoritative runtime completion contract, include the required BOX_* closure markers and verification evidence, and do not emit TOOL_INTENT or HOOK_DECISION pseudo-telemetry lines.`,
       },
       {
         stage: "verification",

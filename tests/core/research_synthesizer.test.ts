@@ -205,6 +205,32 @@ describe("computeSynthesisActionableDensity", () => {
     });
     assert.equal((output as any).qualityGate, undefined);
   });
+
+  it("sanitizeResearchSynthesisForPersistence preserves target-session metadata", () => {
+    const output = sanitizeResearchSynthesisForPersistence({
+      success: true,
+      topicCount: 1,
+      topics: [{ topic: "T", netFindings: ["f1"], sources: [] }] as any,
+      crossTopicConnections: [],
+      researchGaps: "",
+      synthesizedAt: "2026-01-01T00:00:00.000Z",
+      scoutSourceCount: 0,
+      model: "gpt-5.3-codex",
+      targetSession: {
+        projectId: "target_restaurant",
+        sessionId: "sess_123",
+        repoState: "empty",
+        researchMode: "empty_repo_discovery",
+      },
+    });
+
+    assert.deepEqual((output as any).targetSession, {
+      projectId: "target_restaurant",
+      sessionId: "sess_123",
+      repoState: "empty",
+      researchMode: "empty_repo_discovery",
+    });
+  });
 });
 
 // ── quarantineLowDensityTopics ─────────────────────────────────────────────────

@@ -15,9 +15,17 @@ state/*.txt
 state/*.jsonl
 state/*.pid
 state/*.md
+state/archive/
+state/platform/
+state/projects/
 state/synth_clean/
 state/synth_fetch/
+state/synth_fetch2/
+state/synth_fetch3/
+state/synth_fetch4/
 tmp_research/
+.box-evolution-prompt-cache-lineage/
+tmp_evolution_worktree/
 # Schema and reference documents in state/ are committed (not runtime state)
 # Logs
 *.log

@@ -102,4 +102,22 @@ describe("agent execution profiles", () => {
     assert.equal(profile.hookCoverage, "not_required");
     assert.equal(profile.allowsExecute, false);
   });
+
+  it("resolves an execute-enabled onboarding profile with required hook coverage", () => {
+    const profile = resolveAgentExecutionProfile("onboarding");
+    assert.equal(profile.valid, true, `onboarding violations: ${profile.violations.join(", ")}`);
+    assert.equal(profile.sessionInputPolicy, "auto");
+    assert.equal(profile.hookCoverage, "required");
+    assert.equal(profile.allowsExecute, true);
+  });
+
+  it("resolves execute-enabled clarification onboarding profiles for empty and existing repos", () => {
+    for (const slug of ["onboarding-empty-repo", "onboarding-existing-repo"]) {
+      const profile = resolveAgentExecutionProfile(slug);
+      assert.equal(profile.valid, true, `${slug} violations: ${profile.violations.join(", ")}`);
+      assert.equal(profile.sessionInputPolicy, "auto");
+      assert.equal(profile.hookCoverage, "required");
+      assert.equal(profile.allowsExecute, true);
+    }
+  });
 });

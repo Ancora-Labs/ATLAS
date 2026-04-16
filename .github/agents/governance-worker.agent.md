@@ -1,6 +1,7 @@
 ---
 name: governance-worker
 description: BOX Governance Lane Worker. Handles policy engine changes, governance freeze logic, canary rules, state contract validation, and security-sensitive changes from the orchestrator's capability-based routing.
+model: gpt-5.4
 tools: [read, edit, execute, search, fetch]
 user-invocable: false
 ---
@@ -46,46 +47,10 @@ When batched, execute tasks in order and respect dependency/wave boundaries.
 - Keep changes scoped to the task — do not fix unrelated things
 - Run `npm test` after every non-trivial change
 
-## Reporting
+## Runtime Contract
 
-Always end your response with:
+The authoritative completion, verification, and tool-governance contract is injected by the worker runtime at session start.
 
-```
-BOX_STATUS=done | partial | blocked
-BOX_PR_URL=<url>   (if PR was created)
-BOX_BRANCH=<branch>
-BOX_FILES_TOUCHED=src/file1.js,src/file2.js
-
-===VERIFICATION_REPORT===
-acceptance criterion 1: PASS/FAIL — evidence
-acceptance criterion 2: PASS/FAIL — evidence
-...
-===END_VERIFICATION===
-
-Summary: what changed, why, what criteria were met.
-```
-
-## Hook-driven tool policy wiring (additive)
-
-Apply the following deterministic `preToolUse` policy before every `execute` tool call:
-
-```yaml
-preToolUse:
-  - id: deny-force-push
-    match: '(?i)\bgit\s+push\b.*\s(--force|--force-with-lease)\b'
-    decision: deny
-    reason_code: HOOK_DENY_FORCE_PUSH
-  - id: deny-secret-write
-    match: '(?i)\b(echo|printf|cat)\b.*(ghp_|github_pat_|AKIA[0-9A-Z]{16}|-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----)'
-    decision: deny
-    reason_code: HOOK_DENY_SECRET_WRITE
-  - id: deny-schema-drop
-    match: '(?i)\b(drop\s+table|drop\s+database|truncate\s+table)\b'
-    decision: deny
-    reason_code: HOOK_DENY_SCHEMA_DROP
-```
-
-Telemetry contract for every tool-executing session:
-- Emit one machine-readable line before each `execute` call:
-  `[HOOK_DECISION] tool=execute decision=<allow|deny> reason_code=<code> rule_id=<id|none>`
-- If decision is `deny`, do not issue the tool call.
+- Follow the runtime contract exactly, including all required `BOX_*` markers, verification evidence, and closure reporting.
+- Treat runtime-enforced hook policy as authoritative, and do not emit self-reported `TOOL_INTENT` or `HOOK_DECISION` pseudo-telemetry lines.
+- If this profile and the runtime contract ever differ, the runtime contract wins.

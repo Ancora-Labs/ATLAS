@@ -346,9 +346,43 @@ export async function loadConfig(): Promise<Config> {
     recoveryTag: String(fileConfig?.selfDev?.recoveryTag || "box/recovery-v0.1.0-pre-selfdev"),
     maxFilesPerPr: Number(fileConfig?.selfDev?.maxFilesPerPr || 8),
     mandatoryGates: Array.isArray(fileConfig?.selfDev?.mandatoryGates)
-      ? fileConfig.selfDev.mandatoryGates
+      ? fileConfig.selfDev.mandatoryGates.map((item) => String(item)).filter(Boolean)
       : ["lint", "test"],
+    forbiddenBranchTargets: Array.isArray(fileConfig?.selfDev?.forbiddenBranchTargets)
+      ? fileConfig.selfDev.forbiddenBranchTargets.map((item) => String(item)).filter(Boolean)
+      : ["main", "master"],
     branchPrefix: String(fileConfig?.selfDev?.branchPrefix || "box/selfdev-"),
+    criticalFiles: Array.isArray(fileConfig?.selfDev?.criticalFiles)
+      ? fileConfig.selfDev.criticalFiles.map((item) => String(item)).filter(Boolean)
+      : [
+          "src/core/orchestrator.ts",
+          "src/core/self_dev_guard.ts",
+          "src/core/daemon_control.ts",
+          "src/core/policy_engine.ts",
+          "src/cli.ts",
+          ".env",
+          ".env.sandbox",
+          "policy.json"
+        ],
+    cautionFiles: Array.isArray(fileConfig?.selfDev?.cautionFiles)
+      ? fileConfig.selfDev.cautionFiles.map((item) => String(item)).filter(Boolean)
+      : [
+          "src/core/self_improvement.ts",
+          "src/core/athena_reviewer.ts",
+          "src/core/jesus_supervisor.ts",
+          "src/core/prometheus.ts",
+          "box.config.json",
+          "package.json"
+        ],
+    protectedPrefixes: Array.isArray(fileConfig?.selfDev?.protectedPrefixes)
+      ? fileConfig.selfDev.protectedPrefixes.map((item) => String(item)).filter(Boolean)
+      : ["state/", ".git/", "node_modules/", ".next/"],
+    futureModeFlags: {
+      singleTargetDelivery: Boolean(fileConfig?.selfDev?.futureModeFlags?.singleTargetDelivery ?? false),
+      targetSessionState: Boolean(fileConfig?.selfDev?.futureModeFlags?.targetSessionState ?? false),
+      targetPromptOverlay: Boolean(fileConfig?.selfDev?.futureModeFlags?.targetPromptOverlay ?? false),
+      targetWorkspaceLifecycle: Boolean(fileConfig?.selfDev?.futureModeFlags?.targetWorkspaceLifecycle ?? false),
+    },
   };
 
   const systemGuardian = {

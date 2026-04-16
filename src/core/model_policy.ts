@@ -14,6 +14,7 @@
 
 import path from "node:path";
 import { readJson, writeJson } from "./fs_utils.js";
+import { FAILURE_CLASS } from "./failure_classifier.js";
 import { scheduleBoundedHypothesisCandidates, type ScheduledHypothesisCandidate } from "./hypothesis_scheduler.js";
 import {
   resolveStableInterventionLineage,
@@ -143,6 +144,15 @@ export interface DeliberationPolicy {
   candidateFirstMoves: ScheduledHypothesisCandidate[];
   recommendedFirstMove: ScheduledHypothesisCandidate | null;
   reason: string;
+}
+
+export interface LineageRoutingSignals {
+  lowRoiSignalCount?: number;
+  promptCacheHitRate?: number;
+  promptCacheSavedTokens?: number;
+  latestFailureClass?: string | null;
+  latestFinishCode?: string | null;
+  latestFinishStatus?: string | null;
 }
 
 interface HardTaskUncertaintyFlags {
@@ -1101,6 +1111,7 @@ export async function routeModelWithRealizedROI(
     explorationBound?: number;
     promptCacheHitRate?: number;
     promptCacheSavedTokens?: number;
+    lineageSignals?: LineageRoutingSignals;
   } = {},
 ): Promise<{
   model: string;
@@ -1111,6 +1122,7 @@ export async function routeModelWithRealizedROI(
   meetsQualityFloor: boolean;
   explorationLimited: boolean;
   promptCacheAdjustment: string;
+  selectionPattern: string;
 }> {
   const qualityFloor    = opts.qualityFloor    ?? 0.7;
   const explorationBound = opts.explorationBound ?? EXPLORATION_LIMIT_THRESHOLD;
@@ -1120,6 +1132,26 @@ export async function routeModelWithRealizedROI(
   const promptCacheSavedTokens = Number.isFinite(Number(opts.promptCacheSavedTokens))
     ? Math.max(0, Math.round(Number(opts.promptCacheSavedTokens)))
     : 0;
+  const lineageSignals = opts.lineageSignals || {};
+  const lowRoiSignalCount = Math.max(0, Math.floor(Number(lineageSignals.lowRoiSignalCount || 0)));
+  const latestFailureClass = String(lineageSignals.latestFailureClass || "").trim().toLowerCase();
+  const latestFinishCode = String(lineageSignals.latestFinishCode || "").trim().toLowerCase();
+  const promptCacheCheap = (
+    promptCacheHitRate >= PROMPT_CACHE_HIT_RATE_RELAX_THRESHOLD
+    || promptCacheSavedTokens >= PROMPT_CACHE_SAVED_TOKENS_RELAX_THRESHOLD
+  );
+  const selectionPattern =
+    latestFailureClass === FAILURE_CLASS.LOGIC_DEFECT
+      ? "reasoning-recovery"
+      : latestFailureClass === FAILURE_CLASS.POLICY
+        || latestFailureClass === FAILURE_CLASS.VERIFICATION
+        || /policy|guard|capability_check|verification/.test(latestFinishCode)
+        ? "constraint-first"
+        : latestFailureClass === FAILURE_CLASS.MODEL
+          || latestFailureClass === FAILURE_CLASS.EXTERNAL_API
+          || /rate|quota|429|503|timeout|provider/.test(latestFinishCode)
+          ? "cooldown-stability"
+          : "balanced";
 
   const { tier } = classifyComplexityTier(taskHints);
 
@@ -1147,8 +1179,37 @@ export async function routeModelWithRealizedROI(
     effectiveFloor = Math.max(MIN_QUALITY_FLOOR, effectiveFloor - PROMPT_CACHE_FLOOR_RELAX_AMOUNT);
     promptCacheAdjustment = `relaxed (hitRate=${promptCacheHitRate.toFixed(2)} savedTokens=${Math.round(promptCacheSavedTokens)})`;
   }
+  if (lowRoiSignalCount > 0 && selectionPattern !== "constraint-first") {
+    effectiveFloor = Math.min(MAX_QUALITY_FLOOR, effectiveFloor + Math.min(0.09, lowRoiSignalCount * 0.03));
+  }
+  if (selectionPattern === "reasoning-recovery" && promptCacheCheap && lowRoiSignalCount === 0) {
+    effectiveFloor = Math.min(MAX_QUALITY_FLOOR, effectiveFloor + 0.03);
+  }
 
   const base = routeModelWithCompletionROI(taskHints, modelOptions, effectiveFloor, realizedROI);
+  const defaultModel = modelOptions.defaultModel || "Claude Sonnet 4.6";
+  const strongModel = modelOptions.strongModel || defaultModel;
+  const efficientModel = modelOptions.efficientModel || defaultModel;
+  let selectedModel = base.model;
+  if (selectionPattern === "constraint-first") {
+    if (selectedModel === strongModel && defaultModel) {
+      selectedModel = defaultModel;
+    }
+    if (selectedModel === efficientModel && tier !== COMPLEXITY_TIER.T1 && defaultModel) {
+      selectedModel = defaultModel;
+    }
+  } else if (selectionPattern === "cooldown-stability" && selectedModel === strongModel && defaultModel) {
+    selectedModel = defaultModel;
+  } else if (
+    selectionPattern === "reasoning-recovery"
+    && promptCacheCheap
+    && lowRoiSignalCount === 0
+    && tier !== COMPLEXITY_TIER.T1
+    && selectedModel === defaultModel
+    && strongModel
+  ) {
+    selectedModel = strongModel;
+  }
 
   let uncertainty: string;
   if (realizedROI === 0)       uncertainty = "low";     // no data → no signal
@@ -1158,14 +1219,15 @@ export async function routeModelWithRealizedROI(
 
   const explorationTag = explorationLimited ? " [exploration-limited]" : "";
   return {
-    model:              base.model,
+    model:              selectedModel,
     tier,
-    reason:             `realized-roi(roi=${realizedROI}, tier=${tier})${explorationTag} prompt-cache(${promptCacheAdjustment}): ${base.reason}`,
+    reason:             `realized-roi(roi=${realizedROI}, tier=${tier})${explorationTag} prompt-cache(${promptCacheAdjustment}) pattern=${selectionPattern} low-roi-lineage=${lowRoiSignalCount}: ${base.reason}`,
     realizedROI,
     uncertainty,
     meetsQualityFloor:  base.meetsQualityFloor,
     explorationLimited,
     promptCacheAdjustment,
+    selectionPattern,
   };
 }
 
@@ -1660,6 +1722,11 @@ export function assessRetryExpectedROI(input: {
   premiumUsageData?: any;
   benchmarkGroundTruth?: any;
   minExpectedGain?: number;
+  promptCacheHitRate?: number;
+  promptCacheSavedTokens?: number;
+  lowRoiSignalCount?: number;
+  failureClass?: string | null;
+  finishCode?: string | null;
 }): RetryExpectedRoiSignal {
   const attempt = Math.max(1, Math.floor(Number(input?.attempt) || 1));
   const maxRetries = Math.max(1, Math.floor(Number(input?.maxRetries) || 3));
@@ -1667,6 +1734,11 @@ export function assessRetryExpectedROI(input: {
   const threshold = Number.isFinite(Number(input?.minExpectedGain))
     ? Math.max(0, Number(input?.minExpectedGain))
     : RETRY_EXPECTED_GAIN_MIN_THRESHOLD;
+  const promptCacheHitRate = clamp01(Number(input?.promptCacheHitRate ?? 0));
+  const promptCacheSavedTokens = Math.max(0, Number(input?.promptCacheSavedTokens ?? 0));
+  const lowRoiSignalCount = Math.max(0, Math.floor(Number(input?.lowRoiSignalCount || 0)));
+  const failureClass = String(input?.failureClass || "").trim().toLowerCase();
+  const finishCode = String(input?.finishCode || "").trim().toLowerCase();
   if (attempt > maxRetries) {
     return {
       allowRetry: false,
@@ -1688,13 +1760,28 @@ export function assessRetryExpectedROI(input: {
     ? clamp01(rawBenchmarkSignal * integrity.penaltyApplied - Math.min(0.15, integrity.contradictionCount * 0.03))
     : rawBenchmarkSignal;
   const attemptDecay = 1 / attempt;
-  const expectedGain = Math.round(clamp01(successSignal * benchmarkSignal * attemptDecay) * 1000) / 1000;
+  const cacheBonus = (
+    (promptCacheHitRate >= 0.55 ? 0.05 : promptCacheHitRate >= 0.30 ? 0.02 : 0)
+    + (promptCacheSavedTokens >= 180 ? 0.04 : promptCacheSavedTokens >= 90 ? 0.02 : 0)
+  );
+  const lineagePenalty = Math.min(0.24, lowRoiSignalCount * 0.08);
+  const failurePenalty =
+    failureClass === FAILURE_CLASS.POLICY || /policy|guard|capability_check/.test(finishCode)
+      ? 0.18
+      : failureClass === FAILURE_CLASS.VERIFICATION || /^verification_report_fail:/.test(finishCode)
+        ? 0.12
+        : failureClass === FAILURE_CLASS.MODEL || failureClass === FAILURE_CLASS.EXTERNAL_API || /rate|quota|429|503|timeout|provider/.test(finishCode)
+          ? 0.08
+          : failureClass === FAILURE_CLASS.ENVIRONMENT
+            ? 0.04
+            : 0.02;
+  const expectedGain = Math.round(clamp01((successSignal * benchmarkSignal * attemptDecay) + cacheBonus - lineagePenalty - failurePenalty) * 1000) / 1000;
   const allowRetry = expectedGain >= threshold;
   return {
     allowRetry,
     expectedGain,
     threshold,
-    reason: `retry-roi(taskKind=${taskKind}, outcome=${successSignal.toFixed(2)}, precision=${(outcome.precisionOnAttempted ?? outcome.successRate).toFixed(2)}, attempt_rate=${(outcome.attemptRate ?? 0).toFixed(2)}, benchmark=${benchmarkSignal.toFixed(2)}, attempt=${attempt})`,
+    reason: `retry-roi(taskKind=${taskKind}, outcome=${successSignal.toFixed(2)}, precision=${(outcome.precisionOnAttempted ?? outcome.successRate).toFixed(2)}, attempt_rate=${(outcome.attemptRate ?? 0).toFixed(2)}, benchmark=${benchmarkSignal.toFixed(2)}, cache_bonus=${cacheBonus.toFixed(2)}, lineage_penalty=${lineagePenalty.toFixed(2)}, failure_penalty=${failurePenalty.toFixed(2)}, attempt=${attempt})`,
     attempt,
   };
 }
@@ -2047,10 +2134,36 @@ export function decideDeliberationPolicy(
   signals: {
     benchmarkGroundTruth?: any;
     outcomeMetrics?: Partial<RoutingOutcomeMetrics> | null;
+    lineageSignals?: LineageRoutingSignals | null;
   } = {}
 ): DeliberationPolicy {
   const profile = deriveHardTaskUncertaintyProfile(taskHints, history, signals);
   const hard = assessHardTaskEscalation(taskHints, history, signals);
+  const lineageSignals = signals.lineageSignals || {};
+  const lowRoiSignalCount = Math.max(0, Math.floor(Number(lineageSignals.lowRoiSignalCount || 0)));
+  const promptCacheHitRate = clamp01(Number(lineageSignals.promptCacheHitRate ?? 0));
+  const promptCacheSavedTokens = Math.max(0, Number(lineageSignals.promptCacheSavedTokens ?? 0));
+  const promptCacheCheap = promptCacheHitRate >= 0.55 || promptCacheSavedTokens >= 180;
+  const latestFailureClass = String(lineageSignals.latestFailureClass || "").trim().toLowerCase();
+  const latestFinishCode = String(lineageSignals.latestFinishCode || "").trim().toLowerCase();
+  const selectionPattern =
+    latestFailureClass === FAILURE_CLASS.LOGIC_DEFECT
+      ? "reasoning-recovery"
+      : latestFailureClass === FAILURE_CLASS.POLICY
+        || latestFailureClass === FAILURE_CLASS.VERIFICATION
+        || /policy|guard|capability_check|verification/.test(latestFinishCode)
+        ? "constraint-first"
+        : latestFailureClass === FAILURE_CLASS.MODEL
+          || latestFailureClass === FAILURE_CLASS.EXTERNAL_API
+          || /rate|quota|429|503|timeout|provider/.test(latestFinishCode)
+          ? "cooldown-stability"
+          : "balanced";
+  const order = selectionPattern === "constraint-first"
+    ? ["contract_scan", "smallest_verification", "surface_map"]
+    : selectionPattern === "cooldown-stability"
+      ? ["contract_scan", "surface_map", "smallest_verification"]
+      : ["smallest_verification", "surface_map", "contract_scan"];
+  const rank = new Map(order.map((key, index) => [key, index]));
   if (!hard.hardTask || !hard.escalate) {
     return {
       mode: "single-pass",
@@ -2062,19 +2175,51 @@ export function decideDeliberationPolicy(
       executionMode: "direct_execute",
       candidateFirstMoves: [],
       recommendedFirstMove: null,
-      reason: hard.reason,
+      reason: `${hard.reason}; pattern=${selectionPattern}; low-roi-lineage=${lowRoiSignalCount}`,
+    };
+  }
+  if (lowRoiSignalCount >= 2 && !promptCacheCheap) {
+    return {
+      mode: "single-pass",
+      attempts: 1,
+      reflection: false,
+      boundedSearch: false,
+      searchBudget: 0,
+      uncertaintyLevel: classifyDeliberationUncertaintyLevel(profile.uncertaintyScore, profile.hardTask),
+      executionMode: "direct_execute",
+      candidateFirstMoves: [],
+      recommendedFirstMove: null,
+      reason: `${hard.reason}; lineage-low-roi-gate(count=${lowRoiSignalCount})`,
     };
   }
 
   const required = hard.severity === "required";
-  const searchBudget = required ? 3 : 2;
-  const candidateFirstMoves = scheduleBoundedHypothesisCandidates(
-    buildDeliberationCandidatePool(profile),
-    { limit: searchBudget },
+  const reorderedCandidates = (() => {
+    const baseCandidates = buildDeliberationCandidatePool(profile);
+    return [...baseCandidates].sort((left, right) => {
+      const leftRank = rank.has(left.key) ? rank.get(left.key)! : order.length;
+      const rightRank = rank.has(right.key) ? rank.get(right.key)! : order.length;
+      return leftRank - rightRank;
+    });
+  })();
+  const searchBudget = Math.max(
+    1,
+    Math.min(
+      required ? 3 : 2,
+      (required ? 3 : 2) - Math.min(lowRoiSignalCount, promptCacheCheap ? 0 : 1),
+    ),
   );
+  const candidateFirstMoves = scheduleBoundedHypothesisCandidates(
+    reorderedCandidates,
+    { limit: searchBudget },
+  ).sort((left, right) => {
+    const leftRank = rank.has(left.key) ? rank.get(left.key)! : order.length;
+    const rightRank = rank.has(right.key) ? rank.get(right.key)! : order.length;
+    return leftRank - rightRank;
+  });
   return {
     mode: "multi-attempt",
-    attempts: required ? 3 : 2,
+    attempts: Math.max(2, (required ? 3 : 2) - Math.min(lowRoiSignalCount, promptCacheCheap ? 0 : 1)),
     reflection: true,
     boundedSearch: true,
     searchBudget,
@@ -2082,7 +2227,7 @@ export function decideDeliberationPolicy(
     executionMode: "bounded_deliberation",
     candidateFirstMoves,
     recommendedFirstMove: candidateFirstMoves[0] ?? null,
-    reason: hard.reason,
+    reason: `${hard.reason}; pattern=${selectionPattern}; low-roi-lineage=${lowRoiSignalCount}; prompt-cache-cheap=${promptCacheCheap}`,
   };
 }
 

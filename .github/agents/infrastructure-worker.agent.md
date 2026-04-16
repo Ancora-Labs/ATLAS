@@ -1,6 +1,7 @@
 ---
 name: infrastructure-worker
 description: BOX Infrastructure Lane Worker. Handles Docker, CI/CD, deployment configuration, and infrastructure tasks from the orchestrator's capability-based routing.
+model: gpt-5.4
 tools: [read, edit, execute, search, fetch]
 user-invocable: false
 ---
@@ -47,21 +48,10 @@ When batched, execute tasks in order and respect dependency/wave boundaries.
 - Keep changes scoped to the task — do not fix unrelated things
 - Run `npm run build` and `npm test` after every non-trivial change
 
-## Reporting
+## Runtime Contract
 
-Always end your response with:
+The authoritative completion and verification contract is injected by the worker runtime at session start.
 
-```
-BOX_STATUS=done | partial | blocked
-BOX_PR_URL=<url>   (if PR was created)
-BOX_BRANCH=<branch>
-BOX_FILES_TOUCHED=src/file1.js,src/file2.js
-
-===VERIFICATION_REPORT===
-acceptance criterion 1: PASS/FAIL — evidence
-acceptance criterion 2: PASS/FAIL — evidence
-...
-===END_VERIFICATION===
-
-Summary: what changed, why, what criteria were met.
-```
+- Follow the runtime contract exactly, including all required `BOX_*` markers, verification evidence, and closure reporting.
+- Do not emit self-reported `TOOL_INTENT` or `HOOK_DECISION` pseudo-telemetry lines.
+- If this profile and the runtime contract ever differ, the runtime contract wins.

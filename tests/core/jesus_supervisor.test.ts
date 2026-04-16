@@ -22,6 +22,9 @@ import {
   sanitizeDirectiveFieldForPersistence,
   buildDirectiveStrategyBrief,
   reconcileLeadershipHealthFindings,
+  resolveDirectiveTargetSessionStamp,
+  isDirectiveAlignedToTargetSession,
+  stampDirectiveTargetSession,
   shouldWarnJesusDecisionLatency,
   hasReachedJesusSoftTimeout,
   formatJesusTierEscalationMessage,
@@ -128,6 +131,45 @@ describe("jesus_supervisor — validateExpectedOutcomeMeasurable", () => {
   });
 });
 
+describe("jesus_supervisor — single-target directive alignment", () => {
+  const singleTargetConfig = {
+    platformModeState: { currentMode: "single_target_delivery" },
+    activeTargetSession: {
+      projectId: "portal",
+      sessionId: "sess_active",
+      currentStage: "active",
+      repo: { repoUrl: "https://github.com/acme/portal" },
+    },
+  };
+
+  it("stamps directives with the active target session in single-target mode", () => {
+    const directive = stampDirectiveTargetSession(singleTargetConfig, { decision: "tactical" });
+    assert.deepEqual(directive.targetSession, resolveDirectiveTargetSessionStamp(singleTargetConfig));
+  });
+
+  it("rejects directives from a different target session in single-target mode", () => {
+    assert.equal(
+      isDirectiveAlignedToTargetSession(singleTargetConfig, {
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_old",
+        },
+      }),
+      false,
+    );
+  });
+
+  it("accepts legacy directives without targetSession only outside single-target mode", () => {
+    assert.equal(
+      isDirectiveAlignedToTargetSession(
+        { platformModeState: { currentMode: "self_dev" }, activeTargetSession: null },
+        { decision: "tactical" },
+      ),
+      true,
+    );
+  });
+});
+
 // ── validateDirectivePayload ───────────────────────────────────────────────────
 
 describe("jesus_supervisor — validateDirectivePayload", () => {
@@ -175,12 +217,19 @@ describe("jesus_supervisor — validateDirectivePayload", () => {
   });
 
   it("returns valid:false when briefForPrometheus is empty", () => {
-    const directive = { ...VALID_DIRECTIVE, briefForPrometheus: "   " };
+    const directive = { ...VALID_DIRECTIVE, callPrometheus: true, briefForPrometheus: "   " };
     const result = validateDirectivePayload(directive, VALID_EXPECTED_OUTCOME);
     assert.equal(result.valid, false);
     assert.ok(result.gaps.some(g => g.includes("directive.briefForPrometheus")),
       `gap must mention briefForPrometheus; got: [${result.gaps.join("; ")}]`
     );
+  });
+
+  it("returns valid:true when callPrometheus is false and briefForPrometheus is empty", () => {
+    const directive = { ...VALID_DIRECTIVE, callPrometheus: false, briefForPrometheus: "   " };
+    const result = validateDirectivePayload(directive, VALID_EXPECTED_OUTCOME);
+    assert.equal(result.valid, true, `directive should be valid without a Prometheus brief; gaps: [${result.gaps.join("; ")}]`);
+    assert.equal(result.gaps.length, 0);
   });
 
   it("returns valid:false when decision is an unrecognised value", () => {

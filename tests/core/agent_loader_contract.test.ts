@@ -8,6 +8,7 @@ import {
   validateAgentContract,
   validateAllAgentContracts,
   validateCriticalAgentContracts,
+  validateRequiredAgentContracts,
   type AgentContractValidation,
 } from "../../src/core/agent_loader.js";
 
@@ -33,6 +34,22 @@ describe("validateAgentContract", () => {
     const result = validateAgentContract("athena");
     assert.equal(result.valid, true, `athena violations: ${result.violations.join(", ")}`);
     assert.ok(result.fields.model, "athena must have model");
+  });
+
+  it("validates onboarding agent as valid", () => {
+    const result = validateAgentContract("onboarding");
+    assert.equal(result.valid, true, `onboarding violations: ${result.violations.join(", ")}`);
+    assert.ok(result.fields.model, "onboarding must have model");
+    assert.ok(result.fields.tools && result.fields.tools.length > 0, "onboarding must have tools");
+  });
+
+  it("validates specialized onboarding clarification agents as valid", () => {
+    for (const slug of ["onboarding-empty-repo", "onboarding-existing-repo"]) {
+      const result = validateAgentContract(slug);
+      assert.equal(result.valid, true, `${slug} violations: ${result.violations.join(", ")}`);
+      assert.ok(result.fields.model, `${slug} must have model`);
+      assert.ok(result.fields.tools && result.fields.tools.length > 0, `${slug} must have tools`);
+    }
   });
 
   it("detects frontmatter_missing when file has no YAML block", async () => {
@@ -75,6 +92,19 @@ describe("validateCriticalAgentContracts", () => {
     const slugs = result.results.map(r => r.slug);
     assert.ok(slugs.includes("prometheus"), "results must include prometheus");
     assert.ok(slugs.includes("athena"), "results must include athena");
+  });
+});
+
+describe("validateRequiredAgentContracts", () => {
+  it("supports explicit validation of onboarding for single-target mode", () => {
+    const result = validateRequiredAgentContracts(["prometheus", "athena", "onboarding", "onboarding-empty-repo", "onboarding-existing-repo"]);
+    assert.equal(result.allValid, true,
+      `Required agent violations: ${result.violations.map(v => `${v.slug}: [${v.violations.join(",")}]`).join("; ")}`
+    );
+    const slugs = result.results.map((entry) => entry.slug);
+    assert.ok(slugs.includes("onboarding"), "results must include onboarding");
+    assert.ok(slugs.includes("onboarding-empty-repo"), "results must include onboarding-empty-repo");
+    assert.ok(slugs.includes("onboarding-existing-repo"), "results must include onboarding-existing-repo");
   });
 });
 

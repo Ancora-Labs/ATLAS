@@ -56,6 +56,8 @@ import {
   collectPromptTruthSignals,
   resolveStructuredTruthRetirement,
 } from "./learning_policy_compiler.js";
+import { buildPromptAssemblyPrompt, resolvePromptTargetRepo } from "./prompt_overlay.js";
+import { PLATFORM_MODE } from "./mode_state.js";
 
 // ── CI system-learning debt detection ────────────────────────────────────────
 
@@ -116,6 +118,64 @@ function extractKnowledgeMemoryLessons(knowledgeMemory: unknown): unknown[] {
   return Number(record.schemaVersion) >= 2
     ? [...workingLessons, ...episodicLessons]
     : flatLessons;
+}
+
+function isSingleTargetLeadershipIsolationActive(config: any): boolean {
+  return config?.platformModeState?.currentMode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY
+    && Boolean(config?.activeTargetSession?.sessionId);
+}
+
+export function resolveDirectiveTargetSessionStamp(config: any): Record<string, unknown> | null {
+  if (!isSingleTargetLeadershipIsolationActive(config)) {
+    return null;
+  }
+
+  return {
+    projectId: config.activeTargetSession.projectId,
+    sessionId: config.activeTargetSession.sessionId,
+    currentStage: config.activeTargetSession.currentStage,
+    repoUrl: config.activeTargetSession.repo?.repoUrl || null,
+  };
+}
+
+export function isDirectiveAlignedToTargetSession(config: any, directive: any): boolean {
+  const runtimeTargetSession = resolveDirectiveTargetSessionStamp(config);
+  const directiveTargetSession = directive?.targetSession && typeof directive.targetSession === "object"
+    ? directive.targetSession
+    : null;
+
+  if (!runtimeTargetSession) {
+    return !directiveTargetSession;
+  }
+  if (!directiveTargetSession) {
+    return false;
+  }
+
+  return String(directiveTargetSession.projectId || "") === String(runtimeTargetSession.projectId || "")
+    && String(directiveTargetSession.sessionId || "") === String(runtimeTargetSession.sessionId || "");
+}
+
+export function stampDirectiveTargetSession(config: any, directive: any): any {
+  if (!directive || typeof directive !== "object") return directive;
+  const runtimeTargetSession = resolveDirectiveTargetSessionStamp(config);
+  if (!runtimeTargetSession) {
+    if (directive.targetSession) {
+      delete directive.targetSession;
+    }
+    return directive;
+  }
+
+  directive.targetSession = runtimeTargetSession;
+  return directive;
+}
+
+function normalizeGitHubRepoIdentifier(repo: unknown): string | null {
+  const raw = String(repo || "").trim();
+  if (!raw) return null;
+  if (/^[^/\s]+\/[^/\s]+$/.test(raw)) return raw;
+  const match = raw.match(/github\.com[/:]([^/\s]+)\/([^/\s#?]+?)(?:\.git)?$/i);
+  if (!match) return null;
+  return `${match[1]}/${match[2]}`;
 }
 
 function buildAutonomyDebtPriority(reasonCode: string, blockReason: string | null): string {
@@ -637,7 +697,7 @@ function formatHealthAuditFindings(findings) {
 
 async function fetchGitHubState(config) {
   const token = config?.env?.githubToken;
-  const repo = config?.env?.targetRepo;
+  const repo = normalizeGitHubRepoIdentifier(resolvePromptTargetRepo(config));
   if (!token || !repo) return { issues: [], pullRequests: [], repoInfo: null };
 
   const headers = {
@@ -722,7 +782,7 @@ async function fetchGitHubState(config) {
  * Required string fields in a valid Jesus directive payload.
  * These fields must be present and non-empty for the directive to be actionable.
  */
-const REQUIRED_DIRECTIVE_STRING_FIELDS = ["decision", "systemHealth", "briefForPrometheus"] as const;
+const REQUIRED_DIRECTIVE_STRING_FIELDS = ["decision", "systemHealth"] as const;
 
 /**
  * Required boolean fields in a valid Jesus directive payload.
@@ -783,12 +843,20 @@ export function validateDirectivePayload(
   expectedOutcome: Record<string, unknown>
 ): { valid: boolean; gaps: string[]; hasMeasurableOutcome: boolean } {
   const gaps: string[] = [];
+  const shouldRequirePrometheusBrief = directive.callPrometheus === true;
 
   // Check required string fields
   for (const field of REQUIRED_DIRECTIVE_STRING_FIELDS) {
     const value = directive[field];
     if (value === null || value === undefined || String(value).trim() === "") {
       gaps.push(`directive.${field} is required but missing or empty`);
+    }
+  }
+
+  if (shouldRequirePrometheusBrief) {
+    const briefForPrometheus = directive.briefForPrometheus;
+    if (briefForPrometheus === null || briefForPrometheus === undefined || String(briefForPrometheus).trim() === "") {
+      gaps.push("directive.briefForPrometheus is required but missing or empty when callPrometheus=true");
     }
   }
 
@@ -1140,7 +1208,7 @@ export async function runJesusCycle(config) {
 
   // Read all state (no budget)
   const [
-    lastDirective,
+    lastDirectiveRaw,
     AthenaCoordination,
     prometheusAnalysis,
     githubState,
@@ -1152,8 +1220,12 @@ export async function runJesusCycle(config) {
     fetchGitHubState(config),
     loadWorkerSessionsForHealthAudit(config, stateDir)
   ]);
+  const lastDirective = isDirectiveAlignedToTargetSession(config, lastDirectiveRaw)
+    ? lastDirectiveRaw
+    : {};
 
   const sessions = sessionLoadResult.sessions;
+  const leadershipIsolationActive = isSingleTargetLeadershipIsolationActive(config);
 
   chatLog(
     stateDir,
@@ -1176,7 +1248,7 @@ export async function runJesusCycle(config) {
     const { activeFindings, resolvedLineage } = reconcileLeadershipHealthFindings(healthFindings, {
       latestMainCiConclusion: githubState.latestMainCi?.conclusion,
     });
-    promptHealthFindings = activeFindings;
+    promptHealthFindings = leadershipIsolationActive ? [] : activeFindings;
 
     const healthFindingsPayload: Record<string, unknown> = {
       findings: activeFindings,
@@ -1353,6 +1425,7 @@ export async function runJesusCycle(config) {
   } catch { /* advisory only */ }
 
   let truthMaintenanceSection = "";
+  if (!leadershipIsolationActive) {
   try {
     const [knowledgeMemory, researchSynthesis, benchmarkData] = await Promise.all([
       readJson(path.join(stateDir, "knowledge_memory.json"), null),
@@ -1394,16 +1467,61 @@ export async function runJesusCycle(config) {
       `[JESUS][WARN] Failed to assemble truth-maintenance prompt context: ${String((truthErr as Error)?.message || truthErr)}`,
     );
   }
+  }
 
-  const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
+  const jesusLayerPrompt = buildPromptAssemblyPrompt({ agentName: "jesus", config });
+  const effectivePromptTargetRepo = resolvePromptTargetRepo(config);
+  const activeTargetSession = config?.activeTargetSession && typeof config.activeTargetSession === "object"
+    ? config.activeTargetSession
+    : null;
 
-## CURRENT SYSTEM STATE
+  const runtimeStateSection = leadershipIsolationActive
+    ? `## CURRENT TARGET DELIVERY STATE
+
+**Target Session:** ${String(activeTargetSession?.projectId || "unknown")} / ${String(activeTargetSession?.sessionId || "unknown")}
+**Target Stage:** ${String(activeTargetSession?.currentStage || "unknown")}
+**Objective:** ${String(activeTargetSession?.objective?.summary || "unknown")}
+**Planning Gates:** planning=${Boolean(activeTargetSession?.gates?.allowPlanning)} shadow=${Boolean(activeTargetSession?.gates?.allowShadowExecution)} active=${Boolean(activeTargetSession?.gates?.allowActiveExecution)} quarantine=${Boolean(activeTargetSession?.gates?.quarantine)}
+**Repo State:** ${String(activeTargetSession?.repoProfile?.repoState || activeTargetSession?.intent?.repoState || "unknown")}
+**Clarification Status:** ${String(activeTargetSession?.clarification?.status || "unknown")}
+**Intent Status:** ${String(activeTargetSession?.intent?.status || "unknown")}
+**Intent Summary:** ${String(activeTargetSession?.intent?.summary || "unknown")}
+**Required Human Inputs:** ${Array.isArray(activeTargetSession?.handoff?.requiredHumanInputs) && activeTargetSession.handoff.requiredHumanInputs.length > 0 ? activeTargetSession.handoff.requiredHumanInputs.join("; ") : "none"}
+**Protected Paths:** ${Array.isArray(activeTargetSession?.constraints?.protectedPaths) && activeTargetSession.constraints.protectedPaths.length > 0 ? activeTargetSession.constraints.protectedPaths.join(", ") : "none"}
+**Forbidden Actions:** ${Array.isArray(activeTargetSession?.constraints?.forbiddenActions) && activeTargetSession.constraints.forbiddenActions.length > 0 ? activeTargetSession.constraints.forbiddenActions.join(", ") : "none"}
+
+**GitHub State — ${effectivePromptTargetRepo}:**
+Open Issues (${githubState.issues.length}):
+${githubState.issues.length > 0
+  ? githubState.issues.map(i => `  #${i.number}: ${i.title} [${i.labels.join(", ") || "no labels"}]`).join("\n")
+  : "  No open issues"}
+
+Open PRs (${githubState.pullRequests.length}):
+${githubState.pullRequests.length > 0
+  ? githubState.pullRequests.map(p => `  #${p.number}: ${p.title} [${p.draft ? "draft" : "open"}]`).join("\n")
+  : "  No open PRs"}
+
+**Latest CI on default branch (${githubState.latestMainCi?.branch || "main"}):**
+${githubState.latestMainCi
+  ? `  ${githubState.latestMainCi.conclusion} (${githubState.latestMainCi.commit}) [${githubState.latestMainCi.updatedAt}]`
+  : "  No CI runs found"}
+
+**Recent CI Failures (last 24h): ${githubState.failedCiRuns.length}**
+${githubState.failedCiRuns.length > 0
+  ? githubState.failedCiRuns.map(r => `  ${r.name} on ${r.branch} (${r.commit}) — ${r.conclusion} [${r.updatedAt}]`).join("\n")
+  : "  No recent failures"}
+
+**Leadership Rule For Single-Target Mode:**
+  - Treat the active target session as the only planning authority.
+  - Do not inject BOX self-dev health audit, postmortem debt, trusted memory, or architecture drift pressure into the directive.
+  - If target clarification is incomplete or planning gates are closed, direct Prometheus to resolve target-session blockers only.`
+    : `## CURRENT SYSTEM STATE
 
 **Active Worker Sessions:** ${activeSessions}
 **Last Cycle:** ${lastCycleAt}
 **Prometheus Last Analysis:** ${prometheusLastRunAt}${prometheusAgeHours < 6 ? ` (${prometheusAgeHours.toFixed(1)}h ago — FRESH, only set callPrometheus=true if health is critical)` : ""}
 
-**GitHub State — ${config.env?.targetRepo}:**
+**GitHub State — ${effectivePromptTargetRepo}:**
 Open Issues (${githubState.issues.length}):
 ${githubState.issues.length > 0
   ? githubState.issues.map(i => `  #${i.number}: ${i.title} [${i.labels.join(", ") || "no labels"}]`).join("\n")
@@ -1450,7 +1568,13 @@ ${realizedExecutionBlock}
 ${formatHealthAuditFindings(promptHealthFindings)}
 ${promptHealthFindings.filter(f => f.severity === "critical").length > 0 ? "\n⚠️ CRITICAL FINDINGS ABOVE — these MUST be addressed. Workers and Athena missed them." : ""}
 ${promptHealthFindings.filter(f => f.area === "capability-gap").length > 0 ? "\n⚠️ CAPABILITY GAPS DETECTED — the system is missing abilities that caused failures. Consider requesting Prometheus to plan fixes." : ""}
-${truthMaintenanceSection ? `\n\n${truthMaintenanceSection}` : ""}
+${truthMaintenanceSection ? `\n\n${truthMaintenanceSection}` : ""}`;
+
+  const contextPrompt = `TARGET REPO: ${effectivePromptTargetRepo}
+
+${jesusLayerPrompt}
+
+${runtimeStateSection}
 
 **Leadership Fast Path Rules:**
   - Use the supplied state artifacts, health findings, GitHub state, and prior analysis as the source of truth.
@@ -1684,7 +1808,7 @@ ${workersList}`;
       systemHealth: "unknown",
       thinking: "",
       fullOutput: (aiResult as any).raw || "",
-      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${config.env?.targetRepo}`,
+      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${effectivePromptTargetRepo}`,
       priorities: [],
       workerSuggestions: []
     };
@@ -1719,7 +1843,7 @@ ${workersList}`;
       systemHealth: "unknown",
       thinking: aiResult.thinking,
       fullOutput: (aiResult as any).raw || "",
-      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${config.env?.targetRepo}`,
+      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${effectivePromptTargetRepo}`,
       priorities: [],
       workerSuggestions: [],
       _trustBoundaryViolation: true,
@@ -1820,11 +1944,11 @@ ${workersList}`;
       systemHealth: "unknown",
       wakeAthena: true,
       callPrometheus: needsPrometheus,
-      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${config.env?.targetRepo}`,
+      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${effectivePromptTargetRepo}`,
       priorities: [],
       workerSuggestions: [],
     }, expectedOutcome as unknown as Record<string, unknown>, {
-      repo: config.env?.targetRepo || null,
+      repo: effectivePromptTargetRepo || null,
     });
     return {
       wait: false,
@@ -1836,7 +1960,7 @@ ${workersList}`;
       systemHealth: "unknown",
       thinking: aiResult.thinking,
       fullOutput: (aiResult as any).raw || "",
-      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${config.env?.targetRepo}`,
+      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${effectivePromptTargetRepo}`,
       priorities: [],
       workerSuggestions: [],
       _directivePayloadGaps: payloadValidation.gaps,
@@ -1867,7 +1991,7 @@ ${workersList}`;
   const strategyBrief = buildDirectiveStrategyBrief(d as Record<string, unknown>, expectedOutcome as unknown as Record<string, unknown>, {
     repo: config.env?.targetRepo || null,
   });
-  const directive = {
+  const directive = stampDirectiveTargetSession(config, {
     ...d,
     briefForPrometheus: sanitizeDirectiveFieldForPersistence(String((d as any).briefForPrometheus || "")),
     thinking: aiResult.thinking,
@@ -1884,7 +2008,7 @@ ${workersList}`;
     expectedOutcome,
     strategyBrief,
     ciFastlaneRequired,
-  };
+  });
 
   if (ciFastlaneRequired) {
     await appendProgress(config,

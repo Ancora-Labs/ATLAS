@@ -172,55 +172,55 @@
     "ceoSupervisor": {
       "id": "ceo-supervisor",
       "name": "Jesus",
-      "model": "Claude Sonnet 4.6",
+      "model": "gpt-5.4",
       "provider": "copilot"
     },
     "deepPlanner": {
       "id": "deep-planner",
       "name": "Prometheus",
-      "model": "gpt-5.3-codex",
+      "model": "gpt-5.4",
       "provider": "copilot"
     },
     "qualityReviewer": {
       "id": "quality-reviewer",
       "name": "Athena",
-      "model": "Claude Sonnet 4.6",
+      "model": "gpt-5.4",
       "provider": "copilot"
     },
     "workers": {
       "evolution": {
         "id": "worker-evolution",
         "name": "Evolution Worker",
-        "model": "gpt-5.3-codex"
+        "model": "gpt-5.4"
       },
       "quality": {
         "id": "worker-quality",
         "name": "quality-worker",
-        "model": "gpt-5.3-codex",
+        "model": "gpt-5.4",
         "lane": "quality"
       },
       "governance": {
         "id": "worker-governance",
         "name": "governance-worker",
-        "model": "gpt-5.3-codex",
+        "model": "gpt-5.4",
         "lane": "governance"
       },
       "infrastructure": {
         "id": "worker-infrastructure",
         "name": "infrastructure-worker",
-        "model": "gpt-5.3-codex",
+        "model": "gpt-5.4",
         "lane": "infrastructure"
       },
       "integration": {
         "id": "worker-integration",
         "name": "integration-worker",
-        "model": "gpt-5.3-codex",
+        "model": "gpt-5.4",
         "lane": "integration"
       },
       "observation": {
         "id": "worker-observation",
         "name": "observation-worker",
-        "model": "gpt-5.3-codex",
+        "model": "gpt-5.4",
         "lane": "observation"
       }
     }
@@ -306,76 +306,77 @@
   },
   "copilot": {
     "strategy": "task-best",
-    "defaultModel": "gpt-5.3-codex",
+    "defaultModel": "gpt-5.4",
+    "sonnetModel": "gpt-5.4",
     "preferredModelsByTaskKind": {
       "scan": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ],
       "analysis": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ],
       "planning": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ],
       "implementation": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ],
       "test": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ],
       "qa": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ],
       "security": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ],
       "devops": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ],
       "refactor": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ],
       "quality": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ],
       "stability": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ],
       "production": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ]
     },
     "preferredModelsByRole": {
       "Jesus": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ],
       "Prometheus": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ],
       "Athena": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ],
       "Evolution Worker": [
-        "gpt-5.3-codex",
+        "gpt-5.4",
         "Claude Sonnet 4.6"
       ]
     },
-    "opusModel": "gpt-5.3-codex",
+    "opusModel": "gpt-5.4",
     "allowOpusEscalation": false,
     "opusEscalationKeywords": [
       "critical",
@@ -413,7 +414,7 @@
     "allowedModels": [
       "Claude Sonnet 4.6",
       "GPT-5.2-Codex",
-      "gpt-5.3-codex"
+      "gpt-5.4"
     ],
     "maxMultiplier": 1,
     "opusMinBudgetUsd": 2,
@@ -426,7 +427,7 @@
       "GPT-5 mini": 0,
       "GPT-4.1": 0,
       "GPT-5.2-Codex": 1,
-      "gpt-5.3-codex": 1,
+      "gpt-5.4": 1,
       "Grok Code Fast 1": 0,
       "Raptor mini": 0
     },
@@ -519,6 +520,12 @@
       "master"
     ],
     "branchPrefix": "box/selfdev-",
+    "protectedPrefixes": [
+      "state/",
+      ".git/",
+      "node_modules/",
+      ".next/"
+    ],
     "criticalFiles": [
       "src/core/orchestrator.ts",
       "src/core/self_dev_guard.ts",
@@ -535,7 +542,13 @@
       "src/core/prometheus.ts",
       "box.config.json",
       "package.json"
-    ]
+    ],
+    "futureModeFlags": {
+      "singleTargetDelivery": true,
+      "targetSessionState": true,
+      "targetPromptOverlay": true,
+      "targetWorkspaceLifecycle": true
+    }
   },
   "athenaCalibration": {
     "maxDeviationScore": 0.25,
