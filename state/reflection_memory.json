@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "updatedAt": "2026-04-13T17:41:39.411Z",
+  "updatedAt": "2026-04-16T19:26:03.941Z",
   "entries": [
     {
       "roleName": "infrastructure-worker",
@@ -15,7 +15,12 @@
       },
       "retryState": {
         "schemaVersion": 1,
-        "phaseOrder": ["plan", "edit", "test", "push"],
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
         "currentPhase": "plan",
         "failedPhase": "plan",
         "resumeFromPhase": "plan",
@@ -24,15 +29,32 @@
           "plan": {
             "status": "failed",
             "evidence": [
-              { "code": "dispatch_block_reason", "detail": "hook telemetry evidence missing in worker output", "source": "verification_gate" }
+              {
+                "code": "dispatch_block_reason",
+                "detail": "hook telemetry evidence missing in worker output",
+                "source": "verification_gate"
+              }
             ]
           },
-          "edit": { "status": "pending", "evidence": [] },
-          "test": { "status": "pending", "evidence": [] },
-          "push": { "status": "pending", "evidence": [] }
+          "edit": {
+            "status": "pending",
+            "evidence": []
+          },
+          "test": {
+            "status": "pending",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
         },
         "evidence": [
-          { "code": "dispatch_block_reason", "detail": "hook telemetry evidence missing in worker output", "source": "verification_gate" }
+          {
+            "code": "dispatch_block_reason",
+            "detail": "hook telemetry evidence missing in worker output",
+            "source": "verification_gate"
+          }
         ],
         "mutation": {
           "strategy": "resume_from_failed_phase",
@@ -56,31 +78,62 @@
       },
       "retryState": {
         "schemaVersion": 1,
-        "phaseOrder": ["plan", "edit", "test", "push"],
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
         "currentPhase": "push",
         "failedPhase": "push",
         "resumeFromPhase": "push",
         "lastCompletedPhase": "test",
         "phaseStates": {
-          "plan": { "status": "completed", "evidence": [] },
-          "edit": { "status": "completed", "evidence": [] },
+          "plan": {
+            "status": "completed",
+            "evidence": []
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": []
+          },
           "test": {
             "status": "completed",
             "evidence": [
-              { "code": "verification_report", "detail": "verification report marker was present but malformed", "source": "verification_gate" }
+              {
+                "code": "verification_report",
+                "detail": "verification report marker was present but malformed",
+                "source": "verification_gate"
+              }
             ]
           },
           "push": {
             "status": "failed",
             "evidence": [
-              { "code": "pr_url", "detail": "existing PR recovery path triggered", "source": "worker_output" },
-              { "code": "dispatch_block_reason", "detail": "api-only block softened to partial", "source": "dispatch_contract" }
+              {
+                "code": "pr_url",
+                "detail": "existing PR recovery path triggered",
+                "source": "worker_output"
+              },
+              {
+                "code": "dispatch_block_reason",
+                "detail": "api-only block softened to partial",
+                "source": "dispatch_contract"
+              }
             ]
           }
         },
         "evidence": [
-          { "code": "pr_url", "detail": "existing PR recovery path triggered", "source": "worker_output" },
-          { "code": "dispatch_block_reason", "detail": "api-only block softened to partial", "source": "dispatch_contract" }
+          {
+            "code": "pr_url",
+            "detail": "existing PR recovery path triggered",
+            "source": "worker_output"
+          },
+          {
+            "code": "dispatch_block_reason",
+            "detail": "api-only block softened to partial",
+            "source": "dispatch_contract"
+          }
         ],
         "mutation": {
           "strategy": "resume_from_failed_phase",
@@ -104,7 +157,12 @@
       },
       "retryState": {
         "schemaVersion": 1,
-        "phaseOrder": ["plan", "edit", "test", "push"],
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
         "currentPhase": "plan",
         "failedPhase": "plan",
         "resumeFromPhase": "plan",
@@ -113,15 +171,32 @@
           "plan": {
             "status": "failed",
             "evidence": [
-              { "code": "scope_scan", "detail": "planning inspection stalled before file edits", "source": "worker_output" }
+              {
+                "code": "scope_scan",
+                "detail": "planning inspection stalled before file edits",
+                "source": "worker_output"
+              }
             ]
           },
-          "edit": { "status": "pending", "evidence": [] },
-          "test": { "status": "pending", "evidence": [] },
-          "push": { "status": "pending", "evidence": [] }
+          "edit": {
+            "status": "pending",
+            "evidence": []
+          },
+          "test": {
+            "status": "pending",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
         },
         "evidence": [
-          { "code": "scope_scan", "detail": "planning inspection stalled before file edits", "source": "worker_output" }
+          {
+            "code": "scope_scan",
+            "detail": "planning inspection stalled before file edits",
+            "source": "worker_output"
+          }
         ],
         "mutation": {
           "strategy": "resume_from_failed_phase",
@@ -145,7 +220,12 @@
       },
       "retryState": {
         "schemaVersion": 1,
-        "phaseOrder": ["plan", "edit", "test", "push"],
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
         "currentPhase": "plan",
         "failedPhase": "plan",
         "resumeFromPhase": "plan",
@@ -154,15 +234,32 @@
           "plan": {
             "status": "failed",
             "evidence": [
-              { "code": "scope_scan", "detail": "planning inspection stalled before targeted tests", "source": "worker_output" }
+              {
+                "code": "scope_scan",
+                "detail": "planning inspection stalled before targeted tests",
+                "source": "worker_output"
+              }
             ]
           },
-          "edit": { "status": "pending", "evidence": [] },
-          "test": { "status": "pending", "evidence": [] },
-          "push": { "status": "pending", "evidence": [] }
+          "edit": {
+            "status": "pending",
+            "evidence": []
+          },
+          "test": {
+            "status": "pending",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
         },
         "evidence": [
-          { "code": "scope_scan", "detail": "planning inspection stalled before targeted tests", "source": "worker_output" }
+          {
+            "code": "scope_scan",
+            "detail": "planning inspection stalled before targeted tests",
+            "source": "worker_output"
+          }
         ],
         "mutation": {
           "strategy": "resume_from_failed_phase",
@@ -185,7 +282,12 @@
       },
       "retryState": {
         "schemaVersion": 1,
-        "phaseOrder": ["plan", "edit", "test", "push"],
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
         "currentPhase": "plan",
         "failedPhase": "plan",
         "resumeFromPhase": "plan",
@@ -194,15 +296,32 @@
           "plan": {
             "status": "failed",
             "evidence": [
-              { "code": "dispatch_block_reason", "detail": "api-only access softened to partial before scoped inspection", "source": "dispatch_contract" }
+              {
+                "code": "dispatch_block_reason",
+                "detail": "api-only access softened to partial before scoped inspection",
+                "source": "dispatch_contract"
+              }
             ]
           },
-          "edit": { "status": "pending", "evidence": [] },
-          "test": { "status": "pending", "evidence": [] },
-          "push": { "status": "pending", "evidence": [] }
+          "edit": {
+            "status": "pending",
+            "evidence": []
+          },
+          "test": {
+            "status": "pending",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
         },
         "evidence": [
-          { "code": "dispatch_block_reason", "detail": "api-only access softened to partial before scoped inspection", "source": "dispatch_contract" }
+          {
+            "code": "dispatch_block_reason",
+            "detail": "api-only access softened to partial before scoped inspection",
+            "source": "dispatch_contract"
+          }
         ],
         "mutation": {
           "strategy": "resume_from_failed_phase",
@@ -226,7 +345,12 @@
       },
       "retryState": {
         "schemaVersion": 1,
-        "phaseOrder": ["plan", "edit", "test", "push"],
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
         "currentPhase": "plan",
         "failedPhase": "plan",
         "resumeFromPhase": "plan",
@@ -235,15 +359,32 @@
           "plan": {
             "status": "failed",
             "evidence": [
-              { "code": "verification_report", "detail": "verification block needed corrected parseable markers", "source": "verification_gate" }
+              {
+                "code": "verification_report",
+                "detail": "verification block needed corrected parseable markers",
+                "source": "verification_gate"
+              }
             ]
           },
-          "edit": { "status": "pending", "evidence": [] },
-          "test": { "status": "pending", "evidence": [] },
-          "push": { "status": "pending", "evidence": [] }
+          "edit": {
+            "status": "pending",
+            "evidence": []
+          },
+          "test": {
+            "status": "pending",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
         },
         "evidence": [
-          { "code": "verification_report", "detail": "verification block needed corrected parseable markers", "source": "verification_gate" }
+          {
+            "code": "verification_report",
+            "detail": "verification block needed corrected parseable markers",
+            "source": "verification_gate"
+          }
         ],
         "mutation": {
           "strategy": "resume_from_failed_phase",
@@ -266,7 +407,12 @@
       },
       "retryState": {
         "schemaVersion": 1,
-        "phaseOrder": ["plan", "edit", "test", "push"],
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
         "currentPhase": "plan",
         "failedPhase": "plan",
         "resumeFromPhase": "plan",
@@ -275,21 +421,2105 @@
           "plan": {
             "status": "failed",
             "evidence": [
-              { "code": "scope_scan", "detail": "scoped planning modules inspected before code changes", "source": "worker_output" }
+              {
+                "code": "scope_scan",
+                "detail": "scoped planning modules inspected before code changes",
+                "source": "worker_output"
+              }
             ]
           },
-          "edit": { "status": "pending", "evidence": [] },
-          "test": { "status": "pending", "evidence": [] },
-          "push": { "status": "pending", "evidence": [] }
+          "edit": {
+            "status": "pending",
+            "evidence": []
+          },
+          "test": {
+            "status": "pending",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
         },
         "evidence": [
-          { "code": "scope_scan", "detail": "scoped planning modules inspected before code changes", "source": "worker_output" }
+          {
+            "code": "scope_scan",
+            "detail": "scoped planning modules inspected before code changes",
+            "source": "worker_output"
+          }
         ],
         "mutation": {
           "strategy": "resume_from_failed_phase",
           "instructions": [
             "Resume from planning with the scoped worker, retry, failure, and checkpoint files.",
             "Avoid broad scans outside the declared target files."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "integration-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "36dd65e93b844676d53deb383a056c7471e560c6",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "partial",
+        "retryAction": "rework",
+        "failureClass": "verification",
+        "recordedAt": "2026-04-14T18:38:45.905Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "push",
+        "failedPhase": "push",
+        "resumeFromPhase": "push",
+        "lastCompletedPhase": "test",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "src/core/carry_forward_ledger.ts, src/core/prometheus.ts, src/core/self_improvement.ts, src/core/lesson_halflife.ts, tests/core/carry_forward_ledger.test.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "src/core/carry_forward_ledger.ts, src/core/prometheus.ts, src/core/self_improvement.ts, src/core/lesson_halflife.ts, tests/core/carry_forward_ledger.test.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "integration-ci-retirement",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/Box/pull/340",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "src/core/carry_forward_ledger.ts, src/core/prometheus.ts, src/core/self_improvement.ts, src/core/lesson_halflife.ts, tests/core/carry_forward_ledger.test.ts",
+            "source": "instruction"
+          },
+          {
+            "code": "failure_class",
+            "detail": "verification",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "rework",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "src/core/carry_forward_ledger.ts, src/core/prometheus.ts, src/core/self_improvement.ts, src/core/lesson_halflife.ts, tests/core/carry_forward_ledger.test.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "integration-ci-retirement",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/Box/pull/340",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: src/core/carry_forward_ledger.ts, src/core/prometheus.ts, src/core/self_improvement.ts, src/core/lesson_halflife.ts, tests/core/carry_forward_ledger.test.ts.",
+            "Reuse the recorded branch/PR context and resolve git or clean-tree blockers before another push.",
+            "Continue from branch: integration-ci-retirement.",
+            "Update the existing PR instead of opening a duplicate: https://github.com/Ancora-Labs/Box/pull/340."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "integration-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "03f9dd44d56544a0a62a0b26c61175ff794a1f7f",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "partial",
+        "retryAction": "reassign",
+        "failureClass": "policy",
+        "recordedAt": "2026-04-15T07:52:43.721Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "push",
+        "failedPhase": "push",
+        "resumeFromPhase": "push",
+        "lastCompletedPhase": "test",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "src/core/prometheus.ts, src/core/jesus_supervisor.ts, src/core/cycle_analytics.ts, src/core/learning_policy_compiler.ts, tests/core/prometheus_parse.test.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "src/core/prometheus.ts, src/core/jesus_supervisor.ts, src/core/cycle_analytics.ts, src/core/learning_policy_compiler.ts, tests/core/prometheus_parse.test.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "integration-ci-retirement",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/Box/pull/341",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "src/core/prometheus.ts, src/core/jesus_supervisor.ts, src/core/cycle_analytics.ts, src/core/learning_policy_compiler.ts, tests/core/prometheus_parse.test.ts",
+            "source": "instruction"
+          },
+          {
+            "code": "failure_class",
+            "detail": "policy",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "reassign",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "src/core/prometheus.ts, src/core/jesus_supervisor.ts, src/core/cycle_analytics.ts, src/core/learning_policy_compiler.ts, tests/core/prometheus_parse.test.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "integration-ci-retirement",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/Box/pull/341",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: src/core/prometheus.ts, src/core/jesus_supervisor.ts, src/core/cycle_analytics.ts, src/core/learning_policy_compiler.ts, tests/core/prometheus_parse.test.ts.",
+            "Reuse the recorded branch/PR context and resolve git or clean-tree blockers before another push.",
+            "Continue from branch: integration-ci-retirement.",
+            "Update the existing PR instead of opening a duplicate: https://github.com/Ancora-Labs/Box/pull/341."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "evolution-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "7ac6e758393677f81e2b1064b66ff95112674fe8",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "verification_failed",
+        "retryAction": "rework",
+        "failureClass": "verification",
+        "recordedAt": "2026-04-15T11:17:39.112Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "test",
+        "failedPhase": "test",
+        "resumeFromPhase": "test",
+        "lastCompletedPhase": "edit",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "src/core/worker_runner.ts, src/core/checkpoint_engine.ts, src/core/evidence_envelope.ts, src/core/model_policy.ts, src/core/cycle_analytics.ts, tests/core/worker_runner.test.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "src/core/worker_runner.ts, src/core/checkpoint_engine.ts, src/core/evidence_envelope.ts, src/core/model_policy.ts, src/core/cycle_analytics.ts, tests/core/worker_runner.test.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "verification_gaps",
+                "detail": "Post-merge raw npm test output missing — run 'npm test' on merged state and paste raw stdout; VERIFICATION_REPORT missing — worker did not provide any verification evidence",
+                "source": "verification_gate"
+              },
+              {
+                "code": "missing_test_output",
+                "detail": "raw npm test output missing",
+                "source": "verification_gate"
+              }
+            ]
+          },
+          "push": {
+            "status": "pending",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "evolution/stable-lineage-join-key",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/Box/pull/347",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "0ead5f46b786c247a82f7a015c5c4d1796d1a72b",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "src/core/worker_runner.ts, src/core/checkpoint_engine.ts, src/core/evidence_envelope.ts, src/core/model_policy.ts, src/core/cycle_analytics.ts, tests/core/worker_runner.test.ts",
+            "source": "instruction"
+          },
+          {
+            "code": "failure_class",
+            "detail": "verification",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "rework",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "src/core/worker_runner.ts, src/core/checkpoint_engine.ts, src/core/evidence_envelope.ts, src/core/model_policy.ts, src/core/cycle_analytics.ts, tests/core/worker_runner.test.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "verification_gaps",
+            "detail": "Post-merge raw npm test output missing — run 'npm test' on merged state and paste raw stdout; VERIFICATION_REPORT missing — worker did not provide any verification evidence",
+            "source": "verification_gate"
+          },
+          {
+            "code": "branch",
+            "detail": "evolution/stable-lineage-join-key",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/Box/pull/347",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "0ead5f46b786c247a82f7a015c5c4d1796d1a72b",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: src/core/worker_runner.ts, src/core/checkpoint_engine.ts, src/core/evidence_envelope.ts, src/core/model_policy.ts, src/core/cycle_analytics.ts, tests/core/worker_runner.test.ts...",
+            "Start by reproducing the recorded verification/build/test evidence before wider edits."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "governance-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "726eedd7a167e0484bdeb0e86364b5efb2b7c8fe",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "verification_failed",
+        "retryAction": "rework",
+        "failureClass": "verification",
+        "recordedAt": "2026-04-15T11:57:45.208Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "test",
+        "failedPhase": "test",
+        "resumeFromPhase": "test",
+        "lastCompletedPhase": "edit",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "src/core/orchestrator.ts, src/core/capability_pool.ts, src/core/worker_batch_planner.ts, src/core/role_registry.ts, tests/core/orchestrator_pipeline_progress.test.ts, tests/core/orchestrator_specialization_gate.test.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "src/core/orchestrator.ts, src/core/role_registry.ts, tests/core/orchestrator_pipeline_progress.test.ts, tests/core/orchestrator_worker_cycle_artifacts.test.ts, tests/core/worker_batch_planner.test.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "verification_gaps",
+                "detail": "Post-merge raw npm test output missing — run 'npm test' on merged state and paste raw stdout; VERIFICATION_REPORT missing — worker did not provide any verification evidence",
+                "source": "verification_gate"
+              },
+              {
+                "code": "missing_test_output",
+                "detail": "raw npm test output missing",
+                "source": "verification_gate"
+              }
+            ]
+          },
+          "push": {
+            "status": "pending",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "evolution/stable-lineage-join-key",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/Box/pull/348",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "91fdec67f073e2d9eaebacd5917b5f9e287f06a0",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "src/core/orchestrator.ts, src/core/capability_pool.ts, src/core/worker_batch_planner.ts, src/core/role_registry.ts, tests/core/orchestrator_pipeline_progress.test.ts, tests/core/orchestrator_specialization_gate.test.ts",
+            "source": "instruction"
+          },
+          {
+            "code": "failure_class",
+            "detail": "verification",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "rework",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "src/core/orchestrator.ts, src/core/role_registry.ts, tests/core/orchestrator_pipeline_progress.test.ts, tests/core/orchestrator_worker_cycle_artifacts.test.ts, tests/core/worker_batch_planner.test.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "verification_gaps",
+            "detail": "Post-merge raw npm test output missing — run 'npm test' on merged state and paste raw stdout; VERIFICATION_REPORT missing — worker did not provide any verification evidence",
+            "source": "verification_gate"
+          },
+          {
+            "code": "branch",
+            "detail": "evolution/stable-lineage-join-key",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/Box/pull/348",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "91fdec67f073e2d9eaebacd5917b5f9e287f06a0",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: src/core/orchestrator.ts, src/core/capability_pool.ts, src/core/worker_batch_planner.ts, src/core/role_registry.ts, tests/core/orchestrator_pipeline_progress.test.ts, tests/cor...",
+            "Start by reproducing the recorded verification/build/test evidence before wider edits."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "governance-worker",
+      "taskKind": "rework",
+      "taskFingerprint": "c81986da56792148866c2e545e221c331102a68e",
+      "taskSnippet": "## AUTO-REWORK — VERIFICATION GAPS DETECTED (attempt 1/2)\n\nYour previous completion was REJECTED by the verification gate because the following evidence was missing or failed:\n\n  1. Post-merge raw npm test output missing — run 'npm test' on",
+      "outcome": {
+        "status": "skipped",
+        "retryAction": null,
+        "failureClass": null,
+        "recordedAt": "2026-04-15T12:03:48.081Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "edit",
+        "failedPhase": "edit",
+        "resumeFromPhase": "edit",
+        "lastCompletedPhase": "plan",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": []
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "src/core/orchestrator.ts, src/core/role_registry.ts, tests/core/orchestrator_pipeline_progress.test.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": []
+          },
+          "push": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "evolution/stable-lineage-join-key",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/Box/pull/348",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "91fdec67f073e2d9eaebacd5917b5f9e287f06a0",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "files_touched",
+            "detail": "src/core/orchestrator.ts, src/core/role_registry.ts, tests/core/orchestrator_pipeline_progress.test.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "branch",
+            "detail": "evolution/stable-lineage-join-key",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/Box/pull/348",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "91fdec67f073e2d9eaebacd5917b5f9e287f06a0",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Inspect the last touched files before any new search.",
+            "Resume edits from: src/core/orchestrator.ts, src/core/role_registry.ts, tests/core/orchestrator_pipeline_progress.test.ts."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "evolution-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "4302dd0dcdb031fc90f45f0324eea67f4e444bda",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "verification_failed",
+        "retryAction": "rework",
+        "failureClass": "verification",
+        "recordedAt": "2026-04-15T12:18:16.976Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "test",
+        "failedPhase": "test",
+        "resumeFromPhase": "test",
+        "lastCompletedPhase": "edit",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "src/core/prompt_compiler.ts, src/core/state_tracker.ts, src/core/model_policy.ts, tests/core/prompt_compiler.test.ts, tests/core/state_tracker.test.ts, tests/core/model_policy.test.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "src/core/prompt_compiler.ts, src/core/state_tracker.ts, src/core/model_policy.ts, tests/core/prompt_compiler.test.ts, tests/core/state_tracker.test.ts, tests/core/model_policy.test.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "verification_gaps",
+                "detail": "Post-merge raw npm test output missing — run 'npm test' on merged state and paste raw stdout; VERIFICATION_REPORT missing — worker did not provide any verification evidence",
+                "source": "verification_gate"
+              },
+              {
+                "code": "missing_test_output",
+                "detail": "raw npm test output missing",
+                "source": "verification_gate"
+              }
+            ]
+          },
+          "push": {
+            "status": "pending",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "evolution/prompt-cache-stable-prefix",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/Box/pull/349",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "a920433d7fed0ec80cdf1791f80721d960de6b04",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "src/core/prompt_compiler.ts, src/core/state_tracker.ts, src/core/model_policy.ts, tests/core/prompt_compiler.test.ts, tests/core/state_tracker.test.ts, tests/core/model_policy.test.ts",
+            "source": "instruction"
+          },
+          {
+            "code": "failure_class",
+            "detail": "verification",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "rework",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "src/core/prompt_compiler.ts, src/core/state_tracker.ts, src/core/model_policy.ts, tests/core/prompt_compiler.test.ts, tests/core/state_tracker.test.ts, tests/core/model_policy.test.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "verification_gaps",
+            "detail": "Post-merge raw npm test output missing — run 'npm test' on merged state and paste raw stdout; VERIFICATION_REPORT missing — worker did not provide any verification evidence",
+            "source": "verification_gate"
+          },
+          {
+            "code": "branch",
+            "detail": "evolution/prompt-cache-stable-prefix",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/Box/pull/349",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "a920433d7fed0ec80cdf1791f80721d960de6b04",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: src/core/prompt_compiler.ts, src/core/state_tracker.ts, src/core/model_policy.ts, tests/core/prompt_compiler.test.ts, tests/core/state_tracker.test.ts, tests/core/model_policy....",
+            "Start by reproducing the recorded verification/build/test evidence before wider edits."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "evolution-worker",
+      "taskKind": "documentation",
+      "taskFingerprint": "eee896098dfab5633f61d13aaa4f94a0954e5801",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "error",
+        "retryAction": "rework",
+        "failureClass": "logic_defect",
+        "recordedAt": "2026-04-16T16:06:33.145Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "plan",
+        "failedPhase": "plan",
+        "resumeFromPhase": "plan",
+        "lastCompletedPhase": null,
+        "phaseStates": {
+          "plan": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_20260416113511_3e0e42\\index.html, C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_2026041611...",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "pending",
+            "evidence": []
+          },
+          "test": {
+            "status": "pending",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_20260416113511_3e0e42\\index.html, C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_2026041611...",
+            "source": "instruction"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_20260416113511_3e0e42\\index.html, C:\\Users\\caner\\Desktop\\.box-target-workspace...",
+            "Re-validate repo, tools, and scoped files before editing."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "evolution-worker",
+      "taskKind": "documentation",
+      "taskFingerprint": "eee896098dfab5633f61d13aaa4f94a0954e5801",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "blocked",
+        "retryAction": "escalate",
+        "failureClass": "logic_defect",
+        "recordedAt": "2026-04-16T16:21:57.035Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "push",
+        "failedPhase": "push",
+        "resumeFromPhase": "push",
+        "lastCompletedPhase": "test",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_20260416113511_3e0e42\\index.html, C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_2026041611...",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "index.html, style.css, app.js, README.md, package.json, tests/core/app.test.js",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "dispatch_block_reason",
+                "detail": "target_execution_guard:shadow_scope_too_large",
+                "source": "dispatch_contract"
+              },
+              {
+                "code": "branch",
+                "detail": "evolution/simple-todo-mvp-v2",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode/pull/1",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "960c34cf95353d6994403f2f30fdacf44f348c09",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_20260416113511_3e0e42\\index.html, C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_2026041611...",
+            "source": "instruction"
+          },
+          {
+            "code": "dispatch_block_reason",
+            "detail": "target_execution_guard:shadow_scope_too_large",
+            "source": "dispatch_contract"
+          },
+          {
+            "code": "failure_class",
+            "detail": "logic_defect",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "escalate",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "index.html, style.css, app.js, README.md, package.json, tests/core/app.test.js",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "evolution/simple-todo-mvp-v2",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_20260416113511_3e0e42\\index.html, C:\\Users\\caner\\Desktop\\.box-target-workspace...",
+            "Reuse the recorded branch/PR context and resolve git or clean-tree blockers before another push.",
+            "Continue from branch: evolution/simple-todo-mvp-v2.",
+            "Update the existing PR instead of opening a duplicate: https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode/pull/1."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "quality-worker",
+      "taskKind": "documentation",
+      "taskFingerprint": "c793d328d4e872e8dfccd896e5802a3c7cd62a0b",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "blocked",
+        "retryAction": "escalate",
+        "failureClass": "logic_defect",
+        "recordedAt": "2026-04-16T16:55:34.442Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "push",
+        "failedPhase": "push",
+        "resumeFromPhase": "push",
+        "lastCompletedPhase": "test",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_20260416113511_3e0e42\\index.html, C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_2026041611...",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "none",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "dispatch_block_reason",
+                "detail": "self_dev_guard_breach:runtime_scope",
+                "source": "dispatch_contract"
+              },
+              {
+                "code": "branch",
+                "detail": "main",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_20260416113511_3e0e42\\index.html, C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_2026041611...",
+            "source": "instruction"
+          },
+          {
+            "code": "dispatch_block_reason",
+            "detail": "self_dev_guard_breach:runtime_scope",
+            "source": "dispatch_contract"
+          },
+          {
+            "code": "failure_class",
+            "detail": "logic_defect",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "escalate",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "none",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "main",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: C:\\Users\\caner\\Desktop\\.box-target-workspaces\\box\\targets\\target_testrepoforsingletargetmode\\sess_20260416113511_3e0e42\\index.html, C:\\Users\\caner\\Desktop\\.box-target-workspace...",
+            "Reuse the recorded branch/PR context and resolve git or clean-tree blockers before another push.",
+            "Continue from branch: main."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "evolution-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "89211eec64f4461c92f7737bd420f36d4d607dcc",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "partial",
+        "retryAction": "rework",
+        "failureClass": "verification",
+        "recordedAt": "2026-04-16T17:27:47.323Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "push",
+        "failedPhase": "push",
+        "resumeFromPhase": "push",
+        "lastCompletedPhase": "test",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "index.html, style.css, app.js, README.md",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "none",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "dispatch_block_reason",
+                "detail": "Task was already completed in a prior wave via merged PR #2, so there was no safe remaining implementation step.",
+                "source": "dispatch_contract"
+              },
+              {
+                "code": "branch",
+                "detail": "main",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode/pull/2",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "9665223663e9e4d2bd7bf577e5f741709446f562",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "index.html, style.css, app.js, README.md",
+            "source": "instruction"
+          },
+          {
+            "code": "dispatch_block_reason",
+            "detail": "Task was already completed in a prior wave via merged PR #2, so there was no safe remaining implementation step.",
+            "source": "dispatch_contract"
+          },
+          {
+            "code": "failure_class",
+            "detail": "verification",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "rework",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "none",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "main",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: index.html, style.css, app.js, README.md.",
+            "Reuse the recorded branch/PR context and resolve git or clean-tree blockers before another push.",
+            "Continue from branch: main.",
+            "Update the existing PR instead of opening a duplicate: https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode/pull/2."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "evolution-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "89211eec64f4461c92f7737bd420f36d4d607dcc",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "skipped",
+        "retryAction": null,
+        "failureClass": null,
+        "recordedAt": "2026-04-16T18:10:07.161Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "edit",
+        "failedPhase": "edit",
+        "resumeFromPhase": "edit",
+        "lastCompletedPhase": "plan",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "index.html, style.css, app.js, README.md",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "none",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": []
+          },
+          "push": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "main",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode/pull/2",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "9665223663e9e4d2bd7bf577e5f741709446f562",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "index.html, style.css, app.js, README.md",
+            "source": "instruction"
+          },
+          {
+            "code": "files_touched",
+            "detail": "none",
+            "source": "worker_output"
+          },
+          {
+            "code": "branch",
+            "detail": "main",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode/pull/2",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "9665223663e9e4d2bd7bf577e5f741709446f562",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: index.html, style.css, app.js, README.md.",
+            "Inspect the last touched files before any new search.",
+            "Resume edits from: none."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "evolution-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "89211eec64f4461c92f7737bd420f36d4d607dcc",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "skipped",
+        "retryAction": null,
+        "failureClass": null,
+        "recordedAt": "2026-04-16T18:16:02.682Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "edit",
+        "failedPhase": "edit",
+        "resumeFromPhase": "edit",
+        "lastCompletedPhase": "plan",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "index.html, style.css, app.js, README.md",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "none",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "main",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode/pull/2",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "9665223663e9e4d2bd7bf577e5f741709446f562",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "index.html, style.css, app.js, README.md",
+            "source": "instruction"
+          },
+          {
+            "code": "files_touched",
+            "detail": "none",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "main",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode/pull/2",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "9665223663e9e4d2bd7bf577e5f741709446f562",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: index.html, style.css, app.js, README.md.",
+            "Inspect the last touched files before any new search.",
+            "Resume edits from: none."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "evolution-worker",
+      "taskKind": "documentation",
+      "taskFingerprint": "7c23cc82e5f753312ef1d34b7c6868e177d5fa6c",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "skipped",
+        "retryAction": null,
+        "failureClass": null,
+        "recordedAt": "2026-04-16T18:18:06.996Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "edit",
+        "failedPhase": "edit",
+        "resumeFromPhase": "edit",
+        "lastCompletedPhase": "plan",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "index.html, style.css, app.js, README.md",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "none",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "main",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "9665223663e9e4d2bd7bf577e5f741709446f562",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "index.html, style.css, app.js, README.md",
+            "source": "instruction"
+          },
+          {
+            "code": "files_touched",
+            "detail": "none",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "main",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "9665223663e9e4d2bd7bf577e5f741709446f562",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: index.html, style.css, app.js, README.md.",
+            "Inspect the last touched files before any new search.",
+            "Resume edits from: none."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "quality-worker",
+      "taskKind": "bugfix",
+      "taskFingerprint": "359ab543e7fb4be49f7566f1b4ddf1f85393826b",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "skipped",
+        "retryAction": null,
+        "failureClass": null,
+        "recordedAt": "2026-04-16T18:25:59.291Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "edit",
+        "failedPhase": "edit",
+        "resumeFromPhase": "edit",
+        "lastCompletedPhase": "plan",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "index.html, style.css, app.js, README.md",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "none",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "main",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode/pull/3",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "aa1358529f2c95c1351111ad377d2f28a99efff3",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "index.html, style.css, app.js, README.md",
+            "source": "instruction"
+          },
+          {
+            "code": "files_touched",
+            "detail": "none",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "main",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode/pull/3",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "aa1358529f2c95c1351111ad377d2f28a99efff3",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: index.html, style.css, app.js, README.md.",
+            "Inspect the last touched files before any new search.",
+            "Resume edits from: none."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "quality-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "5859a3801ccf4387d2b125819f053b29711600ab",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "partial",
+        "retryAction": "rework",
+        "failureClass": "logic_defect",
+        "recordedAt": "2026-04-16T18:51:10.672Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "push",
+        "failedPhase": "push",
+        "resumeFromPhase": "push",
+        "lastCompletedPhase": "test",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "index.html, style.css, app.js, README.md",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "none",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "main",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "aa1358529f2c95c1351111ad377d2f28a99efff3",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "index.html, style.css, app.js, README.md",
+            "source": "instruction"
+          },
+          {
+            "code": "failure_class",
+            "detail": "logic_defect",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "rework",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "none",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "main",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "aa1358529f2c95c1351111ad377d2f28a99efff3",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: index.html, style.css, app.js, README.md.",
+            "Reuse the recorded branch/PR context and resolve git or clean-tree blockers before another push.",
+            "Continue from branch: main."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "evolution-worker",
+      "taskKind": "documentation",
+      "taskFingerprint": "b02b2021d2c309965f27a45c39e4f94c8aefd823",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "skipped",
+        "retryAction": null,
+        "failureClass": null,
+        "recordedAt": "2026-04-16T19:22:31.768Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "edit",
+        "failedPhase": "edit",
+        "resumeFromPhase": "edit",
+        "lastCompletedPhase": "plan",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "index.html, style.css, app.js, README.md",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "none",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "main",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode/pull/2",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "index.html, style.css, app.js, README.md",
+            "source": "instruction"
+          },
+          {
+            "code": "files_touched",
+            "detail": "none",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "main",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode/pull/2",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: index.html, style.css, app.js, README.md.",
+            "Inspect the last touched files before any new search.",
+            "Resume edits from: none."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "quality-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "b8bce92ed1b532a49367a463849dbd5781c4de66",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "skipped",
+        "retryAction": null,
+        "failureClass": null,
+        "recordedAt": "2026-04-16T19:26:03.941Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "edit",
+        "failedPhase": "edit",
+        "resumeFromPhase": "edit",
+        "lastCompletedPhase": "plan",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "index.html, style.css, app.js, README.md",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "none",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "main",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode/pull/4",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "index.html, style.css, app.js, README.md",
+            "source": "instruction"
+          },
+          {
+            "code": "files_touched",
+            "detail": "none",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "main",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode/pull/4",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: index.html, style.css, app.js, README.md.",
+            "Inspect the last touched files before any new search.",
+            "Resume edits from: none."
           ]
         }
       }

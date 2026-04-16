@@ -105,7 +105,36 @@
       "resolvedAt": "2026-04-09T12:15:26.254Z",
       "resolutionSummary": "Worker recovered after runtime failure with status=done",
       "resolvedBy": "worker:evolution-worker"
+    },
+    {
+      "schemaVersion": 1,
+      "role": "evolution-worker",
+      "taskFingerprint": "ecc8ff11cc931b91",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo",
+      "blockingReasonClass": "WORKER_ERROR",
+      "attempts": 0,
+      "nextAction": "RETRY",
+      "summary": "Error exit=1: No such agent: evolution-worker, available: \n",
+      "prUrl": null,
+      "resolved": true,
+      "createdAt": "2026-04-16T16:06:33.131Z",
+      "resolvedAt": "2026-04-16T16:53:06.513Z",
+      "resolutionSummary": "Worker recovered after runtime failure with status=done",
+      "resolvedBy": "worker:evolution-worker"
+    },
+    {
+      "schemaVersion": 1,
+      "role": "quality-worker",
+      "taskFingerprint": "01d6398bb88916b7",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo",
+      "blockingReasonClass": "POLICY_VIOLATION",
+      "attempts": 0,
+      "nextAction": "ESCALATE_TO_HUMAN",
+      "summary": "Self-dev guard breach: Self-dev mode requires a feature branch. Current: \"main\". Use box/selfdev-* prefix.",
+      "prUrl": null,
+      "resolved": false,
+      "createdAt": "2026-04-16T16:55:34.356Z"
     }
   ],
-  "updatedAt": "2026-04-09T12:15:26.254Z"
+  "updatedAt": "2026-04-16T16:55:34.373Z"
 }
