@@ -87,28 +87,44 @@ describe("target_execution_guard", () => {
     const config = buildConfig();
     const protectedPathBoundary = evaluateTargetExecutionBoundary({
       changedFiles: ["infra/prod/deploy.yml"],
+      taskKind: "docs",
       task: "Adjust guarded infra configuration",
     }, config);
     assert.equal(protectedPathBoundary.allowed, false);
     assert.equal(protectedPathBoundary.dispatchBlockReason, "target_execution_guard:protected_path_scope");
 
     const forbiddenActionBoundary = evaluateTargetExecutionBoundary({
+      taskKind: "docs",
       task: "Apply the fix and bypass review gate after merge",
     }, config);
     assert.equal(forbiddenActionBoundary.allowed, false);
     assert.equal(forbiddenActionBoundary.dispatchBlockReason, "target_execution_guard:forbidden_action_requested");
   });
 
-  it("blocks high-risk implementation packets while shadow mode is active", () => {
+  it("blocks shadow implementation packets that do not carry concrete verification", () => {
     const config = buildConfig();
     const boundary = evaluateTargetExecutionBoundary({
       changedFiles: ["src/app.ts"],
       taskKind: "implementation",
-      task: "Ship the target feature end to end",
+      task: "Implement the target feature in a bounded way",
+      verification: "npm test",
     }, config);
 
     assert.equal(boundary.allowed, false);
-    assert.equal(boundary.dispatchBlockReason, "target_execution_guard:shadow_task_kind_not_allowed");
+    assert.equal(boundary.dispatchBlockReason, "target_execution_guard:shadow_implementation_requires_verification");
+  });
+
+  it("allows a bounded shadow implementation packet when it carries concrete verification", () => {
+    const config = buildConfig();
+    const boundary = evaluateTargetExecutionBoundary({
+      changedFiles: ["src/app.ts", "src/ui.ts"],
+      taskKind: "implementation",
+      task: "Implement a tiny proving-step refinement only",
+      verification: "npm test -- tests/core/target_execution_guard.test.ts",
+    }, config);
+
+    assert.equal(boundary.allowed, true);
+    assert.equal(boundary.dispatchBlockReason, null);
   });
 
   it("blocks deploy intent while shadow mode is active", () => {
@@ -136,6 +152,9 @@ describe("target_execution_guard", () => {
     assert.match(contextBlock, /TARGET EXECUTION CONTEXT/);
     assert.match(contextBlock, /Run repo commands, tests, and git operations inside the target workspace only/);
     assert.match(contextBlock, /Shadow mode is verification-first/);
+    assert.match(contextBlock, /Allowed task kinds only: planning, test, ci-fix, observation, analysis, docs, documentation, verification, implementation/);
+    assert.match(contextBlock, /must stay within 4 target file\(s\), avoid broad delivery or release intent, and carry concrete verification/i);
+    assert.match(contextBlock, /must produce evidence: keep at least one verification, test, observation, analysis, or concretely verified implementation packet/i);
     assert.match(contextBlock, /do not create extra files outside the planner-declared target file set/i);
     assert.match(prompt, /TARGET EXECUTION CONTEXT/);
     assert.match(prompt, /SHADOW MODE DELIVERY DISCIPLINE/);

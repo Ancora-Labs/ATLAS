@@ -72,6 +72,12 @@ import {
 } from "./worker_batch_planner.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
 import { buildPromptAssemblyPrompt, resolvePromptTargetRepo } from "./prompt_overlay.js";
+import {
+  buildShadowStageDisciplineLines,
+  evaluateTargetStagePlanContract,
+  isShadowStageRuntime,
+  splitTargetStagePlans,
+} from "./target_stage_contract.js";
 
 // ── Span contract emitter ─────────────────────────────────────────────────────
 
@@ -308,6 +314,7 @@ export const ATHENA_PLAN_REVIEW_REASON_CODE = Object.freeze({
   NO_PLAN_PROVIDED: "NO_PLAN_PROVIDED",
   AI_CALL_FAILED: "AI_CALL_FAILED",
   LOW_PLAN_QUALITY: "LOW_PLAN_QUALITY",
+  TARGET_STAGE_CONTRACT_VIOLATION: "TARGET_STAGE_CONTRACT_VIOLATION",
   MISSING_PREMORTEM: "MISSING_PREMORTEM",
   MISSING_ACTIONABLE_PACKET_FIELDS: "MISSING_ACTIONABLE_PACKET_FIELDS",
   MALFORMED_DECISION_PACKET: "MALFORMED_DECISION_PACKET",
@@ -2843,7 +2850,7 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
     return attachReviewArtifact({ approved: false, reason, blocker, corrections: [] }, [], null);
   }
 
-  const plans = Array.isArray(prometheusAnalysis.plans) ? prometheusAnalysis.plans : [];
+  let plans = Array.isArray(prometheusAnalysis.plans) ? prometheusAnalysis.plans : [];
   const gateRisk = await assessGovernanceGateBlockRisk(config);
   const gateRiskLine = `Current governance gate feasibility risk: gateBlockRisk=${gateRisk.gateBlockRisk}; signals=${gateRisk.activeGateSignals.join("|") || "none"}; requiresCorrection=${gateRisk.requiresCorrection}`;
 
@@ -2925,6 +2932,36 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
         blocker,
         corrections: [...missing.map(id => `finding ${id} not covered`), ...invalid.map(id => `invalid coverage for ${id}`)],
       }, plans, gateRisk);
+    }
+  }
+
+  const stageContract = evaluateTargetStagePlanContract(plans, config);
+  if (!stageContract.valid) {
+    const salvage = splitTargetStagePlans(plans, config);
+    if (salvage.active && salvage.admittedPlans.length > 0) {
+      plans = salvage.admittedPlans;
+      await appendProgress(config, `[ATHENA] Target stage contract salvaged ${salvage.admittedPlans.length}/${salvage.admittedPlans.length + salvage.rejectedPlans.length} plan(s) before rejection — ${salvage.summary}`);
+      chatLog(stateDir, athenaName, `Target stage contract salvaged subset before review: ${salvage.summary}`);
+    } else {
+    const message = `Target stage contract rejected ${stageContract.violations.length} plan issue(s) — ${stageContract.summary}`;
+    const reason = {
+      code: ATHENA_PLAN_REVIEW_REASON_CODE.TARGET_STAGE_CONTRACT_VIOLATION,
+      message,
+    };
+    const blocker = { stage: "athena_plan_review", code: reason.code, source: "athena_reviewer", retryable: true };
+    const corrections = stageContract.violations.map((violation) => {
+      const indexLabel = violation.planIndex === null ? "plan[unknown]" : `plan[${violation.planIndex}]`;
+      return `${indexLabel}: ${violation.message}`;
+    });
+    await appendProgress(config, `[ATHENA] Target stage contract FAILED — ${message}`);
+    await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
+    chatLog(stateDir, athenaName, `Target stage contract failed: ${message}`);
+    return attachReviewArtifact({
+      approved: false,
+      reason,
+      blocker,
+      corrections,
+    }, plans, gateRisk);
     }
   }
 
@@ -3145,10 +3182,14 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
 
   const athenaLayerPrompt = buildPromptAssemblyPrompt({ agentName: "athena", config });
   const effectivePromptTargetRepo = resolvePromptTargetRepo(config);
+  const shadowDisciplinePrompt = isShadowStageRuntime(config)
+    ? `\n## SHADOW MODE DELIVERY DISCIPLINE\n${buildShadowStageDisciplineLines().map((entry) => `- ${entry}`).join("\n")}`
+    : "";
 
   const contextPrompt = `TARGET REPO: ${effectivePromptTargetRepo}
 ${similarityWarning}
 ${athenaLayerPrompt}
+${shadowDisciplinePrompt}
 
 ## YOUR MISSION — PLAN QUALITY REVIEW & IN-PLACE REPAIR
 
@@ -3543,6 +3584,41 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
         reason: blockReason,
         blocker,
       }, plans, gateRisk);
+    }
+
+    const patchedStageContract = evaluateTargetStagePlanContract(handoff.plans, config);
+    if (!patchedStageContract.valid) {
+      const salvage = splitTargetStagePlans(handoff.plans, config);
+      if (salvage.active && salvage.admittedPlans.length > 0) {
+        result.patchedPlans = salvage.admittedPlans;
+        if (!result.corrections.includes(`Athena salvaged ${salvage.admittedPlans.length} shadow-compatible patched plan(s) before rejecting the batch`)) {
+          result.corrections.push(`Athena salvaged ${salvage.admittedPlans.length} shadow-compatible patched plan(s) before rejecting the batch`);
+        }
+        await appendProgress(config, `[ATHENA] Patched plan stage contract salvaged ${salvage.admittedPlans.length}/${salvage.admittedPlans.length + salvage.rejectedPlans.length} plan(s) — ${salvage.summary}`);
+        chatLog(stateDir, athenaName, `Patched plan stage contract salvaged subset: ${salvage.summary}`);
+      } else {
+      const blockReason = {
+        code: ATHENA_PLAN_REVIEW_REASON_CODE.TARGET_STAGE_CONTRACT_VIOLATION,
+        message: `Patched plans violate the active target stage contract: ${patchedStageContract.summary}`,
+      };
+      const blocker = buildPlanReviewBlocker(blockReason.code);
+      await appendProgress(config, `[ATHENA] Patched plan stage contract FAILED — ${blockReason.message}`);
+      await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
+      chatLog(stateDir, athenaName, `Patched plan stage contract failed: ${patchedStageContract.summary}`);
+      return attachReviewArtifact({
+        ...result,
+        approved: false,
+        corrections: [
+          ...corrections,
+          ...patchedStageContract.violations.map((violation) => {
+            const indexLabel = violation.planIndex === null ? "plan[unknown]" : `plan[${violation.planIndex}]`;
+            return `${indexLabel}: ${violation.message}`;
+          }),
+        ],
+        reason: blockReason,
+        blocker,
+      }, plans, gateRisk);
+      }
     }
 
     // ── AI batch-metadata contract gate ─────────────────────────────────────

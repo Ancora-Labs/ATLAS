@@ -264,9 +264,13 @@ async function handleActivationCommand(config: Config): Promise<void> {
   const questionId = getArgValue("--question-id");
   const selectedOptions = getArgValue("--options");
   const interactiveEnabled = !process.argv.includes("--no-interactive");
+  const deleteRepoOnRestart = hasArgFlag("--delete-repo");
 
   if (hasArgFlag("--restart") && (answerText || selectedOptions || manifestPath)) {
     throw new Error("--restart cannot be combined with --manifest, --answer, or --options");
+  }
+  if (deleteRepoOnRestart && !hasArgFlag("--restart")) {
+    throw new Error("--delete-repo can only be used with --restart");
   }
 
   if (manifestPath) {
@@ -297,7 +301,6 @@ async function handleActivationCommand(config: Config): Promise<void> {
 
   const activeSession = await resolveActivationEntrySession(config, interactiveEnabled);
   if (!activeSession && interactiveEnabled && isInteractiveTerminal()) {
-    await promptLastArchivedSessionCleanup(config, interactiveEnabled);
     const wizardResult = await runInteractiveActivationWizard(config);
     const session = await createTargetSession(wizardResult.manifest, config);
     const onboardingResult = await runTargetOnboarding(config, session);
@@ -450,18 +453,27 @@ async function runInteractiveClarificationSession(config: Config, session?: any 
   return currentSession;
 }
 
-async function restartActiveTargetSession(config: Config, reason = "restart_requested_from_activate"): Promise<void> {
+async function restartActiveTargetSession(
+  config: Config,
+  options: {
+    reason?: string;
+    deleteRemoteRepo?: boolean;
+    completionSummary?: string;
+  } = {},
+): Promise<void> {
   const activeSession = await loadActiveTargetSession(config);
   if (!activeSession) {
     return;
   }
 
-  const repoFullName = String(activeSession?.repo?.repoFullName || "").trim();
-  const deleteRemoteRepo = activeSession?.repo?.repoCreatedByBox === true
-    && activeSession?.repo?.deleteOnCancel === true
-    && Boolean(repoFullName);
+  const reason = options.reason || "restart_requested_from_activate";
+  const deleteRemoteRepo = options.deleteRemoteRepo === true;
 
   if (deleteRemoteRepo) {
+    const repoFullName = String(activeSession?.repo?.repoFullName || "").trim();
+    if (!canDeleteSessionRepo(activeSession)) {
+      throw new Error("Active target session does not have a BOX-created repo that can be deleted");
+    }
     await deleteGithubRepo(config, repoFullName);
     console.log(`[box activate] deleted created repo=${repoFullName}`);
   }
@@ -469,7 +481,10 @@ async function restartActiveTargetSession(config: Config, reason = "restart_requ
   const archived = await archiveTargetSession(config, {
     completionStage: TARGET_SESSION_STAGE.COMPLETED,
     completionReason: reason,
-    completionSummary: "Target session intentionally restarted from the activation flow.",
+    completionSummary: options.completionSummary
+      || (deleteRemoteRepo
+        ? "Target session intentionally closed from the activation flow and the BOX-created repo was deleted."
+        : "Target session intentionally closed from the activation flow while preserving the repository."),
     unresolvedItems: [],
   });
   console.log(`[box activate] previous session archived=${archived.sessionId} reason=${reason}`);
@@ -482,7 +497,10 @@ async function resolveActivationEntrySession(config: Config, interactiveEnabled:
   }
 
   if (hasArgFlag("--restart")) {
-    await restartActiveTargetSession(config, "restart_flag_requested");
+    await restartActiveTargetSession(config, {
+      reason: hasArgFlag("--delete-repo") ? "restart_flag_requested_delete_repo" : "restart_flag_requested",
+      deleteRemoteRepo: hasArgFlag("--delete-repo"),
+    });
     return null;
   }
 
@@ -495,36 +513,34 @@ async function resolveActivationEntrySession(config: Config, interactiveEnabled:
   printProductField("stage", humanizeMode(activeSession.currentStage));
   printProductField("repo", activeSession.repo?.repoUrl || activeSession.repo?.localPath || "unknown");
   printProductField("objective", activeSession.objective?.summary || "unknown");
-  const canDeleteCreatedRepo = activeSession?.repo?.repoCreatedByBox === true
-    && activeSession?.repo?.deleteOnCancel === true
-    && String(activeSession?.repo?.repoFullName || "").trim().length > 0;
+  const canDeleteCreatedRepo = canDeleteSessionRepo(activeSession);
   console.log("1. Continue current target session");
   console.log("2. Start over and keep current repo");
-  console.log(canDeleteCreatedRepo ? "3. Cancel and delete created repo" : "3. Cancel current session");
-  console.log("4. Keep everything and exit");
+  console.log("3. Cancel current session");
+  console.log(canDeleteCreatedRepo ? "4. Cancel current session and delete created repo" : "4. Keep everything and exit");
   const decision = await promptChoice("select [1/2/3/4]: ", ["1", "2", "3", "4"], "1");
   if (decision === "1") {
     return activeSession;
   }
   if (decision === "2") {
-    const keepRepoSession = {
-      ...activeSession,
-      repo: {
-        ...activeSession.repo,
-        repoCreatedByBox: false,
-        deleteOnCancel: false,
-      },
-    };
-    await saveActiveTargetSession(config, keepRepoSession);
-    await restartActiveTargetSession(config, "restart_selected_in_activation_wizard_keep_repo");
+    await restartActiveTargetSession(config, {
+      reason: "restart_selected_in_activation_wizard_keep_repo",
+    });
     return null;
   }
 
   if (decision === "3") {
-    await restartActiveTargetSession(
-      config,
-      canDeleteCreatedRepo ? "cancel_selected_delete_created_repo" : "cancel_selected_keep_existing_repo",
-    );
+    await restartActiveTargetSession(config, {
+      reason: "cancel_selected_keep_existing_repo",
+    });
+    return null;
+  }
+
+  if (decision === "4" && canDeleteCreatedRepo) {
+    await restartActiveTargetSession(config, {
+      reason: "cancel_selected_delete_created_repo",
+      deleteRemoteRepo: true,
+    });
     return null;
   }
 
@@ -914,6 +930,15 @@ async function main(): Promise<void> {
     }
 
     if (subCommand === "close") {
+      const deleteRemoteRepo = hasArgFlag("--delete-repo");
+      if (deleteRemoteRepo) {
+        const activeSession = await loadActiveTargetSession(config);
+        if (!canDeleteSessionRepo(activeSession)) {
+          throw new Error("Active target session does not have a BOX-created repo that can be deleted");
+        }
+        await deleteGithubRepo(config, String(activeSession.repo.repoFullName));
+        console.log(`[box target] deleted created repo=${String(activeSession.repo.repoFullName)}`);
+      }
       const completionStage = getArgValue("--status") || TARGET_SESSION_STAGE.COMPLETED;
       const archived = await archiveTargetSession(config, {
         completionStage,

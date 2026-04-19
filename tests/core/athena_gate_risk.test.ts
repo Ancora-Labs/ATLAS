@@ -87,6 +87,109 @@ describe("athena gate risk dry-run integration", () => {
     }
   });
 
+  it("rejects high-risk shadow packets that still violate the target stage contract", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-shadow-contract-"));
+    try {
+      const config = {
+        paths: {
+          stateDir,
+          progressFile: path.join(stateDir, "progress.log"),
+          policyFile: path.join(stateDir, "policy.json"),
+        },
+        env: { targetRepo: "CanerDoqdu/Box" },
+        platformModeState: { currentMode: "single_target_delivery" },
+        activeTargetSession: {
+          projectId: "portal",
+          sessionId: "sess_shadow",
+          currentStage: "shadow",
+          gates: {
+            allowShadowExecution: true,
+            allowActiveExecution: false,
+          },
+          repo: { repoUrl: "https://github.com/acme/portal" },
+        },
+      };
+      const result = await runAthenaPlanReview(config, {
+        plans: [
+          {
+            role: "evolution-worker",
+            task: "Implement the premium todo board end to end and release it",
+            taskKind: "implementation",
+            target_files: ["src/app.ts"],
+            scope: "feature delivery",
+            verification: "npm test -- tests/core/athena_gate_risk.test.ts",
+            wave: 1,
+            riskLevel: "low",
+          },
+        ],
+      });
+
+      assert.equal(result.approved, false);
+      assert.equal(result.reason?.code, ATHENA_PLAN_REVIEW_REASON_CODE.TARGET_STAGE_CONTRACT_VIOLATION);
+      assert.equal(result.blocker?.stage, "athena_plan_review");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("salvages shadow-compatible plans before rejecting the whole batch", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-shadow-salvage-"));
+    try {
+      const config = {
+        paths: {
+          stateDir,
+          progressFile: path.join(stateDir, "progress.log"),
+          policyFile: path.join(stateDir, "policy.json"),
+        },
+        env: { targetRepo: "CanerDoqdu/Box" },
+        platformModeState: { currentMode: "single_target_delivery" },
+        activeTargetSession: {
+          projectId: "portal",
+          sessionId: "sess_shadow",
+          currentStage: "shadow",
+          gates: {
+            allowShadowExecution: true,
+            allowActiveExecution: false,
+          },
+          repo: { repoUrl: "https://github.com/acme/portal" },
+        },
+      };
+
+      const result = await runAthenaPlanReview(config, {
+        plans: [
+          {
+            role: "quality-worker",
+            task: "Capture focused verification evidence for the current target behavior",
+            taskKind: "verification",
+            target_files: ["tests/core/athena_gate_risk.test.ts"],
+            verification: "npm test -- tests/core/athena_gate_risk.test.ts",
+            wave: 1,
+            riskLevel: "low",
+            capacityDelta: 0.1,
+            requestROI: 1.0,
+          },
+          {
+            role: "evolution-worker",
+            task: "Implement the premium todo board end to end and release it",
+            taskKind: "implementation",
+            target_files: ["src/app.ts"],
+            scope: "feature delivery",
+            verification: "npm test -- tests/core/athena_gate_risk.test.ts",
+            wave: 1,
+            riskLevel: "low",
+            capacityDelta: 0.1,
+            requestROI: 1.0,
+          },
+        ],
+      });
+
+      assert.equal(result.approved, true);
+      assert.notEqual(result.reason?.code, ATHENA_PLAN_REVIEW_REASON_CODE.TARGET_STAGE_CONTRACT_VIOLATION);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("enforces fail-closed review even when runtime.athenaFailOpen is enabled (legacy rollback removed)", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-fail-closed-"));
     try {

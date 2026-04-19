@@ -490,6 +490,7 @@ function buildIntentContractSkeleton(preparedSession: any, clarificationPacket: 
     selectedAgentSlug: clarificationPacket.selectedAgentSlug,
     objectiveSummary: preparedSession.objective?.summary || null,
     desiredOutcome: preparedSession.objective?.desiredOutcome || null,
+    deliveryModeDecision: null,
     clarifiedIntent: {
       productType: null,
       targetUsers: [],

@@ -55,9 +55,84 @@ const STAGE_DEFAULT_NEXT_ACTION = Object.freeze({
   [TARGET_SESSION_STAGE.QUARANTINED]: "await_human_review",
 });
 
+const TARGET_SESSION_EPHEMERAL_STATE_FILES = Object.freeze([
+  "approved_plan_set.json",
+  "athena_plan_rejection.json",
+  "athena_plan_review.json",
+  "dispatch_checkpoint.json",
+  "last_target_delivery_handoff.json",
+  "pipeline_progress.json",
+  "prometheus_analysis.json",
+  "worker_cycle_artifacts.json",
+  "worker_sessions.json",
+]);
+
+const TARGET_SESSION_EPHEMERAL_STATE_PATTERNS = Object.freeze([
+  /^debug_worker_.+\.txt$/i,
+  /^debug_agent_.+\.txt$/i,
+]);
+
+function buildTargetSessionIdentity(session: any): string {
+  const projectId = String(session?.projectId || "").trim();
+  const sessionId = String(session?.sessionId || "").trim();
+  if (!projectId || !sessionId) return "";
+  return `${projectId}:${sessionId}`;
+}
+
+function shouldResetTargetSessionEphemeralState(previousSession: any, nextSession: any): boolean {
+  if (String(nextSession?.currentMode || "") !== PLATFORM_MODE.SINGLE_TARGET_DELIVERY) {
+    return false;
+  }
+
+  const nextIdentity = buildTargetSessionIdentity(nextSession);
+  if (!nextIdentity) return false;
+
+  const previousIdentity = buildTargetSessionIdentity(previousSession);
+  return !previousIdentity || previousIdentity !== nextIdentity;
+}
+
+async function clearTargetSessionEphemeralState(config: any): Promise<void> {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  await fs.mkdir(stateDir, { recursive: true });
+
+  await Promise.all(
+    TARGET_SESSION_EPHEMERAL_STATE_FILES.map((fileName) =>
+      fs.rm(path.join(stateDir, fileName), { force: true }).catch(() => {})
+    )
+  );
+
+  const entries = await fs.readdir(stateDir, { withFileTypes: true }).catch(() => [] as Array<{ isFile(): boolean; name: string }>);
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && TARGET_SESSION_EPHEMERAL_STATE_PATTERNS.some((pattern) => pattern.test(entry.name)))
+      .map((entry) => fs.rm(path.join(stateDir, entry.name), { force: true }).catch(() => {}))
+  );
+}
+
 function normalizeNullableString(value: unknown): string | null {
   const normalized = String(value || "").trim();
   return normalized ? normalized : null;
+}
+
+function normalizeRepoIdentityValue(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .replace(/\.git$/i, "")
+    .replace(/^https?:\/\/github\.com\//i, "")
+    .replace(/^git@github\.com:/i, "")
+    .replace(/\\/g, "/")
+    .replace(/^\/+|\/+$/g, "")
+    .toLowerCase();
+}
+
+function buildSessionRepoIdentity(sessionOrManifest: any): string {
+  return normalizeRepoIdentityValue(
+    sessionOrManifest?.repo?.repoFullName
+    || sessionOrManifest?.target?.repoFullName
+    || sessionOrManifest?.repo?.repoUrl
+    || sessionOrManifest?.target?.repoUrl
+    || sessionOrManifest?.repoUrl,
+  );
 }
 
 function sanitizePathSegment(value: unknown, fallback: string): string {
@@ -235,7 +310,7 @@ function buildDefaultStageGates(stage: string) {
     case TARGET_SESSION_STAGE.ACTIVE:
       return {
         allowPlanning: true,
-        allowShadowExecution: true,
+        allowShadowExecution: false,
         allowActiveExecution: true,
         quarantine: false,
         quarantineReason: null,
@@ -980,11 +1055,17 @@ export async function persistTargetSessionSnapshot(session: any, config: any) {
 }
 
 export async function saveActiveTargetSession(config: any, session: any) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const previousRawSession = await readJson(getActiveTargetSessionPath(stateDir), null);
+  const previousSession = normalizeActiveTargetSession(previousRawSession, config).session;
   const normalized = normalizeActiveTargetSession(session, config);
   if (!normalized.session) {
     throw new Error("Cannot save invalid active target session");
   }
   const relocatedSession = await ensureTargetWorkspaceLocation(normalized.session, config);
+  if (shouldResetTargetSessionEphemeralState(previousSession, relocatedSession)) {
+    await clearTargetSessionEphemeralState(config);
+  }
   await persistTargetSessionSnapshot(relocatedSession, config);
   return relocatedSession;
 }
@@ -1016,13 +1097,19 @@ export async function clearLastArchivedTargetSession(config: any) {
 
 export async function createTargetSession(manifest: any, config: any) {
   const existingSession = await loadActiveTargetSession(config);
+  const requestedRepoIdentity = buildSessionRepoIdentity(manifest);
   if (existingSession && !CLOSED_TARGET_SESSION_STAGES.has(String(existingSession.currentStage || "") as TargetSessionStage)) {
+    const existingRepoIdentity = buildSessionRepoIdentity(existingSession);
+    if (requestedRepoIdentity && existingRepoIdentity && requestedRepoIdentity === existingRepoIdentity) {
+      throw new Error(`Active target session for this repo already exists: ${existingSession.sessionId}`);
+    }
     throw new Error(`Active target session already exists: ${existingSession.sessionId}`);
   }
 
   let session = buildTargetSessionRecord(manifest, config);
   const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
 
+  await clearTargetSessionEphemeralState(config);
   await fs.mkdir(getTargetSessionPath(stateDir, session.projectId, session.sessionId), { recursive: true });
   await fs.mkdir(session.workspace.path, { recursive: true });
   session = await prepareTargetWorkspaceForSession(session, config);

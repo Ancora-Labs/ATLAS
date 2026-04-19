@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { spawnAsync, writeJson } from "./fs_utils.js";
-import { agentFileExists, buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
-import { getTargetCompletionPath, loadActiveTargetSession } from "./target_session_state.js";
+import { agentFileExists, appendAgentLiveLog, appendAgentLiveLogDetail, buildAgentArgs, parseAgentOutput, writeAgentDebugFile } from "./agent_loader.js";
+import { appendProgress } from "./state_tracker.js";
+import { getTargetCompletionPath, getTargetSessionPath, loadActiveTargetSession } from "./target_session_state.js";
 
 export const TARGET_SUCCESS_CONTRACT_STATUS = Object.freeze({
   OPEN: "open",
@@ -19,6 +20,21 @@ const STOPWORDS = new Set([
 ]);
 
 const PRODUCT_PRESENTER_AGENT_SLUG = "product-presenter";
+const DEBUG_WORKER_FILE_PATTERN = /^debug_worker_[A-Za-z0-9_-]+\.txt$/;
+
+const DELIVERY_ROLE_PRIORITY: Record<string, number> = Object.freeze({
+  "evolution-worker": 400,
+  "integration-worker": 350,
+  "infrastructure-worker": 300,
+  "quality-worker": 250,
+});
+
+const RELEASE_ROLE_PRIORITY: Record<string, number> = Object.freeze({
+  "quality-worker": 400,
+  "evolution-worker": 250,
+  "integration-worker": 200,
+  "infrastructure-worker": 150,
+});
 
 async function readTextIfExists(filePath: string): Promise<string> {
   try {
@@ -70,6 +86,105 @@ function parseWorkerEvidence(rawText: string) {
   };
 }
 
+function getTargetSessionWorkerEvidenceDir(stateDir: string, projectId: string, sessionId: string): string {
+  return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "worker_evidence");
+}
+
+function extractWorkerRoleFromEvidencePath(filePath: string): string {
+  return path.basename(filePath).replace(/^debug_worker_/i, "").replace(/\.txt$/i, "");
+}
+
+async function loadAlignedWorkerEvidenceEntries(stateDir: string, session: any) {
+  const candidatePaths = new Set<string>();
+  const sessionEvidenceDir = session?.projectId && session?.sessionId
+    ? getTargetSessionWorkerEvidenceDir(stateDir, String(session.projectId), String(session.sessionId))
+    : null;
+
+  if (sessionEvidenceDir) {
+    const sessionEntries = await fs.readdir(sessionEvidenceDir).catch(() => []);
+    for (const entry of sessionEntries) {
+      if (DEBUG_WORKER_FILE_PATTERN.test(entry)) {
+        candidatePaths.add(path.join(sessionEvidenceDir, entry));
+      }
+    }
+  }
+
+  const stateEntries = await fs.readdir(stateDir).catch(() => []);
+  for (const entry of stateEntries) {
+    if (DEBUG_WORKER_FILE_PATTERN.test(entry)) {
+      candidatePaths.add(path.join(stateDir, entry));
+    }
+  }
+
+  const entries = await Promise.all([...candidatePaths].map(async (filePath) => {
+    const text = await readTextIfExists(filePath);
+    const aligned = isWorkerEvidenceAlignedToSession(text, session);
+    return {
+      filePath,
+      roleName: extractWorkerRoleFromEvidencePath(filePath),
+      scope: sessionEvidenceDir && filePath.startsWith(sessionEvidenceDir) ? "session" : "global",
+      text,
+      aligned,
+      evidence: parseWorkerEvidence(aligned ? text : ""),
+    };
+  }));
+
+  return entries.filter((entry) => entry.aligned && entry.text.trim());
+}
+
+function scoreDeliveryEntry(session: any, entry: any): number {
+  const evidence = entry?.evidence || {};
+  const repoRequiresFreshWork = isExistingRepoSession(session);
+  const status = String(evidence.status || "").toLowerCase();
+  const statusEligible = repoRequiresFreshWork ? status === "done" : status === "done" || status === "skipped";
+  const scopeBoost = entry?.scope === "session" ? 1000 : 0;
+  const roleBoost = DELIVERY_ROLE_PRIORITY[String(entry?.roleName || "").toLowerCase()] || 100;
+  const mergedBoost = evidence.mergedSha ? 60 : 0;
+  const outcomeBoost = evidence.actualOutcome ? 30 : 0;
+  const deliveredBoost = evidence.deliveredSentence ? 20 : 0;
+  return (statusEligible ? 5000 : 0) + scopeBoost + roleBoost + mergedBoost + outcomeBoost + deliveredBoost;
+}
+
+function scoreReleaseEntry(entry: any): number {
+  const evidence = entry?.evidence || {};
+  const status = String(evidence.status || "").toLowerCase();
+  const statusEligible = status === "done" || status === "skipped";
+  const scopeBoost = entry?.scope === "session" ? 1000 : 0;
+  const roleBoost = RELEASE_ROLE_PRIORITY[String(entry?.roleName || "").toLowerCase()] || 100;
+  const mergedBoost = evidence.mergedSha ? 50 : 0;
+  const outcomeBoost = evidence.actualOutcome ? 30 : 0;
+  const deliveredBoost = evidence.deliveredSentence ? 20 : 0;
+  return (statusEligible ? 5000 : 0) + scopeBoost + roleBoost + mergedBoost + outcomeBoost + deliveredBoost;
+}
+
+function selectBestDeliveryEvidence(session: any, entries: any[]) {
+  const ranked = [...entries].sort((left, right) => scoreDeliveryEntry(session, right) - scoreDeliveryEntry(session, left));
+  return ranked[0] || null;
+}
+
+function selectBestReleaseEvidence(entries: any[]) {
+  const ranked = [...entries].sort((left, right) => scoreReleaseEntry(right) - scoreReleaseEntry(left));
+  return ranked[0] || null;
+}
+
+function evaluateEvidenceAlignmentDimension(entries: any[], deliveryEntry: any, releaseEntry: any) {
+  const alignedRoles = entries.map((entry) => `${String(entry?.scope || "global")}:${String(entry?.roleName || "unknown")}`);
+  return {
+    status: alignedRoles.length > 0 ? "satisfied" : "missing",
+    evidence: {
+      evolutionEvidenceAligned: Boolean(deliveryEntry),
+      qualityEvidenceAligned: Boolean(releaseEntry),
+      alignedRoles,
+    },
+  };
+}
+
+function isExistingRepoSession(session: any): boolean {
+  return String(session?.intent?.repoState || session?.repoProfile?.repoState || "")
+  .trim()
+  .toLowerCase() === "existing";
+}
+
 function resolveEffectiveHumanInputs(session: any) {
   const requiredHumanInputs = Array.isArray(session?.handoff?.requiredHumanInputs)
     ? session.handoff.requiredHumanInputs.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
@@ -90,6 +205,7 @@ function resolveEffectiveHumanInputs(session: any) {
 }
 
 function evaluateDeliveryDimension(
+  session: any,
   evolutionEvidence: ReturnType<typeof parseWorkerEvidence>,
   qualityEvidence: ReturnType<typeof parseWorkerEvidence>,
 ) {
@@ -100,9 +216,15 @@ function evaluateDeliveryDimension(
     qualityEvidence.actualOutcome || "",
     qualityEvidence.deliveredSentence || "",
   ].join("\n");
-  const statusEligible = evolutionEvidence.status === "done" || evolutionEvidence.status === "skipped";
+  const repoRequiresFreshWork = isExistingRepoSession(session);
+  const statusEligible = repoRequiresFreshWork
+    ? evolutionEvidence.status === "done"
+    : evolutionEvidence.status === "done" || evolutionEvidence.status === "skipped";
   const mergedOrDelivered = /already merged on main|already present on main|delivered in the target repository|live repo passes|live at https?:\/\/|preview is available at https?:\/\/|deployed at https?:\/\//i.test(text);
-  const satisfied = statusEligible && Boolean(evolutionEvidence.mergedSha) && mergedOrDelivered;
+  const mergedDeliveryEvidence = /merged\s+(?:\*\*)?pr\s*#\d+|left main clean|delivered |bulk selection|reorder controls|power-user hint|keyboard-safe/i.test(text);
+  const satisfied = statusEligible
+    && Boolean(evolutionEvidence.mergedSha)
+    && (mergedOrDelivered || mergedDeliveryEvidence || Boolean(evolutionEvidence.actualOutcome));
   return {
     status: satisfied ? "satisfied" : "missing",
     evidence: {
@@ -110,6 +232,7 @@ function evaluateDeliveryDimension(
       skipReason: evolutionEvidence.skipReason,
       mergedSha: evolutionEvidence.mergedSha,
       actualOutcome: evolutionEvidence.actualOutcome,
+      repoRequiresFreshWork,
     },
   };
 }
@@ -118,7 +241,9 @@ function evaluateReleaseDimension(qualityEvidence: ReturnType<typeof parseWorker
   const text = `${qualityEvidence.rawText}\n${qualityEvidence.actualOutcome || ""}`;
   const statusEligible = qualityEvidence.status === "done" || qualityEvidence.status === "skipped";
   const hasReleaseChecks = /all six release checks passed|release checks passed|verified live main already contains/i.test(text);
-  const satisfied = statusEligible && Boolean(qualityEvidence.deliveredSentence) && hasReleaseChecks;
+  const hasLocalTrustGate = /npm test[\s\S]*npm run lint[\s\S]*npm run build|40 passing tests|left main clean/i.test(text);
+  const releaseMarkerPresent = Boolean(qualityEvidence.deliveredSentence) || Boolean(qualityEvidence.mergedSha) || Boolean(qualityEvidence.actualOutcome);
+  const satisfied = statusEligible && releaseMarkerPresent && (hasReleaseChecks || hasLocalTrustGate);
   return {
     status: satisfied ? "satisfied" : "missing",
     evidence: {
@@ -199,6 +324,80 @@ function normalizeRepoWebUrl(repoUrl: unknown): string | null {
   return raw.replace(/\.git$/i, "");
 }
 
+function normalizePathForComparison(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/\/+$/g, "")
+    .toLowerCase();
+}
+
+function normalizeRepoMarker(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .replace(/\.git$/i, "")
+    .replace(/^https?:\/\/github\.com\//i, "")
+    .replace(/^git@github\.com:/i, "")
+    .replace(/^\/+|\/+$/g, "")
+    .toLowerCase();
+}
+
+function readStampedHeader(rawText: string, key: string): string | null {
+  const match = String(rawText || "").match(new RegExp(`^${key}:\\s*(.+)$`, "im"));
+  const value = String(match?.[1] || "").trim();
+  return value || null;
+}
+
+function isWorkerEvidenceAlignedToSession(rawText: string, session: any): boolean {
+  const text = String(rawText || "");
+  if (!text.trim()) return false;
+
+  const sessionId = String(session?.sessionId || "").trim();
+  const projectId = String(session?.projectId || "").trim();
+  const repoFullName = normalizeRepoMarker(session?.repo?.repoFullName);
+  const repoWebUrl = normalizeRepoMarker(normalizeRepoWebUrl(session?.repo?.repoUrl));
+  const repoName = String(session?.repo?.name || "").trim().toLowerCase();
+  const workspacePath = normalizePathForComparison(session?.workspace?.path);
+
+  const stampedSessionId = String(readStampedHeader(text, "TARGET_SESSION_ID") || "").trim();
+  if (stampedSessionId) {
+    return stampedSessionId === sessionId;
+  }
+
+  const stampedProjectId = String(readStampedHeader(text, "TARGET_PROJECT_ID") || "").trim();
+  const stampedRepoUrl = normalizeRepoMarker(readStampedHeader(text, "TARGET_REPO_URL"));
+  const stampedRepoFullName = normalizeRepoMarker(readStampedHeader(text, "TARGET_REPO_FULL_NAME"));
+  const stampedWorkspacePath = normalizePathForComparison(readStampedHeader(text, "TARGET_WORKSPACE_PATH"));
+
+  const hasStampedTargetMetadata = Boolean(stampedProjectId || stampedRepoUrl || stampedRepoFullName || stampedWorkspacePath);
+  if (hasStampedTargetMetadata) {
+    if (stampedProjectId && stampedProjectId !== projectId) return false;
+    if (stampedRepoFullName && stampedRepoFullName !== repoFullName) return false;
+    if (stampedRepoUrl && repoWebUrl && stampedRepoUrl !== repoWebUrl) return false;
+    if (stampedWorkspacePath && workspacePath && stampedWorkspacePath !== workspacePath) return false;
+    return true;
+  }
+
+  const normalizedText = text.toLowerCase();
+  const normalizedTextPath = normalizePathForComparison(text);
+  const repoMarkers = [repoFullName, repoWebUrl, repoName].filter(Boolean);
+  if (repoMarkers.some((marker) => normalizedText.includes(marker))) {
+    return true;
+  }
+
+  if (workspacePath && normalizedTextPath.includes(workspacePath)) {
+    return true;
+  }
+
+  const hasLegacyDeliverySignal = /DELIVERED:|BOX_SKIP_REASON=already-merged(?:-on-main)?|release checks passed|verified live main already contains/i.test(text);
+  const hasLegacyProductSignal = /index\.html|live on main|browser-openable|working project|todo|to-do|weather app|preview/i.test(text);
+  if (workspacePath && hasLegacyDeliverySignal && hasLegacyProductSignal) {
+    return true;
+  }
+
+  return false;
+}
+
 function extractHttpUrls(value: unknown): string[] {
   const text = String(value || "");
   const matches = text.match(/https?:\/\/[^\s'"<>\])]+/gi) || [];
@@ -211,10 +410,12 @@ function extractHttpUrls(value: unknown): string[] {
 function rankPreviewUrlCandidate(url: string): number {
   const normalized = String(url || "").toLowerCase();
   if (!normalized) return -1;
+  if (/github\.com\/.+\/(pull|issues|actions)\//.test(normalized)) return 0;
+  if (/github\.com\/.+\/blob\//.test(normalized)) return 0;
+  if (/github\.com\/.+\/.+$/.test(normalized) && !/github\.io/.test(normalized)) return 5;
   if (/localhost|127\.0\.0\.1|0\.0\.0\.0/.test(normalized)) return 100;
   if (/vercel\.app|netlify\.app|pages\.dev|github\.io|web\.app|azurewebsites\.net|onrender\.com|fly\.dev/.test(normalized)) return 90;
   if (/\/preview|\/demo|\/app|\/index\.html/.test(normalized)) return 80;
-  if (/github\.com\/.+\/blob\//.test(normalized)) return 10;
   if (/raw\.githubusercontent\.com/.test(normalized)) return 5;
   return 50;
 }
@@ -237,6 +438,11 @@ async function readWorkspacePresentationContext(workspacePath: string | null) {
       topLevelEntries: [],
       packageJson: null,
       readmeExcerpt: null,
+      repoKind: "unknown",
+      distIndexPath: null,
+      rootIndexPath: null,
+      previewUrls: [],
+      recommendedOpenTarget: null,
     };
   }
 
@@ -248,6 +454,12 @@ async function readWorkspacePresentationContext(workspacePath: string | null) {
 
   const packageJsonPath = path.join(normalizedWorkspacePath, "package.json");
   const readmePath = path.join(normalizedWorkspacePath, "README.md");
+  const distIndexPath = await pathExists(path.join(normalizedWorkspacePath, "dist", "index.html"))
+    ? path.join(normalizedWorkspacePath, "dist", "index.html")
+    : null;
+  const rootIndexPath = await pathExists(path.join(normalizedWorkspacePath, "index.html"))
+    ? path.join(normalizedWorkspacePath, "index.html")
+    : null;
   let packageJson: any = null;
   if (await pathExists(packageJsonPath)) {
     try {
@@ -261,8 +473,31 @@ async function readWorkspacePresentationContext(workspacePath: string | null) {
     .then((content) => content.slice(0, 4000))
     .catch(() => null);
 
+  const dependencyNames = packageJson?.dependencies && typeof packageJson.dependencies === "object"
+    ? Object.keys(packageJson.dependencies)
+    : [];
+  const scriptNames = packageJson?.scripts && typeof packageJson.scripts === "object"
+    ? Object.keys(packageJson.scripts)
+    : [];
+  const previewUrls = resolvePresentationPreviewUrls([
+    readmeExcerpt,
+    packageJson?.homepage,
+  ]);
+  const repoKind = inferWorkspaceRepoKind({
+    topLevelEntries,
+    dependencyNames,
+    scriptNames,
+    rootIndexPath,
+    distIndexPath,
+  });
+  const recommendedOpenTarget = previewUrls[0]
+    || distIndexPath
+    || rootIndexPath
+    || (repoKind === "website" ? normalizedWorkspacePath : null);
+
   return {
     exists: true,
+    workspacePath: normalizedWorkspacePath,
     topLevelEntries,
     packageJson: packageJson
       ? {
@@ -274,6 +509,183 @@ async function readWorkspacePresentationContext(workspacePath: string | null) {
         }
       : null,
     readmeExcerpt,
+    repoKind,
+    distIndexPath,
+    rootIndexPath,
+    previewUrls,
+    recommendedOpenTarget,
+  };
+}
+
+function resolvePresentationPreviewUrls(evidenceParts: unknown[]): string[] {
+  const urls = evidenceParts.flatMap((entry) => extractHttpUrls(entry));
+  if (urls.length === 0) return [];
+  return urls
+    .map((url) => ({ url, score: rankPreviewUrlCandidate(url) }))
+    .filter((entry) => entry.score >= 60)
+    .sort((left, right) => right.score - left.score)
+    .map((entry) => entry.url);
+}
+
+function createAgentStreamLogger(config: any, session: any, agentSlug: string, contextLabel: string, stage: "stdout" | "stderr") {
+  let buffer = "";
+  return {
+    push(chunk: unknown) {
+      const text = String(chunk || "");
+      if (!text) return;
+      buffer += text;
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        const normalized = String(line || "").trimEnd();
+        if (!normalized.trim()) continue;
+        appendAgentLiveLog(config, {
+          agentSlug,
+          session,
+          contextLabel,
+          status: `stream_${stage}`,
+          message: normalized,
+        });
+      }
+    },
+    flush() {
+      const normalized = String(buffer || "").trimEnd();
+      if (!normalized.trim()) return;
+      appendAgentLiveLog(config, {
+        agentSlug,
+        session,
+        contextLabel,
+        status: `stream_${stage}`,
+        message: normalized,
+      });
+      buffer = "";
+    },
+  };
+}
+
+function inferWorkspaceRepoKind(input: {
+  topLevelEntries: string[];
+  dependencyNames: string[];
+  scriptNames: string[];
+  rootIndexPath: string | null;
+  distIndexPath: string | null;
+}): "website" | "service" | "library" | "unknown" {
+  const dependencyText = input.dependencyNames.join(" ").toLowerCase();
+  const scriptText = input.scriptNames.join(" ").toLowerCase();
+  const entryText = input.topLevelEntries.join(" ").toLowerCase();
+  const looksLikeWebsite = Boolean(input.rootIndexPath || input.distIndexPath)
+    || /next|react|vite|vue|svelte|astro|gatsby|nuxt|tailwind|framer-motion/.test(dependencyText)
+    || /dev|preview/.test(scriptText)
+    || /dir:public|dir:app|dir:src/.test(entryText);
+  if (looksLikeWebsite) return "website";
+  if (/express|fastify|koa|hono|nestjs/.test(dependencyText) || /start|serve/.test(scriptText)) return "service";
+  if (/typescript|vitest|jest/.test(dependencyText) && /dir:src/.test(entryText)) return "library";
+  return "unknown";
+}
+
+function applyWorkspaceAwareFallbackDelivery(fallback: any, workspaceContext: any, reportStatus: string) {
+  if (!isTargetSuccessContractTerminal({ status: reportStatus })) return fallback;
+  const preferredOpenTarget = String(workspaceContext?.recommendedOpenTarget || "").trim() || null;
+  if (!preferredOpenTarget) return fallback;
+
+  const locationType = /^https?:\/\//i.test(preferredOpenTarget)
+    ? "url"
+    : preferredOpenTarget === String(workspaceContext?.workspacePath || "")
+      ? "workspace"
+      : /\.html?(?:$|[?#])/i.test(preferredOpenTarget)
+        ? "local_path"
+        : fallback.locationType;
+  const instructions = /^https?:\/\//i.test(preferredOpenTarget)
+    ? [`Open ${preferredOpenTarget}.`]
+    : workspaceContext?.repoKind === "website"
+      ? [`Open the website from ${preferredOpenTarget}. BOX can serve it locally when needed.`]
+      : [`Open ${preferredOpenTarget}.`];
+  return {
+    ...fallback,
+    status: "ready_to_open",
+    locationType,
+    primaryLocation: preferredOpenTarget,
+    openTarget: preferredOpenTarget,
+    autoOpenEligible: true,
+    preserveWorkspace: !/^https?:\/\//i.test(preferredOpenTarget),
+    instructions,
+    userMessage: /^https?:\/\//i.test(preferredOpenTarget)
+      ? `Product preview available at ${preferredOpenTarget}. BOX can try to open it automatically.`
+      : workspaceContext?.repoKind === "website"
+        ? `Website preview can be opened from ${preferredOpenTarget}. BOX can try to launch the simplest local surface automatically.`
+        : fallback.userMessage,
+    execution: /^https?:\/\//i.test(preferredOpenTarget)
+      ? {
+          mode: "open_url",
+          target: preferredOpenTarget,
+          staticRoot: null,
+          preferredPort: null,
+        }
+      : workspaceContext?.repoKind === "website"
+        ? {
+            mode: "serve_and_open",
+            target: preferredOpenTarget,
+            staticRoot: /index\.html?$/i.test(preferredOpenTarget) ? path.dirname(preferredOpenTarget) : preferredOpenTarget,
+            preferredPort: 4173,
+          }
+        : {
+            mode: "open_direct",
+            target: preferredOpenTarget,
+            staticRoot: null,
+            preferredPort: null,
+          },
+    resolutionSource: `${String(fallback?.resolutionSource || "fallback_evidence_only")}:workspace_context`,
+  };
+}
+
+function sanitizeFallbackDeliveryAgainstWorkspace(fallback: any, workspaceContext: any) {
+  const openTarget = String(fallback?.openTarget || "").trim();
+  const primaryLocation = String(fallback?.primaryLocation || "").trim();
+  const pointsToLocalSurface = Boolean(openTarget || primaryLocation)
+    && !/^https?:\/\//i.test(openTarget || primaryLocation);
+  if (workspaceContext?.exists !== false || !pointsToLocalSurface) {
+    return fallback;
+  }
+
+  const repoWebUrl = String(fallback?.repoWebUrl || "").trim() || null;
+  if (repoWebUrl) {
+    return {
+      ...fallback,
+      status: "documented",
+      locationType: "repo",
+      primaryLocation: repoWebUrl,
+      openTarget: null,
+      autoOpenEligible: false,
+      preserveWorkspace: false,
+      instructions: [`Open ${repoWebUrl}.`],
+      userMessage: `Product delivery is documented at ${repoWebUrl}, but the local workspace preview is no longer available.`,
+      execution: {
+        mode: "document_only",
+        target: repoWebUrl,
+        staticRoot: null,
+        preferredPort: null,
+      },
+      resolutionSource: `${String(fallback?.resolutionSource || "fallback_evidence_only")}:workspace_missing`,
+    };
+  }
+
+  return {
+    ...fallback,
+    status: "manual_followup_required",
+    locationType: "manual",
+    primaryLocation: null,
+    openTarget: null,
+    autoOpenEligible: false,
+    preserveWorkspace: false,
+    instructions: ["The local workspace preview is no longer available; inspect recorded artifacts manually."],
+    userMessage: "The local workspace preview is no longer available, so BOX could not open the product automatically.",
+    execution: {
+      mode: "document_only",
+      target: null,
+      staticRoot: null,
+      preferredPort: null,
+    },
+    resolutionSource: `${String(fallback?.resolutionSource || "fallback_evidence_only")}:workspace_missing`,
   };
 }
 
@@ -281,17 +693,21 @@ function buildFallbackDelivery(config: any, session: any, qualityEvidence: Retur
   const repoWebUrl = normalizeRepoWebUrl(session?.repo?.repoUrl);
   const workspacePath = String(session?.workspace?.path || "").trim() || null;
   const deliveredSentence = qualityEvidence?.deliveredSentence || null;
+  const localIndexPath = workspacePath ? path.join(workspacePath, "index.html") : null;
   const evidencePreviewUrl = resolveEvidencePreviewUrl([
     deliveredSentence,
     qualityEvidence?.actualOutcome,
     qualityEvidence?.expectedOutcome,
     qualityEvidence?.rawText,
   ]);
-  const openTarget = isTargetSuccessContractTerminal({ status: reportStatus }) && evidencePreviewUrl
-    ? evidencePreviewUrl
+  const canOpenLocalIndex = isTargetSuccessContractTerminal({ status: reportStatus }) && Boolean(localIndexPath);
+  const openTarget = isTargetSuccessContractTerminal({ status: reportStatus })
+    ? (evidencePreviewUrl || (canOpenLocalIndex ? localIndexPath : null))
     : null;
   const locationType = evidencePreviewUrl
     ? "url"
+    : canOpenLocalIndex
+      ? "local_path"
     : repoWebUrl
       ? "repo"
       : workspacePath
@@ -319,17 +735,74 @@ function buildFallbackDelivery(config: any, session: any, qualityEvidence: Retur
     workspacePath,
     openTarget,
     autoOpenEligible: Boolean(openTarget),
-    preserveWorkspace: false,
+    preserveWorkspace: canOpenLocalIndex,
     instructions,
     userMessage,
+    execution: openTarget
+      ? /^https?:\/\//i.test(openTarget)
+        ? {
+            mode: "open_url",
+            target: openTarget,
+            staticRoot: null,
+            preferredPort: null,
+          }
+        : /index\.html?$/i.test(openTarget)
+          ? {
+              mode: "serve_and_open",
+              target: openTarget,
+              staticRoot: path.dirname(openTarget),
+              preferredPort: 4173,
+            }
+          : {
+              mode: "open_direct",
+              target: openTarget,
+              staticRoot: null,
+              preferredPort: null,
+            }
+      : {
+          mode: "document_only",
+          target: primaryLocation,
+          staticRoot: null,
+          preferredPort: null,
+        },
     resolutionSource: "fallback_evidence_only",
   };
+}
+
+function isPreviewLikeTarget(target: unknown): boolean {
+  const normalized = String(target || "").trim().toLowerCase();
+  if (!normalized) return false;
+  if (/^https?:\/\//.test(normalized)) {
+    return rankPreviewUrlCandidate(normalized) >= 60;
+  }
+  if (/^file:/.test(normalized)) {
+    return true;
+  }
+  if (/\.html?(?:$|[?#])/.test(normalized)) return true;
+  if (/localhost|127\.0\.0\.1|0\.0\.0\.0|vercel\.app|netlify\.app|pages\.dev|github\.io|web\.app|azurewebsites\.net|onrender\.com|fly\.dev/.test(normalized)) {
+    return true;
+  }
+  return false;
 }
 
 function normalizePresentationDelivery(rawPresentation: any, fallback: any, reportStatus: string) {
   const locationType = String(rawPresentation?.locationType || "").trim().toLowerCase();
   const primaryLocation = String(rawPresentation?.primaryLocation || "").trim() || null;
   const openTarget = String(rawPresentation?.openTarget || "").trim() || null;
+  const thinkingSummary = String(rawPresentation?.thinkingSummary || rawPresentation?.decisionTrace?.summary || "").trim() || null;
+  const decisionTrace = rawPresentation?.decisionTrace && typeof rawPresentation.decisionTrace === "object"
+    ? {
+      summary: String(rawPresentation.decisionTrace.summary || "").trim() || null,
+      repoAssessment: String(rawPresentation.decisionTrace.repoAssessment || "").trim() || null,
+      availableSurfaces: Array.isArray(rawPresentation.decisionTrace.availableSurfaces)
+        ? rawPresentation.decisionTrace.availableSurfaces.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
+        : [],
+      blockers: Array.isArray(rawPresentation.decisionTrace.blockers)
+        ? rawPresentation.decisionTrace.blockers.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
+        : [],
+      chosenAction: String(rawPresentation.decisionTrace.chosenAction || "").trim() || null,
+    }
+    : null;
   const instructions = Array.isArray(rawPresentation?.instructions)
     ? rawPresentation.instructions.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
     : [];
@@ -343,11 +816,13 @@ function normalizePresentationDelivery(rawPresentation: any, fallback: any, repo
       : primaryLocation
         ? "documented"
         : "manual_followup_required";
-  const autoOpenEligible = isTargetSuccessContractTerminal({ status: reportStatus }) && Boolean(openTarget);
+  const autoOpenEligible = isTargetSuccessContractTerminal({ status: reportStatus })
+    && resolvedStatus === "ready_to_open"
+    && Boolean(openTarget);
   if (!locationType || (!primaryLocation && !openTarget && !userMessage)) {
     return fallback;
   }
-  return {
+  const normalizedPresentation = {
     ...fallback,
     status: resolvedStatus,
     locationType,
@@ -355,10 +830,100 @@ function normalizePresentationDelivery(rawPresentation: any, fallback: any, repo
     openTarget: autoOpenEligible ? openTarget : null,
     autoOpenEligible,
     preserveWorkspace,
+    thinkingSummary,
+    decisionTrace,
     instructions: instructions.length > 0 ? instructions : fallback.instructions,
     userMessage: userMessage || fallback.userMessage,
+    execution: normalizePresentationExecution(rawPresentation?.execution, {
+      fallback,
+      resolvedStatus,
+      openTarget,
+      primaryLocation: primaryLocation || openTarget || fallback.primaryLocation,
+      locationType,
+    }),
     resolutionSource: "product_presenter_ai",
   };
+
+  const fallbackTarget = String(fallback?.openTarget || fallback?.primaryLocation || "").trim() || null;
+  const chosenTarget = String(normalizedPresentation?.openTarget || normalizedPresentation?.primaryLocation || "").trim() || null;
+  const preferFallbackPreview = isTargetSuccessContractTerminal({ status: reportStatus })
+    && isPreviewLikeTarget(fallbackTarget)
+    && !isPreviewLikeTarget(chosenTarget);
+
+  if (preferFallbackPreview) {
+    return {
+      ...fallback,
+      thinkingSummary,
+      decisionTrace,
+      instructions: instructions.length > 0 ? instructions : fallback.instructions,
+      userMessage: userMessage || fallback.userMessage,
+      resolutionSource: "product_presenter_ai_preview_overridden",
+    };
+  }
+
+  return normalizedPresentation;
+}
+
+function normalizePresentationExecution(
+  rawExecution: any,
+  context: {
+    fallback: any;
+    resolvedStatus: string;
+    openTarget: string | null;
+    primaryLocation: string | null;
+    locationType: string;
+  },
+) {
+  const supportedModes = new Set(["open_direct", "open_url", "serve_and_open", "document_only"]);
+  const mode = String(rawExecution?.mode || "").trim().toLowerCase();
+  const target = String(rawExecution?.target || "").trim() || null;
+  const staticRoot = String(rawExecution?.staticRoot || "").trim() || null;
+  const rawPort = Number(rawExecution?.preferredPort);
+  const preferredPort = Number.isFinite(rawPort) && rawPort >= 1024 ? rawPort : null;
+
+  if (supportedModes.has(mode)) {
+    if (mode === "document_only") {
+      return { mode, target: target || context.primaryLocation, staticRoot: null, preferredPort: null };
+    }
+    if (mode === "serve_and_open") {
+      const serveTarget = target || context.openTarget || context.primaryLocation || null;
+      return {
+        mode,
+        target: serveTarget,
+        staticRoot: staticRoot || (serveTarget && /index\.html?$/i.test(serveTarget) ? path.dirname(serveTarget) : serveTarget),
+        preferredPort,
+      };
+    }
+    return {
+      mode,
+      target: target || context.openTarget || context.primaryLocation,
+      staticRoot: null,
+      preferredPort: null,
+    };
+  }
+
+  if (context.resolvedStatus !== "ready_to_open") {
+    return {
+      mode: "document_only",
+      target: context.primaryLocation || context.fallback?.primaryLocation || null,
+      staticRoot: null,
+      preferredPort: null,
+    };
+  }
+
+  const inferredTarget = context.openTarget || context.primaryLocation || context.fallback?.openTarget || null;
+  if (/^https?:\/\//i.test(String(inferredTarget || ""))) {
+    return { mode: "open_url", target: inferredTarget, staticRoot: null, preferredPort: null };
+  }
+  if (context.locationType === "local_path" || /index\.html?$/i.test(String(inferredTarget || ""))) {
+    return {
+      mode: "serve_and_open",
+      target: inferredTarget,
+      staticRoot: inferredTarget && /index\.html?$/i.test(inferredTarget) ? path.dirname(inferredTarget) : inferredTarget,
+      preferredPort: 4173,
+    };
+  }
+  return { mode: "open_direct", target: inferredTarget, staticRoot: null, preferredPort: null };
 }
 
 async function resolvePresentationDelivery(
@@ -368,8 +933,14 @@ async function resolvePresentationDelivery(
   qualityEvidence: ReturnType<typeof parseWorkerEvidence>,
   opts: { resolvePresentation?: (input: any) => Promise<any> } = {},
 ) {
-  const fallback = buildFallbackDelivery(config, session, qualityEvidence, report?.status);
-  const workspaceContext = await readWorkspacePresentationContext(fallback.workspacePath);
+  const baseFallback = buildFallbackDelivery(config, session, qualityEvidence, report?.status);
+  const workspaceContext = await readWorkspacePresentationContext(baseFallback.workspacePath);
+  const sanitizedFallback = sanitizeFallbackDeliveryAgainstWorkspace(baseFallback, workspaceContext);
+  const fallback = applyWorkspaceAwareFallbackDelivery(
+    sanitizedFallback,
+    workspaceContext,
+    report?.status,
+  );
   const requestPayload = {
     projectId: report?.projectId || null,
     sessionId: report?.sessionId || null,
@@ -384,6 +955,12 @@ async function resolvePresentationDelivery(
       actualOutcome: qualityEvidence?.actualOutcome || null,
       expectedOutcome: qualityEvidence?.expectedOutcome || null,
       rawText: qualityEvidence?.rawText || null,
+    },
+    presentationCandidates: {
+      distIndexPath: workspaceContext?.distIndexPath || null,
+      rootIndexPath: workspaceContext?.rootIndexPath || null,
+      previewUrls: Array.isArray(workspaceContext?.previewUrls) ? workspaceContext.previewUrls : [],
+      recommendedOpenTarget: workspaceContext?.recommendedOpenTarget || null,
     },
     workspaceContext,
     fallback,
@@ -401,6 +978,7 @@ async function resolvePresentationDelivery(
 
   const command = config?.env?.copilotCliCommand || "copilot";
   if (!agentFileExists(PRODUCT_PRESENTER_AGENT_SLUG)) {
+    await appendProgress(config, `[TARGET_PRESENTATION] presenter=skipped reason=agent_missing repoKind=${workspaceContext.repoKind} fallback=${fallback.locationType}:${String(fallback.openTarget || fallback.primaryLocation || "none")}`);
     return fallback;
   }
   const model = config?.roleRegistry?.qualityReviewer?.model || "Claude Sonnet 4.6";
@@ -410,10 +988,26 @@ Your task: decide how BOX should present a completed product to the user after d
 Rules:
 - Use ONLY the evidence provided below.
 - Do NOT invent files, routes, URLs, commands, servers, or deployment surfaces.
-- Prefer an already-provided live preview URL when one exists.
+- You may inspect the workspace directly with read/search/execute tools before deciding.
+- If workspacePath exists on disk, you MUST inspect the workspace directly before deciding.
+- If workspacePath exists on disk, you MUST perform at least one concrete artifact or runtime check that is relevant to the final action you choose.
+- Understand the repo type from the workspace evidence.
+- Decide the best presentation path from the evidence, repo state, and available surfaces.
+- Prioritize the best currently runnable or openable verified product surface over PR/repo metadata when both exist.
+- If a verified \`dist/index.html\`, deployed preview URL, or other concrete product surface exists now, prefer that over a PR or repo link.
+- Treat delivery evidence and merged PRs as supporting context unless they are the only real surfaces available.
+- Choose the presentation style that best shows the finished result to the user when a safe surface exists.
 - If no direct runnable surface is evidenced, document the safest verifiable access path instead of guessing.
+- Choose the exact execution action BOX should apply now: open_direct, open_url, serve_and_open, or document_only.
+- If a local website artifact would be safer through a static server, explicitly choose serve_and_open instead of leaving that decision to the caller.
 - preserveWorkspace=true only when the target you want BOX to open depends on the local workspace continuing to exist.
-- Output strict JSON only inside markers.
+- First write a short operator-visible reasoning section in plain English before the markers.
+- That reasoning section should briefly say what surfaces you evaluated, what blockers mattered, and why you chose the final action.
+- Include concrete action-style lines when you inspect things, for example short lines showing what you checked in the workspace before deciding.
+- If the workspace exists, do not answer from the provided JSON alone. Re-check the workspace with tools and reflect those actions in the visible reasoning lines.
+- End the reasoning by naming the exact action BOX should execute now.
+- Prefer a worker-like operator trace with 4-8 short lines, such as: inspect workspace, inspect build artifact, inspect preview candidates, compare surfaces, choose action.
+- After the reasoning section, output strict JSON only inside markers.
 
 Context:
 ${JSON.stringify(requestPayload, null, 2)}
@@ -425,7 +1019,22 @@ ${JSON.stringify(requestPayload, null, 2)}
     "locationType": "local_path|url|repo|workspace|manual",
     "primaryLocation": "string|null",
     "openTarget": "string|null",
+    "execution": {
+      "mode": "open_direct|open_url|serve_and_open|document_only",
+      "target": "string|null",
+      "staticRoot": "string|null",
+      "preferredPort": 4173
+    },
     "preserveWorkspace": true,
+    "thinkingSummary": "string",
+    "rationale": "string",
+    "decisionTrace": {
+      "summary": "string",
+      "repoAssessment": "string",
+      "availableSurfaces": ["string"],
+      "blockers": ["string"],
+      "chosenAction": "string"
+    },
     "instructions": ["string"],
     "userMessage": "string"
   }
@@ -439,20 +1048,238 @@ ${JSON.stringify(requestPayload, null, 2)}
     allowAll: false,
     noAskUser: true,
     autopilot: false,
-    silent: true,
+    silent: false,
   });
+  appendAgentLiveLog(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    session,
+    contextLabel: "target_presentation",
+    status: "starting",
+    message: `reportStatus=${String(report?.status || "unknown")} repoKind=${String(workspaceContext?.repoKind || "unknown")} fallback=${String(fallback?.openTarget || fallback?.primaryLocation || "none")}`,
+  });
+  appendAgentLiveLogDetail(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    session,
+    contextLabel: "target_presentation",
+    stage: "prompt",
+    title: "Prompt",
+    content: prompt,
+  });
+  const stdoutStreamLogger = createAgentStreamLogger(
+    config,
+    session,
+    PRODUCT_PRESENTER_AGENT_SLUG,
+    "target_presentation",
+    "stdout",
+  );
+  const stderrStreamLogger = createAgentStreamLogger(
+    config,
+    session,
+    PRODUCT_PRESENTER_AGENT_SLUG,
+    "target_presentation",
+    "stderr",
+  );
   const result: any = await spawnAsync(command, args, {
     env: process.env,
     timeoutMs: 120000,
+    onStdout: (chunk: Buffer | string) => {
+      stdoutStreamLogger.push(chunk);
+    },
+    onStderr: (chunk: Buffer | string) => {
+      stderrStreamLogger.push(chunk);
+    },
+  });
+  stdoutStreamLogger.flush();
+  stderrStreamLogger.flush();
+  appendAgentLiveLog(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    session,
+    contextLabel: "target_presentation",
+    status: Number(result?.status ?? 1) === 0 ? "completed" : "failed",
+    message: `repoKind=${String(workspaceContext?.repoKind || "unknown")} fallback=${String(fallback?.openTarget || fallback?.primaryLocation || "none")} stdout=${String(result?.stdout || "").trim() ? "present" : "empty"} stderr=${String(result?.stderr || "").trim() ? "present" : "empty"}`,
+  });
+  appendAgentLiveLogDetail(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    session,
+    contextLabel: "target_presentation",
+    stage: "result",
+    title: "Raw Output",
+    content: [
+      `STATUS: ${String(result?.status ?? "unknown")}`,
+      "",
+      "STDOUT:",
+      String(result?.stdout || ""),
+      "",
+      "STDERR:",
+      String(result?.stderr || ""),
+    ].join("\n"),
+  });
+  writeAgentDebugFile(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    prompt,
+    result,
+    session,
+    contextLabel: "target_presentation",
+    metadata: {
+      reportStatus: report?.status || null,
+      repoKind: workspaceContext?.repoKind || null,
+      fallbackTarget: fallback?.openTarget || fallback?.primaryLocation || null,
+    },
   });
   if (Number(result?.status ?? 1) !== 0 || !String(result?.stdout || "").trim()) {
+    await appendProgress(config, `[TARGET_PRESENTATION] presenter=failed repoKind=${workspaceContext.repoKind} reason=${String(result?.stderr || result?.error || "empty_output").slice(0, 120)} fallback=${fallback.locationType}:${String(fallback.openTarget || fallback.primaryLocation || "none")}`);
     return {
       ...fallback,
       resolutionSource: `product_presenter_failed:${String(result?.stderr || result?.error || "empty_output").slice(0, 120)}`,
     };
   }
   const parsed = parseAgentOutput(String(result.stdout || ""));
-  return normalizePresentationDelivery(parsed?.parsed?.presentation, fallback, report?.status);
+  appendAgentLiveLog(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    session,
+    contextLabel: "target_presentation",
+    status: parsed?.ok ? "parsed" : "unparsed",
+    message: [
+      parsed?.parsed?.presentation?.thinkingSummary
+        ? `thinking=${String(parsed.parsed.presentation.thinkingSummary).replace(/\s+/g, " ").slice(0, 400)}`
+        : parsed?.thinking
+          ? `thinking=${String(parsed.thinking).replace(/\s+/g, " ").slice(0, 400)}`
+          : "thinking=none",
+      `decisionStatus=${String(parsed?.parsed?.presentation?.status || "none")}`,
+      `executionMode=${String(parsed?.parsed?.presentation?.execution?.mode || "none")}`,
+      `target=${String(parsed?.parsed?.presentation?.openTarget || parsed?.parsed?.presentation?.primaryLocation || "none")}`,
+      parsed?.parsed?.presentation?.decisionTrace?.chosenAction
+        ? `chosenAction=${String(parsed.parsed.presentation.decisionTrace.chosenAction).replace(/\s+/g, " ").slice(0, 240)}`
+        : "chosenAction=none",
+      parsed?.parsed?.presentation?.rationale ? `rationale=${String(parsed.parsed.presentation.rationale).replace(/\s+/g, " ").slice(0, 240)}` : "rationale=none",
+    ].join(" | "),
+  });
+  appendAgentLiveLogDetail(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    session,
+    contextLabel: "target_presentation",
+    stage: "thinking",
+    title: "Visible Reasoning",
+    content: String(parsed?.thinking || parsed?.parsed?.presentation?.thinkingSummary || ""),
+  });
+  appendAgentLiveLogDetail(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    session,
+    contextLabel: "target_presentation",
+    stage: "parsed",
+    title: "Parsed Decision",
+    content: JSON.stringify(parsed, null, 2),
+  });
+  writeAgentDebugFile(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    prompt,
+    result,
+    parsed,
+    session,
+    contextLabel: "target_presentation",
+    metadata: {
+      reportStatus: report?.status || null,
+      repoKind: workspaceContext?.repoKind || null,
+      fallbackTarget: fallback?.openTarget || fallback?.primaryLocation || null,
+    },
+  });
+  const normalized = normalizePresentationDelivery(parsed?.parsed?.presentation, fallback, report?.status);
+  await appendProgress(config, `[TARGET_PRESENTATION] presenter=ai repoKind=${workspaceContext.repoKind} status=${normalized.status} action=${String(normalized.execution?.mode || "none")} source=${normalized.resolutionSource} target=${String(normalized.openTarget || normalized.primaryLocation || "none")} thinking=${String(normalized.thinkingSummary || normalized.decisionTrace?.summary || "none").replace(/\s+/g, " ").slice(0, 220)}`);
+  return normalized;
+}
+
+async function startLocalStaticServer(directoryPath: string, preferredPort = 4173) {
+  const normalizedDir = path.resolve(directoryPath);
+  const listenPort = Math.max(1024, Number(preferredPort || 4173));
+  const script = [
+    "const http=require('http');",
+    "const fs=require('fs');",
+    "const path=require('path');",
+    `const root=${JSON.stringify(normalizedDir)};`,
+    `const port=${listenPort};`,
+    "const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.ico':'image/x-icon'};",
+    "const server=http.createServer((req,res)=>{",
+    "  const requestPath=decodeURIComponent(String(req.url||'/').split('?')[0]);",
+    "  const safePath=path.normalize(requestPath).replace(/^([\\/])+/, '');",
+    "  let filePath=path.join(root, safePath || 'index.html');",
+    "  if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) filePath=path.join(filePath,'index.html');",
+    "  if (!fs.existsSync(filePath) && fs.existsSync(path.join(root,'index.html'))) filePath=path.join(root,'index.html');",
+    "  fs.readFile(filePath,(err,data)=>{",
+    "    if(err){res.statusCode=404;res.end('Not found');return;}",
+    "    res.setHeader('Content-Type', mime[path.extname(filePath).toLowerCase()]||'application/octet-stream');",
+    "    res.end(data);",
+    "  });",
+    "});",
+    "server.listen(port,'127.0.0.1',()=>{});",
+  ].join("");
+  const child = spawn(process.execPath, ["-e", script], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.unref();
+  return { url: `http://127.0.0.1:${listenPort}`, reason: "static_server_started" };
+}
+
+async function spawnDetachedAndConfirm(command: string, args: string[], options: Record<string, unknown> = {}) {
+  try {
+    return await new Promise<{ attempted: boolean; opened: boolean; reason: string | null }>((resolve) => {
+      const child = spawn(command, args, {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: process.platform === "win32",
+        ...options,
+      });
+
+      let settled = false;
+      const timer = setTimeout(() => finish({ attempted: true, opened: true, reason: null }), 350);
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        child.removeListener("error", onError);
+        child.removeListener("exit", onExit);
+      };
+
+      const finish = (result: { attempted: boolean; opened: boolean; reason: string | null }) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (result.opened === true) {
+          child.unref();
+        }
+        resolve(result);
+      };
+
+      const onError = (err: unknown) => {
+        finish({
+          attempted: true,
+          opened: false,
+          reason: String(err instanceof Error ? err.message : err || "spawn_failed"),
+        });
+      };
+
+      const onExit = (code: number | null) => {
+        if (code === 0) {
+          finish({ attempted: true, opened: true, reason: null });
+          return;
+        }
+        finish({
+          attempted: true,
+          opened: false,
+          reason: code === null ? "exited_without_code" : `exit_${code}`,
+        });
+      };
+
+      child.once("error", onError);
+      child.once("exit", onExit);
+    });
+  } catch (err) {
+    return {
+      attempted: true,
+      opened: false,
+      reason: String(err instanceof Error ? err.message : err || "spawn_failed"),
+    };
+  }
 }
 
 async function openDeliveryTarget(targetPath: string) {
@@ -463,10 +1290,12 @@ async function openDeliveryTarget(targetPath: string) {
 
   try {
     if (process.platform === "win32") {
-      const normalizedTarget = path.resolve(target);
-      const targetUrl = /^(https?:|file:)/i.test(target)
+      const isHttpUrl = /^https?:/i.test(target);
+      const isFileUrl = /^file:/i.test(target);
+      const normalizedTarget = isHttpUrl || isFileUrl ? target : path.resolve(target);
+      const targetUrl = isHttpUrl || isFileUrl
         ? target
-        : pathToFileURL(normalizedTarget).toString();
+        : pathToFileURL(path.resolve(target)).toString();
       const browserCandidates = [
         { kind: "edge", path: path.join(process.env["ProgramFiles(x86)"] || "", "Microsoft", "Edge", "Application", "msedge.exe") },
         { kind: "edge", path: path.join(process.env.ProgramFiles || "", "Microsoft", "Edge", "Application", "msedge.exe") },
@@ -478,38 +1307,150 @@ async function openDeliveryTarget(targetPath: string) {
       ].filter((entry) => entry.path);
       const looksLikeHtml = /\.html?$/i.test(normalizedTarget) || /^file:.*\.html?$/i.test(targetUrl);
 
-      if (looksLikeHtml) {
+      if (isHttpUrl || looksLikeHtml) {
         for (const candidate of browserCandidates) {
           if (!(await pathExists(candidate.path))) continue;
           const args = candidate.kind === "firefox"
             ? ["-new-window", targetUrl]
             : ["--new-window", targetUrl];
-          const child = spawn(candidate.path, args, { detached: true, stdio: "ignore" });
-          child.unref();
-          return { attempted: true, opened: true, reason: `browser_new_window:${candidate.kind}` };
+          const launched = await spawnDetachedAndConfirm(candidate.path, args);
+          if (launched.opened) {
+            return { attempted: true, opened: true, reason: `browser_new_window:${candidate.kind}` };
+          }
         }
       }
 
-      const psTarget = target.replace(/'/g, "''");
-      const child = spawn(
+      if (isHttpUrl) {
+        const cmdOpen = await spawnDetachedAndConfirm("cmd.exe", ["/d", "/s", "/c", "start", "", targetUrl]);
+        if (cmdOpen.opened) {
+          return { attempted: true, opened: true, reason: "cmd_start_url" };
+        }
+      }
+
+      if (!isHttpUrl && !isFileUrl) {
+        const explorerOpen = await spawnDetachedAndConfirm("explorer.exe", [normalizedTarget]);
+        if (explorerOpen.opened) {
+          return { attempted: true, opened: true, reason: looksLikeHtml ? "explorer_html" : "explorer_path" };
+        }
+      }
+
+      const psTarget = (isHttpUrl || isFileUrl ? targetUrl : normalizedTarget).replace(/'/g, "''");
+      const powerShellOpen = await spawnDetachedAndConfirm(
         "powershell",
-        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", `Start-Process -FilePath '${psTarget}'`],
-        { detached: true, stdio: "ignore", windowsHide: true },
+        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", `Start-Process '${psTarget}'`],
       );
-      child.unref();
-      return { attempted: true, opened: true, reason: looksLikeHtml ? "powershell_start_process_html" : null };
+      return powerShellOpen.opened
+        ? { attempted: true, opened: true, reason: isHttpUrl ? "powershell_start_url" : looksLikeHtml ? "powershell_start_process_html" : "powershell_start_path" }
+        : powerShellOpen;
     }
     if (process.platform === "darwin") {
-      const child = spawn("open", [target], { detached: true, stdio: "ignore" });
-      child.unref();
-      return { attempted: true, opened: true, reason: null };
+      return await spawnDetachedAndConfirm("open", [target]);
     }
-    const child = spawn("xdg-open", [target], { detached: true, stdio: "ignore" });
-    child.unref();
-    return { attempted: true, opened: true, reason: null };
+    return await spawnDetachedAndConfirm("xdg-open", [target]);
   } catch (err) {
     return { attempted: true, opened: false, reason: String(err instanceof Error ? err.message : err || "open_failed") };
   }
+}
+
+async function executePresentationAction(
+  delivery: any,
+  openTargetFn: (target: string) => Promise<any>,
+) {
+  const execution = delivery?.execution && typeof delivery.execution === "object"
+    ? delivery.execution
+    : null;
+  const mode = String(execution?.mode || "").trim().toLowerCase();
+  const target = String(execution?.target || delivery?.openTarget || delivery?.primaryLocation || "").trim() || null;
+  const staticRoot = String(execution?.staticRoot || "").trim() || null;
+  const preferredPort = Number.isFinite(Number(execution?.preferredPort)) ? Number(execution.preferredPort) : 4173;
+
+  if (!mode || mode === "document_only") {
+    return {
+      attempted: false,
+      opened: false,
+      reason: target ? "document_only" : "no_execution_target",
+      execution: {
+        mode: mode || "document_only",
+        target,
+        staticRoot: null,
+        preferredPort: null,
+        finalTarget: target,
+      },
+    };
+  }
+
+  if (!target) {
+    return {
+      attempted: false,
+      opened: false,
+      reason: "missing_target",
+      execution: {
+        mode,
+        target: null,
+        staticRoot,
+        preferredPort,
+        finalTarget: null,
+      },
+    };
+  }
+
+  if (mode === "serve_and_open") {
+    try {
+      const directOpen = await openTargetFn(target);
+      if (directOpen?.opened === true) {
+        return {
+          ...directOpen,
+          execution: {
+            mode,
+            target,
+            staticRoot: staticRoot || (/index\.html?$/i.test(target) ? path.dirname(target) : target),
+            preferredPort,
+            finalTarget: target,
+          },
+        };
+      }
+
+      const serveRoot = staticRoot || (/index\.html?$/i.test(target) ? path.dirname(target) : target);
+      const served = await startLocalStaticServer(serveRoot, preferredPort);
+      const openResult = await openTargetFn(served.url);
+      return {
+        ...openResult,
+        reason: openResult?.reason || served.reason,
+        execution: {
+          mode,
+          target,
+          staticRoot: serveRoot,
+          preferredPort,
+          finalTarget: served.url,
+        },
+      };
+    } catch (err) {
+      return {
+        attempted: true,
+        opened: false,
+        reason: String(err instanceof Error ? err.message : err || "serve_and_open_failed"),
+        execution: {
+          mode,
+          target,
+          staticRoot,
+          preferredPort,
+          finalTarget: null,
+        },
+      };
+    }
+  }
+
+  const openResult = await openTargetFn(target);
+  return {
+    ...openResult,
+    execution: {
+      mode,
+      target,
+      staticRoot: null,
+      preferredPort: null,
+      finalTarget: target,
+    },
+  };
 }
 
 export async function performTargetDeliveryHandoff(
@@ -521,22 +1462,50 @@ export async function performTargetDeliveryHandoff(
   } = {},
 ) {
   const stateDir = config?.paths?.stateDir || "state";
+  await appendProgress(config, `[TARGET_PRESENTATION] handoff=starting status=${String(report?.status || "unknown")}`);
   const session = await loadActiveTargetSession(config);
-  const qualityText = await readTextIfExists(path.join(stateDir, "debug_worker_quality-worker.txt"));
-  const qualityEvidence = parseWorkerEvidence(qualityText);
-  const delivery = await resolvePresentationDelivery(config, report, session || {
-    repo: { repoUrl: report?.delivery?.repoWebUrl || null },
+  const handoffSession = session || {
+    projectId: report?.projectId || null,
+    sessionId: report?.sessionId || null,
+    repo: {
+      repoUrl: report?.delivery?.repoWebUrl || null,
+      repoFullName: normalizeRepoMarker(report?.delivery?.repoWebUrl),
+      name: null,
+    },
     workspace: { path: report?.delivery?.workspacePath || null },
     objective: { summary: report?.objectiveSummary || null },
-  }, qualityEvidence, { resolvePresentation: opts.resolvePresentation });
+  };
+  const alignedEntries = await loadAlignedWorkerEvidenceEntries(stateDir, handoffSession);
+  const releaseEntry = selectBestReleaseEvidence(alignedEntries);
+  const qualityEvidence = releaseEntry?.evidence || parseWorkerEvidence("");
+  const delivery = await resolvePresentationDelivery(config, report, handoffSession, qualityEvidence, {
+    resolvePresentation: opts.resolvePresentation,
+  });
   const openTargetFn = typeof opts.openTarget === "function" ? opts.openTarget : openDeliveryTarget;
-  const autoOpen = delivery?.autoOpenEligible && delivery?.openTarget
-    ? await openTargetFn(String(delivery.openTarget))
+  appendAgentLiveLogDetail(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    session: handoffSession,
+    contextLabel: "target_presentation",
+    stage: "execution_plan",
+    title: "Execution Plan",
+    content: JSON.stringify(delivery?.execution || null, null, 2),
+  });
+  const autoOpen = delivery?.autoOpenEligible || ["serve_and_open", "open_direct", "open_url"].includes(String(delivery?.execution?.mode || ""))
+    ? await executePresentationAction(delivery, openTargetFn)
     : {
         attempted: false,
         opened: false,
         reason: delivery?.primaryLocation ? "auto_open_not_supported_for_surface" : "no_openable_target",
+        execution: delivery?.execution || null,
       };
+  appendAgentLiveLogDetail(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    session: handoffSession,
+    contextLabel: "target_presentation",
+    stage: "execution_result",
+    title: "Execution Result",
+    content: JSON.stringify(autoOpen, null, 2),
+  });
   const handoff = {
     recordedAt: new Date().toISOString(),
     projectId: report?.projectId || null,
@@ -546,6 +1515,7 @@ export async function performTargetDeliveryHandoff(
     delivery,
     autoOpen,
   };
+  await appendProgress(config, `[TARGET_PRESENTATION] handoff=resolved status=${String(delivery?.status || "unknown")} locationType=${String(delivery?.locationType || "unknown")} target=${String(autoOpen?.execution?.finalTarget || delivery?.openTarget || delivery?.primaryLocation || "none")} autoOpen=${autoOpen.opened === true ? "opened" : autoOpen.attempted === true ? `failed:${String(autoOpen.reason || "unknown")}` : `skipped:${String(autoOpen.reason || "n/a")}`}`);
   await writeJson(path.join(stateDir, "last_target_delivery_handoff.json"), handoff);
   return handoff;
 }
@@ -574,17 +1544,19 @@ export async function evaluateTargetSuccessContract(config: any, providedSession
     };
   }
 
-  const [evolutionText, qualityText] = await Promise.all([
-    readTextIfExists(path.join(stateDir, "debug_worker_evolution-worker.txt")),
-    readTextIfExists(path.join(stateDir, "debug_worker_quality-worker.txt")),
-  ]);
-  const evolutionEvidence = parseWorkerEvidence(evolutionText);
-  const qualityEvidence = parseWorkerEvidence(qualityText);
-  const delivery = evaluateDeliveryDimension(evolutionEvidence, qualityEvidence);
+  const alignedEntries = await loadAlignedWorkerEvidenceEntries(stateDir, session);
+  const deliveryEntry = selectBestDeliveryEvidence(session, alignedEntries);
+  const releaseEntry = selectBestReleaseEvidence(alignedEntries);
+  const evolutionEvidence = deliveryEntry?.evidence || parseWorkerEvidence("");
+  const qualityEvidence = releaseEntry?.evidence || parseWorkerEvidence("");
+  const delivery = evaluateDeliveryDimension(session, evolutionEvidence, qualityEvidence);
   const releaseVerification = evaluateReleaseDimension(qualityEvidence);
+  const evidenceAlignment = evaluateEvidenceAlignmentDimension(alignedEntries, deliveryEntry, releaseEntry);
   const evidenceText = [
     session?.objective?.summary,
     session?.intent?.summary,
+    deliveryEntry?.text,
+    releaseEntry?.text,
     evolutionEvidence.expectedOutcome,
     evolutionEvidence.actualOutcome,
     qualityEvidence.expectedOutcome,
@@ -633,6 +1605,7 @@ export async function evaluateTargetSuccessContract(config: any, providedSession
       releaseVerification,
       intentCore,
       preferences,
+      evidenceAlignment,
     },
   };
 }

@@ -46,6 +46,16 @@ function buildSession() {
   };
 }
 
+function buildStampedWorkerHeader(session: any, workspacePath?: string) {
+  return [
+    `TARGET_PROJECT_ID: ${String(session?.projectId || "")}`,
+    `TARGET_SESSION_ID: ${String(session?.sessionId || "")}`,
+    `TARGET_REPO_URL: ${String(session?.repo?.repoUrl || "")}`,
+    `TARGET_REPO_FULL_NAME: ${String(session?.repo?.repoFullName || "")}`,
+    `TARGET_WORKSPACE_PATH: ${String(workspacePath || session?.workspace?.path || "")}`,
+  ].join("\n");
+}
+
 describe("target_success_contract", () => {
   let tempRoot: string;
   let config: any;
@@ -63,7 +73,12 @@ describe("target_success_contract", () => {
   it("marks the target fulfilled when delivery and final sign-off evidence exist", async () => {
     const workspacePath = path.join(tempRoot, "delivered-workspace");
     await fs.mkdir(workspacePath, { recursive: true });
+    const session = {
+      ...buildSession(),
+      workspace: { path: workspacePath },
+    };
     await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
       "BOX_STATUS=skipped",
       "BOX_SKIP_REASON=already-merged",
       "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
@@ -71,6 +86,7 @@ describe("target_success_contract", () => {
       "BOX_ACTUAL_OUTCOME=the app was already merged on main, and current main passes build, lint, and targeted todo app tests without further edits",
     ].join("\n"), "utf8");
     await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
       "DELIVERED: To-do list app is live on main. Open index.html in any browser. No build step. Session ready to close.",
       "BOX_STATUS=skipped",
       "BOX_SKIP_REASON=already-merged-on-main",
@@ -79,16 +95,14 @@ describe("target_success_contract", () => {
       "BOX_ACTUAL_OUTCOME=Verified live main already contains the simple to-do list app and all six release checks passed without requiring new changes.",
     ].join("\n"), "utf8");
 
-    const report = await evaluateTargetSuccessContract(config, {
-      ...buildSession(),
-      workspace: { path: workspacePath },
-    });
+    const report = await evaluateTargetSuccessContract(config, session);
     assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED);
     assert.equal(report.pendingHumanInputs.length, 0);
     assert.equal(isTargetSuccessContractTerminal(report), true);
-    assert.equal(report.delivery.locationType, "workspace");
+    assert.equal(report.delivery.locationType, "local_path");
     assert.equal(report.delivery.workspacePath, workspacePath);
-    assert.equal(report.delivery.autoOpenEligible, false);
+    assert.equal(report.delivery.autoOpenEligible, true);
+    assert.equal(report.delivery.openTarget, path.join(workspacePath, "index.html"));
   });
 
   it("keeps the contract open when final release sign-off evidence is missing", async () => {
@@ -104,28 +118,238 @@ describe("target_success_contract", () => {
     assert.equal(isTargetSuccessContractTerminal(report), false);
   });
 
-  it("records delivery handoff and uses the presenter-selected local target", async () => {
-    const workspacePath = path.join(tempRoot, "delivered-workspace");
-    await fs.mkdir(workspacePath, { recursive: true });
-    const indexPath = path.join(workspacePath, "index.html");
-    await fs.writeFile(indexPath, "<html><body>todo</body></html>", "utf8");
+  it("does not auto-fulfill a fresh existing-repo session from already-merged evidence", async () => {
+    const session = {
+      ...buildSession(),
+      repoProfile: { repoState: "existing" },
+      intent: {
+        summary: "upgrade the existing repo",
+        repoState: "existing",
+        scopeIn: ["premium upgrade"],
+        mustHaveFlows: [],
+      },
+    };
+
     await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
+      buildStampedWorkerHeader(session),
       "BOX_STATUS=skipped",
       "BOX_SKIP_REASON=already-merged",
       "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
-      "BOX_ACTUAL_OUTCOME=the app was already merged on main, and current main passes build, lint, and targeted todo app tests without further edits",
+      "BOX_ACTUAL_OUTCOME=the requested work is already merged on main and verified",
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(session),
+      "DELIVERED: Premium to-do app is live on main.",
+      "BOX_STATUS=skipped",
+      "BOX_SKIP_REASON=already-merged-on-main",
+      "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+      "BOX_ACTUAL_OUTCOME=Verified live main already contains the requested product state and release checks passed.",
+    ].join("\n"), "utf8");
+
+    const report = await evaluateTargetSuccessContract(config, session);
+
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.OPEN);
+    assert.ok(report.blockers.includes("delivery_evidence_missing"));
+    assert.equal(report.dimensions.delivery.evidence.repoRequiresFreshWork, true);
+  });
+
+  it("ignores stale worker evidence from a different target repo", async () => {
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
+      "TASK: verify already-merged app on dogducaner66-byte/TestRepoForSingleTargetMode",
+      "BOX_STATUS=skipped",
+      "BOX_SKIP_REASON=already-merged",
+      "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+      "BOX_ACTUAL_OUTCOME=the app was already merged on main for dogducaner66-byte/TestRepoForSingleTargetMode and current main passes build lint and targeted tests",
     ].join("\n"), "utf8");
     await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
       "DELIVERED: To-do list app is live on main. Open index.html in any browser. No build step. Session ready to close.",
       "BOX_STATUS=skipped",
       "BOX_SKIP_REASON=already-merged-on-main",
       "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
-      "BOX_ACTUAL_OUTCOME=Verified live main already contains the simple to-do list app and all six release checks passed without requiring new changes.",
+      "BOX_ACTUAL_OUTCOME=Verified live main already contains the simple to-do list app for dogducaner66-byte/TestRepoForSingleTargetMode and all six release checks passed without requiring new changes.",
     ].join("\n"), "utf8");
+
     const report = await evaluateTargetSuccessContract(config, {
       ...buildSession(),
-      workspace: { path: workspacePath },
+      projectId: "target_testrepoforsingletargetmodecomplextodo",
+      sessionId: "sess_test_002",
+      repo: {
+        repoUrl: "https://github.com/dogducaner66-byte/TestRepoForSingleTargetModeComplexTodo.git",
+        repoFullName: "dogducaner66-byte/TestRepoForSingleTargetModeComplexTodo",
+        name: "TestRepoForSingleTargetModeComplexTodo",
+      },
+      objective: {
+        summary: "build a more complex to-do app",
+        acceptanceCriteria: ["clarified", "planning-ready"],
+      },
+      intent: {
+        summary: "goal=complex to-do app | success=Strong design polish",
+        scopeIn: ["complex to-do app"],
+        mustHaveFlows: ["complex to-do app"],
+        preferredQualityBar: "Strong design polish",
+      },
     });
+
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.OPEN);
+    assert.ok(report.blockers.includes("delivery_evidence_missing"));
+    assert.ok(report.blockers.includes("release_signoff_missing"));
+    assert.equal(report.dimensions.evidenceAlignment.evidence.evolutionEvidenceAligned, false);
+    assert.equal(report.dimensions.evidenceAlignment.evidence.qualityEvidenceAligned, false);
+  });
+
+  it("uses aligned non-evolution worker evidence when the global evolution debug file is stale", async () => {
+    const session = {
+      ...buildSession(),
+      projectId: "target_wheatherappbox",
+      sessionId: "sess_weather_001",
+      repo: {
+        repoUrl: "https://github.com/dogducaner66-byte/wheatherappbox.git",
+        repoFullName: "dogducaner66-byte/wheatherappbox",
+        name: "wheatherappbox",
+      },
+      workspace: { path: path.join(tempRoot, "weather-workspace") },
+      objective: {
+        summary: "Build the best possible premium weather app with polished forecasts and search.",
+        acceptanceCriteria: ["clarified", "planning-ready"],
+      },
+      intent: {
+        summary: "goal=premium weather app | success=Strong design polish",
+        scopeIn: ["premium weather app", "hourly forecast", "location search"],
+        mustHaveFlows: ["premium weather app"],
+        preferredQualityBar: "Strong design polish",
+      },
+      handoff: {
+        requiredHumanInputs: ["Choose the main priority so BOX can optimize the first build correctly."],
+        carriedContextSummary: "Target delivery is active.",
+      },
+    };
+
+    await fs.mkdir(session.workspace.path, { recursive: true });
+    await fs.writeFile(path.join(session.workspace.path, "index.html"), "<html><body>weather</body></html>", "utf8");
+
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
+      buildStampedWorkerHeader(buildSession()),
+      "BOX_STATUS=done",
+      "BOX_MERGED_SHA=c57d721d85217ef03fd5b4b8bffeb59ba43d5b9a",
+      "BOX_ACTUAL_OUTCOME=Delivered old todo app work for a different session.",
+    ].join("\n"), "utf8");
+
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_integration-worker.txt"), [
+      buildStampedWorkerHeader(session, session.workspace.path),
+      "BOX_STATUS=done",
+      "BOX_PR_URL=https://github.com/dogducaner66-byte/wheatherappbox/pull/3",
+      "BOX_MERGED_SHA=a0cfecd041b3dbdb6414c751744845f66542aa01",
+      "BOX_EXPECTED_OUTCOME=Land the premium weather app foundation and interaction surface.",
+      "BOX_ACTUAL_OUTCOME=Delivered the premium weather app search, saved-city controls, and app foundation through a merged PR and left main clean.",
+    ].join("\n"), "utf8");
+
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(session, session.workspace.path),
+      "BOX_STATUS=done",
+      "BOX_PR_URL=https://github.com/dogducaner66-byte/wheatherappbox/pull/7",
+      "BOX_MERGED_SHA=9063b0c01655947559e68baa5ead84245519f5d5",
+      "BOX_EXPECTED_OUTCOME=Validate the weather app release gates.",
+      "BOX_ACTUAL_OUTCOME=Verified the weather app release checks passed and all gates are green.",
+      "DELIVERED: Weather app is live on main. Open index.html in the session workspace.",
+      "I ran npm test, npm run lint, and npm run build.",
+    ].join("\n"), "utf8");
+
+    const report = await evaluateTargetSuccessContract(config, session);
+
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED);
+    assert.equal(report.dimensions.delivery.evidence.mergedSha, "a0cfecd041b3dbdb6414c751744845f66542aa01");
+    assert.deepEqual(report.dimensions.evidenceAlignment.evidence.alignedRoles, [
+      "global:integration-worker",
+      "global:quality-worker",
+    ]);
+  });
+
+  it("prefers session-scoped worker evidence over stale global debug files", async () => {
+    const session = {
+      ...buildSession(),
+      projectId: "target_wheatherappbox",
+      sessionId: "sess_weather_002",
+      repo: {
+        repoUrl: "https://github.com/dogducaner66-byte/wheatherappbox.git",
+        repoFullName: "dogducaner66-byte/wheatherappbox",
+        name: "wheatherappbox",
+      },
+      workspace: { path: path.join(tempRoot, "weather-workspace-2") },
+      objective: {
+        summary: "Build the best possible premium weather app.",
+        acceptanceCriteria: ["clarified", "planning-ready"],
+      },
+      intent: {
+        summary: "goal=premium weather app | success=Strong design polish",
+        scopeIn: ["premium weather app"],
+        mustHaveFlows: ["premium weather app"],
+        preferredQualityBar: "Strong design polish",
+      },
+      handoff: {
+        requiredHumanInputs: ["Choose the main priority so BOX can optimize the first build correctly."],
+        carriedContextSummary: "Target delivery is active.",
+      },
+    };
+
+    await fs.mkdir(session.workspace.path, { recursive: true });
+    await fs.writeFile(path.join(session.workspace.path, "index.html"), "<html><body>weather</body></html>", "utf8");
+
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(buildSession()),
+      "BOX_STATUS=done",
+      "BOX_MERGED_SHA=c57d721d85217ef03fd5b4b8bffeb59ba43d5b9a",
+      "BOX_ACTUAL_OUTCOME=Stale unrelated global worker evidence.",
+    ].join("\n"), "utf8");
+
+    const sessionEvidenceDir = path.join(
+      config.paths.stateDir,
+      "projects",
+      session.projectId,
+      session.sessionId,
+      "worker_evidence",
+    );
+    await fs.mkdir(sessionEvidenceDir, { recursive: true });
+    await fs.writeFile(path.join(sessionEvidenceDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(session, session.workspace.path),
+      "BOX_STATUS=done",
+      "BOX_PR_URL=https://github.com/dogducaner66-byte/wheatherappbox/pull/7",
+      "BOX_MERGED_SHA=9063b0c01655947559e68baa5ead84245519f5d5",
+      "BOX_ACTUAL_OUTCOME=Verified the weather app release checks passed and all gates are green.",
+      "DELIVERED: Weather app is live on main.",
+      "I ran npm test, npm run lint, and npm run build.",
+    ].join("\n"), "utf8");
+
+    const report = await evaluateTargetSuccessContract(config, session);
+
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED);
+    assert.deepEqual(report.dimensions.evidenceAlignment.evidence.alignedRoles, ["session:quality-worker"]);
+  });
+
+  it("records delivery handoff and uses the presenter-selected local target", async () => {
+    const workspacePath = path.join(tempRoot, "delivered-workspace");
+    await fs.mkdir(workspacePath, { recursive: true });
+    const indexPath = path.join(workspacePath, "index.html");
+    await fs.writeFile(indexPath, "<html><body>todo</body></html>", "utf8");
+    const session = {
+      ...buildSession(),
+      workspace: { path: workspacePath },
+    };
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
+      "BOX_STATUS=skipped",
+      "BOX_SKIP_REASON=already-merged",
+      "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+      "BOX_ACTUAL_OUTCOME=the app was already merged on main, and current main passes build, lint, and targeted todo app tests without further edits",
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
+      "DELIVERED: To-do list app is live on main. Open index.html in any browser. No build step. Session ready to close.",
+      "BOX_STATUS=skipped",
+      "BOX_SKIP_REASON=already-merged-on-main",
+      "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+      "BOX_ACTUAL_OUTCOME=Verified live main already contains the simple to-do list app and all six release checks passed without requiring new changes.",
+    ].join("\n"), "utf8");
+    const report = await evaluateTargetSuccessContract(config, session);
 
     const targets: string[] = [];
     const handoff = await performTargetDeliveryHandoff(config, report, {
@@ -150,16 +374,22 @@ describe("target_success_contract", () => {
     assert.equal(handoff.delivery.preserveWorkspace, true);
   });
 
-  it("falls back to a documented workspace when the presenter does not provide a runnable target", async () => {
+  it("keeps the local preview as the handoff target when a presenter only documents the workspace", async () => {
     const workspacePath = path.join(tempRoot, "delivered-workspace");
     await fs.mkdir(workspacePath, { recursive: true });
+    const session = {
+      ...buildSession(),
+      workspace: { path: workspacePath },
+    };
     await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
       "BOX_STATUS=skipped",
       "BOX_SKIP_REASON=already-merged",
       "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
       "BOX_ACTUAL_OUTCOME=the app was already merged on main, and current main passes build, lint, and targeted todo app tests without further edits",
     ].join("\n"), "utf8");
     await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
       "DELIVERED: To-do list app is live on main. Open index.html in any browser. No build step. Session ready to close.",
       "BOX_STATUS=skipped",
       "BOX_SKIP_REASON=already-merged-on-main",
@@ -167,10 +397,7 @@ describe("target_success_contract", () => {
       "BOX_ACTUAL_OUTCOME=Verified live main already contains the simple to-do list app and all six release checks passed without requiring new changes.",
     ].join("\n"), "utf8");
 
-    const report = await evaluateTargetSuccessContract(config, {
-      ...buildSession(),
-      workspace: { path: workspacePath },
-    });
+    const report = await evaluateTargetSuccessContract(config, session);
 
     const handoff = await performTargetDeliveryHandoff(config, report, {
       resolvePresentation: async () => ({
@@ -184,19 +411,90 @@ describe("target_success_contract", () => {
       }),
     });
 
-    assert.equal(handoff.delivery.locationType, "workspace");
-    assert.equal(handoff.delivery.autoOpenEligible, false);
-    assert.equal(handoff.autoOpen.attempted, false);
+    assert.equal(handoff.delivery.locationType, "local_path");
+    assert.equal(handoff.delivery.autoOpenEligible, true);
+    assert.equal(handoff.delivery.openTarget, path.join(workspacePath, "index.html"));
+  });
+
+  it("prefers the local product preview when the presenter tries to redirect fulfilled delivery to a PR", async () => {
+    const workspacePath = path.join(tempRoot, "delivered-workspace-preview-first");
+    await fs.mkdir(workspacePath, { recursive: true });
+    const indexPath = path.join(workspacePath, "index.html");
+    await fs.writeFile(indexPath, "<html><body>preview</body></html>", "utf8");
+    const session = {
+      ...buildSession(),
+      projectId: "target_wheatherappbox",
+      sessionId: "sess_weather_preview_first",
+      repo: {
+        repoUrl: "https://github.com/dogducaner66-byte/wheatherappbox.git",
+        repoFullName: "dogducaner66-byte/wheatherappbox",
+        name: "wheatherappbox",
+      },
+      workspace: { path: workspacePath },
+    };
+
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_integration-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
+      "BOX_STATUS=done",
+      "BOX_PR_URL=https://github.com/dogducaner66-byte/wheatherappbox/pull/3",
+      "BOX_MERGED_SHA=a0cfecd041b3dbdb6414c751744845f66542aa01",
+      "BOX_ACTUAL_OUTCOME=Delivered the premium weather app search and interaction surface.",
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
+      "BOX_STATUS=done",
+      "BOX_PR_URL=https://github.com/dogducaner66-byte/wheatherappbox/pull/7",
+      "BOX_MERGED_SHA=9063b0c01655947559e68baa5ead84245519f5d5",
+      "BOX_ACTUAL_OUTCOME=Verified the weather app release checks passed and all gates are green.",
+      "DELIVERED: Weather app is live on main. Open index.html in the session workspace.",
+      "I ran npm test, npm run lint, and npm run build.",
+    ].join("\n"), "utf8");
+
+    const report = await evaluateTargetSuccessContract(config, session);
+    const targets: string[] = [];
+    const handoff = await performTargetDeliveryHandoff(config, report, {
+      resolvePresentation: async () => ({
+        status: "documented",
+        locationType: "repo",
+        primaryLocation: "https://github.com/dogducaner66-byte/wheatherappbox",
+        openTarget: "https://github.com/dogducaner66-byte/wheatherappbox/pull/7",
+        preserveWorkspace: false,
+        instructions: ["Open PR #7 to review the final packet."],
+        userMessage: "Review PR #7 for final delivery details.",
+      }),
+      openTarget: async (target: string) => {
+        targets.push(target);
+        return { attempted: true, opened: true, reason: null };
+      },
+    });
+
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED);
+    assert.deepEqual(targets, [indexPath]);
+    assert.equal(handoff.delivery.locationType, "local_path");
+    assert.equal(handoff.delivery.openTarget, indexPath);
+    assert.equal(handoff.delivery.preserveWorkspace, true);
+    assert.equal(handoff.delivery.resolutionSource, "product_presenter_ai_preview_overridden");
   });
 
   it("uses an explicit deployed preview URL as the conservative fallback", async () => {
+    const session = {
+      ...buildSession(),
+      repo: {
+        repoUrl: "https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode.git",
+        repoFullName: "dogducaner66-byte/TestRepoForSingleTargetMode",
+        name: "TestRepoForSingleTargetMode",
+      },
+      workspace: { path: path.join(tempRoot, "missing-workspace") },
+    };
     await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
+      buildStampedWorkerHeader(session),
       "BOX_STATUS=skipped",
       "BOX_SKIP_REASON=already-merged",
       "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
-      "BOX_ACTUAL_OUTCOME=the simple to-do list app delivery is already merged and verified on main",
+      "BOX_ACTUAL_OUTCOME=the simple to-do list app delivery is already merged on main and verified on main",
     ].join("\n"), "utf8");
     await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(session),
       "DELIVERED: Simple to-do list app is live at https://acme-demo.vercel.app and ready to use.",
       "BOX_STATUS=skipped",
       "BOX_SKIP_REASON=already-merged-on-main",
@@ -204,10 +502,7 @@ describe("target_success_contract", () => {
       "BOX_ACTUAL_OUTCOME=Verified the simple to-do list app release checks passed and preview is available at https://acme-demo.vercel.app .",
     ].join("\n"), "utf8");
 
-    const report = await evaluateTargetSuccessContract(config, {
-      ...buildSession(),
-      workspace: { path: path.join(tempRoot, "missing-workspace") },
-    });
+    const report = await evaluateTargetSuccessContract(config, session);
 
     const handoff = await performTargetDeliveryHandoff(config, report, {
       resolvePresentation: async () => {
@@ -218,5 +513,61 @@ describe("target_success_contract", () => {
     assert.equal(handoff.delivery.locationType, "url");
     assert.equal(handoff.delivery.autoOpenEligible, true);
     assert.equal(handoff.delivery.openTarget, "https://acme-demo.vercel.app");
+  });
+
+  it("marks an existing-repo session fulfilled_with_handoff when merged delivery and local release verification evidence exist", async () => {
+    const workspacePath = path.join(tempRoot, "premium-delivered-workspace");
+    await fs.mkdir(workspacePath, { recursive: true });
+    await fs.writeFile(path.join(workspacePath, "index.html"), "<html><body>premium todo</body></html>", "utf8");
+    const session = {
+      ...buildSession(),
+      objective: {
+        summary: "upgrade the existing basic todo app into the strongest personal todo product",
+        acceptanceCriteria: ["clarified", "planning-ready"],
+      },
+      repoProfile: { repoState: "existing" },
+      intent: {
+        summary: "goal=premium personal todo app | success=design looks production-ready and tests are green",
+        repoState: "existing",
+        scopeIn: ["premium personal todo app", "ordering and bulk actions", "accessibility", "reliable persistence"],
+        mustHaveFlows: [],
+        preferredQualityBar: null,
+      },
+      handoff: {
+        requiredHumanInputs: ["What outcome would make you say the target work is correct?"],
+        carriedContextSummary: "Target delivery is active.",
+      },
+      workspace: { path: workspacePath },
+      repo: {
+        repoUrl: "https://github.com/dogducaner66-byte/TestRepoForSingleTargetMode.git",
+        repoFullName: "dogducaner66-byte/TestRepoForSingleTargetMode",
+        name: "TestRepoForSingleTargetMode",
+      },
+    };
+
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
+      "BOX_STATUS=done",
+      "BOX_MERGED_SHA=c57d721d85217ef03fd5b4b8bffeb59ba43d5b9a",
+      "BOX_EXPECTED_OUTCOME=Add full keyboard navigation and semantic accessibility coverage for add/edit/select/bulk/reorder/subtask todo flows.",
+      "BOX_ACTUAL_OUTCOME=Delivered accessible bulk selection and reorder controls with live announcements, focus restoration, Escape/Enter contracts, and updated regression coverage.",
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
+      "BOX_STATUS=done",
+      "BOX_MERGED_SHA=886a51516055193f26bcb320114f4f283279a3ac",
+      "BOX_EXPECTED_OUTCOME=Expand core QA coverage past 32 passing tests and replace placeholder guidance with real README plus a subtle in-app power-user hint.",
+      "BOX_ACTUAL_OUTCOME=Expanded the core suite to 40 passing tests, added verified power-user hint UI, replaced README with real product/setup guidance, merged PR #13, and left main clean.",
+      "I ran npm test, npm run lint, and npm run build.",
+    ].join("\n"), "utf8");
+
+    const report = await evaluateTargetSuccessContract(config, session);
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED_WITH_HANDOFF);
+    assert.ok(report.blockers.includes("human_input_pending"));
+    assert.equal(report.dimensions.delivery.status, "satisfied");
+    assert.equal(report.dimensions.releaseVerification.status, "satisfied");
+    assert.equal(report.delivery.locationType, "local_path");
+    assert.equal(report.delivery.autoOpenEligible, true);
+    assert.equal(report.delivery.openTarget, path.join(workspacePath, "index.html"));
   });
 });

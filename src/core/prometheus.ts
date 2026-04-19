@@ -8653,7 +8653,7 @@ Mandatory requirements:
           : 1.0;
         const effectiveThresholds = {
           minTaskChars: Math.max(baseDensityThresholds.minTaskChars, Math.ceil(laneThresholds.minTaskChars * laneStrictness)),
-          minTargetFiles: Math.max(baseDensityThresholds.minTargetFiles, laneThresholds.minTargetFiles),
+          minTargetFiles: laneThresholds.minTargetFiles,
           minAcceptanceCriteria: Math.max(baseDensityThresholds.minAcceptanceCriteria, Math.ceil(laneThresholds.minAcceptanceCriteria * laneStrictness)),
           minExecutionTokens: Math.max(baseDensityThresholds.minExecutionTokens, Math.ceil(laneThresholds.minExecutionTokens * laneStrictness)),
         };

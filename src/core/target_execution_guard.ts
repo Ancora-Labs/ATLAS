@@ -1,6 +1,10 @@
 import path from "node:path";
 import { PLATFORM_MODE } from "./mode_state.js";
 import { TARGET_SESSION_STAGE } from "./target_session_state.js";
+import {
+  buildShadowStageDisciplineLines,
+  evaluateShadowPlanEntryContract,
+} from "./target_stage_contract.js";
 
 function normalizeString(value: unknown): string {
   return String(value || "").trim();
@@ -24,28 +28,6 @@ function normalizeStringArray(values: unknown): string[] {
   }
   return result;
 }
-
-const SHADOW_SAFE_TASK_KINDS = new Set([
-  "planning",
-  "test",
-  "ci-fix",
-  "observation",
-  "analysis",
-  "docs",
-  "documentation",
-  "verification",
-]);
-
-const SHADOW_HIGH_RISK_PATTERNS = Object.freeze([
-  "deploy",
-  "production",
-  "release",
-  "rollout",
-  "migrate",
-  "schema",
-  "secret rotation",
-  "force push",
-]);
 
 function pathOverlap(left: string, right: string): boolean {
   const leftResolved = path.resolve(left);
@@ -209,24 +191,20 @@ export function evaluateTargetExecutionBoundary(input: any, config: any) {
 
   const changedFiles = Array.isArray(input?.changedFiles) ? input.changedFiles : [];
   const taskKind = normalizeString(input?.taskKind).toLowerCase();
-  const taskSignal = [input?.task, input?.context, input?.verification]
-    .map((value) => normalizeString(value).toLowerCase())
-    .filter(Boolean)
-    .join("\n");
 
   if (context.executionMode === TARGET_SESSION_STAGE.SHADOW) {
-    if (taskKind && !SHADOW_SAFE_TASK_KINDS.has(taskKind)) {
-      blockedCodes.push("shadow_task_kind_not_allowed");
-      blocked.push(`shadow mode only allows low-risk task kinds; received ${taskKind}`);
-    }
-    if (changedFiles.length > 4) {
-      blockedCodes.push("shadow_scope_too_large");
-      blocked.push(`shadow mode limits planned scope to 4 files; received ${changedFiles.length}`);
-    }
-    const matchedPattern = SHADOW_HIGH_RISK_PATTERNS.find((pattern) => taskSignal.includes(pattern));
-    if (matchedPattern) {
-      blockedCodes.push("shadow_high_risk_action");
-      blocked.push(`shadow mode forbids high-risk action intent: ${matchedPattern}`);
+    const shadowViolations = evaluateShadowPlanEntryContract({
+      taskKind,
+      changedFiles,
+      task: input?.task,
+      context: input?.context,
+      verification: input?.verification,
+    });
+    for (const violation of shadowViolations) {
+      if (!blockedCodes.includes(violation.code)) {
+        blockedCodes.push(violation.code);
+      }
+      blocked.push(violation.message);
     }
   }
 
@@ -278,6 +256,8 @@ export function buildTargetExecutionWorkerContext(config: any): string {
     parts.push("Shadow mode is verification-first: prefer planning, tests, CI fixes, docs, and observation work.");
     parts.push("Shadow mode blocks high-risk delivery intent, broad implementation packets, and large file spreads.");
     parts.push("Shadow mode also requires exact scope discipline: do not create extra files outside the planner-declared target file set.");
+    parts.push("SHADOW MODE DELIVERY DISCIPLINE");
+    parts.push(...buildShadowStageDisciplineLines());
   }
 
   if (!boundary.allowed && boundary.blocked.length > 0) {

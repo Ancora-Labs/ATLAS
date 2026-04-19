@@ -36,6 +36,122 @@ type TopicSiteState = {
   entries: TopicSiteEntry[];
 };
 
+export interface TargetResearchCoveragePlan {
+  adaptive: boolean;
+  repoState: string;
+  obligations: string[];
+  recommendedSourceTypes: string[];
+  targetSourceCount: number;
+  rationale: string[];
+}
+
+const COVERAGE_SIGNAL_RULES = Object.freeze({
+  visual_design: [/\blanding\b/i, /\bhero\b/i, /\bvisual\b/i, /\bbrand(?:ed|ing)?\b/i, /\bshowcase\b/i, /\bpremium\b/i, /\bmarketing\b/i, /\bportfolio\b/i],
+  media_surfaces: [/\bimage\b/i, /\bimages\b/i, /\bphoto(?:graphy)?\b/i, /\bgallery\b/i, /\bvideo\b/i, /\billustration\b/i, /\basset\b/i],
+  responsive_experience: [/\bresponsive\b/i, /\bmobile\b/i, /\bbreakpoint\b/i, /\bviewport\b/i, /\badaptive\b/i, /\bdesktop\b/i],
+  trust_signals: [/\btrust\b/i, /\btestimonial\b/i, /\breview\b/i, /\brating\b/i, /\bfaq\b/i, /\bsocial\s+proof\b/i, /\breservation\b/i, /\bbooking\b/i, /\bcheckout\b/i, /\bpricing\b/i],
+  user_flow_clarity: [/\bflow\b/i, /\bcta\b/i, /\bjourney\b/i, /\bnavigation\b/i, /\bform\b/i, /\bbooking\b/i, /\bcheckout\b/i, /\breservation\b/i, /\bdashboard\b/i, /\bworkflow\b/i],
+  accessibility_clarity: [/\baccessibility\b/i, /\ba11y\b/i, /\bkeyboard\b/i, /\bcontrast\b/i, /\bsemantic\b/i, /\baria\b/i],
+});
+
+function pushUnique(list: string[], value: string): void {
+  if (!value || list.includes(value)) return;
+  list.push(value);
+}
+
+function textMatchesAny(text: string, patterns: readonly RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function collectTargetIntentText(activeTargetSession: any): string {
+  const intent = activeTargetSession?.intent || {};
+  const parts = [
+    intent.summary,
+    intent.productType,
+    ...(Array.isArray(intent.targetUsers) ? intent.targetUsers : []),
+    ...(Array.isArray(intent.mustHaveFlows) ? intent.mustHaveFlows : []),
+    ...(Array.isArray(intent.scopeIn) ? intent.scopeIn : []),
+    ...(Array.isArray(intent.successCriteria) ? intent.successCriteria : []),
+  ];
+  return parts
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+export function deriveTargetResearchCoveragePlan(activeTargetSession: any): TargetResearchCoveragePlan {
+  const repoState = String(activeTargetSession?.intent?.repoState || activeTargetSession?.repoProfile?.repoState || "unknown").trim() || "unknown";
+  const text = collectTargetIntentText(activeTargetSession);
+  const obligations: string[] = [];
+  const recommendedSourceTypes: string[] = [];
+  const rationale: string[] = [];
+
+  pushUnique(obligations, "implementation_patterns");
+  pushUnique(obligations, "user_flow_clarity");
+  pushUnique(recommendedSourceTypes, "implementation docs");
+  pushUnique(recommendedSourceTypes, "reference implementations");
+  pushUnique(recommendedSourceTypes, "failure-mode notes");
+
+  if (repoState === "empty") {
+    pushUnique(obligations, "architecture_foundation");
+    pushUnique(recommendedSourceTypes, "stack selection references");
+    rationale.push("repo is empty so initial build-direction evidence matters");
+  }
+
+  if (textMatchesAny(text, COVERAGE_SIGNAL_RULES.visual_design)) {
+    pushUnique(obligations, "visual_design");
+    pushUnique(recommendedSourceTypes, "visual exemplars");
+    rationale.push("intent suggests a visual-first or brand-sensitive surface");
+  }
+
+  if (textMatchesAny(text, COVERAGE_SIGNAL_RULES.media_surfaces) || textMatchesAny(text, COVERAGE_SIGNAL_RULES.visual_design)) {
+    pushUnique(obligations, "media_surfaces");
+    pushUnique(recommendedSourceTypes, "asset and media patterns");
+    rationale.push("delivery likely depends on imagery or media presentation");
+  }
+
+  if (textMatchesAny(text, COVERAGE_SIGNAL_RULES.responsive_experience) || textMatchesAny(text, COVERAGE_SIGNAL_RULES.visual_design)) {
+    pushUnique(obligations, "responsive_experience");
+    pushUnique(recommendedSourceTypes, "responsive UX guidance");
+    rationale.push("the experience needs to hold across mobile and desktop");
+  }
+
+  if (textMatchesAny(text, COVERAGE_SIGNAL_RULES.trust_signals) || /\bpremium\b|\bconversion\b|\blanding\b/i.test(text)) {
+    pushUnique(obligations, "trust_signals");
+    pushUnique(recommendedSourceTypes, "trust/conversion UX examples");
+    rationale.push("user confidence and conversion clarity are part of success");
+  }
+
+  if (textMatchesAny(text, COVERAGE_SIGNAL_RULES.accessibility_clarity) || /\buser\b|\bcustomer\b|\bpublic\b|\blanding\b|\bdashboard\b/i.test(text)) {
+    pushUnique(obligations, "accessibility_clarity");
+    pushUnique(recommendedSourceTypes, "accessibility and usability guidance");
+    rationale.push("user-facing delivery benefits from usability evidence");
+  }
+
+  const targetSourceCount = Math.max(8, Math.min(24, 6 + (obligations.length * 2) + (repoState === "empty" ? 2 : 0)));
+
+  return {
+    adaptive: true,
+    repoState,
+    obligations,
+    recommendedSourceTypes,
+    targetSourceCount,
+    rationale,
+  };
+}
+
+export function buildTargetResearchCoverageSection(activeTargetSession: any): string {
+  const plan = deriveTargetResearchCoveragePlan(activeTargetSession);
+  return `## TARGET RESEARCH COVERAGE PLAN
+Adaptive coverage: enabled
+Coverage obligations: ${plan.obligations.join(", ") || "implementation_patterns"}
+Preferred source mix: ${plan.recommendedSourceTypes.join(", ") || "implementation docs"}
+Adaptive source target: ${plan.targetSourceCount}
+Stop condition: do not stop once only stack docs are found; continue until the obligation list is materially represented in the evidence set.
+Why these obligations: ${plan.rationale.join("; ") || "keep the research aligned to the declared target intent"}`;
+}
+
 function normalizeUrl(raw: string): string {
   const s = String(raw || "").trim();
   if (!s) return "";
@@ -275,6 +391,7 @@ Research should improve target delivery readiness and planning quality for this 
 
     sections.push(section("target-intent-contract", buildTargetIntentResearchSection(activeTargetSession)));
     sections.push(section("target-research-mode", buildTargetResearchModeSection(activeTargetSession)));
+    sections.push(section("target-research-coverage", buildTargetResearchCoverageSection(activeTargetSession)));
   } else {
     sections.push(section("system-identity", `## SYSTEM CONTEXT
 You are searching for knowledge to improve BOX — an autonomous software delivery system.
@@ -361,12 +478,12 @@ function buildTargetResearchModeSection(activeTargetSession: any): string {
 Mode: empty_repo_discovery
 The target repository is effectively empty. Do NOT waste effort inferring a current stack from the repo.
 Your job is to reduce build-direction uncertainty from the clarified product intent.
-Prioritize:
+Prioritize a balanced evidence mix across:
 - best-fit stack choices for this product type
-- initial architecture shape
-- hosting/deployment options appropriate for v1
-- common implementation patterns and integration choices
-- tradeoffs that keep MVP delivery fast without painting the system into a corner
+- initial architecture shape and hosting/deployment for v1
+- implementation and integration patterns that reduce delivery risk
+- product-facing UX references, exemplars, and flow patterns when the target is user-visible
+- media, responsive, trust, or accessibility evidence when those obligations are implied by the target intent
 After research, BOX must move forward into planning in the same cycle. Do not behave as if research itself is the final stop.`;
   }
 
@@ -478,6 +595,7 @@ export interface ResearchScoutResult {
   scoutedAt: string;
   model: string;
   targetSession?: Record<string, unknown> | null;
+  coveragePlan?: TargetResearchCoveragePlan | null;
   error?: string;
 }
 
@@ -495,9 +613,17 @@ export async function runResearchScout(config: any): Promise<ResearchScoutResult
   const runNonce = disablePromptCache
     ? `research-scout-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
     : "research-scout";
-  const targetSourceCount = Number.isFinite(Number(config?.runtime?.researchScoutTargetSources))
+  const promptRuntime = resolvePromptRuntimeContext(config);
+  const targetResearchPlan = promptRuntime.mode.effectiveMode === "single_target_delivery"
+    ? deriveTargetResearchCoveragePlan(promptRuntime.activeTargetSession)
+    : null;
+  const configuredTargetSourceCount = Number.isFinite(Number(config?.runtime?.researchScoutTargetSources))
     ? Math.max(1, Number(config.runtime.researchScoutTargetSources))
-    : 20;
+    : null;
+  const derivedTargetSourceCount = targetResearchPlan?.targetSourceCount ?? 20;
+  const targetSourceCount = configuredTargetSourceCount !== null
+    ? Math.min(configuredTargetSourceCount, derivedTargetSourceCount)
+    : derivedTargetSourceCount;
   const topicSiteCompletionThreshold = Number.isFinite(Number(config?.runtime?.researchScoutTopicSiteCompletionThreshold))
     ? Math.max(2, Number(config.runtime.researchScoutTopicSiteCompletionThreshold))
     : 8;
@@ -511,17 +637,31 @@ export async function runResearchScout(config: any): Promise<ResearchScoutResult
 
   await appendProgress(config, "[RESEARCH_SCOUT] Starting internet knowledge acquisition");
   await appendProgress(config, `[RESEARCH_SCOUT][CACHE_POLICY] promptCache=${disablePromptCache ? "disabled(via nonce)" : "enabled"}`);
+  if (targetResearchPlan) {
+    await appendProgress(
+      config,
+      `[RESEARCH_SCOUT][COVERAGE_PLAN] obligations=${targetResearchPlan.obligations.join(",") || "none"} sourceTypes=${targetResearchPlan.recommendedSourceTypes.join(",") || "none"} targetSources=${targetSourceCount}`
+    );
+  }
 
   // Build context prompt
   const contextPrompt = await buildScoutContext(config);
   await appendProgress(config, `[RESEARCH_SCOUT][CONTEXT_BUDGET] prompt~${estimateTokens(contextPrompt)} tokens maxCapacityMode=${config?.runtime?.maxCapacityMode === true}`);
 
+  const taskObjective = targetResearchPlan
+    ? `Search for the most valuable external evidence that helps BOX deliver the active target repo successfully.
+Do NOT stop after collecting only stack or framework docs.
+Materially cover these obligation areas: ${targetResearchPlan.obligations.join(", ")}.
+Prefer a balanced mix of ${targetResearchPlan.recommendedSourceTypes.join(", ")}.
+Target at least ${targetSourceCount} high-quality sources when evidence allows; only return fewer if genuinely no additional strong sources are accessible.`
+    : `Search the internet for the most valuable technical knowledge that can advance this autonomous agent system.
+Use your full capacity — search as many different angles as you can.
+Target at least ${targetSourceCount} high-quality sources when evidence allows; only return fewer if genuinely no additional strong sources are accessible.`;
+
   const fullPrompt = `${contextPrompt}
 
 ## YOUR TASK
-Search the internet for the most valuable technical knowledge that can advance this autonomous agent system.
-Use your full capacity — search as many different angles as you can.
-Target at least ${targetSourceCount} high-quality sources when evidence allows; only return fewer if genuinely no additional strong sources are accessible.
+${taskObjective}
 Rank your findings by importance — most valuable first.
 If native web search/fetch tools are unavailable, use execute tool with shell HTTP commands (curl/Invoke-WebRequest) to retrieve web pages and continue.
 Follow the output format specified in your agent definition exactly.`;
@@ -576,6 +716,7 @@ Follow the output format specified in your agent definition exactly.`;
       scoutedAt: new Date().toISOString(),
       model,
       targetSession: buildTargetResearchSessionStamp(config?.activeTargetSession),
+      coveragePlan: targetResearchPlan,
       error,
     };
   }
@@ -661,6 +802,7 @@ Follow the output format specified in your agent definition exactly.`;
     scoutedAt: new Date().toISOString(),
     model,
     targetSession: buildTargetResearchSessionStamp(config?.activeTargetSession),
+    coveragePlan: targetResearchPlan,
   };
 
   // Persist raw research package

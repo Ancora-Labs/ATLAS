@@ -21,6 +21,7 @@ const SHUTDOWN_CLEAR_FILES = [
 // Worker state files pattern
 const WORKER_STATE_PATTERN = /^worker_[a-z_]+\.json$/;
 const DEBUG_WORKER_PATTERN = /^debug_worker_[A-Za-z_]+\.txt$/;
+const DEBUG_AGENT_PATTERN = /^debug_agent_[A-Za-z0-9_-]+\.txt$/;
 
 function daemonPidFile(config) {
   return path.join(config.paths.stateDir, "daemon.pid.json");
@@ -275,7 +276,7 @@ export async function clearAllAIState(config) {
   try {
     const entries = await fs.readdir(stateDir);
     for (const entry of entries) {
-      if (WORKER_STATE_PATTERN.test(entry) || DEBUG_WORKER_PATTERN.test(entry)) {
+      if (WORKER_STATE_PATTERN.test(entry) || DEBUG_WORKER_PATTERN.test(entry) || DEBUG_AGENT_PATTERN.test(entry)) {
         await fs.rm(path.join(stateDir, entry), { force: true });
         cleared.push(entry);
       }

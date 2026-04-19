@@ -78,6 +78,10 @@ Your final output must make it possible for BOX to create a target intent contra
 - success criteria
 - remaining open questions, if any
 - readiness decision: ready_for_planning or needs_more_clarification
+- delivery mode decision: `active` or `shadow`
+- delivery mode rationale: 1-2 concrete sentences explaining why direct active is safe or why shadow is required first
 
 Do not produce a code plan.
 Do not produce worker assignments.
+When the requested first release is small, bounded, and low-risk, explicitly mark delivery mode as `active`.
+When the requested build is broad, ambiguous, or risk-bearing, explicitly mark delivery mode as `shadow`.

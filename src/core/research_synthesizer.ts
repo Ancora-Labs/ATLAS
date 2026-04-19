@@ -25,6 +25,7 @@ import { section, compilePrompt } from "./prompt_compiler.js";
 import { appendAgentContextUsage, resolveMaxPromptBudget } from "./context_usage.js";
 import { appendAggregateLiveLogSync } from "./live_log.js";
 import { buildPromptAssemblySections } from "./prompt_overlay.js";
+import { deriveTargetResearchCoveragePlan, type TargetResearchCoveragePlan } from "./research_scout.js";
 
 function liveLogPath(stateDir: string): string {
   return path.join(stateDir, "live_worker_research-synthesizer.log");
@@ -439,6 +440,89 @@ export interface SynthesisTopicDensity {
   passed: boolean;
 }
 
+export interface TargetCoverageAssessment {
+  passed: boolean;
+  requiredObligations: string[];
+  coveredObligations: string[];
+  missingObligations: string[];
+}
+
+const OBLIGATION_COVERAGE_RULES: Readonly<Record<string, readonly RegExp[]>> = Object.freeze({
+  implementation_patterns: [/\bimplementation\b/i, /\bintegration\b/i, /\barchitecture\b/i, /\bsetup\b/i, /\bdeploy(?:ment)?\b/i, /\bnext\.js\b/i, /\breact\b/i, /\btailwind\b/i, /\bapi\b/i],
+  architecture_foundation: [/\barchitecture\b/i, /\bhosting\b/i, /\bdeployment\b/i, /\bstack\b/i, /\bfoundation\b/i, /\bapp router\b/i],
+  user_flow_clarity: [/\bflow\b/i, /\bcta\b/i, /\bjourney\b/i, /\bnavigation\b/i, /\bform\b/i, /\bbooking\b/i, /\bcheckout\b/i, /\breservation\b/i, /\bfunnel\b/i],
+  visual_design: [/\bvisual\b/i, /\bhero\b/i, /\bbrand(?:ed|ing)?\b/i, /\bdesign system\b/i, /\blayout\b/i, /\blook and feel\b/i, /\bpremium\b/i],
+  media_surfaces: [/\bimage\b/i, /\bimages\b/i, /\bphoto(?:graphy)?\b/i, /\bgallery\b/i, /\bvideo\b/i, /\billustration\b/i, /\basset\b/i],
+  responsive_experience: [/\bresponsive\b/i, /\bmobile\b/i, /\bbreakpoint\b/i, /\bviewport\b/i, /\badaptive\b/i, /\bdesktop\b/i],
+  trust_signals: [/\btrust\b/i, /\btestimonial\b/i, /\breview\b/i, /\brating\b/i, /\bfaq\b/i, /\bsocial\s+proof\b/i, /\bguarantee\b/i],
+  accessibility_clarity: [/\baccessibility\b/i, /\ba11y\b/i, /\bkeyboard\b/i, /\bcontrast\b/i, /\bsemantic\b/i, /\baria\b/i],
+});
+
+function collectTopicCoverageText(topic: Record<string, unknown>): string {
+  const parts: string[] = [
+    String(topic.topic || ""),
+    ...(Array.isArray(topic.netFindings) ? topic.netFindings.map((value) => String(value || "")) : []),
+    ...(Array.isArray(topic.applicableIdeas) ? topic.applicableIdeas.map((value) => String(value || "")) : []),
+    String(topic.prometheusReadySummary || ""),
+  ];
+  const sources = Array.isArray(topic.sources) ? topic.sources as Array<Record<string, unknown>> : [];
+  for (const src of sources) {
+    parts.push(String(src.title || ""));
+    parts.push(String(src.scoutFindings || ""));
+    parts.push(String(src.prometheusReadySummary || ""));
+    parts.push(String(src.extractedContent || ""));
+  }
+  return parts.join(" ").toLowerCase();
+}
+
+export function assessTargetCoverageObligations(
+  topics: Array<Record<string, unknown>>,
+  coveragePlan?: TargetResearchCoveragePlan | null,
+): TargetCoverageAssessment {
+  const requiredObligations = Array.isArray(coveragePlan?.obligations)
+    ? Array.from(new Set(coveragePlan!.obligations.map((value) => String(value || "").trim()).filter(Boolean)))
+    : [];
+
+  if (requiredObligations.length === 0) {
+    return {
+      passed: true,
+      requiredObligations: [],
+      coveredObligations: [],
+      missingObligations: [],
+    };
+  }
+
+  const aggregateText = topics.map((topic) => collectTopicCoverageText(topic)).join(" \n ");
+  const coveredObligations = requiredObligations.filter((obligation) => {
+    const patterns = OBLIGATION_COVERAGE_RULES[obligation] || [];
+    return patterns.some((pattern) => pattern.test(aggregateText));
+  });
+  const missingObligations = requiredObligations.filter((obligation) => !coveredObligations.includes(obligation));
+
+  return {
+    passed: missingObligations.length === 0,
+    requiredObligations,
+    coveredObligations,
+    missingObligations,
+  };
+}
+
+export function buildTargetModeSynthesisTaskSection(
+  activeTargetSession: any,
+  coveragePlan?: TargetResearchCoveragePlan | null,
+): string {
+  const plan = coveragePlan || deriveTargetResearchCoveragePlan(activeTargetSession);
+  return `## TARGET-REPO SYNTHESIS TASK
+You are preparing research for an external target repo delivery, not BOX self-improvement.
+Do NOT reframe this as BOX self-improvement or answer only in terms of BOX internal file changes.
+Translate the research into implementation guidance for the target repo's product, flows, and user-facing quality.
+Target product: ${String(activeTargetSession?.intent?.productType || "unknown")}
+Must-have flows: ${(Array.isArray(activeTargetSession?.intent?.mustHaveFlows) ? activeTargetSession.intent.mustHaveFlows : []).join(", ") || "none"}
+Success criteria: ${(Array.isArray(activeTargetSession?.intent?.successCriteria) ? activeTargetSession.intent.successCriteria : []).join(", ") || "none"}
+Coverage obligations: ${plan.obligations.join(", ") || "implementation_patterns"}
+For each medium/high relevance source, explain what the target repo should implement, what user-facing behavior it improves, and what evidence supports that change.`;
+}
+
 export interface SynthesisQualityGate {
   /** True when all topics meet the minimum actionable density threshold. */
   passed: boolean;
@@ -457,6 +541,10 @@ export interface SynthesisQualityGate {
   recoverySignal?: string;
   /** Explicit planning contract for degraded mode consumers. */
   planningMode?: "normal" | "internal_evidence_only";
+  /** Target-mode coverage analysis for obligation-based research completeness. */
+  coverage?: TargetCoverageAssessment;
+  /** True when another scout pass is recommended to fill missing obligation areas. */
+  refreshRecommended?: boolean;
 }
 
 /**
@@ -839,20 +927,30 @@ export async function runResearchSynthesizer(config: any, scoutOutput: any): Pro
   // Build prompt with the Scout's raw output as input
   const scoutRawText = String(scoutOutput?.rawText || "");
   const sourceCount = scoutOutput?.sourceCount || 0;
+  const targetSession = scoutOutput?.targetSession && typeof scoutOutput.targetSession === "object"
+    ? scoutOutput.targetSession
+    : (config?.activeTargetSession && typeof config.activeTargetSession === "object" ? config.activeTargetSession : null);
+  const targetCoveragePlan = scoutOutput?.coveragePlan && typeof scoutOutput.coveragePlan === "object"
+    ? scoutOutput.coveragePlan as TargetResearchCoveragePlan
+    : (targetSession ? deriveTargetResearchCoveragePlan(targetSession) : null);
   const synthesizerAssemblySections = buildPromptAssemblySections({
     agentName: "research-synthesizer",
     config,
   });
 
-  const compiledPrompt = compilePrompt([
-    ...synthesizerAssemblySections,
-    section("task", `## YOUR TASK
+  const taskSectionText = targetSession
+    ? buildTargetModeSynthesisTaskSection(targetSession, targetCoveragePlan)
+    : `## YOUR TASK
 Below is the raw research output from the Research Scout.
 It contains ${sourceCount} source(s) with extracted findings.
 Your job: synthesize this into a structured, topic-organized output that Prometheus can use for planning.
 Follow your agent definition's output format exactly.
 Do NOT lose useful information. Compress the format, not the content.
-If sources contradict each other, document the contradiction explicitly.`),
+If sources contradict each other, document the contradiction explicitly.`;
+
+  const compiledPrompt = compilePrompt([
+    ...synthesizerAssemblySections,
+    section("task", taskSectionText),
     section("scout-output", `## RESEARCH SCOUT RAW OUTPUT
 ${scoutRawText}`),
   ], {
@@ -930,36 +1028,45 @@ ${scoutRawText}`),
 
   const initialDensities = computeSynthesisActionableDensity(topics);
   const lowDensityTopics = initialDensities.filter(d => !d.passed);
+  const initialCoverage = assessTargetCoverageObligations(topics, targetCoveragePlan);
+  const missingCoverageObligations = initialCoverage.missingObligations;
 
-  if (lowDensityTopics.length > 0) {
+  if (lowDensityTopics.length > 0 || missingCoverageObligations.length > 0) {
     // Gate failed — retry once with constrained repair instructions
     retried = true;
     appendLiveLogSync(
       stateDir,
-      `\n[quality_gate_retry] ${ts()} — ${lowDensityTopics.length} topic(s) below density threshold. Retrying with repair prompt.\n`
+      `\n[quality_gate_retry] ${ts()} — densityFailures=${lowDensityTopics.length} missingCoverage=${missingCoverageObligations.length}. Retrying with repair prompt.\n`
     );
     await appendProgress(
       config,
-      `[RESEARCH_SYNTHESIZER][QUALITY_GATE] Density insufficient for ${lowDensityTopics.length} topic(s). Retrying.`
+      `[RESEARCH_SYNTHESIZER][QUALITY_GATE] densityFailures=${lowDensityTopics.length} missingCoverage=${missingCoverageObligations.length}. Retrying.`
     );
 
-    const deficientTopicNames = lowDensityTopics.map(d => `- ${d.topic}`).join("\n");
+    const deficientTopicNames = lowDensityTopics.map(d => `- ${d.topic}`).join("\n") || "- none";
+    const missingCoverageText = missingCoverageObligations.length > 0
+      ? missingCoverageObligations.map((item) => `- ${item}`).join("\n")
+      : "- none";
     const repairPrompt = compilePrompt([
       ...synthesizerAssemblySections,
       section("task", `## REPAIR TASK
-The previous synthesis run produced topics with insufficient actionable content.
+The previous synthesis run produced research that was incomplete for downstream planning.
 Each topic MUST have at least one concrete finding, applicable idea, or prometheus-ready summary.
+When target delivery mode is active, the final synthesis must also cover the required obligation areas instead of staying stack-only.
 
-Topics requiring repair:
+Topics requiring density repair:
 ${deficientTopicNames}
 
-Re-synthesize ONLY the deficient topics listed above.
-For each topic, include:
+Missing coverage obligations:
+${missingCoverageText}
+
+Re-synthesize the deficient areas with concrete, target-relevant evidence.
+For each repaired topic, include:
   - At least one **Net Finding** (concrete, factual statement)
-  - At least one **Applicable Idea for BOX** (specific improvement suggestion)
+  - At least one **Applicable Idea** tied to the active delivery target
   - At least one **Source** with a **Prometheus-Ready Summary** (actionable 1-2 sentence summary)
 
-Preserve all already-adequate topics unchanged.
+Preserve already-adequate evidence unchanged.
 Follow your agent definition's output format exactly.`),
       section("scout-output", `## RESEARCH SCOUT RAW OUTPUT\n${scoutRawText}`),
     ], {
@@ -1019,9 +1126,17 @@ Follow your agent definition's output format exactly.`),
   }
 
   const qualityGateDensities = computeSynthesisActionableDensity(finalTopics);
-  const gatePassed = qualityGateDensities.every(d => d.passed);
+  const coverageAssessment = assessTargetCoverageObligations(finalTopics, targetCoveragePlan);
+  const gatePassed = qualityGateDensities.every(d => d.passed) && coverageAssessment.passed;
   const { passedTopics, quarantinedTopics } = quarantineLowDensityTopics(finalTopics, qualityGateDensities);
   const degradedPlanningMode = quarantinedTopics.length > 0 && passedTopics.length === 0;
+
+  if (coverageAssessment.missingObligations.length > 0) {
+    finalResearchGaps = [
+      String(finalResearchGaps || "").trim(),
+      `Missing target coverage obligations: ${coverageAssessment.missingObligations.join(", ")}`,
+    ].filter(Boolean).join("\n");
+  }
 
   // Build recovery signal when all topics are quarantined.
   // Invariant: degradedPlanningMode=true MUST be paired with a non-empty recoverySignal
@@ -1046,6 +1161,8 @@ Follow your agent definition's output format exactly.`),
     // Always non-empty when degradedPlanningMode=true (invariant enforced above).
     ...(degradedPlanningMode ? { recoverySignal } : {}),
     planningMode: degradedPlanningMode ? "internal_evidence_only" : "normal",
+    coverage: coverageAssessment,
+    refreshRecommended: Boolean(targetCoveragePlan && !coverageAssessment.passed),
   };
 
   const output: ResearchSynthesisResult = {
@@ -1058,8 +1175,8 @@ Follow your agent definition's output format exactly.`),
     synthesizedAt: new Date().toISOString(),
     scoutSourceCount: sourceCount,
     model,
-    targetSession: scoutOutput?.targetSession && typeof scoutOutput.targetSession === "object"
-      ? scoutOutput.targetSession
+    targetSession: targetSession && typeof targetSession === "object"
+      ? targetSession
       : null,
     qualityGate,
   };
@@ -1067,7 +1184,10 @@ Follow your agent definition's output format exactly.`),
   // Persist synthesis for Prometheus to read
   await writeJson(path.join(stateDir, "research_synthesis.json"), sanitizeResearchSynthesisForPersistence(output));
 
-  await appendProgress(config, `[RESEARCH_SYNTHESIZER] Complete — ${finalTopics.length} topic(s) synthesized from ${sourceCount} source(s) [qualityGate=${gatePassed ? "passed" : "failed"}]`);
+  await appendProgress(
+    config,
+    `[RESEARCH_SYNTHESIZER] Complete — ${finalTopics.length} topic(s) synthesized from ${sourceCount} source(s) [qualityGate=${gatePassed ? "passed" : "failed"} coverageMissing=${coverageAssessment.missingObligations.length}]`
+  );
 
   return output;
 }

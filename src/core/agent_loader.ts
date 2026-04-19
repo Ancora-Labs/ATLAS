@@ -11,11 +11,12 @@
  * Edit an agent's behavior by editing their .agent.md file ÔÇö no code changes needed.
  */
 
-import { existsSync, readFileSync, appendFileSync, writeFileSync, readdirSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, appendFileSync, writeFileSync, readdirSync, unlinkSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { isModelBanned } from "./model_policy.js";
 import type { ModelCallSettingsOverlay } from "./model_policy.js";
+import { getTargetSessionPath } from "./target_session_state.js";
 import {
   buildPromptLineagePreamble,
   extractPromptLineageContractFromText,
@@ -183,6 +184,164 @@ export function toCopilotModelSlug(name) {
 // For prompts >25KB, write to a temp file and pass a short -p telling the agent to read it.
 const PROMPT_FILE_THRESHOLD = 25_000;
 const STATE_DIR = path.join(__dirname, "..", "..", "state");
+
+function normalizeAgentDebugSlug(value: unknown): string {
+  return String(value || "agent")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "agent";
+}
+
+export function writeAgentDebugFile(config: any, input: {
+  agentSlug: string;
+  prompt?: unknown;
+  result?: any;
+  parsed?: any;
+  session?: any;
+  contextLabel?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  try {
+    const stateDir = config?.paths?.stateDir || STATE_DIR;
+    const agentSlug = normalizeAgentDebugSlug(input?.agentSlug);
+    const fileName = `debug_agent_${agentSlug}.txt`;
+    const session = input?.session || null;
+    const metadata = input?.metadata && typeof input.metadata === "object" ? input.metadata : {};
+    const result = input?.result || {};
+    const parsed = input?.parsed;
+    const promptText = String(input?.prompt || "");
+    const stdout = String(result?.stdout || "");
+    const stderr = String(result?.stderr || "");
+    const status = String(result?.status ?? "unknown");
+    const contextLabel = String(input?.contextLabel || "agent_call").trim() || "agent_call";
+    const targetHeader = session
+      ? [
+          `TARGET_PROJECT_ID: ${String(session?.projectId || "").trim()}`,
+          `TARGET_SESSION_ID: ${String(session?.sessionId || "").trim()}`,
+          `TARGET_REPO_URL: ${String(session?.repo?.repoUrl || "").trim()}`,
+          `TARGET_REPO_FULL_NAME: ${String(session?.repo?.repoFullName || "").trim()}`,
+          `TARGET_WORKSPACE_PATH: ${String(session?.workspace?.path || "").trim()}`,
+        ].filter((line) => !/:\s*$/.test(line)).join("\n")
+      : "";
+    const metadataLines = Object.entries(metadata)
+      .map(([key, value]) => `${String(key).toUpperCase()}: ${typeof value === "string" ? value : JSON.stringify(value)}`);
+    const content = [
+      `AGENT: ${agentSlug}`,
+      `CONTEXT: ${contextLabel}`,
+      `RECORDED_AT: ${new Date().toISOString()}`,
+      `STATUS: ${status}`,
+      ...metadataLines,
+      targetHeader,
+      "",
+      "PROMPT:",
+      promptText,
+      "",
+      "STDOUT:",
+      stdout,
+      "",
+      "STDERR:",
+      stderr,
+      "",
+      "PARSED:",
+      parsed == null ? "null" : JSON.stringify(parsed, null, 2),
+      "",
+    ].join("\n");
+
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(path.join(stateDir, fileName), content, "utf8");
+
+    if (session?.projectId && session?.sessionId) {
+      const evidenceDir = path.join(
+        getTargetSessionPath(stateDir, String(session.projectId), String(session.sessionId)),
+        "agent_evidence",
+      );
+      mkdirSync(evidenceDir, { recursive: true });
+      writeFileSync(path.join(evidenceDir, fileName), content, "utf8");
+    }
+  } catch {
+    /* non-critical */
+  }
+}
+
+export function appendAgentLiveLog(config: any, input: {
+  agentSlug: string;
+  session?: any;
+  contextLabel?: string;
+  status?: unknown;
+  message: unknown;
+}) {
+  try {
+    const stateDir = config?.paths?.stateDir || STATE_DIR;
+    const agentSlug = normalizeAgentDebugSlug(input?.agentSlug);
+    const session = input?.session || null;
+    const contextLabel = String(input?.contextLabel || "agent_call").trim() || "agent_call";
+    const status = String(input?.status ?? "info").trim() || "info";
+    const message = String(input?.message || "").trim();
+    if (!message) return;
+    const line = `[${new Date().toISOString()}] [AGENT:${agentSlug}] [context=${contextLabel}] [status=${status}] ${message}\n`;
+
+    mkdirSync(stateDir, { recursive: true });
+    appendFileSync(path.join(stateDir, `live_agent_${agentSlug}.log`), line, "utf8");
+    appendFileSync(path.join(stateDir, "live_agents.log"), `[agent:${agentSlug}] ${line}`, "utf8");
+
+    if (session?.projectId && session?.sessionId) {
+      const evidenceDir = path.join(
+        getTargetSessionPath(stateDir, String(session.projectId), String(session.sessionId)),
+        "agent_evidence",
+      );
+      mkdirSync(evidenceDir, { recursive: true });
+      appendFileSync(path.join(evidenceDir, `live_agent_${agentSlug}.log`), line, "utf8");
+    }
+  } catch {
+    /* non-critical */
+  }
+}
+
+export function appendAgentLiveLogDetail(config: any, input: {
+  agentSlug: string;
+  session?: any;
+  contextLabel?: string;
+  stage?: unknown;
+  title?: unknown;
+  content?: unknown;
+}) {
+  try {
+    const stateDir = config?.paths?.stateDir || STATE_DIR;
+    const agentSlug = normalizeAgentDebugSlug(input?.agentSlug);
+    const session = input?.session || null;
+    const contextLabel = String(input?.contextLabel || "agent_call").trim() || "agent_call";
+    const stage = String(input?.stage || "detail").trim() || "detail";
+    const title = String(input?.title || stage).trim() || stage;
+    const content = String(input?.content || "");
+    if (!content.trim()) return;
+
+    const header = [
+      "",
+      `${"=".repeat(72)}`,
+      `[${new Date().toISOString()}] [AGENT:${agentSlug}] [context=${contextLabel}] [stage=${stage}] ${title}`,
+      `${"=".repeat(72)}`,
+      content.endsWith("\n") ? content.slice(0, -1) : content,
+      "",
+    ].join("\n");
+
+    mkdirSync(stateDir, { recursive: true });
+    appendFileSync(path.join(stateDir, `live_agent_${agentSlug}.log`), `${header}\n`, "utf8");
+    appendFileSync(path.join(stateDir, "live_agents.log"), `[agent:${agentSlug}] ${header}\n`, "utf8");
+
+    if (session?.projectId && session?.sessionId) {
+      const evidenceDir = path.join(
+        getTargetSessionPath(stateDir, String(session.projectId), String(session.sessionId)),
+        "agent_evidence",
+      );
+      mkdirSync(evidenceDir, { recursive: true });
+      appendFileSync(path.join(evidenceDir, `live_agent_${agentSlug}.log`), `${header}\n`, "utf8");
+    }
+  } catch {
+    /* non-critical */
+  }
+}
 
 export function buildAgentArgs({
   agentSlug,

@@ -690,11 +690,13 @@ export const PACKET_LANE = Object.freeze({
  * Per-lane minimum packet-density thresholds.
  *
  * System-learning: Prometheus consistently declares ~2 k tokens for plans covering
- * 5+ files.  The LARGE lane enforces a hard 8 k floor.
+ * 5+ files.  The LARGE lane enforces a hard 8 k floor. Small and medium lanes
+ * keep the base 2 k floor so single-feature and medium-scope product work does
+ * not get rejected purely because the token estimate is low-resolution.
  */
 export const LANE_PACKET_SIZE_DEFAULTS: Record<string, PacketDensityThresholds> = Object.freeze({
   [PACKET_LANE.SMALL]:   { minTargetFiles: 1, minAcceptanceCriteria: 1, minTaskChars: 20, minExecutionTokens: 2000 },
-  [PACKET_LANE.MEDIUM]:  { minTargetFiles: 3, minAcceptanceCriteria: 2, minTaskChars: 30, minExecutionTokens: 4000 },
+  [PACKET_LANE.MEDIUM]:  { minTargetFiles: 3, minAcceptanceCriteria: 2, minTaskChars: 30, minExecutionTokens: 2000 },
   [PACKET_LANE.LARGE]:   { minTargetFiles: 5, minAcceptanceCriteria: 3, minTaskChars: 40, minExecutionTokens: 8000 },
   [PACKET_LANE.DEFAULT]: { minTargetFiles: 1, minAcceptanceCriteria: 1, minTaskChars: 20, minExecutionTokens: 2000 },
 });

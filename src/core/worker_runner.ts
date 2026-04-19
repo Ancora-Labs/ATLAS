@@ -33,7 +33,7 @@ import {
   type InterventionLineageContract,
 } from "./state_tracker.js";
 import { buildAgentArgs, nameToSlug, readAgentPersona, resolveAgentExecutionProfile, resolveAgentSessionInputPolicy } from "./agent_loader.js";
-import { buildVerificationChecklist, CANONICAL_VERIFICATION_REPORT_TEMPLATE } from "./verification_profiles.js";
+import { buildVerificationChecklist, CANONICAL_VERIFICATION_REPORT_TEMPLATE, getVerificationProfile, resolveVerificationProfileKind } from "./verification_profiles.js";
 import { getVerificationCommands, classifyNodeTestGlobWindowsArtifact } from "./verification_command_registry.js";
 import { parseVerificationReport, parseResponsiveMatrix, validateWorkerContract, decideRework, checkPostMergeArtifact, collectArtifactGaps, isArtifactGateRequired, isDiscoverySafeTask, extractMergedSha, buildArtifactAuditEntry, buildReplayClosureEvidence, hasVerificationReportEvidence, hasCleanTreeStatusEvidence, parseToolExecutionTelemetry, checkCancellationAtVerification, auditRuntimeHookEnforcement } from "./verification_gate.js";
 import {
@@ -79,7 +79,7 @@ import {
   resolveWorkerExecutionCwd,
   resolveTargetExecutionContext,
 } from "./target_execution_guard.js";
-import { TARGET_SESSION_STAGE } from "./target_session_state.js";
+import { getTargetSessionPath, TARGET_SESSION_STAGE } from "./target_session_state.js";
 import { appendEscalation, BLOCKING_REASON_CLASS, NEXT_ACTION, resolveEscalationsForTask } from "./escalation_queue.js";
 import { buildTaskFingerprint, buildLineageId, LINEAGE_ENTRY_STATUS } from "./lineage_graph.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
@@ -162,6 +162,7 @@ type PromptControls = {
   uncertaintyLevel?: DeliberationPolicy["uncertaintyLevel"];
   candidateFirstMoves?: ScheduledHypothesisCandidate[];
   recommendedFirstMove?: ScheduledHypothesisCandidate | null;
+  verificationProfileKind?: string | null;
 };
 
 type WorkerActivityEntry = {
@@ -1494,30 +1495,35 @@ function getLiveLogPath(config, roleName) {
 }
 
 export function buildLiveWorkerLogStamp(config, roleName) {
+  const timestamp = new Date().toISOString();
   const currentMode = String(config?.platformModeState?.currentMode || "self_dev").trim() || "self_dev";
   const activeTargetSession = config?.activeTargetSession && typeof config.activeTargetSession === "object"
     ? config.activeTargetSession
     : null;
+  const normalizedRole = String(roleName || "worker");
   const parts = [
-    `mode=${currentMode}`,
-    `role=${String(roleName || "worker")}`,
+    `[WORKER:${normalizedRole}]`,
+    `[role=${normalizedRole}]`,
+    `[mode=${currentMode}]`,
   ];
   if (currentMode === "single_target_delivery" && activeTargetSession?.projectId && activeTargetSession?.sessionId) {
-    parts.push(`projectId=${String(activeTargetSession.projectId).trim()}`);
-    parts.push(`sessionId=${String(activeTargetSession.sessionId).trim()}`);
+    parts.push(`[projectId=${String(activeTargetSession.projectId).trim()}]`);
+    parts.push(`[sessionId=${String(activeTargetSession.sessionId).trim()}]`);
   }
-  return `[${parts.join(" ")}]`;
+  return `[${timestamp}] ${parts.join(" ")}`;
 }
 
 export function formatLiveWorkerLogChunk(config, roleName, text) {
   const stamp = buildLiveWorkerLogStamp(config, roleName);
   const chunks = String(text || "").replace(/\r\n/g, "\n").split("\n");
-  return chunks.map((line, index) => {
+  const formatted = chunks.map((line, index) => {
     if (!line && index === chunks.length - 1) {
       return "";
     }
     return `${stamp} ${line}`;
   }).join("\n");
+  if (!formatted) return "";
+  return formatted.endsWith("\n") ? formatted : `${formatted}\n`;
 }
 
 export async function captureRerereState(repoPath: string): Promise<string[]> {
@@ -2362,9 +2368,10 @@ export function buildConversationContext(history, instruction: WorkerInstruction
   // T1: no tier section — keep the prompt lean for routine patches.
 
   // Role-based verification — inject requirements specific to this worker's kind
-  if (workerKind) {
+  const verificationKind = String((promptControls as any)?.verificationProfileKind || workerKind || "").trim() || null;
+  if (verificationKind) {
     parts.push("");
-    parts.push(buildVerificationChecklist(workerKind));
+    parts.push(buildVerificationChecklist(verificationKind));
   } else {
     // Fallback for unknown roles — basic verification
     parts.push("\n## SELF-VERIFICATION PROTOCOL");
@@ -2582,9 +2589,46 @@ export async function injectCiFailureContextIfMissing(
 
 // ── Parse worker response ────────────────────────────────────────────────────
 // Exported for unit testing of marker extraction and access-guard normalization.
-export function parseWorkerResponse(stdout, stderr) {
+function isApiRequiredWorkerKind(workerKind: unknown): boolean {
+  const profile = getVerificationProfile(String(workerKind || "unknown"));
+  return profile?.evidence?.api === "required";
+}
+
+function resolveInstructionVerificationKind(roleName: unknown, workerKind: unknown, instruction: WorkerInstruction | null | undefined): string {
+  const directKind = resolveVerificationProfileKind(workerKind);
+  const candidates = [
+    (instruction as any)?.verificationProfileKind,
+    (instruction as any)?.planArtifact?.role,
+    (instruction as any)?.originalRole,
+    (instruction as any)?.logicalRole,
+    (instruction as any)?.role,
+  ];
+
+  const lane = String((instruction as any)?.capabilityLane || (instruction as any)?._capabilityLane || "").trim().toLowerCase();
+  if (lane && lane !== "implementation") {
+    candidates.push(lane);
+  }
+
+  candidates.push((instruction as any)?.taskKind);
+
+  for (const candidate of candidates) {
+    const resolved = resolveVerificationProfileKind(candidate);
+    if (resolved && resolved !== "unknown" && resolved !== "evolution" && getVerificationProfile(resolved)?.kind !== "unknown") {
+      return resolved;
+    }
+  }
+
+  const normalizedRoleName = String(roleName || "").trim().toLowerCase();
+  if (normalizedRoleName === "evolution-worker" && directKind === "unknown") {
+    return "unknown";
+  }
+  return directKind;
+}
+
+export function parseWorkerResponse(stdout, stderr, options: { workerKind?: unknown } = {}) {
   const output = String(stdout || "");
   const combined = `${output}\n${String(stderr || "")}`;
+  const workerKind = options?.workerKind ?? "unknown";
 
   // Extract status marker
   const statusMatch = combined.match(/BOX_STATUS=(\w+)/i);
@@ -2620,7 +2664,10 @@ export function parseWorkerResponse(stdout, stderr) {
       })
     : [];
   const blockedScopes = accessPairs.filter(item => item.state === "blocked").map(item => item.scope);
+  const apiBlocked = blockedScopes.includes("api");
+  const nonApiBlockedScopes = blockedScopes.filter(scope => scope !== "api");
   const hasBlockedAccess = blockedScopes.length > 0;
+  const hasBlockingAccess = nonApiBlockedScopes.length > 0 || (apiBlocked && isApiRequiredWorkerKind(workerKind));
   const blockerMatch = combined.match(/BOX_BLOCKER=([^\n\r]+)/i);
   const skipReasonMatch = combined.match(/BOX_SKIP_REASON=([^\n\r]+)/i);
   const skipReason = skipReasonMatch ? skipReasonMatch[1].trim() : null;
@@ -2641,11 +2688,11 @@ export function parseWorkerResponse(stdout, stderr) {
   ) {
     normalizedStatus = "skipped";
   }
-  if (hasBlockedAccess && normalizedStatus !== "blocked" && normalizedStatus !== "skipped") {
+  if (hasBlockingAccess && normalizedStatus !== "blocked" && normalizedStatus !== "skipped") {
     normalizedStatus = "blocked";
   }
   if (normalizedStatus === "blocked" && !dispatchBlockReason) {
-    dispatchBlockReason = hasBlockedAccess
+    dispatchBlockReason = hasBlockingAccess
       ? `access_blocked:${blockedScopes.join(",")}`
       : null;
   }
@@ -2669,7 +2716,7 @@ export function parseWorkerResponse(stdout, stderr) {
     normalizedStatus,
     combined,
     dispatchBlockReason,
-    hasBlockedAccess,
+    hasBlockedAccess: hasBlockingAccess,
     skipReason,
     verificationReport,
   })) {
@@ -2683,7 +2730,7 @@ export function parseWorkerResponse(stdout, stderr) {
     status: normalizedStatus,
     prUrl,
     mergedSha,
-    hasBlockedAccess,
+    hasBlockedAccess: hasBlockingAccess,
   });
   if (unsupportedUpstreamCiDeferral && !dispatchBlockReason) {
     dispatchBlockReason = UNSUPPORTED_UPSTREAM_CI_DEFERRAL_REASON;
@@ -3175,6 +3222,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // Resolve worker kind for role-based verification
   const workerConfig = findWorkerByName(config, roleName);
   const workerKind = workerConfig?.kind || null;
+  const verificationProfileKind = resolveInstructionVerificationKind(roleName, workerKind, instruction);
   const semanticContext = await buildSemanticTaskContext(config, instruction);
   const instructionWithSemanticContext = semanticContext
     ? {
@@ -3202,6 +3250,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   const conversationContext = buildConversationContext(
     history, reflectedInstruction, sessionState, config, workerKind,
     {
+      verificationProfileKind,
       tier,
       hardConstraints,
       deliberationMode: deliberation.mode,
@@ -3930,11 +3979,37 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // This file is overwritten each attempt; resetAttemptBoundary below clears stale
   // attempt-scoped checkpoints so replay state stays deterministic.
   try {
+    const activeTargetSession = config?.platformModeState?.currentMode === "single_target_delivery"
+      ? config?.activeTargetSession
+      : null;
+    const debugFileName = `debug_worker_${roleName.replace(/\s+/g, "_")}.txt`;
+    const targetDebugHeader = activeTargetSession
+      ? [
+          `TARGET_PROJECT_ID: ${String(activeTargetSession?.projectId || "").trim()}`,
+          `TARGET_SESSION_ID: ${String(activeTargetSession?.sessionId || "").trim()}`,
+          `TARGET_REPO_URL: ${String(activeTargetSession?.repo?.repoUrl || "").trim()}`,
+          `TARGET_REPO_FULL_NAME: ${String(activeTargetSession?.repo?.repoFullName || "").trim()}`,
+          `TARGET_WORKSPACE_PATH: ${String(activeTargetSession?.workspace?.path || "").trim()}`,
+        ].filter((line) => !/:\s*$/.test(line)).join("\n") + "\n"
+      : "";
+    const debugContent = `${targetDebugHeader}TASK: ${instruction.task}\nRUN_ID: ${runId}\nATTEMPT: ${attempt}\n\nOUTPUT:\n${stdout}`;
     writeFileSync(
-      path.join(config.paths?.stateDir || "state", `debug_worker_${roleName.replace(/\s+/g, "_")}.txt`),
-      `TASK: ${instruction.task}\nRUN_ID: ${runId}\nATTEMPT: ${attempt}\n\nOUTPUT:\n${stdout}`,
+      path.join(config.paths?.stateDir || "state", debugFileName),
+      debugContent,
       "utf8"
     );
+    if (activeTargetSession?.projectId && activeTargetSession?.sessionId) {
+      const sessionEvidenceDir = path.join(
+        getTargetSessionPath(
+          config.paths?.stateDir || "state",
+          String(activeTargetSession.projectId),
+          String(activeTargetSession.sessionId),
+        ),
+        "worker_evidence",
+      );
+      await fs.mkdir(sessionEvidenceDir, { recursive: true });
+      writeFileSync(path.join(sessionEvidenceDir, debugFileName), debugContent, "utf8");
+    }
   } catch { /* non-critical */ }
 
   // Reset attempt-scoped boundary checkpoint so retries begin from a clean slate.
@@ -3948,7 +4023,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     }
   } catch { /* non-critical — checkpoint reset must never block result path */ }
 
-  const parsed: ParsedWorkerResponse = parseWorkerResponse(stdout, stderr);
+  const parsed: ParsedWorkerResponse = parseWorkerResponse(stdout, stderr, { workerKind: verificationProfileKind });
   const cleanTreeSupplement = await supplementCleanTreeEvidenceIfMissing(config, parsed, instruction);
   if (cleanTreeSupplement.applied) {
     await appendProgress(
@@ -4006,6 +4081,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     && Array.isArray(parsed.blockedAccessScopes)
     && parsed.blockedAccessScopes.length === 1
     && String(parsed.blockedAccessScopes[0] || "") === "api"
+    && !isApiRequiredWorkerKind(verificationProfileKind)
   ) {
     parsed.status = "partial";
     parsed.summary = `[ACCESS SOFTENED] api-only access block downgraded to partial to avoid cycle stall\n${parsed.summary}`;
@@ -4251,7 +4327,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   // The artifact is computed once here and reused by both this gate and the
   // subsequent validateWorkerContract call, avoiding duplicate evaluation.
   const scopedTargetFiles = cleanTreeTargetFiles;
-  const isArtifactRequired = parsed.status === "done" && isArtifactGateRequired(workerKind ?? "unknown", instruction.taskKind);
+  const isArtifactRequired = parsed.status === "done" && isArtifactGateRequired(verificationProfileKind ?? "unknown", instruction.taskKind);
   const precomputedArtifact = isArtifactRequired
     ? checkPostMergeArtifact(parsed.fullOutput || parsed.summary || "", {
         expectedTargetFiles: scopedTargetFiles,
@@ -4333,7 +4409,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     // fires when the packet names a specific test file/description in its verification commands.
     // precomputedArtifact is reused from the hard-block gate above to avoid evaluating the same
     // output string twice.
-    const effectiveKind = workerKind ?? "unknown";
+    const effectiveKind = verificationProfileKind ?? workerKind ?? "unknown";
     const validationResult = validateWorkerContract(effectiveKind, {
       status: parsed.status,
       fullOutput: parsed.fullOutput,

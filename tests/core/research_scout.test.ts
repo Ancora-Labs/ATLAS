@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildTargetIntentResearchSection, buildTargetResearchSessionStamp } from "../../src/core/research_scout.js";
+import {
+  buildTargetIntentResearchSection,
+  buildTargetResearchCoverageSection,
+  buildTargetResearchSessionStamp,
+  deriveTargetResearchCoveragePlan,
+} from "../../src/core/research_scout.js";
 
 describe("research_scout target intent context", () => {
   it("formats the clarified target intent for scout prompt injection", () => {
@@ -48,5 +53,42 @@ describe("research_scout target intent context", () => {
       planningMode: "shadow",
       researchMode: "empty_repo_discovery",
     });
+  });
+
+  it("derives adaptive coverage obligations for visual-first targets", () => {
+    const plan = deriveTargetResearchCoveragePlan({
+      intent: {
+        repoState: "empty",
+        productType: "premium food landing page",
+        summary: "Goal is a premium food landing page with strong images, trust, and mobile polish.",
+        mustHaveFlows: ["hero CTA", "menu preview", "reservation flow"],
+        successCriteria: ["looks premium on mobile and desktop"],
+      },
+    });
+
+    assert.equal(plan.adaptive, true);
+    assert.ok(plan.obligations.includes("visual_design"));
+    assert.ok(plan.obligations.includes("media_surfaces"));
+    assert.ok(plan.obligations.includes("responsive_experience"));
+    assert.ok(plan.obligations.includes("trust_signals"));
+    assert.ok(plan.recommendedSourceTypes.includes("visual exemplars"));
+    assert.ok(plan.targetSourceCount >= 10);
+  });
+
+  it("builds a generic coverage section without hardcoded domain gates", () => {
+    const sectionText = buildTargetResearchCoverageSection({
+      intent: {
+        repoState: "existing",
+        productType: "admin dashboard",
+        summary: "Improve a staff dashboard flow safely.",
+        mustHaveFlows: ["booking edits", "status filters"],
+        successCriteria: ["flow remains clear and usable"],
+      },
+    });
+
+    assert.ok(sectionText.includes("## TARGET RESEARCH COVERAGE PLAN"));
+    assert.ok(sectionText.includes("Coverage obligations:"));
+    assert.ok(sectionText.includes("implementation_patterns"));
+    assert.ok(!sectionText.toLowerCase().includes("food gate"));
   });
 });

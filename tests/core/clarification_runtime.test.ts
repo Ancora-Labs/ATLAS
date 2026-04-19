@@ -43,7 +43,10 @@ describe("clarification_runtime", () => {
     await fs.mkdir(path.join(localRepo, ".git"), { recursive: true });
     await fs.writeFile(path.join(localRepo, "README.md"), "# Empty target\n");
 
-    const config = buildConfig(tempRoot, { githubToken: "token" });
+    const config = buildConfig(tempRoot, {
+      githubToken: "token",
+      copilotCliCommand: "__missing_copilot_binary__",
+    });
     const session = await createTargetSession(buildManifest({ localPath: localRepo }), config);
     await runTargetOnboarding(config, session);
 
@@ -85,7 +88,10 @@ describe("clarification_runtime", () => {
     await fs.writeFile(path.join(localRepo, "src", "index.ts"), "export const ready = true;\n");
     await fs.writeFile(path.join(localRepo, "package.json"), JSON.stringify({ name: "target-repo" }, null, 2));
 
-    const config = buildConfig(tempRoot, { githubToken: "token" });
+    const config = buildConfig(tempRoot, {
+      githubToken: "token",
+      copilotCliCommand: "__missing_copilot_binary__",
+    });
     const session = await createTargetSession(buildManifest({ localPath: localRepo }), config);
     await runTargetOnboarding(config, session);
 
@@ -101,5 +107,151 @@ describe("clarification_runtime", () => {
     assert.equal(result.session.currentStage, TARGET_SESSION_STAGE.AWAITING_INTENT_CLARIFICATION);
     assert.equal(String(result.currentQuestion?.id || "").startsWith("follow_up_repo_purpose_confirmation_"), true);
     assert.ok(result.session.intent.openQuestions.some((entry: string) => entry.includes("Follow-up for")));
+  });
+
+  it("keeps clarification fail-closed in shadow when no agent mode decision is available", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-clarification-simple-"));
+    const localRepo = path.join(tempRoot, "existing-simple-target-repo");
+    await fs.mkdir(path.join(localRepo, ".git"), { recursive: true });
+    await fs.mkdir(path.join(localRepo, "src"), { recursive: true });
+    await fs.writeFile(path.join(localRepo, "index.html"), "<main>Home</main>\n");
+    await fs.writeFile(path.join(localRepo, "style.css"), "body { margin: 0; }\n");
+    await fs.writeFile(path.join(localRepo, "package.json"), JSON.stringify({ name: "simple-target" }, null, 2));
+
+    const config = buildConfig(tempRoot, {
+      githubToken: "token",
+      copilotCliCommand: "__missing_copilot_binary__",
+    });
+    const session = await createTargetSession(buildManifest({ localPath: localRepo }), config);
+    await runTargetOnboarding(config, session);
+
+    await getTargetClarificationRuntimeState(config, { persistPrompt: true });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "repo_purpose_confirmation",
+      answerText: "Marketing site for a local business",
+      selectedOptions: ["Marketing site"],
+    });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "target_users",
+      answerText: "Customers browsing the homepage",
+      selectedOptions: ["Customers"],
+    });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "requested_change",
+      answerText: "Refresh the homepage hero copy and CTA styling only.",
+    });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "protected_areas",
+      answerText: "none",
+    });
+    const finalResult = await submitTargetClarificationAnswer(config, {
+      questionId: "success_signal",
+      answerText: "Homepage still renders correctly and tests stay green.",
+    });
+
+    assert.equal(finalResult.readyForPlanning, true);
+    assert.equal(finalResult.session.currentStage, TARGET_SESSION_STAGE.SHADOW);
+    assert.equal(finalResult.session.intent.planningMode, "shadow");
+    assert.equal(finalResult.session.gates.allowPlanning, true);
+    assert.equal(finalResult.session.gates.allowShadowExecution, true);
+    assert.equal(finalResult.session.gates.allowActiveExecution, false);
+    assert.equal(finalResult.session.handoff.nextAction, "run_shadow_planning");
+  });
+
+  it("honors an agent-authored delivery mode decision without any heuristic fallback", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-clarification-agent-route-"));
+    const localRepo = path.join(tempRoot, "existing-agent-routed-target-repo");
+    await fs.mkdir(path.join(localRepo, ".git"), { recursive: true });
+    await fs.writeFile(path.join(localRepo, "index.html"), "<main>Home</main>\n");
+    await fs.writeFile(path.join(localRepo, "style.css"), "body { margin: 0; }\n");
+    await fs.writeFile(path.join(localRepo, "package.json"), JSON.stringify({ name: "agent-routed-target" }, null, 2));
+
+    const config = buildConfig(tempRoot, {
+      githubToken: "token",
+      mockClarificationDeliveryModeDecision: "shadow",
+    });
+    const session = await createTargetSession(buildManifest({ localPath: localRepo }), config);
+    await runTargetOnboarding(config, session);
+
+    await getTargetClarificationRuntimeState(config, { persistPrompt: true });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "repo_purpose_confirmation",
+      answerText: "Marketing site for a local business",
+      selectedOptions: ["Marketing site"],
+    });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "target_users",
+      answerText: "Customers browsing the homepage",
+      selectedOptions: ["Customers"],
+    });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "requested_change",
+      answerText: "Refresh the homepage hero copy and CTA styling only.",
+    });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "protected_areas",
+      answerText: "none",
+    });
+
+    const finalResult = await submitTargetClarificationAnswer(config, {
+      questionId: "success_signal",
+      answerText: "Homepage still renders correctly and tests stay green.",
+    });
+
+    assert.equal(finalResult.readyForPlanning, true);
+    assert.equal(finalResult.session.currentStage, TARGET_SESSION_STAGE.SHADOW);
+    assert.equal(finalResult.session.intent.planningMode, "shadow");
+    assert.equal(finalResult.session.gates.allowShadowExecution, true);
+    assert.equal(finalResult.session.gates.allowActiveExecution, false);
+    assert.equal(finalResult.intentContract.deliveryModeDecision?.recommendation, "shadow");
+    assert.equal(finalResult.intentContract.deliveryModeDecision?.source, "onboarding-existing-repo");
+  });
+
+  it("opens directly in active mode when the selected onboarding agent decides active", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-clarification-agent-active-"));
+    const localRepo = path.join(tempRoot, "existing-agent-active-target-repo");
+    await fs.mkdir(path.join(localRepo, ".git"), { recursive: true });
+    await fs.writeFile(path.join(localRepo, "index.html"), "<main>Portal</main>\n");
+    await fs.writeFile(path.join(localRepo, "style.css"), "body { color: #111; }\n");
+    await fs.writeFile(path.join(localRepo, "package.json"), JSON.stringify({ name: "agent-active-target" }, null, 2));
+
+    const config = buildConfig(tempRoot, {
+      githubToken: "token",
+      mockClarificationDeliveryModeDecision: "active",
+    });
+    const session = await createTargetSession(buildManifest({ localPath: localRepo }), config);
+    await runTargetOnboarding(config, session);
+
+    await getTargetClarificationRuntimeState(config, { persistPrompt: true });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "repo_purpose_confirmation",
+      answerText: "SaaS app with multiple admin workflows",
+      selectedOptions: ["SaaS app"],
+    });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "target_users",
+      answerText: "Admins and staff",
+      selectedOptions: ["Admins/staff"],
+    });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "requested_change",
+      answerText: "Add dashboard analytics and admin filters for internal operations.",
+    });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "protected_areas",
+      answerText: "none",
+    });
+    const finalResult = await submitTargetClarificationAnswer(config, {
+      questionId: "success_signal",
+      answerText: "Admins can use the new dashboard without regressions.",
+    });
+
+    assert.equal(finalResult.readyForPlanning, true);
+    assert.equal(finalResult.session.currentStage, TARGET_SESSION_STAGE.ACTIVE);
+    assert.equal(finalResult.session.intent.planningMode, "active");
+    assert.equal(finalResult.session.gates.allowPlanning, true);
+    assert.equal(finalResult.session.gates.allowShadowExecution, false);
+    assert.equal(finalResult.session.gates.allowActiveExecution, true);
+    assert.equal(finalResult.intentContract.deliveryModeDecision?.recommendation, "active");
   });
 });

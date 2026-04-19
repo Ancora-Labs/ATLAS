@@ -1,6 +1,7 @@
 import { getAgentLayerContract } from "./agent_layer_contract.js";
 import { section, compilePrompt } from "./prompt_compiler.js";
 import { DEFAULT_PLATFORM_MODE_STATE, PLATFORM_MODE } from "./mode_state.js";
+import { buildShadowStageDisciplineLines } from "./target_stage_contract.js";
 
 export const PROMPT_STAGE = Object.freeze({
   NONE: "none",
@@ -261,6 +262,13 @@ export function buildPromptAssemblySections(input: {
     `## STAGE OVERLAY — ${stage}`,
     ...(STAGE_OVERLAY_LINES[stage as keyof typeof STAGE_OVERLAY_LINES] || STAGE_OVERLAY_LINES[PROMPT_STAGE.NONE]).map((entry: string) => `- ${entry}`),
   ].join("\n")));
+
+  if (mode.effectiveMode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY && stage === PROMPT_STAGE.SHADOW) {
+    sections.push(section("shadow-stage-discipline", [
+      "## SHADOW MODE DELIVERY DISCIPLINE",
+      ...buildShadowStageDisciplineLines().map((entry: string) => `- ${entry}`),
+    ].join("\n")));
+  }
 
   return sections;
 }

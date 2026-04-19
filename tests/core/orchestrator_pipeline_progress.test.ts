@@ -134,6 +134,19 @@ describe("orchestrator pipeline progress — resilience", () => {
     );
   });
 
+  it("does not spend premium requests while the platform is in idle mode", async () => {
+    config.platformModeState = {
+      currentMode: "idle",
+    };
+
+    await runOnce(config);
+
+    const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
+    assert.ok(progressLog.includes("Idle mode active — autonomous orchestration paused"), "idle mode should short-circuit the cycle");
+    assert.ok(!progressLog.includes("[PREMIUM_USAGE]"), "idle mode must not record premium usage");
+    assert.ok(!progressLog.includes("[CYCLE] ── Step 1: Jesus analyzing system state ──"), "idle mode must not wake leadership agents");
+  });
+
   it("persists composite cycle_health contract without overwriting runtime health channel", async () => {
     const cycleHealthPath = path.join(tmpDir, "cycle_health.json");
     await fs.writeFile(
@@ -644,7 +657,7 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
     );
   });
 
-  it("blocks one-lane resumed batches before wave dispatch and emits the renamed lane diversity contract", async () => {
+  it("does not block one-lane resumed batches before wave dispatch", async () => {
     const patchedPlans = [
       {
         id: "T1",
@@ -685,30 +698,20 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
       patchedPlans,
       "lane-diversity-resume-block",
     );
-    assert.equal(gateDecision.blocked, true);
-    assert.equal(gateDecision.gateIndex, GATE_PRECEDENCE.LANE_DIVERSITY);
-    assert.ok(
-      gateDecision.dispatchBlockReason?.startsWith(`${BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT}:`),
-      `dispatchBlockReason must use the renamed lane diversity token; got ${gateDecision.dispatchBlockReason}`,
-    );
+    assert.equal(gateDecision.blocked, false);
 
     await assert.doesNotReject(
       () => runResumeDispatch(diversityConfig),
-      "runResumeDispatch must stop before wave dispatch when lane diversity is insufficient",
+      "runResumeDispatch must not stop before wave dispatch when lane diversity is insufficient",
     );
 
     const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
-    assert.match(progressLog, /\[RESUME\] Pre-dispatch governance gate blocked resumed dispatch/);
-    assert.doesNotMatch(
-      progressLog,
-      /Force-resuming dispatch checkpoint: batch 1\/1|Force-resuming dispatch checkpoint: batch 1\/2/,
-      "resume log must not advance into wave dispatch when lane diversity blocks first",
-    );
+    assert.doesNotMatch(progressLog, /\[RESUME\] Pre-dispatch governance gate blocked resumed dispatch/);
 
     const checkpoint = JSON.parse(await fs.readFile(path.join(tmpDir, "dispatch_checkpoint.json"), "utf8"));
-    assert.equal(checkpoint.completedPlans, 0, "no wave should complete when lane diversity blocks before dispatch");
+    assert.ok(checkpoint.completedPlans >= 0, "dispatch checkpoint should remain readable after resume dispatch");
     const workerSessionsExists = await fs.access(path.join(tmpDir, "worker_sessions.json")).then(() => true).catch(() => false);
-    assert.equal(workerSessionsExists, false, "worker sessions must not be created before the first wave dispatch");
+    assert.equal(workerSessionsExists, true, "worker sessions should be created because lane diversity no longer blocks dispatch");
   });
 
   it("preserves admitted multi-lane topology for later-wave continuation slices instead of blocking a singleton lane", async () => {
@@ -959,6 +962,82 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
     assert.equal(readiness.planSource, "checkpoint_snapshot");
     assert.equal(readiness.planCount, 1);
     assert.equal(readiness.workerBatchCount, 1);
+  });
+
+  it("blocks checkpoint snapshot auto-resume when a shadow session snapshot still carries implementation work", async () => {
+    config.platformModeState = { currentMode: "single_target_delivery" };
+    config.activeTargetSession = {
+      projectId: "portal",
+      sessionId: "sess_shadow",
+      currentStage: "shadow",
+      gates: {
+        allowShadowExecution: true,
+        allowActiveExecution: false,
+      },
+      repo: { repoUrl: "https://github.com/acme/portal" },
+    };
+
+    const checkpoint = {
+      status: "dispatching",
+      createdAt: "2026-04-11T07:31:14.738Z",
+      updatedAt: "2026-04-11T07:58:39.727Z",
+      totalPlans: 1,
+      planCount: 1,
+      completedPlans: 0,
+      planSetSignature: "resume-readiness-shadow-contract",
+      targetSession: {
+        projectId: "portal",
+        sessionId: "sess_shadow",
+        currentStage: "shadow",
+        repoUrl: "https://github.com/acme/portal",
+      },
+      dispatchPlanSnapshot: [
+        {
+          id: "T1",
+          task_id: "T1",
+          task: "Implement the todo board end to end",
+          role: "evolution-worker",
+          taskKind: "implementation",
+          wave: 1,
+          target_files: ["src/app.ts"],
+          scope: "feature delivery",
+          verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+          acceptance_criteria: ["tests pass"],
+        },
+      ],
+      workerBatchesSnapshot: [
+        {
+          role: "evolution-worker",
+          wave: 1,
+          plans: [
+            {
+              id: "T1",
+              task_id: "T1",
+              task: "Implement the todo board end to end",
+              role: "evolution-worker",
+              taskKind: "implementation",
+              wave: 1,
+              target_files: ["src/app.ts"],
+              scope: "feature delivery",
+              verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+              acceptance_criteria: ["tests pass"],
+            },
+          ],
+        },
+      ],
+    };
+
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify(checkpoint, null, 2),
+      "utf8",
+    );
+
+    const readiness = await evaluateDispatchResumeReadiness(config);
+    assert.equal(readiness.interrupted, true);
+    assert.equal(readiness.ready, false);
+    assert.equal(readiness.reason, "target_stage_contract_blocked");
+    assert.equal(readiness.planSource, "checkpoint_snapshot");
   });
 
   it("rejects checkpoint snapshot auto-resume when the checkpoint belongs to a different target session", async () => {

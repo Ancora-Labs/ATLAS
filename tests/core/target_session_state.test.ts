@@ -168,8 +168,23 @@ describe("target_session_state", () => {
     await createTargetSession(buildManifest(), config);
 
     await assert.rejects(
-      () => createTargetSession(buildManifest({ repoUrl: "https://github.com/acme/second.git" }), config),
+      () => createTargetSession(buildManifest({ target: {
+        repoUrl: "https://github.com/acme/second.git",
+        defaultBranch: "main",
+        provider: "github",
+      } }), config),
       /Active target session already exists/
+    );
+  });
+
+  it("rejects opening the same repo while that repo already has an active session", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
+    const config = buildConfig(tempRoot);
+    await createTargetSession(buildManifest(), config);
+
+    await assert.rejects(
+      () => createTargetSession(buildManifest({ requestId: "req_target_same_repo_002" }), config),
+      /Active target session for this repo already exists/
     );
   });
 
@@ -332,6 +347,78 @@ describe("target_session_state", () => {
     assert.notEqual(secondSession.projectId, "");
   });
 
+  it("clears stale singleton target artifacts before opening a new target session", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
+    const config = buildConfig(tempRoot);
+    const stateDir = config.paths.stateDir;
+
+    await createTargetSession(buildManifest({
+      requestId: "req_target_cleanup_001",
+    }), config);
+
+    await archiveTargetSession(config, {
+      completionStage: TARGET_SESSION_STAGE.COMPLETED,
+      completionReason: "cleanup boundary regression",
+    });
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await Promise.all([
+      fs.writeFile(path.join(stateDir, "approved_plan_set.json"), JSON.stringify({ stale: true }), "utf8"),
+      fs.writeFile(path.join(stateDir, "athena_plan_review.json"), JSON.stringify({ stale: true }), "utf8"),
+      fs.writeFile(path.join(stateDir, "dispatch_checkpoint.json"), JSON.stringify({ stale: true }), "utf8"),
+      fs.writeFile(path.join(stateDir, "last_target_delivery_handoff.json"), JSON.stringify({ stale: true }), "utf8"),
+      fs.writeFile(path.join(stateDir, "pipeline_progress.json"), JSON.stringify({ stale: true }), "utf8"),
+      fs.writeFile(path.join(stateDir, "prometheus_analysis.json"), JSON.stringify({ stale: true }), "utf8"),
+      fs.writeFile(path.join(stateDir, "worker_cycle_artifacts.json"), JSON.stringify({ stale: true }), "utf8"),
+      fs.writeFile(path.join(stateDir, "worker_sessions.json"), JSON.stringify({ stale: true }), "utf8"),
+      fs.writeFile(path.join(stateDir, "debug_worker_evolution-worker.txt"), "stale worker evidence", "utf8"),
+    ]);
+
+    await createTargetSession(buildManifest({
+      requestId: "req_target_cleanup_002",
+      target: {
+        repoUrl: "https://github.com/acme/second-cleanup.git",
+        defaultBranch: "main",
+        provider: "github",
+      },
+    }), config);
+
+    await Promise.all([
+      assert.rejects(() => fs.access(path.join(stateDir, "approved_plan_set.json"))),
+      assert.rejects(() => fs.access(path.join(stateDir, "athena_plan_review.json"))),
+      assert.rejects(() => fs.access(path.join(stateDir, "dispatch_checkpoint.json"))),
+      assert.rejects(() => fs.access(path.join(stateDir, "last_target_delivery_handoff.json"))),
+      assert.rejects(() => fs.access(path.join(stateDir, "pipeline_progress.json"))),
+      assert.rejects(() => fs.access(path.join(stateDir, "prometheus_analysis.json"))),
+      assert.rejects(() => fs.access(path.join(stateDir, "worker_cycle_artifacts.json"))),
+      assert.rejects(() => fs.access(path.join(stateDir, "worker_sessions.json"))),
+      assert.rejects(() => fs.access(path.join(stateDir, "debug_worker_evolution-worker.txt"))),
+    ]);
+  });
+
+  it("allows a fresh session on the same repo after the earlier session is completed", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
+    const config = buildConfig(tempRoot);
+
+    const firstSession = await createTargetSession(buildManifest({
+      requestId: "req_target_same_repo_completed_001",
+    }), config);
+
+    await archiveTargetSession(config, {
+      completionStage: TARGET_SESSION_STAGE.COMPLETED_WITH_HANDOFF,
+      completionReason: "same_repo_reopen_regression",
+      completionSummary: "First session completed and should remain only as archive history.",
+    });
+
+    const reopenedSession = await createTargetSession(buildManifest({
+      requestId: "req_target_same_repo_completed_002",
+    }), config);
+
+    assert.notEqual(reopenedSession.sessionId, firstSession.sessionId);
+    assert.equal(reopenedSession.projectId, firstSession.projectId);
+    assert.equal(reopenedSession.currentStage, TARGET_SESSION_STAGE.ONBOARDING);
+  });
+
   it("transitions an active target session with stage-specific gates and preserved human inputs", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
     const config = buildConfig(tempRoot);
@@ -384,5 +471,22 @@ describe("target_session_state", () => {
     assert.equal(loaded?.feedback?.pendingResearchRefresh, true);
     assert.equal(loaded?.feedback?.lastAthenaReview?.category, "research");
     assert.deepEqual(loaded?.feedback?.lastAthenaReview?.corrections, ["Bring stack evidence"]);
+  });
+
+  it("active stage gates do not keep shadow execution enabled", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
+    const config = buildConfig(tempRoot);
+    await createTargetSession(buildManifest(), config);
+
+    const transitioned = await transitionActiveTargetSession(config, {
+      nextStage: TARGET_SESSION_STAGE.ACTIVE,
+      actor: "test",
+      reason: "simple_request",
+    });
+
+    assert.equal(transitioned.currentStage, TARGET_SESSION_STAGE.ACTIVE);
+    assert.equal(transitioned.gates.allowPlanning, true);
+    assert.equal(transitioned.gates.allowShadowExecution, false);
+    assert.equal(transitioned.gates.allowActiveExecution, true);
   });
 });

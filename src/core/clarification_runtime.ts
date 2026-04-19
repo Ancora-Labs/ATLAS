@@ -1,5 +1,6 @@
 import { appendProgress } from "./state_tracker.js";
-import { readJson, writeJson } from "./fs_utils.js";
+import { readJson, spawnAsync, writeJson } from "./fs_utils.js";
+import { agentFileExists, appendAgentLiveLog, appendAgentLiveLogDetail, buildAgentArgs, parseAgentOutput, writeAgentDebugFile } from "./agent_loader.js";
 import {
   loadActiveTargetSession,
   saveActiveTargetSession,
@@ -80,6 +81,9 @@ function buildFollowUpPrompt(questionId: string, repoState: string) {
 
 function inferAnswerNeedsFollowUp(question: any, answerText: string, selectedOptions: string[]) {
   const answerMode = String(question?.answerMode || "").trim();
+  if (isNegativeNoneResponse(answerText)) {
+    return false;
+  }
   if ((answerMode === "single_select" || answerMode === "multi_select") && selectedOptions.length === 0 && answerText.length === 0) {
     return true;
   }
@@ -274,6 +278,243 @@ function buildIntentSummary(contract: any, session: any) {
   ].join(" | ");
 }
 
+function resolveAgentAuthoredDeliveryModeDecision(contract: any) {
+  const decision = contract?.deliveryModeDecision;
+  if (!decision || typeof decision !== "object") return null;
+
+  const rawRecommendation = String(
+    decision?.recommendation
+    ?? decision?.planningMode
+    ?? decision?.recommendedNextStage
+    ?? "",
+  ).trim().toLowerCase();
+
+  if (!rawRecommendation) return null;
+
+  const normalizedRecommendation = rawRecommendation === "direct_active"
+    ? "active"
+    : rawRecommendation === "shadow_required"
+      ? "shadow"
+      : rawRecommendation;
+
+  if (!["active", "shadow"].includes(normalizedRecommendation)) {
+    return null;
+  }
+
+  return {
+    eligible: normalizedRecommendation === "active",
+    planningMode: normalizedRecommendation,
+    recommendedNextStage: normalizedRecommendation === "active"
+      ? TARGET_SESSION_STAGE.ACTIVE
+      : TARGET_SESSION_STAGE.SHADOW,
+    reason: `agent_authored source=${String(decision?.source || contract?.selectedAgentSlug || "agent").trim() || "agent"} recommendation=${normalizedRecommendation}`,
+  };
+}
+
+function normalizeAgentDeliveryModeDecision(rawDecision: any, selectedAgentSlug: string | null) {
+  if (!rawDecision || typeof rawDecision !== "object") return null;
+  const recommendation = String(
+    rawDecision?.recommendation
+    ?? rawDecision?.planningMode
+    ?? rawDecision?.mode
+    ?? rawDecision?.recommendedNextStage
+    ?? "",
+  ).trim().toLowerCase();
+  if (!recommendation) return null;
+
+  const normalizedRecommendation = recommendation === "direct_active"
+    ? "active"
+    : recommendation === "shadow_required"
+      ? "shadow"
+      : recommendation;
+
+  if (!["active", "shadow"].includes(normalizedRecommendation)) {
+    return null;
+  }
+
+  const rationale = normalizeNullableString(rawDecision?.rationale)
+    || normalizeNullableString(rawDecision?.reason)
+    || normalizeNullableString(rawDecision?.notes);
+
+  return {
+    source: normalizeNullableString(rawDecision?.source) || selectedAgentSlug || "clarification_agent",
+    recommendation: normalizedRecommendation,
+    rationale,
+    confidence: normalizeNullableString(rawDecision?.confidence),
+    decidedAt: new Date().toISOString(),
+  };
+}
+
+async function requestClarificationDeliveryModeDecision(config: any, session: any, packet: any, transcript: any, intentContract: any) {
+  const selectedAgentSlug = normalizeNullableString(session?.clarification?.selectedAgentSlug)
+    || normalizeNullableString(packet?.selectedAgentSlug)
+    || normalizeNullableString(intentContract?.selectedAgentSlug);
+  if (!selectedAgentSlug) {
+    return null;
+  }
+
+  const mockedDecision = normalizeNullableString(config?.env?.mockClarificationDeliveryModeDecision);
+  if (mockedDecision) {
+    return normalizeAgentDeliveryModeDecision({
+      recommendation: mockedDecision,
+      rationale: normalizeNullableString(config?.env?.mockClarificationDeliveryModeRationale) || `Mock clarification agent selected ${mockedDecision}.`,
+      confidence: normalizeNullableString(config?.env?.mockClarificationDeliveryModeConfidence) || "high",
+      source: normalizeNullableString(config?.env?.mockClarificationDeliveryModeSource) || selectedAgentSlug,
+    }, selectedAgentSlug);
+  }
+
+  const command = String(config?.env?.copilotCliCommand || "copilot").trim() || "copilot";
+  const model = config?.roleRegistry?.targetOnboarding?.model || "Claude Sonnet 4.6";
+  const prompt = `You are BOX's selected target onboarding clarification agent.
+You already own this clarification session.
+
+Task:
+- Read the repo context, clarified intent, and transcript.
+- Decide whether BOX should open in \"active\" or \"shadow\" immediately after clarification.
+
+Rules:
+- Use the actual user request complexity and operational risk.
+- Do not use generic scoring language.
+- Output strict JSON only inside markers.
+
+Context:
+${JSON.stringify({
+    projectId: session?.projectId || null,
+    sessionId: session?.sessionId || null,
+    repoState: intentContract?.repoState || packet?.repoState || session?.repoProfile?.repoState || null,
+    repoProfile: session?.repoProfile || null,
+    clarificationPacket: packet || null,
+    clarifiedIntent: intentContract?.clarifiedIntent || {},
+    summary: intentContract?.summary || null,
+    transcriptTurns: Array.isArray(transcript?.turns) ? transcript.turns : [],
+  }, null, 2)}
+
+===DECISION===
+{
+  "decision": {
+    "recommendation": "active|shadow",
+    "rationale": "string",
+    "confidence": "high|medium|low"
+  }
+}
+===END===`;
+
+  const args = buildAgentArgs({
+    agentSlug: agentFileExists(selectedAgentSlug) ? selectedAgentSlug : undefined,
+    prompt,
+    model,
+    allowAll: false,
+    noAskUser: true,
+    autopilot: false,
+    silent: true,
+  });
+  appendAgentLiveLog(config, {
+    agentSlug: selectedAgentSlug,
+    session,
+    contextLabel: "clarification_delivery_mode",
+    status: "starting",
+    message: `repoState=${String(intentContract?.repoState || packet?.repoState || session?.repoProfile?.repoState || "unknown")}`,
+  });
+  appendAgentLiveLogDetail(config, {
+    agentSlug: selectedAgentSlug,
+    session,
+    contextLabel: "clarification_delivery_mode",
+    stage: "prompt",
+    title: "Prompt",
+    content: prompt,
+  });
+  const result: any = await spawnAsync(command, args, {
+    env: { ...process.env, ...(config?.env || {}) },
+    timeoutMs: 120000,
+  });
+  const stdout = String(result?.stdout || "");
+  const stderr = String(result?.stderr || "");
+  appendAgentLiveLog(config, {
+    agentSlug: selectedAgentSlug,
+    session,
+    contextLabel: "clarification_delivery_mode",
+    status: Number(result?.status ?? 1) === 0 ? "completed" : "failed",
+    message: `repoState=${String(intentContract?.repoState || packet?.repoState || session?.repoProfile?.repoState || "unknown")} stdout=${stdout.trim() ? "present" : "empty"} stderr=${stderr.trim() ? "present" : "empty"}`,
+  });
+  appendAgentLiveLogDetail(config, {
+    agentSlug: selectedAgentSlug,
+    session,
+    contextLabel: "clarification_delivery_mode",
+    stage: "result",
+    title: "Raw Output",
+    content: [
+      `STATUS: ${String(result?.status ?? "unknown")}`,
+      "",
+      "STDOUT:",
+      stdout,
+      "",
+      "STDERR:",
+      stderr,
+    ].join("\n"),
+  });
+  writeAgentDebugFile(config, {
+    agentSlug: selectedAgentSlug,
+    prompt,
+    result,
+    session,
+    contextLabel: "clarification_delivery_mode",
+    metadata: {
+      repoState: intentContract?.repoState || packet?.repoState || session?.repoProfile?.repoState || null,
+    },
+  });
+  if (Number(result?.status ?? 1) !== 0 || (!stdout.trim() && !stderr.trim())) {
+    await appendProgress(
+      config,
+      `[CLARIFICATION][WARN] delivery mode agent failed agent=${selectedAgentSlug} status=${String(result?.status ?? "unknown")} error=${String(stderr || stdout || result?.error || "empty_output").slice(0, 160)}`,
+      { projectId: session?.projectId, sessionId: session?.sessionId },
+    );
+    return null;
+  }
+
+  const parsed = parseAgentOutput(stdout || stderr);
+  appendAgentLiveLog(config, {
+    agentSlug: selectedAgentSlug,
+    session,
+    contextLabel: "clarification_delivery_mode",
+    status: parsed?.ok ? "parsed" : "unparsed",
+    message: [
+      parsed?.thinking ? `thinking=${String(parsed.thinking).replace(/\s+/g, " ").slice(0, 400)}` : "thinking=none",
+      `recommendation=${String(parsed?.parsed?.decision?.recommendation || "none")}`,
+      `confidence=${String(parsed?.parsed?.decision?.confidence || "none")}`,
+    ].join(" | "),
+  });
+  appendAgentLiveLogDetail(config, {
+    agentSlug: selectedAgentSlug,
+    session,
+    contextLabel: "clarification_delivery_mode",
+    stage: "parsed",
+    title: "Parsed Decision",
+    content: JSON.stringify(parsed, null, 2),
+  });
+  writeAgentDebugFile(config, {
+    agentSlug: selectedAgentSlug,
+    prompt,
+    result,
+    parsed,
+    session,
+    contextLabel: "clarification_delivery_mode",
+    metadata: {
+      repoState: intentContract?.repoState || packet?.repoState || session?.repoProfile?.repoState || null,
+    },
+  });
+  const normalizedDecision = normalizeAgentDeliveryModeDecision(parsed?.parsed?.decision, selectedAgentSlug);
+  if (!normalizedDecision) {
+    await appendProgress(
+      config,
+      `[CLARIFICATION][WARN] delivery mode agent returned no valid decision agent=${selectedAgentSlug}`,
+      { projectId: session?.projectId, sessionId: session?.sessionId },
+    );
+    return null;
+  }
+
+  return normalizedDecision;
+}
+
 function buildSessionIntent(contract: any, session: any, status: string) {
   const clarifiedIntent = contract?.clarifiedIntent || {};
   const openQuestions = (Array.isArray(contract?.openQuestions) ? contract.openQuestions : [])
@@ -455,12 +696,25 @@ export async function submitTargetClarificationAnswer(config: any, input: {
   const missingFields = computeMissingIntentFields(intentContract, session);
   const nextQuestion = followUpQuestion || getCurrentPendingQuestion(intentContract);
   const readyForPlanning = !followUpQuestion && missingFields.length === 0 && !nextQuestion;
+  const agentDeliveryModeDecision = readyForPlanning
+    ? await requestClarificationDeliveryModeDecision(config, session, runtime.packet, transcript, intentContract)
+    : null;
+  if (agentDeliveryModeDecision) {
+    intentContract = {
+      ...intentContract,
+      deliveryModeDecision: agentDeliveryModeDecision,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+  const deliveryModeDecision = readyForPlanning
+    ? resolveAgentAuthoredDeliveryModeDecision(intentContract)
+    : null;
   const nextIntentStatus = readyForPlanning ? TARGET_INTENT_STATUS.READY_FOR_PLANNING : TARGET_INTENT_STATUS.CLARIFYING;
   intentContract = {
     ...intentContract,
     status: readyForPlanning ? "ready_for_planning" : "clarifying",
     readyForPlanning,
-    planningMode: readyForPlanning ? "shadow" : null,
+    planningMode: readyForPlanning ? deliveryModeDecision?.planningMode || "shadow" : null,
     summary: buildIntentSummary(intentContract, session),
     missingFields,
     updatedAt: new Date().toISOString(),
@@ -482,7 +736,9 @@ export async function submitTargetClarificationAnswer(config: any, input: {
   const requiredHumanInputs = readyForPlanning
     ? normalizeStringArray(session.handoff?.requiredHumanInputs).filter((entry) => !/clarify the target intent|launch_onboarding/i.test(entry))
     : [String(nextQuestion?.prompt || nextQuestion?.title || `Respond to ${session.clarification?.selectedAgentSlug || "onboarding"}`).trim()];
-  const nextStage = readyForPlanning ? TARGET_SESSION_STAGE.SHADOW : TARGET_SESSION_STAGE.AWAITING_INTENT_CLARIFICATION;
+  const nextStage = readyForPlanning
+    ? deliveryModeDecision?.recommendedNextStage || TARGET_SESSION_STAGE.SHADOW
+    : TARGET_SESSION_STAGE.AWAITING_INTENT_CLARIFICATION;
   const updatedSession = {
     ...session,
     currentStage: nextStage,
@@ -514,8 +770,8 @@ export async function submitTargetClarificationAnswer(config: any, input: {
       ? {
           ...session.gates,
           allowPlanning: true,
-          allowShadowExecution: true,
-          allowActiveExecution: false,
+          allowShadowExecution: nextStage === TARGET_SESSION_STAGE.SHADOW,
+          allowActiveExecution: nextStage === TARGET_SESSION_STAGE.ACTIVE,
           quarantine: false,
           quarantineReason: null,
         }
@@ -530,7 +786,11 @@ export async function submitTargetClarificationAnswer(config: any, input: {
       carriedContextSummary: buildIntentSummary(intentContract, session),
       requiredHumanInputs,
       lastAction: `clarification_answered:${questionId}`,
-      nextAction: readyForPlanning ? "run_shadow_planning" : "await_clarification_response",
+      nextAction: readyForPlanning
+        ? nextStage === TARGET_SESSION_STAGE.ACTIVE
+          ? "run_active_planning"
+          : "run_shadow_planning"
+        : "await_clarification_response",
     },
     lifecycle: {
       ...session.lifecycle,
@@ -544,7 +804,7 @@ export async function submitTargetClarificationAnswer(config: any, input: {
   await appendProgress(
     config,
     readyForPlanning
-      ? `[CLARIFICATION] completed session=${persistedSession.sessionId} planningMode=shadow intentSummary=${persistedSession.intent?.summary || "none"}`
+      ? `[CLARIFICATION] completed session=${persistedSession.sessionId} planningMode=${persistedSession.intent?.planningMode || "shadow"} nextStage=${persistedSession.currentStage} intentSummary=${persistedSession.intent?.summary || "none"}`
       : `[CLARIFICATION] answered question=${questionId} nextQuestion=${String(nextQuestion?.id || "none")} followUp=${followUpQuestion ? followUpQuestion.id : "none"}`,
     {
       projectId: persistedSession.projectId,

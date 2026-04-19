@@ -1421,6 +1421,34 @@ describe("thin-packet density contract", () => {
     assert.equal(isThinPacketForAdmission(metrics, thresholds), false);
   });
 
+  it("admits small-lane product work scoped to one file when other density signals pass", () => {
+    const metrics = computePacketDensityMetrics({
+      task: "Implement task creation form validation and preserve due-date defaults for the to-do workflow",
+      target_files: ["src/app.js"],
+      acceptance_criteria: [
+        "Task creation rejects blank titles",
+        "Due-date defaults remain stable after save",
+      ],
+      estimatedExecutionTokens: 2000,
+    });
+    const thresholds = getPacketThresholdsForLane(1);
+    assert.equal(isThinPacketForAdmission(metrics, thresholds), false);
+  });
+
+  it("admits medium-lane product work at the calibrated 2k token floor", () => {
+    const metrics = computePacketDensityMetrics({
+      task: "Implement task editing, list filtering, and storage synchronization for the to-do application while keeping the UI state deterministic across refreshes",
+      target_files: ["src/app.js", "src/storage.js", "tests/app.test.js"],
+      acceptance_criteria: [
+        "Editing preserves existing tags and subtasks",
+        "Filters reflect saved state after reload",
+      ],
+      estimatedExecutionTokens: 2000,
+    });
+    const thresholds = getPacketThresholdsForLane(3);
+    assert.equal(isThinPacketForAdmission(metrics, thresholds), false);
+  });
+
   it("emits absent marker in rejection reason when estimatedExecutionTokens is non-finite", () => {
     const metrics = computePacketDensityMetrics(densePlan({ estimatedExecutionTokens: Number.NaN, task: "short" }));
     const reason = buildThinPacketRejectionReason(metrics, thresholds);
@@ -1579,6 +1607,11 @@ describe("lane-aware packet-size defaults", () => {
   it("getPacketThresholdsForLane returns large thresholds for 5+ files", () => {
     const thresholds = getPacketThresholdsForLane(5);
     assert.equal(thresholds.minExecutionTokens, LANE_PACKET_SIZE_DEFAULTS[PACKET_LANE.LARGE].minExecutionTokens);
+  });
+
+  it("getPacketThresholdsForLane keeps medium token floor aligned with the calibrated base floor", () => {
+    const thresholds = getPacketThresholdsForLane(3);
+    assert.equal(thresholds.minExecutionTokens, 2000);
   });
 
   it("getPacketThresholdsForLane returns small thresholds for 1-2 files", () => {
