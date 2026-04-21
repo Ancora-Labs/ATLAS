@@ -3,6 +3,9 @@ import { SYSTEM_STATUS_REASON_CODE } from "../core/pipeline_progress.js";
 interface AtlasSessionCard {
   name?: string;
   status?: string;
+  statusLabel?: string;
+  readiness?: string;
+  readinessLabel?: string;
   lastTask?: string;
   lastActiveAt?: string | null;
 }

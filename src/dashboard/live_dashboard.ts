@@ -6,6 +6,7 @@ import { execSync, spawn } from "node:child_process";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
+import { bridgeBoxTargetSessionState } from "../atlas/state_bridge.js";
 import { readPipelineProgress, SYSTEM_STATUS_REASON_CODE } from "../core/pipeline_progress.js";
 import { parseTypedEvent } from "../core/event_schema.js";
 import { readCycleAnalytics } from "../core/cycle_analytics.js";
@@ -1314,52 +1315,17 @@ function normalizeWorkerActivity(
   thinkingMap: Record<string, string> = {}
 ): Record<string, {
   role: string;
+  name: string;
   status: string;
+  statusLabel: string;
+  readiness: string;
+  readinessLabel: string;
   lastTask: string;
   lastActiveAt: string | null;
   historyLength: number;
   lastThinking: string;
 }> {
-  const cleaned: Record<string, {
-    role: string;
-    status: string;
-    lastTask: string;
-    lastActiveAt: string | null;
-    historyLength: number;
-    lastThinking: string;
-  }> = {};
-
-  for (const [role, rawSession] of Object.entries(workerSessions || {})) {
-    const session = rawSession && typeof rawSession === "object" ? rawSession as Record<string, unknown> : {};
-    const history = Array.isArray(session.history) ? session.history : [];
-    let effectiveStatus = String(session.status || "idle");
-
-    if (effectiveStatus === "working" && history.length > 0) {
-      const lastEntry = [...history].reverse().find((entry) => {
-        if (!entry || typeof entry !== "object") return false;
-        const historyEntry = entry as Record<string, unknown>;
-        const actor = String(historyEntry.from || historyEntry.role || "");
-        return actor !== "Athena" && actor !== "orchestrator";
-      });
-      if (lastEntry && typeof lastEntry === "object") {
-        const normalizedHistoryStatus = String((lastEntry as Record<string, unknown>).status || "").toLowerCase();
-        if (["done", "partial", "blocked"].includes(normalizedHistoryStatus)) {
-          effectiveStatus = "idle";
-        }
-      }
-    }
-
-    cleaned[role] = {
-      role,
-      status: effectiveStatus,
-      lastTask: String(session.lastTask || ""),
-      lastActiveAt: typeof session.lastActiveAt === "string" ? session.lastActiveAt : null,
-      historyLength: history.length,
-      lastThinking: String(thinkingMap[role] || ""),
-    };
-  }
-
-  return cleaned;
+  return bridgeBoxTargetSessionState(workerSessions, thinkingMap);
 }
 
 async function collectDashboardData() {
@@ -1635,6 +1601,9 @@ function toAtlasSessionSummary(data: Awaited<ReturnType<typeof collectDashboardD
     sessions: Object.values(data?.workerActivity || {}).map((session) => ({
       name: String(session?.role || "Session"),
       status: String(session?.status || "idle"),
+      statusLabel: String(session?.statusLabel || ""),
+      readiness: String(session?.readiness || ""),
+      readinessLabel: String(session?.readinessLabel || ""),
       lastTask: String(session?.lastTask || ""),
       lastActiveAt: typeof session?.lastActiveAt === "string" ? session.lastActiveAt : null,
     })),
