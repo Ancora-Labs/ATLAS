@@ -142,6 +142,11 @@ function renderShell(pageData: AtlasPageData, activeView: "home" | "sessions", c
       display: grid;
       gap: 14px;
     }
+    .control-stack, .session-actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
     .window__content {
       padding: 20px;
     }
@@ -214,13 +219,16 @@ function renderShell(pageData: AtlasPageData, activeView: "home" | "sessions", c
       flex-wrap: wrap;
       margin-top: 18px;
     }
-    .hero__cta {
+    .hero__cta, .control-button {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       padding: 12px 16px;
       border-radius: 999px;
       font-weight: 700;
+      border: 0;
+      cursor: pointer;
+      font: inherit;
       background: var(--accent);
       color: #08111d;
     }
@@ -232,6 +240,19 @@ function renderShell(pageData: AtlasPageData, activeView: "home" | "sessions", c
       border: 1px solid var(--line);
       color: var(--text);
       text-decoration: none;
+    }
+    .control-stack {
+      margin-top: 18px;
+    }
+    .control-button--secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+    .control-button--danger {
+      background: rgba(255, 154, 154, 0.16);
+      color: var(--text);
+      border: 1px solid rgba(255, 154, 154, 0.28);
     }
     .metrics {
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -285,6 +306,9 @@ function renderShell(pageData: AtlasPageData, activeView: "home" | "sessions", c
       margin-top: 16px;
       display: grid;
       gap: 12px;
+    }
+    .session-actions {
+      margin-top: 16px;
     }
     .empty-state {
       padding: 18px;
@@ -368,11 +392,23 @@ export function renderAtlasHomeHtml(pageData: AtlasPageData): string {
       <span class="label">Launch command</span>
       <code>${escapeHtml(pageData.shellCommand)}</code>
     </div>
-    <div class="hero__actions">
-      <a class="hero__cta" href="/sessions">${escapeHtml(pageData.homePrimaryActionLabel)}</a>
-      <a class="hero__link" href="/sessions">Review active roles</a>
-    </div>
-  </section>
+     <div class="hero__actions">
+       <a class="hero__cta" href="/sessions">${escapeHtml(pageData.homePrimaryActionLabel)}</a>
+       <a class="hero__link" href="/sessions">Review active roles</a>
+     </div>
+     <div class="control-stack" aria-label="Runtime lifecycle controls">
+       <form method="POST" action="/lifecycle">
+         <input type="hidden" name="action" value="resume" />
+         <input type="hidden" name="returnTo" value="/" />
+         <button class="control-button" type="submit">Resume BOX runtime</button>
+       </form>
+       <form method="POST" action="/lifecycle">
+         <input type="hidden" name="action" value="stop" />
+         <input type="hidden" name="returnTo" value="/" />
+         <button class="control-button control-button--danger" type="submit">Stop BOX runtime</button>
+       </form>
+     </div>
+   </section>
   <section class="metrics" aria-label="Session summary">
     <article class="metric">
       <span>Total sessions</span>
@@ -445,12 +481,36 @@ export function renderAtlasSessionsHtml(pageData: AtlasPageData): string {
                 <div class="session-meta__label">Last update</div>
                 <p>${escapeHtml(formatTimestamp(session.lastActiveAt))}</p>
               </div>
-              <div>
-                <div class="session-meta__label">Files touched / PRs</div>
-                <p>${escapeHtml(String(session.touchedFileCount))} files · ${escapeHtml(String(session.pullRequestCount))} PRs</p>
-              </div>
-            </div>
-          </article>`).join("")}</div>`}
+               <div>
+                 <div class="session-meta__label">Files touched / PRs</div>
+                 <p>${escapeHtml(String(session.touchedFileCount))} files · ${escapeHtml(String(session.pullRequestCount))} PRs</p>
+               </div>
+               <div>
+                 <div class="session-meta__label">Lane control</div>
+                 <p>${escapeHtml(session.lane ? (session.isPaused ? `${session.lane} lane paused` : `${session.lane} lane live`) : "No lane lifecycle control")}</p>
+               </div>
+             </div>
+             ${(session.lane || session.canArchive)
+               ? `<div class="session-actions">
+                   ${session.lane
+                     ? `<form method="POST" action="/lifecycle">
+                          <input type="hidden" name="action" value="${escapeHtml(session.isPaused ? "resume" : "pause")}" />
+                          <input type="hidden" name="role" value="${escapeHtml(session.role)}" />
+                          <input type="hidden" name="returnTo" value="/sessions" />
+                          <button class="control-button control-button--secondary" type="submit">${escapeHtml(session.isPaused ? "Resume lane" : "Pause lane")}</button>
+                        </form>`
+                     : ""}
+                   ${session.canArchive
+                     ? `<form method="POST" action="/lifecycle">
+                          <input type="hidden" name="action" value="archive" />
+                          <input type="hidden" name="role" value="${escapeHtml(session.role)}" />
+                          <input type="hidden" name="returnTo" value="/sessions" />
+                          <button class="control-button control-button--danger" type="submit">Archive session</button>
+                        </form>`
+                     : ""}
+                 </div>`
+               : ""}
+           </article>`).join("")}</div>`}
   </section>`;
 
   return renderShell(pageData, "sessions", content);

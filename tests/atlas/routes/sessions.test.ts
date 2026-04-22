@@ -134,7 +134,8 @@ describe("atlas sessions route", () => {
       assert.match(res.body, />Integration lane</);
       assert.match(res.body, />Needs attention · Needs your input</);
       assert.match(res.body, />Ready · Ready to continue</);
-      assert.doesNotMatch(res.body, /quality-worker|integration-worker/);
+      assert.match(res.body, />Pause lane</);
+      assert.match(res.body, />Archive session</);
       assert.doesNotMatch(res.body, /BOX Mission Control|dashboard/i);
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

@@ -54,9 +54,11 @@ describe("state_bridge", () => {
     assert.equal(sessions.Atlas.readinessLabel, "Ready to start");
     assert.equal(sessions.Athena.statusLabel, "In progress");
     assert.equal(sessions.Athena.readinessLabel, "In progress");
+    assert.equal(sessions.Athena.lane, null);
     assert.equal(sessions.Athena.pullRequestCount, 1);
     assert.equal(sessions.Athena.touchedFileCount, 2);
     assert.equal(sessions.Athena.lastThinking, "reviewing failures");
+    assert.equal(sessions.Athena.canArchive, false);
     assert.equal(sessions.Prometheus.statusLabel, "Needs attention");
     assert.equal(sessions.Prometheus.readinessLabel, "Needs your input");
     assert.equal(sessions.Prometheus.needsInput, true);
@@ -161,6 +163,12 @@ describe("state_bridge", () => {
                 lastTask: "Validate canonical state",
                 lastActiveAt: "2026-04-21T11:50:00.000Z",
               },
+              "quality-worker": {
+                role: "quality-worker",
+                status: "partial",
+                lastTask: "Resume verification handoff",
+                lastActiveAt: "2026-04-21T11:57:00.000Z",
+              },
               Atlas: {
                 role: "Atlas",
                 status: 42,
@@ -176,6 +184,12 @@ describe("state_bridge", () => {
           },
         },
       }), "utf8");
+      await fs.writeFile(path.join(stateDir, "medic_paused_lanes.json"), JSON.stringify({
+        quality: {
+          pausedAt: "2026-04-21T12:01:00.000Z",
+          reason: "atlas:test",
+        },
+      }), "utf8");
 
       const sessions = await listAtlasSessions({
         stateDir,
@@ -188,9 +202,14 @@ describe("state_bridge", () => {
 
       assert.equal(sessions.Hermes.status, "partial");
       assert.equal(sessions.Hermes.readinessLabel, "Ready to continue");
+      assert.equal(sessions.Hermes.lane, null);
 
       assert.equal(sessions.Prometheus.status, "error");
       assert.equal(sessions.Prometheus.needsInput, true);
+
+      assert.equal(sessions["quality-worker"].lane, "quality");
+      assert.equal(sessions["quality-worker"].isPaused, true);
+      assert.equal(sessions["quality-worker"].canArchive, true);
 
       assert.equal(sessions.Atlas.status, "idle");
       assert.equal(sessions.Atlas.readinessLabel, "Ready to start");

@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { handleAtlasHomeRequest, type AtlasHomeRouteOptions } from "./routes/home.js";
+import { handleAtlasLifecycleRequest } from "./routes/lifecycle.js";
 import { handleAtlasSessionsRequest } from "./routes/sessions.js";
 
 export const ATLAS_DEFAULT_PORT = 8788;
@@ -37,6 +38,14 @@ async function routeAtlasRequest(
 
     if (url.pathname === "/sessions") {
       await handleAtlasSessionsRequest(req, res, options);
+      return;
+    }
+
+    if (url.pathname === "/lifecycle" || url.pathname === "/api/lifecycle") {
+      await handleAtlasLifecycleRequest(req, res, {
+        stateDir: options.stateDir,
+        pathname: url.pathname,
+      });
       return;
     }
 

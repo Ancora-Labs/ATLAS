@@ -51,11 +51,16 @@ describe("atlas regression fence", () => {
     const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as {
       scripts?: Record<string, string>;
     };
+    const launcherPath = path.join(process.cwd(), "ATLAS.cmd");
+    const launcher = await fs.readFile(launcherPath, "utf8");
 
     assert.equal(packageJson.scripts?.["atlas:start"], "node --import tsx src/atlas/server.ts");
+    assert.equal(packageJson.scripts?.["atlas:ctl"], "node --import tsx src/atlas/lifecycle.ts");
     assert.match(String(packageJson.scripts?.["atlas:open"] || ""), /ATLAS_PORT/);
     assert.match(String(packageJson.scripts?.["atlas:open"] || ""), /Start-Process/);
     assert.doesNotMatch(String(packageJson.scripts?.["atlas:start"] || ""), /dashboard/i);
+    assert.match(launcher, /npm run atlas:ctl -- %ATLAS_ACTION%/);
+    assert.match(launcher, /Invoke-WebRequest/);
   });
 
   it("falls back to open_target_sessions.json, maps legacy BOX stages, and aggregates archived sessions", async () => {

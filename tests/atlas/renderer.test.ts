@@ -24,6 +24,7 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
       {
         role: "Athena",
         name: "Athena",
+        lane: "review",
         status: "working",
         statusLabel: "In progress",
         readiness: "in_progress",
@@ -37,10 +38,13 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
         touchedFileCount: 3,
         needsInput: false,
         isResumable: true,
+        isPaused: false,
+        canArchive: false,
       },
       {
         role: "Prometheus",
         name: "Prometheus",
+        lane: null,
         status: "blocked",
         statusLabel: "Needs attention",
         readiness: "action_needed",
@@ -54,10 +58,13 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
         touchedFileCount: 1,
         needsInput: true,
         isResumable: true,
+        isPaused: false,
+        canArchive: true,
       },
       {
         role: "Hermes",
         name: "Hermes",
+        lane: null,
         status: "done",
         statusLabel: "Completed",
         readiness: "completed",
@@ -71,6 +78,8 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
         touchedFileCount: 7,
         needsInput: false,
         isResumable: false,
+        isPaused: false,
+        canArchive: true,
       },
     ],
     ...overrides,
@@ -94,6 +103,8 @@ describe("atlas renderer", () => {
     assert.match(html, />Resume session flow</);
     assert.match(html, />Ready to resume</);
     assert.match(html, /One or more roles can continue from their recorded state\./);
+    assert.match(html, /Resume BOX runtime/);
+    assert.match(html, /Stop BOX runtime/);
     assert.doesNotMatch(html, /BOX Mission Control|dashboard/i);
   });
 
@@ -111,6 +122,8 @@ describe("atlas renderer", () => {
     assert.match(html, />In progress · In progress</);
     assert.match(html, />Needs attention · Needs your input</);
     assert.match(html, />Completed · Completed</);
+    assert.match(html, />Pause lane</);
+    assert.match(html, />Archive session</);
     assert.match(html, />feat\/atlas-home</);
     assert.match(html, />No branch recorded</);
     assert.match(html, />2026-04-21 12:00 UTC</);
