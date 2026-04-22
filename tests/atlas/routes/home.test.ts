@@ -125,6 +125,8 @@ describe("atlas home route", () => {
       assert.match(res.body, /active sessions, and current cycle aligned/i);
       assert.match(res.body, />Ready to resume</);
       assert.match(res.body, />Resume session flow</);
+      assert.match(res.body, />Resume BOX runtime</);
+      assert.match(res.body, />Stop BOX runtime</);
       assert.doesNotMatch(res.body, /quality-worker|governance-worker/);
       assert.doesNotMatch(res.body, /BOX Mission Control|dashboard/i);
     } finally {

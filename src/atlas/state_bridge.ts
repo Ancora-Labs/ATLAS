@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { getPausedLanes } from "../core/medic_agent.js";
 import { getLaneForWorkerName, normalizeWorkerName } from "../core/role_registry.js";
 import { READ_JSON_REASON, readJsonSafe } from "../core/fs_utils.js";
 import { listOpenTargetSessions } from "../core/target_session_state.js";
@@ -46,6 +47,7 @@ export type AtlasSessionReadiness =
 export interface AtlasSessionDto {
   role: string;
   name: string;
+  lane: string | null;
   status: AtlasSessionStatus;
   statusLabel: string;
   readiness: AtlasSessionReadiness;
@@ -59,6 +61,8 @@ export interface AtlasSessionDto {
   touchedFileCount: number;
   needsInput: boolean;
   isResumable: boolean;
+  isPaused: boolean;
+  canArchive: boolean;
 }
 
 export interface AtlasArchivedSessionDto extends AtlasSessionDto {
@@ -149,6 +153,16 @@ function normalizeRawStatus(status: unknown): AtlasSessionStatus {
   const normalized = String(status || "idle").trim().toLowerCase().replace(/[\s-]+/g, "_");
   if (isAtlasSessionStatus(normalized)) return normalized;
   return INTERNAL_SESSION_STAGE_TO_STATUS[normalized] || "idle";
+}
+
+function resolveSessionLane(role: string): string | null {
+  const normalizedRole = normalizeWorkerName(role);
+  if (!normalizedRole || normalizedRole === "atlas") return null;
+  const fallbackLane = normalizedRole.endsWith("-worker")
+    ? normalizedRole.replace(/-worker$/, "")
+    : "";
+  const lane = String(getLaneForWorkerName(normalizedRole, fallbackLane) || "").trim();
+  return lane || null;
 }
 
 function resolveSessionRoleKey(rawSession: unknown, fallbackKey: string): string {
@@ -310,6 +324,7 @@ function isResumable(status: AtlasSessionStatus, lastTask: string): boolean {
 export function bridgeBoxTargetSessionState(
   workerSessions: Record<string, unknown>,
   thinkingMap: Record<string, string> = {},
+  pausedLanes: Record<string, unknown> = {},
 ): Record<string, AtlasSessionDto> {
   const cleaned: Record<string, AtlasSessionDto> = {};
 
@@ -323,11 +338,13 @@ export function bridgeBoxTargetSessionState(
     const status = resolveEffectiveStatus(rawStatus, history);
     const lastTask = String(session.lastTask || "").trim();
     const role = String(session.role || roleKey).trim() || roleKey;
+    const lane = resolveSessionLane(role);
     const { readiness, readinessLabel } = getAtlasSessionReadiness(status, lastTask);
 
     cleaned[roleKey] = {
       role,
       name: getAtlasSessionDisplayName(role),
+      lane,
       status,
       statusLabel: getAtlasSessionStatusLabel(status),
       readiness,
@@ -341,6 +358,8 @@ export function bridgeBoxTargetSessionState(
       touchedFileCount: Array.isArray(session.filesTouched) ? session.filesTouched.filter(Boolean).length : 0,
       needsInput: readiness === "action_needed",
       isResumable: isResumable(status, lastTask),
+      isPaused: Boolean(lane && pausedLanes[lane]),
+      canArchive: normalizeWorkerName(role) !== "atlas" && status !== "working",
     };
   }
 
@@ -355,6 +374,13 @@ export interface AtlasSessionStateBridgeOptions {
 export async function readAtlasSessionReadModel(
   options: AtlasSessionStateBridgeOptions,
 ): Promise<AtlasSessionReadModel> {
+  let pausedLanes: Record<string, unknown> = {};
+  try {
+    pausedLanes = await getPausedLanes(options.stateDir);
+  } catch (error) {
+    console.error(`[atlas] failed to read paused lanes: ${String((error as Error)?.message || error)}`);
+  }
+
   const canonicalOpenSessions = await readCanonicalOpenSessionRecords(options.stateDir);
   const fallbackOpenSessions = Object.keys(canonicalOpenSessions).length > 0
     ? {}
@@ -364,6 +390,7 @@ export async function readAtlasSessionReadModel(
     openSessions: bridgeBoxTargetSessionState(
       Object.keys(canonicalOpenSessions).length > 0 ? canonicalOpenSessions : fallbackOpenSessions,
       options.thinkingMap,
+      pausedLanes,
     ),
     archivedSessions: await readArchivedSessionRecords(options.stateDir),
   };

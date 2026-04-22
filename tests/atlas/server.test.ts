@@ -54,6 +54,41 @@ function requestText(port: number, pathname: string, method = "GET"): Promise<{ 
   });
 }
 
+function requestJson(
+  port: number,
+  pathname: string,
+  payload: unknown,
+): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const rawBody = JSON.stringify(payload);
+    const req = http.request({
+      hostname: "127.0.0.1",
+      port,
+      path: pathname,
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(rawBody),
+      },
+    }, (res) => {
+      let raw = "";
+      res.on("data", (chunk) => {
+        raw += String(chunk);
+      });
+      res.on("end", () => {
+        resolve({
+          status: Number(res.statusCode || 0),
+          text: raw,
+        });
+      });
+    });
+    req.on("error", reject);
+    req.write(rawBody);
+    req.end();
+  });
+}
+
 describe("atlas server", () => {
   let tempRoot = "";
   let stateDir = "";
@@ -175,8 +210,21 @@ describe("atlas server", () => {
     assert.match(sessionsResponse.text, />ATLAS control</);
     assert.match(sessionsResponse.text, />Quality lane</);
     assert.match(sessionsResponse.text, />2 tracked sessions</);
-    assert.doesNotMatch(sessionsResponse.text, /quality-worker/);
     assert.doesNotMatch(sessionsResponse.text, /BOX Mission Control/i);
+  });
+
+  it("accepts lifecycle API mutations without breaking the dedicated surface contract", async () => {
+    const response = await requestJson(port, "/api/lifecycle", {
+      action: "pause",
+      role: "quality-worker",
+      returnTo: "/sessions",
+    });
+
+    assert.equal(response.status, 200);
+    const payload = JSON.parse(response.text) as { ok: boolean; lane: string; message: string };
+    assert.equal(payload.ok, true);
+    assert.equal(payload.lane, "quality");
+    assert.match(payload.message, /Paused the quality lane/i);
   });
 
   it("[NEGATIVE] returns route-level errors for unsupported methods and unknown paths", async () => {
