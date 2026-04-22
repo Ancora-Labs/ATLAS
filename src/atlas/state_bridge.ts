@@ -1,4 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 import { getLaneForWorkerName, normalizeWorkerName } from "../core/role_registry.js";
+import { READ_JSON_REASON, readJsonSafe } from "../core/fs_utils.js";
 import { listOpenTargetSessions } from "../core/target_session_state.js";
 
 export interface BoxTargetSessionHistoryEntry {
@@ -57,6 +61,20 @@ export interface AtlasSessionDto {
   isResumable: boolean;
 }
 
+export interface AtlasArchivedSessionDto extends AtlasSessionDto {
+  archivePath: string;
+  archiveRoleKey: string;
+}
+
+export interface AtlasSessionReadModel {
+  openSessions: Record<string, AtlasSessionDto>;
+  archivedSessions: AtlasArchivedSessionDto[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function toTitleCase(value: string): string {
   return value
     .split(/[\s_-]+/)
@@ -89,11 +107,14 @@ const TERMINAL_HISTORY_STATUSES = new Set<AtlasSessionStatus>(["blocked", "done"
 const SYSTEM_HISTORY_ACTORS = new Set(["athena", "orchestrator"]);
 const INTERNAL_SESSION_STAGE_TO_STATUS: Record<string, AtlasSessionStatus> = {
   blocked: "blocked",
+  complete: "done",
+  completed: "done",
   done: "done",
   error: "error",
   failed: "error",
   idle: "idle",
   in_progress: "working",
+  needs_input: "blocked",
   offline: "offline",
   partial: "partial",
   pending: "idle",
@@ -125,9 +146,115 @@ function isAtlasSessionStatus(value: string): value is AtlasSessionStatus {
 }
 
 function normalizeRawStatus(status: unknown): AtlasSessionStatus {
-  const normalized = String(status || "idle").trim().toLowerCase();
+  const normalized = String(status || "idle").trim().toLowerCase().replace(/[\s-]+/g, "_");
   if (isAtlasSessionStatus(normalized)) return normalized;
   return INTERNAL_SESSION_STAGE_TO_STATUS[normalized] || "idle";
+}
+
+function resolveSessionRoleKey(rawSession: unknown, fallbackKey: string): string {
+  if (isRecord(rawSession)) {
+    const role = String(rawSession.role || "").trim();
+    if (role) return role;
+  }
+  return fallbackKey;
+}
+
+function extractSessionRecordMap(raw: unknown, fallbackPrefix: string): Record<string, unknown> {
+  if (Array.isArray(raw)) {
+    const extracted: Record<string, unknown> = {};
+    raw.forEach((entry, index) => {
+      if (!isRecord(entry)) return;
+      const roleKey = resolveSessionRoleKey(entry, `${fallbackPrefix}-${index + 1}`);
+      extracted[roleKey] = entry;
+    });
+    return extracted;
+  }
+
+  if (!isRecord(raw)) return {};
+
+  const candidate = isRecord(raw.sessions) ? raw.sessions : raw;
+  if (!isRecord(candidate)) return {};
+
+  const looksLikeSingleSession = ["role", "status", "lastTask", "lastActiveAt"].some((key) => key in candidate);
+  if (looksLikeSingleSession) {
+    const roleKey = resolveSessionRoleKey(candidate, fallbackPrefix);
+    return { [roleKey]: candidate };
+  }
+
+  const extracted: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(candidate)) {
+    if (!isRecord(value)) continue;
+    extracted[resolveSessionRoleKey(value, key)] = value;
+  }
+  return extracted;
+}
+
+async function readLegacyOpenSessionRecords(stateDir: string): Promise<Record<string, unknown>> {
+  const openSessionsPath = path.join(stateDir, "open_target_sessions.json");
+  const openSessionsResult = await readJsonSafe(openSessionsPath);
+  if (!openSessionsResult.ok) {
+    if (openSessionsResult.reason === READ_JSON_REASON.INVALID) {
+      console.error(`[atlas] failed to read open session state: ${String(openSessionsResult.error?.message || openSessionsResult.error)}`);
+    }
+    return {};
+  }
+  return extractSessionRecordMap(openSessionsResult.data, "atlas-session");
+}
+
+async function readCanonicalOpenSessionRecords(stateDir: string): Promise<Record<string, unknown>> {
+  try {
+    return await listOpenTargetSessions({ stateDir });
+  } catch (error) {
+    console.error(`[atlas] failed to read canonical open sessions: ${String((error as Error)?.message || error)}`);
+    return {};
+  }
+}
+
+async function collectArchiveJsonFiles(dirPath: string): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    const nestedPaths = await Promise.all(entries.map(async (entry) => {
+      const entryPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        return collectArchiveJsonFiles(entryPath);
+      }
+      return entry.isFile() && entry.name.endsWith(".json") ? [entryPath] : [];
+    }));
+    return nestedPaths.flat();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error(`[atlas] failed to enumerate archived sessions: ${String((error as Error)?.message || error)}`);
+    }
+    return [];
+  }
+}
+
+async function readArchivedSessionRecords(stateDir: string): Promise<AtlasArchivedSessionDto[]> {
+  const archiveDir = path.join(stateDir, "archive");
+  const archiveFiles = await collectArchiveJsonFiles(archiveDir);
+  const archivedSessions: AtlasArchivedSessionDto[] = [];
+
+  for (const archivePath of archiveFiles.sort()) {
+    const archiveResult = await readJsonSafe(archivePath);
+    if (!archiveResult.ok) {
+      console.error(`[atlas] failed to read archived session snapshot: ${archivePath} (${String(archiveResult.error?.message || archiveResult.error)})`);
+      continue;
+    }
+
+    const bridgedSessions = bridgeBoxTargetSessionState(
+      extractSessionRecordMap(archiveResult.data, path.basename(archivePath, path.extname(archivePath))),
+    );
+
+    for (const [archiveRoleKey, session] of Object.entries(bridgedSessions)) {
+      archivedSessions.push({
+        ...session,
+        archivePath,
+        archiveRoleKey,
+      });
+    }
+  }
+
+  return archivedSessions;
 }
 
 function resolveEffectiveStatus(
@@ -225,9 +352,26 @@ export interface AtlasSessionStateBridgeOptions {
   thinkingMap?: Record<string, string>;
 }
 
+export async function readAtlasSessionReadModel(
+  options: AtlasSessionStateBridgeOptions,
+): Promise<AtlasSessionReadModel> {
+  const canonicalOpenSessions = await readCanonicalOpenSessionRecords(options.stateDir);
+  const fallbackOpenSessions = Object.keys(canonicalOpenSessions).length > 0
+    ? {}
+    : await readLegacyOpenSessionRecords(options.stateDir);
+
+  return {
+    openSessions: bridgeBoxTargetSessionState(
+      Object.keys(canonicalOpenSessions).length > 0 ? canonicalOpenSessions : fallbackOpenSessions,
+      options.thinkingMap,
+    ),
+    archivedSessions: await readArchivedSessionRecords(options.stateDir),
+  };
+}
+
 export async function listAtlasSessions(
   options: AtlasSessionStateBridgeOptions,
 ): Promise<Record<string, AtlasSessionDto>> {
-  const workerSessions = await listOpenTargetSessions({ stateDir: options.stateDir });
-  return bridgeBoxTargetSessionState(workerSessions, options.thinkingMap);
+  const sessionReadModel = await readAtlasSessionReadModel(options);
+  return sessionReadModel.openSessions;
 }
