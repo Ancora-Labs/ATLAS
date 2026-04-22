@@ -19,6 +19,15 @@ import {
   killAllDaemonProcesses
 } from "./core/daemon_control.js";
 
+function readSelfImprovementEnabled(config: Config): boolean {
+  const candidate = config.selfImprovement;
+  if (!candidate || typeof candidate !== "object") {
+    return true;
+  }
+
+  return (candidate as { enabled?: boolean }).enabled !== false;
+}
+
 // ── box on: start dashboard + daemon in one command ──────────────────────────
 
 function killByPort(port: number): Promise<number | null> {
@@ -385,7 +394,7 @@ async function main(): Promise<void> {
     console.log("  active:         " + gate.active);
     console.log("  status:         " + gate.status);
     console.log("  reason:         " + gate.reason);
-    console.log("  config.enabled: " + ((config as any).selfImprovement?.enabled !== false));
+    console.log("  config.enabled: " + readSelfImprovementEnabled(config));
     console.log("  manual.enabled: " + control.enabled);
     if (control.updatedAt) {
       console.log("  manual.updated: " + control.updatedAt + " by " + control.updatedBy);
