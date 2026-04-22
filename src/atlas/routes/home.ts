@@ -27,9 +27,32 @@ function sortSessions(sessions: AtlasSessionDto[]): AtlasSessionDto[] {
   });
 }
 
+export function deriveAtlasHomeReadiness(
+  sessions: AtlasSessionDto[],
+): Pick<AtlasPageData, "homePrimaryActionLabel" | "homeReadinessHeading" | "homeReadinessDetail"> {
+  const hasResumableSessions = sessions.some((session) => session.isResumable);
+  return hasResumableSessions
+    ? {
+        homePrimaryActionLabel: "Resume session flow",
+        homeReadinessHeading: "Ready to resume",
+        homeReadinessDetail: "One or more roles can continue from their recorded state.",
+      }
+    : {
+        homePrimaryActionLabel: "Open sessions",
+        homeReadinessHeading: "Ready to start",
+        homeReadinessDetail: "No resumable session is active yet. Open Sessions to begin the next role handoff.",
+      };
+}
+
+export function writeAtlasHtmlResponse(res: ServerResponse, html: string): void {
+  res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  res.end(html);
+}
+
 export async function buildAtlasPageData(options: AtlasHomeRouteOptions): Promise<AtlasPageData> {
   const pipelineProgress = await readPipelineProgress({ paths: { stateDir: options.stateDir } });
   const sessions = await listAtlasSessions({ stateDir: options.stateDir });
+  const sortedSessions = sortSessions(Object.values(sessions));
 
   return {
     title: "ATLAS Home",
@@ -40,7 +63,8 @@ export async function buildAtlasPageData(options: AtlasHomeRouteOptions): Promis
     pipelineDetail: String(pipelineProgress?.detail || "System ready"),
     pipelinePercent: Number(pipelineProgress?.percent || 0),
     updatedAt: typeof pipelineProgress?.updatedAt === "string" ? pipelineProgress.updatedAt : null,
-    sessions: sortSessions(Object.values(sessions)),
+    ...deriveAtlasHomeReadiness(sortedSessions),
+    sessions: sortedSessions,
   };
 }
 
@@ -57,8 +81,7 @@ export async function handleAtlasHomeRequest(
 
   try {
     const pageData = await buildAtlasPageData(options);
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    res.end(renderAtlasHomeHtml(pageData));
+    writeAtlasHtmlResponse(res, renderAtlasHomeHtml(pageData));
   } catch (error) {
     console.error(`[atlas] home route failed: ${String((error as Error)?.message || error)}`);
     res.writeHead(500, { "content-type": "text/html; charset=utf-8" });

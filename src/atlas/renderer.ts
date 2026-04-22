@@ -9,6 +9,9 @@ export interface AtlasPageData {
   pipelineDetail: string;
   pipelinePercent: number;
   updatedAt: string | null;
+  homeReadinessHeading: string;
+  homeReadinessDetail: string;
+  homePrimaryActionLabel: string;
   sessions: AtlasSessionDto[];
 }
 
@@ -342,8 +345,6 @@ function sessionTone(session: AtlasSessionDto): string {
 export function renderAtlasHomeHtml(pageData: AtlasPageData): string {
   const sessions = [...pageData.sessions];
   const counts = countSessions(sessions);
-  const resumable = sessions.some((session) => session.isResumable);
-  const primaryLabel = resumable ? "Resume session flow" : "Open sessions";
 
   const content = `<section class="hero">
     <div class="eyebrow">Windows-first product shell</div>
@@ -368,7 +369,7 @@ export function renderAtlasHomeHtml(pageData: AtlasPageData): string {
       <code>${escapeHtml(pageData.shellCommand)}</code>
     </div>
     <div class="hero__actions">
-      <a class="hero__cta" href="/sessions">${escapeHtml(primaryLabel)}</a>
+      <a class="hero__cta" href="/sessions">${escapeHtml(pageData.homePrimaryActionLabel)}</a>
       <a class="hero__link" href="/sessions">Review active roles</a>
     </div>
   </section>
@@ -403,10 +404,8 @@ export function renderAtlasHomeHtml(pageData: AtlasPageData): string {
     </article>
     <article class="panel">
       <div class="eyebrow">Session handoff</div>
-      <h2>${resumable ? "Ready to resume" : "Ready to start"}</h2>
-      <p>${escapeHtml(resumable
-        ? "One or more roles can continue from their recorded state."
-        : "No resumable session is active yet. Open Sessions to begin the next role handoff.")}</p>
+      <h2>${escapeHtml(pageData.homeReadinessHeading)}</h2>
+      <p>${escapeHtml(pageData.homeReadinessDetail)}</p>
     </article>
   </section>`;
 

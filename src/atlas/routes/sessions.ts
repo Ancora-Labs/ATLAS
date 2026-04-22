@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { renderAtlasSessionsHtml } from "../renderer.js";
-import { buildAtlasPageData, type AtlasHomeRouteOptions } from "./home.js";
+import { buildAtlasPageData, type AtlasHomeRouteOptions, writeAtlasHtmlResponse } from "./home.js";
 
 export type AtlasSessionsRouteOptions = AtlasHomeRouteOptions;
 
@@ -18,8 +18,10 @@ export async function handleAtlasSessionsRequest(
 
   try {
     const pageData = await buildAtlasPageData(options);
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    res.end(renderAtlasSessionsHtml(pageData));
+    writeAtlasHtmlResponse(res, renderAtlasSessionsHtml({
+      ...pageData,
+      title: "ATLAS Sessions",
+    }));
   } catch (error) {
     console.error(`[atlas] sessions route failed: ${String((error as Error)?.message || error)}`);
     res.writeHead(500, { "content-type": "text/html; charset=utf-8" });

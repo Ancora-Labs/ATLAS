@@ -6,7 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 
-import { buildAtlasPageData, handleAtlasHomeRequest } from "../../../src/atlas/routes/home.ts";
+import {
+  buildAtlasPageData,
+  deriveAtlasHomeReadiness,
+  handleAtlasHomeRequest,
+} from "../../../src/atlas/routes/home.ts";
+import { handleAtlasSessionsRequest } from "../../../src/atlas/routes/sessions.ts";
 
 function createTempRoot(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), "atlas-home-route-"));
@@ -119,7 +124,9 @@ describe("atlas home route", () => {
 
     port = await getFreePort();
     server = http.createServer((req, res) => {
-      handleAtlasHomeRequest(req, res, {
+      const url = new URL(req.url || "/", "http://127.0.0.1");
+      const routeHandler = url.pathname === "/sessions" ? handleAtlasSessionsRequest : handleAtlasHomeRequest;
+      routeHandler(req, res, {
         stateDir,
         targetRepo: "Ancora-Labs/ATLAS",
         hostLabel: "Windows 11 workstation",
@@ -160,6 +167,34 @@ describe("atlas home route", () => {
     assert.equal(pageData.sessions[1]?.statusLabel, "Completed");
     assert.equal(pageData.sessions[1]?.pullRequestCount, 1);
     assert.equal(pageData.sessions[2]?.readinessLabel, "Needs your input");
+    assert.equal(pageData.homePrimaryActionLabel, "Resume session flow");
+    assert.equal(pageData.homeReadinessHeading, "Ready to resume");
+  });
+
+  it("derives a start state when no worker session can resume", () => {
+    assert.deepEqual(deriveAtlasHomeReadiness([
+      {
+        role: "Hermes",
+        name: "Hermes",
+        status: "done",
+        statusLabel: "Completed",
+        readiness: "completed",
+        readinessLabel: "Completed",
+        lastTask: "Wrapped the last delivery",
+        lastActiveAt: "2026-04-21T12:00:00.000Z",
+        historyLength: 1,
+        lastThinking: "",
+        currentBranch: null,
+        pullRequestCount: 1,
+        touchedFileCount: 2,
+        needsInput: false,
+        isResumable: false,
+      },
+    ]), {
+      homePrimaryActionLabel: "Open sessions",
+      homeReadinessHeading: "Ready to start",
+      homeReadinessDetail: "No resumable session is active yet. Open Sessions to begin the next role handoff.",
+    });
   });
 
   it("serves GET / as the ATLAS Home HTML surface", async () => {
@@ -174,10 +209,23 @@ describe("atlas home route", () => {
     assert.doesNotMatch(response.text, /dashboard/i);
   });
 
-  it("[NEGATIVE] rejects non-GET requests", async () => {
-    const response = await requestText(port, "/", "POST");
+  it("serves GET /sessions as the ATLAS Sessions HTML surface", async () => {
+    const response = await requestText(port, "/sessions");
 
-    assert.equal(response.status, 405);
-    assert.match(response.text, /Method Not Allowed/);
+    assert.equal(response.status, 200);
+    assert.match(response.text, /<title>ATLAS Sessions<\/title>/);
+    assert.match(response.text, />Worker sessions</);
+    assert.match(response.text, />Needs attention · Needs your input</);
+    assert.match(response.text, />3 tracked roles</);
+  });
+
+  it("[NEGATIVE] rejects non-GET requests on both ATLAS HTML routes", async () => {
+    const homeResponse = await requestText(port, "/", "POST");
+    const sessionsResponse = await requestText(port, "/sessions", "POST");
+
+    assert.equal(homeResponse.status, 405);
+    assert.match(homeResponse.text, /Method Not Allowed/);
+    assert.equal(sessionsResponse.status, 405);
+    assert.match(sessionsResponse.text, /Method Not Allowed/);
   });
 });
