@@ -1,3 +1,4 @@
+import { getLaneForWorkerName, normalizeWorkerName } from "../core/role_registry.js";
 import { listOpenTargetSessions } from "../core/target_session_state.js";
 
 export interface BoxTargetSessionHistoryEntry {
@@ -54,6 +55,24 @@ export interface AtlasSessionDto {
   touchedFileCount: number;
   needsInput: boolean;
   isResumable: boolean;
+}
+
+function toTitleCase(value: string): string {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
+}
+
+function getAtlasSessionDisplayName(role: string): string {
+  const normalizedRole = normalizeWorkerName(role);
+  if (normalizedRole === "atlas") return "ATLAS control";
+  if (normalizedRole.endsWith("-worker")) {
+    const lane = getLaneForWorkerName(normalizedRole, normalizedRole.replace(/-worker$/, ""));
+    return `${toTitleCase(lane)} lane`;
+  }
+  return toTitleCase(role);
 }
 
 const STATUS_LABELS: Record<AtlasSessionStatus, string> = {
@@ -181,7 +200,7 @@ export function bridgeBoxTargetSessionState(
 
     cleaned[roleKey] = {
       role,
-      name: role,
+      name: getAtlasSessionDisplayName(role),
       status,
       statusLabel: getAtlasSessionStatusLabel(status),
       readiness,

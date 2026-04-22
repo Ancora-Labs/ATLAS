@@ -81,8 +81,8 @@ describe("atlas server", () => {
               lastTask: "",
               lastActiveAt: "2026-04-21T11:15:00.000Z",
             },
-            Athena: {
-              role: "Athena",
+            "quality-worker": {
+              role: "quality-worker",
               status: "working",
               lastTask: "Wire the ATLAS server boundary",
               lastActiveAt: "2026-04-21T12:00:00.000Z",
@@ -129,6 +129,37 @@ describe("atlas server", () => {
     assert.equal(ATLAS_DEFAULT_PORT, 8788);
   });
 
+  it("honors ATLAS_PORT when no explicit server port is provided", async () => {
+    const envPort = await getFreePort();
+    const previousPort = process.env.ATLAS_PORT;
+    process.env.ATLAS_PORT = String(envPort);
+
+    let envServer: http.Server | null = null;
+    try {
+      envServer = await startAtlasServer({
+        stateDir,
+        targetRepo: "Ancora-Labs/Box",
+        hostLabel: "Windows 11 workstation",
+        shellCommand: ".\\ATLAS.cmd",
+      });
+
+      const address = envServer.address();
+      assert.ok(address && typeof address === "object");
+      assert.equal(address.port, envPort);
+    } finally {
+      if (previousPort === undefined) {
+        delete process.env.ATLAS_PORT;
+      } else {
+        process.env.ATLAS_PORT = previousPort;
+      }
+      if (envServer?.listening) {
+        await new Promise<void>((resolve) => {
+          envServer?.close(() => resolve());
+        });
+      }
+    }
+  });
+
   it("serves the home and sessions routes from the dedicated ATLAS server", async () => {
     const homeResponse = await requestText(port, "/");
     const sessionsResponse = await requestText(port, "/sessions");
@@ -141,8 +172,10 @@ describe("atlas server", () => {
     assert.equal(sessionsResponse.status, 200);
     assert.match(sessionsResponse.text, /<title>ATLAS Sessions<\/title>/);
     assert.match(sessionsResponse.text, />Worker sessions</);
-    assert.match(sessionsResponse.text, />Athena</);
-    assert.match(sessionsResponse.text, />2 tracked roles</);
+    assert.match(sessionsResponse.text, />ATLAS control</);
+    assert.match(sessionsResponse.text, />Quality lane</);
+    assert.match(sessionsResponse.text, />2 tracked sessions</);
+    assert.doesNotMatch(sessionsResponse.text, /quality-worker/);
     assert.doesNotMatch(sessionsResponse.text, /BOX Mission Control/i);
   });
 

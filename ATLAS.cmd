@@ -19,10 +19,12 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [ATLAS] Starting the dashboard for ATLAS Home...
-start "ATLAS Dashboard" npm run box:dashboard
+if "%ATLAS_PORT%"=="" set "ATLAS_PORT=8788"
+
+echo [ATLAS] Starting the dedicated ATLAS server on port %ATLAS_PORT%...
+start "ATLAS Server" cmd /c npm run atlas:start
 timeout /t 2 /nobreak >nul
-start "" "http://localhost:8787/atlas"
+call npm run atlas:open
 
 popd >nul
 exit /b 0

@@ -12,7 +12,7 @@ export interface AtlasServerOptions extends Partial<AtlasHomeRouteOptions> {
 }
 
 function resolveAtlasServerOptions(options: AtlasServerOptions = {}): Required<AtlasServerOptions> {
-  const rawPort = Number(options.port ?? process.env.BOX_ATLAS_PORT ?? ATLAS_DEFAULT_PORT);
+  const rawPort = Number(options.port ?? process.env.ATLAS_PORT ?? process.env.BOX_ATLAS_PORT ?? ATLAS_DEFAULT_PORT);
   return {
     port: Number.isInteger(rawPort) && rawPort > 0 ? rawPort : ATLAS_DEFAULT_PORT,
     stateDir: String(options.stateDir || path.join(process.cwd(), "state")),
