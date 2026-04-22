@@ -33,17 +33,13 @@ import {
   appendCalibrationHistory,
 } from "./jesus_calibration.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, JESUS_SOFT_TIMEOUT_POLICY_CONTRACT, SPAN_CONTRACT } from "./event_schema.js";
-import { computeQueueViability, readPipelineProgress } from "./pipeline_progress.js";
+import { computeQueueViability } from "./pipeline_progress.js";
 import { resolveJesusFallbackModel, ROUTING_REASON } from "./model_policy.js";
 import {
-  WORKER_CYCLE_ARTIFACTS_FILE,
-  migrateWorkerCycleArtifacts,
-  selectWorkerCycleRecord,
-  extractSessionsFromCycleRecord,
-  filterStaleWorkerSessions,
   readCycleAnalytics,
   extractLatestBenchmarkRecommendations,
 } from "./cycle_analytics.js";
+import { readOpenTargetSessionState } from "./target_session_state.js";
 import { buildJesusStrategyBriefArtifact } from "./plan_lifecycle_contract.js";
 import { summarizeAgentControlPlane } from "./agent_control_plane.js";
 import {
@@ -1008,7 +1004,7 @@ function buildCapacityDeltaReport(d, healthFindings, kpis) {
  * detect source conflicts downstream.
  */
 export async function loadWorkerSessionsForHealthAudit(
-  config: unknown,
+  _config: unknown,
   stateDir: string,
 ): Promise<{
   sessions: Record<string, unknown>;
@@ -1023,108 +1019,7 @@ export async function loadWorkerSessionsForHealthAudit(
   /** Roles that were excluded due to staleness. */
   filteredStaleRoles: string[];
 }> {
-  // Read canonical worker_cycle_artifacts and legacy sessions in parallel.
-  const artifactsPath = path.join(stateDir, WORKER_CYCLE_ARTIFACTS_FILE);
-  const legacyPath = path.join(stateDir, "worker_sessions.json");
-  const [artifactsRaw, legacyRaw] = await Promise.all([
-    readJsonSafe(artifactsPath),
-    readJsonSafe(legacyPath),
-  ]);
-
-  const legacySessions = (legacyRaw.ok && legacyRaw.data && typeof legacyRaw.data === "object" && !Array.isArray(legacyRaw.data))
-    ? (legacyRaw.data as Record<string, unknown>)
-    : null;
-  const legacyAvailable = legacySessions !== null && Object.keys(legacySessions).length > 0;
-
-  // Attempt canonical resolution.
-  if (artifactsRaw.ok && artifactsRaw.data && typeof artifactsRaw.data === "object") {
-    try {
-      const migrated = migrateWorkerCycleArtifacts(artifactsRaw.data);
-      if (migrated.ok && migrated.data) {
-        // Determine preferred cycle from active pipeline.
-        let preferredCycleId: string | null = null;
-        try {
-          const progress = await readPipelineProgress(config as Parameters<typeof readPipelineProgress>[0]);
-          preferredCycleId = progress?.startedAt ?? null;
-        } catch {
-          // pipeline progress unreadable — fall through with null preferred cycle
-        }
-        const { cycleId, record } = selectWorkerCycleRecord(migrated.data, preferredCycleId ?? undefined);
-        const canonicalSessions = extractSessionsFromCycleRecord(record);
-
-        if (canonicalSessions && Object.keys(canonicalSessions).length > 0) {
-          // Conflict detection: canonical and legacy disagree on active worker count.
-          const canonicalActive = Object.values(canonicalSessions).filter(
-            (s) => s && typeof s === "object" && (s as Record<string, unknown>).status === "working",
-          ).length;
-          const legacyActive = legacySessions
-            ? Object.values(legacySessions).filter(
-                (s) => s && typeof s === "object" && (s as Record<string, unknown>).status === "working",
-              ).length
-            : 0;
-          const conflict = legacyAvailable && canonicalActive !== legacyActive;
-          const conflictReason = conflict
-            ? `canonical_active=${canonicalActive} vs legacy_active=${legacyActive}`
-            : null;
-
-          return {
-            sessions: canonicalSessions,
-            source: "canonical",
-            cycleId,
-            canonicalSessionsAvailable: true,
-            legacySessionsAvailable: legacyAvailable,
-            workerSessionSourceConflict: conflict,
-            conflictReason,
-            staleSessionsFiltered: 0,
-            filteredStaleRoles: [],
-          };
-        }
-      }
-    } catch {
-      // Canonical read failed after a successful JSON parse.
-    }
-  }
-
-  // Fallback: legacy worker_sessions.json is allowed only when the canonical
-  // artifact is absent, not when it exists but is invalid/unusable.
-  if (artifactsRaw.reason === READ_JSON_REASON.MISSING && legacySessions && Object.keys(legacySessions).length > 0) {
-    // Filter sessions that predate the current pipeline cycle so stale legacy
-    // "working" sessions cannot generate actionable worker-health findings.
-    let pipelineStartedAt: string | null = null;
-    try {
-      const progress = await readPipelineProgress(config as Parameters<typeof readPipelineProgress>[0]);
-      pipelineStartedAt = progress?.startedAt ?? null;
-    } catch {
-      // pipeline progress unreadable — staleness filter cannot run; pass sessions through
-    }
-    const { sessions: filteredSessions, staleRoles } = filterStaleWorkerSessions(
-      legacySessions,
-      pipelineStartedAt,
-    );
-    return {
-      sessions: filteredSessions,
-      source: "legacy",
-      cycleId: null,
-      canonicalSessionsAvailable: false,
-      legacySessionsAvailable: true,
-      workerSessionSourceConflict: false,
-      conflictReason: null,
-      staleSessionsFiltered: staleRoles.length,
-      filteredStaleRoles: staleRoles,
-    };
-  }
-
-  return {
-    sessions: {},
-    source: "empty",
-    cycleId: null,
-    canonicalSessionsAvailable: false,
-    legacySessionsAvailable: legacyAvailable,
-    workerSessionSourceConflict: false,
-    conflictReason: null,
-    staleSessionsFiltered: 0,
-    filteredStaleRoles: [],
-  };
+  return readOpenTargetSessionState({ stateDir });
 }
 
 export async function runJesusCycle(config) {

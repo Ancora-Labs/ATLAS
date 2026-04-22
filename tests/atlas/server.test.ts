@@ -65,21 +65,34 @@ describe("atlas server", () => {
     stateDir = path.join(tempRoot, "state");
     await fs.mkdir(stateDir, { recursive: true });
 
-    await fs.writeFile(path.join(stateDir, "worker_sessions.json"), JSON.stringify({
+    await fs.writeFile(path.join(stateDir, "worker_cycle_artifacts.json"), JSON.stringify({
       schemaVersion: 1,
-      Atlas: {
-        role: "Atlas",
-        status: "idle",
-        lastTask: "",
-        lastActiveAt: "2026-04-21T11:15:00.000Z",
-      },
-      Athena: {
-        role: "Athena",
-        status: "working",
-        lastTask: "Wire the ATLAS server boundary",
-        lastActiveAt: "2026-04-21T12:00:00.000Z",
-        createdPRs: ["https://example.com/pr/1"],
-        filesTouched: ["src/atlas/server.ts", "src/atlas/routes/sessions.ts"],
+      updatedAt: "2026-04-21T12:00:00.000Z",
+      latestCycleId: "cycle-1",
+      cycles: {
+        "cycle-1": {
+          cycleId: "cycle-1",
+          updatedAt: "2026-04-21T12:00:00.000Z",
+          status: "in_progress",
+          workerSessions: {
+            Atlas: {
+              role: "Atlas",
+              status: "idle",
+              lastTask: "",
+              lastActiveAt: "2026-04-21T11:15:00.000Z",
+            },
+            Athena: {
+              role: "Athena",
+              status: "working",
+              lastTask: "Wire the ATLAS server boundary",
+              lastActiveAt: "2026-04-21T12:00:00.000Z",
+              createdPRs: ["https://example.com/pr/1"],
+              filesTouched: ["src/atlas/server.ts", "src/atlas/routes/sessions.ts"],
+            },
+          },
+          workerActivity: {},
+          completedTaskIds: [],
+        },
       },
     }), "utf8");
 
@@ -90,7 +103,7 @@ describe("atlas server", () => {
       detail: "Serving the ATLAS product shell",
       steps: [],
       updatedAt: "2026-04-21T12:00:00.000Z",
-      startedAt: "2026-04-21T11:58:00.000Z",
+      startedAt: "cycle-1",
     }), "utf8");
 
     port = await getFreePort();

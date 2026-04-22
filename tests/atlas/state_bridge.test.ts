@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
   bridgeBoxTargetSessionState,
   getAtlasSessionReadiness,
   getAtlasSessionStatusLabel,
+  listAtlasSessions,
 } from "../../src/atlas/state_bridge.ts";
+
+function createTempRoot(): Promise<string> {
+  return fs.mkdtemp(path.join(os.tmpdir(), "atlas-state-bridge-"));
+}
 
 describe("state_bridge", () => {
   it("maps BOX target-session state into ATLAS session DTOs with product labels", () => {
@@ -108,5 +116,86 @@ describe("state_bridge", () => {
       readiness: "ready",
       readinessLabel: "Ready to start",
     });
+  });
+
+  it("loads canonical target sessions through the dedicated ATLAS adapter", async () => {
+    const tempRoot = await createTempRoot();
+    const stateDir = path.join(tempRoot, "state");
+
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, "pipeline_progress.json"), JSON.stringify({
+        stage: "workers_running",
+        stageLabel: "Workers Running",
+        percent: 85,
+        detail: "Serving the ATLAS product shell",
+        steps: [],
+        updatedAt: "2026-04-21T12:00:00.000Z",
+        startedAt: "cycle-1",
+      }), "utf8");
+      await fs.writeFile(path.join(stateDir, "worker_cycle_artifacts.json"), JSON.stringify({
+        schemaVersion: 1,
+        updatedAt: "2026-04-21T12:00:00.000Z",
+        latestCycleId: "cycle-1",
+        cycles: {
+          "cycle-1": {
+            cycleId: "cycle-1",
+            updatedAt: "2026-04-21T12:00:00.000Z",
+            status: "in_progress",
+            workerSessions: {
+              Athena: {
+                role: "Athena",
+                status: "in_progress",
+                lastTask: "Review ATLAS integration",
+                lastActiveAt: "2026-04-21T12:00:00.000Z",
+              },
+              Hermes: {
+                role: "Hermes",
+                status: "recovered",
+                lastTask: "Retry the branch push",
+                lastActiveAt: "2026-04-21T11:55:00.000Z",
+              },
+              Prometheus: {
+                role: "Prometheus",
+                status: "working",
+                lastTask: "Validate canonical state",
+                lastActiveAt: "2026-04-21T11:50:00.000Z",
+              },
+              Atlas: {
+                role: "Atlas",
+                status: 42,
+                lastTask: "",
+              },
+            },
+            workerActivity: {
+              Prometheus: [
+                { from: "Prometheus", status: "failed", task: "Push checks failed" },
+              ],
+            },
+            completedTaskIds: [],
+          },
+        },
+      }), "utf8");
+
+      const sessions = await listAtlasSessions({
+        stateDir,
+        thinkingMap: { Athena: "validating canonical state" },
+      });
+
+      assert.equal(sessions.Athena.status, "working");
+      assert.equal(sessions.Athena.statusLabel, "In progress");
+      assert.equal(sessions.Athena.lastThinking, "validating canonical state");
+
+      assert.equal(sessions.Hermes.status, "partial");
+      assert.equal(sessions.Hermes.readinessLabel, "Ready to continue");
+
+      assert.equal(sessions.Prometheus.status, "error");
+      assert.equal(sessions.Prometheus.needsInput, true);
+
+      assert.equal(sessions.Atlas.status, "idle");
+      assert.equal(sessions.Atlas.readinessLabel, "Ready to start");
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 });

@@ -1,3 +1,5 @@
+import { listOpenTargetSessions } from "../core/target_session_state.js";
+
 export interface BoxTargetSessionHistoryEntry {
   at?: string;
   from?: string;
@@ -13,6 +15,7 @@ export interface BoxTargetSessionRecord {
   lastActiveAt?: string | null;
   history?: BoxTargetSessionHistoryEntry[];
   activityLog?: BoxTargetSessionHistoryEntry[];
+  _activityLog?: BoxTargetSessionHistoryEntry[];
   currentBranch?: string | null;
   createdPRs?: string[];
   filesTouched?: string[];
@@ -65,6 +68,24 @@ const STATUS_LABELS: Record<AtlasSessionStatus, string> = {
 
 const TERMINAL_HISTORY_STATUSES = new Set<AtlasSessionStatus>(["blocked", "done", "error", "partial"]);
 const SYSTEM_HISTORY_ACTORS = new Set(["athena", "orchestrator"]);
+const INTERNAL_SESSION_STAGE_TO_STATUS: Record<string, AtlasSessionStatus> = {
+  blocked: "blocked",
+  done: "done",
+  error: "error",
+  failed: "error",
+  idle: "idle",
+  in_progress: "working",
+  offline: "offline",
+  partial: "partial",
+  pending: "idle",
+  queued: "idle",
+  ready: "idle",
+  recovered: "partial",
+  running: "working",
+  skipped: "done",
+  success: "done",
+  working: "working",
+};
 
 function normalizeHistoryEntry(entry: unknown): BoxTargetSessionHistoryEntry | null {
   if (!entry || typeof entry !== "object") return null;
@@ -74,7 +95,9 @@ function normalizeHistoryEntry(entry: unknown): BoxTargetSessionHistoryEntry | n
 function getSessionHistory(session: BoxTargetSessionRecord): BoxTargetSessionHistoryEntry[] {
   const history = Array.isArray(session.history)
     ? session.history
-    : (Array.isArray(session.activityLog) ? session.activityLog : []);
+    : (Array.isArray(session.activityLog)
+        ? session.activityLog
+        : (Array.isArray(session._activityLog) ? session._activityLog : []));
   return history.map(normalizeHistoryEntry).filter((entry): entry is BoxTargetSessionHistoryEntry => entry !== null);
 }
 
@@ -84,7 +107,8 @@ function isAtlasSessionStatus(value: string): value is AtlasSessionStatus {
 
 function normalizeRawStatus(status: unknown): AtlasSessionStatus {
   const normalized = String(status || "idle").trim().toLowerCase();
-  return isAtlasSessionStatus(normalized) ? normalized : "idle";
+  if (isAtlasSessionStatus(normalized)) return normalized;
+  return INTERNAL_SESSION_STAGE_TO_STATUS[normalized] || "idle";
 }
 
 function resolveEffectiveStatus(
@@ -175,4 +199,16 @@ export function bridgeBoxTargetSessionState(
   }
 
   return cleaned;
+}
+
+export interface AtlasSessionStateBridgeOptions {
+  stateDir: string;
+  thinkingMap?: Record<string, string>;
+}
+
+export async function listAtlasSessions(
+  options: AtlasSessionStateBridgeOptions,
+): Promise<Record<string, AtlasSessionDto>> {
+  const workerSessions = await listOpenTargetSessions({ stateDir: options.stateDir });
+  return bridgeBoxTargetSessionState(workerSessions, options.thinkingMap);
 }

@@ -65,29 +65,46 @@ describe("atlas home route", () => {
     stateDir = path.join(tempRoot, "state");
     await fs.mkdir(stateDir, { recursive: true });
 
-    await fs.writeFile(path.join(stateDir, "worker_sessions.json"), JSON.stringify({
+    await fs.writeFile(path.join(stateDir, "worker_cycle_artifacts.json"), JSON.stringify({
       schemaVersion: 1,
-      Atlas: {
-        role: "Atlas",
-        status: "idle",
-        lastTask: "",
-        lastActiveAt: "2026-04-21T11:15:00.000Z",
+      updatedAt: "2026-04-21T12:00:00.000Z",
+      latestCycleId: "cycle-1",
+      cycles: {
+        "cycle-1": {
+          cycleId: "cycle-1",
+          updatedAt: "2026-04-21T12:00:00.000Z",
+          status: "in_progress",
+          workerSessions: {
+            Atlas: {
+              role: "Atlas",
+              status: "idle",
+              lastTask: "",
+              lastActiveAt: "2026-04-21T11:15:00.000Z",
+            },
+            Athena: {
+              role: "Athena",
+              status: "success",
+              lastTask: "Render the ATLAS Home shell",
+              lastActiveAt: "2026-04-21T12:00:00.000Z",
+              createdPRs: ["https://example.com/pr/1"],
+              filesTouched: ["src/atlas/renderer.ts", "src/atlas/routes/home.ts"],
+            },
+            Prometheus: {
+              role: "Prometheus",
+              status: "working",
+              lastTask: "Waiting for acceptance review",
+              lastActiveAt: "2026-04-21T11:45:00.000Z",
+            },
+            Broken: "skip me",
+          },
+          workerActivity: {
+            Prometheus: [
+              { from: "Prometheus", status: "blocked", task: "Waiting for acceptance review" },
+            ],
+          },
+          completedTaskIds: [],
+        },
       },
-      Athena: {
-        role: "Athena",
-        status: "working",
-        lastTask: "Render the ATLAS Home shell",
-        lastActiveAt: "2026-04-21T12:00:00.000Z",
-        createdPRs: ["https://example.com/pr/1"],
-        filesTouched: ["src/atlas/renderer.ts", "src/atlas/routes/home.ts"],
-      },
-      Prometheus: {
-        role: "Prometheus",
-        status: "blocked",
-        lastTask: "Waiting for acceptance review",
-        lastActiveAt: "2026-04-21T11:45:00.000Z",
-      },
-      Broken: "skip me",
     }), "utf8");
 
     await fs.writeFile(path.join(stateDir, "pipeline_progress.json"), JSON.stringify({
@@ -97,7 +114,7 @@ describe("atlas home route", () => {
       detail: "Serving the ATLAS Home surface",
       steps: [],
       updatedAt: "2026-04-21T12:00:00.000Z",
-      startedAt: "2026-04-21T11:58:00.000Z",
+      startedAt: "cycle-1",
     }), "utf8");
 
     port = await getFreePort();
@@ -140,7 +157,7 @@ describe("atlas home route", () => {
     assert.equal(pageData.repoLabel, "Ancora-Labs/ATLAS");
     assert.equal(pageData.pipelineStageLabel, "Workers Running");
     assert.deepEqual(pageData.sessions.map((session) => session.name), ["Atlas", "Athena", "Prometheus"]);
-    assert.equal(pageData.sessions[1]?.statusLabel, "In progress");
+    assert.equal(pageData.sessions[1]?.statusLabel, "Completed");
     assert.equal(pageData.sessions[1]?.pullRequestCount, 1);
     assert.equal(pageData.sessions[2]?.readinessLabel, "Needs your input");
   });

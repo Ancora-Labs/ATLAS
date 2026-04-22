@@ -1,9 +1,7 @@
-import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import path from "node:path";
 
 import { renderAtlasHomeHtml, type AtlasPageData } from "../renderer.js";
-import { bridgeBoxTargetSessionState, type AtlasSessionDto } from "../state_bridge.js";
+import { listAtlasSessions, type AtlasSessionDto } from "../state_bridge.js";
 import { readPipelineProgress } from "../../core/pipeline_progress.js";
 
 export interface AtlasHomeRouteOptions {
@@ -18,18 +16,6 @@ function normalizeRepoLabel(targetRepo?: string): string {
   return repo || "Target repo not configured";
 }
 
-async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw) as T;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      console.error(`[atlas] failed to read ${path.basename(filePath)}: ${String((error as Error)?.message || error)}`);
-    }
-    return fallback;
-  }
-}
-
 function sortSessions(sessions: AtlasSessionDto[]): AtlasSessionDto[] {
   return [...sessions].sort((left, right) => {
     const leftIsAtlas = left.name === "Atlas" ? 0 : 1;
@@ -42,12 +28,8 @@ function sortSessions(sessions: AtlasSessionDto[]): AtlasSessionDto[] {
 }
 
 export async function buildAtlasPageData(options: AtlasHomeRouteOptions): Promise<AtlasPageData> {
-  const workerSessions = await readJsonFile<Record<string, unknown>>(
-    path.join(options.stateDir, "worker_sessions.json"),
-    {},
-  );
   const pipelineProgress = await readPipelineProgress({ paths: { stateDir: options.stateDir } });
-  const sessions = bridgeBoxTargetSessionState(workerSessions);
+  const sessions = await listAtlasSessions({ stateDir: options.stateDir });
 
   return {
     title: "ATLAS Home",
