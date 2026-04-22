@@ -139,6 +139,7 @@ describe("atlas server", () => {
     assert.match(homeResponse.text, /Ancora-Labs\/ATLAS/);
 
     assert.equal(sessionsResponse.status, 200);
+    assert.match(sessionsResponse.text, /<title>ATLAS Sessions<\/title>/);
     assert.match(sessionsResponse.text, />Worker sessions</);
     assert.match(sessionsResponse.text, />Athena</);
     assert.match(sessionsResponse.text, />2 tracked roles</);

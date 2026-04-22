@@ -17,6 +17,9 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
     pipelineDetail: "Delivering the ATLAS desktop shell",
     pipelinePercent: 85,
     updatedAt: "2026-04-21T12:00:00.000Z",
+    homeReadinessHeading: "Ready to resume",
+    homeReadinessDetail: "One or more roles can continue from their recorded state.",
+    homePrimaryActionLabel: "Resume session flow",
     sessions: [
       {
         role: "Athena",
@@ -75,11 +78,13 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
 }
 
 describe("atlas renderer", () => {
-  it("renders the home surface with Windows-first shell framing and ATLAS product language", () => {
+  it("renders the home surface with title, navigation, readiness copy, and resume CTA behavior", () => {
     const html = renderAtlasHomeHtml(buildPageData());
 
     assert.match(html, /<title>ATLAS Home<\/title>/);
     assert.match(html, /ATLAS Desktop Session Control/);
+    assert.match(html, /<a class="nav-link" href="\/" aria-current="page">/);
+    assert.match(html, /<a class="nav-link" href="\/sessions">/);
     assert.match(html, /Windows-first product shell/);
     assert.match(html, /<code>\.\\ATLAS\.cmd<\/code>/);
     assert.match(html, /<span>Total sessions<\/span>\s*<strong>3<\/strong>/);
@@ -87,34 +92,50 @@ describe("atlas renderer", () => {
     assert.match(html, /<span>Needs input<\/span>\s*<strong>1<\/strong>/);
     assert.match(html, /<span>Completed<\/span>\s*<strong>1<\/strong>/);
     assert.match(html, />Resume session flow</);
+    assert.match(html, />Ready to resume</);
+    assert.match(html, /One or more roles can continue from their recorded state\./);
     assert.doesNotMatch(html, /BOX Mission Control|dashboard/i);
   });
 
-  it("renders the sessions surface with deterministic session cards", () => {
-    const html = renderAtlasSessionsHtml(buildPageData());
+  it("renders the sessions surface with product-language status chips and active navigation", () => {
+    const html = renderAtlasSessionsHtml(buildPageData({ title: "ATLAS Sessions" }));
 
-    assert.match(html, /<title>ATLAS Home<\/title>/);
+    assert.match(html, /<title>ATLAS Sessions<\/title>/);
+    assert.match(html, /<a class="nav-link" href="\/">/);
+    assert.match(html, /<a class="nav-link" href="\/sessions" aria-current="page">/);
     assert.match(html, />Worker sessions</);
     assert.match(html, />3 tracked roles</);
     assert.match(html, />Athena</);
     assert.match(html, />Prometheus</);
     assert.match(html, />Hermes</);
+    assert.match(html, />In progress · In progress</);
     assert.match(html, />Needs attention · Needs your input</);
+    assert.match(html, />Completed · Completed</);
     assert.match(html, />feat\/atlas-home</);
     assert.match(html, />No branch recorded</);
     assert.match(html, />2026-04-21 12:00 UTC</);
   });
 
-  it("[NEGATIVE] escapes session content and falls back to empty-state copy", () => {
+  it("[NEGATIVE] escapes session content, falls back to empty-state output, and keeps the start CTA deterministic", () => {
     const html = renderAtlasSessionsHtml(buildPageData({
+      title: "ATLAS Sessions",
       sessions: [],
       repoLabel: "<unsafe repo>",
       shellCommand: "<script>alert(1)</script>",
+    }));
+    const homeHtml = renderAtlasHomeHtml(buildPageData({
+      sessions: [],
+      homeReadinessHeading: "Ready to start",
+      homeReadinessDetail: "No resumable session is active yet. Open Sessions to begin the next role handoff.",
+      homePrimaryActionLabel: "Open sessions",
     }));
 
     assert.match(html, /&lt;unsafe repo&gt;/);
     assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
     assert.match(html, /No session state is available yet/);
     assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
+    assert.match(homeHtml, />Open sessions</);
+    assert.match(homeHtml, />Ready to start</);
+    assert.match(homeHtml, /No resumable session is active yet\./);
   });
 });
