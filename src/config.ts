@@ -1,7 +1,7 @@
-﻿import fs from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
 import dotenv from "dotenv";
-import type { Config } from "./types/index.js";
+import type { Config, WorkerRoleConfig } from "./types/index.js";
 
 dotenv.config();
 
@@ -282,9 +282,14 @@ export async function loadConfig(): Promise<Config> {
   };
 
   const derivedRoleModelMap = (() => {
-    const map: Record<string, any> = {};
-    const workers = fileConfig?.roleRegistry?.workers || {};
-    for (const worker of Object.values(workers) as any[]) {
+    const roleRegistry = (
+      fileConfig?.roleRegistry && typeof fileConfig.roleRegistry === "object"
+        ? fileConfig.roleRegistry as { workers?: Record<string, WorkerRoleConfig>; leadWorker?: WorkerRoleConfig }
+        : {}
+    );
+    const map: Record<string, string> = {};
+    const workers = roleRegistry.workers ?? {};
+    for (const worker of Object.values(workers)) {
       const roleName = String(worker?.name || "").trim();
       const model = String(worker?.model || "").trim();
       if (roleName && model) {
@@ -292,8 +297,8 @@ export async function loadConfig(): Promise<Config> {
       }
     }
 
-    const leadName = String(fileConfig?.roleRegistry?.leadWorker?.name || "").trim();
-    const leadModel = String(fileConfig?.roleRegistry?.leadWorker?.model || "").trim();
+    const leadName = String(roleRegistry.leadWorker?.name || "").trim();
+    const leadModel = String(roleRegistry.leadWorker?.model || "").trim();
     if (leadName && leadModel) {
       map[leadName] = leadModel;
     }

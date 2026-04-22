@@ -25,7 +25,28 @@ type AgentHandoffEvent = {
   recordedAt: string;
 };
 
-function initialState() {
+type AgentSessionSnapshot = {
+  agent: string;
+  cycleId: string | null;
+  status: string;
+  phase: "start" | "complete" | "failed";
+  model: string | null;
+  summary: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  failedAt: string | null;
+  updatedAt: string;
+};
+
+type AgentControlPlaneState = {
+  schemaVersion: number;
+  updatedAt: string | null;
+  sessions: Record<string, AgentSessionSnapshot>;
+  sessionEvents: AgentSessionEvent[];
+  handoffs: AgentHandoffEvent[];
+};
+
+function initialState(): AgentControlPlaneState {
   return {
     schemaVersion: 1,
     updatedAt: null,
@@ -38,12 +59,14 @@ function initialState() {
 export async function loadAgentControlPlane(config) {
   const stateDir = config?.paths?.stateDir || "state";
   const filePath = path.join(stateDir, AGENT_CONTROL_PLANE_FILE);
-  const raw = await readJson(filePath, initialState());
+  const raw = await readJson(filePath, initialState()) as Partial<AgentControlPlaneState> | null;
   const safe = raw && typeof raw === "object" ? raw : initialState();
   return {
     schemaVersion: 1,
     updatedAt: safe.updatedAt || null,
-    sessions: safe.sessions && typeof safe.sessions === "object" && !Array.isArray(safe.sessions) ? safe.sessions : {},
+    sessions: safe.sessions && typeof safe.sessions === "object" && !Array.isArray(safe.sessions)
+      ? safe.sessions
+      : {},
     sessionEvents: Array.isArray(safe.sessionEvents) ? safe.sessionEvents : [],
     handoffs: Array.isArray(safe.handoffs) ? safe.handoffs : [],
   };
@@ -74,7 +97,10 @@ export async function recordAgentSession(config, input: {
     recordedAt,
   };
 
-  const prev = state.sessions[agent] && typeof state.sessions[agent] === "object" ? state.sessions[agent] : {};
+  const prev: Partial<AgentSessionSnapshot> =
+    state.sessions[agent] && typeof state.sessions[agent] === "object"
+      ? state.sessions[agent]
+      : {};
   state.sessions[agent] = {
     agent,
     cycleId: event.cycleId,
@@ -135,11 +161,11 @@ export async function summarizeAgentControlPlane(config, limit = 25): Promise<{
   const safeLimit = Math.max(1, Math.floor(Number(limit) || 25));
   const recentSessions = state.sessionEvents.slice(-safeLimit);
   const activeAgents = Object.values(state.sessions || {})
-    .filter((session: any) => session && typeof session === "object" && String(session.phase || "") === "start")
-    .map((session: any) => String(session.agent || "").trim().toLowerCase())
+    .filter((session) => session && typeof session === "object" && String(session.phase || "") === "start")
+    .map((session) => String(session.agent || "").trim().toLowerCase())
     .filter(Boolean);
-  const completionCount = recentSessions.filter((entry: any) => String(entry?.phase || "") === "complete").length;
-  const failureCount = recentSessions.filter((entry: any) => String(entry?.phase || "") === "failed").length;
+  const completionCount = recentSessions.filter((entry) => String(entry?.phase || "") === "complete").length;
+  const failureCount = recentSessions.filter((entry) => String(entry?.phase || "") === "failed").length;
   const handoffCount = state.handoffs.slice(-safeLimit).length;
   const lastSessionAt = recentSessions.length > 0 ? String(recentSessions[recentSessions.length - 1]?.recordedAt || "") : "";
   const lastHandoffAt = handoffCount > 0 ? String(state.handoffs[state.handoffs.length - 1]?.recordedAt || "") : "";
