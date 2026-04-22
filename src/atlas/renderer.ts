@@ -349,7 +349,7 @@ export function renderAtlasHomeHtml(pageData: AtlasPageData): string {
   const content = `<section class="hero">
     <div class="eyebrow">Windows-first product shell</div>
     <h1>${escapeHtml(pageData.repoLabel)}</h1>
-    <p>ATLAS keeps the desktop workspace, worker roles, and current cycle aligned inside one dedicated product shell.</p>
+    <p>ATLAS keeps the desktop workspace, active sessions, and current cycle aligned inside one dedicated product shell.</p>
     <div class="hero__meta">
       <div>
         <div class="label">Current cycle</div>
@@ -377,7 +377,7 @@ export function renderAtlasHomeHtml(pageData: AtlasPageData): string {
     <article class="metric">
       <span>Total sessions</span>
       <strong>${escapeHtml(String(counts.total))}</strong>
-      <p>Roles tracked by the ATLAS state bridge.</p>
+      <p>Sessions tracked by the ATLAS state bridge.</p>
     </article>
     <article class="metric">
       <span>Active sessions</span>
@@ -417,7 +417,7 @@ export function renderAtlasSessionsHtml(pageData: AtlasPageData): string {
   const content = `<section class="hero">
     <div class="eyebrow">Session control</div>
     <h1>Worker sessions</h1>
-    <p>Every role is presented with its readiness state, branch context, and last recorded task so ATLAS can stay focused on a single target.</p>
+    <p>Every session is presented with its readiness state, branch context, and last recorded task so ATLAS can stay focused on a single target.</p>
     <div class="command-bar" aria-label="Windows launcher">
       <span class="label">Launch command</span>
       <code>${escapeHtml(pageData.shellCommand)}</code>
@@ -425,9 +425,9 @@ export function renderAtlasSessionsHtml(pageData: AtlasPageData): string {
   </section>
   <section class="panel">
     <div class="eyebrow">Session list</div>
-    <h2>${escapeHtml(String(sessions.length))} tracked role${sessions.length === 1 ? "" : "s"}</h2>
+    <h2>${escapeHtml(String(sessions.length))} tracked session${sessions.length === 1 ? "" : "s"}</h2>
     ${sessions.length === 0
-      ? `<div class="empty-state">No session state is available yet. Start ATLAS from the Windows shell to populate the first role handoff.</div>`
+      ? `<div class="empty-state">No session state is available yet. Start ATLAS from the Windows shell to populate the first session handoff.</div>`
       : `<div class="session-grid">${sessions.map((session) => `<article class="session-card ${sessionTone(session)}">
             <div class="eyebrow">Role</div>
             <h3>${escapeHtml(session.name)}</h3>

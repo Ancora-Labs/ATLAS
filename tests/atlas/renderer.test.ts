@@ -104,7 +104,7 @@ describe("atlas renderer", () => {
     assert.match(html, /<a class="nav-link" href="\/">/);
     assert.match(html, /<a class="nav-link" href="\/sessions" aria-current="page">/);
     assert.match(html, />Worker sessions</);
-    assert.match(html, />3 tracked roles</);
+    assert.match(html, />3 tracked sessions</);
     assert.match(html, />Athena</);
     assert.match(html, />Prometheus</);
     assert.match(html, />Hermes</);

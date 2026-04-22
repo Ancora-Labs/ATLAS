@@ -19,6 +19,8 @@
     "box:park": "node --import tsx scripts/box_park.ts",
     "box:once": "node --import tsx src/cli.ts once",
     "box:dashboard": "node --import tsx src/dashboard/live_dashboard.ts",
+    "atlas:start": "node --import tsx src/atlas/server.ts",
+    "atlas:open": "pwsh -NoProfile -Command \"$atlasPort = if ($env:ATLAS_PORT) { $env:ATLAS_PORT } else { '8788' }; Start-Process ('http://127.0.0.1:' + $atlasPort)\"",
     "prometheus:watch": "node --import tsx scripts/watch_prometheus_live.ts",
     "worker:run": "node --import tsx src/workers/run_task.ts",
     "doctor": "node --import tsx src/cli.ts doctor"

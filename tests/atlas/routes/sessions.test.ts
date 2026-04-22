@@ -5,7 +5,7 @@ import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, it } from "node:test";
 
-import { handleAtlasHomeRequest } from "../../../src/atlas/routes/home.ts";
+import { handleAtlasSessionsRequest } from "../../../src/atlas/routes/sessions.ts";
 
 interface ResponseCapture {
   readonly headersSent: boolean;
@@ -15,7 +15,7 @@ interface ResponseCapture {
 }
 
 function createTempRoot(): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), "atlas-home-route-"));
+  return fs.mkdtemp(path.join(os.tmpdir(), "atlas-sessions-route-"));
 }
 
 function createRequest(method = "GET"): IncomingMessage {
@@ -65,20 +65,20 @@ async function writeStateFixture(
   await fs.writeFile(path.join(stateDir, "pipeline_progress.json"), JSON.stringify({
     stage: "workers_running",
     stageLabel: "Workers Running",
-    percent: 82,
-    detail: "ATLAS is coordinating the current repo session.",
+    percent: 84,
+    detail: "ATLAS is reviewing session readiness.",
     steps: [],
-    updatedAt: "2026-04-22T08:15:00.000Z",
+    updatedAt: "2026-04-22T08:25:00.000Z",
     startedAt: "cycle-1",
   }), "utf8");
   await fs.writeFile(path.join(stateDir, "worker_cycle_artifacts.json"), JSON.stringify({
     schemaVersion: 1,
-    updatedAt: "2026-04-22T08:15:00.000Z",
+    updatedAt: "2026-04-22T08:25:00.000Z",
     latestCycleId: "cycle-1",
     cycles: {
       "cycle-1": {
         cycleId: "cycle-1",
-        updatedAt: "2026-04-22T08:15:00.000Z",
+        updatedAt: "2026-04-22T08:25:00.000Z",
         status: "in_progress",
         workerSessions,
         workerActivity: {},
@@ -89,80 +89,70 @@ async function writeStateFixture(
   return stateDir;
 }
 
-describe("atlas home route", () => {
-  it("returns ATLAS product HTML and derives resume readiness from resumable sessions", async () => {
+describe("atlas sessions route", () => {
+  it("returns product-language session HTML with readiness derived from worker state", async () => {
     const tempRoot = await createTempRoot();
 
     try {
       const stateDir = await writeStateFixture(tempRoot, {
+        Atlas: {
+          role: "Atlas",
+          status: "idle",
+          lastTask: "",
+          lastActiveAt: "2026-04-22T08:10:00.000Z",
+        },
         "quality-worker": {
           role: "quality-worker",
-          status: "working",
-          lastTask: "Validate the ATLAS route coverage",
-          lastActiveAt: "2026-04-22T08:14:00.000Z",
+          status: "blocked",
+          lastTask: "Waiting for review feedback",
+          lastActiveAt: "2026-04-22T08:24:00.000Z",
         },
-        "governance-worker": {
-          role: "governance-worker",
-          status: "done",
-          lastTask: "Approve the current change set",
-          lastActiveAt: "2026-04-22T08:10:00.000Z",
+        "integration-worker": {
+          role: "integration-worker",
+          status: "partial",
+          lastTask: "Resume the standalone server patch",
+          lastActiveAt: "2026-04-22T08:20:00.000Z",
+          createdPRs: ["https://example.com/pr/1"],
+          filesTouched: ["src/atlas/server.ts"],
         },
       });
       const req = createRequest();
       const res = createResponseCapture();
 
-      await handleAtlasHomeRequest(req, res, {
+      await handleAtlasSessionsRequest(req, res, {
         stateDir,
         targetRepo: "Ancora-Labs/Box",
-        hostLabel: "Windows 11 workstation",
         shellCommand: ".\\ATLAS.cmd",
       });
 
       assert.equal(res.statusCode, 200);
       assert.equal(res.headers["content-type"], "text/html; charset=utf-8");
-      assert.match(res.body, /<title>ATLAS Home<\/title>/);
-      assert.match(res.body, /ATLAS Desktop Session Control/);
-      assert.match(res.body, /active sessions, and current cycle aligned/i);
-      assert.match(res.body, />Ready to resume</);
-      assert.match(res.body, />Resume session flow</);
-      assert.doesNotMatch(res.body, /quality-worker|governance-worker/);
+      assert.match(res.body, /<title>ATLAS Sessions<\/title>/);
+      assert.match(res.body, />Worker sessions</);
+      assert.match(res.body, />ATLAS control</);
+      assert.match(res.body, />Quality lane</);
+      assert.match(res.body, />Integration lane</);
+      assert.match(res.body, />Needs attention · Needs your input</);
+      assert.match(res.body, />Ready · Ready to continue</);
+      assert.doesNotMatch(res.body, /quality-worker|integration-worker/);
       assert.doesNotMatch(res.body, /BOX Mission Control|dashboard/i);
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
 
-  it("[NEGATIVE] falls back to start readiness when no session can be resumed", async () => {
+  it("[NEGATIVE] rejects unsupported request methods before rendering session output", async () => {
     const tempRoot = await createTempRoot();
 
     try {
-      const stateDir = await writeStateFixture(tempRoot, {
-        "quality-worker": {
-          role: "quality-worker",
-          status: "done",
-          lastTask: "Closed the verification pass",
-          lastActiveAt: "2026-04-22T08:05:00.000Z",
-        },
-        "integration-worker": {
-          role: "integration-worker",
-          status: "offline",
-          lastTask: "Paused external checks",
-          lastActiveAt: "2026-04-22T08:00:00.000Z",
-        },
-      });
-      const req = createRequest();
+      const stateDir = await writeStateFixture(tempRoot, {});
+      const req = createRequest("POST");
       const res = createResponseCapture();
 
-      await handleAtlasHomeRequest(req, res, {
-        stateDir,
-        targetRepo: "Ancora-Labs/Box",
-      });
+      await handleAtlasSessionsRequest(req, res, { stateDir });
 
-      assert.equal(res.statusCode, 200);
-      assert.match(res.body, />Ready to start</);
-      assert.match(res.body, />Open sessions</);
-      assert.match(res.body, /No resumable session is active yet/);
-      assert.doesNotMatch(res.body, /quality-worker|integration-worker/);
+      assert.equal(res.statusCode, 405);
+      assert.match(res.body, /Method Not Allowed/);
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }

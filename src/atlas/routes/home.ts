@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { renderAtlasHomeHtml, type AtlasPageData } from "../renderer.js";
 import { listAtlasSessions, type AtlasSessionDto } from "../state_bridge.js";
 import { readPipelineProgress } from "../../core/pipeline_progress.js";
+import { normalizeWorkerName } from "../../core/role_registry.js";
 
 export interface AtlasHomeRouteOptions {
   stateDir: string;
@@ -18,8 +19,8 @@ function normalizeRepoLabel(targetRepo?: string): string {
 
 function sortSessions(sessions: AtlasSessionDto[]): AtlasSessionDto[] {
   return [...sessions].sort((left, right) => {
-    const leftIsAtlas = left.name === "Atlas" ? 0 : 1;
-    const rightIsAtlas = right.name === "Atlas" ? 0 : 1;
+    const leftIsAtlas = normalizeWorkerName(left.role) === "atlas" ? 0 : 1;
+    const rightIsAtlas = normalizeWorkerName(right.role) === "atlas" ? 0 : 1;
     if (leftIsAtlas !== rightIsAtlas) {
       return leftIsAtlas - rightIsAtlas;
     }
