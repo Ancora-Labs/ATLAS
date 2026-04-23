@@ -105,3 +105,9 @@ of institutional learning under iterative constraints.
 Its objective is not one-shot perfection; its objective is progressive gains in
 robustness, intelligence, and autonomy across successive operational cycles.
 
+## ATLAS Desktop Shell
+
+ATLAS now launches inside a native Electron window instead of opening a localhost page in the default browser. The desktop shell performs one English clarification pass, stores a session-bound clarification packet under `state\atlas\desktop_sessions\`, and only then hands the window over to the existing ATLAS home and session surfaces.
+
+Use `ATLAS.cmd start` or `npm run atlas:open` to launch the desktop shell, `npm run atlas:desktop:build` to transpile the Electron entrypoints, and `npm run atlas:desktop:package` for the internal Windows package directory build.
+

@@ -15,6 +15,12 @@ export interface AtlasPageData {
   sessions: AtlasSessionDto[];
 }
 
+export interface AtlasOnboardingGateData {
+  repoLabel: string;
+  hostLabel: string;
+  shellCommand: string;
+}
+
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -514,4 +520,76 @@ export function renderAtlasSessionsHtml(pageData: AtlasPageData): string {
   </section>`;
 
   return renderShell(pageData, "sessions", content);
+}
+
+export function renderAtlasOnboardingGateHtml(pageData: AtlasOnboardingGateData): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ATLAS onboarding required</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a1017;
+      --panel: rgba(11, 18, 26, 0.95);
+      --line: rgba(132, 187, 255, 0.18);
+      --text: #f3f7fb;
+      --muted: #a5b5c8;
+      --accent: #88baff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      color: var(--text);
+      font-family: "Segoe UI", Inter, sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(74, 143, 255, 0.16), transparent 24%),
+        linear-gradient(180deg, #0a1017 0%, #101925 100%);
+    }
+    article {
+      width: min(760px, 100%);
+      padding: 28px;
+      border-radius: 22px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.32);
+    }
+    h1, p { margin: 0; }
+    p + p { margin-top: 12px; }
+    .eyebrow {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 12px;
+    }
+    code {
+      display: inline-block;
+      margin-top: 14px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(8, 14, 21, 0.62);
+      color: var(--accent);
+      font-family: Consolas, "Cascadia Code", monospace;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+  <article aria-label="ATLAS onboarding gate">
+    <div class="eyebrow">Desktop onboarding required</div>
+    <h1>Finish clarification in the ATLAS desktop window</h1>
+    <p>${escapeHtml(pageData.repoLabel)} is blocked from session handoff until the current desktop session stores a clarification packet.</p>
+    <p>Return to the native ATLAS window on ${escapeHtml(pageData.hostLabel)} and complete the English onboarding prompt before opening planning or session surfaces.</p>
+    <code>${escapeHtml(pageData.shellCommand)}</code>
+  </article>
+</body>
+</html>`;
 }
