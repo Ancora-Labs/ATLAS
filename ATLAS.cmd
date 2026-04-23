@@ -42,20 +42,7 @@ popd >nul
 exit /b %ATLAS_EXIT%
 
 :start
-powershell -NoProfile -Command "$uri = 'http://127.0.0.1:' + $env:ATLAS_PORT + '/'; try { $response = Invoke-WebRequest -UseBasicParsing -Uri $uri -TimeoutSec 2; if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) { exit 0 } } catch { exit 1 }"
-if not errorlevel 1 (
-  echo [ATLAS] Dedicated ATLAS server already responding on port %ATLAS_PORT%.
-  goto :open
-)
-
-echo [ATLAS] Starting the dedicated ATLAS server on port %ATLAS_PORT%...
-start "ATLAS Server" cmd /c npm run atlas:start
-powershell -NoProfile -Command "$uri = 'http://127.0.0.1:' + $env:ATLAS_PORT + '/'; $deadline = (Get-Date).AddSeconds(20); while ((Get-Date) -lt $deadline) { try { $response = Invoke-WebRequest -UseBasicParsing -Uri $uri -TimeoutSec 2; if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) { exit 0 } } catch { }; Start-Sleep -Milliseconds 500 }; exit 1"
-if errorlevel 1 (
-  echo [ATLAS] The dedicated ATLAS server did not become ready on port %ATLAS_PORT%.
-  popd >nul
-  exit /b 1
-)
+echo [ATLAS] Launching the native ATLAS desktop shell...
 
 :open
 call npm run atlas:open

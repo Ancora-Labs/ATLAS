@@ -213,6 +213,76 @@ describe("atlas server", () => {
     assert.doesNotMatch(sessionsResponse.text, /BOX Mission Control/i);
   });
 
+  it("blocks home handoff until the session-bound clarification packet exists and exposes the onboarding API", async () => {
+    const gatedRoot = await createTempRoot();
+    const gatedStateDir = path.join(gatedRoot, "state");
+    await fs.mkdir(gatedStateDir, { recursive: true });
+    await fs.writeFile(path.join(gatedStateDir, "worker_cycle_artifacts.json"), JSON.stringify({
+      schemaVersion: 1,
+      updatedAt: "2026-04-21T12:00:00.000Z",
+      latestCycleId: "cycle-1",
+      cycles: {
+        "cycle-1": {
+          cycleId: "cycle-1",
+          updatedAt: "2026-04-21T12:00:00.000Z",
+          status: "in_progress",
+          workerSessions: {},
+          workerActivity: {},
+          completedTaskIds: [],
+        },
+      },
+    }), "utf8");
+    await fs.writeFile(path.join(gatedStateDir, "pipeline_progress.json"), JSON.stringify({
+      stage: "idle",
+      stageLabel: "Idle",
+      percent: 0,
+      detail: "Waiting for onboarding",
+      steps: [],
+      updatedAt: "2026-04-21T12:00:00.000Z",
+      startedAt: "cycle-1",
+    }), "utf8");
+
+    const gatedPort = await getFreePort();
+    const gatedServer = await startAtlasServer({
+      port: gatedPort,
+      stateDir: gatedStateDir,
+      targetRepo: "Ancora-Labs/ATLAS",
+      desktopSessionId: "desktop-session-1",
+      clarificationRunner: async () => JSON.stringify({
+        summary: "ATLAS should capture one clarification packet before opening the session surface.",
+        openQuestions: ["What should the first planning pass optimize for?"],
+        executionNotes: ["Persist the packet, then unlock the home surface."],
+      }),
+    });
+
+    try {
+      const blockedHome = await requestText(gatedPort, "/");
+      assert.equal(blockedHome.status, 412);
+      assert.match(blockedHome.text, /Finish clarification in the ATLAS desktop window/i);
+
+      const onboardingStatus = await requestText(gatedPort, "/api/onboarding/status");
+      assert.equal(onboardingStatus.status, 200);
+      assert.match(onboardingStatus.text, /"ready":false/);
+
+      const clarifyResponse = await requestJson(gatedPort, "/api/onboarding/clarify", {
+        objective: "Launch ATLAS in a native desktop window with one clarification pass.",
+      });
+      assert.equal(clarifyResponse.status, 200);
+      assert.match(clarifyResponse.text, /"ready":true/);
+
+      const unblockedHome = await requestText(gatedPort, "/");
+      assert.equal(unblockedHome.status, 200);
+      assert.match(unblockedHome.text, /ATLAS Desktop Session Control/);
+    } finally {
+      if (gatedServer.listening) {
+        await new Promise<void>((resolve) => {
+          gatedServer.close(() => resolve());
+        });
+      }
+      await fs.rm(gatedRoot, { recursive: true, force: true });
+    }
+  });
+
   it("accepts lifecycle API mutations without breaking the dedicated surface contract", async () => {
     const response = await requestJson(port, "/api/lifecycle", {
       action: "pause",

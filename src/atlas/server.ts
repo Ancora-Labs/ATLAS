@@ -2,35 +2,95 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { readAtlasClarificationStatus, type AtlasClarificationRunner } from "./clarification.js";
 import { handleAtlasHomeRequest, type AtlasHomeRouteOptions } from "./routes/home.js";
 import { handleAtlasLifecycleRequest } from "./routes/lifecycle.js";
+import { handleAtlasOnboardingRequest } from "./routes/onboarding.js";
 import { handleAtlasSessionsRequest } from "./routes/sessions.js";
+import { renderAtlasOnboardingGateHtml } from "./renderer.js";
 
 export const ATLAS_DEFAULT_PORT = 8788;
 
 export interface AtlasServerOptions extends Partial<AtlasHomeRouteOptions> {
   port?: number;
+  desktopSessionId?: string;
+  clarificationCommand?: string;
+  clarificationRunner?: AtlasClarificationRunner;
 }
 
-function resolveAtlasServerOptions(options: AtlasServerOptions = {}): Required<AtlasServerOptions> {
-  const rawPort = Number(options.port ?? process.env.ATLAS_PORT ?? process.env.BOX_ATLAS_PORT ?? ATLAS_DEFAULT_PORT);
+interface ResolvedAtlasServerOptions extends Required<AtlasHomeRouteOptions> {
+  port: number;
+  desktopSessionId: string;
+  clarificationCommand: string;
+  clarificationRunner?: AtlasClarificationRunner;
+}
+
+function resolveAtlasServerOptions(options: AtlasServerOptions = {}): ResolvedAtlasServerOptions {
+  const explicitPort = options.port;
+  const rawPort = Number(explicitPort ?? process.env.ATLAS_PORT ?? process.env.BOX_ATLAS_PORT ?? ATLAS_DEFAULT_PORT);
   return {
-    port: Number.isInteger(rawPort) && rawPort > 0 ? rawPort : ATLAS_DEFAULT_PORT,
+    port: explicitPort === 0
+      ? 0
+      : (Number.isInteger(rawPort) && rawPort > 0 ? rawPort : ATLAS_DEFAULT_PORT),
     stateDir: String(options.stateDir || path.join(process.cwd(), "state")),
     targetRepo: String(options.targetRepo || process.env.TARGET_REPO || ""),
     hostLabel: String(options.hostLabel || process.env.BOX_ATLAS_HOST_LABEL || "Windows host"),
     shellCommand: String(options.shellCommand || process.env.BOX_ATLAS_SHELL_COMMAND || ".\\ATLAS.cmd"),
+    desktopSessionId: String(options.desktopSessionId || "").trim(),
+    clarificationCommand: String(options.clarificationCommand || "").trim(),
+    clarificationRunner: options.clarificationRunner,
   };
+}
+
+async function shouldBlockAtlasSurface(
+  pathname: string,
+  options: ResolvedAtlasServerOptions,
+): Promise<boolean> {
+  if (!options.desktopSessionId) return false;
+  if (!["/", "/sessions"].includes(pathname)) return false;
+
+  const status = await readAtlasClarificationStatus(options.stateDir, options.desktopSessionId);
+  return !status.ready;
 }
 
 async function routeAtlasRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  options: Required<AtlasServerOptions>,
+  options: ResolvedAtlasServerOptions,
 ): Promise<void> {
   const url = new URL(req.url || "/", "http://127.0.0.1");
 
   try {
+    if (url.pathname === "/api/onboarding/status" || url.pathname === "/api/onboarding/clarify") {
+      if (!options.desktopSessionId) {
+        res.writeHead(409, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({
+          ok: false,
+          error: "ATLAS onboarding is not bound to a desktop session.",
+          code: "desktop_session_missing",
+        }));
+        return;
+      }
+      await handleAtlasOnboardingRequest(req, res, {
+        stateDir: options.stateDir,
+        sessionId: options.desktopSessionId,
+        targetRepo: options.targetRepo,
+        clarificationCommand: options.clarificationCommand,
+        clarificationRunner: options.clarificationRunner,
+      });
+      return;
+    }
+
+    if (await shouldBlockAtlasSurface(url.pathname, options)) {
+      res.writeHead(412, { "content-type": "text/html; charset=utf-8" });
+      res.end(renderAtlasOnboardingGateHtml({
+        repoLabel: options.targetRepo || "ATLAS desktop session",
+        hostLabel: options.hostLabel,
+        shellCommand: options.shellCommand,
+      }));
+      return;
+    }
+
     if (url.pathname === "/") {
       await handleAtlasHomeRequest(req, res, options);
       return;

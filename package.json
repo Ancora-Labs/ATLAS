@@ -21,7 +21,10 @@
     "box:dashboard": "node --import tsx src/dashboard/live_dashboard.ts",
     "atlas:start": "node --import tsx src/atlas/server.ts",
     "atlas:ctl": "node --import tsx src/atlas/lifecycle.ts",
-    "atlas:open": "pwsh -NoProfile -Command \"$atlasPort = if ($env:ATLAS_PORT) { $env:ATLAS_PORT } else { '8788' }; Start-Process ('http://127.0.0.1:' + $atlasPort)\"",
+    "atlas:desktop:build": "tsc -p tsconfig.electron.json",
+    "atlas:desktop": "npm run atlas:desktop:build && electron .electron-build\\electron\\main.js",
+    "atlas:desktop:package": "npm run atlas:desktop:build && electron-builder --dir --win",
+    "atlas:open": "npm run atlas:desktop",
     "prometheus:watch": "node --import tsx scripts/watch_prometheus_live.ts",
     "worker:run": "node --import tsx src/workers/run_task.ts",
     "doctor": "node --import tsx src/cli.ts doctor"
@@ -36,6 +39,8 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.5.0",
+    "electron": "^36.3.2",
+    "electron-builder": "^26.0.12",
     "eslint": "^10.0.3",
     "globals": "^17.4.0",
     "jiti": "^2.6.1",
