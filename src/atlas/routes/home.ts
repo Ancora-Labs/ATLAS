@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { renderAtlasHomeHtml, type AtlasPageData } from "../renderer.js";
+import { readAtlasClarificationStatus } from "../clarification.js";
 import { listAtlasSessions, type AtlasSessionDto } from "../state_bridge.js";
 import { readPipelineProgress } from "../../core/pipeline_progress.js";
 import { normalizeWorkerName } from "../../core/role_registry.js";
@@ -10,6 +13,12 @@ export interface AtlasHomeRouteOptions {
   targetRepo?: string;
   hostLabel?: string;
   shellCommand?: string;
+  desktopSessionId?: string;
+}
+
+interface AtlasDesktopBuildInfo {
+  sessionId?: unknown;
+  builtAt?: unknown;
 }
 
 function normalizeRepoLabel(targetRepo?: string): string {
@@ -26,6 +35,24 @@ function sortSessions(sessions: AtlasSessionDto[]): AtlasSessionDto[] {
     }
     return left.name.localeCompare(right.name);
   });
+}
+
+async function readDesktopBuildInfo(): Promise<{ sessionId: string; builtAt: string | null; }> {
+  const buildInfoPath = path.join(process.cwd(), "desktop-build-info.json");
+  try {
+    const raw = await fs.readFile(buildInfoPath, "utf8");
+    const parsed = JSON.parse(raw) as AtlasDesktopBuildInfo;
+    return {
+      sessionId: String(parsed?.sessionId || "unknown-session").trim() || "unknown-session",
+        builtAt: typeof parsed?.builtAt === "string" && parsed.builtAt.trim() ? parsed.builtAt.trim() : null,
+    };
+  } catch (error) {
+    console.error(`[atlas] failed to read desktop build info: ${String((error as Error)?.message || error)}`);
+    return {
+      sessionId: "unknown-session",
+      builtAt: null,
+    };
+  }
 }
 
 export function deriveAtlasHomeReadiness(
@@ -50,10 +77,59 @@ export function writeAtlasHtmlResponse(res: ServerResponse, html: string): void 
   res.end(html);
 }
 
+function renderClarificationRequiredHtml(): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ATLAS Home</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080808;
+      --panel: #151515;
+      --line: rgba(255, 255, 255, 0.12);
+      --text: #f5f5f5;
+      --muted: #c6c6c6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(180deg, #020202 0%, var(--bg) 100%);
+      color: var(--text);
+      font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
+      padding: 24px;
+    }
+    main {
+      width: min(760px, 100%);
+      padding: 28px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: var(--panel);
+    }
+    h1, p { margin: 0; }
+    p { margin-top: 14px; color: var(--muted); line-height: 1.7; }
+  </style>
+</head>
+<body>
+  <main aria-label="ATLAS clarification gate">
+    <p>Desktop onboarding</p>
+    <h1>Finish clarification in the ATLAS desktop window.</h1>
+    <p>The main home surface opens after the first clarification packet is recorded for this desktop session.</p>
+  </main>
+</body>
+</html>`;
+}
+
 export async function buildAtlasPageData(options: AtlasHomeRouteOptions): Promise<AtlasPageData> {
   const pipelineProgress = await readPipelineProgress({ paths: { stateDir: options.stateDir } });
   const sessions = await listAtlasSessions({ stateDir: options.stateDir });
   const sortedSessions = sortSessions(Object.values(sessions));
+  const buildInfo = await readDesktopBuildInfo();
 
   return {
     title: "ATLAS Home",
@@ -64,6 +140,8 @@ export async function buildAtlasPageData(options: AtlasHomeRouteOptions): Promis
     pipelineDetail: String(pipelineProgress?.detail || "System ready"),
     pipelinePercent: Number(pipelineProgress?.percent || 0),
     updatedAt: typeof pipelineProgress?.updatedAt === "string" ? pipelineProgress.updatedAt : null,
+    buildSessionId: buildInfo.sessionId,
+    buildTimestamp: buildInfo.builtAt,
     ...deriveAtlasHomeReadiness(sortedSessions),
     sessions: sortedSessions,
   };
@@ -81,6 +159,16 @@ export async function handleAtlasHomeRequest(
   }
 
   try {
+    const desktopSessionId = String(options.desktopSessionId || "").trim();
+    if (desktopSessionId) {
+      const clarificationStatus = await readAtlasClarificationStatus(options.stateDir, desktopSessionId);
+      if (!clarificationStatus.ready) {
+        res.writeHead(412, { "content-type": "text/html; charset=utf-8" });
+        res.end(renderClarificationRequiredHtml());
+        return;
+      }
+    }
+
     const pageData = await buildAtlasPageData(options);
     writeAtlasHtmlResponse(res, renderAtlasHomeHtml(pageData));
   } catch (error) {

@@ -201,15 +201,17 @@ describe("atlas server", () => {
 
     assert.equal(homeResponse.status, 200);
     assert.match(homeResponse.text, /<title>ATLAS Home<\/title>/);
-    assert.match(homeResponse.text, /ATLAS Desktop Session Control/);
+    assert.match(homeResponse.text, /ATLAS keeps the live delivery state in the desktop window\./);
     assert.match(homeResponse.text, /Ancora-Labs\/ATLAS/);
+    assert.match(homeResponse.text, />Stop runtime</);
 
     assert.equal(sessionsResponse.status, 200);
     assert.match(sessionsResponse.text, /<title>ATLAS Sessions<\/title>/);
-    assert.match(sessionsResponse.text, />Worker sessions</);
+    assert.match(sessionsResponse.text, />Tracked sessions</);
     assert.match(sessionsResponse.text, />ATLAS control</);
     assert.match(sessionsResponse.text, />Quality lane</);
     assert.match(sessionsResponse.text, />2 tracked sessions</);
+    assert.match(sessionsResponse.text, />Pause lane</);
     assert.doesNotMatch(sessionsResponse.text, /BOX Mission Control/i);
   });
 
@@ -272,7 +274,7 @@ describe("atlas server", () => {
 
       const unblockedHome = await requestText(gatedPort, "/");
       assert.equal(unblockedHome.status, 200);
-      assert.match(unblockedHome.text, /ATLAS Desktop Session Control/);
+      assert.match(unblockedHome.text, /ATLAS keeps the live delivery state in the desktop window\./);
     } finally {
       if (gatedServer.listening) {
         await new Promise<void>((resolve) => {

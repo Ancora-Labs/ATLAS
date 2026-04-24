@@ -128,14 +128,18 @@ describe("atlas sessions route", () => {
       assert.equal(res.statusCode, 200);
       assert.equal(res.headers["content-type"], "text/html; charset=utf-8");
       assert.match(res.body, /<title>ATLAS Sessions<\/title>/);
-      assert.match(res.body, />Worker sessions</);
+      assert.match(res.body, />Tracked sessions</);
+      assert.match(res.body, /Session ledger stays aligned with the desktop lifecycle\./);
       assert.match(res.body, />ATLAS control</);
       assert.match(res.body, />Quality lane</);
       assert.match(res.body, />Integration lane</);
+      assert.match(res.body, />3 tracked sessions</);
+      assert.match(res.body, />2 resumable</);
       assert.match(res.body, />Needs attention · Needs your input</);
       assert.match(res.body, />Ready · Ready to continue</);
       assert.match(res.body, />Pause lane</);
       assert.match(res.body, />Archive session</);
+      assert.match(res.body, /method="post" action="\/lifecycle"/);
       assert.doesNotMatch(res.body, /BOX Mission Control|dashboard/i);
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

@@ -121,12 +121,13 @@ describe("atlas home route", () => {
       assert.equal(res.statusCode, 200);
       assert.equal(res.headers["content-type"], "text/html; charset=utf-8");
       assert.match(res.body, /<title>ATLAS Home<\/title>/);
-      assert.match(res.body, /ATLAS Desktop Session Control/);
-      assert.match(res.body, /active sessions, and current cycle aligned/i);
+      assert.match(res.body, /Native desktop workspace/);
+      assert.match(res.body, /ATLAS keeps the live delivery state in the desktop window\./);
+      assert.match(res.body, /monochrome, desktop-first, and trustworthy/i);
       assert.match(res.body, />Ready to resume</);
       assert.match(res.body, />Resume session flow</);
-      assert.match(res.body, />Resume BOX runtime</);
-      assert.match(res.body, />Stop BOX runtime</);
+      assert.match(res.body, />Stop runtime</);
+      assert.match(res.body, />Total sessions<\/span>\s*<strong>2<\/strong>/);
       assert.doesNotMatch(res.body, /quality-worker|governance-worker/);
       assert.doesNotMatch(res.body, /BOX Mission Control|dashboard/i);
     } finally {

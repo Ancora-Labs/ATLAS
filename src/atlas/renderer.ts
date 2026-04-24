@@ -9,16 +9,23 @@ export interface AtlasPageData {
   pipelineDetail: string;
   pipelinePercent: number;
   updatedAt: string | null;
+  buildSessionId: string;
+  buildTimestamp: string | null;
   homeReadinessHeading: string;
   homeReadinessDetail: string;
   homePrimaryActionLabel: string;
   sessions: AtlasSessionDto[];
 }
 
-export interface AtlasOnboardingGateData {
-  repoLabel: string;
-  hostLabel: string;
-  shellCommand: string;
+type AtlasView = "home" | "sessions";
+
+interface AtlasSessionCounts {
+  total: number;
+  active: number;
+  needsInput: number;
+  completed: number;
+  resumable: number;
+  paused: number;
 }
 
 function escapeHtml(value: unknown): string {
@@ -43,553 +50,586 @@ function formatTimestamp(value: string | null): string {
   return `${year}-${month}-${day} ${hour}:${minute} UTC`;
 }
 
-function normalizeStatus(status: string): string {
-  return String(status || "idle").trim().toLowerCase();
-}
-
 function clampPercent(value: number): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 0;
   return Math.max(0, Math.min(100, numeric));
 }
 
-function countSessions(sessions: AtlasSessionDto[]) {
-  const statuses = sessions.map((session) => normalizeStatus(session.status));
+function getPrimarySession(sessions: AtlasSessionDto[]): AtlasSessionDto | null {
+  return sessions.find((session) => session.status === "working")
+    || sessions.find((session) => session.needsInput)
+    || sessions.find((session) => session.isResumable)
+    || sessions[0]
+    || null;
+}
+
+function countSessions(sessions: AtlasSessionDto[]): AtlasSessionCounts {
+  return sessions.reduce<AtlasSessionCounts>((counts, session) => ({
+    total: counts.total + 1,
+    active: counts.active + (session.status === "working" ? 1 : 0),
+    needsInput: counts.needsInput + (session.needsInput ? 1 : 0),
+    completed: counts.completed + (session.status === "done" ? 1 : 0),
+    resumable: counts.resumable + (session.isResumable ? 1 : 0),
+    paused: counts.paused + (session.isPaused ? 1 : 0),
+  }), {
+    total: 0,
+    active: 0,
+    needsInput: 0,
+    completed: 0,
+    resumable: 0,
+    paused: 0,
+  });
+}
+
+function getSessionSummary(session: AtlasSessionDto | null): { heading: string; detail: string; branch: string; status: string; } {
+  if (!session) {
+    return {
+      heading: "No live session focus yet",
+      detail: "ATLAS is ready to open the next tracked session when state arrives.",
+      branch: "No branch recorded",
+      status: "Waiting for session state",
+    };
+  }
+
   return {
-    total: sessions.length,
-    active: statuses.filter((status) => status === "working").length,
-    needsInput: sessions.filter((session) => session.needsInput).length,
-    completed: statuses.filter((status) => status === "done").length,
+    heading: session.name,
+    detail: session.lastTask || "Waiting for the next product-facing task.",
+    branch: session.currentBranch || "No branch recorded",
+    status: `${session.statusLabel} · ${session.readinessLabel}`,
   };
 }
 
-function renderShell(pageData: AtlasPageData, activeView: "home" | "sessions", content: string): string {
+function renderNavigation(view: AtlasView): string {
+  return `<nav class="nav" aria-label="ATLAS pages">
+    <a class="nav-link" href="/"${view === "home" ? ' aria-current="page"' : ""}>Home</a>
+    <a class="nav-link" href="/sessions"${view === "sessions" ? ' aria-current="page"' : ""}>Sessions</a>
+  </nav>`;
+}
+
+function renderMetricCard(label: string, value: string | number): string {
+  return `<article class="metric-card" aria-label="${escapeHtml(label)}">
+    <span>${escapeHtml(label)}</span>
+    <strong>${escapeHtml(String(value))}</strong>
+  </article>`;
+}
+
+function renderLifecycleForm(
+  label: string,
+  action: "pause" | "resume" | "archive" | "stop",
+  options: { role?: string | null; returnTo: string; tone?: "primary" | "secondary"; },
+): string {
+  return `<form class="action-form" method="post" action="/lifecycle">
+    <input type="hidden" name="action" value="${escapeHtml(action)}" />
+    ${options.role ? `<input type="hidden" name="role" value="${escapeHtml(options.role)}" />` : ""}
+    <input type="hidden" name="returnTo" value="${escapeHtml(options.returnTo)}" />
+    <button class="action-button ${options.tone || "secondary"}" type="submit">${escapeHtml(label)}</button>
+  </form>`;
+}
+
+function renderSessionActions(session: AtlasSessionDto): string {
+  const actions: string[] = [];
+
+  if (session.lane) {
+    actions.push(session.isPaused
+      ? renderLifecycleForm("Resume lane", "resume", { role: session.role, returnTo: "/sessions" })
+      : renderLifecycleForm("Pause lane", "pause", { role: session.role, returnTo: "/sessions" }));
+  }
+
+  if (session.canArchive) {
+    actions.push(renderLifecycleForm("Archive session", "archive", {
+      role: session.role,
+      returnTo: "/sessions",
+    }));
+  }
+
+  return actions.length > 0
+    ? `<div class="action-row">${actions.join("")}</div>`
+    : '<p class="support-copy">No lifecycle action is available for this session yet.</p>';
+}
+
+function renderStatusTags(session: AtlasSessionDto): string {
+  const chips = [
+    `<span class="chip">${escapeHtml(session.statusLabel)} · ${escapeHtml(session.readinessLabel)}</span>`,
+  ];
+
+  if (session.isResumable) {
+    chips.push('<span class="chip">Resumable</span>');
+  }
+
+  if (session.isPaused) {
+    chips.push('<span class="chip">Paused lane</span>');
+  }
+
+  if (session.pullRequestCount > 0) {
+    chips.push(`<span class="chip">${escapeHtml(String(session.pullRequestCount))} PR${session.pullRequestCount === 1 ? "" : "s"}</span>`);
+  }
+
+  return chips.join("");
+}
+
+function renderSessionCard(session: AtlasSessionDto): string {
+  return `<article class="session-card" aria-label="${escapeHtml(session.name)} session">
+    <div class="session-card-header">
+      <div>
+        <h3>${escapeHtml(session.name)}</h3>
+        <p class="support-copy">${escapeHtml(session.lastTask || "Waiting for the next product-facing task.")}</p>
+      </div>
+      <div class="chip-row">${renderStatusTags(session)}</div>
+    </div>
+    <dl class="definition-grid">
+      <div>
+        <dt>Role</dt>
+        <dd>${escapeHtml(session.role)}</dd>
+      </div>
+      <div>
+        <dt>Branch</dt>
+        <dd>${escapeHtml(session.currentBranch || "No branch recorded")}</dd>
+      </div>
+      <div>
+        <dt>Last active</dt>
+        <dd>${escapeHtml(formatTimestamp(session.lastActiveAt))}</dd>
+      </div>
+      <div>
+        <dt>Files touched</dt>
+        <dd>${escapeHtml(String(session.touchedFileCount))}</dd>
+      </div>
+    </dl>
+    ${renderSessionActions(session)}
+  </article>`;
+}
+
+function renderHomeContent(pageData: AtlasPageData, counts: AtlasSessionCounts): string {
+  const sessionSummary = getSessionSummary(getPrimarySession(pageData.sessions));
+
+  return `<section class="content-grid">
+    <article class="panel hero-panel" aria-label="Desktop overview">
+      <div class="eyebrow">Desktop overview</div>
+      <h1>ATLAS keeps the live delivery state in the desktop window.</h1>
+      <p class="lead">The packaged shell stays monochrome, desktop-first, and trustworthy: repo state, lifecycle status, and resumable work are surfaced directly without drifting back into a browser control surface.</p>
+      <div class="chip-row" aria-label="Current runtime status">
+        <span class="chip">Stage: ${escapeHtml(pageData.pipelineStageLabel)}</span>
+        <span class="chip">Updated: ${escapeHtml(formatTimestamp(pageData.updatedAt))}</span>
+        <span class="chip">Packaged: ${escapeHtml(formatTimestamp(pageData.buildTimestamp))}</span>
+      </div>
+      <div class="command-block">
+        <span>Launch entrypoint</span>
+        <code>${escapeHtml(pageData.shellCommand)}</code>
+      </div>
+      <div class="cta-row">
+        <a class="primary-link" href="/sessions">${escapeHtml(pageData.homePrimaryActionLabel)}</a>
+        ${renderLifecycleForm("Stop runtime", "stop", { returnTo: "/", tone: "secondary" })}
+      </div>
+    </article>
+
+    <article class="panel" aria-label="Session readiness">
+      <div class="eyebrow">Session readiness</div>
+      <h2>${escapeHtml(pageData.homeReadinessHeading)}</h2>
+      <p class="support-copy">${escapeHtml(pageData.homeReadinessDetail)}</p>
+      <div class="progress-rail" aria-hidden="true">
+        <span style="width:${escapeHtml(String(clampPercent(pageData.pipelinePercent)))}%"></span>
+      </div>
+      <div class="definition-stack">
+        <div>
+          <span class="caption">Build session</span>
+          <strong>${escapeHtml(pageData.buildSessionId)}</strong>
+        </div>
+        <div>
+          <span class="caption">Live focus</span>
+          <strong>${escapeHtml(sessionSummary.heading)}</strong>
+          <p class="support-copy">${escapeHtml(sessionSummary.detail)}</p>
+          <code>${escapeHtml(sessionSummary.branch)}</code>
+        </div>
+        <div>
+          <span class="caption">Lifecycle feedback</span>
+          <strong>${escapeHtml(sessionSummary.status)}</strong>
+        </div>
+      </div>
+    </article>
+
+    <section class="panel panel-span" aria-label="Session totals">
+      <div class="section-heading">
+        <div>
+          <div class="eyebrow">Windows-style hierarchy</div>
+          <h2>Session totals</h2>
+        </div>
+        <p class="support-copy">Signals that matter most stay visible first: active work, blocked handoffs, and what can be resumed immediately.</p>
+      </div>
+      <div class="metric-grid">
+        ${renderMetricCard("Total sessions", counts.total)}
+        ${renderMetricCard("Active sessions", counts.active)}
+        ${renderMetricCard("Needs input", counts.needsInput)}
+        ${renderMetricCard("Completed", counts.completed)}
+      </div>
+    </section>
+  </section>`;
+}
+
+function renderSessionsContent(pageData: AtlasPageData, counts: AtlasSessionCounts): string {
+  return `<section class="content-grid">
+    <article class="panel hero-panel panel-span" aria-label="Session ledger">
+      <div class="eyebrow">Session ledger</div>
+      <h1>Session ledger stays aligned with the desktop lifecycle.</h1>
+      <p class="lead">Every tracked role keeps its state, lane action, branch, and last activity visible so restore, resume, and archive decisions stay grounded in the packaged ATLAS shell.</p>
+      <div class="chip-row">
+        <span class="chip">${escapeHtml(String(counts.total))} tracked sessions</span>
+        <span class="chip">${escapeHtml(String(counts.resumable))} resumable</span>
+        <span class="chip">${escapeHtml(String(counts.needsInput))} needing input</span>
+        <span class="chip">${escapeHtml(String(counts.paused))} paused lane${counts.paused === 1 ? "" : "s"}</span>
+      </div>
+    </article>
+
+    <section class="panel panel-span" aria-label="Tracked sessions">
+      <div class="section-heading">
+        <div>
+          <div class="eyebrow">Trusted feedback</div>
+          <h2>Tracked sessions</h2>
+        </div>
+        <p class="support-copy">Actions submit directly to the ATLAS lifecycle route so the desktop state and the session ledger stay in sync.</p>
+      </div>
+      ${pageData.sessions.length > 0
+        ? `<div class="session-list">${pageData.sessions.map((session) => renderSessionCard(session)).join("")}</div>`
+        : '<div class="empty-state"><strong>No session state is available yet.</strong><p class="support-copy">ATLAS will surface tracked work here as soon as the next session is written.</p></div>'}
+    </section>
+  </section>`;
+}
+
+function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
+  const counts = countSessions(pageData.sessions);
+  const pageTitle = view === "sessions" ? "ATLAS Sessions" : pageData.title;
+
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(pageData.title)}</title>
+  <title>${escapeHtml(pageTitle)}</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #0a1017;
-      --panel: rgba(11, 18, 26, 0.94);
-      --panel-strong: rgba(16, 26, 37, 0.98);
-      --line: rgba(132, 187, 255, 0.16);
-      --line-strong: rgba(132, 187, 255, 0.26);
-      --text: #f3f7fb;
-      --muted: #a5b5c8;
-      --accent: #88baff;
-      --accent-strong: #4a8fff;
-      --success: #8de1b1;
-      --warn: #ffc77a;
-      --error: #ff9a9a;
-      --surface: rgba(8, 14, 21, 0.76);
+      --bg: #070707;
+      --bg-soft: #111111;
+      --panel: #141414;
+      --panel-strong: #1a1a1a;
+      --line: rgba(255, 255, 255, 0.12);
+      --line-strong: rgba(255, 255, 255, 0.28);
+      --text: #f5f5f5;
+      --muted: #bbbbbb;
+      --muted-strong: #d4d4d4;
+      --shadow: 0 24px 72px rgba(0, 0, 0, 0.34);
     }
     * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
     body {
       margin: 0;
-      min-height: 100vh;
-      color: var(--text);
-      font-family: "Segoe UI", Inter, sans-serif;
       background:
-        radial-gradient(circle at top left, rgba(74, 143, 255, 0.16), transparent 24%),
-        radial-gradient(circle at top right, rgba(141, 225, 177, 0.10), transparent 20%),
-        linear-gradient(180deg, #0a1017 0%, #101925 100%);
+        linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 16%),
+        linear-gradient(180deg, #020202 0%, var(--bg) 36%, #0b0b0b 100%);
+      color: var(--text);
+      font-family: "Segoe UI Variable Display", "Segoe UI", Arial, sans-serif;
     }
-    main {
-      max-width: 1180px;
-      margin: 0 auto;
-      padding: 24px 18px 40px;
-    }
-    .window {
-      border: 1px solid var(--line);
-      border-radius: 22px;
-      overflow: hidden;
-      background: var(--panel);
-      box-shadow: 0 26px 72px rgba(0, 0, 0, 0.28);
-    }
-    .window__titlebar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--line);
-      background: linear-gradient(180deg, rgba(16, 26, 37, 0.98), rgba(11, 18, 26, 0.98));
-      font-size: 13px;
-    }
-    .window__controls {
-      display: flex;
-      gap: 8px;
-    }
-    .window__controls span {
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
+    a, button { font: inherit; }
+    a { color: inherit; text-decoration: none; }
+    code {
       display: inline-block;
-      background: rgba(255, 255, 255, 0.24);
-    }
-    .window__controls span:nth-child(1) { background: #ff7b72; }
-    .window__controls span:nth-child(2) { background: #ffd866; }
-    .window__controls span:nth-child(3) { background: #8de1b1; }
-    .window__title {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-    .window__meta {
-      color: var(--muted);
-      font-family: Consolas, "Cascadia Code", monospace;
-    }
-    .shell-nav, .command-bar, .hero__meta, .metrics, .surface-grid, .session-grid {
-      display: grid;
-      gap: 14px;
-    }
-    .control-stack, .session-actions {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-    .window__content {
-      padding: 20px;
-    }
-    .shell-nav {
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      margin-bottom: 18px;
-    }
-    .shell-nav a, .hero__cta {
-      text-decoration: none;
-      color: inherit;
-    }
-    .nav-link, .metric, .panel, .session-card {
+      padding: 10px 12px;
+      border-radius: 14px;
       border: 1px solid var(--line);
-      border-radius: 18px;
-      background: var(--surface);
-    }
-    .nav-link {
-      padding: 14px 16px;
-      min-height: 74px;
-    }
-    .nav-link[aria-current="page"] {
-      border-color: var(--line-strong);
-      background: rgba(74, 143, 255, 0.10);
-    }
-    .eyebrow, .metric span, .label, .session-meta__label {
-      color: var(--muted);
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-    }
-    h1, h2, h3, p { margin: 0; }
-    h1 { font-size: clamp(32px, 5vw, 48px); }
-    h2 { font-size: clamp(22px, 4vw, 30px); }
-    h3 { font-size: 20px; }
-    .hero {
-      padding: 24px;
-      margin-bottom: 18px;
-      border: 1px solid var(--line);
-      border-radius: 20px;
-      background: linear-gradient(135deg, rgba(22, 36, 52, 0.98), rgba(10, 17, 25, 0.98));
-    }
-    .hero p, .panel p, .session-card p, .nav-link p {
-      margin-top: 10px;
-      color: #d6e1ee;
-      line-height: 1.5;
-    }
-    .hero__meta {
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      margin: 18px 0;
-    }
-    .hero__meta > div, .command-bar, .metric {
-      padding: 14px 16px;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      background: rgba(8, 14, 21, 0.62);
-    }
-    .command-bar {
-      grid-template-columns: auto 1fr;
-      align-items: center;
-      margin-top: 18px;
-    }
-    .command-bar code, .session-meta code {
-      color: #dfe9f7;
-      font-family: Consolas, "Cascadia Code", monospace;
+      background: #0d0d0d;
+      color: var(--muted-strong);
+      font-family: "Cascadia Code", Consolas, monospace;
       word-break: break-word;
     }
-    .hero__actions {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      margin-top: 18px;
+    a:focus-visible,
+    button:focus-visible {
+      outline: 3px solid #ffffff;
+      outline-offset: 2px;
     }
-    .hero__cta, .control-button {
+    main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px 20px 40px;
+    }
+    .shell {
+      display: grid;
+      gap: 18px;
+    }
+    .masthead,
+    .content-grid,
+    .metric-grid,
+    .session-list,
+    .definition-grid,
+    .chip-row,
+    .cta-row,
+    .action-row {
+      display: grid;
+      gap: 12px;
+    }
+    .masthead {
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+      padding: 18px 20px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: rgba(17, 17, 17, 0.92);
+      box-shadow: var(--shadow);
+    }
+    .brand-block {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+    }
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      border: 1px solid var(--line-strong);
+      background: #ffffff;
+      color: #050505;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+    }
+    .eyebrow,
+    .caption,
+    .meta-copy,
+    dt {
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .product-title {
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: -0.04em;
+    }
+    .product-copy,
+    .support-copy,
+    dd {
+      margin: 0;
+      color: var(--muted-strong);
+      line-height: 1.6;
+    }
+    .product-copy { max-width: 720px; }
+    .masthead-meta {
+      display: grid;
+      justify-items: end;
+      gap: 10px;
+    }
+    .repo-tag,
+    .chip,
+    .nav-link,
+    .metric-card,
+    .action-button,
+    .empty-state {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .repo-tag,
+    .nav-link,
+    .chip,
+    .action-button {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      padding: 12px 16px;
-      border-radius: 999px;
-      font-weight: 700;
-      border: 0;
-      cursor: pointer;
-      font: inherit;
-      background: var(--accent);
-      color: #08111d;
+      min-height: 42px;
+      padding: 10px 14px;
     }
-    .hero__link {
-      display: inline-flex;
-      align-items: center;
-      padding: 12px 16px;
-      border-radius: 999px;
+    .nav {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .nav-link[aria-current="page"] {
+      background: #ffffff;
+      color: #050505;
+      border-color: #ffffff;
+      font-weight: 600;
+    }
+    .content-grid {
+      grid-template-columns: minmax(0, 1.5fr) minmax(320px, 1fr);
+    }
+    .panel,
+    .session-card {
+      padding: 22px;
+      border-radius: 24px;
       border: 1px solid var(--line);
-      color: var(--text);
-      text-decoration: none;
+      background: linear-gradient(180deg, rgba(20, 20, 20, 0.96), rgba(12, 12, 12, 0.96));
+      box-shadow: var(--shadow);
     }
-    .control-stack {
+    .panel-span {
+      grid-column: 1 / -1;
+    }
+    .hero-panel h1,
+    .section-heading h2,
+    h3 {
+      margin: 0;
+      letter-spacing: -0.04em;
+    }
+    .hero-panel h1 {
+      font-size: clamp(34px, 5vw, 56px);
+      line-height: 1.02;
+      max-width: 860px;
+    }
+    .lead {
+      margin: 14px 0 0;
+      max-width: 760px;
+      color: var(--muted-strong);
+      font-size: 17px;
+      line-height: 1.7;
+    }
+    .chip-row {
+      grid-auto-flow: column;
+      grid-auto-columns: max-content;
+      align-items: start;
+      justify-content: start;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+    .command-block,
+    .definition-stack {
+      display: grid;
+      gap: 8px;
       margin-top: 18px;
     }
-    .control-button--secondary {
-      background: transparent;
-      color: var(--text);
-      border: 1px solid var(--line);
+    .cta-row {
+      grid-auto-flow: column;
+      grid-auto-columns: max-content;
+      justify-content: start;
+      margin-top: 22px;
     }
-    .control-button--danger {
-      background: rgba(255, 154, 154, 0.16);
-      color: var(--text);
-      border: 1px solid rgba(255, 154, 154, 0.28);
-    }
-    .metrics {
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      margin-bottom: 18px;
-    }
-    .metric strong {
-      display: block;
-      margin-top: 10px;
-      font-size: 30px;
-    }
-    .surface-grid {
-      grid-template-columns: 1.3fr 1fr;
-    }
-    .panel {
-      padding: 20px;
-    }
-    .progress {
-      width: 100%;
-      height: 12px;
-      margin: 16px 0;
-      border-radius: 999px;
-      overflow: hidden;
-      background: rgba(136, 186, 255, 0.10);
-    }
-    .progress > span {
-      display: block;
-      height: 100%;
-      width: ${escapeHtml(String(clampPercent(pageData.pipelinePercent)))}%;
-      background: linear-gradient(90deg, var(--accent-strong), var(--success));
-    }
-    .session-grid {
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    }
-    .session-card {
-      padding: 18px;
-      min-height: 220px;
-    }
-    .session-card--action-needed { border-color: rgba(255, 199, 122, 0.36); }
-    .session-card--working { border-color: rgba(136, 186, 255, 0.36); }
-    .session-card--completed { border-color: rgba(141, 225, 177, 0.32); }
-    .session-card--unavailable { border-color: rgba(255, 154, 154, 0.26); }
-    .session-card__status {
+    .primary-link {
       display: inline-flex;
       align-items: center;
-      padding: 8px 12px;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0 18px;
+      border-radius: 14px;
+      background: #ffffff;
+      color: #050505;
+      font-weight: 600;
+    }
+    .action-form { display: inline-flex; }
+    .action-button {
+      cursor: pointer;
+      color: var(--text);
+    }
+    .action-button.primary {
+      background: #ffffff;
+      color: #050505;
+      border-color: #ffffff;
+      font-weight: 600;
+    }
+    .progress-rail {
+      height: 10px;
+      margin-top: 18px;
       border-radius: 999px;
-      margin-top: 12px;
+      overflow: hidden;
       background: rgba(255, 255, 255, 0.06);
     }
-    .session-meta {
-      margin-top: 16px;
-      display: grid;
-      gap: 12px;
+    .progress-rail > span {
+      display: block;
+      height: 100%;
+      background: linear-gradient(90deg, #ffffff, #8d8d8d);
     }
-    .session-actions {
-      margin-top: 16px;
+    .section-heading {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: end;
+      flex-wrap: wrap;
+      margin-bottom: 18px;
+    }
+    .metric-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .metric-card {
+      padding: 16px;
+      display: grid;
+      gap: 8px;
+    }
+    .metric-card span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .metric-card strong {
+      font-size: 34px;
+      letter-spacing: -0.05em;
+    }
+    .session-list {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .session-card-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: start;
+      flex-wrap: wrap;
+    }
+    .definition-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin: 18px 0;
+    }
+    dd {
+      margin-top: 6px;
+      font-size: 15px;
+      word-break: break-word;
+    }
+    .action-row {
+      grid-auto-flow: column;
+      grid-auto-columns: max-content;
+      justify-content: start;
+      align-items: start;
     }
     .empty-state {
-      padding: 18px;
-      border-radius: 18px;
-      border: 1px dashed var(--line-strong);
-      color: var(--muted);
-      background: rgba(8, 14, 21, 0.38);
+      padding: 20px;
     }
-    @media (max-width: 860px) {
-      .surface-grid {
+    @media (max-width: 960px) {
+      .masthead,
+      .content-grid,
+      .metric-grid,
+      .session-list,
+      .definition-grid {
         grid-template-columns: 1fr;
+      }
+      .masthead-meta {
+        justify-items: start;
       }
     }
   </style>
 </head>
 <body>
   <main>
-    <section class="window" aria-label="ATLAS shell">
-      <div class="window__titlebar">
-        <div class="window__title">
-          <div class="window__controls" aria-hidden="true">
-            <span></span><span></span><span></span>
+    <section class="shell" aria-label="ATLAS desktop surface">
+      <header class="masthead">
+        <div class="brand-block">
+          <div class="brand-mark">A</div>
+          <div>
+            <div class="eyebrow">Native desktop workspace</div>
+            <p class="product-title">ATLAS</p>
+            <p class="product-copy">${escapeHtml(pageData.hostLabel)} · ${escapeHtml(pageData.pipelineDetail)}</p>
           </div>
-          <strong>ATLAS Desktop Session Control</strong>
-          <span class="window__meta">${escapeHtml(pageData.hostLabel)}</span>
         </div>
-        <span class="window__meta">${escapeHtml(pageData.repoLabel)}</span>
-      </div>
-      <div class="window__content">
-        <nav class="shell-nav" aria-label="ATLAS surfaces">
-          <a class="nav-link" href="/"${activeView === "home" ? " aria-current=\"page\"" : ""}>
-            <div class="eyebrow">Surface</div>
-            <h3>Home</h3>
-            <p>Overview for the current single-target workspace.</p>
-          </a>
-          <a class="nav-link" href="/sessions"${activeView === "sessions" ? " aria-current=\"page\"" : ""}>
-            <div class="eyebrow">Surface</div>
-            <h3>Sessions</h3>
-            <p>Inspect every worker session with its current branch and next step.</p>
-          </a>
-        </nav>
-        ${content}
-      </div>
+        <div class="masthead-meta">
+          <div class="repo-tag">${escapeHtml(pageData.repoLabel)}</div>
+          <div class="meta-copy">Build session ${escapeHtml(pageData.buildSessionId)}</div>
+          ${renderNavigation(view)}
+        </div>
+      </header>
+      ${view === "home" ? renderHomeContent(pageData, counts) : renderSessionsContent(pageData, counts)}
     </section>
   </main>
 </body>
 </html>`;
 }
 
-function sessionTone(session: AtlasSessionDto): string {
-  if (session.needsInput) return "session-card--action-needed";
-  if (session.status === "working") return "session-card--working";
-  if (session.status === "done") return "session-card--completed";
-  if (session.status === "offline" || session.status === "error") return "session-card--unavailable";
-  return "";
-}
-
 export function renderAtlasHomeHtml(pageData: AtlasPageData): string {
-  const sessions = [...pageData.sessions];
-  const counts = countSessions(sessions);
-
-  const content = `<section class="hero">
-    <div class="eyebrow">Windows-first product shell</div>
-    <h1>${escapeHtml(pageData.repoLabel)}</h1>
-    <p>ATLAS keeps the desktop workspace, active sessions, and current cycle aligned inside one dedicated product shell.</p>
-    <div class="hero__meta">
-      <div>
-        <div class="label">Current cycle</div>
-        <strong>${escapeHtml(pageData.pipelineStageLabel)}</strong>
-      </div>
-      <div>
-        <div class="label">Updated</div>
-        <strong>${escapeHtml(formatTimestamp(pageData.updatedAt))}</strong>
-      </div>
-      <div>
-        <div class="label">Host shell</div>
-        <strong>${escapeHtml(pageData.hostLabel)}</strong>
-      </div>
-    </div>
-    <div class="command-bar" aria-label="Windows launcher">
-      <span class="label">Launch command</span>
-      <code>${escapeHtml(pageData.shellCommand)}</code>
-    </div>
-     <div class="hero__actions">
-       <a class="hero__cta" href="/sessions">${escapeHtml(pageData.homePrimaryActionLabel)}</a>
-       <a class="hero__link" href="/sessions">Review active roles</a>
-     </div>
-     <div class="control-stack" aria-label="Runtime lifecycle controls">
-       <form method="POST" action="/lifecycle">
-         <input type="hidden" name="action" value="resume" />
-         <input type="hidden" name="returnTo" value="/" />
-         <button class="control-button" type="submit">Resume BOX runtime</button>
-       </form>
-       <form method="POST" action="/lifecycle">
-         <input type="hidden" name="action" value="stop" />
-         <input type="hidden" name="returnTo" value="/" />
-         <button class="control-button control-button--danger" type="submit">Stop BOX runtime</button>
-       </form>
-     </div>
-   </section>
-  <section class="metrics" aria-label="Session summary">
-    <article class="metric">
-      <span>Total sessions</span>
-      <strong>${escapeHtml(String(counts.total))}</strong>
-      <p>Sessions tracked by the ATLAS state bridge.</p>
-    </article>
-    <article class="metric">
-      <span>Active sessions</span>
-      <strong>${escapeHtml(String(counts.active))}</strong>
-      <p>Sessions that are currently moving work forward.</p>
-    </article>
-    <article class="metric">
-      <span>Needs input</span>
-      <strong>${escapeHtml(String(counts.needsInput))}</strong>
-      <p>Sessions waiting for a response before they can continue.</p>
-    </article>
-    <article class="metric">
-      <span>Completed</span>
-      <strong>${escapeHtml(String(counts.completed))}</strong>
-      <p>Sessions already closed in this workspace.</p>
-    </article>
-  </section>
-  <section class="surface-grid" aria-label="ATLAS home details">
-    <article class="panel">
-      <div class="eyebrow">Cycle detail</div>
-      <h2>${escapeHtml(pageData.pipelineStageLabel)}</h2>
-      <div class="progress" aria-hidden="true"><span></span></div>
-      <p>${escapeHtml(pageData.pipelineDetail)}</p>
-    </article>
-    <article class="panel">
-      <div class="eyebrow">Session handoff</div>
-      <h2>${escapeHtml(pageData.homeReadinessHeading)}</h2>
-      <p>${escapeHtml(pageData.homeReadinessDetail)}</p>
-    </article>
-  </section>`;
-
-  return renderShell(pageData, "home", content);
+  return renderAtlasAppShell(pageData, "home");
 }
 
 export function renderAtlasSessionsHtml(pageData: AtlasPageData): string {
-  const sessions = [...pageData.sessions];
-  const content = `<section class="hero">
-    <div class="eyebrow">Session control</div>
-    <h1>Worker sessions</h1>
-    <p>Every session is presented with its readiness state, branch context, and last recorded task so ATLAS can stay focused on a single target.</p>
-    <div class="command-bar" aria-label="Windows launcher">
-      <span class="label">Launch command</span>
-      <code>${escapeHtml(pageData.shellCommand)}</code>
-    </div>
-  </section>
-  <section class="panel">
-    <div class="eyebrow">Session list</div>
-    <h2>${escapeHtml(String(sessions.length))} tracked session${sessions.length === 1 ? "" : "s"}</h2>
-    ${sessions.length === 0
-      ? `<div class="empty-state">No session state is available yet. Start ATLAS from the Windows shell to populate the first session handoff.</div>`
-      : `<div class="session-grid">${sessions.map((session) => `<article class="session-card ${sessionTone(session)}">
-            <div class="eyebrow">Role</div>
-            <h3>${escapeHtml(session.name)}</h3>
-            <div class="session-card__status">${escapeHtml(session.statusLabel)} · ${escapeHtml(session.readinessLabel)}</div>
-            <div class="session-meta">
-              <div>
-                <div class="session-meta__label">Last task</div>
-                <p>${escapeHtml(session.lastTask || "Waiting for the first task")}</p>
-              </div>
-              <div>
-                <div class="session-meta__label">Current branch</div>
-                <code>${escapeHtml(session.currentBranch || "No branch recorded")}</code>
-              </div>
-              <div>
-                <div class="session-meta__label">Last update</div>
-                <p>${escapeHtml(formatTimestamp(session.lastActiveAt))}</p>
-              </div>
-               <div>
-                 <div class="session-meta__label">Files touched / PRs</div>
-                 <p>${escapeHtml(String(session.touchedFileCount))} files · ${escapeHtml(String(session.pullRequestCount))} PRs</p>
-               </div>
-               <div>
-                 <div class="session-meta__label">Lane control</div>
-                 <p>${escapeHtml(session.lane ? (session.isPaused ? `${session.lane} lane paused` : `${session.lane} lane live`) : "No lane lifecycle control")}</p>
-               </div>
-             </div>
-             ${(session.lane || session.canArchive)
-               ? `<div class="session-actions">
-                   ${session.lane
-                     ? `<form method="POST" action="/lifecycle">
-                          <input type="hidden" name="action" value="${escapeHtml(session.isPaused ? "resume" : "pause")}" />
-                          <input type="hidden" name="role" value="${escapeHtml(session.role)}" />
-                          <input type="hidden" name="returnTo" value="/sessions" />
-                          <button class="control-button control-button--secondary" type="submit">${escapeHtml(session.isPaused ? "Resume lane" : "Pause lane")}</button>
-                        </form>`
-                     : ""}
-                   ${session.canArchive
-                     ? `<form method="POST" action="/lifecycle">
-                          <input type="hidden" name="action" value="archive" />
-                          <input type="hidden" name="role" value="${escapeHtml(session.role)}" />
-                          <input type="hidden" name="returnTo" value="/sessions" />
-                          <button class="control-button control-button--danger" type="submit">Archive session</button>
-                        </form>`
-                     : ""}
-                 </div>`
-               : ""}
-           </article>`).join("")}</div>`}
-  </section>`;
-
-  return renderShell(pageData, "sessions", content);
-}
-
-export function renderAtlasOnboardingGateHtml(pageData: AtlasOnboardingGateData): string {
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ATLAS onboarding required</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #0a1017;
-      --panel: rgba(11, 18, 26, 0.95);
-      --line: rgba(132, 187, 255, 0.18);
-      --text: #f3f7fb;
-      --muted: #a5b5c8;
-      --accent: #88baff;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      padding: 24px;
-      color: var(--text);
-      font-family: "Segoe UI", Inter, sans-serif;
-      background:
-        radial-gradient(circle at top left, rgba(74, 143, 255, 0.16), transparent 24%),
-        linear-gradient(180deg, #0a1017 0%, #101925 100%);
-    }
-    article {
-      width: min(760px, 100%);
-      padding: 28px;
-      border-radius: 22px;
-      border: 1px solid var(--line);
-      background: var(--panel);
-      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.32);
-    }
-    h1, p { margin: 0; }
-    p + p { margin-top: 12px; }
-    .eyebrow {
-      color: var(--muted);
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-bottom: 12px;
-    }
-    code {
-      display: inline-block;
-      margin-top: 14px;
-      padding: 10px 12px;
-      border-radius: 14px;
-      border: 1px solid var(--line);
-      background: rgba(8, 14, 21, 0.62);
-      color: var(--accent);
-      font-family: Consolas, "Cascadia Code", monospace;
-      word-break: break-word;
-    }
-  </style>
-</head>
-<body>
-  <article aria-label="ATLAS onboarding gate">
-    <div class="eyebrow">Desktop onboarding required</div>
-    <h1>Finish clarification in the ATLAS desktop window</h1>
-    <p>${escapeHtml(pageData.repoLabel)} is blocked from session handoff until the current desktop session stores a clarification packet.</p>
-    <p>Return to the native ATLAS window on ${escapeHtml(pageData.hostLabel)} and complete the English onboarding prompt before opening planning or session surfaces.</p>
-    <code>${escapeHtml(pageData.shellCommand)}</code>
-  </article>
-</body>
-</html>`;
+  return renderAtlasAppShell(pageData, "sessions");
 }
