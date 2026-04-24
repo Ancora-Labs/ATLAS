@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 
-import { createAtlasDesktopPackageLayout } from "../../scripts/atlas_desktop_package.ts";
+import {
+  createAtlasDesktopPackageLayout,
+  publishAtlasDesktopPortableRelease,
+} from "../../scripts/atlas_desktop_package.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const PACKAGE_JSON_PATH = path.join(ROOT, "package.json");
@@ -67,5 +72,33 @@ describe("atlas desktop packaging", () => {
       () => createAtlasDesktopPackageLayout(ROOT, "   "),
       /portable folder name/i,
     );
+  });
+
+  it("writes fresh desktop build metadata beside the packaged ATLAS.exe", async () => {
+    const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "atlas-desktop-package-"));
+    const layout = createAtlasDesktopPackageLayout(tempRoot);
+
+    try {
+      await fsp.mkdir(layout.stagedAppRoot, { recursive: true });
+      await fsp.writeFile(path.join(layout.stagedAppRoot, "ATLAS.exe"), "portable-exe", "utf8");
+
+      await publishAtlasDesktopPortableRelease(layout);
+
+      const portableBuildInfo = JSON.parse(
+        await fsp.readFile(path.join(layout.portableRoot, "desktop-build-info.json"), "utf8"),
+      ) as {
+        sessionId?: string;
+        builtAt?: string | null;
+        launcherCommand?: string;
+        executablePath?: string;
+      };
+
+      assert.equal(portableBuildInfo.launcherCommand, path.normalize(`.${path.sep}ATLAS.exe`));
+      assert.equal(portableBuildInfo.executablePath, layout.portableExePath);
+      assert.ok(typeof portableBuildInfo.sessionId === "string" && portableBuildInfo.sessionId.length > 0);
+      assert.match(String(portableBuildInfo.builtAt), /T/);
+    } finally {
+      await fsp.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 });
