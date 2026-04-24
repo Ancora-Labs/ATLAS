@@ -13,6 +13,7 @@ import {
 } from "../src/atlas/clarification.js";
 import {
   buildAtlasDesktopLocationPath,
+  createDefaultAtlasDesktopState,
   parseAtlasDesktopLocationFromUrl,
   readAtlasDesktopState,
   resolveAtlasDesktopStatePath,
@@ -108,21 +109,14 @@ async function initializeDesktopState(): Promise<void> {
 }
 
 async function updateDesktopState(
-  patch: Partial<Pick<AtlasDesktopState, "sessionId" | "onboardingDraft" | "windowBounds" | "lastProductSurface" | "focusedSessionRole">>,
+  patch: Partial<Pick<AtlasDesktopState, "sessionId" | "onboardingDraft" | "productDraft" | "productComposerFocused" | "windowBounds" | "lastProductSurface" | "focusedSessionRole">>,
 ): Promise<void> {
   if (!atlasDesktopStatePath) {
     throw new Error("ATLAS desktop state path is not initialized.");
   }
 
   atlasDesktopState = await writeAtlasDesktopState(atlasDesktopStatePath, {
-    ...(atlasDesktopState || {
-      sessionId: null,
-      onboardingDraft: "",
-      windowBounds: null,
-      lastProductSurface: "home",
-      focusedSessionRole: null,
-      updatedAt: null,
-    }),
+    ...(atlasDesktopState || createDefaultAtlasDesktopState()),
     ...patch,
   });
 }
@@ -134,6 +128,28 @@ async function updateOnboardingDraft(draft: string): Promise<void> {
     atlasBootstrap = {
       ...atlasBootstrap,
       onboardingDraft: normalizedDraft,
+    };
+  }
+}
+
+async function updateProductDraft(draft: string): Promise<void> {
+  await updateDesktopState({ productDraft: String(draft || "") });
+}
+
+async function updateProductComposerFocus(focused: boolean): Promise<void> {
+  await updateDesktopState({ productComposerFocused: focused === true });
+}
+
+async function clearClarificationDrafts(): Promise<void> {
+  await updateDesktopState({
+    onboardingDraft: "",
+    productDraft: "",
+    productComposerFocused: false,
+  });
+  if (atlasBootstrap) {
+    atlasBootstrap = {
+      ...atlasBootstrap,
+      onboardingDraft: "",
     };
   }
 }
@@ -323,6 +339,7 @@ async function submitDesktopClarification(
 
     const normalizedObjective = String(objective || "").trim();
     await updateOnboardingDraft(normalizedObjective);
+    await updateProductDraft(normalizedObjective);
 
     const config = await loadConfig();
     const stateDir = String(config.paths?.stateDir || "state");
@@ -334,7 +351,7 @@ async function submitDesktopClarification(
       command: String(config.copilotCliCommand || "").trim(),
     });
 
-    await updateOnboardingDraft("");
+    await clearClarificationDrafts();
     if (requestWindow && !requestWindow.isDestroyed()) {
       await loadInitialSurface(requestWindow);
     }
@@ -442,12 +459,33 @@ app.whenReady().then(() => {
     }
     return atlasBootstrap;
   });
+  ipcMain.handle("atlas-desktop:get-desktop-state", async () => {
+    return atlasDesktopState || createDefaultAtlasDesktopState();
+  });
   ipcMain.handle("atlas-desktop:set-onboarding-draft", async (_event, payload: { draft?: string } = {}) => {
     try {
       await updateOnboardingDraft(String(payload.draft || ""));
       return { ok: true };
     } catch (error) {
       console.error(`[atlas] onboarding draft update failed: ${String((error as Error)?.message || error)}`);
+      throw error;
+    }
+  });
+  ipcMain.handle("atlas-desktop:set-product-draft", async (_event, payload: { draft?: string } = {}) => {
+    try {
+      await updateProductDraft(String(payload.draft || ""));
+      return { ok: true };
+    } catch (error) {
+      console.error(`[atlas] product draft update failed: ${String((error as Error)?.message || error)}`);
+      throw error;
+    }
+  });
+  ipcMain.handle("atlas-desktop:set-product-composer-focus", async (_event, payload: { focused?: boolean } = {}) => {
+    try {
+      await updateProductComposerFocus(payload.focused === true);
+      return { ok: true };
+    } catch (error) {
+      console.error(`[atlas] product composer focus update failed: ${String((error as Error)?.message || error)}`);
       throw error;
     }
   });

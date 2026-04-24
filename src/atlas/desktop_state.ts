@@ -19,6 +19,8 @@ export interface AtlasDesktopLocation {
 export interface AtlasDesktopState {
   sessionId: string | null;
   onboardingDraft: string;
+  productDraft: string;
+  productComposerFocused: boolean;
   windowBounds: AtlasDesktopWindowBounds | null;
   lastProductSurface: AtlasDesktopProductSurface;
   focusedSessionRole: string | null;
@@ -42,12 +44,14 @@ export interface ResolveAtlasDesktopStateRootOptions {
   cwd: string;
 }
 
-const ATLAS_DESKTOP_STATE_SCHEMA_VERSION = 2;
+const ATLAS_DESKTOP_STATE_SCHEMA_VERSION = 3;
 
-function createDefaultAtlasDesktopState(): AtlasDesktopState {
+export function createDefaultAtlasDesktopState(): AtlasDesktopState {
   return {
     sessionId: null,
     onboardingDraft: "",
+    productDraft: "",
+    productComposerFocused: false,
     windowBounds: null,
     lastProductSurface: "home",
     focusedSessionRole: null,
@@ -65,6 +69,10 @@ function normalizeOptionalNumber(value: unknown): number | undefined {
 
 function normalizeOptionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizeBoolean(value: unknown): boolean {
+  return value === true;
 }
 
 export function normalizeAtlasDesktopProductSurface(value: unknown): AtlasDesktopProductSurface {
@@ -147,11 +155,16 @@ function normalizeAtlasDesktopState(value: unknown): AtlasDesktopState | null {
   const onboardingDraft = typeof value.onboardingDraft === "string"
     ? value.onboardingDraft
     : "";
+  const productDraft = typeof value.productDraft === "string"
+    ? value.productDraft
+    : "";
   const updatedAt = normalizeOptionalString(value.updatedAt);
 
   return {
     sessionId,
     onboardingDraft,
+    productDraft,
+    productComposerFocused: normalizeBoolean(value.productComposerFocused),
     windowBounds: normalizeAtlasDesktopWindowBounds(value.windowBounds),
     lastProductSurface: normalizeAtlasDesktopProductSurface(value.lastProductSurface),
     focusedSessionRole: normalizeOptionalString(value.focusedSessionRole),

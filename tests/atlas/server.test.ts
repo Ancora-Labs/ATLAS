@@ -201,11 +201,12 @@ describe("atlas server", () => {
 
     assert.equal(homeResponse.status, 200);
     assert.match(homeResponse.text, /<title>ATLAS Home<\/title>/);
-    assert.match(homeResponse.text, /ATLAS keeps the live delivery state in the same desktop window\./);
+    assert.match(homeResponse.text, /ATLAS keeps the live delivery state in the desktop window\./);
     assert.match(homeResponse.text, /Desktop continuity/);
     assert.match(homeResponse.text, /Ancora-Labs\/ATLAS/);
     assert.match(homeResponse.text, /href="\/sessions\?focusRole=quality-worker"/);
     assert.match(homeResponse.text, /Wire the ATLAS server boundary/);
+    assert.match(homeResponse.text, /data-role="product-composer-input"/);
     assert.match(homeResponse.text, />Stop runtime</);
     assert.doesNotMatch(homeResponse.text, /default browser|localhost page/i);
 
@@ -294,7 +295,7 @@ describe("atlas server", () => {
       const unblockedHome = await requestText(gatedPort, "/");
       assert.equal(unblockedHome.status, 200);
       assert.match(unblockedHome.text, /Desktop continuity/);
-      assert.match(unblockedHome.text, /ATLAS keeps the live delivery state in the same desktop window\./);
+      assert.match(unblockedHome.text, /ATLAS keeps the live delivery state in the desktop window\./);
 
       const repeatHome = await requestText(gatedPort, "/");
       const repeatOnboardingStatus = await requestText(gatedPort, "/api/onboarding/status");
@@ -332,6 +333,30 @@ describe("atlas server", () => {
     assert.match(payload.message, /Paused the quality lane/i);
   });
 
+  it("[NEGATIVE] returns a graceful onboarding status payload when the product surface is not bound to a desktop session", async () => {
+    const detachedPort = await getFreePort();
+    const detachedServer = await startAtlasServer({
+      port: detachedPort,
+      stateDir,
+      targetRepo: "Ancora-Labs/ATLAS",
+    });
+
+    try {
+      const response = await requestText(detachedPort, "/api/onboarding/status");
+
+      assert.equal(response.status, 200);
+      assert.match(response.text, /"ready":false/);
+      assert.match(response.text, /"code":"desktop_session_missing"/);
+      assert.match(response.text, /"sessionId":null/);
+    } finally {
+      if (detachedServer.listening) {
+        await new Promise<void>((resolve) => {
+          detachedServer.close(() => resolve());
+        });
+      }
+    }
+  });
+
   it("[NEGATIVE] returns route-level errors for unsupported methods and unknown paths", async () => {
     const invalidMethodResponse = await requestText(port, "/sessions", "POST");
     const missingRouteResponse = await requestText(port, "/missing");
@@ -348,7 +373,7 @@ describe("atlas server", () => {
 
     assert.equal(response.status, 200);
     assert.match(response.text, />Tracked sessions</);
-    assert.doesNotMatch(response.text, />Focused workspace</);
+    assert.doesNotMatch(response.text, /missing-worker/);
   });
 
   it("can create a request handler without mutating dashboard port 8787 behavior", () => {

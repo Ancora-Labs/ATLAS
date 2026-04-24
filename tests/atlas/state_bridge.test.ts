@@ -9,6 +9,7 @@ import {
   getAtlasSessionReadiness,
   getAtlasSessionStatusLabel,
   listAtlasSessions,
+  resolveAtlasSessionSnapshotContinuity,
 } from "../../src/atlas/state_bridge.ts";
 
 function createTempRoot(): Promise<string> {
@@ -117,6 +118,36 @@ describe("state_bridge", () => {
     assert.deepEqual(getAtlasSessionReadiness("idle", ""), {
       readiness: "ready",
       readinessLabel: "Ready to start",
+    });
+  });
+
+  it("flags when a restored focused role no longer exists in the live session snapshot", () => {
+    const continuity = resolveAtlasSessionSnapshotContinuity([
+      {
+        role: "Atlas",
+        name: "ATLAS control",
+        lane: null,
+        status: "idle",
+        statusLabel: "Ready",
+        readiness: "ready",
+        readinessLabel: "Ready to start",
+        lastTask: "",
+        lastActiveAt: null,
+        historyLength: 0,
+        lastThinking: "",
+        currentBranch: null,
+        pullRequestCount: 0,
+        touchedFileCount: 0,
+        needsInput: false,
+        isResumable: false,
+        isPaused: false,
+        canArchive: false,
+      },
+    ], "quality-worker");
+
+    assert.deepEqual(continuity, {
+      hasLiveSessions: true,
+      missingFocusedSnapshot: true,
     });
   });
 

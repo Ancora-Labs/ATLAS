@@ -1,4 +1,7 @@
-import type { AtlasSessionDto } from "./state_bridge.js";
+import {
+  resolveAtlasSessionSnapshotContinuity,
+  type AtlasSessionDto,
+} from "./state_bridge.js";
 
 export interface AtlasPageData {
   title: string;
@@ -333,13 +336,13 @@ function renderHomeCanvas(pageData: AtlasPageData, counts: AtlasSessionCounts, a
       <div class="section-heading">
         <div>
           <div class="eyebrow">Desktop continuity</div>
-          <h1>ATLAS keeps the live delivery state in the same desktop window.</h1>
+          <h1>ATLAS keeps the live delivery state in the desktop window.</h1>
         </div>
-        <p class="support-copy">The clarification handoff, relaunch recovery, and repo context stay inside the native shell instead of drifting back to a browser-style launch flow.</p>
+        <p class="support-copy">The packaged shell stays monochrome, desktop-first, and trustworthy while repo state, relaunch recovery, and clarification handoff stay inside the native shell.</p>
       </div>
       <dl class="definition-grid">
         <div>
-          <dt>Desktop session</dt>
+          <dt>Build session</dt>
           <dd>${escapeHtml(pageData.buildSessionId)}</dd>
         </div>
         <div>
@@ -383,12 +386,12 @@ function renderHomeCanvas(pageData: AtlasPageData, counts: AtlasSessionCounts, a
         <p class="lead">${escapeHtml(pageData.hostLabel)}</p>
         <p class="support-copy">${escapeHtml(pageData.homeReadinessDetail)}</p>
         <div class="stats-grid">
-          <div class="stat-pill"><span class="caption">Tracked sessions</span><strong>${escapeHtml(String(counts.total))}</strong></div>
-          <div class="stat-pill"><span class="caption">Active sessions</span><strong>${escapeHtml(String(counts.active))}</strong></div>
-          <div class="stat-pill"><span class="caption">Needs input</span><strong>${escapeHtml(String(counts.needsInput))}</strong></div>
-          <div class="stat-pill"><span class="caption">Completed handoffs</span><strong>${escapeHtml(String(counts.completed))}</strong></div>
-          <div class="stat-pill"><span class="caption">Resumable sessions</span><strong>${escapeHtml(String(counts.resumable))}</strong></div>
-          <div class="stat-pill"><span class="caption">Paused lanes</span><strong>${escapeHtml(String(counts.paused))}</strong></div>
+          <div class="stat-pill"><span>Total sessions</span><strong>${escapeHtml(String(counts.total))}</strong></div>
+          <div class="stat-pill"><span>Active sessions</span><strong>${escapeHtml(String(counts.active))}</strong></div>
+          <div class="stat-pill"><span>Needs input</span><strong>${escapeHtml(String(counts.needsInput))}</strong></div>
+          <div class="stat-pill"><span>Completed</span><strong>${escapeHtml(String(counts.completed))}</strong></div>
+          <div class="stat-pill"><span>Resumable</span><strong>${escapeHtml(String(counts.resumable))}</strong></div>
+          <div class="stat-pill"><span>Paused lanes</span><strong>${escapeHtml(String(counts.paused))}</strong></div>
         </div>
       </section>
     </section>
@@ -403,7 +406,7 @@ function renderSessionsCanvas(pageData: AtlasPageData, counts: AtlasSessionCount
           <div class="eyebrow">Trust-first work ledger</div>
           <h1>Session ledger keeps delivery trust anchored in the desktop lifecycle.</h1>
         </div>
-        <p class="support-copy">Every tracked role keeps its state, lane action, branch, and last activity visible so restore, resume, and archive decisions stay grounded in the packaged ATLAS shell.</p>
+        <p class="support-copy">Session ledger stays aligned with the desktop lifecycle.</p>
       </div>
       <div class="chip-row">
         <span class="chip">${escapeHtml(String(counts.total))} tracked sessions</span>
@@ -452,6 +455,7 @@ function renderSessionsCanvas(pageData: AtlasPageData, counts: AtlasSessionCount
 }
 
 function renderComposer(view: AtlasView, pageData: AtlasPageData, activeSession: AtlasSessionDto | null): string {
+  const continuity = resolveAtlasSessionSnapshotContinuity(pageData.sessions, pageData.focusedSessionRole);
   const primaryHref = view === "sessions" && activeSession
     ? buildSurfaceHref("home", activeSession.role)
     : buildSurfaceHref("sessions", pageData.focusedSessionRole);
@@ -459,6 +463,16 @@ function renderComposer(view: AtlasView, pageData: AtlasPageData, activeSession:
     ? "Keep focus on home"
     : pageData.homePrimaryActionLabel;
   const returnTo = buildSurfaceHref(view, pageData.focusedSessionRole);
+  const composerHeading = continuity.missingFocusedSnapshot
+    ? "Focus restored without a live session snapshot"
+    : (!continuity.hasLiveSessions ? "No live session snapshot yet" : (activeSession?.name || pageData.pipelineStageLabel));
+  const composerDetail = continuity.missingFocusedSnapshot
+    ? "ATLAS reopened the shell on the saved surface, but the last focused session has not published its next live snapshot yet. Keep drafting here and the shell will stay stable."
+    : (!continuity.hasLiveSessions
+        ? "ATLAS restored the desktop shell and is waiting for the next live session snapshot. Keep the next objective here so a relaunch does not cost context."
+        : (activeSession
+            ? `Refine what ${activeSession.name} should deliver next without losing the current desktop context.`
+            : pageData.homeReadinessDetail));
 
   const actions = [
     `<a class="primary-link" href="${escapeHtml(primaryHref)}">${escapeHtml(primaryLabel)}</a>`,
@@ -486,14 +500,233 @@ function renderComposer(view: AtlasView, pageData: AtlasPageData, activeSession:
     }
   }
 
-  return `<section class="desktop-composer" aria-label="Desktop composer">
+  return `<section
+    class="desktop-composer"
+    aria-label="Desktop composer"
+    data-role="product-composer"
+    data-view="${escapeHtml(view)}"
+    data-focused-session-role="${escapeHtml(pageData.focusedSessionRole || "")}"
+    data-missing-focused-snapshot="${continuity.missingFocusedSnapshot ? "true" : "false"}"
+    data-has-live-sessions="${continuity.hasLiveSessions ? "true" : "false"}">
     <div class="composer-copy">
       <div class="eyebrow">Desktop composer</div>
-      <h2>${escapeHtml(activeSession?.name || pageData.pipelineStageLabel)}</h2>
-      <p class="support-copy">${escapeHtml(activeSession ? getSessionActivityLabel(activeSession) : pageData.homeReadinessDetail)}</p>
+      <h2>${escapeHtml(composerHeading)}</h2>
+      <p class="support-copy">${escapeHtml(composerDetail)}</p>
     </div>
-    <div class="composer-actions">${actions.join("")}</div>
+    <div class="composer-body">
+      <form class="product-composer-form" id="atlas-product-composer-form" data-role="product-composer-form">
+        <label class="composer-field">
+          <span class="caption">Next objective</span>
+          <textarea
+            class="composer-input"
+            data-role="product-composer-input"
+            name="objective"
+            rows="4"
+            placeholder="Keep the next delivery objective here. ATLAS restores the draft, surface, and focus when the desktop shell reopens."></textarea>
+        </label>
+        <div class="composer-status">
+          <p class="support-copy" data-role="product-composer-status">Loading the saved workspace draft...</p>
+          <p class="support-copy" data-role="product-composer-detail">ATLAS keeps this draft in the desktop shell state so accidental close and reopen recovery feels deliberate.</p>
+          <p class="composer-error" data-role="product-composer-error"></p>
+        </div>
+      </form>
+      <div class="composer-actions">
+        <button class="action-button primary" type="submit" form="atlas-product-composer-form">Refresh clarification</button>
+        ${actions.join("")}
+      </div>
+    </div>
   </section>`;
+}
+
+function renderComposerScript(): string {
+  return `<script>
+(() => {
+  const bridge = window.atlasDesktop;
+  const composerRoot = document.querySelector("[data-role='product-composer']");
+  const form = document.querySelector("[data-role='product-composer-form']");
+  const input = document.querySelector("[data-role='product-composer-input']");
+  const statusEl = document.querySelector("[data-role='product-composer-status']");
+  const detailEl = document.querySelector("[data-role='product-composer-detail']");
+  const errorEl = document.querySelector("[data-role='product-composer-error']");
+
+  if (!(composerRoot instanceof HTMLElement)
+    || !(form instanceof HTMLFormElement)
+    || !(input instanceof HTMLTextAreaElement)
+    || !(statusEl instanceof HTMLElement)
+    || !(detailEl instanceof HTMLElement)
+    || !(errorEl instanceof HTMLElement)) {
+    return;
+  }
+
+  const continuityDetail = composerRoot.dataset.missingFocusedSnapshot === "true"
+    ? "The saved focus target is still waiting on its next live session snapshot. The desktop shell stays usable and keeps this draft in place."
+    : (composerRoot.dataset.hasLiveSessions === "true"
+        ? "ATLAS keeps this draft in the desktop shell state so accidental close and reopen recovery feels deliberate."
+        : "No live session snapshot is available yet, but the shell still restores this draft and surface cleanly.");
+  let saveTimer = null;
+
+  const setComposerStatus = (message, detail) => {
+    statusEl.textContent = message;
+    detailEl.textContent = detail || continuityDetail;
+  };
+
+  const persistDraft = async (value) => {
+    if (!bridge?.setProductDraft) {
+      return;
+    }
+    try {
+      await bridge.setProductDraft(value);
+      if (String(value || "").trim()) {
+        setComposerStatus("Saved the workspace draft for this desktop shell.", continuityDetail);
+      } else {
+        setComposerStatus("The workspace draft is empty.", continuityDetail);
+      }
+    } catch (error) {
+      console.error("[atlas] product draft save failed:", error);
+      setComposerStatus(
+        "Draft save failed. Keep the text here and retry when the desktop bridge is responsive again.",
+        String(error?.message || error || ""),
+      );
+    }
+  };
+
+  const persistComposerFocus = async (focused) => {
+    if (!bridge?.setProductComposerFocus) {
+      return;
+    }
+    try {
+      await bridge.setProductComposerFocus(focused === true);
+    } catch (error) {
+      console.error("[atlas] product composer focus save failed:", error);
+    }
+  };
+
+  const queueDraftSave = () => {
+    if (saveTimer) {
+      window.clearTimeout(saveTimer);
+    }
+    saveTimer = window.setTimeout(() => {
+      saveTimer = null;
+      void persistDraft(String(input.value || ""));
+    }, 180);
+  };
+
+  const loadClarificationStatus = async () => {
+    try {
+      const response = await window.fetch("/api/onboarding/status", {
+        headers: { accept: "application/json" },
+      });
+      if (!response.ok) {
+        return;
+      }
+      const payload = await response.json();
+      if (payload?.ready && payload?.packet?.summary) {
+        setComposerStatus("Restored the desktop workspace with the latest clarification brief.", String(payload.packet.summary || continuityDetail));
+      }
+    } catch (error) {
+      console.error("[atlas] product composer status load failed:", error);
+    }
+  };
+
+  const bootstrapComposer = async () => {
+    if (!bridge?.getDesktopState) {
+      setComposerStatus(
+        "Desktop state recovery is unavailable in this surface.",
+        "The composer stays editable, but draft recovery requires the Electron desktop bridge.",
+      );
+      return;
+    }
+
+    try {
+      const desktopState = await bridge.getDesktopState();
+      if (desktopState.productDraft) {
+        input.value = desktopState.productDraft;
+        setComposerStatus("Restored the saved workspace draft for this desktop session.", continuityDetail);
+      } else {
+        setComposerStatus("Workspace draft ready.", continuityDetail);
+      }
+
+      if (desktopState.productComposerFocused) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+    } catch (error) {
+      console.error("[atlas] product composer bootstrap failed:", error);
+      setComposerStatus(
+        "Desktop state recovery failed.",
+        "ATLAS could not read the saved shell state, but the workspace remains available.",
+      );
+    }
+
+    await loadClarificationStatus();
+  };
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    errorEl.textContent = "";
+
+    if (!bridge?.submitClarification) {
+      errorEl.textContent = "ATLAS could not reach the clarification bridge for this desktop shell.";
+      setComposerStatus(
+        "Clarification refresh is unavailable.",
+        "The product composer can keep text locally, but refreshing the brief needs the Electron desktop bridge.",
+      );
+      return;
+    }
+
+    const objective = String(input.value || "").trim();
+    if (!objective) {
+      errorEl.textContent = "Describe the next delivery outcome before refreshing the clarification brief.";
+      setComposerStatus("The composer is still waiting on a concrete objective.", continuityDetail);
+      input.focus();
+      return;
+    }
+
+    setComposerStatus(
+      "Refreshing the clarification brief for this desktop session.",
+      "ATLAS keeps the draft, then reloads the current workspace surface in the same window.",
+    );
+    void persistComposerFocus(true);
+    void bridge.submitClarification(objective).then((result) => {
+      if (!result.ok) {
+        errorEl.textContent = result.error || "ATLAS could not refresh the clarification brief.";
+        setComposerStatus(
+          "Clarification refresh failed. The draft is still preserved in this desktop shell.",
+          "Review the error, keep editing, and retry after the provider is available.",
+        );
+      }
+    }).catch((error) => {
+      console.error("[atlas] product composer submit failed:", error);
+      errorEl.textContent = String(error?.message || error || "ATLAS could not refresh the clarification brief.");
+      setComposerStatus(
+        "Clarification refresh failed. The draft is still preserved in this desktop shell.",
+        "Review the shell logs, keep the draft, and retry when the desktop bridge is responsive.",
+      );
+    });
+  });
+
+  input.addEventListener("input", () => {
+    errorEl.textContent = "";
+    queueDraftSave();
+  });
+  input.addEventListener("focus", () => {
+    void persistComposerFocus(true);
+  });
+  input.addEventListener("blur", () => {
+    void persistComposerFocus(false);
+    void persistDraft(String(input.value || ""));
+  });
+  window.addEventListener("beforeunload", () => {
+    if (saveTimer) {
+      window.clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    void persistDraft(String(input.value || ""));
+  });
+
+  void bootstrapComposer();
+})();
+  </script>`;
 }
 
 function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
@@ -833,26 +1066,60 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
       display: grid;
       gap: 6px;
     }
+    .stat-pill > span {
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
     .stat-pill strong {
       font-size: 24px;
       letter-spacing: -0.04em;
     }
-    .desktop-composer {
-      position: sticky;
-      bottom: 18px;
-      padding: 18px;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 18px;
-      align-items: center;
-      background: linear-gradient(180deg, rgba(24, 24, 24, 0.98), rgba(12, 12, 12, 0.98));
-    }
-    .composer-actions {
-      grid-auto-flow: column;
-      grid-auto-columns: max-content;
-      align-items: center;
-      justify-content: end;
-    }
+     .desktop-composer {
+       position: sticky;
+       bottom: 18px;
+       padding: 18px;
+       display: grid;
+       grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+       gap: 18px;
+       align-items: start;
+       background: linear-gradient(180deg, rgba(24, 24, 24, 0.98), rgba(12, 12, 12, 0.98));
+     }
+     .composer-body,
+     .product-composer-form,
+     .composer-status,
+     .composer-field {
+       display: grid;
+       gap: 10px;
+     }
+     .composer-input {
+       width: 100%;
+       min-height: 112px;
+       padding: 14px;
+       border-radius: 16px;
+       border: 1px solid var(--line);
+       background: rgba(255, 255, 255, 0.03);
+       color: var(--text);
+       resize: vertical;
+       font: inherit;
+       line-height: 1.6;
+     }
+     .composer-input:focus-visible {
+       outline: 3px solid #ffffff;
+       outline-offset: 2px;
+     }
+     .composer-error {
+       margin: 0;
+       min-height: 1.4em;
+       color: #ffb0b0;
+     }
+     .composer-actions {
+       grid-auto-flow: column;
+       grid-auto-columns: max-content;
+       align-items: center;
+       justify-content: start;
+     }
     @media (max-width: 960px) {
       .shell,
       .canvas-columns,
@@ -871,17 +1138,18 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
     }
   </style>
 </head>
-<body>
-  <main>
-    <section class="shell" aria-label="ATLAS desktop surface">
-      ${renderSidebar(pageData, view, counts, activeSession)}
-      <section class="workspace-shell" aria-label="ATLAS work canvas">
-        ${view === "home" ? renderHomeCanvas(pageData, counts, activeSession) : renderSessionsCanvas(pageData, counts, activeSession)}
-        ${renderComposer(view, pageData, activeSession)}
+  <body>
+    <main>
+      <section class="shell" aria-label="ATLAS desktop surface">
+        ${renderSidebar(pageData, view, counts, activeSession)}
+        <section class="workspace-shell" aria-label="ATLAS work canvas">
+          ${view === "home" ? renderHomeCanvas(pageData, counts, activeSession) : renderSessionsCanvas(pageData, counts, activeSession)}
+          ${renderComposer(view, pageData, activeSession)}
+        </section>
       </section>
-    </section>
-  </main>
-</body>
+    </main>
+    ${renderComposerScript()}
+  </body>
 </html>`;
 }
 

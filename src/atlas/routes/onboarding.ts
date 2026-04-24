@@ -9,7 +9,7 @@ import {
 
 export interface AtlasOnboardingRouteOptions {
   stateDir: string;
-  sessionId: string;
+  sessionId?: string;
   targetRepo?: string;
   clarificationCommand?: string;
   clarificationRunner?: AtlasClarificationRunner;
@@ -57,14 +57,26 @@ export async function handleAtlasOnboardingRequest(
   options: AtlasOnboardingRouteOptions,
 ): Promise<void> {
   const method = String(req.method || "GET").toUpperCase();
+  const sessionId = String(options.sessionId || "").trim();
 
   try {
     if (method === "GET") {
-      const status = await readAtlasClarificationStatus(options.stateDir, options.sessionId);
+      if (!sessionId) {
+        writeJsonResponse(res, 200, {
+          ok: true,
+          ready: false,
+          sessionId: null,
+          packet: null,
+          code: "desktop_session_missing",
+        });
+        return;
+      }
+
+      const status = await readAtlasClarificationStatus(options.stateDir, sessionId);
       writeJsonResponse(res, 200, {
         ok: true,
         ready: status.ready,
-        sessionId: options.sessionId,
+        sessionId,
         packet: status.packet,
       });
       return;
@@ -75,11 +87,21 @@ export async function handleAtlasOnboardingRequest(
       return;
     }
 
+    if (!sessionId) {
+      writeJsonResponse(res, 409, {
+        ok: false,
+        error: "ATLAS onboarding is not bound to a desktop session.",
+        code: "desktop_session_missing",
+        sessionId: null,
+      });
+      return;
+    }
+
     const rawBody = await readRequestBody(req);
     const payload = parseOnboardingPayload(rawBody);
     const packet = await createAtlasClarificationPacket({
       stateDir: options.stateDir,
-      sessionId: options.sessionId,
+      sessionId,
       targetRepo: String(options.targetRepo || "").trim(),
       objective: String(payload.objective || "").trim(),
       command: options.clarificationCommand,
@@ -89,7 +111,7 @@ export async function handleAtlasOnboardingRequest(
     writeJsonResponse(res, 200, {
       ok: true,
       ready: true,
-      sessionId: options.sessionId,
+      sessionId,
       packet,
     });
   } catch (error) {
@@ -105,7 +127,7 @@ export async function handleAtlasOnboardingRequest(
       ok: false,
       error: clarificationError.message,
       code: clarificationError.code,
-      sessionId: options.sessionId,
+      sessionId: sessionId || null,
     });
   }
 }

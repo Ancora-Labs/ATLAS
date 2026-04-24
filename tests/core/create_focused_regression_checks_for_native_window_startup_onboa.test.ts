@@ -69,6 +69,8 @@ describe("atlas desktop regression checks", () => {
       const storedState = await writeAtlasDesktopState(statePath, {
         sessionId: "desktop-session-restore",
         onboardingDraft: "Reopen the desktop shell without losing this draft.",
+        productDraft: "Restore the product-side composer draft after a relaunch.",
+        productComposerFocused: true,
         windowBounds: {
           x: 120,
           y: 84,
@@ -85,6 +87,8 @@ describe("atlas desktop regression checks", () => {
       assert.equal(statePath, path.join(portableRoot, "state", "atlas", "desktop_state.json"));
       assert.equal(restoredState.sessionId, "desktop-session-restore");
       assert.equal(restoredState.onboardingDraft, "Reopen the desktop shell without losing this draft.");
+      assert.equal(restoredState.productDraft, "Restore the product-side composer draft after a relaunch.");
+      assert.equal(restoredState.productComposerFocused, true);
       assert.deepEqual(restoredState.windowBounds, {
         x: 120,
         y: 84,
@@ -191,6 +195,8 @@ describe("atlas desktop regression checks", () => {
       await fs.writeFile(statePath, JSON.stringify({
         sessionId: 42,
         onboardingDraft: ["invalid"],
+        productDraft: { nope: true },
+        productComposerFocused: "yes",
         windowBounds: {
           width: -1,
           height: "tall",
@@ -202,6 +208,8 @@ describe("atlas desktop regression checks", () => {
       const restoredState = await readAtlasDesktopState(statePath);
       assert.equal(restoredState.sessionId, null);
       assert.equal(restoredState.onboardingDraft, "");
+      assert.equal(restoredState.productDraft, "");
+      assert.equal(restoredState.productComposerFocused, false);
       assert.equal(restoredState.windowBounds, null);
       assert.equal(restoredState.lastProductSurface, "home");
       assert.equal(restoredState.focusedSessionRole, null);

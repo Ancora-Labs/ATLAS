@@ -50,18 +50,9 @@ async function routeAtlasRequest(
 
   try {
     if (url.pathname === "/api/onboarding/status" || url.pathname === "/api/onboarding/clarify") {
-      if (!options.desktopSessionId) {
-        res.writeHead(409, { "content-type": "application/json; charset=utf-8" });
-        res.end(JSON.stringify({
-          ok: false,
-          error: "ATLAS onboarding is not bound to a desktop session.",
-          code: "desktop_session_missing",
-        }));
-        return;
-      }
       await handleAtlasOnboardingRequest(req, res, {
         stateDir: options.stateDir,
-        sessionId: options.desktopSessionId,
+        sessionId: options.desktopSessionId || undefined,
         targetRepo: options.targetRepo,
         clarificationCommand: options.clarificationCommand,
         clarificationRunner: options.clarificationRunner,

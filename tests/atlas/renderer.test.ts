@@ -89,28 +89,40 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
 }
 
 describe("atlas renderer", () => {
-  it("renders the home surface with desktop hierarchy, session totals, and lifecycle controls", () => {
+  it("renders the home surface around desktop continuity, delivery focus, and repo state", () => {
     const html = renderAtlasHomeHtml(buildPageData());
 
     assert.match(html, /<title>ATLAS Home<\/title>/);
     assert.match(html, /Native desktop workspace/);
     assert.match(html, /<a class="nav-link" href="\/" aria-current="page">Home<\/a>/);
     assert.match(html, /<a class="nav-link" href="\/sessions">Sessions<\/a>/);
+    assert.match(html, /Desktop continuity/);
     assert.match(html, /ATLAS keeps the live delivery state in the desktop window\./);
-    assert.match(html, /The packaged shell stays monochrome, desktop-first, and trustworthy/);
+    assert.match(html, /repo state, relaunch recovery, and clarification handoff stay inside the native shell/i);
     assert.match(html, /<code>\.\\ATLAS\.cmd<\/code>/);
-    assert.match(html, /<span>Total sessions<\/span>\s*<strong>3<\/strong>/);
-    assert.match(html, /<span>Active sessions<\/span>\s*<strong>1<\/strong>/);
-    assert.match(html, /<span>Needs input<\/span>\s*<strong>1<\/strong>/);
-    assert.match(html, /<span>Completed<\/span>\s*<strong>1<\/strong>/);
+    assert.match(html, /Build session/);
+    assert.match(html, /desktop-session-7/);
+    assert.match(html, /Last packaged build/);
+    assert.match(html, /2026-04-21 12:05 UTC/);
+    assert.match(html, /Active delivery focus/);
+    assert.match(html, /Workers Running/);
+    assert.match(html, /Delivering the ATLAS desktop shell/);
+    assert.match(html, /Repo state/);
+    assert.match(html, />Ancora-Labs\/ATLAS</);
+    assert.match(html, /Tracked sessions/);
+    assert.match(html, />3</);
+    assert.match(html, /Desktop composer/);
+    assert.match(html, /Refresh clarification/);
+    assert.match(html, /data-role="product-composer-input"/);
+    assert.match(html, /getDesktopState/);
+    assert.match(html, /setProductDraft/);
+    assert.match(html, /setProductComposerFocus/);
     assert.match(html, />Resume session flow</);
     assert.match(html, />Stop runtime</);
     assert.match(html, />Ready to resume</);
-    assert.match(html, /Build session/);
-    assert.match(html, /desktop-session-7/);
     assert.match(html, /outline: 3px solid #ffffff/);
     assert.match(html, /@media \(max-width: 960px\)/);
-    assert.doesNotMatch(html, /BOX Mission Control|dashboard/i);
+    assert.doesNotMatch(html, /hero-panel|metric-card|dashboard/i);
   });
 
   it("renders the sessions surface with trusted lifecycle feedback and session actions", () => {
@@ -119,7 +131,8 @@ describe("atlas renderer", () => {
     assert.match(html, /<title>ATLAS Sessions<\/title>/);
     assert.match(html, /<a class="nav-link" href="\/">Home<\/a>/);
     assert.match(html, /<a class="nav-link" href="\/sessions" aria-current="page">Sessions<\/a>/);
-    assert.match(html, /Session ledger stays aligned with the desktop lifecycle\./);
+    assert.match(html, /Trust-first work ledger/);
+    assert.match(html, /Session ledger keeps delivery trust anchored in the desktop lifecycle\./);
     assert.match(html, />3 tracked sessions</);
     assert.match(html, />2 resumable</);
     assert.match(html, />1 needing input</);
@@ -132,11 +145,12 @@ describe("atlas renderer", () => {
     assert.match(html, />Completed · Completed</);
     assert.match(html, />Pause lane</);
     assert.match(html, />Archive session</);
+    assert.match(html, />Refresh clarification</);
     assert.match(html, />feat\/atlas-home</);
     assert.match(html, />No branch recorded</);
     assert.match(html, />2026-04-21 12:00 UTC</);
     assert.match(html, /method="post" action="\/lifecycle"/);
-    assert.doesNotMatch(html, /BOX Mission Control|dashboard/i);
+    assert.doesNotMatch(html, /hero-panel|BOX Mission Control|dashboard/i);
   });
 
   it("[NEGATIVE] escapes dynamic values, keeps the empty state stable, and preserves the start CTA", () => {
@@ -161,5 +175,7 @@ describe("atlas renderer", () => {
     assert.match(homeHtml, />Open sessions</);
     assert.match(homeHtml, />Ready to start</);
     assert.match(homeHtml, /No resumable session is active yet\./);
+    assert.match(homeHtml, /No live session snapshot yet/);
+    assert.doesNotMatch(homeHtml, /metric-card|dashboard/i);
   });
 });

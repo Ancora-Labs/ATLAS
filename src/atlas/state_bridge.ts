@@ -75,6 +75,11 @@ export interface AtlasSessionReadModel {
   archivedSessions: AtlasArchivedSessionDto[];
 }
 
+export interface AtlasSessionSnapshotContinuity {
+  hasLiveSessions: boolean;
+  missingFocusedSnapshot: boolean;
+}
+
 const SESSION_STATUS_PRIORITY: Record<AtlasSessionStatus, number> = {
   blocked: 0,
   error: 1,
@@ -369,6 +374,24 @@ export function getAtlasSessionReadiness(
         readinessLabel: lastTask.trim() ? "Ready to continue" : "Ready to start",
       };
   }
+}
+
+export function resolveAtlasSessionSnapshotContinuity(
+  sessions: AtlasSessionDto[],
+  focusedSessionRole: string | null,
+): AtlasSessionSnapshotContinuity {
+  const normalizedFocus = String(focusedSessionRole || "").trim();
+  if (!normalizedFocus) {
+    return {
+      hasLiveSessions: sessions.length > 0,
+      missingFocusedSnapshot: false,
+    };
+  }
+
+  return {
+    hasLiveSessions: sessions.length > 0,
+    missingFocusedSnapshot: !sessions.some((session) => session.role === normalizedFocus),
+  };
 }
 
 function isResumable(status: AtlasSessionStatus, lastTask: string): boolean {
