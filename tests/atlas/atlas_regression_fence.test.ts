@@ -5,7 +5,11 @@ import path from "node:path";
 import { describe, it } from "node:test";
 
 import { ATLAS_WINDOWS_APP_ID } from "../../electron/single_instance.ts";
-import { createAtlasDesktopPackageLayout } from "../../scripts/atlas_desktop_package.ts";
+import {
+  createAtlasDesktopPackageLayout,
+  publishAtlasDesktopPortableRelease,
+  resetAtlasDesktopReleaseSurface,
+} from "../../scripts/atlas_desktop_package.ts";
 import { listAtlasSessions, readAtlasSessionReadModel } from "../../src/atlas/state_bridge.ts";
 
 function createTempRoot(): Promise<string> {
@@ -87,6 +91,7 @@ describe("atlas regression fence", () => {
     assert.equal(layout.portableRoot, path.join("C:", "ATLAS Release Root", "dist", "ATLAS"));
     assert.equal(layout.portableExePath, path.join("C:", "ATLAS Release Root", "dist", "ATLAS", "ATLAS.exe"));
     assert.equal(layout.stagedAppRoot, path.join("C:", "ATLAS Release Root", "dist", ".atlas-builder", "win-unpacked"));
+    assert.equal(layout.legacyUnpackedRoot, path.join("C:", "ATLAS Release Root", "dist", "win-unpacked"));
     assert.match(launcher, /npm run atlas:ctl -- %ATLAS_ACTION%/);
     assert.match(launcher, /Launching the native ATLAS desktop shell/i);
     assert.match(launcher, /Packaging the portable Windows desktop folder/i);
@@ -95,6 +100,8 @@ describe("atlas regression fence", () => {
     assert.match(desktopMain, /app\.on\("second-instance"/);
     assert.match(desktopMain, /restoreAndFocusAtlasWindow\(mainWindow\)/);
     assert.match(desktopMain, /setAppUserModelId\(ATLAS_WINDOWS_APP_ID\)/);
+    assert.match(desktopMain, /isPackaged:\s*app\.isPackaged/);
+    assert.match(desktopMain, /exePath:\s*app\.getPath\("exe"\)/);
     assert.match(desktopMain, /atlasDesktopResources\.onboardingHtmlPath/);
     assert.match(desktopMain, /window\.loadFile\(atlasDesktopResources\.onboardingHtmlPath\)/);
   });
@@ -104,6 +111,47 @@ describe("atlas regression fence", () => {
       () => createAtlasDesktopPackageLayout(path.join("C:", "ATLAS Release Root"), "   "),
       /non-empty string/i,
     );
+  });
+
+  it("keeps dist\\ATLAS as the only Windows handoff surface after packaging", async () => {
+    const tempRoot = await createTempRoot();
+    const layout = createAtlasDesktopPackageLayout(tempRoot);
+
+    try {
+      await fs.mkdir(layout.portableRoot, { recursive: true });
+      await fs.writeFile(layout.portableExePath, "stale-portable", "utf8");
+      await fs.mkdir(layout.stagingRoot, { recursive: true });
+      await fs.writeFile(path.join(layout.stagingRoot, "stale.txt"), "staging", "utf8");
+      await fs.mkdir(layout.legacyUnpackedRoot, { recursive: true });
+      await fs.writeFile(path.join(layout.legacyUnpackedRoot, "ATLAS.exe"), "legacy", "utf8");
+
+      await resetAtlasDesktopReleaseSurface(layout);
+      await fs.mkdir(layout.stagedAppRoot, { recursive: true });
+      await fs.writeFile(path.join(layout.stagedAppRoot, "ATLAS.exe"), "fresh-portable", "utf8");
+      await publishAtlasDesktopPortableRelease(layout);
+
+      const portableStats = await fs.stat(layout.portableExePath);
+
+      assert.ok(portableStats.isFile());
+      await assert.rejects(fs.stat(layout.stagingRoot), /ENOENT/);
+      await assert.rejects(fs.stat(layout.legacyUnpackedRoot), /ENOENT/);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("[NEGATIVE] rejects publishing when electron-builder does not leave a staged ATLAS.exe surface to promote", async () => {
+    const tempRoot = await createTempRoot();
+    const layout = createAtlasDesktopPackageLayout(tempRoot);
+
+    try {
+      await assert.rejects(
+        publishAtlasDesktopPortableRelease(layout),
+        /did not produce the expected folder/i,
+      );
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("falls back to open_target_sessions.json, maps legacy BOX stages, and aggregates archived sessions", async () => {

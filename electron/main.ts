@@ -64,7 +64,11 @@ let atlasBootstrap: AtlasDesktopBootstrap | null = null;
 let mainWindow: BrowserWindow | null = null;
 let atlasDesktopState: AtlasDesktopState | null = null;
 let atlasDesktopStatePath = "";
-const atlasDesktopResources = resolveAtlasDesktopResourcePaths(import.meta.url);
+const atlasDesktopResources = resolveAtlasDesktopResourcePaths({
+  mainModuleUrl: import.meta.url,
+  isPackaged: app.isPackaged,
+  exePath: app.getPath("exe"),
+});
 const atlasOwnsSingleInstanceLock = wireSingleInstanceLifecycle();
 
 async function assertDesktopResourcePath(resourcePath: string, label: string): Promise<void> {

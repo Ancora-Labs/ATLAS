@@ -11,9 +11,9 @@ import {
 describe("atlas_desktop_resource_paths", () => {
   it("derives preload and onboarding assets from the compiled desktop entrypoint", () => {
     const appRoot = path.join(path.parse(process.cwd()).root, "repo");
-    const paths = resolveAtlasDesktopResourcePaths(
-      pathToFileURL(path.join(appRoot, ".electron-build", "electron", "main.js")).toString(),
-    );
+    const paths = resolveAtlasDesktopResourcePaths({
+      mainModuleUrl: pathToFileURL(path.join(appRoot, ".electron-build", "electron", "main.js")).toString(),
+    });
 
     assert.equal(paths.appRoot, appRoot);
     assert.equal(paths.mainModuleDir, path.join(appRoot, ".electron-build", "electron"));
@@ -24,12 +24,16 @@ describe("atlas_desktop_resource_paths", () => {
   });
 
   it("keeps packaged asset resolution anchored to app.asar instead of the process working directory", () => {
-    const appRoot = path.join(path.parse(process.cwd()).root, "portable", "ATLAS", "resources", "app.asar");
-    const paths = resolveAtlasDesktopResourcePaths(
-      pathToFileURL(path.join(appRoot, ".electron-build", "electron", "main.js")).toString(),
-    );
+    const packagedRoot = path.join(path.parse(process.cwd()).root, "portable", "ATLAS");
+    const appRoot = path.join(packagedRoot, "resources", "app.asar");
+    const paths = resolveAtlasDesktopResourcePaths({
+      mainModuleUrl: pathToFileURL(path.join(appRoot, ".electron-build", "electron", "main.js")).toString(),
+      isPackaged: true,
+      exePath: path.join(packagedRoot, "ATLAS.exe"),
+    });
 
     assert.equal(paths.appRoot, appRoot);
+    assert.equal(paths.mainModuleDir, path.join(appRoot, ".electron-build", "electron"));
     assert.equal(
       paths.preloadPath,
       path.join(appRoot, ".electron-build", "electron", "preload.js"),
@@ -49,6 +53,16 @@ describe("atlas_desktop_resource_paths", () => {
     assert.notEqual(
       paths.onboardingHtmlPath,
       path.join(path.parse(process.cwd()).root, "somewhere-else", "electron", "renderer", "index.html"),
+    );
+  });
+
+  it("[NEGATIVE] rejects packaged asset resolution when the portable ATLAS.exe path is missing", () => {
+    assert.throws(
+      () => resolveAtlasDesktopResourcePaths({
+        mainModuleUrl: pathToFileURL(path.join("C:", "portable", "ATLAS", "resources", "app.asar", ".electron-build", "electron", "main.js")).toString(),
+        isPackaged: true,
+      }),
+      /executable path/i,
     );
   });
 
