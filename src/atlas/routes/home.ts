@@ -182,7 +182,9 @@ export async function buildAtlasPageData(
   const sessions = await listAtlasSessions({ stateDir: options.stateDir });
   const sortedSessions = sortSessions(Object.values(sessions));
   const buildInfo = await readDesktopBuildInfo();
-  const focusedSessionRole = resolveFocusedSessionRole(sortedSessions, location.focusedSessionRole);
+  const requestedFocusedSessionRole = String(location.focusedSessionRole || "").trim() || null;
+  const focusedSessionRole = resolveFocusedSessionRole(sortedSessions, requestedFocusedSessionRole);
+  const missingFocusedSnapshot = Boolean(requestedFocusedSessionRole && !focusedSessionRole);
 
   const pageData = {
     title: "ATLAS Home",
@@ -196,6 +198,7 @@ export async function buildAtlasPageData(
     buildSessionId: buildInfo.sessionId,
     buildTimestamp: buildInfo.builtAt,
     focusedSessionRole,
+    missingFocusedSnapshot,
     ...deriveAtlasHomeReadiness(sortedSessions),
     sessions: sortedSessions,
   };

@@ -22,6 +22,8 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
     homeReadinessHeading: "Ready to resume",
     homeReadinessDetail: "One or more roles can continue from their recorded state.",
     homePrimaryActionLabel: "Resume session flow",
+    focusedSessionRole: null,
+    missingFocusedSnapshot: false,
     sessions: [
       {
         role: "Athena",
@@ -177,5 +179,17 @@ describe("atlas renderer", () => {
     assert.match(homeHtml, /No resumable session is active yet\./);
     assert.match(homeHtml, /No live session snapshot yet/);
     assert.doesNotMatch(homeHtml, /metric-card|dashboard/i);
+  });
+
+  it("shows degraded composer continuity when the saved focus has no live snapshot yet", () => {
+    const html = renderAtlasSessionsHtml(buildPageData({
+      title: "ATLAS Sessions",
+      missingFocusedSnapshot: true,
+    }));
+
+    assert.match(html, /Focus restored without a live session snapshot/);
+    assert.match(html, /The saved focus target is still waiting on its next live session snapshot\./);
+    assert.match(html, /data-missing-focused-snapshot="true"/);
+    assert.match(html, />Clear focus</);
   });
 });

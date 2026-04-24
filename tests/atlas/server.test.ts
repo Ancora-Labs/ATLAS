@@ -369,6 +369,9 @@ describe("atlas server", () => {
 
     assert.equal(response.status, 200);
     assert.match(response.text, />Tracked sessions</);
+    assert.match(response.text, /Focus restored without a live session snapshot/);
+    assert.match(response.text, /The saved focus target is still waiting on its next live session snapshot\./);
+    assert.match(response.text, />Clear focus</);
     assert.doesNotMatch(response.text, /missing-worker/);
   });
   it("can create a request handler without mutating dashboard port 8787 behavior", () => {

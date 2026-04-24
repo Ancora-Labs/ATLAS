@@ -151,6 +151,15 @@ describe("state_bridge", () => {
     });
   });
 
+  it("accepts a route-level continuity hint when the restored focus cannot be surfaced safely", () => {
+    const continuity = resolveAtlasSessionSnapshotContinuity([], null, true);
+
+    assert.deepEqual(continuity, {
+      hasLiveSessions: false,
+      missingFocusedSnapshot: true,
+    });
+  });
+
   it("loads canonical target sessions through the dedicated ATLAS adapter", async () => {
     const tempRoot = await createTempRoot();
     const stateDir = path.join(tempRoot, "state");

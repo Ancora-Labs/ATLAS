@@ -18,6 +18,7 @@ export interface AtlasPageData {
   homeReadinessDetail: string;
   homePrimaryActionLabel: string;
   focusedSessionRole: string | null;
+  missingFocusedSnapshot: boolean;
   sessions: AtlasSessionDto[];
 }
 
@@ -299,7 +300,7 @@ function renderSidebar(pageData: AtlasPageData, view: AtlasView, counts: AtlasSe
           <div class="eyebrow">Session focus</div>
           <h2>${escapeHtml(sessionSummary.heading)}</h2>
         </div>
-        ${activeSession && pageData.focusedSessionRole
+        ${activeSession && (pageData.focusedSessionRole || pageData.missingFocusedSnapshot)
           ? renderLinkAction("Clear focus", buildSurfaceHref(view, null))
           : ""}
       </div>
@@ -455,7 +456,11 @@ function renderSessionsCanvas(pageData: AtlasPageData, counts: AtlasSessionCount
 }
 
 function renderComposer(view: AtlasView, pageData: AtlasPageData, activeSession: AtlasSessionDto | null): string {
-  const continuity = resolveAtlasSessionSnapshotContinuity(pageData.sessions, pageData.focusedSessionRole);
+  const continuity = resolveAtlasSessionSnapshotContinuity(
+    pageData.sessions,
+    pageData.focusedSessionRole,
+    pageData.missingFocusedSnapshot === true,
+  );
   const primaryHref = view === "sessions" && activeSession
     ? buildSurfaceHref("home", activeSession.role)
     : buildSurfaceHref("sessions", pageData.focusedSessionRole);
@@ -498,6 +503,10 @@ function renderComposer(view: AtlasView, pageData: AtlasPageData, activeSession:
         actions.push(renderLifecycleForm("Archive session", "archive", { role: activeSession.role, returnTo }));
       }
     }
+  }
+
+  if (view === "sessions" && pageData.missingFocusedSnapshot) {
+    actions.push(renderLinkAction("Clear focus", buildSurfaceHref(view, null)));
   }
 
   return `<section

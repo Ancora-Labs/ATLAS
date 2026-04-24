@@ -379,7 +379,15 @@ export function getAtlasSessionReadiness(
 export function resolveAtlasSessionSnapshotContinuity(
   sessions: AtlasSessionDto[],
   focusedSessionRole: string | null,
+  missingFocusedSnapshotHint = false,
 ): AtlasSessionSnapshotContinuity {
+  if (missingFocusedSnapshotHint) {
+    return {
+      hasLiveSessions: sessions.length > 0,
+      missingFocusedSnapshot: true,
+    };
+  }
+
   const normalizedFocus = String(focusedSessionRole || "").trim();
   if (!normalizedFocus) {
     return {
