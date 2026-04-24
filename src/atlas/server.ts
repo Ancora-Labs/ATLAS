@@ -2,12 +2,11 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { readAtlasClarificationStatus, type AtlasClarificationRunner } from "./clarification.js";
+import { type AtlasClarificationRunner } from "./clarification.js";
 import { handleAtlasHomeRequest, type AtlasHomeRouteOptions } from "./routes/home.js";
 import { handleAtlasLifecycleRequest } from "./routes/lifecycle.js";
 import { handleAtlasOnboardingRequest } from "./routes/onboarding.js";
 import { handleAtlasSessionsRequest } from "./routes/sessions.js";
-import { renderAtlasOnboardingGateHtml } from "./renderer.js";
 
 export const ATLAS_DEFAULT_PORT = 8788;
 
@@ -42,17 +41,6 @@ function resolveAtlasServerOptions(options: AtlasServerOptions = {}): ResolvedAt
   };
 }
 
-async function shouldBlockAtlasSurface(
-  pathname: string,
-  options: ResolvedAtlasServerOptions,
-): Promise<boolean> {
-  if (!options.desktopSessionId) return false;
-  if (!["/", "/sessions"].includes(pathname)) return false;
-
-  const status = await readAtlasClarificationStatus(options.stateDir, options.desktopSessionId);
-  return !status.ready;
-}
-
 async function routeAtlasRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -78,16 +66,6 @@ async function routeAtlasRequest(
         clarificationCommand: options.clarificationCommand,
         clarificationRunner: options.clarificationRunner,
       });
-      return;
-    }
-
-    if (await shouldBlockAtlasSurface(url.pathname, options)) {
-      res.writeHead(412, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderAtlasOnboardingGateHtml({
-        repoLabel: options.targetRepo || "ATLAS desktop session",
-        hostLabel: options.hostLabel,
-        shellCommand: options.shellCommand,
-      }));
       return;
     }
 
