@@ -7,161 +7,398 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg: #0a1017;
-      --panel: rgba(11, 18, 26, 0.94);
-      --line: rgba(132, 187, 255, 0.18);
+      --bg: #0a0f14;
+      --panel: rgba(12, 18, 24, 0.92);
+      --panel-strong: rgba(15, 23, 31, 0.98);
+      --line: rgba(154, 179, 204, 0.16);
+      --line-strong: rgba(154, 179, 204, 0.28);
       --text: #f3f7fb;
-      --muted: #a5b5c8;
-      --accent: #88baff;
-      --danger: #ff9a9a;
+      --muted: #9caec1;
+      --accent: #a7cdf8;
+      --accent-strong: #dbeeff;
+      --danger: #ffb3b3;
+      --shadow: 0 28px 72px rgba(0, 0, 0, 0.34);
     }
-    * { box-sizing: border-box; }
+
+    * {
+      box-sizing: border-box;
+    }
+
     body {
       margin: 0;
       min-height: 100vh;
       color: var(--text);
-      font-family: "Segoe UI", Inter, sans-serif;
+      font-family: "Segoe UI Variable", "Segoe UI", Inter, sans-serif;
       background:
-        radial-gradient(circle at top left, rgba(74, 143, 255, 0.16), transparent 24%),
-        radial-gradient(circle at top right, rgba(141, 225, 177, 0.10), transparent 20%),
-        linear-gradient(180deg, #0a1017 0%, #101925 100%);
+        radial-gradient(circle at top left, rgba(126, 172, 226, 0.16), transparent 24%),
+        linear-gradient(180deg, #0a0f14 0%, #0d131a 48%, #101922 100%);
     }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 72px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.03), transparent 1px);
+      opacity: 0.34;
+    }
+
     main {
       min-height: 100vh;
       display: grid;
       place-items: center;
-      padding: 24px;
-    }
-    .panel {
-      width: min(1120px, 100%);
-      display: grid;
-      gap: 24px;
       padding: 28px;
+    }
+
+    .shell {
+      width: min(1220px, 100%);
       border-radius: 24px;
       border: 1px solid var(--line);
-      background: var(--panel);
-      box-shadow: 0 26px 72px rgba(0, 0, 0, 0.28);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 160px), var(--panel);
+      box-shadow: var(--shadow);
+      overflow: hidden;
     }
-    body[data-layout="split"] .panel {
-      grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
-      align-items: start;
-    }
-    .eyebrow {
-      color: var(--muted);
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-bottom: 12px;
-    }
-    h1, h2, p { margin: 0; }
-    p { line-height: 1.55; color: #d6e1ee; }
-    .stack, form {
-      display: grid;
+
+    .shell-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       gap: 16px;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.02);
     }
+
+    .shell-brand {
+      display: grid;
+      gap: 4px;
+    }
+
+    .eyebrow,
+    .meta-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .shell-brand strong,
+    h1,
+    h2,
+    p {
+      margin: 0;
+    }
+
+    .shell-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .shell-pill {
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+      color: #d4dfeb;
+      font-size: 12px;
+      line-height: 1;
+    }
+
+    .body-grid {
+      display: grid;
+      gap: 24px;
+      padding: 24px;
+    }
+
+    body[data-layout="split"] .body-grid {
+      grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+      align-items: stretch;
+    }
+
+    .rail,
+    .workspace {
+      display: grid;
+      gap: 18px;
+    }
+
+    .workspace {
+      grid-template-rows: minmax(0, 1fr) auto;
+    }
+
+    .workspace-main {
+      display: grid;
+      gap: 18px;
+      align-content: start;
+    }
+
     .card {
       padding: 18px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: rgba(9, 14, 20, 0.72);
+    }
+
+    .hero {
+      display: grid;
+      gap: 16px;
+      padding: 22px;
+      border: 1px solid var(--line-strong);
+      background: linear-gradient(180deg, rgba(167, 205, 248, 0.08), rgba(9, 14, 20, 0.72));
+    }
+
+    .hero h1 {
+      font-size: clamp(28px, 3.5vw, 38px);
+      line-height: 1.08;
+      letter-spacing: -0.03em;
+    }
+
+    .hero p,
+    .support-copy,
+    .composer-help {
+      color: #d4dfeb;
+      line-height: 1.6;
+    }
+
+    .status-block {
+      display: grid;
+      gap: 8px;
+      padding: 16px 18px;
       border-radius: 18px;
       border: 1px solid var(--line);
-      background: rgba(8, 14, 21, 0.52);
+      background: rgba(7, 12, 18, 0.68);
     }
-    label span, .meta {
+
+    .status-block strong {
+      font-size: 15px;
+      line-height: 1.4;
+    }
+
+    .meta-grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .meta-grid code,
+    textarea {
+      font: inherit;
+      font-family: Consolas, "Cascadia Code", monospace;
+    }
+
+    .meta-grid strong,
+    .meta-grid code {
       display: block;
-      margin-bottom: 8px;
-      color: var(--muted);
-      font-size: 12px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      margin-top: 8px;
+      word-break: break-word;
     }
+
+    form {
+      display: grid;
+      gap: 18px;
+    }
+
+    .composer {
+      display: grid;
+      gap: 18px;
+      padding: 22px;
+      border-color: var(--line-strong);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(9, 14, 20, 0.9));
+    }
+
+    .composer-header {
+      display: grid;
+      gap: 12px;
+    }
+
+    .composer-help {
+      max-width: 72ch;
+    }
+
+    .composer-form {
+      gap: 14px;
+    }
+
+    .composer-field {
+      display: grid;
+      gap: 10px;
+    }
+
+    .composer-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
     textarea {
       width: 100%;
-      min-height: 180px;
-      padding: 14px 16px;
-      border-radius: 18px;
-      border: 1px solid var(--line);
-      background: rgba(8, 14, 21, 0.82);
+      min-height: 170px;
+      padding: 18px;
+      border-radius: 20px;
+      border: 1px solid var(--line-strong);
+      background: var(--panel-strong);
       color: var(--text);
-      font: inherit;
+      font-size: 14px;
+      line-height: 1.6;
       resize: vertical;
     }
+
+    textarea:focus,
+    button:focus-visible {
+      outline: 2px solid var(--accent-strong);
+      outline-offset: 2px;
+    }
+
     button {
       border: 0;
       border-radius: 999px;
-      padding: 12px 18px;
+      padding: 14px 18px;
       font: inherit;
       font-weight: 700;
+      letter-spacing: 0.01em;
+      color: #09111a;
+      background: linear-gradient(180deg, var(--accent-strong), var(--accent));
       cursor: pointer;
-      color: #08111d;
-      background: var(--accent);
+      justify-self: start;
+      min-width: 240px;
+      box-shadow: 0 10px 28px rgba(167, 205, 248, 0.22);
     }
+
     button[disabled] {
       cursor: wait;
-      opacity: 0.75;
+      opacity: 0.78;
     }
-    code {
-      display: inline-block;
-      margin-top: 10px;
-      padding: 10px 12px;
-      border-radius: 14px;
-      border: 1px solid var(--line);
-      background: rgba(8, 14, 21, 0.62);
-      color: var(--text);
-      font-family: Consolas, "Cascadia Code", monospace;
-      word-break: break-word;
-    }
+
     .error {
-      color: var(--danger);
       min-height: 1.4em;
+      color: var(--danger);
+      margin: 0;
+      flex: 1 1 220px;
     }
-    @media (max-width: 959px) {
-      .panel {
-        padding: 20px;
+
+    .support-list {
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding-left: 18px;
+      color: #d4dfeb;
+    }
+
+    @media (max-width: 1099px) {
+      main {
+        padding: 18px;
+      }
+
+      .body-grid {
+        padding: 18px;
+      }
+
+      .shell {
+        border-radius: 20px;
+      }
+
+      .shell-header,
+      .composer-actions {
+        align-items: start;
+        flex-direction: column;
+      }
+
+      button {
+        width: 100%;
       }
     }
   </style>
 </head>
 <body>
   <main>
-    <section class="panel" aria-label="ATLAS desktop onboarding">
-      <div class="stack">
-        <div>
-          <div class="eyebrow">Native desktop shell</div>
-          <h1>Clarify the work before ATLAS starts planning</h1>
+    <section class="shell" aria-label="ATLAS desktop onboarding">
+      <header class="shell-header">
+        <div class="shell-brand">
+          <span class="eyebrow">ATLAS Desktop</span>
+          <strong>First-run objective intake</strong>
         </div>
-        <div class="card">
-          <div class="meta">Target repo</div>
-          <strong data-role="repo">Loading target repository...</strong>
+        <div class="shell-pills" aria-label="Desktop shell context">
+          <span class="shell-pill">Native Windows title bar</span>
+          <span class="shell-pill">Single clarification handoff</span>
         </div>
-        <div class="card">
-          <div class="meta">Desktop session</div>
-          <code data-role="session">Generating session...</code>
-        </div>
-        <div class="card">
-          <div class="meta">Launcher</div>
-          <code data-role="shell">.\\ATLAS.cmd</code>
-        </div>
-      </div>
+      </header>
 
-      <div class="stack">
-        <div>
-          <div class="eyebrow">One real clarification pass</div>
-          <h2>Describe the outcome you want in English</h2>
-          <p data-role="status">Planning remains locked until this desktop session stores one clarification packet.</p>
-        </div>
+      <div class="body-grid">
+        <aside class="rail">
+          <section class="card hero">
+            <div class="eyebrow">Windows-first shell</div>
+            <h1>Start with one clear objective before the workspace unlocks.</h1>
+            <p>The renderer stays below the real Windows frame, keeps the first-run handoff focused, and stores one clarification packet before the live ATLAS workspace replaces this intake surface.</p>
+          </section>
 
-        <form data-role="form">
-          <label>
-            <span>Objective</span>
-            <textarea
-              data-role="objective"
-              name="objective"
-              required
-              placeholder="Explain the feature, bug fix, or delivery outcome you want ATLAS to drive."></textarea>
-          </label>
-          <button type="submit">Run clarification and open ATLAS</button>
-        </form>
+          <section class="status-block" aria-live="polite">
+            <span class="eyebrow">Desktop status</span>
+            <strong data-role="status">Loading the desktop bootstrap...</strong>
+          </section>
 
-        <p class="error" data-role="error"></p>
+          <section class="card meta-grid" aria-label="Desktop session metadata">
+            <div>
+              <span class="meta-label">Target repo</span>
+              <strong data-role="repo">Loading target repository...</strong>
+            </div>
+            <div>
+              <span class="meta-label">Desktop session</span>
+              <code data-role="session">Loading session...</code>
+            </div>
+            <div>
+              <span class="meta-label">Launcher</span>
+              <code data-role="shell">.\\ATLAS.cmd</code>
+            </div>
+          </section>
+        </aside>
+
+        <section class="workspace">
+          <section class="workspace-main">
+            <section class="card">
+              <div class="eyebrow">Clarification workspace</div>
+              <h2>Frame the delivery outcome, not the implementation checklist.</h2>
+              <p class="support-copy">Use the context rail to confirm the desktop session, keep the scope grounded, and hand ATLAS one precise objective before the main workspace opens.</p>
+            </section>
+
+            <section class="card" aria-label="What ATLAS does next">
+              <div class="eyebrow">What ATLAS does next</div>
+              <ol class="support-list">
+                <li>Persist the objective as the session draft so the shell can recover cleanly after a relaunch.</li>
+                <li>Store one clarification packet for the current desktop session.</li>
+                <li>Replace this onboarding surface with the live ATLAS workspace in the same window.</li>
+              </ol>
+            </section>
+          </section>
+
+          <section class="composer card" aria-label="Objective composer">
+            <div class="composer-header">
+              <div>
+                <div class="eyebrow">Objective composer</div>
+                <h2>Describe the delivery outcome in plain English.</h2>
+              </div>
+              <p class="composer-help" data-role="detail"></p>
+            </div>
+
+            <form data-role="form" class="composer-form">
+              <label class="composer-field">
+                <span class="meta-label">Objective</span>
+                <textarea
+                  data-role="objective"
+                  name="objective"
+                  required
+                  placeholder="Example: Ship the Electron onboarding shell with native window polish, restore the preload bridge, and keep the product surface locked until one clarification packet is stored."></textarea>
+              </label>
+              <div class="composer-actions">
+                <p class="error" data-role="error"></p>
+                <button type="submit">Store clarification and open ATLAS</button>
+              </div>
+            </form>
+          </section>
+        </section>
       </div>
     </section>
   </main>

@@ -333,13 +333,13 @@ function renderHomeCanvas(pageData: AtlasPageData, counts: AtlasSessionCounts, a
       <div class="section-heading">
         <div>
           <div class="eyebrow">Desktop continuity</div>
-          <h1>ATLAS keeps the live delivery state in the same desktop window.</h1>
+          <h1>ATLAS keeps the live delivery state in the desktop window.</h1>
         </div>
-        <p class="support-copy">The clarification handoff, relaunch recovery, and repo context stay inside the native shell instead of drifting back to a browser-style launch flow.</p>
+        <p class="support-copy">The packaged shell stays monochrome, desktop-first, and trustworthy while repo state, relaunch recovery, and clarification handoff stay inside the native shell.</p>
       </div>
       <dl class="definition-grid">
         <div>
-          <dt>Desktop session</dt>
+          <dt>Build session</dt>
           <dd>${escapeHtml(pageData.buildSessionId)}</dd>
         </div>
         <div>
@@ -383,12 +383,12 @@ function renderHomeCanvas(pageData: AtlasPageData, counts: AtlasSessionCounts, a
         <p class="lead">${escapeHtml(pageData.hostLabel)}</p>
         <p class="support-copy">${escapeHtml(pageData.homeReadinessDetail)}</p>
         <div class="stats-grid">
-          <div class="stat-pill"><span class="caption">Tracked sessions</span><strong>${escapeHtml(String(counts.total))}</strong></div>
-          <div class="stat-pill"><span class="caption">Active sessions</span><strong>${escapeHtml(String(counts.active))}</strong></div>
-          <div class="stat-pill"><span class="caption">Needs input</span><strong>${escapeHtml(String(counts.needsInput))}</strong></div>
-          <div class="stat-pill"><span class="caption">Completed handoffs</span><strong>${escapeHtml(String(counts.completed))}</strong></div>
-          <div class="stat-pill"><span class="caption">Resumable sessions</span><strong>${escapeHtml(String(counts.resumable))}</strong></div>
-          <div class="stat-pill"><span class="caption">Paused lanes</span><strong>${escapeHtml(String(counts.paused))}</strong></div>
+          <div class="stat-pill"><span>Total sessions</span><strong>${escapeHtml(String(counts.total))}</strong></div>
+          <div class="stat-pill"><span>Active sessions</span><strong>${escapeHtml(String(counts.active))}</strong></div>
+          <div class="stat-pill"><span>Needs input</span><strong>${escapeHtml(String(counts.needsInput))}</strong></div>
+          <div class="stat-pill"><span>Completed</span><strong>${escapeHtml(String(counts.completed))}</strong></div>
+          <div class="stat-pill"><span>Resumable</span><strong>${escapeHtml(String(counts.resumable))}</strong></div>
+          <div class="stat-pill"><span>Paused lanes</span><strong>${escapeHtml(String(counts.paused))}</strong></div>
         </div>
       </section>
     </section>
@@ -403,7 +403,7 @@ function renderSessionsCanvas(pageData: AtlasPageData, counts: AtlasSessionCount
           <div class="eyebrow">Trust-first work ledger</div>
           <h1>Session ledger keeps delivery trust anchored in the desktop lifecycle.</h1>
         </div>
-        <p class="support-copy">Every tracked role keeps its state, lane action, branch, and last activity visible so restore, resume, and archive decisions stay grounded in the packaged ATLAS shell.</p>
+        <p class="support-copy">Session ledger stays aligned with the desktop lifecycle.</p>
       </div>
       <div class="chip-row">
         <span class="chip">${escapeHtml(String(counts.total))} tracked sessions</span>
@@ -832,6 +832,12 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
       padding: 14px;
       display: grid;
       gap: 6px;
+    }
+    .stat-pill > span {
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
     .stat-pill strong {
       font-size: 24px;

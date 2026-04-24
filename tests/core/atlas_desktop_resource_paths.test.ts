@@ -19,6 +19,8 @@ describe("atlas_desktop_resource_paths", () => {
     assert.equal(paths.mainModuleDir, path.join(appRoot, ".electron-build", "electron"));
     assert.equal(paths.preloadPath, path.join(appRoot, ".electron-build", "electron", "preload.js"));
     assert.equal(paths.onboardingHtmlPath, path.join(appRoot, "electron", "renderer", "index.html"));
+    assert.equal(paths.onboardingScriptPath, path.join(appRoot, "electron", "renderer", "app.js"));
+    assert.equal(paths.onboardingLayoutPath, path.join(appRoot, "electron", "renderer", "layout.js"));
   });
 
   it("keeps packaged asset resolution anchored to app.asar instead of the process working directory", () => {
@@ -35,6 +37,14 @@ describe("atlas_desktop_resource_paths", () => {
     assert.equal(
       paths.onboardingHtmlPath,
       path.join(appRoot, "electron", "renderer", "index.html"),
+    );
+    assert.equal(
+      paths.onboardingScriptPath,
+      path.join(appRoot, "electron", "renderer", "app.js"),
+    );
+    assert.equal(
+      paths.onboardingLayoutPath,
+      path.join(appRoot, "electron", "renderer", "layout.js"),
     );
     assert.notEqual(
       paths.onboardingHtmlPath,

@@ -1,6 +1,57 @@
+import type { BrowserWindow, BrowserWindowConstructorOptions } from "electron";
+
+export interface AtlasWindowBounds {
+  width: number;
+  height: number;
+  x?: number;
+  y?: number;
+}
+
 export interface AtlasPopupDecision {
   action: "allow-same-origin" | "open-modal-auth" | "deny";
   reason: string;
+}
+
+export function createAtlasDesktopWindowChromeOptions(
+  persistedBounds: AtlasWindowBounds | null,
+  platform: NodeJS.Platform = process.platform,
+): BrowserWindowConstructorOptions {
+  return {
+    width: persistedBounds?.width || 1420,
+    height: persistedBounds?.height || 920,
+    ...(persistedBounds && typeof persistedBounds.x === "number" ? { x: persistedBounds.x } : { center: true }),
+    ...(persistedBounds && typeof persistedBounds.y === "number" ? { y: persistedBounds.y } : {}),
+    minWidth: 1120,
+    minHeight: 720,
+    show: false,
+    frame: true,
+    autoHideMenuBar: true,
+    backgroundColor: "#0a0f14",
+    title: "ATLAS",
+    maximizable: true,
+    fullscreenable: false,
+    ...(platform === "win32" ? { backgroundMaterial: "mica" as const } : {}),
+  };
+}
+
+export function createAtlasAuthPopupOptions(parentWindow: BrowserWindow): BrowserWindowConstructorOptions {
+  return {
+    width: 540,
+    height: 720,
+    parent: parentWindow,
+    modal: true,
+    autoHideMenuBar: true,
+    backgroundColor: "#0a0f14",
+    title: "ATLAS authentication",
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    webPreferences: {
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  };
 }
 
 function normalizeOrigin(value: string): string {

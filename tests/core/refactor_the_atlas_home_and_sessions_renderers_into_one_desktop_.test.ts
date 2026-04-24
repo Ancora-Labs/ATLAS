@@ -102,6 +102,8 @@ describe("atlas desktop shell refactor", () => {
     assert.match(html, /Desktop continuity/);
     assert.match(html, /Active delivery focus/);
     assert.match(html, /Repo state/);
+    assert.match(html, /ATLAS keeps the live delivery state in the desktop window\./);
+    assert.match(html, /monochrome, desktop-first, and trustworthy/i);
     assert.match(html, /Resume session flow/);
     assert.match(html, /Stop runtime/);
     assert.match(html, /position: sticky/);
@@ -114,6 +116,7 @@ describe("atlas desktop shell refactor", () => {
 
     assert.match(html, /<title>ATLAS Sessions<\/title>/);
     assert.match(html, /Trust-first work ledger/);
+    assert.match(html, /Session ledger stays aligned with the desktop lifecycle\./);
     assert.match(html, /Focused workspace/);
     assert.match(html, /Keep focus on home/);
     assert.match(html, /method="post" action="\/lifecycle"/);
