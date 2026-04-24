@@ -36,6 +36,14 @@
   "build": {
     "appId": "com.ancoralabs.atlas",
     "productName": "ATLAS",
+    "files": [
+      "package.json",
+      ".electron-build/**/*",
+      "electron/renderer/**/*"
+    ],
+    "extraFiles": [
+      "box.config.json"
+    ],
     "win": {
       "target": [
         "dir"

@@ -1,3 +1,4 @@
+﻿import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -19,6 +20,10 @@ import {
   writeAtlasDesktopState,
 } from "../src/atlas/desktop_state.js";
 import { startAtlasServer } from "../src/atlas/server.js";
+import {
+  resolveAtlasDesktopResourcePaths,
+  resolvePackagedWorkingDirectory,
+} from "./resource_paths.js";
 import { decideAtlasPopupHandling, isContainedAuthUrl } from "./window_policy.js";
 
 interface AtlasDesktopRuntime {
@@ -31,13 +36,36 @@ let atlasBootstrap: AtlasDesktopBootstrap | null = null;
 let mainWindow: BrowserWindow | null = null;
 let atlasDesktopState: AtlasDesktopState | null = null;
 let atlasDesktopStatePath = "";
+const atlasDesktopResources = resolveAtlasDesktopResourcePaths(import.meta.url);
 
-function resolvePreloadPath(): string {
-  return path.join(app.isPackaged ? app.getAppPath() : process.cwd(), ".electron-build", "electron", "preload.js");
+async function assertDesktopResourcePath(resourcePath: string, label: string): Promise<void> {
+  try {
+    await fs.access(resourcePath);
+  } catch (error) {
+    throw new Error(
+      `[atlas] desktop ${label} was not found at ${resourcePath}: ${String((error as Error)?.message || error)}`,
+    );
+  }
 }
 
-function resolveOnboardingHtmlPath(): string {
-  return path.join(app.isPackaged ? app.getAppPath() : process.cwd(), "electron", "renderer", "index.html");
+async function validateDesktopResources(): Promise<void> {
+  await assertDesktopResourcePath(atlasDesktopResources.preloadPath, "preload script");
+  await assertDesktopResourcePath(atlasDesktopResources.onboardingHtmlPath, "onboarding shell");
+}
+
+function alignPackagedWorkingDirectory(): void {
+  if (!app.isPackaged) {
+    return;
+  }
+
+  const workingDirectory = resolvePackagedWorkingDirectory(app.getPath("exe"));
+  try {
+    process.chdir(workingDirectory);
+  } catch (error) {
+    throw new Error(
+      `[atlas] failed to align the packaged working directory to ${workingDirectory}: ${String((error as Error)?.message || error)}`,
+    );
+  }
 }
 
 async function initializeDesktopState(): Promise<void> {
@@ -164,7 +192,7 @@ async function loadInitialSurface(window: BrowserWindow): Promise<void> {
     return;
   }
 
-  await window.loadFile(resolveOnboardingHtmlPath());
+  await window.loadFile(atlasDesktopResources.onboardingHtmlPath);
 }
 
 function createAuthPopup(parentWindow: BrowserWindow, targetUrl: string): void {
@@ -236,7 +264,7 @@ async function createMainWindow(): Promise<BrowserWindow> {
     backgroundColor: "#0a1017",
     title: "ATLAS Desktop",
     webPreferences: {
-      preload: resolvePreloadPath(),
+      preload: atlasDesktopResources.preloadPath,
       contextIsolation: true,
       sandbox: false,
       nodeIntegration: false,
@@ -250,6 +278,9 @@ async function createMainWindow(): Promise<BrowserWindow> {
 }
 
 async function bootstrapDesktopApp(): Promise<void> {
+  alignPackagedWorkingDirectory();
+  await validateDesktopResources();
+
   await initializeDesktopState();
   atlasRuntime = await startDesktopRuntime();
   mainWindow = await createMainWindow();
