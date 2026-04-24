@@ -3,6 +3,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import { resolveAtlasDesktopShellCommand } from "../electron/resource_paths.js";
+
 export interface AtlasDesktopPackageLayout {
   distRoot: string;
   stagingRoot: string;
@@ -12,11 +14,20 @@ export interface AtlasDesktopPackageLayout {
   portableExePath: string;
 }
 
+interface AtlasDesktopBuildInfo {
+  sessionId: string;
+  builtAt: string | null;
+  sourceRoot: string;
+  launcherCommand: string;
+  executablePath: string;
+}
+
 const ROOT = process.cwd();
 const PORTABLE_FOLDER_NAME = "ATLAS";
 const PORTABLE_EXE_NAME = "ATLAS.exe";
 const STAGING_FOLDER_NAME = ".atlas-builder";
 const STAGED_WINDOWS_FOLDER_NAME = "win-unpacked";
+const DESKTOP_BUILD_INFO_NAME = "desktop-build-info.json";
 const REMOVE_RETRYABLE_CODES = new Set(["EBUSY", "EPERM", "ENOTEMPTY"]);
 const REMOVE_RETRY_DELAYS_MS = [150, 300, 600];
 
@@ -111,6 +122,60 @@ async function resolveElectronBuilderCli(root: string): Promise<string> {
   throw new Error("electron-builder CLI was not found under node_modules.");
 }
 
+function normalizePortableBuildSessionId(value: unknown): string {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  return path.basename(ROOT);
+}
+
+async function readSourceDesktopBuildInfo(): Promise<Partial<AtlasDesktopBuildInfo>> {
+  const sourceBuildInfoPath = path.join(ROOT, DESKTOP_BUILD_INFO_NAME);
+  if (!await pathExists(sourceBuildInfoPath)) {
+    return {};
+  }
+
+  let rawBuildInfo = "";
+  try {
+    rawBuildInfo = await fs.readFile(sourceBuildInfoPath, "utf8");
+  } catch (error) {
+    throw new Error(
+      `[atlas:desktop:package] failed to read ${DESKTOP_BUILD_INFO_NAME} at ${sourceBuildInfoPath}: ${String((error as Error)?.message || error)}`,
+    );
+  }
+
+  try {
+    return JSON.parse(rawBuildInfo) as Partial<AtlasDesktopBuildInfo>;
+  } catch (error) {
+    throw new Error(
+      `[atlas:desktop:package] failed to parse ${DESKTOP_BUILD_INFO_NAME} at ${sourceBuildInfoPath}: ${String((error as Error)?.message || error)}`,
+    );
+  }
+}
+
+async function writePortableDesktopBuildInfo(layout: AtlasDesktopPackageLayout): Promise<void> {
+  const buildInfoPath = path.join(layout.portableRoot, DESKTOP_BUILD_INFO_NAME);
+  const sourceBuildInfo = await readSourceDesktopBuildInfo();
+  const portableBuildInfo: AtlasDesktopBuildInfo = {
+    sessionId: normalizePortableBuildSessionId(sourceBuildInfo.sessionId),
+    builtAt: new Date().toISOString(),
+    sourceRoot: ROOT,
+    launcherCommand: resolveAtlasDesktopShellCommand({
+      isPackaged: true,
+      exePath: layout.portableExePath,
+    }),
+    executablePath: layout.portableExePath,
+  };
+
+  try {
+    await fs.writeFile(buildInfoPath, JSON.stringify(portableBuildInfo, null, 2), "utf8");
+  } catch (error) {
+    throw new Error(
+      `[atlas:desktop:package] failed to write ${DESKTOP_BUILD_INFO_NAME} at ${buildInfoPath}: ${String((error as Error)?.message || error)}`,
+    );
+  }
+}
+
 export async function resetAtlasDesktopReleaseSurface(layout: AtlasDesktopPackageLayout): Promise<void> {
   await removeReleasePath(layout.stagingRoot, "staging surface");
   await removeReleasePath(layout.legacyUnpackedRoot, "legacy unpacked release surface");
@@ -138,6 +203,8 @@ export async function publishAtlasDesktopPortableRelease(
   if (!await pathExists(layout.portableExePath)) {
     throw new Error(`portable ATLAS executable was not created at ${layout.portableExePath}`);
   }
+
+  await writePortableDesktopBuildInfo(layout);
 
   return layout;
 }

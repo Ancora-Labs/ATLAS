@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 
 import {
   resolveAtlasDesktopResourcePaths,
+  resolveAtlasDesktopShellCommand,
   resolvePackagedWorkingDirectory,
 } from "../../electron/resource_paths.js";
 
@@ -71,6 +72,22 @@ describe("atlas_desktop_resource_paths", () => {
     assert.equal(
       resolvePackagedWorkingDirectory(path.join(packagedRoot, "ATLAS.exe")),
       packagedRoot,
+    );
+  });
+
+  it("keeps the packaged desktop handoff anchored to the root ATLAS.exe instead of the repo launcher script", () => {
+    const packagedRoot = path.join(path.parse(process.cwd()).root, "portable", "ATLAS");
+
+    assert.equal(
+      resolveAtlasDesktopShellCommand({
+        isPackaged: true,
+        exePath: path.join(packagedRoot, "ATLAS.exe"),
+      }),
+      path.normalize(`.${path.sep}ATLAS.exe`),
+    );
+    assert.equal(
+      resolveAtlasDesktopShellCommand(),
+      path.normalize(`.${path.sep}ATLAS.cmd`),
     );
   });
 });

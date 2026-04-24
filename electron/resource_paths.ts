@@ -10,11 +10,19 @@ export interface AtlasDesktopResourcePaths {
   onboardingLayoutPath: string;
 }
 
+export interface ResolveAtlasDesktopShellCommandOptions {
+  isPackaged?: boolean;
+  exePath?: string;
+}
+
 export interface ResolveAtlasDesktopResourcePathsOptions {
   mainModuleUrl: string;
   isPackaged?: boolean;
   exePath?: string;
 }
+
+const ATLAS_DESKTOP_EXECUTABLE_NAME = "ATLAS.exe";
+const ATLAS_DESKTOP_DEVELOPMENT_LAUNCHER = "ATLAS.cmd";
 
 function normalizeResolveAtlasDesktopResourcePathsOptions(
   options: ResolveAtlasDesktopResourcePathsOptions | string,
@@ -27,6 +35,22 @@ function normalizeResolveAtlasDesktopResourcePathsOptions(
 
 export function resolvePackagedWorkingDirectory(exePath: string): string {
   return path.dirname(exePath);
+}
+
+function formatAtlasDesktopShellCommand(fileName: string): string {
+  return path.normalize(`.${path.sep}${fileName}`);
+}
+
+export function resolveAtlasDesktopShellCommand(
+  options: ResolveAtlasDesktopShellCommandOptions = {},
+): string {
+  if (options.isPackaged === true) {
+    return formatAtlasDesktopShellCommand(
+      path.basename(String(options.exePath || "").trim() || ATLAS_DESKTOP_EXECUTABLE_NAME),
+    );
+  }
+
+  return formatAtlasDesktopShellCommand(ATLAS_DESKTOP_DEVELOPMENT_LAUNCHER);
 }
 
 function resolvePackagedAppRoot(exePath: string): string {

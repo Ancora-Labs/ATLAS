@@ -28,6 +28,7 @@ import {
 import { startAtlasServer } from "../src/atlas/server.js";
 import {
   resolveAtlasDesktopResourcePaths,
+  resolveAtlasDesktopShellCommand,
   resolvePackagedWorkingDirectory,
 } from "./resource_paths.js";
 import {
@@ -67,6 +68,10 @@ let atlasDesktopState: AtlasDesktopState | null = null;
 let atlasDesktopStatePath = "";
 const atlasDesktopResources = resolveAtlasDesktopResourcePaths({
   mainModuleUrl: import.meta.url,
+  isPackaged: app.isPackaged,
+  exePath: app.getPath("exe"),
+});
+const atlasDesktopShellCommand = resolveAtlasDesktopShellCommand({
   isPackaged: app.isPackaged,
   exePath: app.getPath("exe"),
 });
@@ -254,7 +259,7 @@ async function startDesktopRuntime(): Promise<AtlasDesktopRuntime> {
     stateDir,
     targetRepo,
     hostLabel: "ATLAS Desktop",
-    shellCommand: ".\\ATLAS.cmd",
+    shellCommand: atlasDesktopShellCommand,
     desktopSessionId: sessionId,
   });
   const address = server.address();
