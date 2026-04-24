@@ -203,7 +203,6 @@ describe("atlas sessions route", () => {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
-
   it("[NEGATIVE] keeps the session ledger shell stable when state is sparse", async () => {
     const tempRoot = await createTempRoot();
 
