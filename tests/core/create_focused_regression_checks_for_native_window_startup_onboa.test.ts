@@ -11,6 +11,8 @@ import {
   getAtlasClarificationPacketPath,
 } from "../../src/atlas/clarification.ts";
 import {
+  buildAtlasDesktopLocationPath,
+  parseAtlasDesktopLocationFromUrl,
   readAtlasDesktopState,
   resolveAtlasDesktopStatePath,
   resolveAtlasDesktopStateRoot,
@@ -53,7 +55,7 @@ describe("atlas desktop regression checks", () => {
     }
   });
 
-  it("persists portable desktop state beside the packaged app and restores the last session, draft, and window bounds", async () => {
+  it("persists portable desktop state beside the packaged app and restores the last session, draft, surface, focus, and window bounds", async () => {
     const tempRoot = await createTempRoot();
     const portableRoot = path.join(tempRoot, "ATLAS-portable");
     const stateRoot = resolveAtlasDesktopStateRoot({
@@ -73,6 +75,8 @@ describe("atlas desktop regression checks", () => {
           width: 1420,
           height: 940,
         },
+        lastProductSurface: "sessions",
+        focusedSessionRole: "quality-worker",
         updatedAt: null,
       });
       const restoredState = await readAtlasDesktopState(statePath);
@@ -87,11 +91,31 @@ describe("atlas desktop regression checks", () => {
         width: 1420,
         height: 940,
       });
+      assert.equal(restoredState.lastProductSurface, "sessions");
+      assert.equal(restoredState.focusedSessionRole, "quality-worker");
       assert.match(String(storedState.updatedAt), /T/);
       assert.equal(restoredState.updatedAt, storedState.updatedAt);
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
+  });
+
+  it("builds and parses restorable product locations for home and sessions surfaces", () => {
+    assert.equal(buildAtlasDesktopLocationPath({
+      surface: "home",
+      focusedSessionRole: "quality-worker",
+    }), "/?focusRole=quality-worker");
+    assert.equal(buildAtlasDesktopLocationPath({
+      surface: "sessions",
+      focusedSessionRole: "quality-worker",
+    }), "/sessions?focusRole=quality-worker");
+    assert.deepEqual(
+      parseAtlasDesktopLocationFromUrl("http://127.0.0.1:8788/sessions?focusRole=quality-worker"),
+      {
+        surface: "sessions",
+        focusedSessionRole: "quality-worker",
+      },
+    );
   });
 
   it("resolves packaged preload and onboarding assets from the bundled desktop entrypoint instead of process.cwd()", async () => {
@@ -171,12 +195,16 @@ describe("atlas desktop regression checks", () => {
           width: -1,
           height: "tall",
         },
+        lastProductSurface: "elsewhere",
+        focusedSessionRole: ["invalid"],
       }), "utf8");
 
       const restoredState = await readAtlasDesktopState(statePath);
       assert.equal(restoredState.sessionId, null);
       assert.equal(restoredState.onboardingDraft, "");
       assert.equal(restoredState.windowBounds, null);
+      assert.equal(restoredState.lastProductSurface, "home");
+      assert.equal(restoredState.focusedSessionRole, null);
       assert.equal(restoredState.updatedAt, null);
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

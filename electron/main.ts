@@ -6,13 +6,19 @@ import { app, BrowserWindow, ipcMain } from "electron";
 
 import { loadConfig } from "../src/config.js";
 import {
+  AtlasClarificationError,
+  createAtlasClarificationPacket,
   readAtlasClarificationStatus,
+  type AtlasClarificationPacket,
 } from "../src/atlas/clarification.js";
 import {
+  buildAtlasDesktopLocationPath,
+  parseAtlasDesktopLocationFromUrl,
   readAtlasDesktopState,
   resolveAtlasDesktopStatePath,
   resolveAtlasDesktopStateRoot,
   type AtlasDesktopBootstrap,
+  type AtlasDesktopLocation,
   type AtlasDesktopState,
   type AtlasDesktopWindowBounds,
   writeAtlasDesktopState,
@@ -26,12 +32,31 @@ import {
   ATLAS_WINDOWS_APP_ID,
   restoreAndFocusAtlasWindow,
 } from "./single_instance.js";
-import { decideAtlasPopupHandling, isContainedAuthUrl } from "./window_policy.js";
+import {
+  createAtlasAuthPopupOptions,
+  createAtlasDesktopWindowChromeOptions,
+  decideAtlasPopupHandling,
+  isContainedAuthUrl,
+} from "./window_policy.js";
 
 interface AtlasDesktopRuntime {
   server: http.Server;
   serverUrl: string;
 }
+
+interface AtlasDesktopClarificationSuccess {
+  ok: true;
+  ready: true;
+  packet: AtlasClarificationPacket;
+}
+
+interface AtlasDesktopClarificationFailure {
+  ok: false;
+  error: string;
+  code: string;
+}
+
+type AtlasDesktopClarificationResult = AtlasDesktopClarificationSuccess | AtlasDesktopClarificationFailure;
 
 let atlasRuntime: AtlasDesktopRuntime | null = null;
 let atlasBootstrap: AtlasDesktopBootstrap | null = null;
@@ -54,6 +79,8 @@ async function assertDesktopResourcePath(resourcePath: string, label: string): P
 async function validateDesktopResources(): Promise<void> {
   await assertDesktopResourcePath(atlasDesktopResources.preloadPath, "preload script");
   await assertDesktopResourcePath(atlasDesktopResources.onboardingHtmlPath, "onboarding shell");
+  await assertDesktopResourcePath(atlasDesktopResources.onboardingScriptPath, "onboarding renderer");
+  await assertDesktopResourcePath(atlasDesktopResources.onboardingLayoutPath, "onboarding layout helper");
 }
 
 function alignPackagedWorkingDirectory(): void {
@@ -81,7 +108,7 @@ async function initializeDesktopState(): Promise<void> {
 }
 
 async function updateDesktopState(
-  patch: Partial<Pick<AtlasDesktopState, "sessionId" | "onboardingDraft" | "windowBounds">>,
+  patch: Partial<Pick<AtlasDesktopState, "sessionId" | "onboardingDraft" | "windowBounds" | "lastProductSurface" | "focusedSessionRole">>,
 ): Promise<void> {
   if (!atlasDesktopStatePath) {
     throw new Error("ATLAS desktop state path is not initialized.");
@@ -92,14 +119,46 @@ async function updateDesktopState(
       sessionId: null,
       onboardingDraft: "",
       windowBounds: null,
+      lastProductSurface: "home",
+      focusedSessionRole: null,
       updatedAt: null,
     }),
     ...patch,
   });
 }
 
+async function updateOnboardingDraft(draft: string): Promise<void> {
+  const normalizedDraft = String(draft || "");
+  await updateDesktopState({ onboardingDraft: normalizedDraft });
+  if (atlasBootstrap) {
+    atlasBootstrap = {
+      ...atlasBootstrap,
+      onboardingDraft: normalizedDraft,
+    };
+  }
+}
+
 function getPersistedWindowBounds(): AtlasDesktopWindowBounds | null {
   return atlasDesktopState?.windowBounds || null;
+}
+
+function getPersistedProductLocation(): AtlasDesktopLocation {
+  return {
+    surface: atlasDesktopState?.lastProductSurface || "home",
+    focusedSessionRole: atlasDesktopState?.focusedSessionRole || null,
+  };
+}
+
+async function persistProductLocation(currentUrl: string): Promise<void> {
+  const location = parseAtlasDesktopLocationFromUrl(currentUrl);
+  if (!location) {
+    return;
+  }
+
+  await updateDesktopState({
+    lastProductSurface: location.surface,
+    focusedSessionRole: location.focusedSessionRole,
+  });
 }
 
 async function persistWindowBounds(window: BrowserWindow): Promise<void> {
@@ -152,6 +211,21 @@ function attachWindowStatePersistence(window: BrowserWindow): void {
   });
 }
 
+function attachProductLocationPersistence(window: BrowserWindow): void {
+  const persistCurrentUrl = (currentUrl: string) => {
+    persistProductLocation(currentUrl).catch((error) => {
+      console.error(`[atlas] failed to persist product location: ${String((error as Error)?.message || error)}`);
+    });
+  };
+
+  window.webContents.on("did-navigate", (_event, currentUrl) => {
+    persistCurrentUrl(currentUrl);
+  });
+  window.webContents.on("did-navigate-in-page", (_event, currentUrl) => {
+    persistCurrentUrl(currentUrl);
+  });
+}
+
 async function startDesktopRuntime(): Promise<AtlasDesktopRuntime> {
   const config = await loadConfig();
   const sessionId = atlasDesktopState?.sessionId || randomUUID();
@@ -191,7 +265,7 @@ async function loadInitialSurface(window: BrowserWindow): Promise<void> {
   const stateDir = String(config.paths?.stateDir || "state");
   const status = await readAtlasClarificationStatus(stateDir, atlasBootstrap.sessionId);
   if (status.ready) {
-    await window.loadURL(new URL("/", atlasBootstrap.serverUrl).toString());
+    await window.loadURL(new URL(buildAtlasDesktopLocationPath(getPersistedProductLocation()), atlasBootstrap.serverUrl).toString());
     return;
   }
 
@@ -199,19 +273,7 @@ async function loadInitialSurface(window: BrowserWindow): Promise<void> {
 }
 
 function createAuthPopup(parentWindow: BrowserWindow, targetUrl: string): void {
-  const popup = new BrowserWindow({
-    width: 540,
-    height: 720,
-    parent: parentWindow,
-    modal: true,
-    autoHideMenuBar: true,
-    title: "ATLAS authentication",
-    webPreferences: {
-      contextIsolation: true,
-      sandbox: true,
-      nodeIntegration: false,
-    },
-  });
+  const popup = new BrowserWindow(createAtlasAuthPopupOptions(parentWindow));
   popup.loadURL(targetUrl).catch((error) => {
     console.error(`[atlas] auth popup load failed: ${String((error as Error)?.message || error)}`);
   });
@@ -250,6 +312,55 @@ function attachWindowPolicies(window: BrowserWindow, atlasOrigin: string): void 
   });
 }
 
+async function submitDesktopClarification(
+  objective: string,
+  requestWindow: BrowserWindow | null,
+): Promise<AtlasDesktopClarificationResult> {
+  try {
+    if (!atlasBootstrap) {
+      throw new Error("ATLAS desktop bootstrap is not available.");
+    }
+
+    const normalizedObjective = String(objective || "").trim();
+    await updateOnboardingDraft(normalizedObjective);
+
+    const config = await loadConfig();
+    const stateDir = String(config.paths?.stateDir || "state");
+    const packet = await createAtlasClarificationPacket({
+      stateDir,
+      sessionId: atlasBootstrap.sessionId,
+      targetRepo: atlasBootstrap.targetRepo,
+      objective: normalizedObjective,
+      command: String(config.copilotCliCommand || "").trim(),
+    });
+
+    await updateOnboardingDraft("");
+    if (requestWindow && !requestWindow.isDestroyed()) {
+      await loadInitialSurface(requestWindow);
+    }
+
+    return {
+      ok: true,
+      ready: true,
+      packet,
+    };
+  } catch (error) {
+    console.error(`[atlas] desktop clarification submit failed: ${String((error as Error)?.message || error)}`);
+    const clarificationError = error instanceof AtlasClarificationError
+      ? error
+      : new AtlasClarificationError(
+        String((error as Error)?.message || error),
+        500,
+        "onboarding_failed",
+      );
+    return {
+      ok: false,
+      error: clarificationError.message,
+      code: clarificationError.code,
+    };
+  }
+}
+
 async function createMainWindow(): Promise<BrowserWindow> {
   if (!atlasBootstrap) {
     throw new Error("ATLAS desktop bootstrap is not ready.");
@@ -257,15 +368,7 @@ async function createMainWindow(): Promise<BrowserWindow> {
 
   const persistedBounds = getPersistedWindowBounds();
   const window = new BrowserWindow({
-    width: persistedBounds?.width || 1440,
-    height: persistedBounds?.height || 980,
-    ...(persistedBounds && typeof persistedBounds.x === "number" ? { x: persistedBounds.x } : {}),
-    ...(persistedBounds && typeof persistedBounds.y === "number" ? { y: persistedBounds.y } : {}),
-    minWidth: 980,
-    minHeight: 680,
-    autoHideMenuBar: true,
-    backgroundColor: "#0a1017",
-    title: "ATLAS Desktop",
+    ...createAtlasDesktopWindowChromeOptions(persistedBounds),
     webPreferences: {
       preload: atlasDesktopResources.preloadPath,
       contextIsolation: true,
@@ -274,8 +377,19 @@ async function createMainWindow(): Promise<BrowserWindow> {
     },
   });
 
+  window.once("ready-to-show", () => {
+    if (!window.isDestroyed()) {
+      window.show();
+    }
+  });
   attachWindowStatePersistence(window);
+  attachProductLocationPersistence(window);
   attachWindowPolicies(window, atlasBootstrap.serverUrl);
+  window.on("closed", () => {
+    if (mainWindow === window) {
+      mainWindow = null;
+    }
+  });
   await loadInitialSurface(window);
   return window;
 }
@@ -327,6 +441,24 @@ app.whenReady().then(() => {
       throw new Error("ATLAS desktop bootstrap is not available.");
     }
     return atlasBootstrap;
+  });
+  ipcMain.handle("atlas-desktop:set-onboarding-draft", async (_event, payload: { draft?: string } = {}) => {
+    try {
+      await updateOnboardingDraft(String(payload.draft || ""));
+      return { ok: true };
+    } catch (error) {
+      console.error(`[atlas] onboarding draft update failed: ${String((error as Error)?.message || error)}`);
+      throw error;
+    }
+  });
+  ipcMain.handle("atlas-desktop:submit-clarification", async (event, payload: { objective?: string } = {}) => {
+    try {
+      const requestWindow = BrowserWindow.fromWebContents(event.sender);
+      return await submitDesktopClarification(String(payload.objective || ""), requestWindow);
+    } catch (error) {
+      console.error(`[atlas] onboarding IPC submit failed: ${String((error as Error)?.message || error)}`);
+      throw error;
+    }
   });
 
   return bootstrapDesktopApp();

@@ -14,6 +14,7 @@ export interface AtlasPageData {
   homeReadinessHeading: string;
   homeReadinessDetail: string;
   homePrimaryActionLabel: string;
+  focusedSessionRole: string | null;
   sessions: AtlasSessionDto[];
 }
 
@@ -64,6 +65,25 @@ function getPrimarySession(sessions: AtlasSessionDto[]): AtlasSessionDto | null 
     || null;
 }
 
+function buildSurfaceHref(view: AtlasView, focusedSessionRole: string | null): string {
+  const params = new URLSearchParams();
+  if (focusedSessionRole) {
+    params.set("focusRole", focusedSessionRole);
+  }
+
+  const pathname = view === "sessions" ? "/sessions" : "/";
+  const query = params.toString();
+  return query ? `${pathname}?${query}` : pathname;
+}
+
+function getFocusedSession(sessions: AtlasSessionDto[], focusedSessionRole: string | null): AtlasSessionDto | null {
+  if (!focusedSessionRole) {
+    return null;
+  }
+
+  return sessions.find((session) => session.role === focusedSessionRole) || null;
+}
+
 function countSessions(sessions: AtlasSessionDto[]): AtlasSessionCounts {
   return sessions.reduce<AtlasSessionCounts>((counts, session) => ({
     total: counts.total + 1,
@@ -100,18 +120,11 @@ function getSessionSummary(session: AtlasSessionDto | null): { heading: string; 
   };
 }
 
-function renderNavigation(view: AtlasView): string {
+function renderNavigation(view: AtlasView, focusedSessionRole: string | null): string {
   return `<nav class="nav" aria-label="ATLAS pages">
-    <a class="nav-link" href="/"${view === "home" ? ' aria-current="page"' : ""}>Home</a>
-    <a class="nav-link" href="/sessions"${view === "sessions" ? ' aria-current="page"' : ""}>Sessions</a>
+    <a class="nav-link" href="${escapeHtml(buildSurfaceHref("home", focusedSessionRole))}"${view === "home" ? ' aria-current="page"' : ""}>Home</a>
+    <a class="nav-link" href="${escapeHtml(buildSurfaceHref("sessions", focusedSessionRole))}"${view === "sessions" ? ' aria-current="page"' : ""}>Sessions</a>
   </nav>`;
-}
-
-function renderMetricCard(label: string, value: string | number): string {
-  return `<article class="metric-card" aria-label="${escapeHtml(label)}">
-    <span>${escapeHtml(label)}</span>
-    <strong>${escapeHtml(String(value))}</strong>
-  </article>`;
 }
 
 function renderLifecycleForm(
@@ -127,25 +140,31 @@ function renderLifecycleForm(
   </form>`;
 }
 
-function renderSessionActions(session: AtlasSessionDto): string {
-  const actions: string[] = [];
+function renderLinkAction(label: string, href: string): string {
+  return `<a class="action-button secondary" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
+}
+
+function renderSessionActions(session: AtlasSessionDto, focusedSessionRole: string | null): string {
+  const actions: string[] = [
+    session.role === focusedSessionRole
+      ? renderLinkAction("Clear focus", buildSurfaceHref("sessions", null))
+      : renderLinkAction("Focus session", buildSurfaceHref("sessions", session.role)),
+  ];
 
   if (session.lane) {
     actions.push(session.isPaused
-      ? renderLifecycleForm("Resume lane", "resume", { role: session.role, returnTo: "/sessions" })
-      : renderLifecycleForm("Pause lane", "pause", { role: session.role, returnTo: "/sessions" }));
+      ? renderLifecycleForm("Resume lane", "resume", { role: session.role, returnTo: buildSurfaceHref("sessions", session.role) })
+      : renderLifecycleForm("Pause lane", "pause", { role: session.role, returnTo: buildSurfaceHref("sessions", session.role) }));
   }
 
   if (session.canArchive) {
     actions.push(renderLifecycleForm("Archive session", "archive", {
       role: session.role,
-      returnTo: "/sessions",
+      returnTo: buildSurfaceHref("sessions", session.role),
     }));
   }
 
-  return actions.length > 0
-    ? `<div class="action-row">${actions.join("")}</div>`
-    : '<p class="support-copy">No lifecycle action is available for this session yet.</p>';
+  return `<div class="action-row">${actions.join("")}</div>`;
 }
 
 function renderStatusTags(session: AtlasSessionDto): string {
@@ -168,14 +187,16 @@ function renderStatusTags(session: AtlasSessionDto): string {
   return chips.join("");
 }
 
-function renderSessionCard(session: AtlasSessionDto): string {
-  return `<article class="session-card" aria-label="${escapeHtml(session.name)} session">
+function renderSessionCard(session: AtlasSessionDto, focusedSessionRole: string | null): string {
+  const isFocused = session.role === focusedSessionRole;
+
+  return `<article class="session-card${isFocused ? " session-card-focused" : ""}" aria-label="${escapeHtml(session.name)} session"${isFocused ? ' data-focus-state="focused"' : ""}>
     <div class="session-card-header">
       <div>
         <h3>${escapeHtml(session.name)}</h3>
         <p class="support-copy">${escapeHtml(session.lastTask || "Waiting for the next product-facing task.")}</p>
       </div>
-      <div class="chip-row">${renderStatusTags(session)}</div>
+      <div class="chip-row">${renderStatusTags(session)}${isFocused ? '<span class="chip">Focused workspace</span>' : ""}</div>
     </div>
     <dl class="definition-grid">
       <div>
@@ -195,45 +216,63 @@ function renderSessionCard(session: AtlasSessionDto): string {
         <dd>${escapeHtml(String(session.touchedFileCount))}</dd>
       </div>
     </dl>
-    ${renderSessionActions(session)}
+    ${renderSessionActions(session, focusedSessionRole)}
   </article>`;
 }
 
 function renderHomeContent(pageData: AtlasPageData, counts: AtlasSessionCounts): string {
-  const sessionSummary = getSessionSummary(getPrimarySession(pageData.sessions));
+  const sessionSummary = getSessionSummary(
+    getFocusedSession(pageData.sessions, pageData.focusedSessionRole) || getPrimarySession(pageData.sessions),
+  );
 
   return `<section class="content-grid">
-    <article class="panel hero-panel" aria-label="Desktop overview">
-      <div class="eyebrow">Desktop overview</div>
-      <h1>ATLAS keeps the live delivery state in the desktop window.</h1>
-      <p class="lead">The packaged shell stays monochrome, desktop-first, and trustworthy: repo state, lifecycle status, and resumable work are surfaced directly without drifting back into a browser control surface.</p>
-      <div class="chip-row" aria-label="Current runtime status">
-        <span class="chip">Stage: ${escapeHtml(pageData.pipelineStageLabel)}</span>
-        <span class="chip">Updated: ${escapeHtml(formatTimestamp(pageData.updatedAt))}</span>
-        <span class="chip">Packaged: ${escapeHtml(formatTimestamp(pageData.buildTimestamp))}</span>
+    <article class="panel panel-span" aria-label="Desktop continuity">
+      <div class="section-heading">
+        <div>
+          <div class="eyebrow">Desktop continuity</div>
+          <h1>ATLAS keeps the live delivery state in the same desktop window.</h1>
+        </div>
+        <p class="support-copy">The clarification handoff, relaunch recovery, and repo context stay inside the native shell instead of drifting back to a browser-style launch flow.</p>
       </div>
-      <div class="command-block">
-        <span>Launch entrypoint</span>
-        <code>${escapeHtml(pageData.shellCommand)}</code>
-      </div>
+      <dl class="definition-grid">
+        <div>
+          <dt>Desktop session</dt>
+          <dd>${escapeHtml(pageData.buildSessionId)}</dd>
+        </div>
+        <div>
+          <dt>Last packaged build</dt>
+          <dd>${escapeHtml(formatTimestamp(pageData.buildTimestamp))}</dd>
+        </div>
+        <div>
+          <dt>Launch entrypoint</dt>
+          <dd><code>${escapeHtml(pageData.shellCommand)}</code></dd>
+        </div>
+        <div>
+          <dt>Last state write</dt>
+          <dd>${escapeHtml(formatTimestamp(pageData.updatedAt))}</dd>
+        </div>
+      </dl>
       <div class="cta-row">
-        <a class="primary-link" href="/sessions">${escapeHtml(pageData.homePrimaryActionLabel)}</a>
-        ${renderLifecycleForm("Stop runtime", "stop", { returnTo: "/", tone: "secondary" })}
+        <a class="primary-link" href="${escapeHtml(buildSurfaceHref("sessions", pageData.focusedSessionRole))}">${escapeHtml(pageData.homePrimaryActionLabel)}</a>
+        ${renderLifecycleForm("Stop runtime", "stop", {
+          returnTo: buildSurfaceHref("home", pageData.focusedSessionRole),
+          tone: "secondary",
+        })}
       </div>
     </article>
 
-    <article class="panel" aria-label="Session readiness">
-      <div class="eyebrow">Session readiness</div>
-      <h2>${escapeHtml(pageData.homeReadinessHeading)}</h2>
-      <p class="support-copy">${escapeHtml(pageData.homeReadinessDetail)}</p>
+    <article class="panel" aria-label="Active delivery focus">
+      <div class="eyebrow">Active delivery focus</div>
+      <h2>${escapeHtml(pageData.pipelineStageLabel)}</h2>
+      <p class="lead">${escapeHtml(pageData.pipelineDetail)}</p>
+      <div class="chip-row" aria-label="Current runtime status">
+        <span class="chip">${escapeHtml(pageData.homeReadinessHeading)}</span>
+        <span class="chip">${escapeHtml(sessionSummary.status)}</span>
+      </div>
       <div class="progress-rail" aria-hidden="true">
         <span style="width:${escapeHtml(String(clampPercent(pageData.pipelinePercent)))}%"></span>
       </div>
       <div class="definition-stack">
-        <div>
-          <span class="caption">Build session</span>
-          <strong>${escapeHtml(pageData.buildSessionId)}</strong>
-        </div>
         <div>
           <span class="caption">Live focus</span>
           <strong>${escapeHtml(sessionSummary.heading)}</strong>
@@ -241,36 +280,60 @@ function renderHomeContent(pageData: AtlasPageData, counts: AtlasSessionCounts):
           <code>${escapeHtml(sessionSummary.branch)}</code>
         </div>
         <div>
-          <span class="caption">Lifecycle feedback</span>
-          <strong>${escapeHtml(sessionSummary.status)}</strong>
+          <span class="caption">Next handoff</span>
+          <strong>${escapeHtml(pageData.homePrimaryActionLabel)}</strong>
+          <p class="support-copy">${escapeHtml(pageData.homeReadinessDetail)}</p>
         </div>
       </div>
     </article>
 
-    <section class="panel panel-span" aria-label="Session totals">
-      <div class="section-heading">
+    <article class="panel" aria-label="Repo state">
+      <div class="eyebrow">Repo state</div>
+      <h2>${escapeHtml(pageData.repoLabel)}</h2>
+      <p class="lead">${escapeHtml(pageData.hostLabel)}</p>
+      <p class="support-copy">${escapeHtml(pageData.homeReadinessDetail)}</p>
+      <dl class="definition-grid">
         <div>
-          <div class="eyebrow">Windows-style hierarchy</div>
-          <h2>Session totals</h2>
+          <dt>Tracked sessions</dt>
+          <dd>${escapeHtml(String(counts.total))}</dd>
         </div>
-        <p class="support-copy">Signals that matter most stay visible first: active work, blocked handoffs, and what can be resumed immediately.</p>
-      </div>
-      <div class="metric-grid">
-        ${renderMetricCard("Total sessions", counts.total)}
-        ${renderMetricCard("Active sessions", counts.active)}
-        ${renderMetricCard("Needs input", counts.needsInput)}
-        ${renderMetricCard("Completed", counts.completed)}
-      </div>
-    </section>
+        <div>
+          <dt>Active sessions</dt>
+          <dd>${escapeHtml(String(counts.active))}</dd>
+        </div>
+        <div>
+          <dt>Needs input</dt>
+          <dd>${escapeHtml(String(counts.needsInput))}</dd>
+        </div>
+        <div>
+          <dt>Completed handoffs</dt>
+          <dd>${escapeHtml(String(counts.completed))}</dd>
+        </div>
+        <div>
+          <dt>Resumable sessions</dt>
+          <dd>${escapeHtml(String(counts.resumable))}</dd>
+        </div>
+        <div>
+          <dt>Paused lanes</dt>
+          <dd>${escapeHtml(String(counts.paused))}</dd>
+        </div>
+      </dl>
+    </article>
   </section>`;
 }
 
 function renderSessionsContent(pageData: AtlasPageData, counts: AtlasSessionCounts): string {
+  const focusedSession = getFocusedSession(pageData.sessions, pageData.focusedSessionRole);
+
   return `<section class="content-grid">
-    <article class="panel hero-panel panel-span" aria-label="Session ledger">
-      <div class="eyebrow">Session ledger</div>
-      <h1>Session ledger stays aligned with the desktop lifecycle.</h1>
-      <p class="lead">Every tracked role keeps its state, lane action, branch, and last activity visible so restore, resume, and archive decisions stay grounded in the packaged ATLAS shell.</p>
+    <article class="panel panel-span" aria-label="Session ledger">
+      <div class="section-heading">
+        <div>
+          <div class="eyebrow">Trust-first work ledger</div>
+          <h1>Session ledger keeps delivery trust anchored in the desktop lifecycle.</h1>
+        </div>
+        <p class="support-copy">Every tracked role keeps its state, lane action, branch, and last activity visible so restore, resume, and archive decisions stay grounded in the packaged ATLAS shell.</p>
+      </div>
       <div class="chip-row">
         <span class="chip">${escapeHtml(String(counts.total))} tracked sessions</span>
         <span class="chip">${escapeHtml(String(counts.resumable))} resumable</span>
@@ -279,16 +342,42 @@ function renderSessionsContent(pageData: AtlasPageData, counts: AtlasSessionCoun
       </div>
     </article>
 
+    ${focusedSession
+      ? `<article class="panel panel-span" aria-label="Focused workspace context">
+      <div class="section-heading">
+        <div>
+          <div class="eyebrow">Focused workspace</div>
+          <h2>${escapeHtml(focusedSession.name)}</h2>
+        </div>
+        <div class="cta-row">
+          <a class="primary-link" href="${escapeHtml(buildSurfaceHref("home", focusedSession.role))}">Keep focus on home</a>
+          ${renderLinkAction("Clear focus", buildSurfaceHref("sessions", null))}
+        </div>
+      </div>
+      <p class="support-copy">${escapeHtml(focusedSession.lastTask || "Waiting for the next product-facing task.")}</p>
+      <dl class="definition-grid">
+        <div>
+          <dt>Branch</dt>
+          <dd>${escapeHtml(focusedSession.currentBranch || "No branch recorded")}</dd>
+        </div>
+        <div>
+          <dt>Status</dt>
+          <dd>${escapeHtml(`${focusedSession.statusLabel} · ${focusedSession.readinessLabel}`)}</dd>
+        </div>
+      </dl>
+    </article>`
+      : ""}
+
     <section class="panel panel-span" aria-label="Tracked sessions">
       <div class="section-heading">
         <div>
           <div class="eyebrow">Trusted feedback</div>
           <h2>Tracked sessions</h2>
         </div>
-        <p class="support-copy">Actions submit directly to the ATLAS lifecycle route so the desktop state and the session ledger stay in sync.</p>
+        <p class="support-copy">Actions submit directly to the ATLAS lifecycle route so the desktop state, focused context, and session ledger stay in sync.</p>
       </div>
       ${pageData.sessions.length > 0
-        ? `<div class="session-list">${pageData.sessions.map((session) => renderSessionCard(session)).join("")}</div>`
+        ? `<div class="session-list">${pageData.sessions.map((session) => renderSessionCard(session, pageData.focusedSessionRole)).join("")}</div>`
         : '<div class="empty-state"><strong>No session state is available yet.</strong><p class="support-copy">ATLAS will surface tracked work here as soon as the next session is written.</p></div>'}
     </section>
   </section>`;
@@ -356,7 +445,6 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
     }
     .masthead,
     .content-grid,
-    .metric-grid,
     .session-list,
     .definition-grid,
     .chip-row,
@@ -421,7 +509,6 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
     .repo-tag,
     .chip,
     .nav-link,
-    .metric-card,
     .action-button,
     .empty-state {
       border: 1px solid var(--line);
@@ -460,16 +547,20 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
       background: linear-gradient(180deg, rgba(20, 20, 20, 0.96), rgba(12, 12, 12, 0.96));
       box-shadow: var(--shadow);
     }
+    .session-card-focused {
+      border-color: rgba(255, 255, 255, 0.42);
+      background: linear-gradient(180deg, rgba(28, 28, 28, 0.98), rgba(14, 14, 14, 0.98));
+    }
     .panel-span {
       grid-column: 1 / -1;
     }
-    .hero-panel h1,
+    h1,
     .section-heading h2,
     h3 {
       margin: 0;
       letter-spacing: -0.04em;
     }
-    .hero-panel h1 {
+    h1 {
       font-size: clamp(34px, 5vw, 56px);
       line-height: 1.02;
       max-width: 860px;
@@ -543,22 +634,6 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
       flex-wrap: wrap;
       margin-bottom: 18px;
     }
-    .metric-grid {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-    }
-    .metric-card {
-      padding: 16px;
-      display: grid;
-      gap: 8px;
-    }
-    .metric-card span {
-      color: var(--muted);
-      font-size: 13px;
-    }
-    .metric-card strong {
-      font-size: 34px;
-      letter-spacing: -0.05em;
-    }
     .session-list {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
@@ -590,7 +665,6 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
     @media (max-width: 960px) {
       .masthead,
       .content-grid,
-      .metric-grid,
       .session-list,
       .definition-grid {
         grid-template-columns: 1fr;
@@ -615,8 +689,7 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
         </div>
         <div class="masthead-meta">
           <div class="repo-tag">${escapeHtml(pageData.repoLabel)}</div>
-          <div class="meta-copy">Build session ${escapeHtml(pageData.buildSessionId)}</div>
-          ${renderNavigation(view)}
+          ${renderNavigation(view, pageData.focusedSessionRole)}
         </div>
       </header>
       ${view === "home" ? renderHomeContent(pageData, counts) : renderSessionsContent(pageData, counts)}

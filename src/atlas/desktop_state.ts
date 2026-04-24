@@ -9,10 +9,19 @@ export interface AtlasDesktopWindowBounds {
   y?: number;
 }
 
+export type AtlasDesktopProductSurface = "home" | "sessions";
+
+export interface AtlasDesktopLocation {
+  surface: AtlasDesktopProductSurface;
+  focusedSessionRole: string | null;
+}
+
 export interface AtlasDesktopState {
   sessionId: string | null;
   onboardingDraft: string;
   windowBounds: AtlasDesktopWindowBounds | null;
+  lastProductSurface: AtlasDesktopProductSurface;
+  focusedSessionRole: string | null;
   updatedAt: string | null;
 }
 
@@ -33,13 +42,15 @@ export interface ResolveAtlasDesktopStateRootOptions {
   cwd: string;
 }
 
-const ATLAS_DESKTOP_STATE_SCHEMA_VERSION = 1;
+const ATLAS_DESKTOP_STATE_SCHEMA_VERSION = 2;
 
 function createDefaultAtlasDesktopState(): AtlasDesktopState {
   return {
     sessionId: null,
     onboardingDraft: "",
     windowBounds: null,
+    lastProductSurface: "home",
+    focusedSessionRole: null,
     updatedAt: null,
   };
 }
@@ -50,6 +61,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeOptionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeOptionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+export function normalizeAtlasDesktopProductSurface(value: unknown): AtlasDesktopProductSurface {
+  return value === "sessions" ? "sessions" : "home";
 }
 
 export function normalizeAtlasDesktopWindowBounds(value: unknown): AtlasDesktopWindowBounds | null {
@@ -71,23 +90,71 @@ export function normalizeAtlasDesktopWindowBounds(value: unknown): AtlasDesktopW
   };
 }
 
+export function normalizeAtlasDesktopLocation(value: unknown): AtlasDesktopLocation {
+  if (!isRecord(value)) {
+    return {
+      surface: "home",
+      focusedSessionRole: null,
+    };
+  }
+
+  return {
+    surface: normalizeAtlasDesktopProductSurface(value.surface),
+    focusedSessionRole: normalizeOptionalString(value.focusedSessionRole),
+  };
+}
+
+export function buildAtlasDesktopLocationPath(location: Partial<AtlasDesktopLocation> = {}): string {
+  const normalizedLocation = normalizeAtlasDesktopLocation({
+    surface: location.surface,
+    focusedSessionRole: location.focusedSessionRole,
+  });
+  const params = new URLSearchParams();
+  if (normalizedLocation.focusedSessionRole) {
+    params.set("focusRole", normalizedLocation.focusedSessionRole);
+  }
+
+  const pathname = normalizedLocation.surface === "sessions" ? "/sessions" : "/";
+  const query = params.toString();
+  return query ? `${pathname}?${query}` : pathname;
+}
+
+export function parseAtlasDesktopLocationFromUrl(input: string | URL): AtlasDesktopLocation | null {
+  try {
+    const parsedUrl = input instanceof URL
+      ? input
+      : new URL(String(input || "/"), "http://127.0.0.1");
+    const surface = parsedUrl.pathname === "/"
+      ? "home"
+      : (parsedUrl.pathname === "/sessions" ? "sessions" : null);
+    if (!surface) {
+      return null;
+    }
+
+    return {
+      surface,
+      focusedSessionRole: normalizeOptionalString(parsedUrl.searchParams.get("focusRole")),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function normalizeAtlasDesktopState(value: unknown): AtlasDesktopState | null {
   if (!isRecord(value)) return null;
 
-  const sessionId = typeof value.sessionId === "string" && value.sessionId.trim()
-    ? value.sessionId.trim()
-    : null;
+  const sessionId = normalizeOptionalString(value.sessionId);
   const onboardingDraft = typeof value.onboardingDraft === "string"
     ? value.onboardingDraft
     : "";
-  const updatedAt = typeof value.updatedAt === "string" && value.updatedAt.trim()
-    ? value.updatedAt
-    : null;
+  const updatedAt = normalizeOptionalString(value.updatedAt);
 
   return {
     sessionId,
     onboardingDraft,
     windowBounds: normalizeAtlasDesktopWindowBounds(value.windowBounds),
+    lastProductSurface: normalizeAtlasDesktopProductSurface(value.lastProductSurface),
+    focusedSessionRole: normalizeOptionalString(value.focusedSessionRole),
     updatedAt,
   };
 }
