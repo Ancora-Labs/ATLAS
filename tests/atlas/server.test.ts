@@ -229,14 +229,12 @@ describe("atlas server", () => {
     const sessionsResponse = await requestText(port, "/sessions");
 
     assert.equal(homeResponse.status, 200);
-    assert.match(homeResponse.text, /<title>ATLAS Home<\/title>/);
+    assert.match(homeResponse.text, /<title>ATLAS Workspace<\/title>/);
     assert.match(homeResponse.text, /aria-label="ATLAS desktop surface"/);
     assert.match(homeResponse.text, /aria-label="ATLAS desktop sidebar"/);
     assert.match(homeResponse.text, /aria-label="ATLAS work canvas"/);
-    assert.match(homeResponse.text, /What should ATLAS do next\?/);
-    assert.match(homeResponse.text, /Focused session detail/);
-    assert.match(homeResponse.text, /What should ATLAS do next\?/);
-    assert.match(homeResponse.text, /Focused session detail/);
+    assert.match(homeResponse.text, /Start a new session from a clean workspace/);
+    assert.match(homeResponse.text, /data-role="new-session-view"/);
     assert.match(homeResponse.text, /snapshot endpoint ready/);
     assert.match(homeResponse.text, /data-role="product-composer-input"/);
     assert.match(homeResponse.text, /bridge\?\.refreshSnapshot/);
@@ -244,16 +242,16 @@ describe("atlas server", () => {
     assert.doesNotMatch(homeResponse.text, /default browser|localhost page/i);
 
     assert.equal(sessionsResponse.status, 200);
-    assert.match(sessionsResponse.text, /<title>ATLAS Sessions<\/title>/);
+    assert.match(sessionsResponse.text, /<title>ATLAS Workspace<\/title>/);
     assert.match(sessionsResponse.text, /aria-label="ATLAS desktop surface"/);
     assert.match(sessionsResponse.text, /aria-label="ATLAS desktop sidebar"/);
     assert.match(sessionsResponse.text, /aria-label="ATLAS work canvas"/);
-    assert.match(sessionsResponse.text, /Focused session detail/);
-    assert.match(sessionsResponse.text, /Readable log excerpt/);
+    assert.match(sessionsResponse.text, /data-role="new-session-view"/);
+    assert.match(sessionsResponse.text, /What should ATLAS do next\?/);
     assert.match(sessionsResponse.text, />ATLAS control</);
     assert.match(sessionsResponse.text, />Quality lane</);
-    assert.match(sessionsResponse.text, />2 tracked sessions</);
-    assert.match(sessionsResponse.text, />Pause lane</);
+    assert.match(sessionsResponse.text, /2 tracked sessions/);
+    assert.match(sessionsResponse.text, /data-role="product-composer-input"/);
     assert.doesNotMatch(sessionsResponse.text, /default browser|localhost page/i);
     assert.doesNotMatch(sessionsResponse.text, /BOX Mission Control/i);
   });
@@ -458,22 +456,24 @@ describe("atlas server", () => {
 
       const blockedSessions = await requestText(gatedPort, "/sessions?focusRole=quality-worker");
       assert.equal(blockedSessions.status, 200);
-      assert.match(blockedSessions.text, /Focused session detail/);
+      assert.match(blockedSessions.text, /data-role="selected-session-view"/);
 
       const onboardingStatus = await requestText(gatedPort, "/api/onboarding/status");
       assert.equal(onboardingStatus.status, 200);
-      assert.match(onboardingStatus.text, /"ready":false/);
+      assert.match(onboardingStatus.text, /"ready":true/);
+      assert.match(onboardingStatus.text, /"started":false/);
 
       const clarifyResponse = await requestJson(gatedPort, "/api/onboarding/clarify", {
         objective: "Launch ATLAS in a native desktop window with one clarification pass.",
       });
       assert.equal(clarifyResponse.status, 200);
       assert.match(clarifyResponse.text, /"ready":true/);
+      assert.match(clarifyResponse.text, /"started":true/);
 
       const unblockedHome = await requestText(gatedPort, "/");
       assert.equal(unblockedHome.status, 200);
       assert.match(unblockedHome.text, /What should ATLAS do next\?/);
-      assert.match(unblockedHome.text, /Focused session detail/);
+      assert.match(unblockedHome.text, /data-role="new-session-view"/);
 
       const repeatHome = await requestText(gatedPort, "/");
       const repeatOnboardingStatus = await requestText(gatedPort, "/api/onboarding/status");
@@ -483,10 +483,11 @@ describe("atlas server", () => {
       assert.doesNotMatch(repeatHome.text, /default browser|localhost page/i);
       assert.equal(repeatOnboardingStatus.status, 200);
       assert.match(repeatOnboardingStatus.text, /"ready":true/);
+      assert.match(repeatOnboardingStatus.text, /"started":true/);
 
       const focusedSessions = await requestText(gatedPort, "/sessions?focusRole=atlas");
       assert.equal(focusedSessions.status, 200);
-      assert.match(focusedSessions.text, /Focused session detail/);
+      assert.match(focusedSessions.text, /data-role="selected-session-view"/);
     } finally {
       if (gatedServer.listening) {
         await new Promise<void>((resolve) => {
@@ -497,7 +498,7 @@ describe("atlas server", () => {
     }
   });
 
-  it("[NEGATIVE] keeps onboarding status unready when clarification refresh fails and does not write a packet", async () => {
+  it("[NEGATIVE] keeps onboarding status ready while rejecting empty session starts and does not write a packet", async () => {
     const tempRoot = await createTempRoot();
     const stateDir = path.join(tempRoot, "state");
     await fs.mkdir(stateDir, { recursive: true });
@@ -532,25 +533,22 @@ describe("atlas server", () => {
       stateDir,
       targetRepo: "Ancora-Labs/ATLAS",
       desktopSessionId: "desktop-session-failure",
-      clarificationRunner: async () => {
-        throw new Error("Clarification provider unavailable.");
-      },
     });
 
     try {
       const clarifyResponse = await requestJson(failedPort, "/api/onboarding/clarify", {
-        objective: "Refresh the ATLAS desktop brief after relaunch.",
+        objective: "   ",
       });
       const blockedHome = await requestText(failedPort, "/");
       const onboardingStatus = await requestText(failedPort, "/api/onboarding/status");
 
-      assert.equal(clarifyResponse.status, 502);
-      assert.match(clarifyResponse.text, /"code":"clarification_invocation_failed"/);
-      assert.match(clarifyResponse.text, /Clarification provider unavailable\./);
+      assert.equal(clarifyResponse.status, 400);
+      assert.match(clarifyResponse.text, /"code":"missing_objective"/);
       assert.equal(blockedHome.status, 200);
       assert.match(blockedHome.text, /Where should we start\?/);
       assert.equal(onboardingStatus.status, 200);
-      assert.match(onboardingStatus.text, /"ready":false/);
+      assert.match(onboardingStatus.text, /"ready":true/);
+      assert.match(onboardingStatus.text, /"started":false/);
       await assert.rejects(
         fs.stat(path.join(stateDir, "atlas", "desktop_sessions", "desktop-session-failure", "clarification_packet.json")),
         /ENOENT/,
@@ -618,10 +616,9 @@ describe("atlas server", () => {
     const response = await requestText(port, "/sessions?focusRole=missing-worker");
 
     assert.equal(response.status, 200);
-    assert.match(response.text, /Focused session detail/);
-    assert.match(response.text, /Start the next session while the old focus recovers/);
-    assert.match(response.text, /The previous focus is missing its next live snapshot, but you can still write the next outcome here and keep the workspace moving\./);
-    assert.match(response.text, />Clear focus</);
+    assert.match(response.text, /data-role="new-session-view"/);
+    assert.match(response.text, /The selected session is waiting for its next live update/);
+    assert.match(response.text, /Selected detail unavailable/);
     assert.doesNotMatch(response.text, /missing-worker/);
   });
 
@@ -646,7 +643,7 @@ describe("atlas server", () => {
       assert.match(homeResponse.text, /data-role="product-composer-input"/);
       assert.equal(sessionsResponse.status, 200);
       assert.match(sessionsResponse.text, /No session state is available yet\./);
-      assert.match(sessionsResponse.text, /Focused session detail/);
+      assert.match(sessionsResponse.text, /data-role="new-session-view"/);
       assert.doesNotMatch(`${homeResponse.text}\n${sessionsResponse.text}`, /dashboard-card|window-controls|traffic-light/i);
     } finally {
       if (sparseServer.listening) {

@@ -100,15 +100,15 @@ describe("atlas regression fence", () => {
     assert.match(launcher, /Packaging the portable Windows desktop folder/i);
     assert.doesNotMatch(launcher, /Start-Process|Invoke-WebRequest/);
     assert.match(onboardingHtml, /Native Windows title bar/);
-    assert.match(onboardingHtml, /First-run objective intake/);
+    assert.match(onboardingHtml, /Workspace handoff/);
     assert.doesNotMatch(onboardingHtml, /dashboard-card|window-controls|traffic-light/i);
     assert.match(rendererSource, /aria-label="ATLAS desktop surface"/);
     assert.match(rendererSource, /aria-label="ATLAS desktop sidebar"/);
     assert.match(rendererSource, /aria-label="ATLAS work canvas"/);
     assert.match(rendererSource, /aria-label="Desktop composer"/);
-    assert.match(rendererSource, /Persistent left sidebar/);
-    assert.match(rendererSource, /Focused session detail/);
-    assert.match(rendererSource, /Readable log excerpt/);
+    assert.match(rendererSource, /data-role="new-session-view"/);
+    assert.match(rendererSource, /data-role="selected-session-view"/);
+    assert.match(rendererSource, /Latest worker output/);
     assert.match(rendererSource, /bridge\?\.refreshSnapshot/);
     assert.match(rendererSource, /ATLAS snapshot refresh requires the Electron desktop bridge\./);
     assert.doesNotMatch(rendererSource, /dashboard-card|hero-panel|metric-card|window-controls|traffic-light/i);
@@ -122,7 +122,7 @@ describe("atlas regression fence", () => {
     assert.match(desktopMain, /setAppUserModelId\(ATLAS_WINDOWS_APP_ID\)/);
     assert.match(desktopMain, /isPackaged:\s*app\.isPackaged/);
     assert.match(desktopMain, /exePath:\s*app\.getPath\("exe"\)/);
-    assert.match(desktopMain, /atlasDesktopResources\.onboardingHtmlPath/);
+    assert.match(desktopMain, /atlasDesktopResources\.rendererHtmlPath/);
     assert.match(desktopMain, /buildAtlasDesktopLocationPath\(getPersistedProductLocation\(\)\)/);
     assert.match(desktopMain, /window\.loadURL\(new URL\(buildAtlasDesktopLocationPath\(getPersistedProductLocation\(\)\), atlasBootstrap\.serverUrl\)\.toString\(\)\)/);
     assert.match(desktopMain, /ipcMain\.handle\("atlas-desktop:get-snapshot"/);
