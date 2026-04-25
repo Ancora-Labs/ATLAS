@@ -74,6 +74,13 @@ export type AtlasSessionReadiness =
   | "completed"
   | "unavailable";
 
+export type AtlasSessionLiveStatusTone =
+  | "idle"
+  | "active"
+  | "attention"
+  | "complete"
+  | "offline";
+
 export interface AtlasSessionDto {
   role: string;
   name: string;
@@ -105,6 +112,10 @@ export interface AtlasSessionDto {
   freshnessAt: string | null;
   freshnessLabel: string;
   logStateLabel: string;
+  liveStatusTone: AtlasSessionLiveStatusTone;
+  liveStatusLabel: string;
+  liveStatusAssistiveText: string;
+  liveStatusPulse: boolean;
   needsInput: boolean;
   isResumable: boolean;
   isPaused: boolean;
@@ -420,11 +431,57 @@ function buildInlineLogExcerpt(session: BoxTargetSessionRecord): string[] {
 }
 
 function getSessionFreshnessLabel(freshnessAt: string | null): string {
-  return freshnessAt ? "Live snapshot ready" : "Waiting for live snapshot";
+  return freshnessAt ? "Live update recorded" : "Waiting for live update";
 }
 
 function getSessionLogStateLabel(logExcerpt: string[]): string {
   return logExcerpt.length > 0 ? "Readable log ready" : "Waiting for live log";
+}
+
+function resolveSessionLiveStatus(
+  sessionName: string,
+  status: AtlasSessionStatus,
+): Pick<AtlasSessionDto, "liveStatusTone" | "liveStatusLabel" | "liveStatusAssistiveText" | "liveStatusPulse"> {
+  switch (status) {
+    case "working":
+      return {
+        liveStatusTone: "active",
+        liveStatusLabel: "Live",
+        liveStatusAssistiveText: `${sessionName} is currently running live work.`,
+        liveStatusPulse: true,
+      };
+    case "blocked":
+    case "error":
+      return {
+        liveStatusTone: "attention",
+        liveStatusLabel: "Needs attention",
+        liveStatusAssistiveText: `${sessionName} needs attention before it can continue.`,
+        liveStatusPulse: false,
+      };
+    case "done":
+      return {
+        liveStatusTone: "complete",
+        liveStatusLabel: "Completed",
+        liveStatusAssistiveText: `${sessionName} has completed its recorded work.`,
+        liveStatusPulse: false,
+      };
+    case "offline":
+      return {
+        liveStatusTone: "offline",
+        liveStatusLabel: "Stopped",
+        liveStatusAssistiveText: `${sessionName} is currently offline.`,
+        liveStatusPulse: false,
+      };
+    case "partial":
+    case "idle":
+    default:
+      return {
+        liveStatusTone: "idle",
+        liveStatusLabel: "Ready",
+        liveStatusAssistiveText: `${sessionName} is ready for the next live update.`,
+        liveStatusPulse: false,
+      };
+  }
 }
 
 function resolveLatestMeaningfulAction(
@@ -820,6 +877,7 @@ export function bridgeBoxTargetSessionState(
       freshnessAt,
       freshnessLabel: getSessionFreshnessLabel(freshnessAt),
       logStateLabel: getSessionLogStateLabel(logExcerpt),
+      ...resolveSessionLiveStatus(getAtlasSessionDisplayName(role), status),
       needsInput: readiness === "action_needed",
       isResumable: isResumable(status, lastTask),
       isPaused: Boolean(lane && pausedLanes[lane]),

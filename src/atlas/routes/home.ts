@@ -66,10 +66,10 @@ async function deriveAtlasWorkspaceRuntimeState(
   const hasLiveSessions = sessions.length > 0;
   const desktopSessionId = String(options.desktopSessionId || "").trim();
 
-  let sessionStartStatusLabel = hasLiveSessions ? "Live workspace" : "Ready to start";
+  let sessionStartStatusLabel = hasLiveSessions ? "New session available" : "Ready for first session";
   let sessionStartStatusDetail = hasLiveSessions
-    ? "The desktop shell is reading tracked session state directly in the main workspace."
-    : "Start a session from the main composer to seed the first live workflow.";
+    ? "The left rail is showing live tracked sessions, and the main pane can switch back to a blank new-session start screen at any time."
+    : "Start a session from the blank workspace composer to seed the first live workflow.";
   let sessionStartUpdatedAt: string | null = null;
 
   if (desktopSessionId) {
@@ -79,13 +79,13 @@ async function deriveAtlasWorkspaceRuntimeState(
         sessionStartUpdatedAt = packetStatus.packet.createdAt;
         sessionStartStatusLabel = "Session brief recorded";
         sessionStartStatusDetail = hasLiveSessions
-          ? "The latest desktop brief is recorded and the workspace is continuing with live session state."
-          : "The brief is recorded. ATLAS is waiting for the first live session snapshot to hydrate the detail pane.";
+          ? "The latest desktop brief is recorded. Use New Session to stay on the blank start screen or select a rail row to open live detail."
+          : "The brief is recorded. ATLAS is waiting for the first live session snapshot before it shows selected-session detail.";
       }
     } catch (error) {
       console.error(`[atlas] failed to read desktop session brief status: ${String((error as Error)?.message || error)}`);
       sessionStartStatusLabel = "Session brief unavailable";
-      sessionStartStatusDetail = "ATLAS could not read the last desktop session brief, but the workspace stays available.";
+      sessionStartStatusDetail = "ATLAS could not read the last desktop session brief, but the blank start screen stays available.";
     }
   }
 
@@ -94,8 +94,8 @@ async function deriveAtlasWorkspaceRuntimeState(
       sessionStartStatusLabel,
       sessionStartStatusDetail,
       sessionStartUpdatedAt,
-      continuityStatusLabel: "Restoring focused detail",
-      continuityStatusDetail: "The saved focus is waiting for its next live snapshot. The rail, composer, and detail pane stay available in the meantime.",
+      continuityStatusLabel: "Selected detail unavailable",
+      continuityStatusDetail: "The saved focus is not present in the current live snapshot, so ATLAS falls back to the blank new-session view instead of showing stale detail.",
     };
   }
 
@@ -103,10 +103,10 @@ async function deriveAtlasWorkspaceRuntimeState(
     sessionStartStatusLabel,
     sessionStartStatusDetail,
     sessionStartUpdatedAt,
-    continuityStatusLabel: hasLiveSessions ? "Live snapshot ready" : "Waiting for live snapshot",
+    continuityStatusLabel: hasLiveSessions ? "Live detail available" : "Waiting for live detail",
     continuityStatusDetail: hasLiveSessions
-      ? "Focused detail, worker freshness, and readable logs are flowing from the latest desktop snapshot."
-      : "ATLAS will hydrate inline worker detail as soon as the next tracked session snapshot is written.",
+      ? "Select any session from the left rail to open its live detail view in the main pane."
+      : "ATLAS will open selected-session detail as soon as the next tracked session snapshot is written.",
   };
 }
 
@@ -142,14 +142,14 @@ export function deriveAtlasHomeReadiness(
   const hasResumableSessions = sessions.some((session) => session.isResumable);
   return hasResumableSessions
     ? {
-        homePrimaryActionLabel: "Resume active session",
-        homeReadinessHeading: "Ready to resume",
-        homeReadinessDetail: "Pick a tracked session from the left rail or write a new objective to start the next flow.",
+        homePrimaryActionLabel: "New Session",
+        homeReadinessHeading: "Live sessions available",
+        homeReadinessDetail: "Pick a tracked session from the left rail to inspect it, or stay on the blank start screen and write the next objective.",
       }
     : {
-        homePrimaryActionLabel: "Start a session",
+        homePrimaryActionLabel: "New Session",
         homeReadinessHeading: "Ready to start",
-        homeReadinessDetail: "Write one outcome in the composer to start the next session from the main workspace.",
+        homeReadinessDetail: "Write one outcome in the blank start screen composer to start the next session from the main workspace.",
       };
 }
 

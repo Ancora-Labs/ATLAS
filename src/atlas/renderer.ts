@@ -36,6 +36,13 @@ interface AtlasSessionCounts {
   paused: number;
 }
 
+interface AtlasSessionLiveStatusState {
+  tone: "idle" | "active" | "attention" | "complete" | "offline";
+  label: string;
+  assistiveText: string;
+  pulse: boolean;
+}
+
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -64,14 +71,6 @@ function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, numeric));
 }
 
-function getPrimarySession(sessions: AtlasSessionDto[]): AtlasSessionDto | null {
-  return sessions.find((session) => session.status === "working")
-    || sessions.find((session) => session.needsInput)
-    || sessions.find((session) => session.isResumable)
-    || sessions[0]
-    || null;
-}
-
 function buildSurfaceHref(focusedSessionRole: string | null): string {
   const params = new URLSearchParams();
   if (focusedSessionRole) {
@@ -83,16 +82,11 @@ function buildSurfaceHref(focusedSessionRole: string | null): string {
   return query ? `${pathname}?${query}` : pathname;
 }
 
-function getFocusedSession(sessions: AtlasSessionDto[], focusedSessionRole: string | null): AtlasSessionDto | null {
+function getSelectedSession(sessions: AtlasSessionDto[], focusedSessionRole: string | null): AtlasSessionDto | null {
   if (!focusedSessionRole) {
     return null;
   }
-
   return sessions.find((session) => session.role === focusedSessionRole) || null;
-}
-
-function getActiveSessionFocus(pageData: AtlasPageData): AtlasSessionDto | null {
-  return getFocusedSession(pageData.sessions, pageData.focusedSessionRole) || getPrimarySession(pageData.sessions);
 }
 
 function countSessions(sessions: AtlasSessionDto[]): AtlasSessionCounts {
@@ -113,38 +107,56 @@ function countSessions(sessions: AtlasSessionDto[]): AtlasSessionCounts {
   });
 }
 
-function getSessionSummary(session: AtlasSessionDto | null): { heading: string; detail: string; branch: string; status: string; } {
-  if (!session) {
-    return {
-      heading: "Ready for the next session",
-      detail: "ATLAS is ready when the next tracked session state arrives.",
-      branch: "No branch recorded",
-      status: "Waiting for session state",
-    };
-  }
-
-  return {
-    heading: session.name,
-    detail: session.latestMeaningfulAction || session.lastTask || "Waiting for the next product-facing task.",
-    branch: session.currentBranch || "No branch recorded",
-    status: `${session.statusLabel} · ${session.readinessLabel}`,
-  };
-}
-
 function getSessionActivityLabel(session: AtlasSessionDto): string {
   return session.latestMeaningfulAction || session.lastTask || "Waiting for the next product-facing task.";
 }
 
-function renderNavigation(): string {
-  return `<div class="nav-shell" aria-label="ATLAS workspace mode">
-    <span class="nav-link nav-link-static">Single workspace shell</span>
-  </div>`;
+function getSessionLiveStatus(session: AtlasSessionDto): AtlasSessionLiveStatusState {
+  return {
+    tone: session.liveStatusTone,
+    label: session.liveStatusLabel,
+    assistiveText: session.liveStatusAssistiveText,
+    pulse: session.liveStatusPulse,
+  };
+}
+
+function renderLiveStatus(
+  session: AtlasSessionDto,
+  options: {
+    dataRole: string;
+    compact?: boolean;
+    showLabel?: boolean;
+  },
+): string {
+  const status = getSessionLiveStatus(session);
+  const classes = [
+    "live-status",
+    `live-status-${status.tone}`,
+    status.pulse ? "live-status-pulse" : "",
+    options.compact ? "live-status-compact" : "",
+  ].filter(Boolean).join(" ");
+  const visibleLabel = options.showLabel === false
+    ? ""
+    : `<span class="live-status-label">${escapeHtml(status.label)}</span>`;
+
+  return `<span
+    class="${classes}"
+    data-role="${escapeHtml(options.dataRole)}"
+    aria-label="${escapeHtml(status.assistiveText)}">
+    <span class="live-status-dot" aria-hidden="true"></span>
+    ${visibleLabel}
+    <span class="sr-only">${escapeHtml(status.assistiveText)}</span>
+  </span>`;
 }
 
 function renderLifecycleForm(
   label: string,
   action: "pause" | "resume" | "archive" | "stop",
-  options: { role?: string | null; returnTo: string; tone?: "primary" | "secondary"; },
+  options: {
+    role?: string | null;
+    returnTo: string;
+    tone?: "primary" | "secondary";
+  },
 ): string {
   return `<form class="action-form" method="post" action="/lifecycle">
     <input type="hidden" name="action" value="${escapeHtml(action)}" />
@@ -154,51 +166,33 @@ function renderLifecycleForm(
   </form>`;
 }
 
-function renderLinkAction(label: string, href: string): string {
-  return `<a class="action-button secondary" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
+function renderLinkAction(label: string, href: string, tone: "primary" | "secondary" = "secondary"): string {
+  return `<a class="action-button ${tone}" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
 }
 
-function renderSessionActions(session: AtlasSessionDto, focusedSessionRole: string | null): string {
+function renderSelectedSessionActions(session: AtlasSessionDto, focusedSessionRole: string | null): string {
+  const returnTo = buildSurfaceHref(session.role);
   const actions: string[] = [
-    session.role === focusedSessionRole
-      ? renderLinkAction("Clear focus", buildSurfaceHref(null))
-      : renderLinkAction("Focus session", buildSurfaceHref(session.role)),
+    focusedSessionRole
+      ? renderLinkAction("New Session", buildSurfaceHref(null), "primary")
+      : renderLinkAction("Select Session", returnTo, "primary"),
+    renderLifecycleForm("Stop runtime", "stop", {
+      returnTo,
+      tone: "secondary",
+    }),
   ];
 
   if (session.lane) {
     actions.push(session.isPaused
-      ? renderLifecycleForm("Resume lane", "resume", { role: session.role, returnTo: buildSurfaceHref(session.role) })
-      : renderLifecycleForm("Pause lane", "pause", { role: session.role, returnTo: buildSurfaceHref(session.role) }));
+      ? renderLifecycleForm("Resume lane", "resume", { role: session.role, returnTo })
+      : renderLifecycleForm("Pause lane", "pause", { role: session.role, returnTo }));
   }
 
   if (session.canArchive) {
-    actions.push(renderLifecycleForm("Archive session", "archive", {
-      role: session.role,
-      returnTo: buildSurfaceHref(session.role),
-    }));
+    actions.push(renderLifecycleForm("Archive session", "archive", { role: session.role, returnTo }));
   }
 
-  return `<div class="action-row">${actions.join("")}</div>`;
-}
-
-function renderStatusTags(session: AtlasSessionDto): string {
-  const chips = [
-    `<span class="chip">${escapeHtml(session.statusLabel)} · ${escapeHtml(session.readinessLabel)}</span>`,
-  ];
-
-  if (session.isResumable) {
-    chips.push('<span class="chip">Resumable</span>');
-  }
-
-  if (session.isPaused) {
-    chips.push('<span class="chip">Paused lane</span>');
-  }
-
-  if (session.pullRequestCount > 0) {
-    chips.push(`<span class="chip">${escapeHtml(String(session.pullRequestCount))} PR${session.pullRequestCount === 1 ? "" : "s"}</span>`);
-  }
-
-  return chips.join("");
+  return `<div class="action-row" data-role="selected-session-actions">${actions.join("")}</div>`;
 }
 
 function renderTokenList(
@@ -225,403 +219,305 @@ function renderRecentActions(session: AtlasSessionDto): string {
   </ol>`;
 }
 
-function renderFocusedSessionDetail(
-  session: AtlasSessionDto | null,
-  pageData: AtlasPageData,
-): string {
-  if (!session) {
-    return `<section class="canvas-section focused-session-panel" aria-label="Focused session detail" data-role="focused-session-panel" aria-live="polite">
-      <div class="section-heading">
-        <div>
-          <div class="eyebrow">Focused session detail</div>
-          <h2 data-role="focused-session-name">Waiting for the next live detail</h2>
-        </div>
-      </div>
-      <p class="support-copy" data-role="focused-session-activity">Focus a tracked session from the left rail or start a new one to hydrate worker detail inline.</p>
-      <div class="chip-row">
-        <span class="chip" data-role="focused-session-status">${escapeHtml(pageData.sessionStartStatusLabel)}</span>
-        <span class="chip" data-role="focused-session-stage">${escapeHtml(pageData.continuityStatusLabel)}</span>
-        <span class="chip" data-role="focused-session-freshness">Freshness ${escapeHtml(formatTimestamp(pageData.sessionStartUpdatedAt))}</span>
-      </div>
-      <p class="support-copy" data-role="focused-session-continuity">${escapeHtml(pageData.continuityStatusDetail)}</p>
-      <details class="detail-section detail-section-log" open>
-        <summary>Readable log excerpt</summary>
-        <div class="log-shell">
-          <p class="support-copy" data-role="focused-session-log-meta">${escapeHtml(pageData.continuityStatusLabel)}</p>
-          <pre class="log-excerpt" data-role="focused-session-log">No live worker log lines are available yet.</pre>
-        </div>
-      </details>
-    </section>`;
-  }
-
-  return `<section class="canvas-section focused-session-panel" aria-label="Focused session detail" data-role="focused-session-panel" aria-live="polite">
-    <div class="section-heading">
-      <div>
-        <div class="eyebrow">Focused session detail</div>
-        <h2 data-role="focused-session-name">${escapeHtml(session.name)}</h2>
-      </div>
-      ${pageData.focusedSessionRole ? renderLinkAction("Clear focus", buildSurfaceHref(null)) : ""}
-    </div>
-    <p class="support-copy" data-role="focused-session-activity">${escapeHtml(getSessionActivityLabel(session))}</p>
-    <div class="chip-row">
-      <span class="chip" data-role="focused-session-status">${escapeHtml(session.statusLabel)} · ${escapeHtml(session.readinessLabel)}</span>
-      <span class="chip" data-role="focused-session-stage">${escapeHtml(session.currentStageLabel)}</span>
-      <span class="chip" data-role="focused-session-freshness">${escapeHtml(session.freshnessLabel)} · ${escapeHtml(formatTimestamp(session.freshnessAt))}</span>
-      <span class="chip" data-role="focused-session-log-state">${escapeHtml(session.logStateLabel)}</span>
-    </div>
-    <dl class="definition-grid detail-grid">
-      <div>
-        <dt>Worker identity</dt>
-        <dd data-role="focused-session-identity">${escapeHtml(session.workerIdentityLabel)}</dd>
-      </div>
-      <div>
-        <dt>Current stage</dt>
-        <dd data-role="focused-session-stage-detail">${escapeHtml(session.currentStageLabel)}</dd>
-      </div>
-      <div>
-        <dt>Resolved role</dt>
-        <dd data-role="focused-session-resolved-role">${escapeHtml(session.resolvedRole || "Role matched the requested worker")}</dd>
-      </div>
-      <div>
-        <dt>Logical role</dt>
-        <dd data-role="focused-session-logical-role">${escapeHtml(session.logicalRole || "No logical override recorded")}</dd>
-      </div>
-      <div>
-        <dt>Branch</dt>
-        <dd data-role="focused-session-branch">${escapeHtml(session.currentBranch || "No branch recorded")}</dd>
-      </div>
-      <div>
-        <dt>Pull requests</dt>
-        <dd data-role="focused-session-pr-count">${escapeHtml(String(session.pullRequestCount))}</dd>
-      </div>
-      <div>
-        <dt>Last active</dt>
-        <dd data-role="focused-session-last-active">${escapeHtml(formatTimestamp(session.lastActiveAt))}</dd>
-      </div>
-      <div>
-        <dt>Log freshness</dt>
-        <dd data-role="focused-session-log-freshness">${escapeHtml(formatTimestamp(session.logUpdatedAt))}</dd>
-      </div>
-    </dl>
-    <div class="canvas-columns detail-columns">
-      <details class="detail-section" open>
-        <summary>Recent actions</summary>
-        <div data-role="focused-session-actions">${renderRecentActions(session)}</div>
-      </details>
-      <details class="detail-section" open>
-        <summary>Repository context</summary>
-        <div class="detail-stack">
-          <div>
-            <span class="caption">Pull request links</span>
-            <div data-role="focused-session-prs">${renderTokenList(session.pullRequests, "No pull requests recorded yet.")}</div>
-          </div>
-          <div>
-            <span class="caption">Touched files</span>
-            <div data-role="focused-session-files">${renderTokenList(session.touchedFiles, "No touched files recorded yet.")}</div>
-          </div>
-        </div>
-      </details>
-    </div>
-    <details class="detail-section detail-section-log" open>
-      <summary>Readable log excerpt</summary>
-      <div class="log-shell">
-        <p class="support-copy" data-role="focused-session-log-meta">${escapeHtml(session.logSource ? `${session.logSource} · ${formatTimestamp(session.logUpdatedAt)}` : "Waiting for a live worker log excerpt.")}</p>
-        <pre class="log-excerpt" data-role="focused-session-log">${escapeHtml(session.logExcerpt.join("\n") || "No live worker log lines are available yet.")}</pre>
-      </div>
-    </details>
-  </section>`;
-}
-
-function renderFocusedSessionHost(
-  session: AtlasSessionDto | null,
-  pageData: AtlasPageData,
-): string {
-  return `<div data-role="focused-session-panel-host">${renderFocusedSessionDetail(session, pageData)}</div>`;
-}
-
-function renderSessionCard(session: AtlasSessionDto, focusedSessionRole: string | null): string {
-  const isFocused = session.role === focusedSessionRole;
-  const laneLabel = session.lane ? `${session.lane} lane` : "Shared lane";
-  return `<article class="session-row${isFocused ? " session-row-focused" : ""}" aria-label="${escapeHtml(session.name)} session"${isFocused ? ' data-focus-state="focused"' : ""}>
-    <div class="session-row-header">
-      <div class="session-row-copy">
-        <div class="eyebrow">${escapeHtml(laneLabel)}</div>
-        <h3>${escapeHtml(session.name)}</h3>
-        <p class="support-copy">${escapeHtml(getSessionActivityLabel(session))}</p>
-      </div>
-      <div class="chip-row">${renderStatusTags(session)}${isFocused ? '<span class="chip">Focused workspace</span>' : ""}</div>
-    </div>
-    <dl class="definition-grid">
-      <div>
-        <dt>Role</dt>
-        <dd>${escapeHtml(session.role)}</dd>
-      </div>
-      <div>
-        <dt>Branch</dt>
-        <dd>${escapeHtml(session.currentBranch || "No branch recorded")}</dd>
-      </div>
-      <div>
-        <dt>Last active</dt>
-        <dd>${escapeHtml(formatTimestamp(session.lastActiveAt))}</dd>
-      </div>
-      <div>
-        <dt>Files touched</dt>
-        <dd>${escapeHtml(String(session.touchedFileCount))}</dd>
-      </div>
-    </dl>
-    ${renderSessionActions(session, focusedSessionRole)}
-  </article>`;
-}
-
 function renderSidebarSessionRail(pageData: AtlasPageData): string {
   if (pageData.sessions.length === 0) {
     return `<div class="sidebar-empty">
       <strong>No session state is available yet.</strong>
-      <p class="support-copy">ATLAS will surface tracked work here as soon as the next session is written.</p>
+      <p class="support-copy">Start a new session and ATLAS will populate the rail as soon as live state arrives.</p>
     </div>`;
   }
 
   return `<div class="session-rail" data-role="session-rail">
     ${pageData.sessions.map((session) => {
-      const isSelected = session.role === pageData.focusedSessionRole || (!pageData.focusedSessionRole && session === pageData.sessions[0]);
-      const containerTag = "a";
-      const hrefAttribute = ` href="${escapeHtml(buildSurfaceHref(session.role))}"`;
-      const currentAttribute = isSelected ? ' aria-current="true"' : "";
-      return `<${containerTag} class="session-rail-link${isSelected ? " session-rail-link-selected" : ""}"${hrefAttribute}${currentAttribute}>
-        <span class="session-rail-copy">
-          <strong>${escapeHtml(session.name)}</strong>
-          <span>${escapeHtml(session.statusLabel)} · ${escapeHtml(session.readinessLabel)}</span>
-        </span>
-        <span class="session-rail-meta">${escapeHtml(session.currentBranch || "No branch")}</span>
-      </${containerTag}>`;
+      const isSelected = session.role === pageData.focusedSessionRole;
+      return `<a
+        class="session-rail-link${isSelected ? " session-rail-link-selected" : ""}"
+        href="${escapeHtml(buildSurfaceHref(session.role))}"
+        ${isSelected ? 'aria-current="true"' : ""}
+        data-role="session-rail-link"
+        data-session-role="${escapeHtml(session.role)}">
+        <div class="session-rail-row">
+          <span class="session-rail-title">
+            ${renderLiveStatus(session, {
+              dataRole: "session-row-status-light",
+              compact: true,
+            })}
+            <strong>${escapeHtml(session.name)}</strong>
+          </span>
+          <span class="session-rail-role">${escapeHtml(session.role)}</span>
+        </div>
+        <p class="session-rail-summary">${escapeHtml(getSessionActivityLabel(session))}</p>
+        <div class="session-rail-meta">
+          <span>${escapeHtml(session.currentStageLabel)}</span>
+          <span>${escapeHtml(formatTimestamp(session.freshnessAt))}</span>
+        </div>
+      </a>`;
     }).join("")}
   </div>`;
 }
 
-function renderSidebar(pageData: AtlasPageData, counts: AtlasSessionCounts, activeSession: AtlasSessionDto | null): string {
-  const sessionSummary = getSessionSummary(activeSession);
+function renderSidebar(pageData: AtlasPageData): string {
+  const hasSelection = Boolean(pageData.focusedSessionRole);
   return `<aside class="desktop-sidebar" aria-label="ATLAS desktop sidebar">
-    <div class="sidebar-top">
-      <div class="brand-block">
-        <div class="brand-mark">A</div>
-        <div>
-          <div class="eyebrow">Native desktop workspace</div>
-          <p class="product-title">ATLAS</p>
-          <p class="product-copy">${escapeHtml(pageData.hostLabel)} · ${escapeHtml(pageData.pipelineDetail)}</p>
-        </div>
-      </div>
-      <div class="repo-tag">${escapeHtml(pageData.repoLabel)}</div>
-      ${renderNavigation()}
-    </div>
-
-    <section class="sidebar-section" aria-label="Runtime status">
-      <div class="section-heading">
-        <div>
-          <div class="eyebrow">Runtime status</div>
-          <h2 data-role="runtime-stage-label">${escapeHtml(pageData.pipelineStageLabel)}</h2>
-        </div>
-        <span class="meta-copy" data-role="runtime-updated-at">${escapeHtml(formatTimestamp(pageData.updatedAt))}</span>
-      </div>
-      <p class="support-copy" data-role="runtime-detail">${escapeHtml(pageData.homeReadinessHeading)} · ${escapeHtml(pageData.homeReadinessDetail)}</p>
-      <p class="support-copy" data-role="session-start-detail">${escapeHtml(pageData.sessionStartStatusLabel)} · ${escapeHtml(pageData.sessionStartStatusDetail)}</p>
-      <p class="support-copy" data-role="continuity-detail">${escapeHtml(pageData.continuityStatusLabel)} · ${escapeHtml(pageData.continuityStatusDetail)}</p>
-      <div class="progress-rail" aria-hidden="true">
-        <span data-role="runtime-progress-bar" style="width:${escapeHtml(String(clampPercent(pageData.pipelinePercent)))}%"></span>
-      </div>
-      <div class="chip-row" aria-label="Current runtime status">
-        <span class="chip" data-role="runtime-readiness">${escapeHtml(pageData.homeReadinessHeading)}</span>
-        <span class="chip" data-role="runtime-session-start">${escapeHtml(pageData.sessionStartStatusLabel)}</span>
-        <span class="chip" data-role="runtime-continuity">${escapeHtml(pageData.continuityStatusLabel)}</span>
-        <span class="chip" data-role="runtime-count-total">${escapeHtml(String(counts.total))} tracked sessions</span>
-        <span class="chip" data-role="runtime-count-needs-input">${escapeHtml(String(counts.needsInput))} needing input</span>
-        <span class="chip" data-role="runtime-count-paused">${escapeHtml(String(counts.paused))} paused lane${counts.paused === 1 ? "" : "s"}</span>
-      </div>
-    </section>
-
-    <section class="sidebar-section" aria-label="Session focus">
-      <div class="section-heading">
-        <div>
-          <div class="eyebrow">Session focus</div>
-          <h2>${escapeHtml(sessionSummary.heading)}</h2>
-        </div>
-        ${activeSession && (pageData.focusedSessionRole || pageData.missingFocusedSnapshot)
-          ? renderLinkAction("Clear focus", buildSurfaceHref(null))
-          : ""}
-      </div>
-      <p class="support-copy">${escapeHtml(sessionSummary.detail)}</p>
-      <div class="definition-stack">
-        <div>
-          <span class="caption">Branch</span>
-          <code>${escapeHtml(sessionSummary.branch)}</code>
-        </div>
-        <div>
-          <span class="caption">Status</span>
-          <strong>${escapeHtml(sessionSummary.status)}</strong>
-        </div>
-      </div>
-    </section>
-
-    <section class="sidebar-section sidebar-section-fill" aria-label="Tracked sessions rail">
+    <a class="sidebar-brand" href="/" data-role="brand-reset">
+      <span class="brand-mark" aria-hidden="true">A</span>
+      <span class="brand-copy">
+        <span class="eyebrow">Brand reset</span>
+        <strong class="brand-title">ATLAS</strong>
+        <span class="support-copy">${escapeHtml(pageData.repoLabel)}</span>
+      </span>
+    </a>
+    <a
+      class="sidebar-new-session${hasSelection ? "" : " sidebar-new-session-active"}"
+      href="/"
+      data-role="new-session-link"
+      ${hasSelection ? "" : 'aria-current="page"'}>
+      <span class="eyebrow">Main pane mode</span>
+      <strong>${escapeHtml(pageData.homePrimaryActionLabel || "New Session")}</strong>
+      <span class="support-copy">Open the blank start screen and keep the next objective in the main workspace.</span>
+    </a>
+    <section class="sidebar-rail-section" aria-label="Tracked sessions">
       <div class="section-heading">
         <div>
           <div class="eyebrow">Tracked sessions</div>
-          <h2>Persistent left sidebar</h2>
+          <h2>${escapeHtml(String(pageData.sessions.length))} live rows</h2>
         </div>
-        <span class="meta-copy">${escapeHtml(String(counts.resumable))} resumable</span>
       </div>
-      ${renderSidebarSessionRail(pageData)}
+      <div data-role="session-rail-host">${renderSidebarSessionRail(pageData)}</div>
     </section>
   </aside>`;
 }
 
-function renderWorkspaceCanvas(pageData: AtlasPageData, counts: AtlasSessionCounts, activeSession: AtlasSessionDto | null): string {
-  const hasSessions = counts.total > 0;
-  return `<section class="workspace-canvas" aria-label="Chat-first workspace">
-    <section class="canvas-section canvas-hero">
-      <div class="section-heading">
-        <div>
-          <div class="eyebrow">Desktop workspace</div>
-          <h1>${escapeHtml(hasSessions ? "What should ATLAS do next?" : "Where should we start?")}</h1>
-        </div>
-        <p class="support-copy">${escapeHtml(hasSessions
-          ? "The left rail, central composer, and inline detail pane stay live in one workspace."
-          : "Start the first session from the central composer and ATLAS will hydrate the detail pane inline.")}</p>
-      </div>
-      <div class="chip-row">
-        <span class="chip">${escapeHtml(String(counts.total))} tracked sessions</span>
-        <span class="chip">${escapeHtml(String(counts.resumable))} resumable</span>
-        <span class="chip">${escapeHtml(String(counts.needsInput))} needing input</span>
-        <span class="chip">${escapeHtml(String(counts.paused))} paused lane${counts.paused === 1 ? "" : "s"}</span>
-      </div>
-    </section>
-
-    ${renderFocusedSessionHost(activeSession, pageData)}
-
-    <section class="canvas-section" aria-label="Tracked sessions">
-      <div class="section-heading">
-        <div>
-          <div class="eyebrow">Tracked sessions</div>
-          <h2>Inline session ledger</h2>
-        </div>
-        <p class="support-copy">Focus stays inline, so lifecycle actions, freshness, and readable logs update without switching product modes.</p>
-      </div>
-      ${pageData.sessions.length > 0
-        ? `<div class="session-list" data-role="session-list">${pageData.sessions.map((session) => renderSessionCard(session, pageData.focusedSessionRole)).join("")}</div>`
-        : '<div class="empty-state"><strong>No session state is available yet.</strong><p class="support-copy">ATLAS will surface tracked work here as soon as the next session is written.</p></div>'}
-    </section>
-  </section>`;
-}
-
-function renderComposer(pageData: AtlasPageData, activeSession: AtlasSessionDto | null): string {
+function renderNewSessionView(pageData: AtlasPageData, counts: AtlasSessionCounts): string {
   const continuity = resolveAtlasSessionSnapshotContinuity(
     pageData.sessions,
     pageData.focusedSessionRole,
     pageData.missingFocusedSnapshot === true,
   );
-  const returnTo = buildSurfaceHref(pageData.focusedSessionRole);
-  const composerHeading = continuity.missingFocusedSnapshot
-    ? "Start the next session while the old focus recovers"
-    : (!continuity.hasLiveSessions ? "Start a new session" : "Start the next session");
-  const composerDetail = continuity.missingFocusedSnapshot
-    ? "The previous focus is missing its next live snapshot, but you can still write the next outcome here and keep the workspace moving."
-    : (!continuity.hasLiveSessions
-        ? "There is no live session yet. Write one outcome here to start from the main workspace instead of a separate onboarding screen."
-        : (activeSession
-            ? `Write the next outcome here, then use the left rail to inspect ${activeSession.name} or any other tracked session.`
-            : pageData.homeReadinessDetail));
 
-  const actions = [
-    renderLifecycleForm("Stop runtime", "stop", {
-      returnTo,
-      tone: "secondary",
-    }),
-  ];
+  const heading = pageData.missingFocusedSnapshot
+    ? "The selected session is waiting for its next live update"
+    : (counts.total > 0 ? "Start a new session from a clean workspace" : "Where should ATLAS start?");
+  const detail = pageData.missingFocusedSnapshot
+    ? "The previous selection is not in the current live snapshot. The rail stays available, and this blank start screen lets you launch the next session without stale detail lingering in the main pane."
+    : (counts.total > 0
+        ? "Choose any tracked session from the rail to inspect its live detail, or write the next outcome here to open a new flow."
+        : "Write one outcome here to seed the first live session. ATLAS will keep the rail blank until live state is actually written.");
+  const continuityDetail = pageData.missingFocusedSnapshot
+    ? pageData.continuityStatusDetail
+    : pageData.sessionStartStatusDetail;
 
-  if (activeSession) {
-      actions.push(activeSession.role === pageData.focusedSessionRole
-        ? renderLinkAction("Clear focus", buildSurfaceHref(null))
-        : renderLinkAction("Focus session", buildSurfaceHref(activeSession.role)));
-
-    if (activeSession.lane) {
-      actions.push(activeSession.isPaused
-        ? renderLifecycleForm("Resume lane", "resume", { role: activeSession.role, returnTo })
-        : renderLifecycleForm("Pause lane", "pause", { role: activeSession.role, returnTo }));
-    }
-
-    if (activeSession.canArchive) {
-      actions.push(renderLifecycleForm("Archive session", "archive", { role: activeSession.role, returnTo }));
-    }
-  }
-
-  if (pageData.missingFocusedSnapshot) {
-    actions.push(renderLinkAction("Clear focus", buildSurfaceHref(null)));
-  }
-
-  return `<section
-    class="desktop-composer"
-    aria-label="Desktop composer"
-    data-role="product-composer"
-    data-surface="workspace"
-    data-focused-session-role="${escapeHtml(pageData.focusedSessionRole || "")}"
-    data-missing-focused-snapshot="${continuity.missingFocusedSnapshot ? "true" : "false"}"
-    data-has-live-sessions="${continuity.hasLiveSessions ? "true" : "false"}">
-    <div class="composer-copy">
-      <div class="eyebrow">Desktop composer</div>
-      <h2>${escapeHtml(composerHeading)}</h2>
-      <p class="support-copy">${escapeHtml(composerDetail)}</p>
+  return `<section class="main-pane main-pane-start" aria-label="New session start screen" data-role="new-session-view">
+    <div class="main-pane-header">
+      <div>
+        <div class="eyebrow">New session</div>
+        <h1 data-role="new-session-heading">${escapeHtml(heading)}</h1>
+      </div>
+      <div class="chip-row">
+        <span class="chip" data-role="runtime-stage-label">${escapeHtml(pageData.pipelineStageLabel)}</span>
+        <span class="chip" data-role="runtime-count-total">${escapeHtml(String(counts.total))} tracked sessions</span>
+        <span class="chip" data-role="runtime-count-needs-input">${escapeHtml(String(counts.needsInput))} needing input</span>
+      </div>
     </div>
-    <div class="composer-body">
+    <p class="lead" data-role="new-session-detail">${escapeHtml(detail)}</p>
+    <section class="start-status-grid">
+      <article class="status-card">
+        <span class="caption">Current runtime</span>
+        <strong>${escapeHtml(pageData.pipelineDetail)}</strong>
+        <span class="support-copy" data-role="runtime-updated-at">${escapeHtml(formatTimestamp(pageData.updatedAt))}</span>
+        <div class="progress-rail" aria-hidden="true">
+          <span data-role="runtime-progress-bar" style="width:${escapeHtml(String(clampPercent(pageData.pipelinePercent)))}%"></span>
+        </div>
+      </article>
+      <article class="status-card">
+        <span class="caption">Live freshness policy</span>
+        <strong data-role="runtime-continuity">${escapeHtml(pageData.continuityStatusLabel)}</strong>
+        <span class="support-copy" data-role="continuity-detail">${escapeHtml(pageData.continuityStatusDetail)}</span>
+      </article>
+      <article class="status-card">
+        <span class="caption">Session brief</span>
+        <strong data-role="runtime-session-start">${escapeHtml(pageData.sessionStartStatusLabel)}</strong>
+        <span class="support-copy" data-role="session-start-detail">${escapeHtml(continuityDetail)}</span>
+      </article>
+    </section>
+    <section
+      class="composer-shell"
+      aria-label="Desktop composer"
+      data-role="product-composer"
+      data-surface="workspace"
+      data-focused-session-role="${escapeHtml(pageData.focusedSessionRole || "")}"
+      data-missing-focused-snapshot="${continuity.missingFocusedSnapshot ? "true" : "false"}"
+      data-has-live-sessions="${continuity.hasLiveSessions ? "true" : "false"}">
+      <div class="section-heading">
+        <div>
+          <div class="eyebrow">Chat-first composer</div>
+          <h2>${escapeHtml(pageData.homePrimaryActionLabel || "New Session")}</h2>
+        </div>
+      </div>
       <form class="product-composer-form" id="atlas-product-composer-form" data-role="product-composer-form">
         <label class="composer-field">
-          <span class="caption">Message ATLAS</span>
+          <span class="caption">What should ATLAS do next?</span>
           <textarea
             class="composer-input"
             data-role="product-composer-input"
             name="objective"
-            rows="4"
-            placeholder="Describe the next delivery outcome. Submitting here records the brief in the main workspace and keeps session detail in the left rail."></textarea>
+            rows="6"
+            placeholder="Describe the next delivery outcome. ATLAS records this brief only when you submit it, so the blank start screen never pretends an old session detail is still live."></textarea>
         </label>
         <div class="composer-status">
           <p class="support-copy" data-role="product-composer-status">Loading the saved workspace draft...</p>
-          <p class="support-copy" data-role="product-composer-detail">ATLAS keeps this draft in the desktop shell state so accidental close and reopen recovery feels deliberate.</p>
+          <p class="support-copy" data-role="product-composer-detail">ATLAS keeps this draft in the desktop shell state so close and reopen recovery stays deliberate.</p>
           <p class="composer-error" data-role="product-composer-error"></p>
         </div>
+        <div class="composer-actions">
+          <button class="action-button primary" type="submit" form="atlas-product-composer-form">Start session</button>
+          ${renderLifecycleForm("Stop runtime", "stop", {
+            returnTo: buildSurfaceHref(pageData.focusedSessionRole),
+            tone: "secondary",
+          })}
+        </div>
       </form>
-      <div class="composer-actions">
-        <button class="action-button primary" type="submit" form="atlas-product-composer-form">Start session</button>
-        ${actions.join("")}
-      </div>
-    </div>
+    </section>
   </section>`;
+}
+
+function renderSelectedSessionView(session: AtlasSessionDto, pageData: AtlasPageData): string {
+  const summary = getSessionActivityLabel(session);
+  const logMeta = session.logSource
+    ? `${session.logSource} · ${formatTimestamp(session.logUpdatedAt)}`
+    : "Waiting for a live worker log excerpt.";
+
+  return `<section class="main-pane main-pane-detail" aria-label="Selected session detail view" data-role="selected-session-view">
+    <header class="selected-session-header">
+      <div class="selected-session-header-copy">
+        <div class="eyebrow">Selected session</div>
+        <div class="selected-session-title-row">
+          <h1 data-role="selected-session-name">${escapeHtml(session.name)}</h1>
+          ${renderLiveStatus(session, {
+            dataRole: "selected-session-status-light",
+          })}
+        </div>
+        <p class="lead" data-role="selected-session-activity">${escapeHtml(summary)}</p>
+      </div>
+      ${renderSelectedSessionActions(session, pageData.focusedSessionRole)}
+    </header>
+
+    <section class="selected-session-hero">
+      <div class="hero-metadata">
+        <article class="hero-stat">
+          <span class="caption">Worker identity</span>
+          <strong data-role="selected-session-identity">${escapeHtml(session.workerIdentityLabel)}</strong>
+          <span class="support-copy">${escapeHtml(session.role)}</span>
+        </article>
+        <article class="hero-stat">
+          <span class="caption">Current stage</span>
+          <strong data-role="selected-session-stage">${escapeHtml(session.currentStageLabel)}</strong>
+          <span class="support-copy">${escapeHtml(session.statusLabel)} · ${escapeHtml(session.readinessLabel)}</span>
+        </article>
+        <article class="hero-stat">
+          <span class="caption">Live update</span>
+          <strong data-role="selected-session-freshness">${escapeHtml(formatTimestamp(session.freshnessAt))}</strong>
+          <span class="support-copy">${escapeHtml(session.freshnessLabel)}</span>
+        </article>
+      </div>
+      <div class="chip-row">
+        <span class="chip" data-role="selected-session-log-state">${escapeHtml(session.logStateLabel)}</span>
+        <span class="chip">${escapeHtml(String(session.pullRequestCount))} PR${session.pullRequestCount === 1 ? "" : "s"}</span>
+        <span class="chip">${escapeHtml(String(session.touchedFileCount))} file${session.touchedFileCount === 1 ? "" : "s"}</span>
+        <span class="chip">${escapeHtml(formatTimestamp(session.lastActiveAt))}</span>
+      </div>
+    </section>
+
+    <section class="detail-grid">
+      <article class="detail-card" data-role="selected-session-updates">
+        <div class="section-heading">
+          <div>
+            <div class="eyebrow">Live updates</div>
+            <h2>Recent actions</h2>
+          </div>
+        </div>
+        ${renderRecentActions(session)}
+      </article>
+
+      <article class="detail-card" data-role="selected-session-context">
+        <div class="section-heading">
+          <div>
+            <div class="eyebrow">Repo context</div>
+            <h2>Branch and files</h2>
+          </div>
+        </div>
+        <dl class="definition-grid">
+          <div>
+            <dt>Branch</dt>
+            <dd data-role="selected-session-branch">${escapeHtml(session.currentBranch || "No branch recorded")}</dd>
+          </div>
+          <div>
+            <dt>Resolved role</dt>
+            <dd data-role="selected-session-resolved-role">${escapeHtml(session.resolvedRole || "Role matched the requested worker")}</dd>
+          </div>
+          <div>
+            <dt>Logical role</dt>
+            <dd data-role="selected-session-logical-role">${escapeHtml(session.logicalRole || "No logical override recorded")}</dd>
+          </div>
+          <div>
+            <dt>Last active</dt>
+            <dd data-role="selected-session-last-active">${escapeHtml(formatTimestamp(session.lastActiveAt))}</dd>
+          </div>
+        </dl>
+        <div class="detail-stack">
+          <div>
+            <span class="caption">Pull request links</span>
+            <div data-role="selected-session-prs">${renderTokenList(session.pullRequests, "No pull requests recorded yet.")}</div>
+          </div>
+          <div>
+            <span class="caption">Touched files</span>
+            <div data-role="selected-session-files">${renderTokenList(session.touchedFiles, "No touched files recorded yet.")}</div>
+          </div>
+        </div>
+      </article>
+
+      <article class="detail-card detail-card-log" data-role="selected-session-log-card">
+        <div class="section-heading">
+          <div>
+            <div class="eyebrow">Readable log</div>
+            <h2>Latest worker output</h2>
+          </div>
+        </div>
+        <p class="support-copy" data-role="selected-session-log-meta">${escapeHtml(logMeta)}</p>
+        <pre class="log-excerpt" data-role="selected-session-log">${escapeHtml(session.logExcerpt.join("\n") || "No live worker log lines are available yet.")}</pre>
+      </article>
+    </section>
+  </section>`;
+}
+
+function renderMainPane(pageData: AtlasPageData, counts: AtlasSessionCounts): string {
+  const selectedSession = getSelectedSession(pageData.sessions, pageData.focusedSessionRole);
+  if (selectedSession) {
+    return renderSelectedSessionView(selectedSession, pageData);
+  }
+  return renderNewSessionView(pageData, counts);
 }
 
 function renderComposerScript(): string {
   return `<script>
 (() => {
   const bridge = window.atlasDesktop;
-  const composerRoot = document.querySelector("[data-role='product-composer']");
-  const form = document.querySelector("[data-role='product-composer-form']");
-  const input = document.querySelector("[data-role='product-composer-input']");
-  const statusEl = document.querySelector("[data-role='product-composer-status']");
-  const detailEl = document.querySelector("[data-role='product-composer-detail']");
-  const errorEl = document.querySelector("[data-role='product-composer-error']");
-
-  if (!(composerRoot instanceof HTMLElement)
-    || !(form instanceof HTMLFormElement)
-    || !(input instanceof HTMLTextAreaElement)
-    || !(statusEl instanceof HTMLElement)
-    || !(detailEl instanceof HTMLElement)
-    || !(errorEl instanceof HTMLElement)) {
-    return;
-  }
-
-  const continuityDetail = composerRoot.dataset.missingFocusedSnapshot === "true"
-    ? "The saved focus target is still waiting on its next live session snapshot. The desktop shell stays usable and keeps this draft in place."
-    : (composerRoot.dataset.hasLiveSessions === "true"
-        ? "ATLAS keeps this draft in the desktop shell state so accidental close and reopen recovery feels deliberate."
-        : "No live session snapshot is available yet, but the shell still restores this draft and surface cleanly.");
+  const shellRoot = document.querySelector("[data-role='atlas-shell']");
+  const sessionRailHost = document.querySelector("[data-role='session-rail-host']");
+  const mainPaneHost = document.querySelector("[data-role='main-pane-host']");
+  let form = null;
+  let input = null;
+  let statusEl = null;
+  let detailEl = null;
+  let errorEl = null;
   let saveTimer = null;
   let refreshTimer = null;
+
+  if (!(shellRoot instanceof HTMLElement)
+    || !(sessionRailHost instanceof HTMLElement)
+    || !(mainPaneHost instanceof HTMLElement)) {
+    return;
+  }
 
   const escapeHtml = (value) => String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -647,22 +543,19 @@ function renderComposerScript(): string {
   };
   const countSessions = (sessions) => sessions.reduce((counts, session) => ({
     total: counts.total + 1,
+    active: counts.active + (session.status === "working" ? 1 : 0),
     needsInput: counts.needsInput + (session.needsInput ? 1 : 0),
+    completed: counts.completed + (session.status === "done" ? 1 : 0),
     resumable: counts.resumable + (session.isResumable ? 1 : 0),
     paused: counts.paused + (session.isPaused ? 1 : 0),
   }), {
     total: 0,
+    active: 0,
     needsInput: 0,
+    completed: 0,
     resumable: 0,
     paused: 0,
   });
-  const getPrimarySession = (sessions) => sessions.find((session) => session.status === "working")
-    || sessions.find((session) => session.needsInput)
-    || sessions.find((session) => session.isResumable)
-    || sessions[0]
-    || null;
-  const getActiveSession = (pageData) => pageData.sessions.find((session) => session.role === pageData.focusedSessionRole)
-    || getPrimarySession(pageData.sessions);
   const buildSurfaceHref = (focusedSessionRole) => {
     const params = new URLSearchParams();
     if (focusedSessionRole) {
@@ -672,14 +565,59 @@ function renderComposerScript(): string {
     const query = params.toString();
     return query ? pathname + "?" + query : pathname;
   };
-  const renderSessionRail = (pageData) => pageData.sessions.map((session, index) => {
-    const isSelected = session.role === pageData.focusedSessionRole || (!pageData.focusedSessionRole && index === 0);
-    return '<a class="session-rail-link' + (isSelected ? " session-rail-link-selected" : "") + '" href="'
-      + escapeHtml(buildSurfaceHref(session.role)) + '"' + (isSelected ? ' aria-current="true"' : "") + '>'
-      + '<span class="session-rail-copy"><strong>' + escapeHtml(session.name) + '</strong><span>'
-      + escapeHtml(session.statusLabel) + " · " + escapeHtml(session.readinessLabel) + "</span></span>"
-      + '<span class="session-rail-meta">' + escapeHtml(session.currentBranch || "No branch") + "</span></a>";
-  }).join("");
+  const getSelectedSession = (pageData) => Array.isArray(pageData.sessions)
+    ? pageData.sessions.find((session) => session.role === pageData.focusedSessionRole) || null
+    : null;
+  const getSessionActivityLabel = (session) => session.latestMeaningfulAction
+    || session.lastTask
+    || "Waiting for the next product-facing task.";
+  const getSessionLiveStatus = (session) => ({
+    tone: session.liveStatusTone || "idle",
+    label: session.liveStatusLabel || "Ready",
+    assistiveText: session.liveStatusAssistiveText || (session.name + " is ready for the next live update."),
+    pulse: session.liveStatusPulse === true,
+  });
+  const renderLiveStatus = (session, options = {}) => {
+    const status = getSessionLiveStatus(session);
+    const classes = [
+      "live-status",
+      "live-status-" + status.tone,
+      status.pulse ? "live-status-pulse" : "",
+      options.compact ? "live-status-compact" : "",
+    ].filter(Boolean).join(" ");
+    const visibleLabel = options.showLabel === false
+      ? ""
+      : '<span class="live-status-label">' + escapeHtml(status.label) + "</span>";
+    return '<span class="' + classes + '" data-role="' + escapeHtml(options.dataRole || "live-status") + '" aria-label="'
+      + escapeHtml(status.assistiveText) + '"><span class="live-status-dot" aria-hidden="true"></span>'
+      + visibleLabel + '<span class="sr-only">' + escapeHtml(status.assistiveText) + "</span></span>";
+  };
+  const renderLifecycleForm = (label, action, options) => '<form class="action-form" method="post" action="/lifecycle">'
+    + '<input type="hidden" name="action" value="' + escapeHtml(action) + '" />'
+    + (options.role ? '<input type="hidden" name="role" value="' + escapeHtml(options.role) + '" />' : "")
+    + '<input type="hidden" name="returnTo" value="' + escapeHtml(options.returnTo) + '" />'
+    + '<button class="action-button ' + escapeHtml(options.tone || "secondary") + '" type="submit">'
+    + escapeHtml(label) + "</button></form>";
+  const renderLinkAction = (label, href, tone = "secondary") => '<a class="action-button ' + escapeHtml(tone)
+    + '" href="' + escapeHtml(href) + '">' + escapeHtml(label) + "</a>";
+  const renderSelectedSessionActions = (session, focusedSessionRole) => {
+    const returnTo = buildSurfaceHref(session.role);
+    const actions = [
+      focusedSessionRole
+        ? renderLinkAction("New Session", buildSurfaceHref(null), "primary")
+        : renderLinkAction("Select Session", returnTo, "primary"),
+      renderLifecycleForm("Stop runtime", "stop", { returnTo, tone: "secondary" }),
+    ];
+    if (session.lane) {
+      actions.push(session.isPaused
+        ? renderLifecycleForm("Resume lane", "resume", { role: session.role, returnTo })
+        : renderLifecycleForm("Pause lane", "pause", { role: session.role, returnTo }));
+    }
+    if (session.canArchive) {
+      actions.push(renderLifecycleForm("Archive session", "archive", { role: session.role, returnTo }));
+    }
+    return '<div class="action-row" data-role="selected-session-actions">' + actions.join("") + "</div>";
+  };
   const renderTokenList = (items, emptyLabel) => {
     if (!Array.isArray(items) || items.length === 0) {
       return '<p class="support-copy">' + escapeHtml(emptyLabel) + "</p>";
@@ -697,132 +635,145 @@ function renderComposerScript(): string {
       + (action.at ? " · " + escapeHtml(formatTimestamp(action.at)) : "")
       + "</span></li>").join("") + "</ol>";
   };
-  const renderFocusedSessionPanel = (session, pageData) => {
-    if (!session) {
-      return '<section class="canvas-section focused-session-panel" aria-label="Focused session detail" data-role="focused-session-panel" aria-live="polite">'
-        + '<div class="section-heading"><div><div class="eyebrow">Focused session detail</div><h2 data-role="focused-session-name">Waiting for the next live detail</h2></div></div>'
-        + '<p class="support-copy" data-role="focused-session-activity">Focus a tracked session from the left rail or start a new one to hydrate worker detail inline.</p>'
-        + '<div class="chip-row"><span class="chip" data-role="focused-session-status">' + escapeHtml(pageData.sessionStartStatusLabel || "Ready to start") + '</span>'
-        + '<span class="chip" data-role="focused-session-stage">' + escapeHtml(pageData.continuityStatusLabel || "Waiting for live snapshot") + '</span>'
-        + '<span class="chip" data-role="focused-session-freshness">Freshness ' + escapeHtml(formatTimestamp(pageData.sessionStartUpdatedAt || null)) + '</span></div>'
-        + '<p class="support-copy" data-role="focused-session-continuity">' + escapeHtml(pageData.continuityStatusDetail || "") + '</p>'
-        + '<details class="detail-section detail-section-log" open><summary>Readable log excerpt</summary><div class="log-shell"><p class="support-copy" data-role="focused-session-log-meta">'
-        + escapeHtml(pageData.continuityStatusLabel || "Waiting for live snapshot")
-        + '</p><pre class="log-excerpt" data-role="focused-session-log">No live worker log lines are available yet.</pre></div></details></section>';
+  const renderSessionRail = (pageData) => {
+    if (!Array.isArray(pageData.sessions) || pageData.sessions.length === 0) {
+      return '<div class="sidebar-empty"><strong>No session state is available yet.</strong><p class="support-copy">Start a new session and ATLAS will populate the rail as soon as live state arrives.</p></div>';
     }
-      const actionHref = buildSurfaceHref(null);
-    const actionLabel = "Clear focus";
+    return '<div class="session-rail" data-role="session-rail">'
+      + pageData.sessions.map((session) => {
+        const isSelected = session.role === pageData.focusedSessionRole;
+        return '<a class="session-rail-link' + (isSelected ? " session-rail-link-selected" : "")
+          + '" href="' + escapeHtml(buildSurfaceHref(session.role)) + '"'
+          + (isSelected ? ' aria-current="true"' : "")
+          + ' data-role="session-rail-link" data-session-role="' + escapeHtml(session.role) + '">'
+          + '<div class="session-rail-row"><span class="session-rail-title">'
+          + renderLiveStatus(session, { dataRole: "session-row-status-light", compact: true })
+          + '<strong>' + escapeHtml(session.name) + '</strong></span><span class="session-rail-role">'
+          + escapeHtml(session.role) + '</span></div><p class="session-rail-summary">'
+          + escapeHtml(getSessionActivityLabel(session)) + '</p><div class="session-rail-meta"><span>'
+          + escapeHtml(session.currentStageLabel) + "</span><span>"
+          + escapeHtml(formatTimestamp(session.freshnessAt)) + "</span></div></a>";
+      }).join("")
+      + "</div>";
+  };
+  const renderNewSessionView = (pageData, counts) => {
+    const missingFocusedSnapshot = pageData.missingFocusedSnapshot === true;
+    const hasLiveSessions = Array.isArray(pageData.sessions) && pageData.sessions.length > 0;
+    const heading = missingFocusedSnapshot
+      ? "The selected session is waiting for its next live update"
+      : (hasLiveSessions ? "Start a new session from a clean workspace" : "Where should ATLAS start?");
+    const detail = missingFocusedSnapshot
+      ? "The previous selection is not in the current live snapshot. The rail stays available, and this blank start screen lets you launch the next session without stale detail lingering in the main pane."
+      : (hasLiveSessions
+          ? "Choose any tracked session from the rail to inspect its live detail, or write the next outcome here to open a new flow."
+          : "Write one outcome here to seed the first live session. ATLAS will keep the rail blank until live state is actually written.");
+    const continuityDetail = missingFocusedSnapshot
+      ? String(pageData.continuityStatusDetail || "")
+      : String(pageData.sessionStartStatusDetail || "");
+    return '<section class="main-pane main-pane-start" aria-label="New session start screen" data-role="new-session-view">'
+      + '<div class="main-pane-header"><div><div class="eyebrow">New session</div><h1 data-role="new-session-heading">'
+      + escapeHtml(heading) + '</h1></div><div class="chip-row"><span class="chip" data-role="runtime-stage-label">'
+      + escapeHtml(pageData.pipelineStageLabel || "Idle")
+      + '</span><span class="chip" data-role="runtime-count-total">' + escapeHtml(String(counts.total))
+      + ' tracked sessions</span><span class="chip" data-role="runtime-count-needs-input">' + escapeHtml(String(counts.needsInput))
+      + ' needing input</span></div></div><p class="lead" data-role="new-session-detail">'
+      + escapeHtml(detail)
+      + '</p><section class="start-status-grid"><article class="status-card"><span class="caption">Current runtime</span><strong>'
+      + escapeHtml(pageData.pipelineDetail || "System ready")
+      + '</strong><span class="support-copy" data-role="runtime-updated-at">' + escapeHtml(formatTimestamp(pageData.updatedAt || null))
+      + '</span><div class="progress-rail" aria-hidden="true"><span data-role="runtime-progress-bar" style="width:'
+      + escapeHtml(String(clampPercent(pageData.pipelinePercent))) + '%"></span></div></article><article class="status-card"><span class="caption">Live freshness policy</span><strong data-role="runtime-continuity">'
+      + escapeHtml(pageData.continuityStatusLabel || "Waiting for live snapshot")
+      + '</strong><span class="support-copy" data-role="continuity-detail">' + escapeHtml(pageData.continuityStatusDetail || "")
+      + '</span></article><article class="status-card"><span class="caption">Session brief</span><strong data-role="runtime-session-start">'
+      + escapeHtml(pageData.sessionStartStatusLabel || "Ready to start")
+      + '</strong><span class="support-copy" data-role="session-start-detail">' + escapeHtml(continuityDetail)
+      + '</span></article></section><section class="composer-shell" aria-label="Desktop composer" data-role="product-composer" data-surface="workspace" data-focused-session-role="'
+      + escapeHtml(pageData.focusedSessionRole || "") + '" data-missing-focused-snapshot="'
+      + (missingFocusedSnapshot ? "true" : "false") + '" data-has-live-sessions="'
+      + (hasLiveSessions ? "true" : "false")
+      + '"><div class="section-heading"><div><div class="eyebrow">Chat-first composer</div><h2>'
+      + escapeHtml(pageData.homePrimaryActionLabel || "New Session")
+      + '</h2></div></div><form class="product-composer-form" id="atlas-product-composer-form" data-role="product-composer-form"><label class="composer-field"><span class="caption">What should ATLAS do next?</span><textarea class="composer-input" data-role="product-composer-input" name="objective" rows="6" placeholder="Describe the next delivery outcome. ATLAS records this brief only when you submit it, so the blank start screen never pretends an old session detail is still live."></textarea></label><div class="composer-status"><p class="support-copy" data-role="product-composer-status">Loading the saved workspace draft...</p><p class="support-copy" data-role="product-composer-detail">ATLAS keeps this draft in the desktop shell state so close and reopen recovery stays deliberate.</p><p class="composer-error" data-role="product-composer-error"></p></div><div class="composer-actions"><button class="action-button primary" type="submit" form="atlas-product-composer-form">Start session</button>'
+      + renderLifecycleForm("Stop runtime", "stop", { returnTo: buildSurfaceHref(pageData.focusedSessionRole || null), tone: "secondary" })
+      + "</div></form></section></section>";
+  };
+  const renderSelectedSessionView = (session, pageData) => {
     const logMeta = session.logSource
       ? session.logSource + " · " + formatTimestamp(session.logUpdatedAt)
       : "Waiting for a live worker log excerpt.";
-    return '<section class="canvas-section focused-session-panel" aria-label="Focused session detail" data-role="focused-session-panel" aria-live="polite">'
-      + '<div class="section-heading"><div><div class="eyebrow">Focused session detail</div><h2 data-role="focused-session-name">'
-      + escapeHtml(session.name)
-      + '</h2></div>'
-      + (pageData.focusedSessionRole ? '<a class="action-button secondary" href="' + escapeHtml(actionHref) + '">' + escapeHtml(actionLabel) + '</a>' : "")
-      + '</div><p class="support-copy" data-role="focused-session-activity">' + escapeHtml(session.latestMeaningfulAction || session.lastTask || "Waiting for the next product-facing task.") + '</p>'
-      + '<div class="chip-row"><span class="chip" data-role="focused-session-status">' + escapeHtml(session.statusLabel) + " · " + escapeHtml(session.readinessLabel) + '</span>'
-      + '<span class="chip" data-role="focused-session-stage">' + escapeHtml(session.currentStageLabel) + '</span>'
-      + '<span class="chip" data-role="focused-session-freshness">' + escapeHtml(session.freshnessLabel || "Waiting for live snapshot") + ' · ' + escapeHtml(formatTimestamp(session.freshnessAt)) + '</span>'
-      + '<span class="chip" data-role="focused-session-log-state">' + escapeHtml(session.logStateLabel || "Waiting for live log") + '</span></div>'
-      + '<dl class="definition-grid detail-grid">'
-      + '<div><dt>Worker identity</dt><dd data-role="focused-session-identity">' + escapeHtml(session.workerIdentityLabel) + '</dd></div>'
-      + '<div><dt>Current stage</dt><dd data-role="focused-session-stage-detail">' + escapeHtml(session.currentStageLabel) + '</dd></div>'
-      + '<div><dt>Resolved role</dt><dd data-role="focused-session-resolved-role">' + escapeHtml(session.resolvedRole || "Role matched the requested worker") + '</dd></div>'
-      + '<div><dt>Logical role</dt><dd data-role="focused-session-logical-role">' + escapeHtml(session.logicalRole || "No logical override recorded") + '</dd></div>'
-      + '<div><dt>Branch</dt><dd data-role="focused-session-branch">' + escapeHtml(session.currentBranch || "No branch recorded") + '</dd></div>'
-      + '<div><dt>Pull requests</dt><dd data-role="focused-session-pr-count">' + escapeHtml(String(session.pullRequestCount || 0)) + '</dd></div>'
-      + '<div><dt>Last active</dt><dd data-role="focused-session-last-active">' + escapeHtml(formatTimestamp(session.lastActiveAt)) + '</dd></div>'
-      + '<div><dt>Log freshness</dt><dd data-role="focused-session-log-freshness">' + escapeHtml(formatTimestamp(session.logUpdatedAt)) + '</dd></div>'
-      + '</dl><div class="canvas-columns detail-columns">'
-      + '<details class="detail-section" open><summary>Recent actions</summary><div data-role="focused-session-actions">' + renderRecentActions(session) + '</div></details>'
-      + '<details class="detail-section" open><summary>Repository context</summary><div class="detail-stack"><div><span class="caption">Pull request links</span><div data-role="focused-session-prs">'
+    return '<section class="main-pane main-pane-detail" aria-label="Selected session detail view" data-role="selected-session-view"><header class="selected-session-header"><div class="selected-session-header-copy"><div class="eyebrow">Selected session</div><div class="selected-session-title-row"><h1 data-role="selected-session-name">'
+      + escapeHtml(session.name) + "</h1>"
+      + renderLiveStatus(session, { dataRole: "selected-session-status-light" })
+      + '</div><p class="lead" data-role="selected-session-activity">' + escapeHtml(getSessionActivityLabel(session))
+      + "</p></div>" + renderSelectedSessionActions(session, pageData.focusedSessionRole)
+      + '</header><section class="selected-session-hero"><div class="hero-metadata"><article class="hero-stat"><span class="caption">Worker identity</span><strong data-role="selected-session-identity">'
+      + escapeHtml(session.workerIdentityLabel) + '</strong><span class="support-copy">' + escapeHtml(session.role)
+      + '</span></article><article class="hero-stat"><span class="caption">Current stage</span><strong data-role="selected-session-stage">'
+      + escapeHtml(session.currentStageLabel) + '</strong><span class="support-copy">' + escapeHtml(session.statusLabel)
+      + " · " + escapeHtml(session.readinessLabel)
+      + '</span></article><article class="hero-stat"><span class="caption">Live update</span><strong data-role="selected-session-freshness">'
+      + escapeHtml(formatTimestamp(session.freshnessAt)) + '</strong><span class="support-copy">'
+      + escapeHtml(session.freshnessLabel) + '</span></article></div><div class="chip-row"><span class="chip" data-role="selected-session-log-state">'
+      + escapeHtml(session.logStateLabel) + '</span><span class="chip">' + escapeHtml(String(session.pullRequestCount))
+      + " PR" + (session.pullRequestCount === 1 ? "" : "s")
+      + '</span><span class="chip">' + escapeHtml(String(session.touchedFileCount))
+      + " file" + (session.touchedFileCount === 1 ? "" : "s")
+      + '</span><span class="chip">' + escapeHtml(formatTimestamp(session.lastActiveAt)) + '</span></div></section><section class="detail-grid"><article class="detail-card" data-role="selected-session-updates"><div class="section-heading"><div><div class="eyebrow">Live updates</div><h2>Recent actions</h2></div></div>'
+      + renderRecentActions(session)
+      + '</article><article class="detail-card" data-role="selected-session-context"><div class="section-heading"><div><div class="eyebrow">Repo context</div><h2>Branch and files</h2></div></div><dl class="definition-grid"><div><dt>Branch</dt><dd data-role="selected-session-branch">'
+      + escapeHtml(session.currentBranch || "No branch recorded")
+      + '</dd></div><div><dt>Resolved role</dt><dd data-role="selected-session-resolved-role">'
+      + escapeHtml(session.resolvedRole || "Role matched the requested worker")
+      + '</dd></div><div><dt>Logical role</dt><dd data-role="selected-session-logical-role">'
+      + escapeHtml(session.logicalRole || "No logical override recorded")
+      + '</dd></div><div><dt>Last active</dt><dd data-role="selected-session-last-active">'
+      + escapeHtml(formatTimestamp(session.lastActiveAt))
+      + '</dd></div></dl><div class="detail-stack"><div><span class="caption">Pull request links</span><div data-role="selected-session-prs">'
       + renderTokenList(session.pullRequests, "No pull requests recorded yet.")
-      + '</div></div><div><span class="caption">Touched files</span><div data-role="focused-session-files">'
+      + '</div></div><div><span class="caption">Touched files</span><div data-role="selected-session-files">'
       + renderTokenList(session.touchedFiles, "No touched files recorded yet.")
-      + '</div></div></div></details></div>'
-      + '<details class="detail-section detail-section-log" open><summary>Readable log excerpt</summary><div class="log-shell"><p class="support-copy" data-role="focused-session-log-meta">'
+      + '</div></div></div></article><article class="detail-card detail-card-log" data-role="selected-session-log-card"><div class="section-heading"><div><div class="eyebrow">Readable log</div><h2>Latest worker output</h2></div></div><p class="support-copy" data-role="selected-session-log-meta">'
       + escapeHtml(logMeta)
-      + '</p><pre class="log-excerpt" data-role="focused-session-log">'
-      + escapeHtml((Array.isArray(session.logExcerpt) && session.logExcerpt.length > 0 ? session.logExcerpt.join("\n") : "No live worker log lines are available yet."))
-      + "</pre></div></details></section>";
+      + '</p><pre class="log-excerpt" data-role="selected-session-log">'
+      + escapeHtml(Array.isArray(session.logExcerpt) && session.logExcerpt.length > 0 ? session.logExcerpt.join("\\n") : "No live worker log lines are available yet.")
+      + "</pre></article></section></section>";
   };
-  const applySnapshot = (payload) => {
-    if (!payload?.ok || !payload?.pageData) {
-      return;
-    }
-    const pageData = payload.pageData;
-    const continuitySource = payload.continuitySource === "cached" ? "cached" : "live";
-    const resolvedContinuityLabel = continuitySource === "cached"
-      ? "Cached snapshot in use"
-      : String(pageData.continuityStatusLabel || "Waiting for live snapshot");
-    const resolvedContinuityDetail = continuitySource === "cached"
-      ? String(payload.continuityDetail || "ATLAS is temporarily showing the last successful desktop snapshot while the next live refresh recovers.")
-      : String(pageData.continuityStatusDetail || "");
+  const renderMainPane = (pageData) => {
     const counts = countSessions(Array.isArray(pageData.sessions) ? pageData.sessions : []);
-    const activeSession = getActiveSession(pageData);
-    composerRoot.dataset.focusedSessionRole = String(pageData.focusedSessionRole || "");
-    composerRoot.dataset.missingFocusedSnapshot = pageData.missingFocusedSnapshot ? "true" : "false";
-    composerRoot.dataset.hasLiveSessions = pageData.sessions?.length > 0 ? "true" : "false";
-    const runtimeStageEl = document.querySelector("[data-role='runtime-stage-label']");
-    const runtimeUpdatedAtEl = document.querySelector("[data-role='runtime-updated-at']");
-    const runtimeDetailEl = document.querySelector("[data-role='runtime-detail']");
-    const sessionStartDetailEl = document.querySelector("[data-role='session-start-detail']");
-    const continuityDetailEl = document.querySelector("[data-role='continuity-detail']");
-    const runtimeProgressBarEl = document.querySelector("[data-role='runtime-progress-bar']");
-    const runtimeReadinessEl = document.querySelector("[data-role='runtime-readiness']");
-    const runtimeSessionStartEl = document.querySelector("[data-role='runtime-session-start']");
-    const runtimeContinuityEl = document.querySelector("[data-role='runtime-continuity']");
-    const runtimeTotalEl = document.querySelector("[data-role='runtime-count-total']");
-    const runtimeNeedsInputEl = document.querySelector("[data-role='runtime-count-needs-input']");
-    const runtimePausedEl = document.querySelector("[data-role='runtime-count-paused']");
-    const sessionRailEl = document.querySelector("[data-role='session-rail']");
-    const focusedPanelHostEl = document.querySelector("[data-role='focused-session-panel-host']");
-    if (runtimeStageEl instanceof HTMLElement) runtimeStageEl.textContent = String(pageData.pipelineStageLabel || "Idle");
-    if (runtimeUpdatedAtEl instanceof HTMLElement) runtimeUpdatedAtEl.textContent = formatTimestamp(pageData.updatedAt || null);
-    if (runtimeDetailEl instanceof HTMLElement) runtimeDetailEl.textContent = String(pageData.homeReadinessHeading || "Ready") + " · " + String(pageData.homeReadinessDetail || "");
-    if (sessionStartDetailEl instanceof HTMLElement) sessionStartDetailEl.textContent = String(pageData.sessionStartStatusLabel || "Ready to start") + " · " + String(pageData.sessionStartStatusDetail || "");
-    if (continuityDetailEl instanceof HTMLElement) continuityDetailEl.textContent = resolvedContinuityLabel + " · " + resolvedContinuityDetail;
-    if (runtimeProgressBarEl instanceof HTMLElement) runtimeProgressBarEl.style.width = String(clampPercent(pageData.pipelinePercent)) + "%";
-    if (runtimeReadinessEl instanceof HTMLElement) runtimeReadinessEl.textContent = String(pageData.homeReadinessHeading || "Ready");
-    if (runtimeSessionStartEl instanceof HTMLElement) runtimeSessionStartEl.textContent = String(pageData.sessionStartStatusLabel || "Ready to start");
-    if (runtimeContinuityEl instanceof HTMLElement) runtimeContinuityEl.textContent = resolvedContinuityLabel;
-    if (runtimeTotalEl instanceof HTMLElement) runtimeTotalEl.textContent = String(counts.total) + " tracked sessions";
-    if (runtimeNeedsInputEl instanceof HTMLElement) runtimeNeedsInputEl.textContent = String(counts.needsInput) + " needing input";
-    if (runtimePausedEl instanceof HTMLElement) runtimePausedEl.textContent = String(counts.paused) + " paused lane" + (counts.paused === 1 ? "" : "s");
-    if (sessionRailEl instanceof HTMLElement) sessionRailEl.innerHTML = renderSessionRail(pageData);
-    if (focusedPanelHostEl instanceof HTMLElement) focusedPanelHostEl.innerHTML = renderFocusedSessionPanel(activeSession, pageData);
+    const selectedSession = getSelectedSession(pageData);
+    return selectedSession
+      ? renderSelectedSessionView(selectedSession, pageData)
+      : renderNewSessionView(pageData, counts);
   };
-  const requestSnapshot = async () => {
-    const focusedSessionRole = String(composerRoot.dataset.focusedSessionRole || "");
-    if (bridge?.refreshSnapshot) {
-      return bridge.refreshSnapshot({
-        focusRole: focusedSessionRole || null,
-      });
-    }
-    throw new Error("ATLAS snapshot refresh requires the Electron desktop bridge.");
+  const queryComposerElements = () => {
+    form = document.querySelector("[data-role='product-composer-form']");
+    input = document.querySelector("[data-role='product-composer-input']");
+    statusEl = document.querySelector("[data-role='product-composer-status']");
+    detailEl = document.querySelector("[data-role='product-composer-detail']");
+    errorEl = document.querySelector("[data-role='product-composer-error']");
   };
-  const refreshSnapshot = async () => {
-    try {
-      applySnapshot(await requestSnapshot());
-    } catch (error) {
-      console.error("[atlas] live snapshot refresh failed:", error);
-    }
-  };
-  const startSnapshotRefresh = () => {
-    if (refreshTimer) {
-      window.clearInterval(refreshTimer);
-    }
-    refreshTimer = window.setInterval(() => {
-      void refreshSnapshot();
-    }, 15000);
-  };
-
   const setComposerStatus = (message, detail) => {
-    statusEl.textContent = message;
-    detailEl.textContent = detail || continuityDetail;
+    if (statusEl instanceof HTMLElement) {
+      statusEl.textContent = message;
+    }
+    if (detailEl instanceof HTMLElement) {
+      detailEl.textContent = detail || "";
+    }
   };
-
+  const getContinuityDetail = () => {
+    const composerRoot = document.querySelector("[data-role='product-composer']");
+    if (!(composerRoot instanceof HTMLElement)) {
+      return "Select a live session from the rail or start a new one from this workspace.";
+    }
+    if (composerRoot.dataset.missingFocusedSnapshot === "true") {
+      return "The saved focus target is still waiting on its next live session snapshot. The desktop shell stays usable and keeps this draft in place.";
+    }
+    if (composerRoot.dataset.hasLiveSessions === "true") {
+      return "ATLAS keeps this draft in the desktop shell state so accidental close and reopen recovery feels deliberate.";
+    }
+    return "No live session snapshot is available yet, but the shell still restores this draft and surface cleanly.";
+  };
   const persistDraft = async (value, options = {}) => {
     if (!bridge?.setProductDraft) {
       return;
@@ -833,9 +784,9 @@ function renderComposerScript(): string {
         return;
       }
       if (String(value || "").trim()) {
-        setComposerStatus("Saved the workspace draft for this session shell.", continuityDetail);
+        setComposerStatus("Saved the workspace draft for this desktop session.", getContinuityDetail());
       } else {
-        setComposerStatus("The message box is empty.", continuityDetail);
+        setComposerStatus("The message box is empty.", getContinuityDetail());
       }
     } catch (error) {
       console.error("[atlas] product draft save failed:", error);
@@ -845,7 +796,6 @@ function renderComposerScript(): string {
       );
     }
   };
-
   const persistComposerFocus = async (focused) => {
     if (!bridge?.setProductComposerFocus) {
       return;
@@ -856,18 +806,92 @@ function renderComposerScript(): string {
       console.error("[atlas] product composer focus save failed:", error);
     }
   };
-
   const queueDraftSave = () => {
     if (saveTimer) {
       window.clearTimeout(saveTimer);
     }
     saveTimer = window.setTimeout(() => {
       saveTimer = null;
-      void persistDraft(String(input.value || ""));
+      if (input instanceof HTMLTextAreaElement) {
+        void persistDraft(String(input.value || ""));
+      }
     }, 180);
   };
-
+  const attachComposerListeners = () => {
+    queryComposerElements();
+    if (!(form instanceof HTMLFormElement)
+      || !(input instanceof HTMLTextAreaElement)
+      || !(statusEl instanceof HTMLElement)
+      || !(detailEl instanceof HTMLElement)
+      || !(errorEl instanceof HTMLElement)
+      || form.dataset.bound === "true") {
+      return;
+    }
+    form.dataset.bound = "true";
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      errorEl.textContent = "";
+      const startSession = bridge?.startSession || bridge?.submitClarification;
+      if (!startSession) {
+        errorEl.textContent = "ATLAS could not reach the session bridge for this desktop shell.";
+        setComposerStatus(
+          "Session start is unavailable.",
+          "The product composer can keep text locally, but submitting the brief needs the Electron desktop bridge.",
+        );
+        return;
+      }
+      const objective = String(input.value || "").trim();
+      if (!objective) {
+        errorEl.textContent = "Describe the next delivery outcome before starting the session.";
+        setComposerStatus("The composer is still waiting on a concrete message.", getContinuityDetail());
+        input.focus();
+        return;
+      }
+      setComposerStatus(
+        "Submitting the session brief from the blank workspace.",
+        "ATLAS keeps the draft, records the brief, and returns the shell to the same window.",
+      );
+      void persistComposerFocus(true);
+      void startSession(objective).then((result) => {
+        if (!result.ok) {
+          errorEl.textContent = result.error || "ATLAS could not start the session brief.";
+          setComposerStatus(
+            "Session start failed. The draft is still preserved in this desktop shell.",
+            "Review the error, keep editing, and retry after the provider is available.",
+          );
+          return;
+        }
+        setComposerStatus(
+          "Session brief recorded in the main workspace.",
+          String(result?.packet?.summary || "Select any tracked session from the rail as soon as live detail appears."),
+        );
+        window.location.assign("/");
+      }).catch((error) => {
+        console.error("[atlas] product composer submit failed:", error);
+        errorEl.textContent = String(error?.message || error || "ATLAS could not start the session brief.");
+        setComposerStatus(
+          "Session start failed. The draft is still preserved in this desktop shell.",
+          "Review the shell logs, keep the draft, and retry when the desktop bridge is responsive.",
+        );
+      });
+    });
+    input.addEventListener("input", () => {
+      errorEl.textContent = "";
+      queueDraftSave();
+    });
+    input.addEventListener("focus", () => {
+      void persistComposerFocus(true);
+    });
+    input.addEventListener("blur", () => {
+      void persistComposerFocus(false);
+      void persistDraft(String(input.value || ""));
+    });
+  };
   const loadClarificationStatus = async () => {
+    queryComposerElements();
+    if (!(input instanceof HTMLTextAreaElement)) {
+      return;
+    }
     try {
       const response = await window.fetch("/api/onboarding/status", {
         headers: { accept: "application/json" },
@@ -877,7 +901,7 @@ function renderComposerScript(): string {
       }
       const payload = await response.json();
       if (payload?.ready && payload?.packet) {
-        const packetSummary = String(payload.packet.summary || continuityDetail);
+        const packetSummary = String(payload.packet.summary || getContinuityDetail());
         const packetObjective = String(payload.packet.objective || "").trim();
         if (!String(input.value || "").trim() && packetObjective) {
           input.value = packetObjective;
@@ -893,8 +917,13 @@ function renderComposerScript(): string {
       console.error("[atlas] product composer status load failed:", error);
     }
   };
-
-  const bootstrapComposer = async () => {
+  const restoreComposerState = async () => {
+    queryComposerElements();
+    if (!(input instanceof HTMLTextAreaElement)
+      || !(statusEl instanceof HTMLElement)
+      || !(detailEl instanceof HTMLElement)) {
+      return;
+    }
     if (!bridge?.getDesktopState) {
       setComposerStatus(
         "Desktop state recovery is unavailable in this surface.",
@@ -902,16 +931,14 @@ function renderComposerScript(): string {
       );
       return;
     }
-
     try {
       const desktopState = await bridge.getDesktopState();
       if (desktopState.productDraft) {
         input.value = desktopState.productDraft;
-        setComposerStatus("Restored the saved workspace draft for this desktop session.", continuityDetail);
+        setComposerStatus("Restored the saved workspace draft for this desktop session.", getContinuityDetail());
       } else {
-        setComposerStatus("Message box ready.", continuityDetail);
+        setComposerStatus("Message box ready.", getContinuityDetail());
       }
-
       if (desktopState.productComposerFocused) {
         input.focus();
         input.setSelectionRange(input.value.length, input.value.length);
@@ -923,75 +950,67 @@ function renderComposerScript(): string {
         "ATLAS could not read the saved shell state, but the workspace remains available.",
       );
     }
-
     await loadClarificationStatus();
+  };
+  const renderSnapshot = async (pageData) => {
+    const previousDraft = input instanceof HTMLTextAreaElement ? String(input.value || "") : "";
+    const previousFocus = document.activeElement === input;
+    const previousSelectionStart = input instanceof HTMLTextAreaElement ? input.selectionStart : null;
+    const previousSelectionEnd = input instanceof HTMLTextAreaElement ? input.selectionEnd : null;
+    shellRoot.dataset.focusedSessionRole = String(pageData.focusedSessionRole || "");
+    shellRoot.dataset.missingFocusedSnapshot = pageData.missingFocusedSnapshot ? "true" : "false";
+    shellRoot.dataset.hasLiveSessions = Array.isArray(pageData.sessions) && pageData.sessions.length > 0 ? "true" : "false";
+    sessionRailHost.innerHTML = renderSessionRail(pageData);
+    mainPaneHost.innerHTML = renderMainPane(pageData);
+    attachComposerListeners();
+    queryComposerElements();
+    if (input instanceof HTMLTextAreaElement && previousDraft.trim()) {
+      input.value = previousDraft;
+      if (previousFocus) {
+        input.focus();
+        if (typeof previousSelectionStart === "number" && typeof previousSelectionEnd === "number") {
+          input.setSelectionRange(previousSelectionStart, previousSelectionEnd);
+        }
+      }
+      setComposerStatus("Restored the in-memory workspace draft after the live refresh.", getContinuityDetail());
+      return;
+    }
+    await restoreComposerState();
+  };
+  const requestSnapshot = async () => {
+    const focusedSessionRole = String(shellRoot.dataset.focusedSessionRole || "");
+    if (bridge?.refreshSnapshot) {
+      return bridge.refreshSnapshot({
+        focusRole: focusedSessionRole || null,
+      });
+    }
+    throw new Error("ATLAS snapshot refresh requires the Electron desktop bridge.");
+  };
+  const refreshSnapshot = async () => {
+    try {
+      const payload = await requestSnapshot();
+      if (!payload?.ok || !payload?.pageData) {
+        return;
+      }
+      await renderSnapshot(payload.pageData);
+    } catch (error) {
+      console.error("[atlas] live snapshot refresh failed:", error);
+    }
+  };
+  const startSnapshotRefresh = () => {
+    if (refreshTimer) {
+      window.clearInterval(refreshTimer);
+    }
+    refreshTimer = window.setInterval(() => {
+      void refreshSnapshot();
+    }, 15000);
+  };
+  const bootstrap = async () => {
+    attachComposerListeners();
+    await restoreComposerState();
     await refreshSnapshot();
     startSnapshotRefresh();
   };
-
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    errorEl.textContent = "";
-
-    const startSession = bridge?.startSession || bridge?.submitClarification;
-    if (!startSession) {
-      errorEl.textContent = "ATLAS could not reach the session bridge for this desktop shell.";
-      setComposerStatus(
-        "Session start is unavailable.",
-        "The product composer can keep text locally, but submitting the brief needs the Electron desktop bridge.",
-      );
-      return;
-    }
-
-    const objective = String(input.value || "").trim();
-    if (!objective) {
-      errorEl.textContent = "Describe the next delivery outcome before starting the session.";
-      setComposerStatus("The composer is still waiting on a concrete message.", continuityDetail);
-      input.focus();
-      return;
-    }
-
-    setComposerStatus(
-      "Submitting the session brief from the main workspace.",
-      "ATLAS keeps the draft, records the brief, and reopens the workspace in the same window.",
-    );
-    void persistComposerFocus(true);
-    void startSession(objective).then((result) => {
-      if (!result.ok) {
-        errorEl.textContent = result.error || "ATLAS could not start the session brief.";
-        setComposerStatus(
-          "Session start failed. The draft is still preserved in this desktop shell.",
-          "Review the error, keep editing, and retry after the provider is available.",
-        );
-        return;
-      }
-
-      setComposerStatus(
-        "Session brief recorded in the main workspace.",
-        String(result?.packet?.summary || "Open any tracked session from the left rail to inspect its detail view."),
-      );
-      window.location.assign("/");
-    }).catch((error) => {
-      console.error("[atlas] product composer submit failed:", error);
-      errorEl.textContent = String(error?.message || error || "ATLAS could not start the session brief.");
-      setComposerStatus(
-        "Session start failed. The draft is still preserved in this desktop shell.",
-        "Review the shell logs, keep the draft, and retry when the desktop bridge is responsive.",
-      );
-    });
-  });
-
-  input.addEventListener("input", () => {
-    errorEl.textContent = "";
-    queueDraftSave();
-  });
-  input.addEventListener("focus", () => {
-    void persistComposerFocus(true);
-  });
-  input.addEventListener("blur", () => {
-    void persistComposerFocus(false);
-    void persistDraft(String(input.value || ""));
-  });
   window.addEventListener("beforeunload", () => {
     if (saveTimer) {
       window.clearTimeout(saveTimer);
@@ -1001,98 +1020,117 @@ function renderComposerScript(): string {
       window.clearInterval(refreshTimer);
       refreshTimer = null;
     }
-    void persistDraft(String(input.value || ""));
+    if (input instanceof HTMLTextAreaElement) {
+      void persistDraft(String(input.value || ""));
+    }
   });
-
-  void bootstrapComposer();
+  void bootstrap();
 })();
   </script>`;
 }
 
 function renderAtlasAppShell(pageData: AtlasPageData): string {
   const counts = countSessions(pageData.sessions);
-  const pageTitle = "ATLAS Workspace";
-  const activeSession = getActiveSessionFocus(pageData);
 
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(pageTitle)}</title>
+  <title>${escapeHtml(pageData.title || "ATLAS Workspace")}</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #070707;
-      --bg-soft: #111111;
-      --panel: #141414;
-      --panel-strong: #1a1a1a;
-      --line: rgba(255, 255, 255, 0.12);
-      --line-strong: rgba(255, 255, 255, 0.28);
-      --text: #f5f5f5;
-      --muted: #bbbbbb;
-      --muted-strong: #d4d4d4;
+      --bg: #050505;
+      --bg-soft: #101010;
+      --panel: rgba(15, 15, 15, 0.96);
+      --panel-soft: rgba(24, 24, 24, 0.96);
+      --line: rgba(255, 255, 255, 0.1);
+      --line-strong: rgba(255, 255, 255, 0.24);
+      --text: #f4f4f4;
+      --muted: #b8b8b8;
+      --muted-strong: #dadada;
       --shadow: 0 24px 72px rgba(0, 0, 0, 0.34);
+      --status-idle: #8d9bb1;
+      --status-active: #4dd68a;
+      --status-attention: #ff9b52;
+      --status-complete: #76b7ff;
+      --status-offline: #7a7a7a;
     }
     * { box-sizing: border-box; }
     html, body { min-height: 100%; }
     body {
       margin: 0;
       background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 16%),
-        linear-gradient(180deg, #020202 0%, var(--bg) 36%, #0b0b0b 100%);
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 18%),
+        linear-gradient(180deg, #030303 0%, var(--bg) 38%, #0a0a0a 100%);
       color: var(--text);
       font-family: "Segoe UI Variable Display", "Segoe UI", Arial, sans-serif;
     }
-    a, button { font: inherit; }
-    a { color: inherit; text-decoration: none; }
-    code {
-      display: inline-block;
-      padding: 10px 12px;
-      border-radius: 14px;
-      border: 1px solid var(--line);
-      background: #0d0d0d;
-      color: var(--muted-strong);
-      font-family: "Cascadia Code", Consolas, monospace;
-      word-break: break-word;
+    a, button, textarea { font: inherit; }
+    a {
+      color: inherit;
+      text-decoration: none;
     }
-    a:focus-visible,
-    button:focus-visible {
-      outline: 3px solid #ffffff;
-      outline-offset: 2px;
+    h1,
+    h2,
+    h3,
+    p,
+    dl,
+    dd,
+    dt {
+      margin: 0;
     }
     main {
       padding: 20px;
     }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
     .shell {
       display: grid;
-      grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+      grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
       gap: 20px;
       min-height: calc(100vh - 40px);
     }
     .desktop-sidebar,
-    .workspace-shell,
-    .workspace-canvas,
-    .session-list,
-    .definition-grid,
-    .chip-row,
-    .cta-row,
-    .action-row,
-    .canvas-columns,
-    .stats-grid,
-    .composer-actions {
-      display: grid;
-      gap: 12px;
-    }
-    .desktop-sidebar,
-    .workspace-shell,
-    .canvas-section,
-    .desktop-composer,
-    .session-row {
+    .main-shell,
+    .main-pane,
+    .detail-card,
+    .status-card,
+    .composer-shell,
+    .session-rail-link,
+    .sidebar-new-session {
       border-radius: 24px;
       border: 1px solid var(--line);
-      background: linear-gradient(180deg, rgba(20, 20, 20, 0.96), rgba(12, 12, 12, 0.96));
+      background: linear-gradient(180deg, rgba(20, 20, 20, 0.96), rgba(11, 11, 11, 0.98));
       box-shadow: var(--shadow);
+    }
+    .desktop-sidebar,
+    .main-shell,
+    .main-pane,
+    .detail-grid,
+    .definition-grid,
+    .session-rail,
+    .start-status-grid,
+    .hero-metadata,
+    .chip-row,
+    .action-row,
+    .composer-actions,
+    .product-composer-form,
+    .composer-field,
+    .composer-status,
+    .detail-stack {
+      display: grid;
+      gap: 14px;
     }
     .desktop-sidebar {
       position: sticky;
@@ -1100,414 +1138,354 @@ function renderAtlasAppShell(pageData: AtlasPageData): string {
       align-self: start;
       min-height: calc(100vh - 40px);
       padding: 18px;
-      grid-template-rows: auto auto auto minmax(0, 1fr);
-    }
-    .workspace-shell {
-      min-height: calc(100vh - 40px);
-      padding: 18px;
-      grid-template-rows: minmax(0, 1fr) auto;
-    }
-      .workspace-canvas {
-        align-content: start;
-        gap: 16px;
-      }
-    .canvas-section {
-      padding: 22px;
-    }
-    .home-stage {
-      width: min(760px, 100%);
-      display: grid;
-      justify-items: center;
-      text-align: center;
-      gap: 12px;
-      margin-top: 0;
-    }
-    .home-stage-copy {
-      display: grid;
-      gap: 12px;
-    }
-    .home-stage-support {
-      max-width: 620px;
-      font-size: 16px;
-    }
-    .canvas-columns {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      align-items: start;
-    }
-    .brand-block {
-      display: flex;
+      grid-template-rows: auto auto minmax(0, 1fr);
       gap: 14px;
+    }
+    .sidebar-brand,
+    .sidebar-new-session {
+      display: grid;
+      gap: 10px;
+      padding: 18px;
+    }
+    .sidebar-brand {
+      grid-template-columns: auto minmax(0, 1fr);
       align-items: center;
     }
     .brand-mark {
-      width: 42px;
-      height: 42px;
-      display: grid;
+      width: 48px;
+      height: 48px;
+      display: inline-grid;
       place-items: center;
-      border-radius: 12px;
-      border: 1px solid var(--line-strong);
+      border-radius: 16px;
       background: #ffffff;
       color: #050505;
       font-weight: 700;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.08em;
     }
-    .eyebrow,
-    .caption,
+    .brand-copy {
+      display: grid;
+      gap: 4px;
+    }
+    .brand-title {
+      font-size: 22px;
+      letter-spacing: -0.04em;
+    }
+    .sidebar-new-session-active,
+    .session-rail-link-selected {
+      border-color: var(--line-strong);
+      background: linear-gradient(180deg, rgba(28, 28, 28, 0.98), rgba(14, 14, 14, 0.98));
+    }
+    .sidebar-rail-section {
+      min-height: 0;
+      display: grid;
+      gap: 14px;
+    }
+    .session-rail {
+      align-content: start;
+      min-height: 0;
+      overflow: auto;
+      padding-right: 2px;
+    }
+    .session-rail-link {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+    }
+    .session-rail-row,
+    .session-rail-title,
+    .section-heading,
+    .main-pane-header,
+    .selected-session-header,
+    .selected-session-title-row {
+      display: flex;
+      gap: 14px;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .session-rail-title {
+      justify-content: start;
+      align-items: center;
+      min-width: 0;
+    }
+    .session-rail-role,
+    .session-rail-meta,
     .meta-copy,
-    dt {
+    .caption,
+    dt,
+    .eyebrow {
       color: var(--muted);
       font-size: 12px;
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }
-    .product-title {
-      margin: 0;
-      font-size: 24px;
-      letter-spacing: -0.04em;
-    }
-    .product-copy,
+    .session-rail-summary,
     .support-copy,
     dd {
-      margin: 0;
       color: var(--muted-strong);
       line-height: 1.6;
     }
-    .product-copy { max-width: 720px; }
-    .repo-tag,
-    .chip,
-    .nav-link,
-    .action-button,
-    .empty-state,
-    .sidebar-empty,
-    .session-rail-link,
-    .stat-pill {
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      background: rgba(255, 255, 255, 0.03);
-    }
-    .repo-tag,
-    .nav-link,
-    .chip,
-    .action-button {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 42px;
-      padding: 10px 14px;
-    }
-    .nav {
+    .session-rail-meta {
       display: flex;
       gap: 10px;
+      justify-content: space-between;
       flex-wrap: wrap;
     }
-    .nav-link[aria-current="page"] {
-      background: #ffffff;
-      color: #050505;
-      border-color: #ffffff;
-      font-weight: 600;
-    }
-    .sidebar-top,
-    .sidebar-section {
-      display: grid;
-      gap: 14px;
-    }
-    .sidebar-section {
-      padding: 16px;
+    .sidebar-empty {
+      padding: 18px;
       border-radius: 18px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      background: rgba(255, 255, 255, 0.02);
+      border: 1px dashed var(--line);
+      background: rgba(255, 255, 255, 0.03);
     }
-    .sidebar-section-fill {
+    .main-shell {
+      min-height: calc(100vh - 40px);
+      padding: 18px;
+      display: grid;
+    }
+    .main-pane {
+      padding: 28px;
       align-content: start;
     }
-    .session-row-focused,
-    .session-rail-link-selected {
-      border-color: rgba(255, 255, 255, 0.42);
-      background: linear-gradient(180deg, rgba(28, 28, 28, 0.98), rgba(14, 14, 14, 0.98));
-    }
-    h1,
-    .section-heading h2,
-    h3 {
-      margin: 0;
-      letter-spacing: -0.04em;
-    }
-    h1 {
-      font-size: clamp(34px, 5vw, 56px);
-      line-height: 1.02;
-      max-width: 860px;
+    .main-pane-header {
+      align-items: start;
     }
     .lead {
-      margin: 14px 0 0;
-      max-width: 760px;
-      color: var(--muted-strong);
       font-size: 17px;
       line-height: 1.7;
+      color: var(--muted-strong);
+      max-width: 880px;
     }
-    .chip-row {
+    h1 {
+      font-size: clamp(34px, 5vw, 54px);
+      letter-spacing: -0.05em;
+      line-height: 1.02;
+    }
+    h2,
+    h3 {
+      letter-spacing: -0.04em;
+    }
+    .chip-row,
+    .action-row,
+    .composer-actions {
       grid-auto-flow: column;
       grid-auto-columns: max-content;
-      align-items: start;
       justify-content: start;
       overflow-x: auto;
       padding-bottom: 2px;
     }
-    .definition-stack {
-      display: grid;
-      gap: 8px;
-    }
-    .cta-row {
-      grid-auto-flow: column;
-      grid-auto-columns: max-content;
-      justify-content: start;
-    }
-    .primary-link {
+    .chip,
+    .action-button,
+    .detail-token {
       display: inline-flex;
       align-items: center;
-      justify-content: center;
-      min-height: 44px;
-      padding: 0 18px;
+      min-height: 38px;
+      padding: 8px 12px;
       border-radius: 14px;
-      background: #ffffff;
-      color: #050505;
-      font-weight: 600;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.04);
     }
-    .action-form { display: inline-flex; }
     .action-button {
       cursor: pointer;
       color: var(--text);
+      justify-content: center;
     }
     .action-button.primary {
       background: #ffffff;
-      color: #050505;
       border-color: #ffffff;
+      color: #050505;
       font-weight: 600;
+    }
+    .action-form {
+      display: inline-flex;
+    }
+    .start-status-grid,
+    .hero-metadata {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .status-card,
+    .hero-stat,
+    .detail-card {
+      padding: 18px;
+    }
+    .hero-stat {
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+      display: grid;
+      gap: 8px;
+    }
+    .hero-stat strong {
+      font-size: 20px;
+      letter-spacing: -0.03em;
+    }
+    .detail-grid {
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+      align-items: start;
+    }
+    .detail-card-log {
+      grid-column: 1 / -1;
+    }
+    .definition-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-top: 10px;
+    }
+    dd {
+      margin-top: 6px;
+      word-break: break-word;
+    }
+    .detail-stack {
+      margin-top: 18px;
+    }
+    .detail-list {
+      margin: 0;
+      padding-left: 18px;
+      display: grid;
+      gap: 10px;
+    }
+    .detail-list li {
+      display: grid;
+      gap: 4px;
+    }
+    .token-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .log-excerpt {
+      margin: 0;
+      padding: 16px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: #0c0c0c;
+      color: var(--muted-strong);
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      word-break: break-word;
     }
     .progress-rail {
       height: 10px;
-      margin-top: 18px;
       border-radius: 999px;
       overflow: hidden;
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.08);
+      margin-top: 6px;
     }
     .progress-rail > span {
       display: block;
       height: 100%;
       background: linear-gradient(90deg, #ffffff, #8d8d8d);
     }
-    .section-heading {
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: end;
-      flex-wrap: wrap;
+    .composer-shell {
+      padding: 22px;
+      margin-top: 10px;
     }
-    .session-list {
-      gap: 14px;
+    .composer-input {
+      width: 100%;
+      min-height: 164px;
+      padding: 16px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text);
+      resize: vertical;
+      line-height: 1.6;
     }
-    .session-row {
-      padding: 18px;
+    .composer-input:focus-visible,
+    a:focus-visible,
+    button:focus-visible {
+      outline: 3px solid #ffffff;
+      outline-offset: 2px;
     }
-    .session-row-header {
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: start;
-      flex-wrap: wrap;
+    .composer-error {
+      min-height: 1.4em;
+      color: #ffb3b3;
     }
-     .definition-grid {
-       grid-template-columns: repeat(2, minmax(0, 1fr));
-       margin: 16px 0 0;
-     }
-     .detail-grid,
-     .detail-columns {
-       margin-top: 18px;
-     }
-     dd {
-       margin-top: 6px;
-       font-size: 15px;
-       word-break: break-word;
-     }
-     .detail-stack,
-     .log-shell {
-       display: grid;
-       gap: 12px;
-     }
-     .detail-list {
-       margin: 0;
-       padding-left: 18px;
-       display: grid;
-       gap: 10px;
-     }
-     .detail-list li {
-       display: grid;
-       gap: 4px;
-     }
-     .token-list {
-       display: flex;
-       flex-wrap: wrap;
-       gap: 8px;
-       margin-top: 6px;
-     }
-     .detail-token {
-       display: inline-flex;
-       align-items: center;
-       min-height: 32px;
-       padding: 6px 10px;
-       border-radius: 12px;
-       border: 1px solid var(--line);
-       background: rgba(255, 255, 255, 0.04);
-       font-size: 13px;
-       color: var(--muted-strong);
-       word-break: break-word;
-     }
-     .detail-section {
-       padding: 16px;
-       border-radius: 18px;
-       border: 1px solid rgba(255, 255, 255, 0.08);
-       background: rgba(255, 255, 255, 0.02);
-     }
-     .detail-section > summary {
-       cursor: pointer;
-       font-weight: 600;
-       list-style: none;
-     }
-     .detail-section > summary::-webkit-details-marker {
-       display: none;
-     }
-     .detail-section[open] > summary {
-       margin-bottom: 12px;
-     }
-     .log-excerpt {
-       margin: 0;
-       padding: 14px;
-       border-radius: 16px;
-       border: 1px solid var(--line);
-       background: #0d0d0d;
-       color: var(--muted-strong);
-       font-family: "Cascadia Code", Consolas, monospace;
-       font-size: 13px;
-       line-height: 1.65;
-       white-space: pre-wrap;
-       word-break: break-word;
-     }
-     .action-row {
-       grid-auto-flow: column;
-       grid-auto-columns: max-content;
-       justify-content: start;
-       align-items: start;
+    .live-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 28px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--muted-strong);
     }
-    .empty-state,
-    .sidebar-empty {
-      padding: 20px;
+    .live-status-compact {
+      min-height: 24px;
+      padding: 2px 8px;
     }
-    .session-rail {
-      display: grid;
-      gap: 10px;
-      align-content: start;
+    .live-status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--status-idle);
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
     }
-    .session-rail-link {
-      display: grid;
-      gap: 6px;
-      padding: 12px;
-    }
-    .session-rail-copy {
-      display: grid;
-      gap: 2px;
-    }
-    .session-rail-copy span,
-    .session-rail-meta,
-    .meta-copy {
-      color: var(--muted);
+    .live-status-idle .live-status-dot { background: var(--status-idle); }
+    .live-status-active .live-status-dot { background: var(--status-active); }
+    .live-status-attention .live-status-dot { background: var(--status-attention); }
+    .live-status-complete .live-status-dot { background: var(--status-complete); }
+    .live-status-offline .live-status-dot { background: var(--status-offline); }
+    .live-status-label {
       font-size: 12px;
-      line-height: 1.5;
-    }
-    .stats-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .stat-pill {
-      padding: 14px;
-      display: grid;
-      gap: 6px;
-    }
-    .stat-pill > span {
-      color: var(--muted);
-      font-size: 12px;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.04em;
       text-transform: uppercase;
     }
-    .stat-pill strong {
-      font-size: 24px;
-      letter-spacing: -0.04em;
+    .live-status-pulse .live-status-dot {
+      animation: atlas-live-pulse 1.8s ease-in-out infinite;
     }
-     .desktop-composer {
-       position: sticky;
-       bottom: 18px;
-       padding: 18px;
-       display: grid;
-       grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
-       gap: 18px;
-       align-items: start;
-       background: linear-gradient(180deg, rgba(24, 24, 24, 0.98), rgba(12, 12, 12, 0.98));
-     }
-      .composer-body,
-      .product-composer-form,
-      .composer-status,
-     .composer-field {
-       display: grid;
-       gap: 10px;
-     }
-      .composer-input {
-       width: 100%;
-       min-height: 112px;
-       padding: 14px;
-       border-radius: 16px;
-       border: 1px solid var(--line);
-       background: rgba(255, 255, 255, 0.03);
-       color: var(--text);
-       resize: vertical;
-       font: inherit;
-       line-height: 1.6;
-     }
-     .composer-input:focus-visible {
-       outline: 3px solid #ffffff;
-       outline-offset: 2px;
-     }
-     .composer-error {
-       margin: 0;
-       min-height: 1.4em;
-       color: #ffb0b0;
-     }
-     .composer-actions {
-       grid-auto-flow: column;
-       grid-auto-columns: max-content;
-       align-items: center;
-       justify-content: start;
-     }
+    @keyframes atlas-live-pulse {
+      0%,
+      100% {
+        box-shadow: 0 0 0 0 rgba(77, 214, 138, 0.12);
+      }
+      50% {
+        box-shadow: 0 0 0 6px rgba(77, 214, 138, 0.04);
+      }
+    }
+    @media (max-width: 1120px) {
+      .detail-grid,
+      .start-status-grid,
+      .hero-metadata {
+        grid-template-columns: 1fr;
+      }
+    }
     @media (max-width: 960px) {
-      .shell,
-      .canvas-columns,
-      .stats-grid,
-      .desktop-composer,
-      .composer-actions,
-      .definition-grid {
+      .shell {
         grid-template-columns: 1fr;
       }
       .desktop-sidebar,
-      .workspace-shell,
-      .desktop-composer {
+      .main-shell {
         position: static;
         min-height: auto;
+      }
+      .definition-grid {
+        grid-template-columns: 1fr;
+      }
+      .chip-row,
+      .action-row,
+      .composer-actions {
+        grid-auto-flow: row;
+        grid-auto-columns: unset;
       }
     }
   </style>
 </head>
   <body>
     <main>
-      <section class="shell" aria-label="ATLAS desktop surface">
-        ${renderSidebar(pageData, counts, activeSession)}
-        <section class="workspace-shell" aria-label="ATLAS work canvas">
-          ${renderWorkspaceCanvas(pageData, counts, activeSession)}
-          ${renderComposer(pageData, activeSession)}
+      <section
+        class="shell"
+        aria-label="ATLAS desktop surface"
+        data-role="atlas-shell"
+        data-focused-session-role="${escapeHtml(pageData.focusedSessionRole || "")}"
+        data-has-live-sessions="${counts.total > 0 ? "true" : "false"}"
+        data-missing-focused-snapshot="${pageData.missingFocusedSnapshot ? "true" : "false"}">
+        ${renderSidebar(pageData)}
+        <section class="main-shell" aria-label="ATLAS work canvas">
+          <div data-role="main-pane-host">${renderMainPane(pageData, counts)}</div>
         </section>
       </section>
     </main>

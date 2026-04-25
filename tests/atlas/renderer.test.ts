@@ -46,8 +46,12 @@ function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto
     logSource: "live_worker_athena.log",
     logUpdatedAt: "2026-04-21T12:01:00.000Z",
     freshnessAt: "2026-04-21T12:01:00.000Z",
-    freshnessLabel: "Live snapshot ready",
+    freshnessLabel: "Live update recorded",
     logStateLabel: "Readable log ready",
+    liveStatusTone: "active",
+    liveStatusLabel: "Live",
+    liveStatusAssistiveText: "Athena is currently running live work.",
+    liveStatusPulse: true,
     needsInput: false,
     isResumable: true,
     isPaused: false,
@@ -58,7 +62,7 @@ function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto
 
 function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
   return {
-    title: "ATLAS Home",
+    title: "ATLAS Workspace",
     repoLabel: "Ancora-Labs/ATLAS",
     hostLabel: "Windows host",
     shellCommand: ".\\ATLAS.cmd",
@@ -68,15 +72,15 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
     updatedAt: "2026-04-21T12:00:00.000Z",
     buildSessionId: "desktop-session-7",
     buildTimestamp: "2026-04-21T12:05:00.000Z",
-    homeReadinessHeading: "Ready to resume",
-    homeReadinessDetail: "One or more roles can continue from their recorded state.",
-    homePrimaryActionLabel: "Resume session flow",
+    homeReadinessHeading: "Live sessions available",
+    homeReadinessDetail: "Pick a tracked session from the left rail to inspect it, or stay on the blank start screen and write the next objective.",
+    homePrimaryActionLabel: "New Session",
     sessionStartStatusLabel: "Session brief recorded",
-    sessionStartStatusDetail: "The latest desktop brief is recorded and the workspace is continuing with live session state.",
+    sessionStartStatusDetail: "The latest desktop brief is recorded. Use New Session to stay on the blank start screen or select a rail row to open live detail.",
     sessionStartUpdatedAt: "2026-04-21T12:04:00.000Z",
-    continuityStatusLabel: "Live snapshot ready",
-    continuityStatusDetail: "Focused detail, worker freshness, and readable logs are flowing from the latest desktop snapshot.",
-    focusedSessionRole: "Athena",
+    continuityStatusLabel: "Live detail available",
+    continuityStatusDetail: "Select any session from the left rail to open its live detail view in the main pane.",
+    focusedSessionRole: null,
     missingFocusedSnapshot: false,
     sessions: [
       buildSession(),
@@ -84,6 +88,7 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
         role: "Prometheus",
         name: "Prometheus",
         lane: null,
+        workerIdentityLabel: "Prometheus",
         status: "blocked",
         statusLabel: "Needs attention",
         readiness: "action_needed",
@@ -111,47 +116,13 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
         logSource: "live_worker_prometheus.log",
         logUpdatedAt: "2026-04-21T11:46:00.000Z",
         freshnessAt: "2026-04-21T11:46:00.000Z",
+        freshnessLabel: "Live update recorded",
+        logStateLabel: "Readable log ready",
+        liveStatusTone: "attention",
+        liveStatusLabel: "Needs attention",
+        liveStatusAssistiveText: "Prometheus needs attention before it can continue.",
+        liveStatusPulse: false,
         needsInput: true,
-        isPaused: false,
-        canArchive: true,
-      }),
-      buildSession({
-        role: "Hermes",
-        name: "Hermes",
-        lane: null,
-        status: "done",
-        statusLabel: "Completed",
-        readiness: "completed",
-        readinessLabel: "Completed",
-        currentStage: "done",
-        currentStageLabel: "Completed",
-        lastTask: "Closed the last session",
-        lastActiveAt: "2026-04-21T11:30:00.000Z",
-        latestMeaningfulAction: "Closed the last session",
-        latestMeaningfulActionAt: "2026-04-21T11:30:00.000Z",
-        recentActions: [{
-          at: "2026-04-21T11:30:00.000Z",
-          actor: "Hermes",
-          status: "done",
-          statusLabel: "Completed",
-          summary: "Closed the last session",
-        }],
-        historyLength: 4,
-        currentBranch: null,
-        pullRequests: ["https://example.com/pr/2", "https://example.com/pr/3"],
-        pullRequestCount: 2,
-        touchedFiles: [
-          "src/atlas/server.ts",
-          "src/atlas/routes/sessions.ts",
-          "tests/atlas/server.test.ts",
-        ],
-        touchedFileCount: 3,
-        logExcerpt: ["session archived cleanly"],
-        logSource: "live_worker_hermes.log",
-        logUpdatedAt: "2026-04-21T11:31:00.000Z",
-        freshnessAt: "2026-04-21T11:31:00.000Z",
-        needsInput: false,
-        isResumable: false,
         isPaused: false,
         canArchive: true,
       }),
@@ -161,101 +132,87 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
 }
 
 describe("atlas renderer", () => {
-  it("renders the home surface as a single workspace with inline focused session detail", () => {
+  it("renders the blank new-session start screen when no session is selected", () => {
     const html = renderAtlasHomeHtml(buildPageData());
+    const documentMarkup = html.split("<script>")[0] || html;
 
-    assert.match(html, /<title>ATLAS Home<\/title>/);
-    assert.match(html, /aria-label="ATLAS desktop surface"/);
-    assert.match(html, /aria-label="ATLAS desktop sidebar"/);
-    assert.match(html, /aria-label="ATLAS work canvas"/);
-    assert.match(html, /aria-label="Chat-first workspace"/);
-    assert.match(html, /What should ATLAS do next\?/);
-    assert.match(html, /Focused session detail/);
-    assert.match(html, /Worker identity/);
-    assert.match(html, /Validating contract/);
-    assert.match(html, /live_worker_athena\.log/);
-    assert.match(html, /focused panel refreshed/);
-    assert.match(html, /https:\/\/example\.com\/pr\/1/);
-    assert.match(html, /src\/atlas\/renderer\.ts/);
-    assert.match(html, /data-role="session-rail"/);
-    assert.match(html, /data-role="focused-session-panel"/);
-    assert.match(html, /data-role="focused-session-identity"/);
-    assert.match(html, /data-role="focused-session-stage-detail"/);
-    assert.match(html, /data-role="focused-session-prs"/);
-    assert.match(html, /data-role="focused-session-files"/);
-    assert.match(html, /data-role="focused-session-freshness"/);
-    assert.match(html, /data-role="focused-session-log"/);
-    assert.match(html, /data-view="home"/);
-    assert.match(html, /data-role="product-composer-input"/);
+    assert.match(html, /<title>ATLAS Workspace<\/title>/);
+    assert.match(documentMarkup, /aria-label="ATLAS desktop surface"/);
+    assert.match(documentMarkup, /aria-label="ATLAS desktop sidebar"/);
+    assert.match(documentMarkup, /data-role="brand-reset"/);
+    assert.match(documentMarkup, /data-role="new-session-link"/);
+    assert.match(documentMarkup, /data-role="session-rail"/);
+    assert.match(documentMarkup, /data-role="new-session-view"/);
+    assert.match(documentMarkup, /Start a new session from a clean workspace/);
+    assert.match(documentMarkup, /What should ATLAS do next\?/);
+    assert.match(documentMarkup, /data-role="product-composer-input"/);
+    assert.match(documentMarkup, /data-role="runtime-stage-label"/);
+    assert.match(documentMarkup, /data-role="session-row-status-light"/);
+    assert.match(documentMarkup, /Live detail available/);
     assert.match(html, /bridge\?\.refreshSnapshot/);
     assert.match(html, /ATLAS snapshot refresh requires the Electron desktop bridge\./);
-    assert.doesNotMatch(html, /window\.fetch\(snapshotPath \+ "\?" \+ params\.toString\(\)/);
-    assert.match(html, /window\.setInterval/);
-    assert.match(html, /setProductDraft/);
-    assert.match(html, /setProductComposerFocus/);
-    assert.match(html, /startSession/);
-    assert.doesNotMatch(html, /hero-panel|metric-card|dashboard|window-controls|traffic-light/i);
+    assert.doesNotMatch(documentMarkup, /data-role="selected-session-view"/);
+    assert.doesNotMatch(documentMarkup, /dashboard|window-controls|traffic-light|hero-panel/i);
   });
 
-  it("renders the sessions surface with runtime status, focused detail, and lifecycle actions", () => {
-    const html = renderAtlasSessionsHtml(buildPageData({ title: "ATLAS Sessions" }));
-
-    assert.match(html, /<title>ATLAS Sessions<\/title>/);
-    assert.match(html, /aria-label="ATLAS desktop sidebar"/);
-    assert.match(html, /Runtime status/);
-    assert.match(html, /data-role="runtime-stage-label"/);
-    assert.match(html, /Workers Running/);
-    assert.match(html, /Desktop workspace/);
-    assert.match(html, /Focused session detail/);
-    assert.match(html, /Readable log excerpt/);
-    assert.match(html, /feat\/atlas-home/);
-    assert.match(html, />3 tracked sessions</);
-    assert.match(html, />2 resumable</);
-    assert.match(html, />1 needing input</);
-    assert.match(html, />0 paused lanes</);
-    assert.match(html, />Pause lane</);
-    assert.match(html, />Archive session</);
-    assert.match(html, /method="post" action="\/lifecycle"/);
-    assert.match(html, /data-role="runtime-count-total"/);
-    assert.match(html, /data-role="runtime-progress-bar"/);
-    assert.match(html, /data-role="session-rail"/);
-    assert.match(html, /data-role="focused-session-pr-count"/);
-    assert.match(html, /data-role="focused-session-log-freshness"/);
-    assert.match(html, /bridge\?\.refreshSnapshot/);
-    assert.doesNotMatch(html, /hero-panel|BOX Mission Control|dashboard|window-controls|traffic-light/i);
-  });
-
-  it("[NEGATIVE] escapes dynamic values and keeps empty workspace states stable", () => {
+  it("renders the selected session as the dominant right-hand detail view", () => {
     const html = renderAtlasSessionsHtml(buildPageData({
-      title: "ATLAS Sessions",
+      focusedSessionRole: "Athena",
+    }));
+    const documentMarkup = html.split("<script>")[0] || html;
+
+    assert.match(documentMarkup, /data-role="selected-session-view"/);
+    assert.match(documentMarkup, /data-role="selected-session-name">Athena/);
+    assert.match(documentMarkup, /data-role="selected-session-status-light"/);
+    assert.match(documentMarkup, /live-status-pulse/);
+    assert.match(documentMarkup, /aria-label="Athena is currently running live work\."/);
+    assert.match(documentMarkup, /data-role="selected-session-identity"/);
+    assert.match(documentMarkup, /data-role="selected-session-stage"/);
+    assert.match(documentMarkup, /data-role="selected-session-prs"/);
+    assert.match(documentMarkup, /data-role="selected-session-files"/);
+    assert.match(documentMarkup, /data-role="selected-session-log"/);
+    assert.match(documentMarkup, /data-role="selected-session-actions"/);
+    assert.match(documentMarkup, /New Session/);
+    assert.match(documentMarkup, /Pause lane/);
+    assert.match(documentMarkup, /feat\/atlas-home/);
+    assert.match(documentMarkup, /https:\/\/example\.com\/pr\/1/);
+    assert.match(documentMarkup, /focused panel refreshed/);
+    assert.doesNotMatch(documentMarkup, /data-role="product-composer-input"/);
+    assert.doesNotMatch(documentMarkup, /Inline session ledger|Runtime status|dashboard/i);
+  });
+
+  it("[NEGATIVE] keeps the blank workspace stable when there are no live sessions", () => {
+    const html = renderAtlasSessionsHtml(buildPageData({
       repoLabel: "<unsafe repo>",
       sessions: [],
       focusedSessionRole: null,
+      sessionStartStatusLabel: "Ready for first session",
+      sessionStartStatusDetail: "Start a session from the blank workspace composer to seed the first live workflow.",
+      continuityStatusLabel: "Waiting for live detail",
+      continuityStatusDetail: "ATLAS will open selected-session detail as soon as the next tracked session snapshot is written.",
     }));
-    const homeHtml = renderAtlasHomeHtml(buildPageData({
-      sessions: [],
-      focusedSessionRole: null,
-    }));
+    const documentMarkup = html.split("<script>")[0] || html;
 
-    assert.match(html, /&lt;unsafe repo&gt;/);
-    assert.doesNotMatch(html, /<unsafe repo>/);
-    assert.match(html, /No session state is available yet\./);
-    assert.match(homeHtml, /Where should we start\?/);
-    assert.match(homeHtml, /Waiting for the next live detail/);
-    assert.match(homeHtml, /Focused session detail/);
-    assert.match(homeHtml, /data-has-live-sessions="false"/);
-    assert.doesNotMatch(homeHtml, /dashboard|window-controls|traffic-light/i);
+    assert.match(documentMarkup, /&lt;unsafe repo&gt;/);
+    assert.doesNotMatch(documentMarkup, /<unsafe repo>/);
+    assert.match(documentMarkup, /Where should ATLAS start\?/);
+    assert.match(documentMarkup, /No session state is available yet\./);
+    assert.match(documentMarkup, /data-role="new-session-view"/);
+    assert.doesNotMatch(documentMarkup, /data-role="selected-session-view"/);
   });
 
-  it("shows degraded composer continuity when the saved focus has no live snapshot yet", () => {
+  it("falls back to the blank start screen when the saved focus is missing from the live snapshot", () => {
     const html = renderAtlasSessionsHtml(buildPageData({
-      title: "ATLAS Sessions",
+      focusedSessionRole: null,
       missingFocusedSnapshot: true,
+      continuityStatusLabel: "Selected detail unavailable",
+      continuityStatusDetail: "The saved focus is not present in the current live snapshot, so ATLAS falls back to the blank new-session view instead of showing stale detail.",
     }));
+    const documentMarkup = html.split("<script>")[0] || html;
 
-    assert.match(html, /Start the next session while the old focus recovers/);
-    assert.match(html, /The previous focus is missing its next live snapshot, but you can still write the next outcome here and keep the workspace moving\./);
-    assert.match(html, /data-missing-focused-snapshot="true"/);
-    assert.match(html, />Clear focus</);
+    assert.match(documentMarkup, /The selected session is waiting for its next live update/);
+    assert.match(documentMarkup, /Selected detail unavailable/);
+    assert.match(documentMarkup, /falls back to the blank new-session view instead of showing stale detail/);
+    assert.doesNotMatch(documentMarkup, /data-role="selected-session-view"/);
   });
 });

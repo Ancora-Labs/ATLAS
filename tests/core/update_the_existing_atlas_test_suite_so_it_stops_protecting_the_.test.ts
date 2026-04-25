@@ -58,8 +58,12 @@ function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto
     logSource: "live_worker_quality-worker.log",
     logUpdatedAt: "2026-04-25T00:01:00.000Z",
     freshnessAt: "2026-04-25T00:01:00.000Z",
-    freshnessLabel: "Live snapshot ready",
+    freshnessLabel: "Live update recorded",
     logStateLabel: "Readable log ready",
+    liveStatusTone: "active",
+    liveStatusLabel: "Live",
+    liveStatusAssistiveText: "Quality lane is currently running live work.",
+    liveStatusPulse: true,
     needsInput: false,
     isResumable: true,
     isPaused: false,
@@ -70,7 +74,7 @@ function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto
 
 function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
   return {
-    title: "ATLAS Home",
+    title: "ATLAS Workspace",
     repoLabel: "Ancora-Labs/ATLAS",
     hostLabel: "Windows host",
     shellCommand: ".\\ATLAS.cmd",
@@ -80,14 +84,14 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
     updatedAt: "2026-04-25T00:00:00.000Z",
     buildSessionId: "desktop-session-9",
     buildTimestamp: "2026-04-25T00:05:00.000Z",
-    homeReadinessHeading: "Ready to resume",
-    homeReadinessDetail: "One or more roles can continue from their recorded state.",
-    homePrimaryActionLabel: "Resume session flow",
+    homeReadinessHeading: "Live sessions available",
+    homeReadinessDetail: "Pick a tracked session from the left rail to inspect it, or stay on the blank start screen and write the next objective.",
+    homePrimaryActionLabel: "New Session",
     sessionStartStatusLabel: "Session brief recorded",
     sessionStartStatusDetail: "The latest desktop brief is recorded and the workspace is continuing with live session state.",
     sessionStartUpdatedAt: "2026-04-25T00:04:00.000Z",
-    continuityStatusLabel: "Live snapshot ready",
-    continuityStatusDetail: "Focused detail, worker freshness, and readable logs are flowing from the latest desktop snapshot.",
+    continuityStatusLabel: "Live detail available",
+    continuityStatusDetail: "Select any session from the left rail to open its live detail view in the main pane.",
     focusedSessionRole: "quality-worker",
     missingFocusedSnapshot: false,
     sessions: [buildSession()],
@@ -156,23 +160,23 @@ function createTempRoot(): Promise<string> {
 describe("update the existing atlas test suite so it stops protecting the old shell", () => {
   it("pins the premium desktop sidebar, main canvas, and composer hierarchy instead of the old dashboard shell", () => {
     const homeHtml = renderAtlasHomeHtml(buildPageData());
-    const sessionsHtml = renderAtlasSessionsHtml(buildPageData({ title: "ATLAS Sessions" }));
+    const sessionsHtml = renderAtlasSessionsHtml(buildPageData());
+    const homeMarkup = homeHtml.split("<script>")[0] || homeHtml;
+    const sessionsMarkup = sessionsHtml.split("<script>")[0] || sessionsHtml;
 
-    for (const html of [homeHtml, sessionsHtml]) {
+    for (const html of [homeMarkup, sessionsMarkup]) {
       assert.match(html, /aria-label="ATLAS desktop surface"/);
       assert.match(html, /aria-label="ATLAS work canvas"/);
-      assert.match(html, /aria-label="Desktop composer"/);
-      assert.match(html, /Focused session detail/);
       assert.match(html, /data-role="session-rail"/);
       assert.doesNotMatch(html, /dashboard-card|hero-panel|metric-card|window-controls|traffic-light/i);
     }
 
-    assert.match(homeHtml, /Readable log excerpt/);
-    assert.match(homeHtml, /premium shell regression locked/);
+    assert.match(homeMarkup, /data-role="selected-session-view"/);
+    assert.match(homeMarkup, /premium shell regression locked/);
     assert.match(homeHtml, /bridge\?\.refreshSnapshot/);
     assert.match(homeHtml, /ATLAS snapshot refresh requires the Electron desktop bridge\./);
-    assert.match(sessionsHtml, /Desktop workspace/);
-    assert.match(sessionsHtml, /Pause lane/);
+    assert.match(sessionsMarkup, /Pause lane/);
+    assert.match(sessionsMarkup, /data-role="selected-session-status-light"/);
   });
 
   it("keeps sparse-state rendering and portable packaging guarantees deterministic", async () => {
@@ -180,18 +184,19 @@ describe("update the existing atlas test suite so it stops protecting the old sh
       sessions: [],
       focusedSessionRole: null,
       homeReadinessHeading: "Ready to start",
-      homeReadinessDetail: "No resumable session is active yet. Open Sessions to begin the next role handoff.",
-      homePrimaryActionLabel: "Open sessions",
+      homeReadinessDetail: "Write one outcome in the blank start screen composer to start the next session from the main workspace.",
+      homePrimaryActionLabel: "New Session",
     }));
+    const homeMarkup = homeHtml.split("<script>")[0] || homeHtml;
     const layout = createAtlasDesktopPackageLayout(path.join("C:", "ATLAS Release Root"));
     const atlasCmd = fs.readFileSync(path.join(process.cwd(), "ATLAS.cmd"), "utf8");
     const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8")) as {
       scripts?: Record<string, string>;
     };
 
-    assert.match(homeHtml, /No session state is available yet\./);
-    assert.match(homeHtml, /Waiting for the next live detail/);
-    assert.match(homeHtml, /data-has-live-sessions="false"/);
+    assert.match(homeMarkup, /No session state is available yet\./);
+    assert.match(homeMarkup, /Where should ATLAS start\?/);
+    assert.match(homeMarkup, /data-has-live-sessions="false"/);
     assert.equal(layout.portableRoot, path.join("C:", "ATLAS Release Root", "dist", "ATLAS"));
     assert.equal(layout.portableExePath, path.join("C:", "ATLAS Release Root", "dist", "ATLAS", "ATLAS.exe"));
     assert.equal(packageJson.scripts?.["atlas:desktop:package"], "node --import tsx scripts/atlas_desktop_package.ts");

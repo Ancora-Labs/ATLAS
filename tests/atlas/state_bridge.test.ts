@@ -64,15 +64,21 @@ describe("state_bridge", () => {
     assert.deepEqual(sessions.Athena.pullRequests, ["https://example.com/pr/1"]);
     assert.deepEqual(sessions.Athena.touchedFiles, ["src/atlas/state_bridge.ts", "tests/atlas/state_bridge.test.ts"]);
     assert.equal(sessions.Athena.lastThinking, "reviewing failures");
-    assert.equal(sessions.Athena.freshnessLabel, "Live snapshot ready");
+    assert.equal(sessions.Athena.freshnessLabel, "Live update recorded");
     assert.equal(sessions.Athena.logStateLabel, "Waiting for live log");
+    assert.equal(sessions.Athena.liveStatusTone, "active");
+    assert.equal(sessions.Athena.liveStatusLabel, "Live");
+    assert.equal(sessions.Athena.liveStatusPulse, true);
+    assert.match(sessions.Athena.liveStatusAssistiveText, /currently running live work/);
     assert.equal(sessions.Athena.canArchive, false);
     assert.equal(sessions.Prometheus.statusLabel, "Needs attention");
     assert.equal(sessions.Prometheus.readinessLabel, "Needs your input");
     assert.equal(sessions.Prometheus.needsInput, true);
+    assert.equal(sessions.Prometheus.liveStatusTone, "attention");
     assert.equal(sessions.Hermes.statusLabel, "Completed");
     assert.equal(sessions.Hermes.readinessLabel, "Completed");
     assert.equal(sessions.Hermes.isResumable, false);
+    assert.equal(sessions.Hermes.liveStatusTone, "complete");
   });
 
   it("uses terminal session history to recover stale working states", () => {
@@ -162,8 +168,12 @@ describe("state_bridge", () => {
         logSource: null,
         logUpdatedAt: null,
         freshnessAt: null,
-        freshnessLabel: "Waiting for live snapshot",
+        freshnessLabel: "Waiting for live update",
         logStateLabel: "Waiting for live log",
+        liveStatusTone: "idle",
+        liveStatusLabel: "Ready",
+        liveStatusAssistiveText: "ATLAS control is ready for the next live update.",
+        liveStatusPulse: false,
         needsInput: false,
         isResumable: false,
         isPaused: false,

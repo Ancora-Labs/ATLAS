@@ -44,8 +44,12 @@ function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto
     logSource: "live_worker_prometheus.log",
     logUpdatedAt: "2026-04-21T11:46:00.000Z",
     freshnessAt: "2026-04-21T11:46:00.000Z",
-    freshnessLabel: "Live snapshot ready",
+    freshnessLabel: "Live update recorded",
     logStateLabel: "Readable log ready",
+    liveStatusTone: "attention",
+    liveStatusLabel: "Needs attention",
+    liveStatusAssistiveText: "Prometheus needs attention before it can continue.",
+    liveStatusPulse: false,
     needsInput: true,
     isResumable: true,
     isPaused: false,
@@ -56,7 +60,7 @@ function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto
 
 function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
   return {
-    title: "ATLAS Home",
+    title: "ATLAS Workspace",
     repoLabel: "Ancora-Labs/ATLAS",
     hostLabel: "Windows host",
     shellCommand: ".\\ATLAS.cmd",
@@ -66,14 +70,14 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
     updatedAt: "2026-04-21T12:00:00.000Z",
     buildSessionId: "desktop-session-7",
     buildTimestamp: "2026-04-21T12:05:00.000Z",
-    homeReadinessHeading: "Ready to resume",
-    homeReadinessDetail: "One or more roles can continue from their recorded state.",
-    homePrimaryActionLabel: "Resume session flow",
+    homeReadinessHeading: "Live sessions available",
+    homeReadinessDetail: "Pick a tracked session from the left rail to inspect it, or stay on the blank start screen and write the next objective.",
+    homePrimaryActionLabel: "New Session",
     sessionStartStatusLabel: "Session brief recorded",
     sessionStartStatusDetail: "The latest desktop brief is recorded and the workspace is continuing with live session state.",
     sessionStartUpdatedAt: "2026-04-21T12:04:00.000Z",
-    continuityStatusLabel: "Live snapshot ready",
-    continuityStatusDetail: "Focused detail, worker freshness, and readable logs are flowing from the latest desktop snapshot.",
+    continuityStatusLabel: "Live detail available",
+    continuityStatusDetail: "Select any session from the left rail to open its live detail view in the main pane.",
     focusedSessionRole: "Prometheus",
     missingFocusedSnapshot: false,
     sessions: [
@@ -152,33 +156,33 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
 describe("atlas desktop shell refactor", () => {
   it("renders home inside one desktop shell with a persistent sidebar and inline focused detail", () => {
     const html = renderAtlasHomeHtml(buildPageData());
+    const documentMarkup = html.split("<script>")[0] || html;
 
-    assert.match(html, /aria-label="ATLAS desktop sidebar"/);
-    assert.match(html, /aria-label="ATLAS work canvas"/);
-    assert.match(html, /aria-label="Desktop composer"/);
-    assert.match(html, /Focused session detail/);
-    assert.match(html, /Worker identity/);
-    assert.match(html, /Readable log excerpt/);
-    assert.match(html, /What should ATLAS do next\?/);
-    assert.match(html, /data-role="session-rail"/);
-    assert.match(html, /position: sticky/);
-    assert.doesNotMatch(html, /hero-panel|metric-card|dashboard/i);
+    assert.match(documentMarkup, /aria-label="ATLAS desktop sidebar"/);
+    assert.match(documentMarkup, /aria-label="ATLAS work canvas"/);
+    assert.match(documentMarkup, /data-role="selected-session-view"/);
+    assert.match(documentMarkup, /Worker identity|data-role="selected-session-identity"/);
+    assert.match(documentMarkup, /Latest worker output/);
+    assert.match(documentMarkup, /Prometheus/);
+    assert.match(documentMarkup, /data-role="session-rail"/);
+    assert.match(documentMarkup, /position: sticky/);
+    assert.doesNotMatch(documentMarkup, /hero-panel|metric-card|dashboard/i);
   });
 
   it("renders sessions inside the same shell while preserving focus-aware lifecycle actions", () => {
-    const html = renderAtlasSessionsHtml(buildPageData({ title: "ATLAS Sessions" }));
+    const html = renderAtlasSessionsHtml(buildPageData());
+    const documentMarkup = html.split("<script>")[0] || html;
 
-    assert.match(html, /<title>ATLAS Sessions<\/title>/);
-    assert.match(html, /Desktop workspace/);
-    assert.match(html, /Focused session detail/);
-    assert.match(html, /method="post" action="\/lifecycle"/);
-    assert.match(html, /Archive session/);
-    assert.match(html, /Pause lane/);
-    assert.match(html, /Athena/);
-    assert.match(html, /Prometheus/);
-    assert.match(html, /Hermes/);
-    assert.match(html, /aria-label="Desktop composer"/);
-    assert.doesNotMatch(html, /hero-panel|metric-card|dashboard/i);
+    assert.match(documentMarkup, /<title>ATLAS Workspace<\/title>/);
+    assert.match(documentMarkup, /data-role="selected-session-view"/);
+    assert.match(documentMarkup, /method="post" action="\/lifecycle"/);
+    assert.match(documentMarkup, /Archive session/);
+    assert.match(documentMarkup, /Pause lane/);
+    assert.match(documentMarkup, /Athena/);
+    assert.match(documentMarkup, /Prometheus/);
+    assert.match(documentMarkup, /Hermes/);
+    assert.doesNotMatch(documentMarkup, /data-role="product-composer-input"/);
+    assert.doesNotMatch(documentMarkup, /hero-panel|metric-card|dashboard/i);
   });
 
   it("[NEGATIVE] keeps the shell stable with no live sessions and escapes unsafe content", () => {
@@ -188,13 +192,14 @@ describe("atlas desktop shell refactor", () => {
       shellCommand: "<script>alert(1)</script>",
       focusedSessionRole: null,
       homeReadinessHeading: "Ready to start",
-      homeReadinessDetail: "No resumable session is active yet. Open Sessions to begin the next role handoff.",
-      homePrimaryActionLabel: "Open sessions",
+      homeReadinessDetail: "Write one outcome in the blank start screen composer to start the next session from the main workspace.",
+      homePrimaryActionLabel: "New Session",
     }));
+    const documentMarkup = html.split("<script>")[0] || html;
 
-    assert.match(html, /No session state is available yet\./);
-    assert.match(html, /Start session/);
-    assert.match(html, /Waiting for the next live detail/);
-    assert.doesNotMatch(html, /<unsafe repo>|<script>alert\(1\)<\/script>/);
+    assert.match(documentMarkup, /No session state is available yet\./);
+    assert.match(documentMarkup, /Where should ATLAS start\?/);
+    assert.match(documentMarkup, /data-role="product-composer-input"/);
+    assert.doesNotMatch(documentMarkup, /<unsafe repo>|<script>alert\(1\)<\/script>/);
   });
 });

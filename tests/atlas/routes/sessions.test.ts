@@ -104,7 +104,7 @@ async function writeStateFixture(
 }
 
 describe("atlas sessions route", () => {
-  it("returns the single-workspace ledger with inline session detail and lifecycle actions", async () => {
+  it("returns the selected-session detail view and compact lifecycle actions", async () => {
     const tempRoot = await createTempRoot();
 
     try {
@@ -148,31 +148,26 @@ describe("atlas sessions route", () => {
         targetRepo: "Ancora-Labs/Box",
         shellCommand: ".\\ATLAS.cmd",
       });
+      const documentMarkup = res.body.split("<script>")[0] || res.body;
 
       assert.equal(res.statusCode, 200);
       assert.equal(res.headers["content-type"], "text/html; charset=utf-8");
-      assert.match(res.body, /<title>ATLAS Sessions<\/title>/);
-      assert.match(res.body, /aria-label="ATLAS desktop surface"/);
-      assert.match(res.body, /aria-label="ATLAS desktop sidebar"/);
-      assert.match(res.body, /aria-label="ATLAS work canvas"/);
-      assert.match(res.body, /Desktop workspace/);
-      assert.match(res.body, /Focused session detail/);
-      assert.match(res.body, /quality-worker/);
-      assert.match(res.body, /Quality review worker/);
-      assert.match(res.body, /Waiting for approval/);
-      assert.match(res.body, /Waiting for review feedback/);
-      assert.match(res.body, /rail detail refresh ready/);
-      assert.match(res.body, /feat\/quality-review/);
-      assert.match(res.body, /https:\/\/example\.com\/pr\/1/);
-      assert.match(res.body, /src\/atlas\/server\.ts/);
-      assert.match(res.body, />3 tracked sessions</);
-      assert.match(res.body, />2 resumable</);
-      assert.match(res.body, />1 needing input</);
-      assert.match(res.body, />0 paused lanes</);
-      assert.match(res.body, />Pause lane</);
-      assert.match(res.body, />Archive session</);
-      assert.match(res.body, /method="post" action="\/lifecycle"/);
-      assert.doesNotMatch(res.body, /hero-panel|BOX Mission Control|dashboard|window-controls|traffic-light/i);
+      assert.match(documentMarkup, /<title>ATLAS Workspace<\/title>/);
+      assert.match(documentMarkup, /data-role="selected-session-view"/);
+      assert.match(documentMarkup, /data-role="selected-session-status-light"/);
+      assert.match(documentMarkup, /Quality review worker/);
+      assert.match(documentMarkup, /Waiting for approval/);
+      assert.match(documentMarkup, /Waiting for review feedback/);
+      assert.match(documentMarkup, /rail detail refresh ready/);
+      assert.match(documentMarkup, /feat\/quality-review/);
+      assert.match(documentMarkup, /https:\/\/example\.com\/pr\/1/);
+      assert.match(documentMarkup, /src\/atlas\/server\.ts/);
+      assert.match(documentMarkup, />Pause lane</);
+      assert.match(documentMarkup, />Archive session</);
+      assert.match(documentMarkup, /method="post" action="\/lifecycle"/);
+      assert.match(documentMarkup, /data-role="session-row-status-light"/);
+      assert.doesNotMatch(documentMarkup, /data-role="product-composer-input"/);
+      assert.doesNotMatch(documentMarkup, /dashboard|window-controls|traffic-light/i);
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
@@ -195,7 +190,7 @@ describe("atlas sessions route", () => {
     }
   });
 
-  it("keeps the sessions surface stable when the restored focused role has no live snapshot", async () => {
+  it("falls back to the blank start screen when the restored focus has no live snapshot", async () => {
     const tempRoot = await createTempRoot();
 
     try {
@@ -215,18 +210,19 @@ describe("atlas sessions route", () => {
         targetRepo: "Ancora-Labs/Box",
         shellCommand: ".\\ATLAS.cmd",
       });
+      const documentMarkup = res.body.split("<script>")[0] || res.body;
 
       assert.equal(res.statusCode, 200);
-      assert.match(res.body, /Start the next session while the old focus recovers/);
-      assert.match(res.body, /The previous focus is missing its next live snapshot, but you can still write the next outcome here and keep the workspace moving\./);
-      assert.match(res.body, />Clear focus</);
-      assert.doesNotMatch(res.body, /missing-worker/);
+      assert.match(documentMarkup, /data-role="new-session-view"/);
+      assert.match(documentMarkup, /The selected session is waiting for its next live update/);
+      assert.match(documentMarkup, /Selected detail unavailable/);
+      assert.doesNotMatch(documentMarkup, /missing-worker/);
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
 
-  it("[NEGATIVE] keeps the session ledger shell stable when state is sparse", async () => {
+  it("[NEGATIVE] keeps the session shell stable when state is sparse", async () => {
     const tempRoot = await createTempRoot();
 
     try {
@@ -240,14 +236,14 @@ describe("atlas sessions route", () => {
         targetRepo: "Ancora-Labs/ATLAS",
         shellCommand: ".\\ATLAS.cmd",
       });
+      const documentMarkup = res.body.split("<script>")[0] || res.body;
 
       assert.equal(res.statusCode, 200);
-      assert.match(res.body, /aria-label="ATLAS desktop surface"/);
-      assert.match(res.body, /aria-label="ATLAS desktop sidebar"/);
-      assert.match(res.body, /aria-label="ATLAS work canvas"/);
-      assert.match(res.body, /No session state is available yet\./);
-      assert.match(res.body, /Waiting for the next live detail/);
-      assert.doesNotMatch(res.body, /dashboard-card|BOX Mission Control|window-controls|traffic-light/i);
+      assert.match(documentMarkup, /data-role="brand-reset"/);
+      assert.match(documentMarkup, /data-role="new-session-view"/);
+      assert.match(documentMarkup, /No session state is available yet\./);
+      assert.doesNotMatch(documentMarkup, /data-role="selected-session-view"/);
+      assert.doesNotMatch(documentMarkup, /dashboard-card|window-controls|traffic-light/i);
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }

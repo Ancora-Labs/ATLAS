@@ -93,7 +93,7 @@ function normalizeBoolean(value: unknown): boolean {
 }
 
 export function normalizeAtlasDesktopProductSurface(value: unknown): AtlasDesktopProductSurface {
-  return value === "workspace" || value === "home" || value === "sessions" ? "workspace" : "workspace";
+  return value === "workspace" ? "workspace" : "workspace";
 }
 
 export function normalizeAtlasDesktopWindowBounds(value: unknown): AtlasDesktopWindowBounds | null {
@@ -149,7 +149,8 @@ export function parseAtlasDesktopLocationFromUrl(input: string | URL): AtlasDesk
     const parsedUrl = input instanceof URL
       ? input
       : new URL(String(input || "/"), "http://127.0.0.1");
-    const surface = parsedUrl.pathname === "/" || parsedUrl.pathname === "/sessions"
+    const isWorkspacePath = parsedUrl.pathname === "/" || parsedUrl.pathname === "/sessions";
+    const surface = isWorkspacePath
       ? "workspace"
       : null;
     if (!surface) {

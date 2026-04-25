@@ -22,10 +22,8 @@ export async function handleAtlasSessionsRequest(
   }
 
   try {
-    const pageData = await buildAtlasPageData(
-      options,
-      resolveAtlasDesktopPageLocation(req.url, "workspace"),
-    );
+    const workspaceLocation = resolveAtlasDesktopPageLocation(req.url, "workspace");
+    const pageData = await buildAtlasPageData(options, workspaceLocation);
     writeAtlasHtmlResponse(res, renderAtlasWorkspaceHtml(pageData));
   } catch (error) {
     console.error(`[atlas] sessions route failed: ${String((error as Error)?.message || error)}`);

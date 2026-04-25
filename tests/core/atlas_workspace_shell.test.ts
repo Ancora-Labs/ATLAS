@@ -55,8 +55,12 @@ function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto
     logSource: "live_worker_quality-worker.log",
     logUpdatedAt: "2026-04-25T09:01:00.000Z",
     freshnessAt: "2026-04-25T09:01:00.000Z",
-    freshnessLabel: "Live snapshot ready",
+    freshnessLabel: "Live update recorded",
     logStateLabel: "Readable log ready",
+    liveStatusTone: "active",
+    liveStatusLabel: "Live",
+    liveStatusAssistiveText: "Quality lane is currently running live work.",
+    liveStatusPulse: true,
     needsInput: false,
     isResumable: true,
     isPaused: false,
@@ -67,7 +71,7 @@ function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto
 
 function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
   return {
-    title: "ATLAS Home",
+    title: "ATLAS Workspace",
     repoLabel: "Ancora-Labs/ATLAS",
     hostLabel: "Windows host",
     shellCommand: ".\\ATLAS.cmd",
@@ -77,14 +81,14 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
     updatedAt: "2026-04-25T09:02:00.000Z",
     buildSessionId: "desktop-session-42",
     buildTimestamp: "2026-04-25T09:03:00.000Z",
-    homeReadinessHeading: "Ready to resume",
-    homeReadinessDetail: "Pick a tracked session from the left rail or write a new objective to start the next flow.",
-    homePrimaryActionLabel: "Resume active session",
+    homeReadinessHeading: "Live sessions available",
+    homeReadinessDetail: "Pick a tracked session from the left rail to inspect it, or stay on the blank start screen and write the next objective.",
+    homePrimaryActionLabel: "New Session",
     sessionStartStatusLabel: "Session brief recorded",
     sessionStartStatusDetail: "The latest desktop brief is recorded and the workspace is continuing with live session state.",
     sessionStartUpdatedAt: "2026-04-25T09:01:30.000Z",
-    continuityStatusLabel: "Live snapshot ready",
-    continuityStatusDetail: "Focused detail, worker freshness, and readable logs are flowing from the latest desktop snapshot.",
+    continuityStatusLabel: "Live detail available",
+    continuityStatusDetail: "Select any session from the left rail to open its live detail view in the main pane.",
     focusedSessionRole: "quality-worker",
     missingFocusedSnapshot: false,
     sessions: [buildSession()],
@@ -153,19 +157,19 @@ function createTempRoot(): Promise<string> {
 describe("atlas workspace shell", () => {
   it("renders one desktop workspace shell for both home and sessions aliases", () => {
     const homeHtml = renderAtlasHomeHtml(buildPageData());
-    const sessionsHtml = renderAtlasSessionsHtml(buildPageData({ title: "ATLAS Sessions" }));
+    const sessionsHtml = renderAtlasSessionsHtml(buildPageData());
 
     for (const html of [homeHtml, sessionsHtml]) {
-      assert.match(html, /aria-label="ATLAS desktop surface"/);
-      assert.match(html, /aria-label="ATLAS desktop sidebar"/);
-      assert.match(html, /aria-label="Chat-first workspace"/);
-      assert.match(html, /data-role="session-rail"/);
-      assert.match(html, /data-role="focused-session-panel"/);
-      assert.match(html, /data-role="product-composer-input"/);
-      assert.match(html, /Session brief recorded/);
-      assert.match(html, /Live snapshot ready/);
-      assert.match(html, /href="\/\?focusRole=quality-worker"/);
-      assert.doesNotMatch(html, /href="\/sessions/);
+      const documentMarkup = html.split("<script>")[0] || html;
+      assert.match(documentMarkup, /<title>ATLAS Workspace<\/title>/);
+      assert.match(documentMarkup, /aria-label="ATLAS desktop surface"/);
+      assert.match(documentMarkup, /aria-label="ATLAS desktop sidebar"/);
+      assert.match(documentMarkup, /aria-label="ATLAS work canvas"/);
+      assert.match(documentMarkup, /data-role="session-rail"/);
+      assert.match(documentMarkup, /data-role="selected-session-view"/);
+      assert.match(documentMarkup, /data-role="selected-session-status-light"/);
+      assert.match(documentMarkup, /href="\/\?focusRole=quality-worker"/);
+      assert.doesNotMatch(documentMarkup, /href="\/sessions/);
     }
   });
 
