@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import {
   AtlasClarificationError,
-  createAtlasClarificationPacket,
+  createAtlasSessionStartPacket,
   readAtlasClarificationStatus,
   type AtlasClarificationRunner,
 } from "../clarification.js";
@@ -75,9 +75,10 @@ export async function handleAtlasOnboardingRequest(
       const status = await readAtlasClarificationStatus(options.stateDir, sessionId);
       writeJsonResponse(res, 200, {
         ok: true,
-        ready: status.ready,
+        ready: true,
         sessionId,
         packet: status.packet,
+        started: status.ready,
       });
       return;
     }
@@ -99,21 +100,20 @@ export async function handleAtlasOnboardingRequest(
 
     const rawBody = await readRequestBody(req);
     const payload = parseOnboardingPayload(rawBody);
-    const packet = await createAtlasClarificationPacket({
-      stateDir: options.stateDir,
-      sessionId,
-      targetRepo: String(options.targetRepo || "").trim(),
-      objective: String(payload.objective || "").trim(),
-      command: options.clarificationCommand,
-      runner: options.clarificationRunner,
-    });
+      const packet = await createAtlasSessionStartPacket({
+        stateDir: options.stateDir,
+        sessionId,
+        targetRepo: String(options.targetRepo || "").trim(),
+        objective: String(payload.objective || "").trim(),
+      });
 
-    writeJsonResponse(res, 200, {
-      ok: true,
-      ready: true,
-      sessionId,
-      packet,
-    });
+      writeJsonResponse(res, 200, {
+        ok: true,
+        ready: true,
+        sessionId,
+        packet,
+        started: true,
+      });
   } catch (error) {
     const clarificationError = error instanceof AtlasClarificationError
       ? error

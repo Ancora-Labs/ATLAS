@@ -298,6 +298,41 @@ export async function readAtlasClarificationStatus(
   };
 }
 
+export async function createAtlasSessionStartPacket(
+  options: CreateAtlasClarificationPacketOptions,
+): Promise<AtlasClarificationPacket> {
+  const objective = String(options.objective || "").trim();
+  if (!objective) {
+    throw new AtlasClarificationError("Objective is required to start an ATLAS desktop session.", 400, "missing_objective");
+  }
+
+  const packet: AtlasClarificationPacket = {
+    sessionId: options.sessionId,
+    targetRepo: options.targetRepo,
+    objective,
+    summary: objective,
+    openQuestions: [],
+    executionNotes: ["Desktop session started directly from the ATLAS workspace composer."],
+    provider: "atlas-desktop",
+    rawResponse: "",
+    createdAt: new Date().toISOString(),
+  };
+
+  const packetPath = getAtlasClarificationPacketPath(options.stateDir, options.sessionId);
+  try {
+    await writeJson(packetPath, packet);
+  } catch (error) {
+    console.error(`[atlas] session start packet write failed: ${String((error as Error)?.message || error)}`);
+    throw new AtlasClarificationError(
+      `Failed to persist session start packet: ${String((error as Error)?.message || error)}`,
+      500,
+      "session_start_packet_write_failed",
+    );
+  }
+
+  return packet;
+}
+
 export async function createAtlasClarificationPacket(
   options: CreateAtlasClarificationPacketOptions,
 ): Promise<AtlasClarificationPacket> {

@@ -146,7 +146,7 @@ describe("atlas home route", () => {
       assert.equal(res.headers["content-type"], "text/html; charset=utf-8");
       assert.match(res.body, /<title>ATLAS Home<\/title>/);
       assert.match(res.body, /aria-label="ATLAS desktop surface"/);
-      assert.match(res.body, /aria-label="ATLAS session sidebar"/);
+      assert.match(res.body, /aria-label="ATLAS desktop sidebar"/);
       assert.match(res.body, /aria-label="ATLAS work canvas"/);
       assert.match(res.body, /What should ATLAS do next\?/);
       assert.match(res.body, /Focused session detail/);
@@ -220,10 +220,10 @@ describe("atlas home route", () => {
 
       assert.equal(res.statusCode, 200);
       assert.match(res.body, /aria-label="ATLAS desktop surface"/);
-      assert.match(res.body, /aria-label="ATLAS session sidebar"/);
+      assert.match(res.body, /aria-label="ATLAS desktop sidebar"/);
       assert.match(res.body, /aria-label="ATLAS work canvas"/);
       assert.match(res.body, /No session state is available yet\./);
-      assert.match(res.body, /No live session focus yet/);
+      assert.match(res.body, /Waiting for the next live detail/);
       assert.doesNotMatch(res.body, /dashboard-card|metric-card|window-controls|traffic-light/i);
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

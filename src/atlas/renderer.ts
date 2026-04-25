@@ -17,6 +17,11 @@ export interface AtlasPageData {
   homeReadinessHeading: string;
   homeReadinessDetail: string;
   homePrimaryActionLabel: string;
+  sessionStartStatusLabel: string;
+  sessionStartStatusDetail: string;
+  sessionStartUpdatedAt: string | null;
+  continuityStatusLabel: string;
+  continuityStatusDetail: string;
   focusedSessionRole: string | null;
   missingFocusedSnapshot: boolean;
   sessions: AtlasSessionDto[];
@@ -70,12 +75,13 @@ function getPrimarySession(sessions: AtlasSessionDto[]): AtlasSessionDto | null 
 }
 
 function buildSurfaceHref(view: AtlasView, focusedSessionRole: string | null): string {
+  void view;
   const params = new URLSearchParams();
   if (focusedSessionRole) {
     params.set("focusRole", focusedSessionRole);
   }
 
-  const pathname = view === "sessions" ? "/sessions" : "/";
+  const pathname = "/";
   const query = params.toString();
   return query ? `${pathname}?${query}` : pathname;
 }
@@ -113,8 +119,8 @@ function countSessions(sessions: AtlasSessionDto[]): AtlasSessionCounts {
 function getSessionSummary(session: AtlasSessionDto | null): { heading: string; detail: string; branch: string; status: string; } {
   if (!session) {
     return {
-      heading: "No live session focus yet",
-      detail: "ATLAS is ready to open the next tracked session when state arrives.",
+      heading: "Ready for the next session",
+      detail: "ATLAS is ready when the next tracked session state arrives.",
       branch: "No branch recorded",
       status: "Waiting for session state",
     };
@@ -232,10 +238,23 @@ function renderFocusedSessionDetail(
       <div class="section-heading">
         <div>
           <div class="eyebrow">Focused session detail</div>
-          <h2>No live session focus yet</h2>
+          <h2 data-role="focused-session-name">Waiting for the next live detail</h2>
         </div>
       </div>
-      <p class="support-copy">Choose a tracked session from the left rail to inspect live worker identity, stage, recent actions, and log context inline.</p>
+      <p class="support-copy" data-role="focused-session-activity">Focus a tracked session from the left rail or start a new one to hydrate worker detail inline.</p>
+      <div class="chip-row">
+        <span class="chip" data-role="focused-session-status">${escapeHtml(pageData.sessionStartStatusLabel)}</span>
+        <span class="chip" data-role="focused-session-stage">${escapeHtml(pageData.continuityStatusLabel)}</span>
+        <span class="chip" data-role="focused-session-freshness">Freshness ${escapeHtml(formatTimestamp(pageData.sessionStartUpdatedAt))}</span>
+      </div>
+      <p class="support-copy" data-role="focused-session-continuity">${escapeHtml(pageData.continuityStatusDetail)}</p>
+      <details class="detail-section detail-section-log" open>
+        <summary>Readable log excerpt</summary>
+        <div class="log-shell">
+          <p class="support-copy" data-role="focused-session-log-meta">${escapeHtml(pageData.continuityStatusLabel)}</p>
+          <pre class="log-excerpt" data-role="focused-session-log">No live worker log lines are available yet.</pre>
+        </div>
+      </details>
     </section>`;
   }
 
@@ -253,7 +272,8 @@ function renderFocusedSessionDetail(
     <div class="chip-row">
       <span class="chip" data-role="focused-session-status">${escapeHtml(session.statusLabel)} · ${escapeHtml(session.readinessLabel)}</span>
       <span class="chip" data-role="focused-session-stage">${escapeHtml(session.currentStageLabel)}</span>
-      <span class="chip" data-role="focused-session-freshness">Freshness ${escapeHtml(formatTimestamp(session.freshnessAt))}</span>
+      <span class="chip" data-role="focused-session-freshness">${escapeHtml(session.freshnessLabel)} · ${escapeHtml(formatTimestamp(session.freshnessAt))}</span>
+      <span class="chip" data-role="focused-session-log-state">${escapeHtml(session.logStateLabel)}</span>
     </div>
     <dl class="definition-grid detail-grid">
       <div>
@@ -318,6 +338,14 @@ function renderFocusedSessionDetail(
   </section>`;
 }
 
+function renderFocusedSessionHost(
+  session: AtlasSessionDto | null,
+  pageData: AtlasPageData,
+  view: AtlasView,
+): string {
+  return `<div data-role="focused-session-panel-host">${renderFocusedSessionDetail(session, pageData, view)}</div>`;
+}
+
 function renderSessionCard(session: AtlasSessionDto, focusedSessionRole: string | null): string {
   const isFocused = session.role === focusedSessionRole;
   const laneLabel = session.lane ? `${session.lane} lane` : "Shared lane";
@@ -378,28 +406,6 @@ function renderSidebarSessionRail(pageData: AtlasPageData, _view: AtlasView): st
 }
 
 function renderSidebar(pageData: AtlasPageData, view: AtlasView, counts: AtlasSessionCounts, activeSession: AtlasSessionDto | null): string {
-  if (view === "home") {
-    return `<aside class="desktop-sidebar desktop-sidebar-minimal" aria-label="ATLAS session sidebar">
-      <div class="sidebar-top sidebar-top-minimal">
-        <div class="brand-block brand-block-minimal">
-          <div class="brand-mark">A</div>
-          <div>
-            <p class="product-title">ATLAS</p>
-          </div>
-        </div>
-      </div>
-
-      <section class="sidebar-section sidebar-section-fill sidebar-section-minimal" aria-label="Tracked sessions rail">
-        <div class="section-heading section-heading-minimal">
-          <div>
-            <div class="eyebrow">Sessions</div>
-          </div>
-        </div>
-        ${renderSidebarSessionRail(pageData, view)}
-      </section>
-    </aside>`;
-  }
-
   const sessionSummary = getSessionSummary(activeSession);
   return `<aside class="desktop-sidebar" aria-label="ATLAS desktop sidebar">
     <div class="sidebar-top">
@@ -424,11 +430,15 @@ function renderSidebar(pageData: AtlasPageData, view: AtlasView, counts: AtlasSe
         <span class="meta-copy" data-role="runtime-updated-at">${escapeHtml(formatTimestamp(pageData.updatedAt))}</span>
       </div>
       <p class="support-copy" data-role="runtime-detail">${escapeHtml(pageData.homeReadinessHeading)} · ${escapeHtml(pageData.homeReadinessDetail)}</p>
+      <p class="support-copy" data-role="session-start-detail">${escapeHtml(pageData.sessionStartStatusLabel)} · ${escapeHtml(pageData.sessionStartStatusDetail)}</p>
+      <p class="support-copy" data-role="continuity-detail">${escapeHtml(pageData.continuityStatusLabel)} · ${escapeHtml(pageData.continuityStatusDetail)}</p>
       <div class="progress-rail" aria-hidden="true">
         <span data-role="runtime-progress-bar" style="width:${escapeHtml(String(clampPercent(pageData.pipelinePercent)))}%"></span>
       </div>
       <div class="chip-row" aria-label="Current runtime status">
         <span class="chip" data-role="runtime-readiness">${escapeHtml(pageData.homeReadinessHeading)}</span>
+        <span class="chip" data-role="runtime-session-start">${escapeHtml(pageData.sessionStartStatusLabel)}</span>
+        <span class="chip" data-role="runtime-continuity">${escapeHtml(pageData.continuityStatusLabel)}</span>
         <span class="chip" data-role="runtime-count-total">${escapeHtml(String(counts.total))} tracked sessions</span>
         <span class="chip" data-role="runtime-count-needs-input">${escapeHtml(String(counts.needsInput))} needing input</span>
         <span class="chip" data-role="runtime-count-paused">${escapeHtml(String(counts.paused))} paused lane${counts.paused === 1 ? "" : "s"}</span>
@@ -471,28 +481,18 @@ function renderSidebar(pageData: AtlasPageData, view: AtlasView, counts: AtlasSe
   </aside>`;
 }
 
-function renderHomeCanvas(pageData: AtlasPageData, counts: AtlasSessionCounts, activeSession: AtlasSessionDto | null): string {
+function renderWorkspaceCanvas(pageData: AtlasPageData, counts: AtlasSessionCounts, activeSession: AtlasSessionDto | null): string {
   const hasSessions = counts.total > 0;
-  return `<section class="workspace-canvas workspace-canvas-minimal" aria-label="Chat-first workspace">
-    <section class="home-stage" aria-label="Main chat stage">
-      <div class="home-stage-copy">
-        <h1>${escapeHtml(hasSessions ? "What should ATLAS do next?" : "Where should we start?")}</h1>
-        <p class="support-copy home-stage-support">${escapeHtml(hasSessions ? "Use the box below to start a new session, or pick an existing session from the left sidebar." : "Write one outcome in the box below to start the first session.")}</p>
-      </div>
-    </section>
-    ${renderFocusedSessionDetail(activeSession, pageData, "home")}
-  </section>`;
-}
-
-function renderSessionsCanvas(pageData: AtlasPageData, counts: AtlasSessionCounts, activeSession: AtlasSessionDto | null): string {
-  return `<section class="workspace-canvas" aria-label="Session ledger">
+  return `<section class="workspace-canvas" aria-label="Chat-first workspace">
     <section class="canvas-section canvas-hero">
       <div class="section-heading">
         <div>
-          <div class="eyebrow">Trust-first work ledger</div>
-          <h1>Session ledger keeps delivery trust anchored in the desktop lifecycle.</h1>
+          <div class="eyebrow">Desktop workspace</div>
+          <h1>${escapeHtml(hasSessions ? "What should ATLAS do next?" : "Where should we start?")}</h1>
         </div>
-        <p class="support-copy">Session ledger stays aligned with the desktop lifecycle.</p>
+        <p class="support-copy">${escapeHtml(hasSessions
+          ? "The left rail, central composer, and inline detail pane stay live in one workspace."
+          : "Start the first session from the central composer and ATLAS will hydrate the detail pane inline.")}</p>
       </div>
       <div class="chip-row">
         <span class="chip">${escapeHtml(String(counts.total))} tracked sessions</span>
@@ -502,15 +502,15 @@ function renderSessionsCanvas(pageData: AtlasPageData, counts: AtlasSessionCount
       </div>
     </section>
 
-    ${renderFocusedSessionDetail(activeSession, pageData, "sessions")}
+    ${renderFocusedSessionHost(activeSession, pageData, "home")}
 
     <section class="canvas-section" aria-label="Tracked sessions">
       <div class="section-heading">
         <div>
-          <div class="eyebrow">Trusted feedback</div>
-          <h2>Tracked sessions</h2>
+          <div class="eyebrow">Tracked sessions</div>
+          <h2>Inline session ledger</h2>
         </div>
-        <p class="support-copy">Actions submit directly to the ATLAS lifecycle route so the desktop state, focused context, and session ledger stay in sync.</p>
+        <p class="support-copy">Focus stays inline, so lifecycle actions, freshness, and readable logs update without switching product modes.</p>
       </div>
       ${pageData.sessions.length > 0
         ? `<div class="session-list" data-role="session-list">${pageData.sessions.map((session) => renderSessionCard(session, pageData.focusedSessionRole)).join("")}</div>`
@@ -525,16 +525,10 @@ function renderComposer(view: AtlasView, pageData: AtlasPageData, activeSession:
     pageData.focusedSessionRole,
     pageData.missingFocusedSnapshot === true,
   );
-  const primaryHref = activeSession
-    ? buildSurfaceHref("sessions", activeSession.role)
-    : buildSurfaceHref("sessions", pageData.focusedSessionRole);
-  const primaryLabel = activeSession
-    ? "Open session detail"
-    : "Open session list";
   const returnTo = buildSurfaceHref(view, pageData.focusedSessionRole);
   const composerHeading = continuity.missingFocusedSnapshot
     ? "Start the next session while the old focus recovers"
-    : (!continuity.hasLiveSessions ? "Start a new session" : (view === "sessions" && activeSession ? activeSession.name : "Start a new session"));
+    : (!continuity.hasLiveSessions ? "Start a new session" : "Start the next session");
   const composerDetail = continuity.missingFocusedSnapshot
     ? "The previous focus is missing its next live snapshot, but you can still write the next outcome here and keep the workspace moving."
     : (!continuity.hasLiveSessions
@@ -544,7 +538,6 @@ function renderComposer(view: AtlasView, pageData: AtlasPageData, activeSession:
             : pageData.homeReadinessDetail));
 
   const actions = [
-    `<a class="primary-link" href="${escapeHtml(primaryHref)}">${escapeHtml(primaryLabel)}</a>`,
     renderLifecycleForm("Stop runtime", "stop", {
       returnTo,
       tone: "secondary",
@@ -552,57 +545,23 @@ function renderComposer(view: AtlasView, pageData: AtlasPageData, activeSession:
   ];
 
   if (activeSession) {
-    if (view === "sessions") {
-      actions.push(activeSession.role === pageData.focusedSessionRole
-        ? renderLinkAction("Clear focus", buildSurfaceHref(view, null))
-        : renderLinkAction("Focus session", buildSurfaceHref("sessions", activeSession.role)));
+    actions.push(activeSession.role === pageData.focusedSessionRole
+      ? renderLinkAction("Clear focus", buildSurfaceHref(view, null))
+      : renderLinkAction("Focus session", buildSurfaceHref(view, activeSession.role)));
 
-      if (activeSession.lane) {
-        actions.push(activeSession.isPaused
-          ? renderLifecycleForm("Resume lane", "resume", { role: activeSession.role, returnTo })
-          : renderLifecycleForm("Pause lane", "pause", { role: activeSession.role, returnTo }));
-      }
+    if (activeSession.lane) {
+      actions.push(activeSession.isPaused
+        ? renderLifecycleForm("Resume lane", "resume", { role: activeSession.role, returnTo })
+        : renderLifecycleForm("Pause lane", "pause", { role: activeSession.role, returnTo }));
+    }
 
-      if (activeSession.canArchive) {
-        actions.push(renderLifecycleForm("Archive session", "archive", { role: activeSession.role, returnTo }));
-      }
+    if (activeSession.canArchive) {
+      actions.push(renderLifecycleForm("Archive session", "archive", { role: activeSession.role, returnTo }));
     }
   }
 
-  if (view === "sessions" && pageData.missingFocusedSnapshot) {
+  if (pageData.missingFocusedSnapshot) {
     actions.push(renderLinkAction("Clear focus", buildSurfaceHref(view, null)));
-  }
-
-  if (view === "home") {
-    return `<section
-      class="desktop-composer desktop-composer-minimal"
-      aria-label="Desktop composer"
-      data-role="product-composer"
-      data-view="${escapeHtml(view)}"
-      data-focused-session-role="${escapeHtml(pageData.focusedSessionRole || "")}" 
-      data-missing-focused-snapshot="${continuity.missingFocusedSnapshot ? "true" : "false"}"
-      data-has-live-sessions="${continuity.hasLiveSessions ? "true" : "false"}">
-      <div class="composer-body composer-body-minimal">
-        <form class="product-composer-form" id="atlas-product-composer-form" data-role="product-composer-form">
-          <label class="composer-field composer-field-minimal">
-            <textarea
-              class="composer-input composer-input-minimal"
-              data-role="product-composer-input"
-              name="objective"
-              rows="3"
-              placeholder="Message ATLAS..."></textarea>
-          </label>
-          <div class="composer-status composer-status-minimal">
-            <p class="support-copy" data-role="product-composer-status">Message box ready.</p>
-            <p class="support-copy" data-role="product-composer-detail">ATLAS keeps this draft in the desktop shell state so accidental close and reopen recovery feels deliberate.</p>
-            <p class="composer-error" data-role="product-composer-error"></p>
-          </div>
-        </form>
-        <div class="composer-actions composer-actions-minimal">
-          <button class="action-button primary" type="submit" form="atlas-product-composer-form">Start session</button>
-        </div>
-      </div>
-    </section>`;
   }
 
   return `<section
@@ -670,7 +629,6 @@ function renderComposerScript(): string {
         : "No live session snapshot is available yet, but the shell still restores this draft and surface cleanly.");
   let saveTimer = null;
   let refreshTimer = null;
-  const snapshotView = composerRoot.dataset.view || (window.location.pathname === "/sessions" ? "sessions" : "home");
 
   const escapeHtml = (value) => String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -712,12 +670,12 @@ function renderComposerScript(): string {
     || null;
   const getActiveSession = (pageData) => pageData.sessions.find((session) => session.role === pageData.focusedSessionRole)
     || getPrimarySession(pageData.sessions);
-  const buildSurfaceHref = (view, focusedSessionRole) => {
+  const buildSurfaceHref = (_view, focusedSessionRole) => {
     const params = new URLSearchParams();
     if (focusedSessionRole) {
       params.set("focusRole", focusedSessionRole);
     }
-    const pathname = view === "sessions" ? "/sessions" : "/";
+    const pathname = "/";
     const query = params.toString();
     return query ? pathname + "?" + query : pathname;
   };
@@ -749,14 +707,18 @@ function renderComposerScript(): string {
   const renderFocusedSessionPanel = (session, pageData) => {
     if (!session) {
       return '<section class="canvas-section focused-session-panel" aria-label="Focused session detail" data-role="focused-session-panel" aria-live="polite">'
-        + '<div class="section-heading"><div><div class="eyebrow">Focused session detail</div><h2>No live session focus yet</h2></div></div>'
-        + '<p class="support-copy">Choose a tracked session from the left rail to inspect live worker identity, stage, recent actions, and log context inline.</p>'
-        + "</section>";
+        + '<div class="section-heading"><div><div class="eyebrow">Focused session detail</div><h2 data-role="focused-session-name">Waiting for the next live detail</h2></div></div>'
+        + '<p class="support-copy" data-role="focused-session-activity">Focus a tracked session from the left rail or start a new one to hydrate worker detail inline.</p>'
+        + '<div class="chip-row"><span class="chip" data-role="focused-session-status">' + escapeHtml(pageData.sessionStartStatusLabel || "Ready to start") + '</span>'
+        + '<span class="chip" data-role="focused-session-stage">' + escapeHtml(pageData.continuityStatusLabel || "Waiting for live snapshot") + '</span>'
+        + '<span class="chip" data-role="focused-session-freshness">Freshness ' + escapeHtml(formatTimestamp(pageData.sessionStartUpdatedAt || null)) + '</span></div>'
+        + '<p class="support-copy" data-role="focused-session-continuity">' + escapeHtml(pageData.continuityStatusDetail || "") + '</p>'
+        + '<details class="detail-section detail-section-log" open><summary>Readable log excerpt</summary><div class="log-shell"><p class="support-copy" data-role="focused-session-log-meta">'
+        + escapeHtml(pageData.continuityStatusLabel || "Waiting for live snapshot")
+        + '</p><pre class="log-excerpt" data-role="focused-session-log">No live worker log lines are available yet.</pre></div></details></section>';
     }
-    const actionHref = snapshotView === "home"
-      ? buildSurfaceHref("sessions", session.role)
-      : buildSurfaceHref(snapshotView, null);
-    const actionLabel = snapshotView === "home" ? "Open detail workspace" : "Clear focus";
+    const actionHref = buildSurfaceHref("home", null);
+    const actionLabel = "Clear focus";
     const logMeta = session.logSource
       ? session.logSource + " · " + formatTimestamp(session.logUpdatedAt)
       : "Waiting for a live worker log excerpt.";
@@ -768,7 +730,8 @@ function renderComposerScript(): string {
       + '</div><p class="support-copy" data-role="focused-session-activity">' + escapeHtml(session.latestMeaningfulAction || session.lastTask || "Waiting for the next product-facing task.") + '</p>'
       + '<div class="chip-row"><span class="chip" data-role="focused-session-status">' + escapeHtml(session.statusLabel) + " · " + escapeHtml(session.readinessLabel) + '</span>'
       + '<span class="chip" data-role="focused-session-stage">' + escapeHtml(session.currentStageLabel) + '</span>'
-      + '<span class="chip" data-role="focused-session-freshness">Freshness ' + escapeHtml(formatTimestamp(session.freshnessAt)) + '</span></div>'
+      + '<span class="chip" data-role="focused-session-freshness">' + escapeHtml(session.freshnessLabel || "Waiting for live snapshot") + ' · ' + escapeHtml(formatTimestamp(session.freshnessAt)) + '</span>'
+      + '<span class="chip" data-role="focused-session-log-state">' + escapeHtml(session.logStateLabel || "Waiting for live log") + '</span></div>'
       + '<dl class="definition-grid detail-grid">'
       + '<div><dt>Worker identity</dt><dd data-role="focused-session-identity">' + escapeHtml(session.workerIdentityLabel) + '</dd></div>'
       + '<div><dt>Current stage</dt><dd data-role="focused-session-stage-detail">' + escapeHtml(session.currentStageLabel) + '</dd></div>'
@@ -796,6 +759,13 @@ function renderComposerScript(): string {
       return;
     }
     const pageData = payload.pageData;
+    const continuitySource = payload.continuitySource === "cached" ? "cached" : "live";
+    const resolvedContinuityLabel = continuitySource === "cached"
+      ? "Cached snapshot in use"
+      : String(pageData.continuityStatusLabel || "Waiting for live snapshot");
+    const resolvedContinuityDetail = continuitySource === "cached"
+      ? String(payload.continuityDetail || "ATLAS is temporarily showing the last successful desktop snapshot while the next live refresh recovers.")
+      : String(pageData.continuityStatusDetail || "");
     const counts = countSessions(Array.isArray(pageData.sessions) ? pageData.sessions : []);
     const activeSession = getActiveSession(pageData);
     composerRoot.dataset.focusedSessionRole = String(pageData.focusedSessionRole || "");
@@ -804,29 +774,37 @@ function renderComposerScript(): string {
     const runtimeStageEl = document.querySelector("[data-role='runtime-stage-label']");
     const runtimeUpdatedAtEl = document.querySelector("[data-role='runtime-updated-at']");
     const runtimeDetailEl = document.querySelector("[data-role='runtime-detail']");
+    const sessionStartDetailEl = document.querySelector("[data-role='session-start-detail']");
+    const continuityDetailEl = document.querySelector("[data-role='continuity-detail']");
     const runtimeProgressBarEl = document.querySelector("[data-role='runtime-progress-bar']");
     const runtimeReadinessEl = document.querySelector("[data-role='runtime-readiness']");
+    const runtimeSessionStartEl = document.querySelector("[data-role='runtime-session-start']");
+    const runtimeContinuityEl = document.querySelector("[data-role='runtime-continuity']");
     const runtimeTotalEl = document.querySelector("[data-role='runtime-count-total']");
     const runtimeNeedsInputEl = document.querySelector("[data-role='runtime-count-needs-input']");
     const runtimePausedEl = document.querySelector("[data-role='runtime-count-paused']");
     const sessionRailEl = document.querySelector("[data-role='session-rail']");
-    const focusedPanelEl = document.querySelector("[data-role='focused-session-panel']");
+    const focusedPanelHostEl = document.querySelector("[data-role='focused-session-panel-host']");
     if (runtimeStageEl instanceof HTMLElement) runtimeStageEl.textContent = String(pageData.pipelineStageLabel || "Idle");
     if (runtimeUpdatedAtEl instanceof HTMLElement) runtimeUpdatedAtEl.textContent = formatTimestamp(pageData.updatedAt || null);
     if (runtimeDetailEl instanceof HTMLElement) runtimeDetailEl.textContent = String(pageData.homeReadinessHeading || "Ready") + " · " + String(pageData.homeReadinessDetail || "");
+    if (sessionStartDetailEl instanceof HTMLElement) sessionStartDetailEl.textContent = String(pageData.sessionStartStatusLabel || "Ready to start") + " · " + String(pageData.sessionStartStatusDetail || "");
+    if (continuityDetailEl instanceof HTMLElement) continuityDetailEl.textContent = resolvedContinuityLabel + " · " + resolvedContinuityDetail;
     if (runtimeProgressBarEl instanceof HTMLElement) runtimeProgressBarEl.style.width = String(clampPercent(pageData.pipelinePercent)) + "%";
     if (runtimeReadinessEl instanceof HTMLElement) runtimeReadinessEl.textContent = String(pageData.homeReadinessHeading || "Ready");
+    if (runtimeSessionStartEl instanceof HTMLElement) runtimeSessionStartEl.textContent = String(pageData.sessionStartStatusLabel || "Ready to start");
+    if (runtimeContinuityEl instanceof HTMLElement) runtimeContinuityEl.textContent = resolvedContinuityLabel;
     if (runtimeTotalEl instanceof HTMLElement) runtimeTotalEl.textContent = String(counts.total) + " tracked sessions";
     if (runtimeNeedsInputEl instanceof HTMLElement) runtimeNeedsInputEl.textContent = String(counts.needsInput) + " needing input";
     if (runtimePausedEl instanceof HTMLElement) runtimePausedEl.textContent = String(counts.paused) + " paused lane" + (counts.paused === 1 ? "" : "s");
     if (sessionRailEl instanceof HTMLElement) sessionRailEl.innerHTML = renderSessionRail(pageData);
-    if (focusedPanelEl instanceof HTMLElement) focusedPanelEl.outerHTML = renderFocusedSessionPanel(activeSession, pageData);
+    if (focusedPanelHostEl instanceof HTMLElement) focusedPanelHostEl.innerHTML = renderFocusedSessionPanel(activeSession, pageData);
   };
   const requestSnapshot = async () => {
     const focusedSessionRole = String(composerRoot.dataset.focusedSessionRole || "");
     if (bridge?.refreshSnapshot) {
       return bridge.refreshSnapshot({
-        view: snapshotView === "sessions" ? "sessions" : "home",
+        view: "home",
         focusRole: focusedSessionRole || null,
       });
     }
@@ -963,7 +941,8 @@ function renderComposerScript(): string {
     event.preventDefault();
     errorEl.textContent = "";
 
-    if (!bridge?.submitClarification) {
+    const startSession = bridge?.startSession || bridge?.submitClarification;
+    if (!startSession) {
       errorEl.textContent = "ATLAS could not reach the session bridge for this desktop shell.";
       setComposerStatus(
         "Session start is unavailable.",
@@ -985,7 +964,7 @@ function renderComposerScript(): string {
       "ATLAS keeps the draft, records the brief, and reopens the workspace in the same window.",
     );
     void persistComposerFocus(true);
-    void bridge.submitClarification(objective).then((result) => {
+    void startSession(objective).then((result) => {
       if (!result.ok) {
         errorEl.textContent = result.error || "ATLAS could not start the session brief.";
         setComposerStatus(
@@ -999,7 +978,7 @@ function renderComposerScript(): string {
         "Session brief recorded in the main workspace.",
         String(result?.packet?.summary || "Open any tracked session from the left rail to inspect its detail view."),
       );
-      window.location.assign("/sessions");
+      window.location.assign("/");
     }).catch((error) => {
       console.error("[atlas] product composer submit failed:", error);
       errorEl.textContent = String(error?.message || error || "ATLAS could not start the session brief.");
@@ -1136,27 +1115,10 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
       padding: 18px;
       grid-template-rows: minmax(0, 1fr) auto;
     }
-    .shell-home {
-      grid-template-columns: 260px minmax(0, 1fr);
-      gap: 0;
-    }
-    .workspace-shell-home {
-      background: transparent;
-      border: 0;
-      box-shadow: none;
-      padding: 0 32px;
-      grid-template-rows: 1fr auto;
-      align-items: center;
-    }
-    .workspace-canvas {
-      align-content: start;
-      gap: 16px;
-    }
-    .workspace-canvas-minimal {
-      display: grid;
-      place-items: center;
-      min-height: calc(100vh - 240px);
-    }
+      .workspace-canvas {
+        align-content: start;
+        gap: 16px;
+      }
     .canvas-section {
       padding: 22px;
     }
@@ -1166,6 +1128,7 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
       justify-items: center;
       text-align: center;
       gap: 12px;
+      margin-top: 0;
     }
     .home-stage-copy {
       display: grid;
@@ -1255,33 +1218,6 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
     .sidebar-section {
       display: grid;
       gap: 14px;
-    }
-    .desktop-sidebar-minimal {
-      gap: 16px;
-      min-height: calc(100vh - 40px);
-      padding: 18px 14px;
-      border-radius: 0;
-      border-left: 0;
-      border-top: 0;
-      border-bottom: 0;
-      border-right: 1px solid rgba(255, 255, 255, 0.08);
-      background: #171717;
-      box-shadow: none;
-    }
-    .sidebar-top-minimal {
-      gap: 10px;
-      padding: 4px 8px;
-    }
-    .brand-block-minimal {
-      gap: 10px;
-    }
-    .sidebar-section-minimal {
-      background: transparent;
-      border: 0;
-      padding: 0 8px 8px;
-    }
-    .section-heading-minimal {
-      align-items: center;
     }
     .sidebar-section {
       padding: 16px;
@@ -1482,16 +1418,6 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
       gap: 6px;
       padding: 12px;
     }
-    .desktop-sidebar-minimal .session-rail-link {
-      border: 0;
-      border-radius: 10px;
-      background: transparent;
-      padding: 10px 12px;
-    }
-    .desktop-sidebar-minimal .session-rail-link-selected {
-      background: rgba(255, 255, 255, 0.08);
-      border: 0;
-    }
     .session-rail-copy {
       display: grid;
       gap: 2px;
@@ -1531,30 +1457,14 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
        align-items: start;
        background: linear-gradient(180deg, rgba(24, 24, 24, 0.98), rgba(12, 12, 12, 0.98));
      }
-     .desktop-composer-minimal {
-       position: static;
-       width: min(760px, 100%);
-       margin: 0 auto 48px;
-       padding: 0;
-       border: 0;
-       background: transparent;
-       box-shadow: none;
-       grid-template-columns: 1fr;
-     }
-     .composer-body,
-     .product-composer-form,
-     .composer-status,
+      .composer-body,
+      .product-composer-form,
+      .composer-status,
      .composer-field {
        display: grid;
        gap: 10px;
      }
-     .composer-body-minimal {
-       gap: 14px;
-     }
-     .composer-field-minimal {
-       gap: 0;
-     }
-     .composer-input {
+      .composer-input {
        width: 100%;
        min-height: 112px;
        padding: 14px;
@@ -1565,13 +1475,6 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
        resize: vertical;
        font: inherit;
        line-height: 1.6;
-     }
-     .composer-input-minimal {
-       min-height: 84px;
-       border-radius: 24px;
-       background: rgba(255, 255, 255, 0.05);
-       padding: 22px 24px;
-       font-size: 16px;
      }
      .composer-input:focus-visible {
        outline: 3px solid #ffffff;
@@ -1588,13 +1491,6 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
        align-items: center;
        justify-content: start;
      }
-     .composer-actions-minimal {
-       justify-content: center;
-     }
-     .composer-status-minimal {
-       justify-items: center;
-       text-align: center;
-     }
     @media (max-width: 960px) {
       .shell,
       .canvas-columns,
@@ -1610,25 +1506,15 @@ function renderAtlasAppShell(pageData: AtlasPageData, view: AtlasView): string {
         position: static;
         min-height: auto;
       }
-      .shell-home {
-        grid-template-columns: 1fr;
-      }
-      .desktop-sidebar-minimal {
-        border-right: 0;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-      }
-      .workspace-shell-home {
-        padding: 24px 18px;
-      }
     }
   </style>
 </head>
   <body>
     <main>
-      <section class="shell shell-${escapeHtml(view)}" aria-label="ATLAS desktop surface">
+      <section class="shell" aria-label="ATLAS desktop surface">
         ${renderSidebar(pageData, view, counts, activeSession)}
-        <section class="workspace-shell workspace-shell-${escapeHtml(view)}" aria-label="ATLAS work canvas">
-          ${view === "home" ? renderHomeCanvas(pageData, counts, activeSession) : renderSessionsCanvas(pageData, counts, activeSession)}
+        <section class="workspace-shell" aria-label="ATLAS work canvas">
+          ${renderWorkspaceCanvas(pageData, counts, activeSession)}
           ${renderComposer(view, pageData, activeSession)}
         </section>
       </section>

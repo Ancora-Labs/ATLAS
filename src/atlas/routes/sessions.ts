@@ -24,7 +24,7 @@ export async function handleAtlasSessionsRequest(
   try {
     const pageData = await buildAtlasPageData(
       options,
-      resolveAtlasDesktopPageLocation(req.url, "sessions"),
+      resolveAtlasDesktopPageLocation(req.url, "home"),
     );
     writeAtlasHtmlResponse(res, renderAtlasSessionsHtml({
       ...pageData,

@@ -58,6 +58,8 @@ function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto
     logSource: "live_worker_quality-worker.log",
     logUpdatedAt: "2026-04-25T00:01:00.000Z",
     freshnessAt: "2026-04-25T00:01:00.000Z",
+    freshnessLabel: "Live snapshot ready",
+    logStateLabel: "Readable log ready",
     needsInput: false,
     isResumable: true,
     isPaused: false,
@@ -81,6 +83,11 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
     homeReadinessHeading: "Ready to resume",
     homeReadinessDetail: "One or more roles can continue from their recorded state.",
     homePrimaryActionLabel: "Resume session flow",
+    sessionStartStatusLabel: "Session brief recorded",
+    sessionStartStatusDetail: "The latest desktop brief is recorded and the workspace is continuing with live session state.",
+    sessionStartUpdatedAt: "2026-04-25T00:04:00.000Z",
+    continuityStatusLabel: "Live snapshot ready",
+    continuityStatusDetail: "Focused detail, worker freshness, and readable logs are flowing from the latest desktop snapshot.",
     focusedSessionRole: "quality-worker",
     missingFocusedSnapshot: false,
     sessions: [buildSession()],
@@ -164,7 +171,7 @@ describe("update the existing atlas test suite so it stops protecting the old sh
     assert.match(homeHtml, /premium shell regression locked/);
     assert.match(homeHtml, /bridge\?\.refreshSnapshot/);
     assert.match(homeHtml, /ATLAS snapshot refresh requires the Electron desktop bridge\./);
-    assert.match(sessionsHtml, /Trust-first work ledger/);
+    assert.match(sessionsHtml, /Desktop workspace/);
     assert.match(sessionsHtml, /Pause lane/);
   });
 
@@ -183,7 +190,7 @@ describe("update the existing atlas test suite so it stops protecting the old sh
     };
 
     assert.match(homeHtml, /No session state is available yet\./);
-    assert.match(homeHtml, /No live session focus yet/);
+    assert.match(homeHtml, /Waiting for the next live detail/);
     assert.match(homeHtml, /data-has-live-sessions="false"/);
     assert.equal(layout.portableRoot, path.join("C:", "ATLAS Release Root", "dist", "ATLAS"));
     assert.equal(layout.portableExePath, path.join("C:", "ATLAS Release Root", "dist", "ATLAS", "ATLAS.exe"));
@@ -208,7 +215,7 @@ describe("update the existing atlas test suite so it stops protecting the old sh
       assert.match(missingSessionResponse.body, /"code":"desktop_session_missing"/);
 
       const failedRunnerRequest = createJsonRequest(JSON.stringify({
-        objective: "Refresh the composer clarification after relaunch.",
+        objective: "   ",
       }));
       const failedRunnerResponse = createResponseCapture();
 
@@ -216,14 +223,10 @@ describe("update the existing atlas test suite so it stops protecting the old sh
         stateDir: path.join(tempRoot, "state"),
         sessionId: "desktop-session-negative",
         targetRepo: "Ancora-Labs/ATLAS",
-        clarificationRunner: async () => {
-          throw new Error("Clarification provider unavailable.");
-        },
       });
 
-      assert.equal(failedRunnerResponse.statusCode, 502);
-      assert.match(failedRunnerResponse.body, /"code":"clarification_invocation_failed"/);
-      assert.match(failedRunnerResponse.body, /Clarification provider unavailable\./);
+      assert.equal(failedRunnerResponse.statusCode, 400);
+      assert.match(failedRunnerResponse.body, /"code":"missing_objective"/);
       assert.equal(
         fs.existsSync(path.join(tempRoot, "state", "atlas", "desktop_sessions", "desktop-session-negative", "clarification_packet.json")),
         false,

@@ -103,6 +103,8 @@ export interface AtlasSessionDto {
   logSource: string | null;
   logUpdatedAt: string | null;
   freshnessAt: string | null;
+  freshnessLabel: string;
+  logStateLabel: string;
   needsInput: boolean;
   isResumable: boolean;
   isPaused: boolean;
@@ -415,6 +417,14 @@ function buildInlineLogExcerpt(session: BoxTargetSessionRecord): string[] {
     .map(sanitizeLogLine)
     .filter(Boolean)
     .slice(-LOG_EXCERPT_LINE_LIMIT);
+}
+
+function getSessionFreshnessLabel(freshnessAt: string | null): string {
+  return freshnessAt ? "Live snapshot ready" : "Waiting for live snapshot";
+}
+
+function getSessionLogStateLabel(logExcerpt: string[]): string {
+  return logExcerpt.length > 0 ? "Readable log ready" : "Waiting for live log";
 }
 
 function resolveLatestMeaningfulAction(
@@ -771,6 +781,13 @@ export function bridgeBoxTargetSessionState(
       normalizeOptionalString(session.logUpdatedAt),
       normalizeOptionalString(session.updatedAt),
     );
+    const freshnessAt = pickFreshestTimestamp(
+      normalizeOptionalString(session.freshnessAt),
+      typeof session.lastActiveAt === "string" ? session.lastActiveAt : null,
+      latestMeaningfulActionAt,
+      logUpdatedAt,
+      normalizeOptionalString(session.updatedAt),
+    );
 
     cleaned[roleKey] = {
       role,
@@ -800,13 +817,9 @@ export function bridgeBoxTargetSessionState(
       logExcerpt,
       logSource: normalizeOptionalString(session.logSource),
       logUpdatedAt,
-      freshnessAt: pickFreshestTimestamp(
-        normalizeOptionalString(session.freshnessAt),
-        typeof session.lastActiveAt === "string" ? session.lastActiveAt : null,
-        latestMeaningfulActionAt,
-        logUpdatedAt,
-        normalizeOptionalString(session.updatedAt),
-      ),
+      freshnessAt,
+      freshnessLabel: getSessionFreshnessLabel(freshnessAt),
+      logStateLabel: getSessionLogStateLabel(logExcerpt),
       needsInput: readiness === "action_needed",
       isResumable: isResumable(status, lastTask),
       isPaused: Boolean(lane && pausedLanes[lane]),

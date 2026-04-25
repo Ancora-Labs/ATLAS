@@ -46,6 +46,8 @@ function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto
     logSource: "live_worker_athena.log",
     logUpdatedAt: "2026-04-21T12:01:00.000Z",
     freshnessAt: "2026-04-21T12:01:00.000Z",
+    freshnessLabel: "Live snapshot ready",
+    logStateLabel: "Readable log ready",
     needsInput: false,
     isResumable: true,
     isPaused: false,
@@ -69,6 +71,11 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
     homeReadinessHeading: "Ready to resume",
     homeReadinessDetail: "One or more roles can continue from their recorded state.",
     homePrimaryActionLabel: "Resume session flow",
+    sessionStartStatusLabel: "Session brief recorded",
+    sessionStartStatusDetail: "The latest desktop brief is recorded and the workspace is continuing with live session state.",
+    sessionStartUpdatedAt: "2026-04-21T12:04:00.000Z",
+    continuityStatusLabel: "Live snapshot ready",
+    continuityStatusDetail: "Focused detail, worker freshness, and readable logs are flowing from the latest desktop snapshot.",
     focusedSessionRole: "Athena",
     missingFocusedSnapshot: false,
     sessions: [
@@ -159,7 +166,7 @@ describe("atlas renderer", () => {
 
     assert.match(html, /<title>ATLAS Home<\/title>/);
     assert.match(html, /aria-label="ATLAS desktop surface"/);
-    assert.match(html, /aria-label="ATLAS session sidebar"/);
+    assert.match(html, /aria-label="ATLAS desktop sidebar"/);
     assert.match(html, /aria-label="ATLAS work canvas"/);
     assert.match(html, /aria-label="Chat-first workspace"/);
     assert.match(html, /What should ATLAS do next\?/);
@@ -186,7 +193,7 @@ describe("atlas renderer", () => {
     assert.match(html, /window\.setInterval/);
     assert.match(html, /setProductDraft/);
     assert.match(html, /setProductComposerFocus/);
-    assert.match(html, /submitClarification/);
+    assert.match(html, /startSession/);
     assert.doesNotMatch(html, /hero-panel|metric-card|dashboard|window-controls|traffic-light/i);
   });
 
@@ -198,7 +205,7 @@ describe("atlas renderer", () => {
     assert.match(html, /Runtime status/);
     assert.match(html, /data-role="runtime-stage-label"/);
     assert.match(html, /Workers Running/);
-    assert.match(html, /Trust-first work ledger/);
+    assert.match(html, /Desktop workspace/);
     assert.match(html, /Focused session detail/);
     assert.match(html, /Readable log excerpt/);
     assert.match(html, /feat\/atlas-home/);
@@ -234,7 +241,8 @@ describe("atlas renderer", () => {
     assert.doesNotMatch(html, /<unsafe repo>/);
     assert.match(html, /No session state is available yet\./);
     assert.match(homeHtml, /Where should we start\?/);
-    assert.match(homeHtml, /No live session focus yet/);
+    assert.match(homeHtml, /Waiting for the next live detail/);
+    assert.match(homeHtml, /Focused session detail/);
     assert.match(homeHtml, /data-has-live-sessions="false"/);
     assert.doesNotMatch(homeHtml, /dashboard|window-controls|traffic-light/i);
   });

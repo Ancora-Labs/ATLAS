@@ -44,6 +44,8 @@ function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto
     logSource: "live_worker_prometheus.log",
     logUpdatedAt: "2026-04-21T11:46:00.000Z",
     freshnessAt: "2026-04-21T11:46:00.000Z",
+    freshnessLabel: "Live snapshot ready",
+    logStateLabel: "Readable log ready",
     needsInput: true,
     isResumable: true,
     isPaused: false,
@@ -67,6 +69,11 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
     homeReadinessHeading: "Ready to resume",
     homeReadinessDetail: "One or more roles can continue from their recorded state.",
     homePrimaryActionLabel: "Resume session flow",
+    sessionStartStatusLabel: "Session brief recorded",
+    sessionStartStatusDetail: "The latest desktop brief is recorded and the workspace is continuing with live session state.",
+    sessionStartUpdatedAt: "2026-04-21T12:04:00.000Z",
+    continuityStatusLabel: "Live snapshot ready",
+    continuityStatusDetail: "Focused detail, worker freshness, and readable logs are flowing from the latest desktop snapshot.",
     focusedSessionRole: "Prometheus",
     missingFocusedSnapshot: false,
     sessions: [
@@ -146,7 +153,7 @@ describe("atlas desktop shell refactor", () => {
   it("renders home inside one desktop shell with a persistent sidebar and inline focused detail", () => {
     const html = renderAtlasHomeHtml(buildPageData());
 
-    assert.match(html, /aria-label="ATLAS session sidebar"/);
+    assert.match(html, /aria-label="ATLAS desktop sidebar"/);
     assert.match(html, /aria-label="ATLAS work canvas"/);
     assert.match(html, /aria-label="Desktop composer"/);
     assert.match(html, /Focused session detail/);
@@ -162,7 +169,7 @@ describe("atlas desktop shell refactor", () => {
     const html = renderAtlasSessionsHtml(buildPageData({ title: "ATLAS Sessions" }));
 
     assert.match(html, /<title>ATLAS Sessions<\/title>/);
-    assert.match(html, /Trust-first work ledger/);
+    assert.match(html, /Desktop workspace/);
     assert.match(html, /Focused session detail/);
     assert.match(html, /method="post" action="\/lifecycle"/);
     assert.match(html, /Archive session/);
@@ -187,7 +194,7 @@ describe("atlas desktop shell refactor", () => {
 
     assert.match(html, /No session state is available yet\./);
     assert.match(html, /Start session/);
-    assert.match(html, /No live session focus yet/);
+    assert.match(html, /Waiting for the next live detail/);
     assert.doesNotMatch(html, /<unsafe repo>|<script>alert\(1\)<\/script>/);
   });
 });

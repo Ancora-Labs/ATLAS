@@ -70,6 +70,12 @@ export function createAtlasDesktopClarificationHandoffState(
   };
 }
 
+export function createAtlasDesktopSessionStartHandoffState(
+  objective: unknown,
+): Pick<AtlasDesktopState, "onboardingDraft" | "productDraft" | "productComposerFocused"> {
+  return createAtlasDesktopClarificationHandoffState(objective);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -87,7 +93,7 @@ function normalizeBoolean(value: unknown): boolean {
 }
 
 export function normalizeAtlasDesktopProductSurface(value: unknown): AtlasDesktopProductSurface {
-  return value === "sessions" ? "sessions" : "home";
+  return value === "home" || value === "sessions" ? "home" : "home";
 }
 
 export function normalizeAtlasDesktopWindowBounds(value: unknown): AtlasDesktopWindowBounds | null {
@@ -133,7 +139,7 @@ export function buildAtlasDesktopLocationPath(location: Partial<AtlasDesktopLoca
     params.set("focusRole", normalizedLocation.focusedSessionRole);
   }
 
-  const pathname = normalizedLocation.surface === "sessions" ? "/sessions" : "/";
+  const pathname = "/";
   const query = params.toString();
   return query ? `${pathname}?${query}` : pathname;
 }
@@ -143,9 +149,9 @@ export function parseAtlasDesktopLocationFromUrl(input: string | URL): AtlasDesk
     const parsedUrl = input instanceof URL
       ? input
       : new URL(String(input || "/"), "http://127.0.0.1");
-    const surface = parsedUrl.pathname === "/"
+    const surface = parsedUrl.pathname === "/" || parsedUrl.pathname === "/sessions"
       ? "home"
-      : (parsedUrl.pathname === "/sessions" ? "sessions" : null);
+      : null;
     if (!surface) {
       return null;
     }

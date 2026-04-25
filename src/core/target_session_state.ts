@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import { WORKER_CYCLE_ARTIFACTS_FILE, extractSessionsFromCycleRecord, filterStaleWorkerSessions, migrateWorkerCycleArtifacts, selectWorkerCycleRecord } from "./cycle_analytics.js";
-import { READ_JSON_REASON, readJsonSafe } from "./fs_utils.js";
+import { readJsonSafe } from "./fs_utils.js";
 import { readPipelineProgress } from "./pipeline_progress.js";
 
 export interface OpenTargetSessionState {
@@ -78,14 +78,14 @@ export async function readOpenTargetSessionState(
     }
   }
 
-  if (artifactsRaw.reason === READ_JSON_REASON.MISSING && legacySessions && Object.keys(legacySessions).length > 0) {
+  if (legacySessions && Object.keys(legacySessions).length > 0) {
     const preferredCycleId = await readPreferredCycleId(options.stateDir);
     const { sessions, staleRoles } = filterStaleWorkerSessions(legacySessions, preferredCycleId);
     return {
       sessions,
       source: "legacy",
       cycleId: null,
-      canonicalSessionsAvailable: false,
+      canonicalSessionsAvailable: artifactsRaw.ok,
       legacySessionsAvailable: true,
       workerSessionSourceConflict: false,
       conflictReason: null,

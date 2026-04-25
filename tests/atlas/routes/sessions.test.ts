@@ -155,7 +155,7 @@ describe("atlas sessions route", () => {
       assert.match(res.body, /aria-label="ATLAS desktop surface"/);
       assert.match(res.body, /aria-label="ATLAS desktop sidebar"/);
       assert.match(res.body, /aria-label="ATLAS work canvas"/);
-      assert.match(res.body, /Trust-first work ledger/);
+      assert.match(res.body, /Desktop workspace/);
       assert.match(res.body, /Focused session detail/);
       assert.match(res.body, /quality-worker/);
       assert.match(res.body, /Quality review worker/);
@@ -246,7 +246,7 @@ describe("atlas sessions route", () => {
       assert.match(res.body, /aria-label="ATLAS desktop sidebar"/);
       assert.match(res.body, /aria-label="ATLAS work canvas"/);
       assert.match(res.body, /No session state is available yet\./);
-      assert.match(res.body, /No live session focus yet/);
+      assert.match(res.body, /Waiting for the next live detail/);
       assert.doesNotMatch(res.body, /dashboard-card|BOX Mission Control|window-controls|traffic-light/i);
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

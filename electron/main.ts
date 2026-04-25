@@ -7,12 +7,12 @@ import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 import { loadConfig } from "../src/config.js";
 import {
   AtlasClarificationError,
-  createAtlasClarificationPacket,
+  createAtlasSessionStartPacket,
   type AtlasClarificationPacket,
 } from "../src/atlas/clarification.js";
 import {
   buildAtlasDesktopLocationPath,
-  createAtlasDesktopClarificationHandoffState,
+  createAtlasDesktopSessionStartHandoffState,
   createDefaultAtlasDesktopState,
   parseAtlasDesktopLocationFromUrl,
   readAtlasDesktopState,
@@ -71,6 +71,7 @@ let atlasBootstrap: AtlasDesktopBootstrap | null = null;
 let mainWindow: BrowserWindow | null = null;
 let atlasDesktopState: AtlasDesktopState | null = null;
 let atlasDesktopStatePath = "";
+let atlasLastSnapshot: AtlasSnapshotResponse | null = null;
 const atlasDesktopSnapshotToken = randomUUID();
 const atlasDesktopResources = resolveAtlasDesktopResourcePaths({
   mainModuleUrl: import.meta.url,
@@ -157,7 +158,7 @@ async function updateProductComposerFocus(focused: boolean): Promise<void> {
 }
 
 async function completeClarificationHandoff(objective: string): Promise<void> {
-  await updateDesktopState(createAtlasDesktopClarificationHandoffState(objective));
+  await updateDesktopState(createAtlasDesktopSessionStartHandoffState(objective));
   if (atlasBootstrap) {
     atlasBootstrap = {
       ...atlasBootstrap,
@@ -172,7 +173,7 @@ function getPersistedWindowBounds(): AtlasDesktopWindowBounds | null {
 
 function getPersistedProductLocation(): AtlasDesktopLocation {
   return {
-    surface: atlasDesktopState?.lastProductSurface || "home",
+    surface: "home",
     focusedSessionRole: atlasDesktopState?.focusedSessionRole || null,
   };
 }
@@ -184,7 +185,6 @@ async function persistProductLocation(currentUrl: string): Promise<void> {
   }
 
   await updateDesktopState({
-    lastProductSurface: location.surface,
     focusedSessionRole: location.focusedSessionRole,
   });
 }
@@ -350,9 +350,17 @@ async function fetchAtlasDesktopSnapshot(
     if (payload.ok !== true || !payload.pageData || typeof payload.snapshotAt !== "string") {
       throw new Error("ATLAS snapshot response was not valid JSON state.");
     }
+    atlasLastSnapshot = payload as AtlasSnapshotResponse;
     return payload as AtlasSnapshotResponse;
   } catch (error) {
     console.error(`[atlas] desktop snapshot refresh failed: ${String((error as Error)?.message || error)}`);
+    if (atlasLastSnapshot) {
+      return {
+        ...atlasLastSnapshot,
+        continuitySource: "cached",
+        continuityDetail: "ATLAS is temporarily showing the last successful desktop snapshot while the next live refresh recovers.",
+      };
+    }
     throw error;
   }
 }
@@ -397,7 +405,7 @@ function attachWindowPolicies(window: BrowserWindow, atlasOrigin: string): void 
   });
 }
 
-async function submitDesktopClarification(
+async function startDesktopSession(
   objective: string,
   requestWindow: BrowserWindow | null,
 ): Promise<AtlasDesktopClarificationResult> {
@@ -407,17 +415,15 @@ async function submitDesktopClarification(
     }
 
     const normalizedObjective = String(objective || "").trim();
-    await updateOnboardingDraft(normalizedObjective);
     await updateProductDraft(normalizedObjective);
 
     const config = await loadConfig();
     const stateDir = String(config.paths?.stateDir || "state");
-    const packet = await createAtlasClarificationPacket({
+    const packet = await createAtlasSessionStartPacket({
       stateDir,
       sessionId: atlasBootstrap.sessionId,
       targetRepo: atlasBootstrap.targetRepo,
       objective: normalizedObjective,
-      command: String(config.copilotCliCommand || "").trim(),
     });
 
     await completeClarificationHandoff(normalizedObjective);
@@ -579,9 +585,18 @@ app.whenReady().then(() => {
   ipcMain.handle("atlas-desktop:submit-clarification", async (event, payload: { objective?: string } = {}) => {
     try {
       const requestWindow = BrowserWindow.fromWebContents(event.sender);
-      return await submitDesktopClarification(String(payload.objective || ""), requestWindow);
+      return await startDesktopSession(String(payload.objective || ""), requestWindow);
     } catch (error) {
       console.error(`[atlas] onboarding IPC submit failed: ${String((error as Error)?.message || error)}`);
+      throw error;
+    }
+  });
+  ipcMain.handle("atlas-desktop:start-session", async (event, payload: { objective?: string } = {}) => {
+    try {
+      const requestWindow = BrowserWindow.fromWebContents(event.sender);
+      return await startDesktopSession(String(payload.objective || ""), requestWindow);
+    } catch (error) {
+      console.error(`[atlas] desktop start session IPC failed: ${String((error as Error)?.message || error)}`);
       throw error;
     }
   });

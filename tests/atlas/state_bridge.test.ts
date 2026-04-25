@@ -64,6 +64,8 @@ describe("state_bridge", () => {
     assert.deepEqual(sessions.Athena.pullRequests, ["https://example.com/pr/1"]);
     assert.deepEqual(sessions.Athena.touchedFiles, ["src/atlas/state_bridge.ts", "tests/atlas/state_bridge.test.ts"]);
     assert.equal(sessions.Athena.lastThinking, "reviewing failures");
+    assert.equal(sessions.Athena.freshnessLabel, "Live snapshot ready");
+    assert.equal(sessions.Athena.logStateLabel, "Waiting for live log");
     assert.equal(sessions.Athena.canArchive, false);
     assert.equal(sessions.Prometheus.statusLabel, "Needs attention");
     assert.equal(sessions.Prometheus.readinessLabel, "Needs your input");
@@ -160,6 +162,8 @@ describe("state_bridge", () => {
         logSource: null,
         logUpdatedAt: null,
         freshnessAt: null,
+        freshnessLabel: "Waiting for live snapshot",
+        logStateLabel: "Waiting for live log",
         needsInput: false,
         isResumable: false,
         isPaused: false,

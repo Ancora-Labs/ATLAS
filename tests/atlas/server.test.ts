@@ -231,7 +231,7 @@ describe("atlas server", () => {
     assert.equal(homeResponse.status, 200);
     assert.match(homeResponse.text, /<title>ATLAS Home<\/title>/);
     assert.match(homeResponse.text, /aria-label="ATLAS desktop surface"/);
-    assert.match(homeResponse.text, /aria-label="ATLAS session sidebar"/);
+    assert.match(homeResponse.text, /aria-label="ATLAS desktop sidebar"/);
     assert.match(homeResponse.text, /aria-label="ATLAS work canvas"/);
     assert.match(homeResponse.text, /What should ATLAS do next\?/);
     assert.match(homeResponse.text, /Focused session detail/);

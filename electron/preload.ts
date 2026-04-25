@@ -43,7 +43,10 @@ contextBridge.exposeInMainWorld("atlasDesktop", {
   setProductComposerFocus(focused: boolean): Promise<{ ok: true }> {
     return ipcRenderer.invoke("atlas-desktop:set-product-composer-focus", { focused });
   },
+  startSession(objective: string): Promise<AtlasDesktopClarificationResult> {
+    return ipcRenderer.invoke("atlas-desktop:start-session", { objective });
+  },
   submitClarification(objective: string): Promise<AtlasDesktopClarificationResult> {
-    return ipcRenderer.invoke("atlas-desktop:submit-clarification", { objective });
+    return ipcRenderer.invoke("atlas-desktop:start-session", { objective });
   },
 });
