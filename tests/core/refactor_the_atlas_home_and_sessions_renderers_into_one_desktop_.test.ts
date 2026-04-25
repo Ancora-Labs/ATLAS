@@ -6,6 +6,51 @@ import {
   renderAtlasSessionsHtml,
   type AtlasPageData,
 } from "../../src/atlas/renderer.ts";
+import type { AtlasSessionDto } from "../../src/atlas/state_bridge.ts";
+
+function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto {
+  return {
+    role: "Prometheus",
+    name: "Prometheus",
+    lane: "planning",
+    resolvedRole: null,
+    logicalRole: null,
+    workerIdentityLabel: "Prometheus",
+    status: "blocked",
+    statusLabel: "Needs attention",
+    readiness: "action_needed",
+    readinessLabel: "Needs your input",
+    currentStage: "waiting_review",
+    currentStageLabel: "Waiting for review",
+    lastTask: "Waiting for route review",
+    lastActiveAt: "2026-04-21T11:45:00.000Z",
+    latestMeaningfulAction: "Waiting for route review",
+    latestMeaningfulActionAt: "2026-04-21T11:45:00.000Z",
+    recentActions: [{
+      at: "2026-04-21T11:45:00.000Z",
+      actor: "Prometheus",
+      status: "blocked",
+      statusLabel: "Needs attention",
+      summary: "Waiting for route review",
+    }],
+    historyLength: 3,
+    lastThinking: "",
+    currentBranch: "feat/atlas-plan",
+    pullRequests: [],
+    pullRequestCount: 0,
+    touchedFiles: ["src/atlas/routes/sessions.ts"],
+    touchedFileCount: 1,
+    logExcerpt: ["waiting on route review"],
+    logSource: "live_worker_prometheus.log",
+    logUpdatedAt: "2026-04-21T11:46:00.000Z",
+    freshnessAt: "2026-04-21T11:46:00.000Z",
+    needsInput: true,
+    isResumable: true,
+    isPaused: false,
+    canArchive: true,
+    ...overrides,
+  };
+}
 
 function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
   return {
@@ -23,8 +68,9 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
     homeReadinessDetail: "One or more roles can continue from their recorded state.",
     homePrimaryActionLabel: "Resume session flow",
     focusedSessionRole: "Prometheus",
+    missingFocusedSnapshot: false,
     sessions: [
-      {
+      buildSession({
         role: "Athena",
         name: "Athena",
         lane: "review",
@@ -32,39 +78,33 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
         statusLabel: "In progress",
         readiness: "in_progress",
         readinessLabel: "In progress",
+        currentStage: "validating_contract",
+        currentStageLabel: "Validating contract",
         lastTask: "Validate the ATLAS contract",
         lastActiveAt: "2026-04-21T12:00:00.000Z",
-        historyLength: 2,
-        lastThinking: "",
+        latestMeaningfulAction: "Validated the ATLAS contract",
+        latestMeaningfulActionAt: "2026-04-21T12:00:00.000Z",
+        recentActions: [{
+          at: "2026-04-21T12:00:00.000Z",
+          actor: "Athena",
+          status: "working",
+          statusLabel: "In progress",
+          summary: "Validated the ATLAS contract",
+        }],
         currentBranch: "feat/atlas-home",
+        pullRequests: ["https://example.com/pr/1"],
         pullRequestCount: 1,
-        touchedFileCount: 3,
-        needsInput: false,
-        isResumable: true,
-        isPaused: false,
-        canArchive: false,
-      },
-      {
-        role: "Prometheus",
-        name: "Prometheus",
-        lane: "planning",
-        status: "blocked",
-        statusLabel: "Needs attention",
-        readiness: "action_needed",
-        readinessLabel: "Needs your input",
-        lastTask: "Waiting for route review",
-        lastActiveAt: "2026-04-21T11:45:00.000Z",
-        historyLength: 3,
-        lastThinking: "",
-        currentBranch: "feat/atlas-plan",
-        pullRequestCount: 0,
+        touchedFiles: ["src/atlas/renderer.ts"],
         touchedFileCount: 1,
-        needsInput: true,
-        isResumable: true,
-        isPaused: false,
-        canArchive: true,
-      },
-      {
+        logExcerpt: ["validated home shell"],
+        logSource: "live_worker_athena.log",
+        logUpdatedAt: "2026-04-21T12:01:00.000Z",
+        freshnessAt: "2026-04-21T12:01:00.000Z",
+        needsInput: false,
+        canArchive: false,
+      }),
+      buildSession(),
+      buildSession({
         role: "Hermes",
         name: "Hermes",
         lane: null,
@@ -72,42 +112,49 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
         statusLabel: "Completed",
         readiness: "completed",
         readinessLabel: "Completed",
+        currentStage: "done",
+        currentStageLabel: "Completed",
         lastTask: "Closed the last session",
         lastActiveAt: "2026-04-21T11:30:00.000Z",
-        historyLength: 4,
-        lastThinking: "",
+        latestMeaningfulAction: "Closed the last session",
+        latestMeaningfulActionAt: "2026-04-21T11:30:00.000Z",
+        recentActions: [{
+          at: "2026-04-21T11:30:00.000Z",
+          actor: "Hermes",
+          status: "done",
+          statusLabel: "Completed",
+          summary: "Closed the last session",
+        }],
         currentBranch: null,
-        pullRequestCount: 2,
-        touchedFileCount: 7,
+        pullRequests: ["https://example.com/pr/2"],
+        pullRequestCount: 1,
+        touchedFiles: ["src/atlas/server.ts"],
+        touchedFileCount: 1,
+        logExcerpt: ["session closed cleanly"],
+        logSource: "live_worker_hermes.log",
+        logUpdatedAt: "2026-04-21T11:31:00.000Z",
+        freshnessAt: "2026-04-21T11:31:00.000Z",
         needsInput: false,
         isResumable: false,
-        isPaused: false,
-        canArchive: true,
-      },
+      }),
     ],
     ...overrides,
   };
 }
 
 describe("atlas desktop shell refactor", () => {
-  it("renders home inside one desktop shell with a persistent sidebar and bottom composer", () => {
+  it("renders home inside one desktop shell with a persistent sidebar and inline focused detail", () => {
     const html = renderAtlasHomeHtml(buildPageData());
 
-    assert.match(html, /aria-label="ATLAS desktop sidebar"/);
+    assert.match(html, /aria-label="ATLAS session sidebar"/);
     assert.match(html, /aria-label="ATLAS work canvas"/);
     assert.match(html, /aria-label="Desktop composer"/);
-    assert.match(html, /Runtime status/);
-    assert.match(html, /Session focus/);
-    assert.match(html, /Persistent left sidebar/);
-    assert.match(html, /Desktop continuity/);
-    assert.match(html, /Active delivery focus/);
-    assert.match(html, /Repo state/);
-    assert.match(html, /ATLAS keeps the live delivery state in the desktop window\./);
-    assert.match(html, /monochrome, desktop-first, and trustworthy/i);
-    assert.match(html, /Resume session flow/);
-    assert.match(html, /Stop runtime/);
+    assert.match(html, /Focused session detail/);
+    assert.match(html, /Worker identity/);
+    assert.match(html, /Readable log excerpt/);
+    assert.match(html, /What should ATLAS do next\?/);
+    assert.match(html, /data-role="session-rail"/);
     assert.match(html, /position: sticky/);
-    assert.match(html, /grid-template-columns: minmax\(280px, 340px\) minmax\(0, 1fr\)/);
     assert.doesNotMatch(html, /hero-panel|metric-card|dashboard/i);
   });
 
@@ -116,11 +163,8 @@ describe("atlas desktop shell refactor", () => {
 
     assert.match(html, /<title>ATLAS Sessions<\/title>/);
     assert.match(html, /Trust-first work ledger/);
-    assert.match(html, /Session ledger stays aligned with the desktop lifecycle\./);
-    assert.match(html, /Focused workspace/);
-    assert.match(html, /Keep focus on home/);
+    assert.match(html, /Focused session detail/);
     assert.match(html, /method="post" action="\/lifecycle"/);
-    assert.match(html, /Focus session|Clear focus/);
     assert.match(html, /Archive session/);
     assert.match(html, /Pause lane/);
     assert.match(html, /Athena/);
@@ -142,10 +186,8 @@ describe("atlas desktop shell refactor", () => {
     }));
 
     assert.match(html, /No session state is available yet\./);
-    assert.match(html, /Open sessions/);
-    assert.match(html, /Ready to start/);
-    assert.match(html, /&lt;unsafe repo&gt;/);
-    assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+    assert.match(html, /Start session/);
+    assert.match(html, /No live session focus yet/);
     assert.doesNotMatch(html, /<unsafe repo>|<script>alert\(1\)<\/script>/);
   });
 });

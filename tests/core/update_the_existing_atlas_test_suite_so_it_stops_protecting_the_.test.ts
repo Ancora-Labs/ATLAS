@@ -13,12 +13,57 @@ import {
   type AtlasPageData,
 } from "../../src/atlas/renderer.ts";
 import { createAtlasDesktopPackageLayout } from "../../scripts/atlas_desktop_package.ts";
+import type { AtlasSessionDto } from "../../src/atlas/state_bridge.ts";
 
 interface ResponseCapture {
   readonly headersSent: boolean;
   readonly statusCode: number;
   readonly headers: Record<string, string>;
   readonly body: string;
+}
+
+function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto {
+  return {
+    role: "quality-worker",
+    name: "Quality lane",
+    lane: "quality",
+    resolvedRole: null,
+    logicalRole: null,
+    workerIdentityLabel: "quality-worker",
+    status: "working",
+    statusLabel: "In progress",
+    readiness: "in_progress",
+    readinessLabel: "In progress",
+    currentStage: "locking_regression_baseline",
+    currentStageLabel: "Locking regression baseline",
+    lastTask: "Lock the premium desktop regression baseline.",
+    lastActiveAt: "2026-04-25T00:00:00.000Z",
+    latestMeaningfulAction: "Locked the premium desktop regression baseline.",
+    latestMeaningfulActionAt: "2026-04-25T00:00:00.000Z",
+    recentActions: [{
+      at: "2026-04-25T00:00:00.000Z",
+      actor: "quality-worker",
+      status: "working",
+      statusLabel: "In progress",
+      summary: "Locked the premium desktop regression baseline.",
+    }],
+    historyLength: 2,
+    lastThinking: "",
+    currentBranch: "feat/premium-desktop-tests",
+    pullRequests: ["https://example.com/pr/premium-desktop"],
+    pullRequestCount: 1,
+    touchedFiles: ["tests/atlas/renderer.test.ts"],
+    touchedFileCount: 1,
+    logExcerpt: ["premium shell regression locked"],
+    logSource: "live_worker_quality-worker.log",
+    logUpdatedAt: "2026-04-25T00:01:00.000Z",
+    freshnessAt: "2026-04-25T00:01:00.000Z",
+    needsInput: false,
+    isResumable: true,
+    isPaused: false,
+    canArchive: false,
+    ...overrides,
+  };
 }
 
 function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
@@ -38,28 +83,7 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
     homePrimaryActionLabel: "Resume session flow",
     focusedSessionRole: "quality-worker",
     missingFocusedSnapshot: false,
-    sessions: [
-      {
-        role: "quality-worker",
-        name: "Quality lane",
-        lane: "quality",
-        status: "working",
-        statusLabel: "In progress",
-        readiness: "in_progress",
-        readinessLabel: "In progress",
-        lastTask: "Lock the premium desktop regression baseline.",
-        lastActiveAt: "2026-04-25T00:00:00.000Z",
-        historyLength: 2,
-        lastThinking: "",
-        currentBranch: "feat/premium-desktop-tests",
-        pullRequestCount: 1,
-        touchedFileCount: 5,
-        needsInput: false,
-        isResumable: true,
-        isPaused: false,
-        canArchive: false,
-      },
-    ],
+    sessions: [buildSession()],
     ...overrides,
   };
 }
@@ -129,18 +153,18 @@ describe("update the existing atlas test suite so it stops protecting the old sh
 
     for (const html of [homeHtml, sessionsHtml]) {
       assert.match(html, /aria-label="ATLAS desktop surface"/);
-      assert.match(html, /aria-label="ATLAS desktop sidebar"/);
       assert.match(html, /aria-label="ATLAS work canvas"/);
       assert.match(html, /aria-label="Desktop composer"/);
-      assert.match(html, /Persistent left sidebar/);
+      assert.match(html, /Focused session detail/);
+      assert.match(html, /data-role="session-rail"/);
       assert.doesNotMatch(html, /dashboard-card|hero-panel|metric-card|window-controls|traffic-light/i);
     }
 
-    assert.match(homeHtml, /Desktop continuity/);
-    assert.match(homeHtml, /Restored the last clarification objective for this desktop session\./);
-    assert.match(homeHtml, /Saved the workspace draft for this desktop shell\./);
+    assert.match(homeHtml, /Readable log excerpt/);
+    assert.match(homeHtml, /premium shell regression locked/);
+    assert.match(homeHtml, /window\.fetch\("\/api\/snapshot\?"/);
     assert.match(sessionsHtml, /Trust-first work ledger/);
-    assert.match(sessionsHtml, /Focused workspace/);
+    assert.match(sessionsHtml, /Pause lane/);
   });
 
   it("keeps sparse-state rendering and portable packaging guarantees deterministic", async () => {
@@ -158,7 +182,7 @@ describe("update the existing atlas test suite so it stops protecting the old sh
     };
 
     assert.match(homeHtml, /No session state is available yet\./);
-    assert.match(homeHtml, /No live session snapshot yet/);
+    assert.match(homeHtml, /No live session focus yet/);
     assert.match(homeHtml, /data-has-live-sessions="false"/);
     assert.equal(layout.portableRoot, path.join("C:", "ATLAS Release Root", "dist", "ATLAS"));
     assert.equal(layout.portableExePath, path.join("C:", "ATLAS Release Root", "dist", "ATLAS", "ATLAS.exe"));
