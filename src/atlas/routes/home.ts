@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -23,10 +24,12 @@ export interface AtlasHomeRouteOptions {
   hostLabel?: string;
   shellCommand?: string;
   desktopSessionId?: string;
+  desktopSnapshotToken?: string;
 }
 
 export const ATLAS_SNAPSHOT_PATH = "/api/atlas/snapshot";
 export const ATLAS_LEGACY_SNAPSHOT_PATH = "/api/snapshot";
+export const ATLAS_SNAPSHOT_TOKEN_HEADER = "x-atlas-desktop-snapshot-token";
 
 type AtlasSnapshotView = "home" | "sessions";
 
@@ -108,6 +111,35 @@ export function writeAtlasJsonResponse(res: ServerResponse, payload: unknown): v
     "content-type": "application/json; charset=utf-8",
   });
   res.end(JSON.stringify(payload));
+}
+
+function isAuthorizedSnapshotToken(providedToken: string, expectedToken: string): boolean {
+  const provided = Buffer.from(providedToken, "utf8");
+  const expected = Buffer.from(expectedToken, "utf8");
+  if (provided.length !== expected.length) {
+    return false;
+  }
+  return timingSafeEqual(provided, expected);
+}
+
+function isAtlasSnapshotRequestAuthorized(
+  req: IncomingMessage,
+  options: AtlasHomeRouteOptions,
+): boolean {
+  const expectedToken = String(options.desktopSnapshotToken || "").trim();
+  if (!expectedToken) {
+    return true;
+  }
+
+  const headerValue = req.headers[ATLAS_SNAPSHOT_TOKEN_HEADER];
+  const providedToken = Array.isArray(headerValue)
+    ? String(headerValue[0] || "").trim()
+    : String(headerValue || "").trim();
+  if (!providedToken) {
+    return false;
+  }
+
+  return isAuthorizedSnapshotToken(providedToken, expectedToken);
 }
 
 export function renderClarificationRequiredHtml(): string {
@@ -269,6 +301,15 @@ export async function handleAtlasSnapshotRequest(
   if (String(req.method || "GET").toUpperCase() !== "GET") {
     res.writeHead(405, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: false, error: "Method Not Allowed" }));
+    return;
+  }
+
+  if (!isAtlasSnapshotRequestAuthorized(req, options)) {
+    res.writeHead(403, {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+    });
+    res.end(JSON.stringify({ ok: false, error: "ATLAS snapshot access denied" }));
     return;
   }
 

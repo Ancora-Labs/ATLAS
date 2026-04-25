@@ -157,8 +157,8 @@ describe("atlas home route", () => {
       assert.match(res.body, /https:\/\/example\.com\/pr\/home/);
       assert.match(res.body, /src\/atlas\/routes\/home\.ts/);
       assert.match(res.body, /ready for snapshot refresh/);
-      assert.match(res.body, /bridge\?\.getSnapshot/);
-      assert.match(res.body, /\/api\/atlas\/snapshot/);
+      assert.match(res.body, /bridge\?\.refreshSnapshot/);
+      assert.match(res.body, /ATLAS snapshot refresh requires the Electron desktop bridge\./);
       assert.match(res.body, /data-role="product-composer-input"/);
       assert.doesNotMatch(res.body, /hero-panel|metric-card|BOX Mission Control|dashboard|window-controls|traffic-light/i);
     } finally {

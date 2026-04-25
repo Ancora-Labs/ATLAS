@@ -7,6 +7,7 @@ import path from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import { ATLAS_DEFAULT_PORT, createAtlasServer, startAtlasServer } from "../../src/atlas/server.ts";
+import { ATLAS_SNAPSHOT_TOKEN_HEADER } from "../../src/atlas/routes/home.ts";
 
 function createTempRoot(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), "atlas-server-"));
@@ -30,13 +31,19 @@ function getFreePort(): Promise<number> {
   });
 }
 
-function requestText(port: number, pathname: string, method = "GET"): Promise<{ status: number; text: string }> {
+function requestText(
+  port: number,
+  pathname: string,
+  method = "GET",
+  headers: Record<string, string> = {},
+): Promise<{ status: number; text: string }> {
   return new Promise((resolve, reject) => {
     const req = http.request({
       hostname: "127.0.0.1",
       port,
       path: pathname,
       method,
+      headers,
     }, (res) => {
       let raw = "";
       res.on("data", (chunk) => {
@@ -232,8 +239,8 @@ describe("atlas server", () => {
     assert.match(homeResponse.text, /Focused session detail/);
     assert.match(homeResponse.text, /snapshot endpoint ready/);
     assert.match(homeResponse.text, /data-role="product-composer-input"/);
-    assert.match(homeResponse.text, /bridge\?\.getSnapshot/);
-    assert.match(homeResponse.text, /\/api\/atlas\/snapshot/);
+    assert.match(homeResponse.text, /bridge\?\.refreshSnapshot/);
+    assert.match(homeResponse.text, /ATLAS snapshot refresh requires the Electron desktop bridge\./);
     assert.doesNotMatch(homeResponse.text, /default browser|localhost page/i);
 
     assert.equal(sessionsResponse.status, 200);
@@ -362,6 +369,37 @@ describe("atlas server", () => {
 
     const legacyResponse = await requestText(port, "/api/snapshot?view=sessions&focusRole=quality-worker");
     assert.equal(legacyResponse.status, 200);
+  });
+
+  it("rejects desktop snapshot requests without the configured desktop token", async () => {
+    const securedPort = await getFreePort();
+    const securedServer = await startAtlasServer({
+      port: securedPort,
+      stateDir,
+      targetRepo: "Ancora-Labs/ATLAS",
+      desktopSnapshotToken: "desktop-snapshot-token",
+    });
+
+    try {
+      const blockedResponse = await requestText(securedPort, "/api/atlas/snapshot?view=sessions&focusRole=quality-worker");
+      const allowedResponse = await requestText(
+        securedPort,
+        "/api/atlas/snapshot?view=sessions&focusRole=quality-worker",
+        "GET",
+        { [ATLAS_SNAPSHOT_TOKEN_HEADER]: "desktop-snapshot-token" },
+      );
+
+      assert.equal(blockedResponse.status, 403);
+      assert.match(blockedResponse.text, /ATLAS snapshot access denied/);
+      assert.equal(allowedResponse.status, 200);
+      assert.match(allowedResponse.text, /"ok":true/);
+    } finally {
+      if (securedServer.listening) {
+        await new Promise<void>((resolve) => {
+          securedServer.close(() => resolve());
+        });
+      }
+    }
   });
 
   it("keeps onboarding status session-bound while the home workspace remains available after relaunch", async () => {

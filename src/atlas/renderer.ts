@@ -670,7 +670,6 @@ function renderComposerScript(): string {
         : "No live session snapshot is available yet, but the shell still restores this draft and surface cleanly.");
   let saveTimer = null;
   let refreshTimer = null;
-  const snapshotPath = "/api/atlas/snapshot";
   const snapshotView = composerRoot.dataset.view || (window.location.pathname === "/sessions" ? "sessions" : "home");
 
   const escapeHtml = (value) => String(value ?? "")
@@ -824,27 +823,14 @@ function renderComposerScript(): string {
     if (focusedPanelEl instanceof HTMLElement) focusedPanelEl.outerHTML = renderFocusedSessionPanel(activeSession, pageData);
   };
   const requestSnapshot = async () => {
-    const params = new URLSearchParams();
-    params.set("view", snapshotView);
     const focusedSessionRole = String(composerRoot.dataset.focusedSessionRole || "");
-    if (focusedSessionRole) {
-      params.set("focusRole", focusedSessionRole);
-    }
-    if (bridge?.getSnapshot) {
-      return bridge.getSnapshot({
+    if (bridge?.refreshSnapshot) {
+      return bridge.refreshSnapshot({
         view: snapshotView === "sessions" ? "sessions" : "home",
         focusRole: focusedSessionRole || null,
       });
     }
-
-    const response = await window.fetch(snapshotPath + "?" + params.toString(), {
-      headers: { accept: "application/json" },
-      cache: "no-store",
-    });
-    if (!response.ok) {
-      throw new Error("ATLAS snapshot request failed with status " + String(response.status) + ".");
-    }
-    return response.json();
+    throw new Error("ATLAS snapshot refresh requires the Electron desktop bridge.");
   };
   const refreshSnapshot = async () => {
     try {

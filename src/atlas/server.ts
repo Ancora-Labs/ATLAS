@@ -42,6 +42,7 @@ function resolveAtlasServerOptions(options: AtlasServerOptions = {}): ResolvedAt
     hostLabel: String(options.hostLabel || process.env.BOX_ATLAS_HOST_LABEL || "Windows host"),
     shellCommand: String(options.shellCommand || process.env.BOX_ATLAS_SHELL_COMMAND || ".\\ATLAS.cmd"),
     desktopSessionId: String(options.desktopSessionId || "").trim(),
+    desktopSnapshotToken: String(options.desktopSnapshotToken || "").trim(),
     clarificationCommand: String(options.clarificationCommand || "").trim(),
     clarificationRunner: options.clarificationRunner,
   };

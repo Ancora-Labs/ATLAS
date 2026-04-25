@@ -28,6 +28,7 @@ import {
   ATLAS_SNAPSHOT_PATH,
   type AtlasSnapshotRequestPayload,
   type AtlasSnapshotResponse,
+  ATLAS_SNAPSHOT_TOKEN_HEADER,
 } from "../src/atlas/routes/home.js";
 import { startAtlasServer } from "../src/atlas/server.js";
 import {
@@ -70,6 +71,7 @@ let atlasBootstrap: AtlasDesktopBootstrap | null = null;
 let mainWindow: BrowserWindow | null = null;
 let atlasDesktopState: AtlasDesktopState | null = null;
 let atlasDesktopStatePath = "";
+const atlasDesktopSnapshotToken = randomUUID();
 const atlasDesktopResources = resolveAtlasDesktopResourcePaths({
   mainModuleUrl: import.meta.url,
   isPackaged: app.isPackaged,
@@ -265,6 +267,7 @@ async function startDesktopRuntime(): Promise<AtlasDesktopRuntime> {
     hostLabel: "ATLAS Desktop",
     shellCommand: atlasDesktopShellCommand,
     desktopSessionId: sessionId,
+    desktopSnapshotToken: atlasDesktopSnapshotToken,
   });
   const address = server.address();
   const port = address && typeof address === "object" ? address.port : 0;
@@ -333,7 +336,10 @@ async function fetchAtlasDesktopSnapshot(
 
   try {
     const response = await fetch(snapshotUrl, {
-      headers: { accept: "application/json" },
+      headers: {
+        accept: "application/json",
+        [ATLAS_SNAPSHOT_TOKEN_HEADER]: atlasDesktopSnapshotToken,
+      },
       cache: "no-store",
     });
     if (!response.ok) {
@@ -531,6 +537,15 @@ app.whenReady().then(() => {
       return await fetchAtlasDesktopSnapshot(payload);
     } catch (error) {
       console.error(`[atlas] desktop snapshot IPC failed: ${String((error as Error)?.message || error)}`);
+      throw error;
+    }
+  });
+  ipcMain.handle("atlas-desktop:refresh-snapshot", async (event, payload: AtlasSnapshotRequestPayload = {}) => {
+    try {
+      assertTrustedAtlasSnapshotSender(event);
+      return await fetchAtlasDesktopSnapshot(payload);
+    } catch (error) {
+      console.error(`[atlas] desktop snapshot refresh IPC failed: ${String((error as Error)?.message || error)}`);
       throw error;
     }
   });

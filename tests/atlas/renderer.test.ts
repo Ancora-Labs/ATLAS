@@ -180,9 +180,9 @@ describe("atlas renderer", () => {
     assert.match(html, /data-role="focused-session-log"/);
     assert.match(html, /data-view="home"/);
     assert.match(html, /data-role="product-composer-input"/);
-    assert.match(html, /bridge\?\.getSnapshot/);
-    assert.match(html, /window\.fetch\(snapshotPath \+ "\?" \+ params\.toString\(\)/);
-    assert.match(html, /\/api\/atlas\/snapshot/);
+    assert.match(html, /bridge\?\.refreshSnapshot/);
+    assert.match(html, /ATLAS snapshot refresh requires the Electron desktop bridge\./);
+    assert.doesNotMatch(html, /window\.fetch\(snapshotPath \+ "\?" \+ params\.toString\(\)/);
     assert.match(html, /window\.setInterval/);
     assert.match(html, /setProductDraft/);
     assert.match(html, /setProductComposerFocus/);
@@ -214,6 +214,7 @@ describe("atlas renderer", () => {
     assert.match(html, /data-role="session-rail"/);
     assert.match(html, /data-role="focused-session-pr-count"/);
     assert.match(html, /data-role="focused-session-log-freshness"/);
+    assert.match(html, /bridge\?\.refreshSnapshot/);
     assert.doesNotMatch(html, /hero-panel|BOX Mission Control|dashboard|window-controls|traffic-light/i);
   });
 

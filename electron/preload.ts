@@ -28,6 +28,9 @@ contextBridge.exposeInMainWorld("atlasDesktop", {
   getDesktopState(): Promise<AtlasDesktopState> {
     return ipcRenderer.invoke("atlas-desktop:get-desktop-state");
   },
+  refreshSnapshot(request: AtlasSnapshotRequestPayload = {}): Promise<AtlasSnapshotResponse> {
+    return ipcRenderer.invoke("atlas-desktop:refresh-snapshot", request);
+  },
   getSnapshot(request: AtlasSnapshotRequestPayload = {}): Promise<AtlasSnapshotResponse> {
     return ipcRenderer.invoke("atlas-desktop:get-snapshot", request);
   },
