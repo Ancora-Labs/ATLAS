@@ -109,9 +109,11 @@ describe("atlas regression fence", () => {
     assert.match(rendererSource, /Persistent left sidebar/);
     assert.match(rendererSource, /Focused session detail/);
     assert.match(rendererSource, /Readable log excerpt/);
-    assert.match(rendererSource, /bridge\?\.getSnapshot/);
-    assert.match(rendererSource, /\/api\/atlas\/snapshot/);
+    assert.match(rendererSource, /bridge\?\.refreshSnapshot/);
+    assert.match(rendererSource, /ATLAS snapshot refresh requires the Electron desktop bridge\./);
     assert.doesNotMatch(rendererSource, /dashboard-card|hero-panel|metric-card|window-controls|traffic-light/i);
+    assert.match(preloadSource, /refreshSnapshot\(request: AtlasSnapshotRequestPayload = \{\}\)/);
+    assert.match(preloadSource, /atlas-desktop:refresh-snapshot/);
     assert.match(preloadSource, /getSnapshot\(request: AtlasSnapshotRequestPayload = \{\}\)/);
     assert.match(preloadSource, /atlas-desktop:get-snapshot/);
     assert.match(desktopMain, /requestSingleInstanceLock\(\)/);
@@ -124,6 +126,8 @@ describe("atlas regression fence", () => {
     assert.match(desktopMain, /buildAtlasDesktopLocationPath\(getPersistedProductLocation\(\)\)/);
     assert.match(desktopMain, /window\.loadURL\(new URL\(buildAtlasDesktopLocationPath\(getPersistedProductLocation\(\)\), atlasBootstrap\.serverUrl\)\.toString\(\)\)/);
     assert.match(desktopMain, /ipcMain\.handle\("atlas-desktop:get-snapshot"/);
+    assert.match(desktopMain, /ipcMain\.handle\("atlas-desktop:refresh-snapshot"/);
+    assert.match(desktopMain, /ATLAS_SNAPSHOT_TOKEN_HEADER/);
     assert.match(desktopMain, /ATLAS_SNAPSHOT_PATH/);
     assert.match(desktopMain, /rejected an untrusted window/);
   });
