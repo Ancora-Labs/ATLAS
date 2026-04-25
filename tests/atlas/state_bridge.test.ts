@@ -230,6 +230,28 @@ describe("state_bridge", () => {
                 status: "partial",
                 lastTask: "Resume verification handoff",
                 lastActiveAt: "2026-04-21T11:57:00.000Z",
+                workerIdentityLabel: "Quality worker via review lane",
+                currentStage: "snapshot_refresh",
+                currentStageLabel: "Refreshing snapshot",
+                latestMeaningfulAction: "Refreshed the focused session contract",
+                latestMeaningfulActionAt: "2026-04-21T11:58:00.000Z",
+                pullRequests: [
+                  "https://example.com/pr/quality",
+                  "https://example.com/pr/quality",
+                ],
+                touchedFiles: [
+                  "src/atlas/state_bridge.ts",
+                  "src/atlas/state_bridge.ts",
+                ],
+                filesChanged: ["tests/atlas/state_bridge.test.ts"],
+                logExcerpt: [
+                  "[leadership_live]",
+                  "snapshot detail refreshed",
+                  "focused session context synced",
+                ],
+                logSource: "worker_cycle_artifacts.json",
+                logUpdatedAt: "2026-04-21T11:58:30.000Z",
+                freshnessAt: "2026-04-21T11:58:30.000Z",
               },
               Atlas: {
                 role: "Atlas",
@@ -279,6 +301,20 @@ describe("state_bridge", () => {
       assert.equal(sessions["quality-worker"].lane, "quality");
       assert.equal(sessions["quality-worker"].isPaused, true);
       assert.equal(sessions["quality-worker"].canArchive, true);
+      assert.equal(sessions["quality-worker"].workerIdentityLabel, "Quality worker via review lane");
+      assert.equal(sessions["quality-worker"].currentStageLabel, "Refreshing snapshot");
+      assert.equal(sessions["quality-worker"].latestMeaningfulAction, "Refreshed the focused session contract");
+      assert.deepEqual(sessions["quality-worker"].pullRequests, ["https://example.com/pr/quality"]);
+      assert.deepEqual(sessions["quality-worker"].touchedFiles, [
+        "src/atlas/state_bridge.ts",
+        "tests/atlas/state_bridge.test.ts",
+      ]);
+      assert.deepEqual(sessions["quality-worker"].logExcerpt, [
+        "snapshot detail refreshed",
+        "focused session context synced",
+      ]);
+      assert.equal(sessions["quality-worker"].logSource, "worker_cycle_artifacts.json");
+      assert.equal(sessions["quality-worker"].freshnessAt, "2026-04-21T11:58:30.000Z");
 
       assert.equal(sessions.Atlas.status, "idle");
       assert.equal(sessions.Atlas.readinessLabel, "Ready to start");

@@ -195,7 +195,18 @@ describe("atlas regression fence", () => {
             status: "needs-input",
             lastTask: "Waiting for archive review notes",
             lastActiveAt: "2026-04-22T10:55:00.000Z",
+            workerIdentityLabel: "Quality archive worker",
+            currentStage: "archive_review",
+            currentStageLabel: "Reviewing archive notes",
+            latestMeaningfulAction: "Queued the archive follow-up",
+            latestMeaningfulActionAt: "2026-04-22T10:56:00.000Z",
+            pullRequests: ["https://example.com/pr/archive"],
             filesTouched: ["src/atlas/state_bridge.ts"],
+            touchedFiles: ["src/atlas/state_bridge.ts", "tests/atlas/atlas_regression_fence.test.ts"],
+            logExcerpt: ["[leadership_live]", "archive follow-up queued"],
+            logSource: "open_target_sessions.json",
+            logUpdatedAt: "2026-04-22T10:56:30.000Z",
+            freshnessAt: "2026-04-22T10:56:30.000Z",
           },
         },
       });
@@ -214,8 +225,14 @@ describe("atlas regression fence", () => {
       assert.equal(openSessions["integration-worker"]?.status, "done");
       assert.equal(openSessions["integration-worker"]?.statusLabel, "Completed");
       assert.equal(openSessions["quality-worker"]?.status, "blocked");
+      assert.equal(openSessions["quality-worker"]?.workerIdentityLabel, "Quality archive worker");
+      assert.equal(openSessions["quality-worker"]?.currentStageLabel, "Reviewing archive notes");
+      assert.equal(openSessions["quality-worker"]?.latestMeaningfulAction, "Queued the archive follow-up");
       assert.equal(openSessions["quality-worker"]?.readinessLabel, "Needs your input");
-      assert.equal(openSessions["quality-worker"]?.touchedFileCount, 1);
+      assert.equal(openSessions["quality-worker"]?.touchedFileCount, 2);
+      assert.deepEqual(openSessions["quality-worker"]?.pullRequests, ["https://example.com/pr/archive"]);
+      assert.deepEqual(openSessions["quality-worker"]?.logExcerpt, ["archive follow-up queued"]);
+      assert.equal(openSessions["quality-worker"]?.freshnessAt, "2026-04-22T10:56:30.000Z");
 
       assert.equal(Object.keys(readModel.openSessions).length, 2);
       assert.equal(readModel.archivedSessions.length, 1);

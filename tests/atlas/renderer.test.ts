@@ -172,6 +172,11 @@ describe("atlas renderer", () => {
     assert.match(html, /src\/atlas\/renderer\.ts/);
     assert.match(html, /data-role="session-rail"/);
     assert.match(html, /data-role="focused-session-panel"/);
+    assert.match(html, /data-role="focused-session-identity"/);
+    assert.match(html, /data-role="focused-session-stage-detail"/);
+    assert.match(html, /data-role="focused-session-prs"/);
+    assert.match(html, /data-role="focused-session-files"/);
+    assert.match(html, /data-role="focused-session-freshness"/);
     assert.match(html, /data-role="focused-session-log"/);
     assert.match(html, /data-view="home"/);
     assert.match(html, /data-role="product-composer-input"/);
@@ -207,6 +212,8 @@ describe("atlas renderer", () => {
     assert.match(html, /data-role="runtime-count-total"/);
     assert.match(html, /data-role="runtime-progress-bar"/);
     assert.match(html, /data-role="session-rail"/);
+    assert.match(html, /data-role="focused-session-pr-count"/);
+    assert.match(html, /data-role="focused-session-log-freshness"/);
     assert.doesNotMatch(html, /hero-panel|BOX Mission Control|dashboard|window-controls|traffic-light/i);
   });
 

@@ -23,12 +23,38 @@ export interface BoxTargetSessionRecord {
   status?: string;
   lastTask?: string;
   lastActiveAt?: string | null;
+  latestMeaningfulAction?: string | null;
+  latestMeaningfulActionAt?: string | null;
+  actionUpdatedAt?: string | null;
+  workerIdentityLabel?: string | null;
+  currentStage?: string | null;
+  currentStageLabel?: string | null;
+  stage?: string | null;
+  stageLabel?: string | null;
+  phase?: string | null;
   history?: BoxTargetSessionHistoryEntry[];
   activityLog?: BoxTargetSessionHistoryEntry[];
   _activityLog?: BoxTargetSessionHistoryEntry[];
   currentBranch?: string | null;
+  branch?: string | null;
+  branchName?: string | null;
   createdPRs?: string[];
+  pullRequests?: string[];
+  prUrl?: string[] | string | null;
+  pr?: string[] | string | null;
+  prUrls?: string[] | string | null;
   filesTouched?: string[];
+  filesChanged?: string[];
+  touchedFiles?: string[];
+  changedFiles?: string[];
+  logExcerpt?: string[] | string | null;
+  recentLogLines?: string[] | string | null;
+  logLines?: string[] | string | null;
+  recentLogs?: string[] | string | null;
+  logSource?: string | null;
+  logUpdatedAt?: string | null;
+  freshnessAt?: string | null;
+  updatedAt?: string | null;
   [key: string]: unknown;
 }
 
@@ -152,6 +178,8 @@ const TERMINAL_HISTORY_STATUSES = new Set<AtlasSessionStatus>(["blocked", "done"
 const SYSTEM_HISTORY_ACTORS = new Set(["athena", "orchestrator"]);
 const RECENT_ACTION_LIMIT = 4;
 const LOG_EXCERPT_LINE_LIMIT = 6;
+const LOG_CONTROL_LINE_PATTERN = /^\[[A-Za-z0-9:_-]+\]$/;
+const ANSI_ESCAPE_SEQUENCE_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "g");
 const INTERNAL_SESSION_STAGE_TO_STATUS: Record<string, AtlasSessionStatus> = {
   blocked: "blocked",
   complete: "done",
@@ -184,6 +212,36 @@ function normalizeOptionalString(value: unknown): string | null {
 }
 
 function normalizeStringList(value: unknown): string[] {
+  const collected: string[] = [];
+  if (Array.isArray(value)) {
+    collected.push(...value.map((entry) => String(entry || "").trim()).filter(Boolean));
+  }
+  if (typeof value === "string" && value.trim()) {
+    collected.push(
+      ...value
+        .split(/\r?\n|,/)
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    );
+  }
+  const seen = new Set<string>();
+  return collected.filter((entry) => {
+    if (seen.has(entry)) return false;
+    seen.add(entry);
+    return true;
+  });
+}
+
+function dedupeStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    if (seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
+}
+
+function normalizeLogLineList(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value
       .map((entry) => String(entry || "").trim())
@@ -191,7 +249,7 @@ function normalizeStringList(value: unknown): string[] {
   }
   if (typeof value === "string" && value.trim()) {
     return value
-      .split(/\r?\n|,/)
+      .split(/\r?\n/)
       .map((entry) => entry.trim())
       .filter(Boolean);
   }
@@ -251,7 +309,16 @@ function normalizeRawStatus(status: unknown): AtlasSessionStatus {
   return INTERNAL_SESSION_STAGE_TO_STATUS[normalized] || "idle";
 }
 
-function resolveWorkerIdentityLabel(role: string, resolvedRole: string | null, logicalRole: string | null): string {
+function resolveWorkerIdentityLabel(
+  session: BoxTargetSessionRecord,
+  role: string,
+  resolvedRole: string | null,
+  logicalRole: string | null,
+): string {
+  const explicitIdentity = normalizeOptionalString(session.workerIdentityLabel);
+  if (explicitIdentity) {
+    return explicitIdentity;
+  }
   if (resolvedRole && normalizeWorkerName(resolvedRole) !== normalizeWorkerName(role)) {
     return `${role} via ${resolvedRole}`;
   }
@@ -306,18 +373,59 @@ function buildRecentActions(history: BoxTargetSessionHistoryEntry[]): AtlasSessi
 
 function normalizeCurrentBranch(session: BoxTargetSessionRecord): string | null {
   return normalizeOptionalString(session.currentBranch)
-    || normalizeOptionalString(session.branch);
+    || normalizeOptionalString(session.branch)
+    || normalizeOptionalString(session.branchName);
 }
 
 function normalizePullRequests(session: BoxTargetSessionRecord): string[] {
-  return normalizeStringList(session.createdPRs)
-    .concat(normalizeStringList(session.prUrl))
-    .concat(normalizeStringList(session.pr));
+  return dedupeStrings(
+    normalizeStringList(session.pullRequests)
+      .concat(normalizeStringList(session.createdPRs))
+      .concat(normalizeStringList(session.prUrl))
+      .concat(normalizeStringList(session.pr))
+      .concat(normalizeStringList(session.prUrls)),
+  );
 }
 
 function normalizeTouchedFiles(session: BoxTargetSessionRecord): string[] {
-  return normalizeStringList(session.filesTouched)
-    .concat(normalizeStringList(session.filesChanged));
+  return dedupeStrings(
+    normalizeStringList(session.touchedFiles)
+      .concat(normalizeStringList(session.filesTouched))
+      .concat(normalizeStringList(session.filesChanged))
+      .concat(normalizeStringList(session.changedFiles)),
+  );
+}
+
+function sanitizeLogLine(line: string): string {
+  const normalized = line
+    .replace(ANSI_ESCAPE_SEQUENCE_PATTERN, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized || LOG_CONTROL_LINE_PATTERN.test(normalized)) {
+    return "";
+  }
+  return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized;
+}
+
+function buildInlineLogExcerpt(session: BoxTargetSessionRecord): string[] {
+  return normalizeLogLineList(session.logExcerpt)
+    .concat(normalizeLogLineList(session.recentLogLines))
+    .concat(normalizeLogLineList(session.logLines))
+    .concat(normalizeLogLineList(session.recentLogs))
+    .map(sanitizeLogLine)
+    .filter(Boolean)
+    .slice(-LOG_EXCERPT_LINE_LIMIT);
+}
+
+function resolveLatestMeaningfulAction(
+  session: BoxTargetSessionRecord,
+  recentActions: AtlasSessionActionDto[],
+  lastTask: string,
+): string {
+  return normalizeOptionalString(session.latestMeaningfulAction)
+    || recentActions[0]?.summary
+    || lastTask
+    || "Waiting for the next product-facing task.";
 }
 
 function resolveSessionLane(role: string): string | null {
@@ -536,12 +644,6 @@ function buildLiveWorkerLogCandidates(session: AtlasSessionDto): string[] {
   return [...candidates];
 }
 
-function normalizeLogLine(line: string): string {
-  const normalized = line.replace(/\s+/g, " ").trim();
-  if (!normalized) return "";
-  return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized;
-}
-
 async function readSessionLogDetails(
   stateDir: string,
   session: AtlasSessionDto,
@@ -555,7 +657,7 @@ async function readSessionLogDetails(
       const raw = await fs.readFile(logPath, "utf8");
       const excerpt = raw
         .split(/\r?\n/)
-        .map(normalizeLogLine)
+        .map(sanitizeLogLine)
         .filter(Boolean)
         .slice(-LOG_EXCERPT_LINE_LIMIT);
       if (excerpt.length === 0) {
@@ -576,10 +678,15 @@ async function readSessionLogDetails(
   }
 
   return {
-    logExcerpt: [],
-    logSource: null,
-    logUpdatedAt: null,
-    freshnessAt: pickFreshestTimestamp(session.lastActiveAt, session.latestMeaningfulActionAt),
+    logExcerpt: session.logExcerpt,
+    logSource: session.logSource,
+    logUpdatedAt: session.logUpdatedAt,
+    freshnessAt: pickFreshestTimestamp(
+      session.freshnessAt,
+      session.logUpdatedAt,
+      session.lastActiveAt,
+      session.latestMeaningfulActionAt,
+    ),
   };
 }
 
@@ -649,10 +756,21 @@ export function bridgeBoxTargetSessionState(
     const { readiness, readinessLabel } = getAtlasSessionReadiness(status, lastTask);
     const { currentStage, currentStageLabel } = resolveSessionStage(session, status);
     const recentActions = buildRecentActions(history);
-    const latestMeaningfulAction = recentActions[0]?.summary || lastTask || "Waiting for the next product-facing task.";
-    const latestMeaningfulActionAt = recentActions[0]?.at || (typeof session.lastActiveAt === "string" ? session.lastActiveAt : null);
+    const latestMeaningfulAction = resolveLatestMeaningfulAction(session, recentActions, lastTask);
+    const latestMeaningfulActionAt = pickFreshestTimestamp(
+      normalizeOptionalString(session.latestMeaningfulActionAt),
+      normalizeOptionalString(session.actionUpdatedAt),
+      recentActions[0]?.at || null,
+      normalizeOptionalString(session.lastActiveAt),
+      normalizeOptionalString(session.updatedAt),
+    );
     const pullRequests = normalizePullRequests(session);
     const touchedFiles = normalizeTouchedFiles(session);
+    const logExcerpt = buildInlineLogExcerpt(session);
+    const logUpdatedAt = pickFreshestTimestamp(
+      normalizeOptionalString(session.logUpdatedAt),
+      normalizeOptionalString(session.updatedAt),
+    );
 
     cleaned[roleKey] = {
       role,
@@ -660,7 +778,7 @@ export function bridgeBoxTargetSessionState(
       lane,
       resolvedRole,
       logicalRole,
-      workerIdentityLabel: resolveWorkerIdentityLabel(role, resolvedRole, logicalRole),
+      workerIdentityLabel: resolveWorkerIdentityLabel(session, role, resolvedRole, logicalRole),
       status,
       statusLabel: getAtlasSessionStatusLabel(status),
       readiness,
@@ -679,12 +797,15 @@ export function bridgeBoxTargetSessionState(
       pullRequestCount: pullRequests.length,
       touchedFiles,
       touchedFileCount: touchedFiles.length,
-      logExcerpt: [],
-      logSource: null,
-      logUpdatedAt: null,
+      logExcerpt,
+      logSource: normalizeOptionalString(session.logSource),
+      logUpdatedAt,
       freshnessAt: pickFreshestTimestamp(
+        normalizeOptionalString(session.freshnessAt),
         typeof session.lastActiveAt === "string" ? session.lastActiveAt : null,
         latestMeaningfulActionAt,
+        logUpdatedAt,
+        normalizeOptionalString(session.updatedAt),
       ),
       needsInput: readiness === "action_needed",
       isResumable: isResumable(status, lastTask),

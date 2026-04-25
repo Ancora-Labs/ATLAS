@@ -121,6 +121,11 @@ describe("atlas server", () => {
               status: "working",
               lastTask: "Wire the ATLAS server boundary",
               lastActiveAt: "2026-04-21T12:00:00.000Z",
+              workerIdentityLabel: "Server quality worker",
+              currentStage: "snapshot_refresh",
+              currentStageLabel: "Refreshing snapshot",
+              latestMeaningfulAction: "Wired the focused-session contract",
+              latestMeaningfulActionAt: "2026-04-21T12:00:30.000Z",
               currentBranch: "feat/server-snapshot",
               createdPRs: ["https://example.com/pr/1"],
               filesTouched: ["src/atlas/server.ts", "src/atlas/routes/sessions.ts"],
@@ -255,19 +260,33 @@ describe("atlas server", () => {
         pipelineDetail: string;
         sessions: Array<{
           role: string;
+          workerIdentityLabel: string;
+          currentStageLabel: string;
           latestMeaningfulAction: string;
+          latestMeaningfulActionAt: string | null;
           logExcerpt: string[];
+          logSource: string | null;
           currentBranch: string | null;
+          pullRequests: string[];
           touchedFiles: string[];
+          freshnessAt: string | null;
         }>;
       };
     };
     assert.equal(firstPayload.ok, true);
     assert.equal(firstPayload.pageData.sessions[1]?.role, "quality-worker");
+    assert.equal(firstPayload.pageData.sessions[1]?.workerIdentityLabel, "Server quality worker");
+    assert.equal(firstPayload.pageData.sessions[1]?.currentStageLabel, "Refreshing snapshot");
     assert.equal(firstPayload.pageData.sessions[1]?.currentBranch, "feat/server-snapshot");
-    assert.equal(firstPayload.pageData.sessions[1]?.latestMeaningfulAction, "Wired the ATLAS snapshot route");
+    assert.equal(firstPayload.pageData.sessions[1]?.latestMeaningfulAction, "Wired the focused-session contract");
+    assert.equal(firstPayload.pageData.sessions[1]?.latestMeaningfulActionAt, "2026-04-21T12:00:30.000Z");
+    assert.equal(firstPayload.pageData.sessions[1]?.logExcerpt[0], "snapshot endpoint ready");
     assert.equal(firstPayload.pageData.sessions[1]?.logExcerpt.at(-1), "focused detail refresh ready");
+    assert.equal(firstPayload.pageData.sessions[1]?.logSource, "live_worker_quality-worker.log");
+    assert.equal(firstPayload.pageData.sessions[1]?.pullRequests[0], "https://example.com/pr/1");
     assert.equal(firstPayload.pageData.sessions[1]?.touchedFiles[0], "src/atlas/server.ts");
+    assert.ok(firstPayload.pageData.sessions[1]?.freshnessAt);
+    assert.ok(Date.parse(String(firstPayload.pageData.sessions[1]?.freshnessAt || "")) >= Date.parse("2026-04-21T12:00:30.000Z"));
 
     await fs.writeFile(path.join(stateDir, "pipeline_progress.json"), JSON.stringify({
       stage: "workers_finishing",
@@ -299,6 +318,11 @@ describe("atlas server", () => {
               status: "working",
               lastTask: "Refresh the focused session surface",
               lastActiveAt: "2026-04-21T12:05:00.000Z",
+              workerIdentityLabel: "Server quality worker",
+              currentStage: "snapshot_refresh",
+              currentStageLabel: "Refreshing snapshot",
+              latestMeaningfulAction: "Refreshed the focused session surface",
+              latestMeaningfulActionAt: "2026-04-21T12:05:30.000Z",
               currentBranch: "feat/live-refresh",
               createdPRs: ["https://example.com/pr/1"],
               filesTouched: ["src/atlas/routes/home.ts", "src/atlas/renderer.ts"],
@@ -330,8 +354,11 @@ describe("atlas server", () => {
     assert.equal(secondPayload.pageData.pipelineDetail, "Publishing the live refresh contract");
     assert.equal(secondPayload.pageData.sessions[1]?.currentBranch, "feat/live-refresh");
     assert.equal(secondPayload.pageData.sessions[1]?.latestMeaningfulAction, "Refreshed the focused session surface");
+    assert.equal(secondPayload.pageData.sessions[1]?.latestMeaningfulActionAt, "2026-04-21T12:05:30.000Z");
+    assert.equal(secondPayload.pageData.sessions[1]?.logExcerpt[0], "snapshot endpoint ready");
     assert.equal(secondPayload.pageData.sessions[1]?.logExcerpt.at(-1), "refreshed focused detail and log excerpt");
     assert.equal(secondPayload.pageData.sessions[1]?.touchedFiles[0], "src/atlas/routes/home.ts");
+    assert.ok(Date.parse(String(secondPayload.pageData.sessions[1]?.freshnessAt || "")) >= Date.parse("2026-04-21T12:05:30.000Z"));
 
     const legacyResponse = await requestText(port, "/api/snapshot?view=sessions&focusRole=quality-worker");
     assert.equal(legacyResponse.status, 200);

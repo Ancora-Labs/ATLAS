@@ -120,6 +120,11 @@ describe("atlas sessions route", () => {
           status: "blocked",
           lastTask: "Waiting for review feedback",
           lastActiveAt: "2026-04-22T08:24:00.000Z",
+          workerIdentityLabel: "Quality review worker",
+          currentStage: "review_wait",
+          currentStageLabel: "Waiting for approval",
+          latestMeaningfulAction: "Published the focused review summary",
+          latestMeaningfulActionAt: "2026-04-22T08:24:30.000Z",
           currentBranch: "feat/quality-review",
           createdPRs: ["https://example.com/pr/1"],
           filesTouched: ["src/atlas/server.ts"],
@@ -153,6 +158,8 @@ describe("atlas sessions route", () => {
       assert.match(res.body, /Trust-first work ledger/);
       assert.match(res.body, /Focused session detail/);
       assert.match(res.body, /quality-worker/);
+      assert.match(res.body, /Quality review worker/);
+      assert.match(res.body, /Waiting for approval/);
       assert.match(res.body, /Waiting for review feedback/);
       assert.match(res.body, /rail detail refresh ready/);
       assert.match(res.body, /feat\/quality-review/);

@@ -114,6 +114,11 @@ describe("atlas home route", () => {
           status: "working",
           lastTask: "Validate the ATLAS route coverage",
           lastActiveAt: "2026-04-22T08:14:00.000Z",
+          workerIdentityLabel: "Route quality worker",
+          currentStage: "snapshot_refresh",
+          currentStageLabel: "Refreshing detail",
+          latestMeaningfulAction: "Published the refreshed home detail contract",
+          latestMeaningfulActionAt: "2026-04-22T08:14:30.000Z",
           currentBranch: "feat/home-detail",
           createdPRs: ["https://example.com/pr/home"],
           filesTouched: ["src/atlas/routes/home.ts"],
@@ -146,6 +151,8 @@ describe("atlas home route", () => {
       assert.match(res.body, /What should ATLAS do next\?/);
       assert.match(res.body, /Focused session detail/);
       assert.match(res.body, /quality-worker/);
+      assert.match(res.body, /Route quality worker/);
+      assert.match(res.body, /Refreshing detail/);
       assert.match(res.body, /feat\/home-detail/);
       assert.match(res.body, /https:\/\/example\.com\/pr\/home/);
       assert.match(res.body, /src\/atlas\/routes\/home\.ts/);
