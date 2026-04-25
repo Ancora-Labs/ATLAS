@@ -670,6 +670,7 @@ function renderComposerScript(): string {
         : "No live session snapshot is available yet, but the shell still restores this draft and surface cleanly.");
   let saveTimer = null;
   let refreshTimer = null;
+  const snapshotPath = "/api/atlas/snapshot";
   const snapshotView = composerRoot.dataset.view || (window.location.pathname === "/sessions" ? "sessions" : "home");
 
   const escapeHtml = (value) => String(value ?? "")
@@ -822,22 +823,32 @@ function renderComposerScript(): string {
     if (sessionRailEl instanceof HTMLElement) sessionRailEl.innerHTML = renderSessionRail(pageData);
     if (focusedPanelEl instanceof HTMLElement) focusedPanelEl.outerHTML = renderFocusedSessionPanel(activeSession, pageData);
   };
+  const requestSnapshot = async () => {
+    const params = new URLSearchParams();
+    params.set("view", snapshotView);
+    const focusedSessionRole = String(composerRoot.dataset.focusedSessionRole || "");
+    if (focusedSessionRole) {
+      params.set("focusRole", focusedSessionRole);
+    }
+    if (bridge?.getSnapshot) {
+      return bridge.getSnapshot({
+        view: snapshotView === "sessions" ? "sessions" : "home",
+        focusRole: focusedSessionRole || null,
+      });
+    }
+
+    const response = await window.fetch(snapshotPath + "?" + params.toString(), {
+      headers: { accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      throw new Error("ATLAS snapshot request failed with status " + String(response.status) + ".");
+    }
+    return response.json();
+  };
   const refreshSnapshot = async () => {
     try {
-      const params = new URLSearchParams();
-      params.set("view", snapshotView);
-      const focusedSessionRole = String(composerRoot.dataset.focusedSessionRole || "");
-      if (focusedSessionRole) {
-        params.set("focusRole", focusedSessionRole);
-      }
-      const response = await window.fetch("/api/snapshot?" + params.toString(), {
-        headers: { accept: "application/json" },
-        cache: "no-store",
-      });
-      if (!response.ok) {
-        return;
-      }
-      applySnapshot(await response.json());
+      applySnapshot(await requestSnapshot());
     } catch (error) {
       console.error("[atlas] live snapshot refresh failed:", error);
     }

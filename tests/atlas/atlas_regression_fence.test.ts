@@ -71,6 +71,7 @@ describe("atlas regression fence", () => {
     const launcherPath = path.join(process.cwd(), "ATLAS.cmd");
     const launcher = await fs.readFile(launcherPath, "utf8");
     const desktopMain = await fs.readFile(path.join(process.cwd(), "electron", "main.ts"), "utf8");
+    const preloadSource = await fs.readFile(path.join(process.cwd(), "electron", "preload.ts"), "utf8");
     const onboardingHtml = await fs.readFile(path.join(process.cwd(), "electron", "renderer", "index.html"), "utf8");
     const rendererSource = await fs.readFile(path.join(process.cwd(), "src", "atlas", "renderer.ts"), "utf8");
     const layout = createAtlasDesktopPackageLayout(path.join("C:", "ATLAS Release Root"));
@@ -108,8 +109,11 @@ describe("atlas regression fence", () => {
     assert.match(rendererSource, /Persistent left sidebar/);
     assert.match(rendererSource, /Focused session detail/);
     assert.match(rendererSource, /Readable log excerpt/);
-    assert.match(rendererSource, /\/api\/snapshot/);
+    assert.match(rendererSource, /bridge\?\.getSnapshot/);
+    assert.match(rendererSource, /\/api\/atlas\/snapshot/);
     assert.doesNotMatch(rendererSource, /dashboard-card|hero-panel|metric-card|window-controls|traffic-light/i);
+    assert.match(preloadSource, /getSnapshot\(request: AtlasSnapshotRequestPayload = \{\}\)/);
+    assert.match(preloadSource, /atlas-desktop:get-snapshot/);
     assert.match(desktopMain, /requestSingleInstanceLock\(\)/);
     assert.match(desktopMain, /app\.on\("second-instance"/);
     assert.match(desktopMain, /restoreAndFocusAtlasWindow\(mainWindow\)/);
@@ -119,6 +123,9 @@ describe("atlas regression fence", () => {
     assert.match(desktopMain, /atlasDesktopResources\.onboardingHtmlPath/);
     assert.match(desktopMain, /buildAtlasDesktopLocationPath\(getPersistedProductLocation\(\)\)/);
     assert.match(desktopMain, /window\.loadURL\(new URL\(buildAtlasDesktopLocationPath\(getPersistedProductLocation\(\)\), atlasBootstrap\.serverUrl\)\.toString\(\)\)/);
+    assert.match(desktopMain, /ipcMain\.handle\("atlas-desktop:get-snapshot"/);
+    assert.match(desktopMain, /ATLAS_SNAPSHOT_PATH/);
+    assert.match(desktopMain, /rejected an untrusted window/);
   });
 
   it("[NEGATIVE] rejects empty portable folder names so the release folder cannot lose the root ATLAS.exe contract", () => {

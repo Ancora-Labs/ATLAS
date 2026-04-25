@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 
 import { type AtlasClarificationRunner } from "./clarification.js";
 import {
+  ATLAS_LEGACY_SNAPSHOT_PATH,
+  ATLAS_SNAPSHOT_PATH,
   handleAtlasHomeRequest,
   handleAtlasSnapshotRequest,
   type AtlasHomeRouteOptions,
@@ -69,7 +71,7 @@ async function routeAtlasRequest(
       return;
     }
 
-    if (url.pathname === "/api/snapshot") {
+    if (url.pathname === ATLAS_SNAPSHOT_PATH || url.pathname === ATLAS_LEGACY_SNAPSHOT_PATH) {
       await handleAtlasSnapshotRequest(req, res, options);
       return;
     }

@@ -25,7 +25,21 @@ export interface AtlasHomeRouteOptions {
   desktopSessionId?: string;
 }
 
+export const ATLAS_SNAPSHOT_PATH = "/api/atlas/snapshot";
+export const ATLAS_LEGACY_SNAPSHOT_PATH = "/api/snapshot";
+
 type AtlasSnapshotView = "home" | "sessions";
+
+export interface AtlasSnapshotRequestPayload {
+  view?: AtlasSnapshotView;
+  focusRole?: string | null;
+}
+
+export interface AtlasSnapshotResponse {
+  ok: true;
+  pageData: AtlasPageData;
+  snapshotAt: string;
+}
 
 interface AtlasDesktopBuildInfo {
   sessionId?: unknown;
@@ -260,11 +274,12 @@ export async function handleAtlasSnapshotRequest(
 
   try {
     const pageData = await buildAtlasPageData(options, resolveAtlasSnapshotLocation(req.url));
-    writeAtlasJsonResponse(res, {
+    const payload: AtlasSnapshotResponse = {
       ok: true,
       pageData,
       snapshotAt: new Date().toISOString(),
-    });
+    };
+    writeAtlasJsonResponse(res, payload);
   } catch (error) {
     console.error(`[atlas] snapshot route failed: ${String((error as Error)?.message || error)}`);
     res.writeHead(500, { "content-type": "application/json; charset=utf-8" });

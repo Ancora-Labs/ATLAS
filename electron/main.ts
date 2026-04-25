@@ -2,13 +2,12 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import { randomUUID } from "node:crypto";
 
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 
 import { loadConfig } from "../src/config.js";
 import {
   AtlasClarificationError,
   createAtlasClarificationPacket,
-  readAtlasClarificationStatus,
   type AtlasClarificationPacket,
 } from "../src/atlas/clarification.js";
 import {
@@ -25,6 +24,11 @@ import {
   type AtlasDesktopWindowBounds,
   writeAtlasDesktopState,
 } from "../src/atlas/desktop_state.js";
+import {
+  ATLAS_SNAPSHOT_PATH,
+  type AtlasSnapshotRequestPayload,
+  type AtlasSnapshotResponse,
+} from "../src/atlas/routes/home.js";
 import { startAtlasServer } from "../src/atlas/server.js";
 import {
   resolveAtlasDesktopResourcePaths,
@@ -283,15 +287,68 @@ async function loadInitialSurface(window: BrowserWindow): Promise<void> {
     throw new Error("ATLAS desktop runtime is not initialized.");
   }
 
-  const config = await loadConfig();
-  const stateDir = String(config.paths?.stateDir || "state");
-  const status = await readAtlasClarificationStatus(stateDir, atlasBootstrap.sessionId);
-  if (status.ready) {
-    await window.loadURL(new URL(buildAtlasDesktopLocationPath(getPersistedProductLocation()), atlasBootstrap.serverUrl).toString());
-    return;
+  await window.loadURL(new URL(buildAtlasDesktopLocationPath(getPersistedProductLocation()), atlasBootstrap.serverUrl).toString());
+}
+
+function assertTrustedAtlasSnapshotSender(event: IpcMainInvokeEvent): void {
+  if (!atlasBootstrap) {
+    throw new Error("ATLAS desktop bootstrap is not available.");
   }
 
-  await window.loadFile(atlasDesktopResources.onboardingHtmlPath);
+  const requestWindow = BrowserWindow.fromWebContents(event.sender);
+  if (!requestWindow || requestWindow !== mainWindow) {
+    throw new Error("ATLAS desktop snapshot bridge rejected an untrusted window.");
+  }
+
+  const senderUrl = String(event.sender.getURL() || "").trim();
+  if (!senderUrl) {
+    throw new Error("ATLAS desktop snapshot bridge requires a loaded ATLAS surface.");
+  }
+
+  const senderOrigin = new URL(senderUrl).origin;
+  const atlasOrigin = new URL(atlasBootstrap.serverUrl).origin;
+  if (senderOrigin !== atlasOrigin) {
+    throw new Error("ATLAS desktop snapshot bridge rejected a non-ATLAS origin.");
+  }
+}
+
+function buildAtlasSnapshotUrl(request: AtlasSnapshotRequestPayload = {}): URL {
+  if (!atlasBootstrap) {
+    throw new Error("ATLAS desktop bootstrap is not available.");
+  }
+
+  const snapshotUrl = new URL(ATLAS_SNAPSHOT_PATH, atlasBootstrap.serverUrl);
+  snapshotUrl.searchParams.set("view", request.view === "sessions" ? "sessions" : "home");
+  const focusRole = String(request.focusRole || "").trim();
+  if (focusRole) {
+    snapshotUrl.searchParams.set("focusRole", focusRole);
+  }
+  return snapshotUrl;
+}
+
+async function fetchAtlasDesktopSnapshot(
+  request: AtlasSnapshotRequestPayload = {},
+): Promise<AtlasSnapshotResponse> {
+  const snapshotUrl = buildAtlasSnapshotUrl(request);
+
+  try {
+    const response = await fetch(snapshotUrl, {
+      headers: { accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      throw new Error(`ATLAS snapshot request failed with status ${response.status}.`);
+    }
+
+    const payload = await response.json() as Partial<AtlasSnapshotResponse> & { ok?: boolean; };
+    if (payload.ok !== true || !payload.pageData || typeof payload.snapshotAt !== "string") {
+      throw new Error("ATLAS snapshot response was not valid JSON state.");
+    }
+    return payload as AtlasSnapshotResponse;
+  } catch (error) {
+    console.error(`[atlas] desktop snapshot refresh failed: ${String((error as Error)?.message || error)}`);
+    throw error;
+  }
 }
 
 function createAuthPopup(parentWindow: BrowserWindow, targetUrl: string): void {
@@ -467,6 +524,15 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("atlas-desktop:get-desktop-state", async () => {
     return atlasDesktopState || createDefaultAtlasDesktopState();
+  });
+  ipcMain.handle("atlas-desktop:get-snapshot", async (event, payload: AtlasSnapshotRequestPayload = {}) => {
+    try {
+      assertTrustedAtlasSnapshotSender(event);
+      return await fetchAtlasDesktopSnapshot(payload);
+    } catch (error) {
+      console.error(`[atlas] desktop snapshot IPC failed: ${String((error as Error)?.message || error)}`);
+      throw error;
+    }
   });
   ipcMain.handle("atlas-desktop:set-onboarding-draft", async (_event, payload: { draft?: string } = {}) => {
     try {

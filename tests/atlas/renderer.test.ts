@@ -175,7 +175,9 @@ describe("atlas renderer", () => {
     assert.match(html, /data-role="focused-session-log"/);
     assert.match(html, /data-view="home"/);
     assert.match(html, /data-role="product-composer-input"/);
-    assert.match(html, /window\.fetch\("\/api\/snapshot\?"/);
+    assert.match(html, /bridge\?\.getSnapshot/);
+    assert.match(html, /window\.fetch\(snapshotPath \+ "\?" \+ params\.toString\(\)/);
+    assert.match(html, /\/api\/atlas\/snapshot/);
     assert.match(html, /window\.setInterval/);
     assert.match(html, /setProductDraft/);
     assert.match(html, /setProductComposerFocus/);

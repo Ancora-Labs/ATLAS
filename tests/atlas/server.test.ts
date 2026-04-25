@@ -227,7 +227,8 @@ describe("atlas server", () => {
     assert.match(homeResponse.text, /Focused session detail/);
     assert.match(homeResponse.text, /snapshot endpoint ready/);
     assert.match(homeResponse.text, /data-role="product-composer-input"/);
-    assert.match(homeResponse.text, /window\.fetch\("\/api\/snapshot\?"/);
+    assert.match(homeResponse.text, /bridge\?\.getSnapshot/);
+    assert.match(homeResponse.text, /\/api\/atlas\/snapshot/);
     assert.doesNotMatch(homeResponse.text, /default browser|localhost page/i);
 
     assert.equal(sessionsResponse.status, 200);
@@ -246,7 +247,7 @@ describe("atlas server", () => {
   });
 
   it("serves a live JSON snapshot that reflects updated session detail and log excerpts", async () => {
-    const firstResponse = await requestText(port, "/api/snapshot?view=sessions&focusRole=quality-worker");
+    const firstResponse = await requestText(port, "/api/atlas/snapshot?view=sessions&focusRole=quality-worker");
     assert.equal(firstResponse.status, 200);
     const firstPayload = JSON.parse(firstResponse.text) as {
       ok: boolean;
@@ -323,7 +324,7 @@ describe("atlas server", () => {
       "refreshed focused detail and log excerpt",
     ].join("\n"), "utf8");
 
-    const secondResponse = await requestText(port, "/api/snapshot?view=sessions&focusRole=quality-worker");
+    const secondResponse = await requestText(port, "/api/atlas/snapshot?view=sessions&focusRole=quality-worker");
     assert.equal(secondResponse.status, 200);
     const secondPayload = JSON.parse(secondResponse.text) as typeof firstPayload;
     assert.equal(secondPayload.pageData.pipelineDetail, "Publishing the live refresh contract");
@@ -331,6 +332,9 @@ describe("atlas server", () => {
     assert.equal(secondPayload.pageData.sessions[1]?.latestMeaningfulAction, "Refreshed the focused session surface");
     assert.equal(secondPayload.pageData.sessions[1]?.logExcerpt.at(-1), "refreshed focused detail and log excerpt");
     assert.equal(secondPayload.pageData.sessions[1]?.touchedFiles[0], "src/atlas/routes/home.ts");
+
+    const legacyResponse = await requestText(port, "/api/snapshot?view=sessions&focusRole=quality-worker");
+    assert.equal(legacyResponse.status, 200);
   });
 
   it("keeps onboarding status session-bound while the home workspace remains available after relaunch", async () => {

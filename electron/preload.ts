@@ -2,6 +2,10 @@ import { contextBridge, ipcRenderer } from "electron";
 
 import type { AtlasClarificationPacket } from "../src/atlas/clarification.js";
 import type { AtlasDesktopBootstrap, AtlasDesktopState } from "../src/atlas/desktop_state.js";
+import type {
+  AtlasSnapshotRequestPayload,
+  AtlasSnapshotResponse,
+} from "../src/atlas/routes/home.js";
 
 interface AtlasDesktopClarificationSuccess {
   ok: true;
@@ -23,6 +27,9 @@ contextBridge.exposeInMainWorld("atlasDesktop", {
   },
   getDesktopState(): Promise<AtlasDesktopState> {
     return ipcRenderer.invoke("atlas-desktop:get-desktop-state");
+  },
+  getSnapshot(request: AtlasSnapshotRequestPayload = {}): Promise<AtlasSnapshotResponse> {
+    return ipcRenderer.invoke("atlas-desktop:get-snapshot", request);
   },
   setOnboardingDraft(draft: string): Promise<{ ok: true }> {
     return ipcRenderer.invoke("atlas-desktop:set-onboarding-draft", { draft });
