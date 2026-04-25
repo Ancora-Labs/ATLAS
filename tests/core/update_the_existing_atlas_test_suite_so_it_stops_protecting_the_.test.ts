@@ -162,7 +162,8 @@ describe("update the existing atlas test suite so it stops protecting the old sh
 
     assert.match(homeHtml, /Readable log excerpt/);
     assert.match(homeHtml, /premium shell regression locked/);
-    assert.match(homeHtml, /window\.fetch\("\/api\/snapshot\?"/);
+    assert.match(homeHtml, /bridge\?\.getSnapshot/);
+    assert.match(homeHtml, /\/api\/atlas\/snapshot/);
     assert.match(sessionsHtml, /Trust-first work ledger/);
     assert.match(sessionsHtml, /Pause lane/);
   });
