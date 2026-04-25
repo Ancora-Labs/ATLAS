@@ -9,7 +9,7 @@ import {
   type AtlasDesktopLocation,
   type AtlasDesktopProductSurface,
 } from "../desktop_state.js";
-import { renderAtlasHomeHtml, type AtlasPageData } from "../renderer.js";
+import { renderAtlasWorkspaceHtml, type AtlasPageData } from "../renderer.js";
 import {
   compareAtlasSessionsForDesktop,
   listAtlasSessions,
@@ -31,10 +31,7 @@ export const ATLAS_SNAPSHOT_PATH = "/api/atlas/snapshot";
 export const ATLAS_LEGACY_SNAPSHOT_PATH = "/api/snapshot";
 export const ATLAS_SNAPSHOT_TOKEN_HEADER = "x-atlas-desktop-snapshot-token";
 
-type AtlasSnapshotView = "home" | "sessions";
-
 export interface AtlasSnapshotRequestPayload {
-  view?: AtlasSnapshotView;
   focusRole?: string | null;
 }
 
@@ -98,9 +95,7 @@ async function deriveAtlasWorkspaceRuntimeState(
       sessionStartStatusDetail,
       sessionStartUpdatedAt,
       continuityStatusLabel: "Restoring focused detail",
-      continuityStatusDetail: focusedSessionRole
-        ? `The saved focus for ${focusedSessionRole} is waiting for its next live snapshot. The rail, composer, and detail pane stay available in the meantime.`
-        : "The saved focus is waiting for its next live snapshot. The rail, composer, and detail pane stay available in the meantime.",
+      continuityStatusDetail: "The saved focus is waiting for its next live snapshot. The rail, composer, and detail pane stay available in the meantime.",
     };
   }
 
@@ -119,10 +114,11 @@ export function resolveAtlasDesktopPageLocation(
   requestUrl: string | undefined,
   fallbackSurface: AtlasDesktopProductSurface,
 ): AtlasDesktopLocation {
-  const fallbackPath = fallbackSurface === "sessions" ? "/" : "/";
+  void fallbackSurface;
+  const fallbackPath = "/";
   return parseAtlasDesktopLocationFromUrl(String(requestUrl || fallbackPath))
     || {
-      surface: "home",
+      surface: "workspace",
       focusedSessionRole: null,
     };
 }
@@ -220,7 +216,7 @@ async function readDesktopBuildInfo(): Promise<{ sessionId: string; builtAt: str
 export async function buildAtlasPageData(
   options: AtlasHomeRouteOptions,
   location: AtlasDesktopLocation = {
-    surface: "home",
+    surface: "workspace",
     focusedSessionRole: null,
   },
 ): Promise<AtlasPageData> {
@@ -239,7 +235,7 @@ export async function buildAtlasPageData(
   );
 
   const pageData = {
-    title: "ATLAS Home",
+    title: "ATLAS Workspace",
     repoLabel: normalizeRepoLabel(options.targetRepo),
     hostLabel: String(options.hostLabel || "Windows host").trim() || "Windows host",
     shellCommand: String(options.shellCommand || ".\\ATLAS.cmd").trim() || ".\\ATLAS.cmd",
@@ -262,7 +258,7 @@ function resolveAtlasSnapshotLocation(requestUrl: string | undefined): AtlasDesk
   const parsedUrl = new URL(String(requestUrl || "/api/snapshot"), "http://127.0.0.1");
   const focusedSessionRole = String(parsedUrl.searchParams.get("focusRole") || "").trim() || null;
   return {
-    surface: "home",
+    surface: "workspace",
     focusedSessionRole,
   };
 }
@@ -279,12 +275,12 @@ export async function handleAtlasHomeRequest(
   }
 
   try {
-    const pageData = await buildAtlasPageData(options, resolveAtlasDesktopPageLocation(req.url, "home"));
-    writeAtlasHtmlResponse(res, renderAtlasHomeHtml(pageData));
+    const pageData = await buildAtlasPageData(options, resolveAtlasDesktopPageLocation(req.url, "workspace"));
+    writeAtlasHtmlResponse(res, renderAtlasWorkspaceHtml(pageData));
   } catch (error) {
     console.error(`[atlas] home route failed: ${String((error as Error)?.message || error)}`);
     res.writeHead(500, { "content-type": "text/html; charset=utf-8" });
-    res.end("<!doctype html><html><body><h1>ATLAS Home unavailable</h1><p>Review the route logs and try again.</p></body></html>");
+    res.end("<!doctype html><html><body><h1>ATLAS workspace unavailable</h1><p>Review the route logs and try again.</p></body></html>");
   }
 }
 

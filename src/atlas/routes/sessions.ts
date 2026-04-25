@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { renderAtlasSessionsHtml } from "../renderer.js";
+import { renderAtlasWorkspaceHtml } from "../renderer.js";
 import {
   buildAtlasPageData,
   resolveAtlasDesktopPageLocation,
@@ -24,15 +24,12 @@ export async function handleAtlasSessionsRequest(
   try {
     const pageData = await buildAtlasPageData(
       options,
-      resolveAtlasDesktopPageLocation(req.url, "home"),
+      resolveAtlasDesktopPageLocation(req.url, "workspace"),
     );
-    writeAtlasHtmlResponse(res, renderAtlasSessionsHtml({
-      ...pageData,
-      title: "ATLAS Sessions",
-    }));
+    writeAtlasHtmlResponse(res, renderAtlasWorkspaceHtml(pageData));
   } catch (error) {
     console.error(`[atlas] sessions route failed: ${String((error as Error)?.message || error)}`);
     res.writeHead(500, { "content-type": "text/html; charset=utf-8" });
-    res.end("<!doctype html><html><body><h1>ATLAS Sessions unavailable</h1><p>Review the route logs and try again.</p></body></html>");
+    res.end("<!doctype html><html><body><h1>ATLAS workspace unavailable</h1><p>Review the route logs and try again.</p></body></html>");
   }
 }
