@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { getPausedLanes } from "../core/medic_agent.js";
 import { getLaneForWorkerName, normalizeWorkerName } from "../core/role_registry.js";
-import { readJsonSafe } from "../core/fs_utils.js";
+import { READ_JSON_REASON, readJsonSafe } from "../core/fs_utils.js";
 import { listOpenTargetSessions } from "../core/target_session_state.js";
 
 export interface BoxTargetSessionHistoryEntry {
@@ -595,6 +595,44 @@ function extractSessionRecordMap(raw: unknown, fallbackPrefix: string): Record<s
   return extracted;
 }
 
+function isAtlasDesktopFallbackSessionRecord(session: unknown): boolean {
+  if (!isRecord(session)) {
+    return false;
+  }
+
+  return [
+    "workerIdentityLabel",
+    "currentStage",
+    "currentStageLabel",
+    "latestMeaningfulAction",
+    "latestMeaningfulActionAt",
+    "pullRequests",
+    "createdPRs",
+    "filesTouched",
+    "touchedFiles",
+    "logExcerpt",
+    "logSource",
+    "logUpdatedAt",
+    "freshnessAt",
+  ].some((key) => key in session);
+}
+
+async function readLegacyOpenSessionRecords(stateDir: string): Promise<Record<string, unknown>> {
+  const openSessionsPath = path.join(stateDir, "open_target_sessions.json");
+  const openSessionsResult = await readJsonSafe(openSessionsPath);
+  if (!openSessionsResult.ok) {
+    if (openSessionsResult.reason === READ_JSON_REASON.INVALID) {
+      console.error(`[atlas] failed to read open session state: ${String(openSessionsResult.error?.message || openSessionsResult.error)}`);
+    }
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(extractSessionRecordMap(openSessionsResult.data, "atlas-session"))
+      .filter(([, session]) => isAtlasDesktopFallbackSessionRecord(session)),
+  );
+}
+
 async function readCanonicalOpenSessionRecords(stateDir: string): Promise<Record<string, unknown>> {
   try {
     return await listOpenTargetSessions({ stateDir });
@@ -944,8 +982,11 @@ export async function readAtlasSessionReadModel(
     console.error(`[atlas] failed to read paused lanes: ${String((error as Error)?.message || error)}`);
   }
 
+  const canonicalOpenSessions = await readCanonicalOpenSessionRecords(options.stateDir);
   const openSessions = bridgeBoxTargetSessionState(
-    await readCanonicalOpenSessionRecords(options.stateDir),
+    Object.keys(canonicalOpenSessions).length > 0
+      ? canonicalOpenSessions
+      : await readLegacyOpenSessionRecords(options.stateDir),
     options.thinkingMap,
     pausedLanes,
   );
