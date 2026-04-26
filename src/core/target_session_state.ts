@@ -110,6 +110,6 @@ export async function readOpenTargetSessionState(
 export async function listOpenTargetSessions(
   options: TargetSessionStateOptions,
 ): Promise<Record<string, unknown>> {
-  const { sessions } = await readOpenTargetSessionState(options);
-  return sessions;
+  const openState = await readOpenTargetSessionState(options);
+  return openState.source === "canonical" ? openState.sessions : {};
 }

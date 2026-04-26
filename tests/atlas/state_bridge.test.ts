@@ -342,4 +342,37 @@ describe("state_bridge", () => {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it("[NEGATIVE] ignores legacy worker-session fallbacks when no canonical live session artifacts are available", async () => {
+    const tempRoot = await createTempRoot();
+    const stateDir = path.join(tempRoot, "state");
+
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, "worker_sessions.json"), JSON.stringify({
+        "quality-worker": {
+          role: "quality-worker",
+          status: "working",
+          lastTask: "Legacy worker state should stay hidden",
+          lastActiveAt: "2026-04-21T12:00:00.000Z",
+        },
+      }), "utf8");
+      await fs.writeFile(path.join(stateDir, "open_target_sessions.json"), JSON.stringify({
+        sessions: {
+          "quality-worker": {
+            role: "quality-worker",
+            status: "working",
+            lastTask: "Legacy open session state should stay hidden",
+            lastActiveAt: "2026-04-21T12:00:00.000Z",
+          },
+        },
+      }), "utf8");
+
+      const sessions = await listAtlasSessions({ stateDir });
+
+      assert.deepEqual(sessions, {});
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 });

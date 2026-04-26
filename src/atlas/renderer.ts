@@ -3,6 +3,8 @@ import {
   type AtlasSessionDto,
 } from "./state_bridge.js";
 
+export type AtlasMainPaneMode = "new-session" | "selected-session";
+
 export interface AtlasPageData {
   title: string;
   repoLabel: string;
@@ -22,6 +24,7 @@ export interface AtlasPageData {
   sessionStartUpdatedAt: string | null;
   continuityStatusLabel: string;
   continuityStatusDetail: string;
+  mainPaneMode?: AtlasMainPaneMode;
   focusedSessionRole: string | null;
   missingFocusedSnapshot: boolean;
   sessions: AtlasSessionDto[];
@@ -87,6 +90,16 @@ function getSelectedSession(sessions: AtlasSessionDto[], focusedSessionRole: str
     return null;
   }
   return sessions.find((session) => session.role === focusedSessionRole) || null;
+}
+
+function resolveMainPaneMode(
+  pageData: Pick<AtlasPageData, "mainPaneMode" | "focusedSessionRole" | "sessions">,
+  selectedSession: AtlasSessionDto | null = getSelectedSession(pageData.sessions, pageData.focusedSessionRole),
+): AtlasMainPaneMode {
+  if (pageData.mainPaneMode === "selected-session" && selectedSession) {
+    return "selected-session";
+  }
+  return selectedSession ? "selected-session" : "new-session";
 }
 
 function countSessions(sessions: AtlasSessionDto[]): AtlasSessionCounts {
@@ -257,7 +270,7 @@ function renderSidebarSessionRail(pageData: AtlasPageData): string {
 }
 
 function renderSidebar(pageData: AtlasPageData): string {
-  const hasSelection = Boolean(pageData.focusedSessionRole);
+  const hasSelection = resolveMainPaneMode(pageData) === "selected-session";
   return `<aside class="desktop-sidebar" aria-label="ATLAS desktop sidebar">
     <a class="sidebar-brand" href="/" data-role="brand-reset">
       <span class="brand-mark" aria-hidden="true">A</span>
@@ -492,7 +505,7 @@ function renderSelectedSessionView(session: AtlasSessionDto, pageData: AtlasPage
 
 function renderMainPane(pageData: AtlasPageData, counts: AtlasSessionCounts): string {
   const selectedSession = getSelectedSession(pageData.sessions, pageData.focusedSessionRole);
-  if (selectedSession) {
+  if (resolveMainPaneMode(pageData, selectedSession) === "selected-session" && selectedSession) {
     return renderSelectedSessionView(selectedSession, pageData);
   }
   return renderNewSessionView(pageData, counts);
@@ -568,6 +581,12 @@ function renderComposerScript(): string {
   const getSelectedSession = (pageData) => Array.isArray(pageData.sessions)
     ? pageData.sessions.find((session) => session.role === pageData.focusedSessionRole) || null
     : null;
+  const resolveMainPaneMode = (pageData, selectedSession = getSelectedSession(pageData)) => {
+    if (pageData?.mainPaneMode === "selected-session" && selectedSession) {
+      return "selected-session";
+    }
+    return selectedSession ? "selected-session" : "new-session";
+  };
   const getSessionActivityLabel = (session) => session.latestMeaningfulAction
     || session.lastTask
     || "Waiting for the next product-facing task.";
@@ -742,7 +761,7 @@ function renderComposerScript(): string {
   const renderMainPane = (pageData) => {
     const counts = countSessions(Array.isArray(pageData.sessions) ? pageData.sessions : []);
     const selectedSession = getSelectedSession(pageData);
-    return selectedSession
+    return resolveMainPaneMode(pageData, selectedSession) === "selected-session" && selectedSession
       ? renderSelectedSessionView(selectedSession, pageData)
       : renderNewSessionView(pageData, counts);
   };
@@ -957,10 +976,14 @@ function renderComposerScript(): string {
     const previousFocus = document.activeElement === input;
     const previousSelectionStart = input instanceof HTMLTextAreaElement ? input.selectionStart : null;
     const previousSelectionEnd = input instanceof HTMLTextAreaElement ? input.selectionEnd : null;
+    const selectedSession = getSelectedSession(pageData);
+    const mainPaneMode = resolveMainPaneMode(pageData, selectedSession);
     shellRoot.dataset.focusedSessionRole = String(pageData.focusedSessionRole || "");
+    shellRoot.dataset.mainPaneMode = mainPaneMode;
     shellRoot.dataset.missingFocusedSnapshot = pageData.missingFocusedSnapshot ? "true" : "false";
     shellRoot.dataset.hasLiveSessions = Array.isArray(pageData.sessions) && pageData.sessions.length > 0 ? "true" : "false";
     sessionRailHost.innerHTML = renderSessionRail(pageData);
+    mainPaneHost.dataset.mainPaneMode = mainPaneMode;
     mainPaneHost.innerHTML = renderMainPane(pageData);
     attachComposerListeners();
     queryComposerElements();
@@ -1031,6 +1054,7 @@ function renderComposerScript(): string {
 
 function renderAtlasAppShell(pageData: AtlasPageData): string {
   const counts = countSessions(pageData.sessions);
+  const mainPaneMode = resolveMainPaneMode(pageData);
 
   return `<!doctype html>
 <html lang="en">
@@ -1480,12 +1504,13 @@ function renderAtlasAppShell(pageData: AtlasPageData): string {
         class="shell"
         aria-label="ATLAS desktop surface"
         data-role="atlas-shell"
+        data-main-pane-mode="${escapeHtml(mainPaneMode)}"
         data-focused-session-role="${escapeHtml(pageData.focusedSessionRole || "")}"
         data-has-live-sessions="${counts.total > 0 ? "true" : "false"}"
         data-missing-focused-snapshot="${pageData.missingFocusedSnapshot ? "true" : "false"}">
         ${renderSidebar(pageData)}
         <section class="main-shell" aria-label="ATLAS work canvas">
-          <div data-role="main-pane-host">${renderMainPane(pageData, counts)}</div>
+          <div data-role="main-pane-host" data-main-pane-mode="${escapeHtml(mainPaneMode)}">${renderMainPane(pageData, counts)}</div>
         </section>
       </section>
     </main>

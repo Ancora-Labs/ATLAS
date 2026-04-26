@@ -236,6 +236,7 @@ describe("atlas server", () => {
     assert.equal(homeResponse.status, 200);
     assert.match(homeMarkup, /<title>ATLAS Workspace<\/title>/);
     assert.match(homeMarkup, /aria-label="ATLAS desktop surface"/);
+    assert.match(homeMarkup, /data-main-pane-mode="new-session"/);
     assert.match(homeMarkup, /aria-label="ATLAS desktop sidebar"/);
     assert.match(homeMarkup, /aria-label="ATLAS work canvas"/);
     assert.match(homeMarkup, /Start a new session from a clean workspace/);
@@ -248,6 +249,7 @@ describe("atlas server", () => {
     assert.doesNotMatch(homeResponse.text, /default browser|localhost page/i);
 
     assert.equal(focusedHomeResponse.status, 200);
+    assert.match(focusedHomeMarkup, /data-main-pane-mode="selected-session"/);
     assert.match(focusedHomeMarkup, /data-role="selected-session-view"/);
     assert.match(focusedHomeMarkup, /live-status-attention[\s\S]*?data-role="selected-session-status-light"/);
     assert.match(focusedHomeMarkup, /data-role="selected-session-actions"[\s\S]*?<a class="action-button primary" href="\/">New Session<\/a>/);
@@ -263,6 +265,7 @@ describe("atlas server", () => {
     const firstPayload = JSON.parse(firstResponse.text) as {
       ok: boolean;
       pageData: {
+        mainPaneMode?: string;
         pipelineDetail: string;
         sessions: Array<{
           role: string;
@@ -280,6 +283,7 @@ describe("atlas server", () => {
       };
     };
     assert.equal(firstPayload.ok, true);
+    assert.equal(firstPayload.pageData.mainPaneMode, "selected-session");
     assert.equal(firstPayload.pageData.sessions[1]?.role, "quality-worker");
     assert.equal(firstPayload.pageData.sessions[1]?.workerIdentityLabel, "Server quality worker");
     assert.equal(firstPayload.pageData.sessions[1]?.currentStageLabel, "Refreshing snapshot");
@@ -379,6 +383,7 @@ describe("atlas server", () => {
       continuitySource: string;
       continuityDetail: string;
       pageData: {
+        mainPaneMode?: string;
         focusedSessionRole: string | null;
         missingFocusedSnapshot: boolean;
         continuityStatusLabel: string;
@@ -389,6 +394,7 @@ describe("atlas server", () => {
 
     assert.equal(payload.ok, true);
     assert.equal(payload.continuitySource, "live");
+    assert.equal(payload.pageData.mainPaneMode, "new-session");
     assert.equal(payload.pageData.focusedSessionRole, null);
     assert.equal(payload.pageData.missingFocusedSnapshot, true);
     assert.equal(payload.pageData.continuityStatusLabel, "Selected detail unavailable");
@@ -645,6 +651,76 @@ describe("atlas server", () => {
 
     assert.equal(response.status, 307);
     assert.equal(response.headers.location, "/?focusRole=missing-worker");
+  });
+
+  it("[NEGATIVE] keeps the workspace on the blank new-session pane when only legacy session files exist", async () => {
+    const tempRoot = await createTempRoot();
+    const legacyOnlyStateDir = path.join(tempRoot, "state");
+    await fs.mkdir(legacyOnlyStateDir, { recursive: true });
+    await fs.writeFile(path.join(legacyOnlyStateDir, "worker_sessions.json"), JSON.stringify({
+      "quality-worker": {
+        role: "quality-worker",
+        status: "working",
+        lastTask: "Legacy worker state should stay hidden",
+        lastActiveAt: "2026-04-21T12:00:00.000Z",
+      },
+    }), "utf8");
+    await fs.writeFile(path.join(legacyOnlyStateDir, "open_target_sessions.json"), JSON.stringify({
+      sessions: {
+        "quality-worker": {
+          role: "quality-worker",
+          status: "working",
+          lastTask: "Legacy open session state should stay hidden",
+          lastActiveAt: "2026-04-21T12:00:00.000Z",
+        },
+      },
+    }), "utf8");
+
+    const legacyOnlyPort = await getFreePort();
+    const legacyOnlyServer = await startAtlasServer({
+      port: legacyOnlyPort,
+      stateDir: legacyOnlyStateDir,
+      targetRepo: "Ancora-Labs/ATLAS",
+    });
+
+    try {
+      const homeResponse = await requestText(legacyOnlyPort, "/?focusRole=quality-worker");
+      const snapshotResponse = await requestText(legacyOnlyPort, "/api/atlas/snapshot?focusRole=quality-worker");
+      const homeMarkup = homeResponse.text.split("<script>")[0] || homeResponse.text;
+
+      assert.equal(homeResponse.status, 200);
+      assert.match(homeMarkup, /data-main-pane-mode="new-session"/);
+      assert.match(homeMarkup, /data-role="new-session-view"/);
+      assert.doesNotMatch(homeMarkup, /data-role="selected-session-view"/);
+
+      assert.equal(snapshotResponse.status, 200);
+      const payload = JSON.parse(snapshotResponse.text) as {
+        ok: boolean;
+        continuitySource: string;
+        continuityDetail: string;
+        pageData: {
+          mainPaneMode?: string;
+          focusedSessionRole: string | null;
+          missingFocusedSnapshot: boolean;
+          sessions: Array<{ role: string }>;
+        };
+      };
+
+      assert.equal(payload.ok, true);
+      assert.equal(payload.continuitySource, "live");
+      assert.equal(payload.pageData.mainPaneMode, "new-session");
+      assert.equal(payload.pageData.focusedSessionRole, null);
+      assert.equal(payload.pageData.missingFocusedSnapshot, true);
+      assert.deepEqual(payload.pageData.sessions, []);
+      assert.match(payload.continuityDetail, /falls back to the blank new-session view instead of showing stale detail/);
+    } finally {
+      if (legacyOnlyServer.listening) {
+        await new Promise<void>((resolve) => {
+          legacyOnlyServer.close(() => resolve());
+        });
+      }
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("[NEGATIVE] serves the premium desktop shell even when the server starts against sparse state", async () => {

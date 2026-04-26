@@ -9,7 +9,11 @@ import {
   type AtlasDesktopLocation,
   type AtlasDesktopProductSurface,
 } from "../desktop_state.js";
-import { renderAtlasWorkspaceHtml, type AtlasPageData } from "../renderer.js";
+import {
+  renderAtlasWorkspaceHtml,
+  type AtlasMainPaneMode,
+  type AtlasPageData,
+} from "../renderer.js";
 import {
   compareAtlasSessionsForDesktop,
   listAtlasSessions,
@@ -169,6 +173,10 @@ function resolveFocusedSessionRole(
   return match?.role || null;
 }
 
+function resolveAtlasMainPaneMode(focusedSessionRole: string | null): AtlasMainPaneMode {
+  return focusedSessionRole ? "selected-session" : "new-session";
+}
+
 export function deriveAtlasHomeReadiness(
   sessions: AtlasSessionDto[],
 ): Pick<AtlasPageData, "homePrimaryActionLabel" | "homeReadinessHeading" | "homeReadinessDetail"> {
@@ -278,6 +286,7 @@ export async function buildAtlasPageData(
     updatedAt: typeof pipelineProgress?.updatedAt === "string" ? pipelineProgress.updatedAt : null,
     buildSessionId: buildInfo.sessionId,
     buildTimestamp: buildInfo.builtAt,
+    mainPaneMode: resolveAtlasMainPaneMode(focusedSessionRole),
     focusedSessionRole,
     missingFocusedSnapshot,
     ...runtimeState,
