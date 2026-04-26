@@ -21,26 +21,35 @@ interface AtlasDesktopClarificationFailure {
 
 type AtlasDesktopClarificationResult = AtlasDesktopClarificationSuccess | AtlasDesktopClarificationFailure;
 
+async function invokeAtlasDesktop<T>(channel: string, payload?: unknown): Promise<T> {
+  try {
+    return await ipcRenderer.invoke(channel, payload);
+  } catch (error) {
+    console.error(`[atlas] preload bridge invoke failed for ${channel}:`, error);
+    throw error;
+  }
+}
+
 contextBridge.exposeInMainWorld("atlasDesktop", {
   getBootstrap(): Promise<AtlasDesktopBootstrap> {
-    return ipcRenderer.invoke("atlas-desktop:get-bootstrap");
+    return invokeAtlasDesktop<AtlasDesktopBootstrap>("atlas-desktop:get-bootstrap");
   },
   getWorkspaceState(): Promise<AtlasDesktopState> {
-    return ipcRenderer.invoke("atlas-desktop:get-workspace-state");
+    return invokeAtlasDesktop<AtlasDesktopState>("atlas-desktop:get-workspace-state");
   },
   refreshSnapshot(request: AtlasSnapshotRequestPayload = {}): Promise<AtlasSnapshotResponse> {
-    return ipcRenderer.invoke("atlas-desktop:refresh-snapshot", request);
+    return invokeAtlasDesktop<AtlasSnapshotResponse>("atlas-desktop:refresh-snapshot", request);
   },
   getSnapshot(request: AtlasSnapshotRequestPayload = {}): Promise<AtlasSnapshotResponse> {
-    return ipcRenderer.invoke("atlas-desktop:get-snapshot", request);
+    return invokeAtlasDesktop<AtlasSnapshotResponse>("atlas-desktop:get-snapshot", request);
   },
   setWorkspaceDraft(draft: string): Promise<{ ok: true }> {
-    return ipcRenderer.invoke("atlas-desktop:set-workspace-draft", { draft });
+    return invokeAtlasDesktop<{ ok: true }>("atlas-desktop:set-workspace-draft", { draft });
   },
   setWorkspaceComposerFocus(focused: boolean): Promise<{ ok: true }> {
-    return ipcRenderer.invoke("atlas-desktop:set-workspace-composer-focus", { focused });
+    return invokeAtlasDesktop<{ ok: true }>("atlas-desktop:set-workspace-composer-focus", { focused });
   },
   startSession(objective: string): Promise<AtlasDesktopClarificationResult> {
-    return ipcRenderer.invoke("atlas-desktop:start-session", { objective });
+    return invokeAtlasDesktop<AtlasDesktopClarificationResult>("atlas-desktop:start-session", { objective });
   },
 });

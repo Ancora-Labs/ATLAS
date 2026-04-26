@@ -448,6 +448,7 @@ async function createMainWindow(): Promise<BrowserWindow> {
       nodeIntegration: false,
     },
   });
+  window.removeMenu();
 
   window.once("ready-to-show", () => {
     if (!window.isDestroyed()) {

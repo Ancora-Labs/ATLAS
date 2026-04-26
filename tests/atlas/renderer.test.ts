@@ -48,12 +48,12 @@ function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto
     freshnessAt: "2026-04-21T12:01:00.000Z",
     freshnessState: "live",
     freshnessLabel: "Live update within 5 minutes",
-    freshnessPolicyDetail: "ATLAS verified a session update within the last 5 minutes.",
-    logStateLabel: "Readable log ready",
-    liveStatusTone: "active",
-    liveStatusLabel: "Live",
-    liveStatusAssistiveText: "Athena is currently running live work.",
-    liveStatusPulse: true,
+     freshnessPolicyDetail: "ATLAS verified a session update within the last 5 minutes.",
+     logStateLabel: "Readable log ready",
+     liveStatusTone: "active",
+     liveStatusLabel: "Active",
+     liveStatusAssistiveText: "Athena is actively running live work.",
+     liveStatusPulse: true,
     needsInput: false,
     isResumable: true,
     isPaused: false,
@@ -148,10 +148,10 @@ describe("atlas renderer", () => {
     assert.match(documentMarkup, /data-role="brand-reset"/);
     assert.match(documentMarkup, /data-role="new-session-link"/);
     assert.match(documentMarkup, /data-role="session-rail"/);
-    assert.match(documentMarkup, /href="\/" data-role="brand-reset"/);
-    assert.match(documentMarkup, /href="\/"[\s\S]*?data-role="new-session-link"/);
-    assert.match(documentMarkup, /href="\/\?focusRole=Athena"[\s\S]*?data-session-role="Athena"/);
-    assert.match(documentMarkup, /href="\/\?focusRole=Prometheus"[\s\S]*?data-session-role="Prometheus"/);
+    assert.match(documentMarkup, /href="\/" data-role="brand-reset" data-focus-role=""/);
+    assert.match(documentMarkup, /href="\/"[\s\S]*?data-role="new-session-link"[\s\S]*?data-focus-role=""/);
+    assert.match(documentMarkup, /href="\/\?focusRole=Athena"[\s\S]*?data-focus-role="Athena"[\s\S]*?data-session-role="Athena"/);
+    assert.match(documentMarkup, /href="\/\?focusRole=Prometheus"[\s\S]*?data-focus-role="Prometheus"[\s\S]*?data-session-role="Prometheus"/);
     assert.match(documentMarkup, /data-role="new-session-view"/);
     assert.match(documentMarkup, /Start a new session from a clean workspace/);
     assert.match(documentMarkup, /What should ATLAS do next\?/);
@@ -159,10 +159,14 @@ describe("atlas renderer", () => {
     assert.match(documentMarkup, /data-role="runtime-stage-label"/);
     assert.match(documentMarkup, /data-role="session-row-status-light"/);
     assert.match(documentMarkup, /Live detail verified/);
+    assert.match(documentMarkup, /aria-live="polite"[\s\S]*?data-role="session-row-status-light"/);
+    assert.match(html, /bridge\?\.getSnapshot/);
+    assert.match(html, /window\.history\.pushState/);
+    assert.match(html, /window\.addEventListener\("popstate"/);
     assert.match(html, /bridge\?\.refreshSnapshot/);
     assert.match(html, /ATLAS snapshot refresh requires the Electron desktop bridge\./);
     assert.doesNotMatch(documentMarkup, /data-role="selected-session-view"/);
-    assert.doesNotMatch(documentMarkup, /dashboard|window-controls|traffic-light|hero-panel/i);
+    assert.doesNotMatch(documentMarkup, /dashboard|window-controls|traffic-light|hero-panel|workspace handoff|compatibility shell/i);
   });
 
   it("renders the selected session as the dominant right-hand detail view", () => {
@@ -177,8 +181,9 @@ describe("atlas renderer", () => {
     assert.match(documentMarkup, /data-role="selected-session-name">Athena/);
     assert.match(documentMarkup, /data-role="selected-session-status-light"/);
     assert.match(documentMarkup, /live-status-active[\s\S]*?data-role="selected-session-status-light"/);
+    assert.match(documentMarkup, /Active<\/span>/);
     assert.match(documentMarkup, /live-status-pulse/);
-    assert.match(documentMarkup, /aria-label="Athena is currently running live work\."/);
+    assert.match(documentMarkup, /aria-label="Athena is actively running live work\."/);
     assert.match(documentMarkup, /data-role="selected-session-identity"/);
     assert.match(documentMarkup, /data-role="selected-session-stage"/);
     assert.match(documentMarkup, /data-role="selected-session-prs"/);
@@ -191,7 +196,7 @@ describe("atlas renderer", () => {
     assert.match(documentMarkup, /https:\/\/example\.com\/pr\/1/);
     assert.match(documentMarkup, /focused panel refreshed/);
     assert.match(documentMarkup, /href="\/"[\s\S]*?data-role="new-session-link"/);
-    assert.match(documentMarkup, /data-role="selected-session-actions"[\s\S]*?<a class="action-button primary" href="\/">New Session<\/a>/);
+    assert.match(documentMarkup, /data-role="selected-session-actions"[\s\S]*?<a class="action-button primary" href="\/" data-role="selected-session-new-session-link" data-focus-role="">New Session<\/a>/);
     assert.match(documentMarkup, /live-status-attention[\s\S]*?data-role="session-row-status-light"/);
     assert.match(documentMarkup, /aria-label="Prometheus needs attention before it can continue\."/);
     assert.doesNotMatch(documentMarkup, /data-role="product-composer-input"/);

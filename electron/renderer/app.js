@@ -3,9 +3,6 @@ import { getDesktopLayoutMode } from "./layout.js";
 const statusEl = document.querySelector("[data-role='status']");
 const detailEl = document.querySelector("[data-role='detail']");
 const errorEl = document.querySelector("[data-role='error']");
-const repoEl = document.querySelector("[data-role='repo']");
-const sessionEl = document.querySelector("[data-role='session']");
-const shellEl = document.querySelector("[data-role='shell']");
 const workspaceUrlEl = document.querySelector("[data-role='workspace-url']");
 
 function setLayoutMode() {
@@ -21,29 +18,33 @@ function setStatus(message, detail = "") {
   }
 }
 
+function buildWorkspaceUrl(bootstrapData, workspaceState) {
+  const workspaceUrl = new URL("/", bootstrapData.serverUrl);
+  const focusedSessionRole = String(workspaceState?.focusedSessionRole || "").trim();
+  if (focusedSessionRole) {
+    workspaceUrl.searchParams.set("focusRole", focusedSessionRole);
+  }
+  return workspaceUrl.toString();
+}
+
 async function bootstrap() {
   if (!window.atlasDesktop?.getBootstrap) {
     throw new Error("ATLAS desktop bridge is unavailable.");
   }
 
   const bootstrapData = await window.atlasDesktop.getBootstrap();
-  const workspaceUrl = new URL("/", bootstrapData.serverUrl).toString();
-  if (repoEl) {
-    repoEl.textContent = bootstrapData.targetRepo || "Target repo";
-  }
-  if (sessionEl) {
-    sessionEl.textContent = bootstrapData.sessionId;
-  }
-  if (shellEl) {
-    shellEl.textContent = ".\\ATLAS.cmd";
-  }
+  const workspaceState = window.atlasDesktop?.getWorkspaceState
+    ? await window.atlasDesktop.getWorkspaceState()
+    : null;
+  const workspaceUrl = buildWorkspaceUrl(bootstrapData, workspaceState);
+
   if (workspaceUrlEl) {
     workspaceUrlEl.textContent = workspaceUrl;
   }
 
   setStatus(
-    "Opening the ATLAS desktop workspace.",
-    "This packaged renderer remains as a portable compatibility handoff while the native window moves into the live workspace surface.",
+    "Opening the ATLAS workspace.",
+    "ATLAS restores the current desktop route and keeps the native shell on the same workspace surface.",
   );
   window.location.replace(workspaceUrl);
 }
@@ -52,12 +53,12 @@ window.addEventListener("resize", setLayoutMode);
 setLayoutMode();
 
 bootstrap().catch((error) => {
-  console.error("[atlas] workspace handoff bootstrap failed:", error);
+  console.error("[atlas] workspace bootstrap failed:", error);
   if (errorEl) {
-    errorEl.textContent = String(error?.message || error || "ATLAS desktop workspace handoff failed.");
+    errorEl.textContent = String(error?.message || error || "ATLAS desktop workspace startup failed.");
   }
   setStatus(
-    "Workspace handoff failed.",
-    "ATLAS could not read the packaged desktop bootstrap, so the live workspace could not open from this compatibility shell.",
+    "Workspace startup failed.",
+    "ATLAS could not restore the workspace route from the desktop bridge.",
   );
 });

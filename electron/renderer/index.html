@@ -7,392 +7,134 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg: #0a0f14;
-      --panel: rgba(12, 18, 24, 0.92);
-      --panel-strong: rgba(15, 23, 31, 0.98);
-      --line: rgba(154, 179, 204, 0.16);
-      --line-strong: rgba(154, 179, 204, 0.28);
-      --text: #f3f7fb;
-      --muted: #9caec1;
-      --accent: #a7cdf8;
-      --accent-strong: #dbeeff;
-      --danger: #ffb3b3;
-      --shadow: 0 28px 72px rgba(0, 0, 0, 0.34);
+      --bg: #050505;
+      --panel: rgba(10, 10, 10, 0.96);
+      --line: rgba(255, 255, 255, 0.1);
+      --text: #f4f4f4;
+      --muted: #b8b8b8;
+      --accent: #4dd68a;
+      --danger: #ff6b6b;
     }
 
     * {
       box-sizing: border-box;
     }
 
+    html,
+    body {
+      min-height: 100%;
+    }
+
     body {
       margin: 0;
       min-height: 100vh;
       color: var(--text);
-      font-family: "Segoe UI Variable", "Segoe UI", Inter, sans-serif;
+      font-family: "Segoe UI Variable Display", "Segoe UI", Inter, sans-serif;
       background:
-        radial-gradient(circle at top left, rgba(126, 172, 226, 0.16), transparent 24%),
-        linear-gradient(180deg, #0a0f14 0%, #0d131a 48%, #101922 100%);
-    }
-
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 72px),
-        linear-gradient(90deg, rgba(255, 255, 255, 0.03), transparent 1px);
-      opacity: 0.34;
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 18%),
+        linear-gradient(180deg, #030303 0%, var(--bg) 38%, #0a0a0a 100%);
     }
 
     main {
       min-height: 100vh;
       display: grid;
       place-items: center;
-      padding: 28px;
+      padding: 24px;
     }
 
-    .shell {
-      width: min(1220px, 100%);
-      border-radius: 24px;
-      border: 1px solid var(--line);
-      background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 160px), var(--panel);
-      box-shadow: var(--shadow);
-      overflow: hidden;
-    }
-
-    .shell-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      padding: 14px 20px;
-      border-bottom: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.02);
-    }
-
-    .shell-brand {
+    .workspace-loader {
+      width: min(520px, 100%);
       display: grid;
-      gap: 4px;
+      gap: 18px;
+      padding: 24px;
+      border-radius: 28px;
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(20, 20, 20, 0.96), rgba(11, 11, 11, 0.98));
     }
 
-    .eyebrow,
-    .meta-label {
+    .eyebrow {
       color: var(--muted);
-      font-size: 11px;
-      font-weight: 600;
+      font-size: 12px;
       letter-spacing: 0.12em;
       text-transform: uppercase;
     }
 
-    .shell-brand strong,
     h1,
-    h2,
-    p {
+    p,
+    code,
+    strong {
       margin: 0;
     }
 
-    .shell-pills {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
+    h1 {
+      font-size: clamp(30px, 5vw, 42px);
+      letter-spacing: -0.05em;
+      line-height: 1.02;
     }
 
-    .shell-pill {
-      padding: 8px 12px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.03);
-      color: #d4dfeb;
-      font-size: 12px;
-      line-height: 1;
-    }
-
-    .body-grid {
-      display: grid;
-      gap: 24px;
-      padding: 24px;
-    }
-
-    body[data-layout="split"] .body-grid {
-      grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
-      align-items: stretch;
-    }
-
-    .rail,
-    .workspace {
-      display: grid;
-      gap: 18px;
-    }
-
-    .workspace {
-      grid-template-rows: minmax(0, 1fr) auto;
-    }
-
-    .workspace-main {
-      display: grid;
-      gap: 18px;
-      align-content: start;
-    }
-
-    .card {
-      padding: 18px;
-      border-radius: 20px;
-      border: 1px solid var(--line);
-      background: rgba(9, 14, 20, 0.72);
-    }
-
-    .hero {
-      display: grid;
-      gap: 16px;
-      padding: 22px;
-      border: 1px solid var(--line-strong);
-      background: linear-gradient(180deg, rgba(167, 205, 248, 0.08), rgba(9, 14, 20, 0.72));
-    }
-
-    .hero h1 {
-      font-size: clamp(28px, 3.5vw, 38px);
-      line-height: 1.08;
-      letter-spacing: -0.03em;
-    }
-
-    .hero p,
-    .support-copy,
-    .composer-help {
-      color: #d4dfeb;
+    p,
+    code {
+      color: var(--muted);
       line-height: 1.6;
-    }
-
-    .status-block {
-      display: grid;
-      gap: 8px;
-      padding: 16px 18px;
-      border-radius: 18px;
-      border: 1px solid var(--line);
-      background: rgba(7, 12, 18, 0.68);
-    }
-
-    .status-block strong {
-      font-size: 15px;
-      line-height: 1.4;
-    }
-
-    .meta-grid {
-      display: grid;
-      gap: 14px;
-    }
-
-    .meta-grid code,
-    textarea {
-      font: inherit;
-      font-family: Consolas, "Cascadia Code", monospace;
-    }
-
-    .meta-grid strong,
-    .meta-grid code {
-      display: block;
-      margin-top: 8px;
       word-break: break-word;
     }
 
-    form {
-      display: grid;
-      gap: 18px;
+    code {
+      display: block;
+      padding: 12px 14px;
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      font-family: "Cascadia Code", Consolas, monospace;
     }
 
-    .composer {
-      display: grid;
-      gap: 18px;
-      padding: 22px;
-      border-color: var(--line-strong);
-      background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(9, 14, 20, 0.9));
-    }
-
-    .composer-header {
-      display: grid;
-      gap: 12px;
-    }
-
-    .composer-help {
-      max-width: 72ch;
-    }
-
-    .composer-form {
-      gap: 14px;
-    }
-
-    .composer-field {
-      display: grid;
-      gap: 10px;
-    }
-
-    .composer-actions {
-      display: flex;
-      flex-wrap: wrap;
+    .status-row {
+      display: inline-flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-    }
-
-    textarea {
-      width: 100%;
-      min-height: 170px;
-      padding: 18px;
-      border-radius: 20px;
-      border: 1px solid var(--line-strong);
-      background: var(--panel-strong);
-      color: var(--text);
-      font-size: 14px;
-      line-height: 1.6;
-      resize: vertical;
-    }
-
-    textarea:focus,
-    button:focus-visible {
-      outline: 2px solid var(--accent-strong);
-      outline-offset: 2px;
-    }
-
-    button {
-      border: 0;
+      gap: 10px;
+      min-height: 36px;
+      padding: 8px 14px;
       border-radius: 999px;
-      padding: 14px 18px;
-      font: inherit;
-      font-weight: 700;
-      letter-spacing: 0.01em;
-      color: #09111a;
-      background: linear-gradient(180deg, var(--accent-strong), var(--accent));
-      cursor: pointer;
-      justify-self: start;
-      min-width: 240px;
-      box-shadow: 0 10px 28px rgba(167, 205, 248, 0.22);
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.04);
     }
 
-    button[disabled] {
-      cursor: wait;
-      opacity: 0.78;
+    .status-light {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--accent);
+      animation: atlas-loader-pulse 1.8s ease-in-out infinite;
     }
 
     .error {
       min-height: 1.4em;
       color: var(--danger);
-      margin: 0;
-      flex: 1 1 220px;
     }
 
-    .support-list {
-      display: grid;
-      gap: 10px;
-      margin: 0;
-      padding-left: 18px;
-      color: #d4dfeb;
-    }
-
-    @media (max-width: 1099px) {
-      main {
-        padding: 18px;
+    @keyframes atlas-loader-pulse {
+      0%,
+      100% {
+        box-shadow: 0 0 0 0 rgba(77, 214, 138, 0.12);
       }
-
-      .body-grid {
-        padding: 18px;
-      }
-
-      .shell {
-        border-radius: 20px;
-      }
-
-      .shell-header,
-      .composer-actions {
-        align-items: start;
-        flex-direction: column;
-      }
-
-      button {
-        width: 100%;
+      50% {
+        box-shadow: 0 0 0 6px rgba(77, 214, 138, 0.04);
       }
     }
   </style>
 </head>
 <body>
   <main>
-      <section class="shell" aria-label="ATLAS desktop workspace handoff">
-        <header class="shell-header">
-          <div class="shell-brand">
-            <span class="eyebrow">ATLAS Desktop</span>
-            <strong>Workspace handoff</strong>
-          </div>
-          <div class="shell-pills" aria-label="Desktop shell context">
-            <span class="shell-pill">Native Windows title bar</span>
-            <span class="shell-pill">Portable renderer compatibility</span>
-          </div>
-        </header>
-
-      <div class="body-grid">
-        <aside class="rail">
-          <section class="card hero">
-            <div class="eyebrow">Windows-first shell</div>
-            <h1>Opening the live ATLAS workspace directly from the packaged desktop shell.</h1>
-            <p>This renderer is only a compatibility handoff that preserves the portable Windows bundle shape while the native window moves into the desktop workspace.</p>
-          </section>
-
-          <section class="status-block" aria-live="polite">
-            <span class="eyebrow">Desktop status</span>
-            <strong data-role="status">Loading the desktop bootstrap...</strong>
-          </section>
-
-          <section class="card meta-grid" aria-label="Desktop session metadata">
-            <div>
-              <span class="meta-label">Target repo</span>
-              <strong data-role="repo">Loading target repository...</strong>
-            </div>
-            <div>
-              <span class="meta-label">Desktop session</span>
-              <code data-role="session">Loading session...</code>
-            </div>
-            <div>
-              <span class="meta-label">Launcher</span>
-              <code data-role="shell">.\\ATLAS.cmd</code>
-            </div>
-            <div>
-              <span class="meta-label">Workspace URL</span>
-              <code data-role="workspace-url">Resolving workspace...</code>
-            </div>
-          </section>
-        </aside>
-
-        <section class="workspace">
-          <section class="workspace-main">
-            <section class="card">
-              <div class="eyebrow">Desktop workspace redirect</div>
-              <h2>The packaged shell now hands off directly to the workspace surface.</h2>
-              <p class="support-copy">ATLAS keeps the native Windows app contract unchanged, restores the desktop session context, and redirects this renderer into the live workspace instead of showing a separate startup mode.</p>
-            </section>
-
-            <section class="card" aria-label="What ATLAS does next">
-              <div class="eyebrow">What ATLAS does next</div>
-              <ol class="support-list">
-                <li>Read the packaged desktop bootstrap from the Electron preload bridge.</li>
-                <li>Resolve the live workspace URL for the current desktop session.</li>
-                <li>Replace this compatibility screen with the main ATLAS workspace in the same window.</li>
-              </ol>
-            </section>
-          </section>
-
-          <section class="composer card" aria-label="Workspace handoff status">
-            <div class="composer-header">
-              <div>
-                <div class="eyebrow">Workspace handoff</div>
-                <h2>Redirecting into the live desktop workspace.</h2>
-              </div>
-              <p class="composer-help" data-role="detail"></p>
-            </div>
-            <p class="support-copy">If the redirect does not complete, review the error below. The live workspace remains the intended first-class startup surface for the ATLAS desktop app.</p>
-            <div class="composer-actions">
-              <p class="error" data-role="error"></p>
-            </div>
-          </section>
-        </section>
+    <section class="workspace-loader" aria-label="ATLAS desktop workspace">
+      <div class="eyebrow">ATLAS Desktop</div>
+      <h1>Opening the workspace.</h1>
+      <div class="status-row" aria-live="polite" aria-atomic="true">
+        <span class="status-light" aria-hidden="true"></span>
+        <strong data-role="status">Reading the desktop bootstrap...</strong>
       </div>
+      <p data-role="detail">ATLAS keeps the native window on the same desktop surface while it restores the current workspace route.</p>
+      <code data-role="workspace-url">Resolving workspace route...</code>
+      <p class="error" data-role="error"></p>
     </section>
   </main>
   <script type="module" src="./app.js"></script>

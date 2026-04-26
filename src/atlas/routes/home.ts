@@ -67,7 +67,7 @@ function summarizeAtlasFreshnessPolicy(
   if (sessions.length === 0) {
     return {
       continuityStatusLabel: "Waiting for live detail",
-      continuityStatusDetail: "ATLAS will open selected-session detail as soon as the next tracked session snapshot is written.",
+      continuityStatusDetail: "ATLAS keeps the workspace root ready and opens selected-session detail as soon as the next tracked session snapshot is written.",
     };
   }
 
@@ -107,8 +107,8 @@ async function deriveAtlasWorkspaceRuntimeState(
 
   let sessionStartStatusLabel = hasLiveSessions ? "New session available" : "Ready for first session";
   let sessionStartStatusDetail = hasLiveSessions
-    ? "The left rail is showing live tracked sessions, and the main pane can switch back to a blank new-session start screen at any time."
-    : "Start a session from the blank workspace composer to seed the first live workflow.";
+    ? "The left rail is showing live tracked sessions, and the main pane can switch back to the clean new-session workspace at any time."
+    : "Start a session from the workspace composer to seed the first live workflow.";
   let sessionStartUpdatedAt: string | null = null;
 
   if (desktopSessionId) {
@@ -119,12 +119,12 @@ async function deriveAtlasWorkspaceRuntimeState(
         sessionStartStatusLabel = "Stored session brief";
         sessionStartStatusDetail = hasLiveSessions
           ? "ATLAS keeps the most recent desktop brief for recovery, but the brief is never treated as current live worker state."
-          : "ATLAS stored the last desktop brief for recovery, and it will wait for a live session snapshot before showing selected-session detail.";
+          : "ATLAS stored the last desktop brief for recovery, and the workspace stays on the new-session canvas until a live session snapshot is written.";
       }
     } catch (error) {
       console.error(`[atlas] failed to read desktop session brief status: ${String((error as Error)?.message || error)}`);
       sessionStartStatusLabel = "Session brief unavailable";
-      sessionStartStatusDetail = "ATLAS could not read the last desktop session brief, but the blank start screen stays available.";
+      sessionStartStatusDetail = "ATLAS could not read the last desktop session brief, but the workspace stays available on the new-session canvas.";
     }
   }
 

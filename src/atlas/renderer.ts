@@ -155,7 +155,9 @@ function renderLiveStatus(
   return `<span
     class="${classes}"
     data-role="${escapeHtml(options.dataRole)}"
-    aria-label="${escapeHtml(status.assistiveText)}">
+    aria-label="${escapeHtml(status.assistiveText)}"
+    aria-live="polite"
+    aria-atomic="true">
     <span class="live-status-dot" aria-hidden="true"></span>
     ${visibleLabel}
     <span class="sr-only">${escapeHtml(status.assistiveText)}</span>
@@ -179,16 +181,36 @@ function renderLifecycleForm(
   </form>`;
 }
 
-function renderLinkAction(label: string, href: string, tone: "primary" | "secondary" = "secondary"): string {
-  return `<a class="action-button ${tone}" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
+function renderLinkAction(
+  label: string,
+  href: string,
+  tone: "primary" | "secondary" = "secondary",
+  options: {
+    dataRole?: string;
+    focusRole?: string | null;
+  } = {},
+): string {
+  const roleAttribute = options.dataRole
+    ? ` data-role="${escapeHtml(options.dataRole)}"`
+    : "";
+  const focusRoleAttribute = Object.hasOwn(options, "focusRole")
+    ? ` data-focus-role="${escapeHtml(options.focusRole || "")}"`
+    : "";
+  return `<a class="action-button ${tone}" href="${escapeHtml(href)}"${roleAttribute}${focusRoleAttribute}>${escapeHtml(label)}</a>`;
 }
 
 function renderSelectedSessionActions(session: AtlasSessionDto, focusedSessionRole: string | null): string {
   const returnTo = buildSurfaceHref(session.role);
   const actions: string[] = [
     focusedSessionRole
-      ? renderLinkAction("New Session", buildSurfaceHref(null), "primary")
-      : renderLinkAction("Select Session", returnTo, "primary"),
+      ? renderLinkAction("New Session", buildSurfaceHref(null), "primary", {
+          dataRole: "selected-session-new-session-link",
+          focusRole: null,
+        })
+      : renderLinkAction("Select Session", returnTo, "primary", {
+          dataRole: "selected-session-link",
+          focusRole: session.role,
+        }),
     renderLifecycleForm("Stop runtime", "stop", {
       returnTo,
       tone: "secondary",
@@ -248,6 +270,7 @@ function renderSidebarSessionRail(pageData: AtlasPageData): string {
         href="${escapeHtml(buildSurfaceHref(session.role))}"
         ${isSelected ? 'aria-current="true"' : ""}
         data-role="session-rail-link"
+        data-focus-role="${escapeHtml(session.role)}"
         data-session-role="${escapeHtml(session.role)}">
         <div class="session-rail-row">
           <span class="session-rail-title">
@@ -272,7 +295,7 @@ function renderSidebarSessionRail(pageData: AtlasPageData): string {
 function renderSidebar(pageData: AtlasPageData): string {
   const hasSelection = resolveMainPaneMode(pageData) === "selected-session";
   return `<aside class="desktop-sidebar" aria-label="ATLAS desktop sidebar">
-    <a class="sidebar-brand" href="/" data-role="brand-reset">
+    <a class="sidebar-brand" href="/" data-role="brand-reset" data-focus-role="">
       <span class="brand-mark" aria-hidden="true">A</span>
       <span class="brand-copy">
         <span class="eyebrow">Brand reset</span>
@@ -284,6 +307,7 @@ function renderSidebar(pageData: AtlasPageData): string {
       class="sidebar-new-session${hasSelection ? "" : " sidebar-new-session-active"}"
       href="/"
       data-role="new-session-link"
+      data-focus-role=""
       ${hasSelection ? "" : 'aria-current="page"'}>
       <span class="eyebrow">Main pane mode</span>
       <strong>${escapeHtml(pageData.homePrimaryActionLabel || "New Session")}</strong>
@@ -578,6 +602,17 @@ function renderComposerScript(): string {
     const query = params.toString();
     return query ? pathname + "?" + query : pathname;
   };
+  const parseFocusRole = (value) => {
+    const normalized = String(value || "").trim();
+    return normalized || null;
+  };
+  const getFocusRoleFromLocation = () => {
+    try {
+      return parseFocusRole(new URL(window.location.href).searchParams.get("focusRole"));
+    } catch {
+      return null;
+    }
+  };
   const getSelectedSession = (pageData) => Array.isArray(pageData.sessions)
     ? pageData.sessions.find((session) => session.role === pageData.focusedSessionRole) || null
     : null;
@@ -608,7 +643,7 @@ function renderComposerScript(): string {
       ? ""
       : '<span class="live-status-label">' + escapeHtml(status.label) + "</span>";
     return '<span class="' + classes + '" data-role="' + escapeHtml(options.dataRole || "live-status") + '" aria-label="'
-      + escapeHtml(status.assistiveText) + '"><span class="live-status-dot" aria-hidden="true"></span>'
+      + escapeHtml(status.assistiveText) + '" aria-live="polite" aria-atomic="true"><span class="live-status-dot" aria-hidden="true"></span>'
       + visibleLabel + '<span class="sr-only">' + escapeHtml(status.assistiveText) + "</span></span>";
   };
   const renderLifecycleForm = (label, action, options) => '<form class="action-form" method="post" action="/lifecycle">'
@@ -617,14 +652,29 @@ function renderComposerScript(): string {
     + '<input type="hidden" name="returnTo" value="' + escapeHtml(options.returnTo) + '" />'
     + '<button class="action-button ' + escapeHtml(options.tone || "secondary") + '" type="submit">'
     + escapeHtml(label) + "</button></form>";
-  const renderLinkAction = (label, href, tone = "secondary") => '<a class="action-button ' + escapeHtml(tone)
-    + '" href="' + escapeHtml(href) + '">' + escapeHtml(label) + "</a>";
+  const renderLinkAction = (label, href, tone = "secondary", options = {}) => {
+    const roleAttribute = options.dataRole
+      ? ' data-role="' + escapeHtml(options.dataRole) + '"'
+      : "";
+    const focusRoleAttribute = Object.prototype.hasOwnProperty.call(options, "focusRole")
+      ? ' data-focus-role="' + escapeHtml(options.focusRole || "") + '"'
+      : "";
+    return '<a class="action-button ' + escapeHtml(tone)
+      + '" href="' + escapeHtml(href) + '"' + roleAttribute + focusRoleAttribute + ">"
+      + escapeHtml(label) + "</a>";
+  };
   const renderSelectedSessionActions = (session, focusedSessionRole) => {
     const returnTo = buildSurfaceHref(session.role);
     const actions = [
       focusedSessionRole
-        ? renderLinkAction("New Session", buildSurfaceHref(null), "primary")
-        : renderLinkAction("Select Session", returnTo, "primary"),
+        ? renderLinkAction("New Session", buildSurfaceHref(null), "primary", {
+            dataRole: "selected-session-new-session-link",
+            focusRole: null,
+          })
+        : renderLinkAction("Select Session", returnTo, "primary", {
+            dataRole: "selected-session-link",
+            focusRole: session.role,
+          }),
       renderLifecycleForm("Stop runtime", "stop", { returnTo, tone: "secondary" }),
     ];
     if (session.lane) {
@@ -664,7 +714,8 @@ function renderComposerScript(): string {
         return '<a class="session-rail-link' + (isSelected ? " session-rail-link-selected" : "")
           + '" href="' + escapeHtml(buildSurfaceHref(session.role)) + '"'
           + (isSelected ? ' aria-current="true"' : "")
-          + ' data-role="session-rail-link" data-session-role="' + escapeHtml(session.role) + '">'
+          + ' data-role="session-rail-link" data-focus-role="' + escapeHtml(session.role)
+          + '" data-session-role="' + escapeHtml(session.role) + '">'
           + '<div class="session-rail-row"><span class="session-rail-title">'
           + renderLiveStatus(session, { dataRole: "session-row-status-light", compact: true })
           + '<strong>' + escapeHtml(session.name) + '</strong></span><span class="session-rail-role">'
@@ -771,6 +822,14 @@ function renderComposerScript(): string {
     statusEl = document.querySelector("[data-role='product-composer-status']");
     detailEl = document.querySelector("[data-role='product-composer-detail']");
     errorEl = document.querySelector("[data-role='product-composer-error']");
+  };
+  const focusMainPaneHeading = () => {
+    const heading = document.querySelector("[data-role='selected-session-name'], [data-role='new-session-heading']");
+    if (!(heading instanceof HTMLElement)) {
+      return;
+    }
+    heading.setAttribute("tabindex", "-1");
+    heading.focus();
   };
   const setComposerStatus = (message, detail) => {
     if (statusEl instanceof HTMLElement) {
@@ -1009,6 +1068,47 @@ function renderComposerScript(): string {
     }
     throw new Error("ATLAS snapshot refresh requires the Electron desktop bridge.");
   };
+  const requestFocusedSnapshot = async (focusedSessionRole) => {
+    if (bridge?.getSnapshot) {
+      return bridge.getSnapshot({
+        focusRole: focusedSessionRole,
+      });
+    }
+    if (bridge?.refreshSnapshot) {
+      return bridge.refreshSnapshot({
+        focusRole: focusedSessionRole,
+      });
+    }
+    throw new Error("ATLAS snapshot selection requires the Electron desktop bridge.");
+  };
+  const syncHistory = (focusedSessionRole, historyMode) => {
+    const nextHref = buildSurfaceHref(focusedSessionRole);
+    const currentHref = window.location.pathname + window.location.search;
+    if (currentHref === nextHref) {
+      return;
+    }
+    if (historyMode === "replace") {
+      window.history.replaceState({ focusRole: focusedSessionRole }, "", nextHref);
+      return;
+    }
+    window.history.pushState({ focusRole: focusedSessionRole }, "", nextHref);
+  };
+  const navigateMainPane = async (focusedSessionRole, options = {}) => {
+    try {
+      const payload = await requestFocusedSnapshot(focusedSessionRole);
+      if (!payload?.ok || !payload?.pageData) {
+        return;
+      }
+      await renderSnapshot(payload.pageData);
+      syncHistory(payload.pageData.focusedSessionRole || null, options.historyMode || "push");
+      if (options.focusHeading === true) {
+        focusMainPaneHeading();
+      }
+    } catch (error) {
+      console.error("[atlas] client-side workspace selection failed:", error);
+      window.location.assign(buildSurfaceHref(focusedSessionRole));
+    }
+  };
   const refreshSnapshot = async () => {
     try {
       const payload = await requestSnapshot();
@@ -1028,7 +1128,37 @@ function renderComposerScript(): string {
       void refreshSnapshot();
     }, 15000);
   };
+  const attachClientSideNavigation = () => {
+    if (shellRoot.dataset.navigationBound === "true") {
+      return;
+    }
+    shellRoot.dataset.navigationBound = "true";
+    shellRoot.addEventListener("click", (event) => {
+      if (!(event.target instanceof Element)) {
+        return;
+      }
+      const link = event.target.closest("a[data-focus-role]");
+      if (!(link instanceof HTMLAnchorElement)) {
+        return;
+      }
+      if (!bridge?.getSnapshot && !bridge?.refreshSnapshot) {
+        return;
+      }
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      void navigateMainPane(parseFocusRole(link.dataset.focusRole), { historyMode: "push", focusHeading: true });
+    });
+    window.addEventListener("popstate", () => {
+      if (!bridge?.getSnapshot && !bridge?.refreshSnapshot) {
+        return;
+      }
+      void navigateMainPane(getFocusRoleFromLocation(), { historyMode: "replace", focusHeading: true });
+    });
+  };
   const bootstrap = async () => {
+    attachClientSideNavigation();
     attachComposerListeners();
     await restoreComposerState();
     await refreshSnapshot();
@@ -1075,11 +1205,11 @@ function renderAtlasAppShell(pageData: AtlasPageData): string {
       --muted: #b8b8b8;
       --muted-strong: #dadada;
       --shadow: 0 24px 72px rgba(0, 0, 0, 0.34);
-      --status-idle: #8d9bb1;
-      --status-active: #4dd68a;
+      --status-idle: #4dd68a;
+      --status-active: #32c66f;
       --status-attention: #ff9b52;
-      --status-complete: #76b7ff;
-      --status-offline: #7a7a7a;
+      --status-complete: #67db96;
+      --status-offline: #ff6b6b;
     }
     * { box-sizing: border-box; }
     html, body { min-height: 100%; }
@@ -1437,6 +1567,17 @@ function renderAtlasAppShell(pageData: AtlasPageData): string {
       background: rgba(255, 255, 255, 0.04);
       color: var(--muted-strong);
     }
+    .live-status-idle,
+    .live-status-active,
+    .live-status-complete {
+      border-color: rgba(77, 214, 138, 0.26);
+    }
+    .live-status-attention {
+      border-color: rgba(255, 155, 82, 0.3);
+    }
+    .live-status-offline {
+      border-color: rgba(255, 107, 107, 0.34);
+    }
     .live-status-compact {
       min-height: 24px;
       padding: 2px 8px;
@@ -1464,10 +1605,10 @@ function renderAtlasAppShell(pageData: AtlasPageData): string {
     @keyframes atlas-live-pulse {
       0%,
       100% {
-        box-shadow: 0 0 0 0 rgba(77, 214, 138, 0.12);
+        box-shadow: 0 0 0 0 rgba(50, 198, 111, 0.12);
       }
       50% {
-        box-shadow: 0 0 0 6px rgba(77, 214, 138, 0.04);
+        box-shadow: 0 0 0 6px rgba(50, 198, 111, 0.05);
       }
     }
     @media (max-width: 1120px) {

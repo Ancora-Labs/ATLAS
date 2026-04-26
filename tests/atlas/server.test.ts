@@ -243,7 +243,10 @@ describe("atlas server", () => {
     assert.match(homeMarkup, /data-role="new-session-view"/);
     assert.match(homeMarkup, /data-role="session-row-status-light"/);
     assert.match(homeMarkup, /data-role="product-composer-input"/);
-    assert.match(homeMarkup, /href="\/\?focusRole=quality-worker"[\s\S]*?data-session-role="quality-worker"/);
+    assert.match(homeMarkup, /href="\/\?focusRole=quality-worker"[\s\S]*?data-focus-role="quality-worker"[\s\S]*?data-session-role="quality-worker"/);
+    assert.match(homeResponse.text, /bridge\?\.getSnapshot/);
+    assert.match(homeResponse.text, /window\.history\.pushState/);
+    assert.match(homeResponse.text, /window\.addEventListener\("popstate"/);
     assert.match(homeResponse.text, /bridge\?\.refreshSnapshot/);
     assert.match(homeResponse.text, /ATLAS snapshot refresh requires the Electron desktop bridge\./);
     assert.doesNotMatch(homeResponse.text, /default browser|localhost page/i);
@@ -252,7 +255,7 @@ describe("atlas server", () => {
     assert.match(focusedHomeMarkup, /data-main-pane-mode="selected-session"/);
     assert.match(focusedHomeMarkup, /data-role="selected-session-view"/);
     assert.match(focusedHomeMarkup, /live-status-attention[\s\S]*?data-role="selected-session-status-light"/);
-    assert.match(focusedHomeMarkup, /data-role="selected-session-actions"[\s\S]*?<a class="action-button primary" href="\/">New Session<\/a>/);
+    assert.match(focusedHomeMarkup, /data-role="selected-session-actions"[\s\S]*?<a class="action-button primary" href="\/" data-role="selected-session-new-session-link" data-focus-role="">New Session<\/a>/);
     assert.doesNotMatch(focusedHomeMarkup, /data-role="product-composer-input"/);
 
     assert.equal(sessionsResponse.status, 307);

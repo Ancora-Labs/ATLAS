@@ -69,9 +69,9 @@ describe("state_bridge", () => {
     assert.match(sessions.Athena.freshnessPolicyDetail, /older than 5 minutes/i);
     assert.equal(sessions.Athena.logStateLabel, "Waiting for live log");
     assert.equal(sessions.Athena.liveStatusTone, "attention");
-    assert.equal(sessions.Athena.liveStatusLabel, "Stale");
+    assert.equal(sessions.Athena.liveStatusLabel, "Live update stale");
     assert.equal(sessions.Athena.liveStatusPulse, false);
-    assert.match(sessions.Athena.liveStatusAssistiveText, /stale recorded context/);
+    assert.match(sessions.Athena.liveStatusAssistiveText, /latest live update is stale/i);
     assert.equal(sessions.Athena.canArchive, false);
     assert.equal(sessions.Prometheus.statusLabel, "Needs attention");
     assert.equal(sessions.Prometheus.readinessLabel, "Needs your input");
@@ -81,6 +81,7 @@ describe("state_bridge", () => {
     assert.equal(sessions.Hermes.readinessLabel, "Completed");
     assert.equal(sessions.Hermes.isResumable, false);
     assert.equal(sessions.Hermes.liveStatusTone, "complete");
+    assert.equal(sessions.Hermes.liveStatusLabel, "Complete");
   });
 
   it("uses terminal session history to recover stale working states", () => {

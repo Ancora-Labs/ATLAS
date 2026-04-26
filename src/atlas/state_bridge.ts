@@ -486,10 +486,10 @@ function resolveSessionLiveStatus(
   if (status === "working" && freshnessState !== "live") {
     return {
       liveStatusTone: "attention",
-      liveStatusLabel: freshnessState === "stale" ? "Stale" : "Waiting",
+      liveStatusLabel: freshnessState === "stale" ? "Live update stale" : "Waiting for live update",
       liveStatusAssistiveText: freshnessState === "stale"
-        ? `${sessionName} does not have a recent live update, so ATLAS is showing stale recorded context.`
-        : `${sessionName} is waiting for a verified live update before ATLAS marks it as live.`,
+        ? `${sessionName} is still marked working, but its latest live update is stale.`
+        : `${sessionName} is waiting for its first verified live update before ATLAS marks it as active.`,
       liveStatusPulse: false,
     };
   }
@@ -498,23 +498,29 @@ function resolveSessionLiveStatus(
     case "working":
       return {
         liveStatusTone: "active",
-        liveStatusLabel: "Live",
-        liveStatusAssistiveText: `${sessionName} is currently running live work.`,
+        liveStatusLabel: "Active",
+        liveStatusAssistiveText: `${sessionName} is actively running live work.`,
         liveStatusPulse: true,
       };
     case "blocked":
-    case "error":
       return {
         liveStatusTone: "attention",
         liveStatusLabel: "Needs attention",
         liveStatusAssistiveText: `${sessionName} needs attention before it can continue.`,
         liveStatusPulse: false,
       };
+    case "error":
+      return {
+        liveStatusTone: "offline",
+        liveStatusLabel: "Error",
+        liveStatusAssistiveText: `${sessionName} hit an error and needs intervention before work can resume.`,
+        liveStatusPulse: false,
+      };
     case "done":
       return {
         liveStatusTone: "complete",
-        liveStatusLabel: "Completed",
-        liveStatusAssistiveText: `${sessionName} has completed its recorded work.`,
+        liveStatusLabel: "Complete",
+        liveStatusAssistiveText: `${sessionName} has completed its recorded work and is in a healthy state.`,
         liveStatusPulse: false,
       };
     case "offline":
@@ -525,6 +531,12 @@ function resolveSessionLiveStatus(
         liveStatusPulse: false,
       };
     case "partial":
+      return {
+        liveStatusTone: "idle",
+        liveStatusLabel: "Ready to continue",
+        liveStatusAssistiveText: `${sessionName} is ready to continue from the latest recorded checkpoint.`,
+        liveStatusPulse: false,
+      };
     case "idle":
     default:
       return {

@@ -1,7 +1,7 @@
 export function getDesktopLayoutMode(width) {
   const numericWidth = Number(width);
-  if (!Number.isFinite(numericWidth) || numericWidth < 1100) {
-    return "stacked";
+  if (!Number.isFinite(numericWidth) || numericWidth < 960) {
+    return "compact";
   }
-  return "split";
+  return "workspace";
 }
