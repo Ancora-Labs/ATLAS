@@ -143,6 +143,7 @@ describe("atlas home route", () => {
       assert.equal(res.statusCode, 200);
       assert.equal(res.headers["content-type"], "text/html; charset=utf-8");
       assert.match(documentMarkup, /<title>ATLAS Workspace<\/title>/);
+      assert.match(documentMarkup, /data-main-pane-mode="new-session"/);
       assert.match(documentMarkup, /data-role="brand-reset"/);
       assert.match(documentMarkup, /data-role="new-session-link"/);
       assert.match(documentMarkup, /data-role="session-rail"/);
@@ -197,6 +198,7 @@ describe("atlas home route", () => {
       const documentMarkup = res.body.split("<script>")[0] || res.body;
 
       assert.equal(res.statusCode, 200);
+      assert.match(documentMarkup, /data-main-pane-mode="selected-session"/);
       assert.match(documentMarkup, /data-role="selected-session-view"/);
       assert.match(documentMarkup, /data-role="selected-session-status-light"/);
       assert.match(documentMarkup, /live-status-active[\s\S]*?data-role="selected-session-status-light"/);
@@ -238,6 +240,7 @@ describe("atlas home route", () => {
       const documentMarkup = res.body.split("<script>")[0] || res.body;
 
       assert.equal(res.statusCode, 200);
+      assert.match(documentMarkup, /data-main-pane-mode="new-session"/);
       assert.match(documentMarkup, /data-role="new-session-view"/);
        assert.match(documentMarkup, /The selected session is waiting for its next live update/);
        assert.match(documentMarkup, /Selected detail unavailable/);
@@ -266,6 +269,7 @@ describe("atlas home route", () => {
       const documentMarkup = res.body.split("<script>")[0] || res.body;
 
       assert.equal(res.statusCode, 200);
+      assert.match(documentMarkup, /data-main-pane-mode="new-session"/);
       assert.match(documentMarkup, /data-role="new-session-view"/);
       assert.match(documentMarkup, /Where should ATLAS start\?/);
       assert.match(documentMarkup, /No session state is available yet\./);
