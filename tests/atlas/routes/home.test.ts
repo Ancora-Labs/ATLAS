@@ -147,9 +147,9 @@ describe("atlas home route", () => {
       assert.match(documentMarkup, /data-role="brand-reset"/);
       assert.match(documentMarkup, /data-role="new-session-link"/);
       assert.match(documentMarkup, /data-role="session-rail"/);
-      assert.match(documentMarkup, /href="\/" data-role="brand-reset"/);
-      assert.match(documentMarkup, /href="\/"[\s\S]*?data-role="new-session-link"/);
-      assert.match(documentMarkup, /href="\/\?focusRole=quality-worker"[\s\S]*?data-session-role="quality-worker"/);
+      assert.match(documentMarkup, /href="\/" data-role="brand-reset" data-focus-role=""/);
+      assert.match(documentMarkup, /href="\/"[\s\S]*?data-role="new-session-link"[\s\S]*?data-focus-role=""/);
+      assert.match(documentMarkup, /href="\/\?focusRole=quality-worker"[\s\S]*?data-focus-role="quality-worker"[\s\S]*?data-session-role="quality-worker"/);
       assert.match(documentMarkup, /data-role="new-session-view"/);
       assert.match(documentMarkup, /Start a new session from a clean workspace/);
       assert.match(documentMarkup, /What should ATLAS do next\?/);
@@ -209,7 +209,7 @@ describe("atlas home route", () => {
       assert.match(documentMarkup, /ready for snapshot refresh/);
       assert.match(documentMarkup, /New Session/);
       assert.match(documentMarkup, /href="\/"[\s\S]*?data-role="new-session-link"/);
-      assert.match(documentMarkup, /data-role="selected-session-actions"[\s\S]*?<a class="action-button primary" href="\/">New Session<\/a>/);
+      assert.match(documentMarkup, /data-role="selected-session-actions"[\s\S]*?<a class="action-button primary" href="\/" data-role="selected-session-new-session-link" data-focus-role="">New Session<\/a>/);
       assert.doesNotMatch(documentMarkup, /data-role="product-composer-input"/);
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

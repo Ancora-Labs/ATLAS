@@ -14,16 +14,16 @@ describe("atlas_desktop_onboarding_shell", () => {
     const preload = await fs.readFile(path.join(ROOT, "electron", "preload.ts"), "utf8");
     const mainProcess = await fs.readFile(path.join(ROOT, "electron", "main.ts"), "utf8");
 
-    assert.match(html, /Native Windows title bar/);
-    assert.match(html, /Workspace handoff/);
+    assert.match(html, /Opening the workspace\./);
     assert.match(html, /data-role="detail"/);
-    assert.match(html, /Portable renderer compatibility/);
-    assert.doesNotMatch(html, /window-controls|Run clarification and open ATLAS|Objective composer/);
+    assert.match(html, /data-role="workspace-url"/);
+    assert.doesNotMatch(html, /window-controls|Run clarification and open ATLAS|Objective composer|Portable renderer compatibility/);
 
     assert.match(appScript, /window\.atlasDesktop\?\.getBootstrap/);
-    assert.match(appScript, /Opening the ATLAS desktop workspace\./);
+    assert.match(appScript, /Opening the ATLAS workspace\./);
+    assert.match(appScript, /getWorkspaceState/);
     assert.match(appScript, /window\.location\.replace\(workspaceUrl\)/);
-    assert.match(appScript, /Workspace handoff failed\./);
+    assert.match(appScript, /Workspace startup failed\./);
 
     assert.match(preload, /getWorkspaceState/);
     assert.match(preload, /atlas-desktop:get-workspace-state/);
@@ -44,8 +44,8 @@ describe("atlas_desktop_onboarding_shell", () => {
   });
 
   it("[NEGATIVE] keeps narrow viewports stacked until the workspace has room for the rail plus composer layout", () => {
-    assert.equal(getDesktopLayoutMode(Number.NaN), "stacked");
-    assert.equal(getDesktopLayoutMode(1099), "stacked");
-    assert.equal(getDesktopLayoutMode(1100), "split");
+    assert.equal(getDesktopLayoutMode(Number.NaN), "compact");
+    assert.equal(getDesktopLayoutMode(959), "compact");
+    assert.equal(getDesktopLayoutMode(960), "workspace");
   });
 });

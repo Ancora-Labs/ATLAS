@@ -163,10 +163,10 @@ describe("atlas sessions route", () => {
       assert.match(documentMarkup, /feat\/quality-review/);
       assert.match(documentMarkup, /https:\/\/example\.com\/pr\/1/);
       assert.match(documentMarkup, /src\/atlas\/server\.ts/);
-      assert.match(documentMarkup, /href="\/" data-role="brand-reset"/);
-      assert.match(documentMarkup, /href="\/"[\s\S]*?data-role="new-session-link"/);
-      assert.match(documentMarkup, /href="\/\?focusRole=quality-worker"[\s\S]*?data-session-role="quality-worker"/);
-      assert.match(documentMarkup, /data-role="selected-session-actions"[\s\S]*?<a class="action-button primary" href="\/">New Session<\/a>/);
+      assert.match(documentMarkup, /href="\/" data-role="brand-reset" data-focus-role=""/);
+      assert.match(documentMarkup, /href="\/"[\s\S]*?data-role="new-session-link"[\s\S]*?data-focus-role=""/);
+      assert.match(documentMarkup, /href="\/\?focusRole=quality-worker"[\s\S]*?data-focus-role="quality-worker"[\s\S]*?data-session-role="quality-worker"/);
+      assert.match(documentMarkup, /data-role="selected-session-actions"[\s\S]*?<a class="action-button primary" href="\/" data-role="selected-session-new-session-link" data-focus-role="">New Session<\/a>/);
       assert.match(documentMarkup, />Pause lane</);
       assert.match(documentMarkup, />Archive session</);
       assert.match(documentMarkup, /method="post" action="\/lifecycle"/);

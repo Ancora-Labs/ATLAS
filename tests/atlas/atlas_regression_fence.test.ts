@@ -103,8 +103,8 @@ describe("atlas regression fence", () => {
     assert.match(launcher, /Launching the native ATLAS desktop shell/i);
     assert.match(launcher, /Packaging the portable Windows desktop folder/i);
     assert.doesNotMatch(launcher, /Start-Process|Invoke-WebRequest/);
-    assert.match(workspaceHandoffHtml, /Native Windows title bar/);
-    assert.match(workspaceHandoffHtml, /Workspace handoff/);
+    assert.match(workspaceHandoffHtml, /Opening the workspace\./);
+    assert.match(workspaceHandoffHtml, /data-role="workspace-url"/);
     assert.doesNotMatch(workspaceHandoffHtml, /dashboard-card|window-controls|traffic-light/i);
     assert.match(rendererSource, /aria-label="ATLAS desktop surface"/);
     assert.match(rendererSource, /aria-label="ATLAS desktop sidebar"/);
@@ -113,7 +113,10 @@ describe("atlas regression fence", () => {
     assert.match(rendererSource, /data-role="new-session-view"/);
     assert.match(rendererSource, /data-role="selected-session-view"/);
     assert.match(rendererSource, /Latest worker output/);
+    assert.match(rendererSource, /window\.history\.pushState/);
+    assert.match(rendererSource, /window\.addEventListener\("popstate"/);
     assert.match(rendererSource, /bridge\?\.refreshSnapshot/);
+    assert.match(rendererSource, /bridge\?\.getSnapshot/);
     assert.match(rendererSource, /ATLAS snapshot refresh requires the Electron desktop bridge\./);
     assert.doesNotMatch(rendererSource, /dashboard-card|hero-panel|metric-card|window-controls|traffic-light/i);
     assert.match(preloadSource, /refreshSnapshot\(request: AtlasSnapshotRequestPayload = \{\}\)/);
