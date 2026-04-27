@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 
-import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from "electron";
 
 import { loadConfig } from "../src/config.js";
 import {
   AtlasClarificationError,
   createAtlasSessionStartPacket,
+  getAtlasClarificationAttachmentDirectory,
   type AtlasClarificationPacket,
 } from "../src/atlas/clarification.js";
 import {
@@ -18,6 +20,7 @@ import {
   readAtlasDesktopState,
   resolveAtlasDesktopStatePath,
   resolveAtlasDesktopStateRoot,
+  type AtlasDesktopAttachment,
   type AtlasDesktopBootstrap,
   type AtlasDesktopLocation,
   type AtlasDesktopState,
@@ -125,7 +128,7 @@ async function initializeDesktopState(): Promise<void> {
 }
 
 async function updateDesktopState(
-  patch: Partial<Pick<AtlasDesktopState, "sessionId" | "workspaceDraft" | "workspaceComposerFocused" | "windowBounds" | "focusedSessionRole">>,
+  patch: Partial<Pick<AtlasDesktopState, "sessionId" | "workspaceDraft" | "workspaceAttachments" | "workspaceComposerFocused" | "windowBounds" | "focusedSessionRole">>,
 ): Promise<void> {
   if (!atlasDesktopStatePath) {
     throw new Error("ATLAS desktop state path is not initialized.");
@@ -152,8 +155,116 @@ async function updateWorkspaceComposerFocus(focused: boolean): Promise<void> {
   await updateDesktopState({ workspaceComposerFocused: focused === true });
 }
 
+async function updateWorkspaceAttachments(attachments: AtlasDesktopAttachment[]): Promise<AtlasDesktopAttachment[]> {
+  await updateDesktopState({ workspaceAttachments: attachments });
+  return atlasDesktopState?.workspaceAttachments || attachments;
+}
+
 async function completeWorkspaceSessionStart(objective: string): Promise<void> {
   await updateDesktopState(createAtlasDesktopSessionStartHandoffState(objective));
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeAttachmentFileName(value: string): string {
+  const normalized = String(value || "").trim().replace(/[<>:"/\\|?*\u0000-\u001F]+/g, "-");
+  return normalized || "attachment";
+}
+
+async function resolveUniqueAttachmentPath(directoryPath: string, fileName: string): Promise<string> {
+  const extension = path.extname(fileName);
+  const baseName = path.basename(fileName, extension) || "attachment";
+  let candidatePath = path.join(directoryPath, fileName);
+  let suffix = 1;
+  while (await pathExists(candidatePath)) {
+    candidatePath = path.join(directoryPath, `${baseName}-${String(suffix)}${extension}`);
+    suffix += 1;
+  }
+  return candidatePath;
+}
+
+async function pickWorkspaceAttachments(requestWindow: BrowserWindow | null): Promise<AtlasDesktopAttachment[]> {
+  if (!atlasBootstrap) {
+    throw new Error("ATLAS desktop bootstrap is not available.");
+  }
+
+  const hostWindow = requestWindow && !requestWindow.isDestroyed()
+    ? requestWindow
+    : mainWindow;
+  if (!hostWindow || hostWindow.isDestroyed()) {
+    throw new Error("ATLAS desktop attachment picker requires an active window.");
+  }
+
+  const fileSelection = await dialog.showOpenDialog(hostWindow, {
+    title: "Add files to the next Atlas session",
+    buttonLabel: "Attach files",
+    properties: ["openFile", "multiSelections"],
+  });
+  if (fileSelection.canceled || fileSelection.filePaths.length === 0) {
+    return atlasDesktopState?.workspaceAttachments || [];
+  }
+
+  const config = await loadConfig();
+  const stateDir = String(config.paths?.stateDir || "state");
+  const attachmentDirectory = getAtlasClarificationAttachmentDirectory(stateDir, atlasBootstrap.sessionId);
+  await fs.mkdir(attachmentDirectory, { recursive: true });
+
+  const existingAttachments = atlasDesktopState?.workspaceAttachments || [];
+  const existingSourcePaths = new Set(existingAttachments.map((attachment) => path.normalize(attachment.sourcePath).toLowerCase()));
+  const nextAttachments = [...existingAttachments];
+
+  for (const sourcePath of fileSelection.filePaths) {
+    const normalizedSourcePath = path.normalize(String(sourcePath || "").trim());
+    if (!normalizedSourcePath || existingSourcePaths.has(normalizedSourcePath.toLowerCase())) {
+      continue;
+    }
+
+    const stats = await fs.stat(normalizedSourcePath);
+    if (!stats.isFile()) {
+      continue;
+    }
+
+    const safeFileName = sanitizeAttachmentFileName(path.basename(normalizedSourcePath));
+    const storedPath = await resolveUniqueAttachmentPath(attachmentDirectory, safeFileName);
+    await fs.copyFile(normalizedSourcePath, storedPath);
+    nextAttachments.push({
+      id: randomUUID(),
+      name: path.basename(storedPath),
+      sourcePath: normalizedSourcePath,
+      storedPath,
+      sizeBytes: stats.size,
+      addedAt: new Date().toISOString(),
+    });
+    existingSourcePaths.add(normalizedSourcePath.toLowerCase());
+  }
+
+  return updateWorkspaceAttachments(nextAttachments);
+}
+
+async function removeWorkspaceAttachment(attachmentId: string): Promise<AtlasDesktopAttachment[]> {
+  const normalizedAttachmentId = String(attachmentId || "").trim();
+  const existingAttachments = atlasDesktopState?.workspaceAttachments || [];
+  if (!normalizedAttachmentId) {
+    return existingAttachments;
+  }
+
+  const attachmentToRemove = existingAttachments.find((attachment) => attachment.id === normalizedAttachmentId) || null;
+  if (attachmentToRemove?.storedPath) {
+    try {
+      await fs.rm(attachmentToRemove.storedPath, { force: true });
+    } catch (error) {
+      console.error(`[atlas] failed to remove the stored attachment ${attachmentToRemove.storedPath}: ${String((error as Error)?.message || error)}`);
+    }
+  }
+
+  return updateWorkspaceAttachments(existingAttachments.filter((attachment) => attachment.id !== normalizedAttachmentId));
 }
 
 function getPersistedWindowBounds(): AtlasDesktopWindowBounds | null {
@@ -345,6 +456,17 @@ async function fetchAtlasDesktopSnapshot(
   }
 }
 
+function notifyRendererWindowVisible(window: BrowserWindow): void {
+  try {
+    if (window.isDestroyed()) {
+      return;
+    }
+    window.webContents.send("atlas-desktop:window-visible");
+  } catch (error) {
+    console.error(`[atlas] failed to notify the renderer about desktop visibility: ${String((error as Error)?.message || error)}`);
+  }
+}
+
 function createAuthPopup(parentWindow: BrowserWindow, targetUrl: string): void {
   const popup = new BrowserWindow(createAtlasAuthPopupOptions(parentWindow));
   popup.loadURL(targetUrl).catch((error) => {
@@ -404,6 +526,7 @@ async function startDesktopSession(
       sessionId: atlasBootstrap.sessionId,
       targetRepo: atlasBootstrap.targetRepo,
       objective: normalizedObjective,
+      attachments: atlasDesktopState?.workspaceAttachments || [],
     });
 
     await completeWorkspaceSessionStart(normalizedObjective);
@@ -441,6 +564,7 @@ async function createMainWindow(): Promise<BrowserWindow> {
   const persistedBounds = getPersistedWindowBounds();
   const window = new BrowserWindow({
     ...createAtlasDesktopWindowChromeOptions(persistedBounds),
+    icon: atlasDesktopResources.appIconPath,
     webPreferences: {
       preload: atlasDesktopResources.preloadPath,
       contextIsolation: true,
@@ -453,11 +577,21 @@ async function createMainWindow(): Promise<BrowserWindow> {
   window.once("ready-to-show", () => {
     if (!window.isDestroyed()) {
       window.show();
+      notifyRendererWindowVisible(window);
     }
   });
   attachWindowStatePersistence(window);
   attachProductLocationPersistence(window);
   attachWindowPolicies(window, atlasBootstrap.serverUrl);
+  window.on("show", () => {
+    notifyRendererWindowVisible(window);
+  });
+  window.on("restore", () => {
+    notifyRendererWindowVisible(window);
+  });
+  window.on("focus", () => {
+    notifyRendererWindowVisible(window);
+  });
   window.on("closed", () => {
     if (mainWindow === window) {
       mainWindow = null;
@@ -551,6 +685,25 @@ app.whenReady().then(() => {
       return { ok: true };
     } catch (error) {
       console.error(`[atlas] workspace composer focus update failed: ${String((error as Error)?.message || error)}`);
+      throw error;
+    }
+  });
+  ipcMain.handle("atlas-desktop:pick-workspace-attachments", async (event) => {
+    try {
+      const requestWindow = BrowserWindow.fromWebContents(event.sender);
+      const attachments = await pickWorkspaceAttachments(requestWindow);
+      return { ok: true, attachments };
+    } catch (error) {
+      console.error(`[atlas] workspace attachment picker failed: ${String((error as Error)?.message || error)}`);
+      throw error;
+    }
+  });
+  ipcMain.handle("atlas-desktop:remove-workspace-attachment", async (_event, payload: { attachmentId?: string } = {}) => {
+    try {
+      const attachments = await removeWorkspaceAttachment(String(payload.attachmentId || ""));
+      return { ok: true, attachments };
+    } catch (error) {
+      console.error(`[atlas] workspace attachment removal failed: ${String((error as Error)?.message || error)}`);
       throw error;
     }
   });

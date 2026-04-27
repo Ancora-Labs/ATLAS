@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { getPausedLanes } from "../core/medic_agent.js";
 import { getLaneForWorkerName, normalizeWorkerName } from "../core/role_registry.js";
-import { READ_JSON_REASON, readJsonSafe } from "../core/fs_utils.js";
+import { readJsonSafe } from "../core/fs_utils.js";
 import { listOpenTargetSessions } from "../core/target_session_state.js";
 
 export interface BoxTargetSessionHistoryEntry {
@@ -607,44 +607,6 @@ function extractSessionRecordMap(raw: unknown, fallbackPrefix: string): Record<s
   return extracted;
 }
 
-function isAtlasDesktopFallbackSessionRecord(session: unknown): boolean {
-  if (!isRecord(session)) {
-    return false;
-  }
-
-  return [
-    "workerIdentityLabel",
-    "currentStage",
-    "currentStageLabel",
-    "latestMeaningfulAction",
-    "latestMeaningfulActionAt",
-    "pullRequests",
-    "createdPRs",
-    "filesTouched",
-    "touchedFiles",
-    "logExcerpt",
-    "logSource",
-    "logUpdatedAt",
-    "freshnessAt",
-  ].some((key) => key in session);
-}
-
-async function readLegacyOpenSessionRecords(stateDir: string): Promise<Record<string, unknown>> {
-  const openSessionsPath = path.join(stateDir, "open_target_sessions.json");
-  const openSessionsResult = await readJsonSafe(openSessionsPath);
-  if (!openSessionsResult.ok) {
-    if (openSessionsResult.reason === READ_JSON_REASON.INVALID) {
-      console.error(`[atlas] failed to read open session state: ${String(openSessionsResult.error?.message || openSessionsResult.error)}`);
-    }
-    return {};
-  }
-
-  return Object.fromEntries(
-    Object.entries(extractSessionRecordMap(openSessionsResult.data, "atlas-session"))
-      .filter(([, session]) => isAtlasDesktopFallbackSessionRecord(session)),
-  );
-}
-
 async function readCanonicalOpenSessionRecords(stateDir: string): Promise<Record<string, unknown>> {
   try {
     return await listOpenTargetSessions({ stateDir });
@@ -732,7 +694,25 @@ function compareNullableTimestampsDescending(left: string | null, right: string 
   return 0;
 }
 
+function getAtlasSessionFreshnessSortPriority(state: AtlasSessionFreshnessState): number {
+  switch (state) {
+    case "live":
+      return 0;
+    case "stale":
+      return 1;
+    case "unknown":
+    default:
+      return 2;
+  }
+}
+
 export function compareAtlasSessionsForDesktop(left: AtlasSessionDto, right: AtlasSessionDto): number {
+  const freshnessOrder = getAtlasSessionFreshnessSortPriority(left.freshnessState)
+    - getAtlasSessionFreshnessSortPriority(right.freshnessState);
+  if (freshnessOrder !== 0) {
+    return freshnessOrder;
+  }
+
   const leftIsAtlas = normalizeWorkerName(left.role) === "atlas" ? 0 : 1;
   const rightIsAtlas = normalizeWorkerName(right.role) === "atlas" ? 0 : 1;
   if (leftIsAtlas !== rightIsAtlas) {
@@ -853,7 +833,14 @@ async function hydrateSessionLogDetails(
 ): Promise<Record<string, AtlasSessionDto>> {
   const hydratedEntries = await Promise.all(Object.entries(sessions).map(async ([roleKey, session]) => {
     const logDetails = await readSessionLogDetails(stateDir, session);
-    return [roleKey, { ...session, ...logDetails }] as const;
+    const freshnessPolicy = resolveSessionFreshnessPolicy(logDetails.freshnessAt);
+    return [roleKey, {
+      ...session,
+      ...logDetails,
+      ...freshnessPolicy,
+      logStateLabel: getSessionLogStateLabel(logDetails.logExcerpt),
+      ...resolveSessionLiveStatus(session.name, session.status, freshnessPolicy.freshnessState),
+    }] as const;
   }));
   return Object.fromEntries(hydratedEntries);
 }
@@ -863,9 +850,10 @@ export function resolveAtlasSessionSnapshotContinuity(
   focusedSessionRole: string | null,
   missingFocusedSnapshotHint = false,
 ): AtlasSessionSnapshotContinuity {
+  const hasLiveSessions = sessions.some((session) => session.freshnessState === "live");
   if (missingFocusedSnapshotHint) {
     return {
-      hasLiveSessions: sessions.length > 0,
+      hasLiveSessions,
       missingFocusedSnapshot: true,
     };
   }
@@ -873,14 +861,16 @@ export function resolveAtlasSessionSnapshotContinuity(
   const normalizedFocus = String(focusedSessionRole || "").trim();
   if (!normalizedFocus) {
     return {
-      hasLiveSessions: sessions.length > 0,
+      hasLiveSessions,
       missingFocusedSnapshot: false,
     };
   }
 
   return {
-    hasLiveSessions: sessions.length > 0,
-    missingFocusedSnapshot: !sessions.some((session) => session.role === normalizedFocus),
+    hasLiveSessions,
+    missingFocusedSnapshot: !sessions.some(
+      (session) => session.role === normalizedFocus && session.freshnessState === "live",
+    ),
   };
 }
 
@@ -996,9 +986,7 @@ export async function readAtlasSessionReadModel(
 
   const canonicalOpenSessions = await readCanonicalOpenSessionRecords(options.stateDir);
   const openSessions = bridgeBoxTargetSessionState(
-    Object.keys(canonicalOpenSessions).length > 0
-      ? canonicalOpenSessions
-      : await readLegacyOpenSessionRecords(options.stateDir),
+    canonicalOpenSessions,
     options.thinkingMap,
     pausedLanes,
   );

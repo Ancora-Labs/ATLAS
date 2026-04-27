@@ -187,7 +187,7 @@ describe("state_bridge", () => {
     ], "quality-worker");
 
     assert.deepEqual(continuity, {
-      hasLiveSessions: true,
+      hasLiveSessions: false,
       missingFocusedSnapshot: true,
     });
   });
@@ -309,6 +309,9 @@ describe("state_bridge", () => {
       assert.equal(sessions.Athena.lastThinking, "validating canonical state");
       assert.equal(sessions.Athena.logExcerpt.at(-1), "live refresh ready");
       assert.equal(sessions.Athena.logSource, "live_worker_athena.log");
+      assert.equal(sessions.Athena.freshnessState, "live");
+      assert.equal(sessions.Athena.logStateLabel, "Readable log ready");
+      assert.equal(sessions.Athena.liveStatusTone, "active");
 
       assert.equal(sessions.Hermes.status, "partial");
       assert.equal(sessions.Hermes.readinessLabel, "Ready to continue");
@@ -365,6 +368,42 @@ describe("state_bridge", () => {
             status: "working",
             lastTask: "Legacy open session state should stay hidden",
             lastActiveAt: "2026-04-21T12:00:00.000Z",
+          },
+        },
+      }), "utf8");
+
+      const sessions = await listAtlasSessions({ stateDir });
+
+      assert.deepEqual(sessions, {});
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("[NEGATIVE] ignores legacy open-session records even when they include desktop fallback fields", async () => {
+    const tempRoot = await createTempRoot();
+    const stateDir = path.join(tempRoot, "state");
+
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(path.join(stateDir, "open_target_sessions.json"), JSON.stringify({
+        sessions: {
+          "integration-worker": {
+            role: "integration-worker",
+            status: "working",
+            lastTask: "Legacy enriched session should stay hidden",
+            lastActiveAt: "2026-04-21T12:00:00.000Z",
+            workerIdentityLabel: "Legacy integration worker",
+            currentStage: "snapshot_refresh",
+            currentStageLabel: "Refreshing snapshot",
+            latestMeaningfulAction: "Legacy stale detail",
+            latestMeaningfulActionAt: "2026-04-21T12:00:30.000Z",
+            pullRequests: ["https://example.com/pr/legacy"],
+            filesTouched: ["src/atlas/state_bridge.ts"],
+            logExcerpt: ["legacy log line"],
+            logSource: "open_target_sessions.json",
+            logUpdatedAt: "2026-04-21T12:00:31.000Z",
+            freshnessAt: "2026-04-21T12:00:31.000Z",
           },
         },
       }), "utf8");

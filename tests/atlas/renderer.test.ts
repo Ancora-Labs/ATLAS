@@ -64,7 +64,7 @@ function buildSession(overrides: Partial<AtlasSessionDto> = {}): AtlasSessionDto
 
 function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
   return {
-    title: "ATLAS Workspace",
+    title: "Atlas",
     repoLabel: "Ancora-Labs/ATLAS",
     hostLabel: "Windows host",
     shellCommand: ".\\ATLAS.cmd",
@@ -141,7 +141,7 @@ describe("atlas renderer", () => {
     const html = renderAtlasHomeHtml(buildPageData());
     const documentMarkup = html.split("<script>")[0] || html;
 
-    assert.match(html, /<title>ATLAS Workspace<\/title>/);
+    assert.match(html, /<title>Atlas<\/title>/);
     assert.match(documentMarkup, /aria-label="ATLAS desktop surface"/);
     assert.match(documentMarkup, /data-main-pane-mode="new-session"/);
     assert.match(documentMarkup, /aria-label="ATLAS desktop sidebar"/);
@@ -153,12 +153,17 @@ describe("atlas renderer", () => {
     assert.match(documentMarkup, /href="\/\?focusRole=Athena"[\s\S]*?data-focus-role="Athena"[\s\S]*?data-session-role="Athena"/);
     assert.match(documentMarkup, /href="\/\?focusRole=Prometheus"[\s\S]*?data-focus-role="Prometheus"[\s\S]*?data-session-role="Prometheus"/);
     assert.match(documentMarkup, /data-role="new-session-view"/);
-    assert.match(documentMarkup, /Start a new session from a clean workspace/);
-    assert.match(documentMarkup, /What should ATLAS do next\?/);
+    assert.match(documentMarkup, /data-role="new-session-shell"/);
+    assert.match(documentMarkup, /What do you want Atlas to deliver today\?/);
+    assert.match(documentMarkup, /Ask anything/);
+    assert.match(documentMarkup, /data-role="composer-attach-button"/);
+    assert.match(documentMarkup, /data-role="composer-submit-button"/);
+    assert.match(documentMarkup, /data-role="composer-attachments"/);
     assert.match(documentMarkup, /data-role="product-composer-input"/);
-    assert.match(documentMarkup, /data-role="runtime-stage-label"/);
     assert.match(documentMarkup, /data-role="session-row-status-light"/);
     assert.match(documentMarkup, /Live detail verified/);
+    assert.doesNotMatch(documentMarkup, /data-role="runtime-stage-label"/);
+    assert.doesNotMatch(documentMarkup, /data-role="new-session-detail"/);
     assert.match(documentMarkup, /aria-live="polite"[\s\S]*?data-role="session-row-status-light"/);
     assert.match(html, /bridge\?\.getSnapshot/);
     assert.match(html, /window\.history\.pushState/);
@@ -177,6 +182,7 @@ describe("atlas renderer", () => {
     const documentMarkup = html.split("<script>")[0] || html;
 
     assert.match(documentMarkup, /data-role="selected-session-view"/);
+    assert.match(documentMarkup, /selected-session-hero/);
     assert.match(documentMarkup, /data-main-pane-mode="selected-session"/);
     assert.match(documentMarkup, /data-role="selected-session-name">Athena/);
     assert.match(documentMarkup, /data-role="selected-session-status-light"/);
@@ -186,6 +192,9 @@ describe("atlas renderer", () => {
     assert.match(documentMarkup, /aria-label="Athena is actively running live work\."/);
     assert.match(documentMarkup, /data-role="selected-session-identity"/);
     assert.match(documentMarkup, /data-role="selected-session-stage"/);
+    assert.match(documentMarkup, /data-role="selected-session-summary"/);
+    assert.match(documentMarkup, /Latest meaningful update/);
+    assert.match(documentMarkup, /What changed most recently/);
     assert.match(documentMarkup, /data-role="selected-session-prs"/);
     assert.match(documentMarkup, /data-role="selected-session-files"/);
     assert.match(documentMarkup, /data-role="selected-session-log"/);
@@ -216,10 +225,8 @@ describe("atlas renderer", () => {
     }));
     const documentMarkup = html.split("<script>")[0] || html;
 
-    assert.match(documentMarkup, /&lt;unsafe repo&gt;/);
-    assert.doesNotMatch(documentMarkup, /<unsafe repo>/);
-    assert.match(documentMarkup, /Where should ATLAS start\?/);
-    assert.match(documentMarkup, /No session state is available yet\./);
+    assert.match(documentMarkup, /What do you want Atlas to deliver today\?/);
+    assert.match(documentMarkup, /No live rows yet\./);
     assert.match(documentMarkup, /data-role="new-session-view"/);
     assert.match(documentMarkup, /data-main-pane-mode="new-session"/);
     assert.doesNotMatch(documentMarkup, /data-role="selected-session-view"/);
@@ -235,7 +242,7 @@ describe("atlas renderer", () => {
     }));
     const documentMarkup = html.split("<script>")[0] || html;
 
-    assert.match(documentMarkup, /The selected session is waiting for its next live update/);
+    assert.match(documentMarkup, /What do you want Atlas to deliver today\?/);
     assert.match(documentMarkup, /data-main-pane-mode="new-session"/);
     assert.match(documentMarkup, /Selected detail unavailable/);
     assert.match(documentMarkup, /falls back to the blank new-session view instead of showing stale detail/);

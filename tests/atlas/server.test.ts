@@ -234,12 +234,12 @@ describe("atlas server", () => {
     const focusedHomeMarkup = focusedHomeResponse.text.split("<script>")[0] || focusedHomeResponse.text;
 
     assert.equal(homeResponse.status, 200);
-    assert.match(homeMarkup, /<title>ATLAS Workspace<\/title>/);
+    assert.match(homeMarkup, /<title>Atlas<\/title>/);
     assert.match(homeMarkup, /aria-label="ATLAS desktop surface"/);
     assert.match(homeMarkup, /data-main-pane-mode="new-session"/);
     assert.match(homeMarkup, /aria-label="ATLAS desktop sidebar"/);
     assert.match(homeMarkup, /aria-label="ATLAS work canvas"/);
-    assert.match(homeMarkup, /Start a new session from a clean workspace/);
+    assert.match(homeMarkup, /What do you want Atlas to deliver today\?/);
     assert.match(homeMarkup, /data-role="new-session-view"/);
     assert.match(homeMarkup, /data-role="session-row-status-light"/);
     assert.match(homeMarkup, /data-role="product-composer-input"/);
@@ -254,6 +254,8 @@ describe("atlas server", () => {
     assert.equal(focusedHomeResponse.status, 200);
     assert.match(focusedHomeMarkup, /data-main-pane-mode="selected-session"/);
     assert.match(focusedHomeMarkup, /data-role="selected-session-view"/);
+    assert.match(focusedHomeMarkup, /data-role="selected-session-summary"/);
+    assert.match(focusedHomeMarkup, /Latest meaningful update/);
     assert.match(focusedHomeMarkup, /live-status-attention[\s\S]*?data-role="selected-session-status-light"/);
     assert.match(focusedHomeMarkup, /data-role="selected-session-actions"[\s\S]*?<a class="action-button primary" href="\/" data-role="selected-session-new-session-link" data-focus-role="">New Session<\/a>/);
     assert.doesNotMatch(focusedHomeMarkup, /data-role="product-composer-input"/);
@@ -285,21 +287,22 @@ describe("atlas server", () => {
         }>;
       };
     };
+    const firstQualitySession = firstPayload.pageData.sessions.find((session) => session.role === "quality-worker");
     assert.equal(firstPayload.ok, true);
     assert.equal(firstPayload.pageData.mainPaneMode, "selected-session");
-    assert.equal(firstPayload.pageData.sessions[1]?.role, "quality-worker");
-    assert.equal(firstPayload.pageData.sessions[1]?.workerIdentityLabel, "Server quality worker");
-    assert.equal(firstPayload.pageData.sessions[1]?.currentStageLabel, "Refreshing snapshot");
-    assert.equal(firstPayload.pageData.sessions[1]?.currentBranch, "feat/server-snapshot");
-    assert.equal(firstPayload.pageData.sessions[1]?.latestMeaningfulAction, "Wired the focused-session contract");
-    assert.equal(firstPayload.pageData.sessions[1]?.latestMeaningfulActionAt, "2026-04-21T12:00:30.000Z");
-    assert.equal(firstPayload.pageData.sessions[1]?.logExcerpt[0], "snapshot endpoint ready");
-    assert.equal(firstPayload.pageData.sessions[1]?.logExcerpt.at(-1), "focused detail refresh ready");
-    assert.equal(firstPayload.pageData.sessions[1]?.logSource, "live_worker_quality-worker.log");
-    assert.equal(firstPayload.pageData.sessions[1]?.pullRequests[0], "https://example.com/pr/1");
-    assert.equal(firstPayload.pageData.sessions[1]?.touchedFiles[0], "src/atlas/server.ts");
-    assert.ok(firstPayload.pageData.sessions[1]?.freshnessAt);
-    assert.ok(Date.parse(String(firstPayload.pageData.sessions[1]?.freshnessAt || "")) >= Date.parse("2026-04-21T12:00:30.000Z"));
+    assert.equal(firstQualitySession?.role, "quality-worker");
+    assert.equal(firstQualitySession?.workerIdentityLabel, "Server quality worker");
+    assert.equal(firstQualitySession?.currentStageLabel, "Refreshing snapshot");
+    assert.equal(firstQualitySession?.currentBranch, "feat/server-snapshot");
+    assert.equal(firstQualitySession?.latestMeaningfulAction, "Wired the focused-session contract");
+    assert.equal(firstQualitySession?.latestMeaningfulActionAt, "2026-04-21T12:00:30.000Z");
+    assert.equal(firstQualitySession?.logExcerpt[0], "snapshot endpoint ready");
+    assert.equal(firstQualitySession?.logExcerpt.at(-1), "focused detail refresh ready");
+    assert.equal(firstQualitySession?.logSource, "live_worker_quality-worker.log");
+    assert.equal(firstQualitySession?.pullRequests[0], "https://example.com/pr/1");
+    assert.equal(firstQualitySession?.touchedFiles[0], "src/atlas/server.ts");
+    assert.ok(firstQualitySession?.freshnessAt);
+    assert.ok(Date.parse(String(firstQualitySession?.freshnessAt || "")) >= Date.parse("2026-04-21T12:00:30.000Z"));
 
     await fs.writeFile(path.join(stateDir, "pipeline_progress.json"), JSON.stringify({
       stage: "workers_finishing",
@@ -364,14 +367,15 @@ describe("atlas server", () => {
     const secondResponse = await requestText(port, "/api/atlas/snapshot?view=sessions&focusRole=quality-worker");
     assert.equal(secondResponse.status, 200);
     const secondPayload = JSON.parse(secondResponse.text) as typeof firstPayload;
+    const secondQualitySession = secondPayload.pageData.sessions.find((session) => session.role === "quality-worker");
     assert.equal(secondPayload.pageData.pipelineDetail, "Publishing the live refresh contract");
-    assert.equal(secondPayload.pageData.sessions[1]?.currentBranch, "feat/live-refresh");
-    assert.equal(secondPayload.pageData.sessions[1]?.latestMeaningfulAction, "Refreshed the focused session surface");
-    assert.equal(secondPayload.pageData.sessions[1]?.latestMeaningfulActionAt, "2026-04-21T12:05:30.000Z");
-    assert.equal(secondPayload.pageData.sessions[1]?.logExcerpt[0], "snapshot endpoint ready");
-    assert.equal(secondPayload.pageData.sessions[1]?.logExcerpt.at(-1), "refreshed focused detail and log excerpt");
-    assert.equal(secondPayload.pageData.sessions[1]?.touchedFiles[0], "src/atlas/routes/home.ts");
-    assert.ok(Date.parse(String(secondPayload.pageData.sessions[1]?.freshnessAt || "")) >= Date.parse("2026-04-21T12:05:30.000Z"));
+    assert.equal(secondQualitySession?.currentBranch, "feat/live-refresh");
+    assert.equal(secondQualitySession?.latestMeaningfulAction, "Refreshed the focused session surface");
+    assert.equal(secondQualitySession?.latestMeaningfulActionAt, "2026-04-21T12:05:30.000Z");
+    assert.equal(secondQualitySession?.logExcerpt[0], "snapshot endpoint ready");
+    assert.equal(secondQualitySession?.logExcerpt.at(-1), "refreshed focused detail and log excerpt");
+    assert.equal(secondQualitySession?.touchedFiles[0], "src/atlas/routes/home.ts");
+    assert.ok(Date.parse(String(secondQualitySession?.freshnessAt || "")) >= Date.parse("2026-04-21T12:05:30.000Z"));
 
     const legacyResponse = await requestText(port, "/api/snapshot?view=sessions&focusRole=quality-worker");
     assert.equal(legacyResponse.status, 200);
@@ -404,6 +408,32 @@ describe("atlas server", () => {
     assert.match(payload.continuityDetail, /falls back to the blank new-session view instead of showing stale detail/);
     assert.match(payload.pageData.continuityStatusDetail, /falls back to the blank new-session view instead of showing stale detail/);
     assert.equal(payload.pageData.sessions.some((session) => session.role === "missing-worker"), false);
+  });
+
+  it("clears a focused stale row so the main pane stays anchored to current live detail", async () => {
+    const snapshotResponse = await requestText(port, "/api/atlas/snapshot?focusRole=Atlas");
+    assert.equal(snapshotResponse.status, 200);
+
+    const payload = JSON.parse(snapshotResponse.text) as {
+      ok: boolean;
+      pageData: {
+        mainPaneMode?: string;
+        focusedSessionRole: string | null;
+        missingFocusedSnapshot: boolean;
+        continuityStatusLabel: string;
+        continuityStatusDetail: string;
+        sessions: Array<{ role: string; freshnessState: string }>;
+      };
+    };
+
+    assert.equal(payload.ok, true);
+    assert.equal(payload.pageData.mainPaneMode, "new-session");
+    assert.equal(payload.pageData.focusedSessionRole, null);
+    assert.equal(payload.pageData.missingFocusedSnapshot, true);
+    assert.equal(payload.pageData.continuityStatusLabel, "Selected detail unavailable");
+    assert.equal(payload.pageData.sessions.some((session) => session.role === "Atlas"), true);
+    assert.equal(payload.pageData.sessions.find((session) => session.role === "Atlas")?.freshnessState, "stale");
+    assert.match(payload.pageData.continuityStatusDetail, /current live snapshot/i);
   });
 
   it("rejects desktop snapshot requests without the configured desktop token", async () => {
@@ -489,7 +519,7 @@ describe("atlas server", () => {
     try {
       const blockedHome = await requestText(gatedPort, "/");
       assert.equal(blockedHome.status, 200);
-      assert.match(blockedHome.text, /What should ATLAS do next\?/);
+      assert.match(blockedHome.text, /What do you want Atlas to deliver today\?/);
 
       const blockedSessions = await requestText(gatedPort, "/sessions?focusRole=quality-worker");
       assert.equal(blockedSessions.status, 307);
@@ -509,7 +539,7 @@ describe("atlas server", () => {
 
       const unblockedHome = await requestText(gatedPort, "/");
       assert.equal(unblockedHome.status, 200);
-      assert.match(unblockedHome.text, /What should ATLAS do next\?/);
+      assert.match(unblockedHome.text, /What do you want Atlas to deliver today\?/);
       assert.match(unblockedHome.text, /data-role="new-session-view"/);
 
       const repeatHome = await requestText(gatedPort, "/");
@@ -582,7 +612,7 @@ describe("atlas server", () => {
       assert.equal(clarifyResponse.status, 400);
       assert.match(clarifyResponse.text, /"code":"missing_objective"/);
       assert.equal(blockedHome.status, 200);
-      assert.match(blockedHome.text, /Where should ATLAS start\?/);
+      assert.match(blockedHome.text, /What do you want Atlas to deliver today\?/);
       assert.equal(workspaceBriefStatus.status, 200);
       assert.match(workspaceBriefStatus.text, /"ready":true/);
       assert.match(workspaceBriefStatus.text, /"started":false/);
@@ -742,7 +772,7 @@ describe("atlas server", () => {
       const sessionsResponse = await requestText(sparsePort, "/sessions");
 
       assert.equal(homeResponse.status, 200);
-      assert.match(homeResponse.text, /No session state is available yet\./);
+      assert.match(homeResponse.text, /No live rows yet\./);
       assert.match(homeResponse.text, /aria-label="ATLAS desktop surface"/);
       assert.match(homeResponse.text, /data-role="product-composer-input"/);
       assert.equal(sessionsResponse.status, 307);

@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 import type { AtlasClarificationPacket } from "../src/atlas/clarification.js";
-import type { AtlasDesktopBootstrap, AtlasDesktopState } from "../src/atlas/desktop_state.js";
+import type { AtlasDesktopAttachment, AtlasDesktopBootstrap, AtlasDesktopState } from "../src/atlas/desktop_state.js";
 import type {
   AtlasSnapshotRequestPayload,
   AtlasSnapshotResponse,
@@ -43,11 +43,30 @@ contextBridge.exposeInMainWorld("atlasDesktop", {
   getSnapshot(request: AtlasSnapshotRequestPayload = {}): Promise<AtlasSnapshotResponse> {
     return invokeAtlasDesktop<AtlasSnapshotResponse>("atlas-desktop:get-snapshot", request);
   },
+  onWindowVisible(listener: () => void): () => void {
+    const wrappedListener = () => {
+      try {
+        listener();
+      } catch (error) {
+        console.error("[atlas] preload visibility listener failed:", error);
+      }
+    };
+    ipcRenderer.on("atlas-desktop:window-visible", wrappedListener);
+    return () => {
+      ipcRenderer.off("atlas-desktop:window-visible", wrappedListener);
+    };
+  },
   setWorkspaceDraft(draft: string): Promise<{ ok: true }> {
     return invokeAtlasDesktop<{ ok: true }>("atlas-desktop:set-workspace-draft", { draft });
   },
   setWorkspaceComposerFocus(focused: boolean): Promise<{ ok: true }> {
     return invokeAtlasDesktop<{ ok: true }>("atlas-desktop:set-workspace-composer-focus", { focused });
+  },
+  pickWorkspaceAttachments(): Promise<{ ok: true; attachments: AtlasDesktopAttachment[]; }> {
+    return invokeAtlasDesktop<{ ok: true; attachments: AtlasDesktopAttachment[]; }>("atlas-desktop:pick-workspace-attachments");
+  },
+  removeWorkspaceAttachment(attachmentId: string): Promise<{ ok: true; attachments: AtlasDesktopAttachment[]; }> {
+    return invokeAtlasDesktop<{ ok: true; attachments: AtlasDesktopAttachment[]; }>("atlas-desktop:remove-workspace-attachment", { attachmentId });
   },
   startSession(objective: string): Promise<AtlasDesktopClarificationResult> {
     return invokeAtlasDesktop<AtlasDesktopClarificationResult>("atlas-desktop:start-session", { objective });

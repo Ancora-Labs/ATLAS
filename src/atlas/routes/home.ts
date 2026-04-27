@@ -61,6 +61,10 @@ function sortSessions(sessions: AtlasSessionDto[]): AtlasSessionDto[] {
   return [...sessions].sort(compareAtlasSessionsForDesktop);
 }
 
+function hasLiveAtlasSessions(sessions: AtlasSessionDto[]): boolean {
+  return sessions.some((session) => session.freshnessState === "live");
+}
+
 function summarizeAtlasFreshnessPolicy(
   sessions: AtlasSessionDto[],
 ): Pick<AtlasPageData, "continuityStatusLabel" | "continuityStatusDetail"> {
@@ -101,7 +105,7 @@ async function deriveAtlasWorkspaceRuntimeState(
   focusedSessionRole: string | null,
   missingFocusedSnapshot: boolean,
 ): Promise<Pick<AtlasPageData, "sessionStartStatusLabel" | "sessionStartStatusDetail" | "sessionStartUpdatedAt" | "continuityStatusLabel" | "continuityStatusDetail">> {
-  const hasLiveSessions = sessions.length > 0;
+  const hasLiveSessions = hasLiveAtlasSessions(sessions);
   const desktopSessionId = String(options.desktopSessionId || "").trim();
   const freshnessSummary = summarizeAtlasFreshnessPolicy(sessions);
 
@@ -169,7 +173,9 @@ function resolveFocusedSessionRole(
     return null;
   }
 
-  const match = sessions.find((session) => normalizeWorkerName(session.role) === normalizedRequestedRole);
+  const match = sessions.find(
+    (session) => normalizeWorkerName(session.role) === normalizedRequestedRole && session.freshnessState === "live",
+  );
   return match?.role || null;
 }
 
@@ -180,7 +186,9 @@ function resolveAtlasMainPaneMode(focusedSessionRole: string | null): AtlasMainP
 export function deriveAtlasHomeReadiness(
   sessions: AtlasSessionDto[],
 ): Pick<AtlasPageData, "homePrimaryActionLabel" | "homeReadinessHeading" | "homeReadinessDetail"> {
-  const hasResumableSessions = sessions.some((session) => session.isResumable);
+  const hasResumableSessions = sessions.some(
+    (session) => session.isResumable && session.freshnessState === "live",
+  );
   return hasResumableSessions
     ? {
         homePrimaryActionLabel: "New Session",
