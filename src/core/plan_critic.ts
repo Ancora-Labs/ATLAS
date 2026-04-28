@@ -9,6 +9,7 @@
  * that catches obvious plan deficiencies cheaply (no AI call).
  */
 import { EQUAL_DIMENSION_SET, normalizeLeverageRank, MAX_ACCEPTANCE_CRITERIA_PER_TASK, MAX_FILES_IN_SCOPE_PER_TASK } from "./plan_contract_validator.js";
+import { TARGETED_TEST_COMMAND_PLACEHOLDER } from "./verification_command_registry.js";
 
 /**
  * Critic rubric dimensions. Each returns a 0-1 score.
@@ -342,8 +343,8 @@ export function repairPlan(plan, criticResult) {
   if (criticResult.dimensions[CRITIC_DIMENSION.HAS_VERIFICATION] < 1.0) {
     const existing = String(repaired.verification || "").trim();
     if (!existing || existing.length <= 20) {
-      repaired.verification = existing ? `${existing}\nnpm test` : "npm test";
-      repairs.push("Added npm test as verification command");
+      repaired.verification = existing ? `${existing}\n${TARGETED_TEST_COMMAND_PLACEHOLDER}` : TARGETED_TEST_COMMAND_PLACEHOLDER;
+      repairs.push("Added targeted verification command placeholder");
     }
   }
 

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { readJson, spawnAsync, writeJson } from "./fs_utils.js";
+import { requestDaemonReload } from "./daemon_control.js";
 import {
   getActiveTargetSessionPath,
   PLATFORM_MODE,
@@ -62,7 +63,13 @@ const TARGET_SESSION_EPHEMERAL_STATE_FILES = Object.freeze([
   "dispatch_checkpoint.json",
   "last_target_delivery_handoff.json",
   "pipeline_progress.json",
+  "prometheus_topic_memory.json",
   "prometheus_analysis.json",
+  "research_scout_output.json",
+  "research_scout_seen_urls.json",
+  "research_scout_topic_site_status.json",
+  "research_synthesis.json",
+  "synthesis_recovery_request.json",
   "worker_cycle_artifacts.json",
   "worker_sessions.json",
 ]);
@@ -77,6 +84,12 @@ function buildTargetSessionIdentity(session: any): string {
   const sessionId = String(session?.sessionId || "").trim();
   if (!projectId || !sessionId) return "";
   return `${projectId}:${sessionId}`;
+}
+
+function isSameTargetSession(left: any, right: any): boolean {
+  const leftIdentity = buildTargetSessionIdentity(left);
+  if (!leftIdentity) return false;
+  return leftIdentity === buildTargetSessionIdentity(right);
 }
 
 function shouldResetTargetSessionEphemeralState(previousSession: any, nextSession: any): boolean {
@@ -112,6 +125,27 @@ async function clearTargetSessionEphemeralState(config: any): Promise<void> {
 function normalizeNullableString(value: unknown): string | null {
   const normalized = String(value || "").trim();
   return normalized ? normalized : null;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function resolveConfiguredTargetSessionSelector(config: any): { projectId: string | null; sessionId: string | null } {
+  const projectId = normalizeNullableString(
+    config?.targetSessionSelector?.projectId
+    || process.env.BOX_TARGET_PROJECT_ID
+  );
+  const sessionId = normalizeNullableString(
+    config?.targetSessionSelector?.sessionId
+    || process.env.BOX_TARGET_SESSION_ID
+  );
+  return { projectId, sessionId };
+}
+
+function hasConfiguredTargetSessionSelector(config: any): boolean {
+  const selector = resolveConfiguredTargetSessionSelector(config);
+  return Boolean(selector.sessionId);
 }
 
 function normalizeRepoIdentityValue(value: unknown): string {
@@ -374,6 +408,75 @@ export function getTargetSessionPath(stateDir: string, projectId: string, sessio
   return path.join(getTargetProjectPath(stateDir, projectId), sessionId);
 }
 
+export function hasActiveTargetSessionScope(config: any): boolean {
+  return String(config?.platformModeState?.currentMode || "") === PLATFORM_MODE.SINGLE_TARGET_DELIVERY
+    && Boolean(config?.activeTargetSession?.projectId)
+    && Boolean(config?.activeTargetSession?.sessionId);
+}
+
+export function resolveTargetSessionArtifactPath(config: any, fileName: string): string | null {
+  if (!hasActiveTargetSessionScope(config)) return null;
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const projectId = String(config?.activeTargetSession?.projectId || "").trim();
+  const sessionId = String(config?.activeTargetSession?.sessionId || "").trim();
+  const normalizedFileName = String(fileName || "").trim();
+  if (!projectId || !sessionId || !normalizedFileName) return null;
+  return path.join(getTargetSessionPath(stateDir, projectId, sessionId), normalizedFileName);
+}
+
+/**
+ * Returns the per-session runtime path for a state file when an active target
+ * session selector is bound on `config`; otherwise returns the global
+ * `<stateDir>/<fileName>` path. This lets callers route reads/writes to a
+ * session-scoped location without forking call sites.
+ *
+ * Per-session layout: `state/projects/<projectId>/<sessionId>/runtime/<fileName>`.
+ * Falls back to `state/<fileName>` when no session is bound (legacy / global mode).
+ */
+export function resolveScopedStatePath(config: any, fileName: string): string {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const normalizedFileName = String(fileName || "").trim();
+  if (!normalizedFileName) return path.join(stateDir, "");
+  if (hasActiveTargetSessionScope(config)) {
+    const projectId = String(config?.activeTargetSession?.projectId || "").trim();
+    const sessionId = String(config?.activeTargetSession?.sessionId || "").trim();
+    if (projectId && sessionId) {
+      return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "runtime", normalizedFileName);
+    }
+  }
+  return path.join(stateDir, normalizedFileName);
+}
+
+/**
+ * Ensure the directory of a scoped path exists so write operations succeed when
+ * the per-session `runtime/` folder hasn't been created yet.
+ */
+export async function ensureScopedStateDir(scopedPath: string): Promise<void> {
+  await fs.mkdir(path.dirname(scopedPath), { recursive: true });
+}
+
+export async function readTargetSessionArtifactJson(config: any, fileName: string, fallbackValue: any = null): Promise<any> {
+  const artifactPath = resolveTargetSessionArtifactPath(config, fileName);
+  if (!artifactPath) return fallbackValue;
+  return readJson(artifactPath, fallbackValue);
+}
+
+export async function mirrorJsonArtifactToTargetSession(config: any, fileName: string, payload: any): Promise<string | null> {
+  const artifactPath = resolveTargetSessionArtifactPath(config, fileName);
+  if (!artifactPath) return null;
+  await fs.mkdir(path.dirname(artifactPath), { recursive: true });
+  await writeJson(artifactPath, payload);
+  return artifactPath;
+}
+
+export async function appendTargetSessionArtifactText(config: any, fileName: string, text: string): Promise<string | null> {
+  const artifactPath = resolveTargetSessionArtifactPath(config, fileName);
+  if (!artifactPath || !String(text || "")) return null;
+  await fs.mkdir(path.dirname(artifactPath), { recursive: true });
+  await fs.appendFile(artifactPath, text, "utf8");
+  return artifactPath;
+}
+
 export function getTargetSessionStateFilePath(stateDir: string, projectId: string, sessionId: string): string {
   return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "target_session.json");
 }
@@ -412,6 +515,150 @@ export function getTargetClarificationTranscriptPath(stateDir: string, projectId
 
 export function getTargetIntentContractPath(stateDir: string, projectId: string, sessionId: string): string {
   return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "target_intent_contract.json");
+}
+
+function parseTimestampOrZero(value: unknown): number {
+  const text = String(value || "").trim();
+  if (!text) return 0;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function preferNonEmptyStringArray(primary: unknown, fallback: unknown): string[] {
+  const primaryValues = normalizeStringArray(primary);
+  if (primaryValues.length > 0) {
+    return primaryValues;
+  }
+  return normalizeStringArray(fallback);
+}
+
+function preferNonEmptyString(primary: unknown, fallback: unknown): string | null {
+  return normalizeNullableString(primary) || normalizeNullableString(fallback);
+}
+
+function buildSessionIntentFromContract(contract: any, session: any, stateDir: string) {
+  const clarifiedIntent = contract?.clarifiedIntent && typeof contract.clarifiedIntent === "object"
+    ? contract.clarifiedIntent
+    : {};
+  const unresolvedOpenQuestions = (Array.isArray(contract?.openQuestions) ? contract.openQuestions : [])
+    .filter((question: any) => String(question?.status || "pending").trim().toLowerCase() !== "answered")
+    .map((question: any) => String(question?.title || question?.prompt || question?.id || "").trim())
+    .filter(Boolean);
+
+  return {
+    status: normalizeNullableString(contract?.status) || normalizeNullableString(session?.intent?.status) || TARGET_INTENT_STATUS.PENDING,
+    summary: normalizeNullableString(contract?.summary) || normalizeNullableString(session?.intent?.summary),
+    repoState: normalizeNullableString(contract?.repoState) || normalizeNullableString(session?.intent?.repoState) || normalizeNullableString(session?.repoProfile?.repoState) || "unknown",
+    planningMode: normalizeNullableString(contract?.planningMode) || normalizeNullableString(session?.intent?.planningMode),
+    productType: preferNonEmptyString(clarifiedIntent?.productType, session?.intent?.productType),
+    targetUsers: preferNonEmptyStringArray(clarifiedIntent?.targetUsers, session?.intent?.targetUsers),
+    mustHaveFlows: preferNonEmptyStringArray(clarifiedIntent?.mustHaveFlows, session?.intent?.mustHaveFlows),
+    scopeIn: preferNonEmptyStringArray(clarifiedIntent?.scopeIn, session?.intent?.scopeIn),
+    scopeOut: preferNonEmptyStringArray(clarifiedIntent?.scopeOut, session?.intent?.scopeOut),
+    protectedAreas: preferNonEmptyStringArray(clarifiedIntent?.protectedAreas, session?.intent?.protectedAreas),
+    preferredQualityBar: preferNonEmptyString(clarifiedIntent?.preferredQualityBar, session?.intent?.preferredQualityBar),
+    designDirection: preferNonEmptyString(clarifiedIntent?.designDirection, session?.intent?.designDirection),
+    deploymentExpectations: preferNonEmptyStringArray(clarifiedIntent?.deploymentExpectations, session?.intent?.deploymentExpectations),
+    successCriteria: preferNonEmptyStringArray(clarifiedIntent?.successCriteria, session?.intent?.successCriteria),
+    assumptions: preferNonEmptyStringArray(contract?.assumptions, session?.intent?.assumptions),
+    openQuestions: unresolvedOpenQuestions.length > 0 ? unresolvedOpenQuestions : normalizeStringArray(session?.intent?.openQuestions),
+    sourceIntentContractPath: normalizeNullableString(session?.clarification?.intentContractPath) || getTargetIntentContractPath(stateDir, session.projectId, session.sessionId),
+    updatedAt: normalizeNullableString(contract?.updatedAt) || normalizeNullableString(session?.intent?.updatedAt),
+  };
+}
+
+async function reconcileSessionWithIntentContract(session: any, config: any) {
+  if (!session?.projectId || !session?.sessionId) {
+    return { session, changed: false };
+  }
+
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const intentContractPath = normalizeNullableString(session?.clarification?.intentContractPath)
+    || getTargetIntentContractPath(stateDir, session.projectId, session.sessionId);
+  const contract = await readJson(intentContractPath, null).catch(() => null);
+  if (!contract || typeof contract !== "object") {
+    return { session, changed: false };
+  }
+
+  const contractUpdatedAt = Math.max(
+    parseTimestampOrZero(contract?.updatedAt),
+    parseTimestampOrZero(contract?.createdAt),
+  );
+  const sessionUpdatedAt = Math.max(
+    parseTimestampOrZero(session?.intent?.updatedAt),
+    parseTimestampOrZero(session?.clarification?.completedAt),
+    parseTimestampOrZero(session?.clarification?.lastAnsweredAt),
+    parseTimestampOrZero(session?.lifecycle?.updatedAt),
+  );
+  const readyForPlanning = contract?.readyForPlanning === true || String(contract?.status || "").trim() === TARGET_INTENT_STATUS.READY_FOR_PLANNING;
+  const planningMode = normalizeNullableString(contract?.planningMode)
+    || normalizeNullableString(contract?.deliveryModeDecision?.recommendation)
+    || normalizeNullableString(session?.intent?.planningMode)
+    || (readyForPlanning ? "active" : null);
+  const nextStage = readyForPlanning
+    ? (planningMode === TARGET_SESSION_STAGE.SHADOW ? TARGET_SESSION_STAGE.SHADOW : TARGET_SESSION_STAGE.ACTIVE)
+    : session.currentStage;
+  const hydratedIntent = buildSessionIntentFromContract(contract, session, stateDir);
+  const pendingQuestionTitles = hydratedIntent.openQuestions;
+  const shouldHydrate = contractUpdatedAt > sessionUpdatedAt
+    || readyForPlanning !== (session?.clarification?.readyForPlanning === true)
+    || normalizeNullableString(hydratedIntent.summary) !== normalizeNullableString(session?.intent?.summary)
+    || normalizeNullableString(hydratedIntent.planningMode) !== normalizeNullableString(session?.intent?.planningMode)
+    || pendingQuestionTitles.length !== normalizeStringArray(session?.clarification?.pendingQuestions).length;
+
+  if (!shouldHydrate) {
+    return { session, changed: false };
+  }
+
+  const reconciledSession = {
+    ...session,
+    currentStage: nextStage,
+    onboarding: {
+      ...session.onboarding,
+      recommendedNextStage: readyForPlanning ? nextStage : session.onboarding?.recommendedNextStage,
+    },
+    clarification: {
+      ...session.clarification,
+      status: readyForPlanning ? "completed" : session.clarification?.status,
+      pendingQuestions: readyForPlanning ? [] : pendingQuestionTitles,
+      questionCount: Array.isArray(contract?.openQuestions) ? contract.openQuestions.length : Number(session?.clarification?.questionCount || 0),
+      readyForPlanning,
+      completedAt: readyForPlanning
+        ? normalizeNullableString(session?.clarification?.completedAt) || normalizeNullableString(contract?.updatedAt) || session?.clarification?.completedAt || null
+        : session?.clarification?.completedAt || null,
+      lastAnsweredAt: normalizeNullableString(contract?.updatedAt) || normalizeNullableString(session?.clarification?.lastAnsweredAt),
+    },
+    intent: hydratedIntent,
+    prerequisites: {
+      ...session.prerequisites,
+      blockedReason: readyForPlanning ? null : session?.prerequisites?.blockedReason,
+      awaitingHumanInput: readyForPlanning ? false : session?.prerequisites?.awaitingHumanInput === true,
+    },
+    gates: readyForPlanning
+      ? {
+          ...session.gates,
+          allowPlanning: true,
+          allowShadowExecution: nextStage === TARGET_SESSION_STAGE.SHADOW,
+          allowActiveExecution: nextStage === TARGET_SESSION_STAGE.ACTIVE,
+        }
+      : session.gates,
+    handoff: {
+      ...session.handoff,
+      carriedContextSummary: normalizeNullableString(hydratedIntent.summary) || normalizeNullableString(session?.handoff?.carriedContextSummary),
+      requiredHumanInputs: readyForPlanning ? [] : normalizeStringArray(session?.handoff?.requiredHumanInputs),
+      nextAction: readyForPlanning ? resolveStageNextAction(nextStage) : normalizeNullableString(session?.handoff?.nextAction) || resolveStageNextAction(session.currentStage),
+    },
+    lifecycle: {
+      ...session.lifecycle,
+      updatedAt: normalizeNullableString(contract?.updatedAt) || normalizeNullableString(session?.lifecycle?.updatedAt) || new Date().toISOString(),
+    },
+    warnings: uniqueStrings([
+      ...normalizeStringArray(session?.warnings),
+      "normalized:hydrated_from_target_intent_contract",
+    ]),
+  };
+
+  return { session: reconciledSession, changed: true };
 }
 
 function normalizeTargetIntent(rawIntent: any, stateDir: string, projectId: string, sessionId: string) {
@@ -464,6 +711,10 @@ export function getTargetCompletionPath(stateDir: string, projectId: string, ses
 
 export function getTargetSessionProgressLogPath(stateDir: string, projectId: string, sessionId: string): string {
   return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "session_progress.log");
+}
+
+export function getOpenTargetSessionsPath(stateDir: string): string {
+  return path.join(stateDir, "open_target_sessions.json");
 }
 
 export function getLegacyTargetWorkspaceRootPath(workspaceDir: string): string {
@@ -920,12 +1171,24 @@ export function normalizeActiveTargetSession(rawSession: any, config: any) {
     };
   }
 
-  const currentStage = normalizeStage(rawSession?.currentStage);
+  const rawLifecycleStatus = normalizeNullableString(rawSession?.lifecycle?.status);
+  const hasArchivedLifecycleMarkers = Boolean(
+    normalizeNullableString(rawSession?.lifecycle?.archivedAt)
+    || normalizeNullableString(rawSession?.lifecycle?.closedAt)
+  );
+  let currentStage = normalizeStage(rawSession?.currentStage);
   if (rawSession?.currentMode !== PLATFORM_MODE.SINGLE_TARGET_DELIVERY) {
     warnings.push("active target session currentMode was normalized to single_target_delivery");
   }
   if (currentStage !== rawSession?.currentStage) {
     warnings.push("active target session stage was invalid and normalized to onboarding");
+  }
+  if (CLOSED_TARGET_SESSION_STAGES.has(String(rawLifecycleStatus || "") as TargetSessionStage) && currentStage !== rawLifecycleStatus) {
+    currentStage = String(rawLifecycleStatus);
+    warnings.push("active target session stage was reconciled from terminal lifecycle status");
+  } else if (hasArchivedLifecycleMarkers && !isClosedTargetSession({ currentStage, lifecycle: { status: rawLifecycleStatus } })) {
+    currentStage = TARGET_SESSION_STAGE.COMPLETED;
+    warnings.push("active target session stage was reconciled from archived lifecycle markers");
   }
   if (normalizeNullableString(rawSession?.workspace?.path) !== getTargetWorkspacePath(workspaceDir, projectId, sessionId, rootDir)) {
     warnings.push("active target session workspace path was rebased to the isolated target workspace root");
@@ -991,6 +1254,23 @@ export function normalizeActiveTargetSession(rawSession: any, config: any) {
       questionCount: Number.isFinite(Number(rawSession?.clarification?.questionCount)) ? Number(rawSession.clarification.questionCount) : 0,
       pendingQuestions: normalizeStringArray(rawSession?.clarification?.pendingQuestions),
       loopCount: Number.isFinite(Number(rawSession?.clarification?.loopCount)) ? Number(rawSession.clarification.loopCount) : 0,
+      singleCall: {
+        attempted: rawSession?.clarification?.singleCall?.attempted === true,
+        completed: rawSession?.clarification?.singleCall?.completed === true,
+        inProgress: rawSession?.clarification?.singleCall?.inProgress === true,
+        failed: rawSession?.clarification?.singleCall?.failed === true,
+        selectedAgentSlug: normalizeNullableString(rawSession?.clarification?.singleCall?.selectedAgentSlug),
+        startedAt: normalizeNullableString(rawSession?.clarification?.singleCall?.startedAt),
+        finishedAt: normalizeNullableString(rawSession?.clarification?.singleCall?.finishedAt),
+        failureReason: normalizeNullableString(rawSession?.clarification?.singleCall?.failureReason),
+        premiumRequests: Number.isFinite(Number(rawSession?.clarification?.singleCall?.premiumRequests))
+          ? Number(rawSession?.clarification?.singleCall?.premiumRequests)
+          : null,
+        maxPremiumRequests: Number.isFinite(Number(rawSession?.clarification?.singleCall?.maxPremiumRequests))
+          ? Number(rawSession?.clarification?.singleCall?.maxPremiumRequests)
+          : 1,
+        withinLimit: rawSession?.clarification?.singleCall?.withinLimit !== false,
+      },
       readyForPlanning: rawSession?.clarification?.readyForPlanning === true,
       lastAskedAt: normalizeNullableString(rawSession?.clarification?.lastAskedAt),
       lastAnsweredAt: normalizeNullableString(rawSession?.clarification?.lastAnsweredAt),
@@ -1048,38 +1328,176 @@ export function normalizeActiveTargetSession(rawSession: any, config: any) {
 
 export async function persistTargetSessionSnapshot(session: any, config: any) {
   const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
-  await Promise.all([
-    writeJson(getActiveTargetSessionPath(stateDir), session),
-    writeJson(getTargetSessionStateFilePath(stateDir, session.projectId, session.sessionId), session),
-  ]);
+  await persistTargetSessionArtifacts(session, config, { selectAsActive: true });
 }
 
-export async function saveActiveTargetSession(config: any, session: any) {
+function isClosedTargetSession(session: any): boolean {
+  return CLOSED_TARGET_SESSION_STAGES.has(String(session?.currentStage || "") as TargetSessionStage)
+    || CLOSED_TARGET_SESSION_STAGES.has(String(session?.lifecycle?.status || "") as TargetSessionStage);
+}
+
+function buildOpenTargetSessionSummary(session: any, stateDir: string) {
+  return {
+    projectId: String(session?.projectId || "").trim() || null,
+    sessionId: String(session?.sessionId || "").trim() || null,
+    currentStage: String(session?.currentStage || TARGET_SESSION_STAGE.ONBOARDING).trim(),
+    repoUrl: normalizeNullableString(session?.repo?.repoUrl),
+    objectiveSummary: normalizeNullableString(session?.objective?.summary),
+    workspacePath: normalizeNullableString(session?.workspace?.path),
+    updatedAt: normalizeNullableString(session?.lifecycle?.updatedAt) || new Date().toISOString(),
+    statePath: getTargetSessionStateFilePath(stateDir, session.projectId, session.sessionId),
+    progressLogPath: getTargetSessionProgressLogPath(stateDir, session.projectId, session.sessionId),
+  };
+}
+
+async function writeOpenTargetSessions(config: any, sessions: any[]) {
   const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
-  const previousRawSession = await readJson(getActiveTargetSessionPath(stateDir), null);
-  const previousSession = normalizeActiveTargetSession(previousRawSession, config).session;
-  const normalized = normalizeActiveTargetSession(session, config);
-  if (!normalized.session) {
-    throw new Error("Cannot save invalid active target session");
-  }
-  const relocatedSession = await ensureTargetWorkspaceLocation(normalized.session, config);
-  if (shouldResetTargetSessionEphemeralState(previousSession, relocatedSession)) {
-    await clearTargetSessionEphemeralState(config);
-  }
-  await persistTargetSessionSnapshot(relocatedSession, config);
-  return relocatedSession;
+  const registryPath = getOpenTargetSessionsPath(stateDir);
+  const summaries = sessions
+    .filter((session) => session && !isClosedTargetSession(session))
+    .map((session) => buildOpenTargetSessionSummary(session, stateDir));
+  await writeJson(registryPath, summaries);
 }
 
-export async function loadActiveTargetSession(config: any) {
+async function loadSessionStateSnapshot(config: any, projectId: string, sessionId: string) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const rawSession = await readJson(getTargetSessionStateFilePath(stateDir, projectId, sessionId), null);
+  const normalized = normalizeActiveTargetSession(rawSession, config);
+  if (!normalized.session) return null;
+  const relocated = await ensureTargetWorkspaceLocation(normalized.session, config);
+  const reconciled = await reconcileSessionWithIntentContract(relocated, config);
+  if (reconciled.changed) {
+    await persistTargetSessionArtifacts(reconciled.session, config, { selectAsActive: false });
+  }
+  return reconciled.session;
+}
+
+async function loadSelectedTargetSessionSnapshot(config: any, options: { includeClosed?: boolean } = {}) {
   const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
   const rawSession = await readJson(getActiveTargetSessionPath(stateDir), null);
   const normalized = normalizeActiveTargetSession(rawSession, config);
   if (normalized.session) {
     const relocatedSession = await ensureTargetWorkspaceLocation(normalized.session, config);
-    await persistTargetSessionSnapshot(relocatedSession, config);
-    return relocatedSession;
+    const reconciled = await reconcileSessionWithIntentContract(relocatedSession, config);
+    await persistTargetSessionArtifacts(reconciled.session, config, { selectAsActive: true });
+    if (isClosedTargetSession(reconciled.session) && options.includeClosed !== true) {
+      await fs.rm(getActiveTargetSessionPath(stateDir), { force: true }).catch(() => {});
+      return null;
+    }
+    return reconciled.session;
   }
   return normalized.session;
+}
+
+async function upsertOpenTargetSession(config: any, session: any) {
+  const existingSessions = await listOpenTargetSessions(config);
+  const retained = existingSessions.filter((entry) => !(entry.projectId === session.projectId && entry.sessionId === session.sessionId));
+  retained.push(session);
+  await writeOpenTargetSessions(config, retained);
+}
+
+async function removeOpenTargetSession(config: any, session: any) {
+  const existingSessions = await listOpenTargetSessions(config);
+  const retained = existingSessions.filter((entry) => !(entry.projectId === session?.projectId && entry.sessionId === session?.sessionId));
+  await writeOpenTargetSessions(config, retained);
+}
+
+async function persistTargetSessionArtifacts(session: any, config: any, options: { selectAsActive?: boolean } = {}) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  await writeJson(getTargetSessionStateFilePath(stateDir, session.projectId, session.sessionId), session);
+  if (isClosedTargetSession(session)) {
+    await removeOpenTargetSession(config, session);
+  } else {
+    await upsertOpenTargetSession(config, session);
+  }
+  if (options.selectAsActive !== false) {
+    await writeJson(getActiveTargetSessionPath(stateDir), session);
+  }
+}
+
+export async function listOpenTargetSessions(config: any) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const registryPath = getOpenTargetSessionsPath(stateDir);
+  const rawRegistry = await readJson(registryPath, null);
+  const registryEntries = Array.isArray(rawRegistry) ? rawRegistry : [];
+  const sessions = await Promise.all(
+    registryEntries.map((entry) => loadSessionStateSnapshot(config, String(entry?.projectId || ""), String(entry?.sessionId || "")))
+  );
+  const normalizedSessions = sessions.filter((session) => session && !isClosedTargetSession(session));
+  if (normalizedSessions.length !== registryEntries.length) {
+    await writeOpenTargetSessions(config, normalizedSessions);
+  }
+  return normalizedSessions.sort((left: any, right: any) => {
+    const leftTime = Date.parse(String(left?.lifecycle?.updatedAt || left?.updatedAt || 0));
+    const rightTime = Date.parse(String(right?.lifecycle?.updatedAt || right?.updatedAt || 0));
+    return rightTime - leftTime;
+  });
+}
+
+export async function loadTargetSession(config: any, input: { sessionId?: string | null; projectId?: string | null }) {
+  const targetSessionId = normalizeNullableString(input?.sessionId);
+  const targetProjectId = normalizeNullableString(input?.projectId);
+  if (!targetSessionId) {
+    return null;
+  }
+
+  const openSessions = await listOpenTargetSessions(config);
+  const matchedOpenSession = openSessions.find((session) => {
+    const sameSessionId = String(session?.sessionId || "") === targetSessionId;
+    const sameProjectId = !targetProjectId || String(session?.projectId || "") === targetProjectId;
+    return sameSessionId && sameProjectId;
+  });
+  if (matchedOpenSession) {
+    return matchedOpenSession;
+  }
+
+  if (!targetProjectId) {
+    return null;
+  }
+
+  return loadSessionStateSnapshot(config, targetProjectId, targetSessionId);
+}
+
+export async function saveTargetSession(config: any, session: any, options: { selectAsActive?: boolean } = {}) {
+  const normalized = normalizeActiveTargetSession(session, config);
+  if (!normalized.session) {
+    throw new Error("Cannot save invalid target session");
+  }
+
+  const selectAsActive = options.selectAsActive === true;
+  const relocatedSession = await ensureTargetWorkspaceLocation(normalized.session, config);
+
+  if (selectAsActive) {
+    const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+    const previousRawSession = await readJson(getActiveTargetSessionPath(stateDir), null);
+    const previousSession = normalizeActiveTargetSession(previousRawSession, config).session;
+    if (shouldResetTargetSessionEphemeralState(previousSession, relocatedSession)) {
+      await clearTargetSessionEphemeralState(config);
+    }
+  }
+
+  await persistTargetSessionArtifacts(relocatedSession, config, { selectAsActive });
+  return relocatedSession;
+}
+
+export async function saveActiveTargetSession(config: any, session: any) {
+  return saveTargetSession(config, session, { selectAsActive: !hasConfiguredTargetSessionSelector(config) });
+}
+
+export async function loadActiveTargetSession(config: any) {
+  const configuredSelector = resolveConfiguredTargetSessionSelector(config);
+  if (configuredSelector.sessionId) {
+    return loadTargetSession(config, configuredSelector);
+  }
+  return loadSelectedTargetSessionSnapshot(config);
+}
+
+export async function loadActiveTargetSessionIncludingClosed(config: any) {
+  const configuredSelector = resolveConfiguredTargetSessionSelector(config);
+  if (configuredSelector.sessionId) {
+    return loadTargetSession(config, configuredSelector);
+  }
+  return loadSelectedTargetSessionSnapshot(config, { includeClosed: true });
 }
 
 export async function loadLastArchivedTargetSession(config: any) {
@@ -1095,21 +1513,28 @@ export async function clearLastArchivedTargetSession(config: any) {
   await fs.rm(getLastArchivedTargetSessionPath(stateDir), { force: true }).catch(() => {});
 }
 
-export async function createTargetSession(manifest: any, config: any) {
-  const existingSession = await loadActiveTargetSession(config);
+export async function createTargetSession(manifest: any, config: any, options: { selectAsActive?: boolean } = {}) {
+  const existingSession = await loadSelectedTargetSessionSnapshot(config);
+  const openSessions = await listOpenTargetSessions(config);
   const requestedRepoIdentity = buildSessionRepoIdentity(manifest);
-  if (existingSession && !CLOSED_TARGET_SESSION_STAGES.has(String(existingSession.currentStage || "") as TargetSessionStage)) {
-    const existingRepoIdentity = buildSessionRepoIdentity(existingSession);
-    if (requestedRepoIdentity && existingRepoIdentity && requestedRepoIdentity === existingRepoIdentity) {
-      throw new Error(`Active target session for this repo already exists: ${existingSession.sessionId}`);
-    }
-    throw new Error(`Active target session already exists: ${existingSession.sessionId}`);
+  const duplicateRepoSession = openSessions.find((session) => {
+    if (isClosedTargetSession(session)) return false;
+    const existingRepoIdentity = buildSessionRepoIdentity(session);
+    return Boolean(requestedRepoIdentity && existingRepoIdentity && requestedRepoIdentity === existingRepoIdentity);
+  });
+  if (duplicateRepoSession) {
+    throw new Error(`Active target session for this repo already exists: ${duplicateRepoSession.sessionId}`);
   }
 
   let session = buildTargetSessionRecord(manifest, config);
   const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const shouldSelectAsActive = typeof options.selectAsActive === "boolean"
+    ? options.selectAsActive
+    : (!existingSession || isClosedTargetSession(existingSession));
 
-  await clearTargetSessionEphemeralState(config);
+  if (shouldSelectAsActive) {
+    await clearTargetSessionEphemeralState(config);
+  }
   await fs.mkdir(getTargetSessionPath(stateDir, session.projectId, session.sessionId), { recursive: true });
   await fs.mkdir(session.workspace.path, { recursive: true });
   session = await prepareTargetWorkspaceForSession(session, config);
@@ -1118,15 +1543,18 @@ export async function createTargetSession(manifest: any, config: any) {
       getTargetIntakeManifestPath(stateDir, session.projectId, session.sessionId),
       validateTargetIntakeManifest(manifest)
     ),
-    persistTargetSessionSnapshot(session, config),
+    persistTargetSessionArtifacts(session, config, { selectAsActive: shouldSelectAsActive }),
   ]);
-  await updatePlatformModeState(config, {
-    currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
-    activeTargetSessionId: session.sessionId,
-    activeTargetProjectId: session.projectId,
-    fallbackModeAfterCompletion: PLATFORM_MODE.IDLE,
-    reason: `target_session_opened:${session.sessionId}`,
-  }, session);
+  if (shouldSelectAsActive) {
+    await updatePlatformModeState(config, {
+      currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+      activeTargetSessionId: session.sessionId,
+      activeTargetProjectId: session.projectId,
+      fallbackModeAfterCompletion: PLATFORM_MODE.IDLE,
+      reason: `target_session_opened:${session.sessionId}`,
+    }, session);
+    await requestDaemonReload(config, "target-session-opened");
+  }
 
   return session;
 }
@@ -1214,6 +1642,24 @@ export async function transitionActiveTargetSession(config: any, input: {
   return saveActiveTargetSession(config, transitionedSession);
 }
 
+export async function selectActiveTargetSession(config: any, input: { sessionId?: string | null; projectId?: string | null }) {
+  const session = await loadTargetSession(config, input);
+  if (!session) {
+    throw new Error(`Target session not found: ${String(input?.sessionId || "unknown")}`);
+  }
+
+  const persistedSession = await saveActiveTargetSession(config, session);
+  await updatePlatformModeState(config, {
+    currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+    activeTargetSessionId: persistedSession.sessionId,
+    activeTargetProjectId: persistedSession.projectId,
+    fallbackModeAfterCompletion: PLATFORM_MODE.IDLE,
+    reason: `target_session_selected:${persistedSession.sessionId}`,
+  }, persistedSession);
+  await requestDaemonReload(config, "target-session-selected");
+  return persistedSession;
+}
+
 function resolveArchiveLogPath(stateDir: string, stage: string): string {
   if (stage === TARGET_SESSION_STAGE.QUARANTINED) {
     return path.join(getArchiveRootPath(stateDir), "quarantined_sessions.jsonl");
@@ -1225,12 +1671,14 @@ function resolveArchiveLogPath(stateDir: string, stage: string): string {
 }
 
 export async function archiveTargetSession(config: any, input: { completionStage?: string; completionReason?: string | null; completionSummary?: string | null; unresolvedItems?: string[]; preserveWorkspace?: boolean } = {}) {
-  const activeSession = await loadActiveTargetSession(config);
+  const activeSession = await loadActiveTargetSessionIncludingClosed(config);
   if (!activeSession) {
     throw new Error("No active target session to archive");
   }
 
   const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const selectedSession = await loadSelectedTargetSessionSnapshot(config).catch(() => null);
+  const selectorBound = hasConfiguredTargetSessionSelector(config);
   const activePath = getActiveTargetSessionPath(stateDir);
   const completionStage = VALID_TARGET_SESSION_STAGES.has(String(input.completionStage || "").trim() as TargetSessionStage)
     ? String(input.completionStage)
@@ -1286,17 +1734,38 @@ export async function archiveTargetSession(config: any, input: { completionStage
     fs.appendFile(archiveLogPath, `${JSON.stringify(completionRecord)}\n`, "utf8"),
   ]);
 
-  await fs.rm(activePath, { force: true });
+  await removeOpenTargetSession(config, archivedSession);
+
+  const archivedWasSelected = isSameTargetSession(archivedSession, selectedSession);
+  if (!selectorBound || archivedWasSelected) {
+    await fs.rm(activePath, { force: true });
+  }
   if (!preserveWorkspace) {
     await fs.rm(archivedSession.workspace.path, { recursive: true, force: true }).catch(() => {});
   }
-  await updatePlatformModeState(config, {
-    currentMode: PLATFORM_MODE.IDLE,
-    activeTargetSessionId: null,
-    activeTargetProjectId: null,
-    fallbackModeAfterCompletion: PLATFORM_MODE.IDLE,
-    reason: `target_session_closed:${archivedSession.sessionId}`,
-  }, null);
+
+  if (!selectorBound || archivedWasSelected) {
+    const remainingSessions = await listOpenTargetSessions(config);
+    const replacementSession = remainingSessions[0] || null;
+    if (replacementSession) {
+      await persistTargetSessionArtifacts(replacementSession, config, { selectAsActive: true });
+      await updatePlatformModeState(config, {
+        currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+        activeTargetSessionId: replacementSession.sessionId,
+        activeTargetProjectId: replacementSession.projectId,
+        fallbackModeAfterCompletion: PLATFORM_MODE.IDLE,
+        reason: `target_session_reselected:${replacementSession.sessionId}`,
+      }, replacementSession);
+    } else {
+      await updatePlatformModeState(config, {
+        currentMode: PLATFORM_MODE.IDLE,
+        activeTargetSessionId: null,
+        activeTargetProjectId: null,
+        fallbackModeAfterCompletion: PLATFORM_MODE.IDLE,
+        reason: `target_session_closed:${archivedSession.sessionId}`,
+      }, null);
+    }
+  }
 
   return archivedSession;
 }
@@ -1329,6 +1798,88 @@ export async function purgeArchivedTargetSessionArtifacts(config: any, session: 
   if (String(lastArchivedRaw?.sessionId || "").trim() === archivedSession.sessionId) {
     await fs.rm(lastArchivedPath, { force: true }).catch(() => {});
   }
+}
+
+export async function purgeAllTargetSessionArtifacts(config: any) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const openSessions = await listOpenTargetSessions(config);
+  const archivedLogs = [
+    path.join(getArchiveRootPath(stateDir), "completed_sessions.jsonl"),
+    path.join(getArchiveRootPath(stateDir), "completed_with_handoff_sessions.jsonl"),
+    path.join(getArchiveRootPath(stateDir), "quarantined_sessions.jsonl"),
+  ];
+  const archivedSessionIds = new Set<string>();
+
+  for (const logPath of archivedLogs) {
+    const raw = await fs.readFile(logPath, "utf8").catch(() => "");
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line);
+        const projectId = normalizeNullableString(parsed?.projectId);
+        const sessionId = normalizeNullableString(parsed?.sessionId);
+        if (projectId && sessionId) {
+          archivedSessionIds.add(`${projectId}:${sessionId}`);
+        }
+      } catch {
+        // Ignore malformed archive lines during destructive cleanup.
+      }
+    }
+  }
+
+  const projectsRoot = getProjectsRootPath(stateDir);
+  const allProjectEntries = await fs.readdir(projectsRoot, { withFileTypes: true }).catch(() => [] as Array<{ isDirectory(): boolean; name: string }>);
+  const openKeys = new Set(openSessions.map((session: any) => `${String(session?.projectId || "").trim()}:${String(session?.sessionId || "").trim()}`));
+
+  for (const projectEntry of allProjectEntries) {
+    if (!projectEntry.isDirectory()) continue;
+    const projectPath = path.join(projectsRoot, projectEntry.name);
+    const sessionEntries = await fs.readdir(projectPath, { withFileTypes: true }).catch(() => [] as Array<{ isDirectory(): boolean; name: string }>);
+    for (const sessionEntry of sessionEntries) {
+      if (!sessionEntry.isDirectory()) continue;
+      const key = `${projectEntry.name}:${sessionEntry.name}`;
+      if (!openKeys.has(key) && !archivedSessionIds.has(key)) continue;
+      const sessionPath = path.join(projectPath, sessionEntry.name);
+      const snapshot = await readJson(path.join(sessionPath, "target_session.json"), null).catch(() => null);
+      const normalized = normalizeActiveTargetSession(snapshot, config).session;
+      if (normalized?.workspace?.path) {
+        await fs.rm(String(normalized.workspace.path), { recursive: true, force: true }).catch(() => {});
+      }
+      await fs.rm(sessionPath, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  const rootEntries = await fs.readdir(stateDir, { withFileTypes: true }).catch(() => [] as Array<{ isFile(): boolean; name: string }>);
+  const removableRootStatePatterns = [
+    /^onboarding_terminal_(manifest|transcript|done)_.+$/i,
+    /^prompt_onboarding-[^.]+_.+\.md$/i,
+    /^live_agent_onboarding-[^.]+\.log$/i,
+    /^last_target_project_readiness\.json$/i,
+  ];
+  await Promise.all(
+    rootEntries
+      .filter((entry) => entry.isFile() && removableRootStatePatterns.some((pattern) => pattern.test(entry.name)))
+      .map((entry) => fs.rm(path.join(stateDir, entry.name), { force: true }).catch(() => {}))
+  );
+
+  await Promise.all([
+    fs.rm(getOpenTargetSessionsPath(stateDir), { force: true }).catch(() => {}),
+    fs.rm(getActiveTargetSessionPath(stateDir), { force: true }).catch(() => {}),
+    fs.rm(getLastArchivedTargetSessionPath(stateDir), { force: true }).catch(() => {}),
+    clearTargetSessionEphemeralState(config),
+  ]);
+
+  for (const logPath of archivedLogs) {
+    await fs.rm(logPath, { force: true }).catch(() => {});
+  }
+
+  await updatePlatformModeState(config, {
+    currentMode: PLATFORM_MODE.IDLE,
+    activeTargetSessionId: null,
+    activeTargetProjectId: null,
+    fallbackModeAfterCompletion: PLATFORM_MODE.IDLE,
+    reason: "target_sessions_purged",
+  }, null);
 }
 
 export function summarizeActiveTargetSession(session: any): string {

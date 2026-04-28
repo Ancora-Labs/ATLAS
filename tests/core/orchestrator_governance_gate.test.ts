@@ -80,6 +80,55 @@ describe("orchestrator governance gate dry-run parity", () => {
     }
   });
 
+  it("does not block resumed active single-target dispatch when FORCE_CHECKPOINT_VALIDATION is active for SLO_CASCADING_BREACH", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-gate-force-checkpoint-single-target-resume-"));
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "guardrail_force_checkpoint.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          enabled: true,
+          action: "force_checkpoint_validation",
+          actionId: "act-1b",
+          scenarioId: "SLO_CASCADING_BREACH",
+          reasonCode: "AUTO_APPLIED",
+          appliedAt: new Date().toISOString(),
+          revertedAt: null,
+        }),
+        "utf8",
+      );
+      const config = {
+        paths: { stateDir },
+        env: { targetRepo: "CanerDoqdu/Box" },
+        platformModeState: { currentMode: "single_target_delivery" },
+        activeTargetSession: {
+          projectId: "target_atlas",
+          sessionId: "sess_active_resume_bypass",
+          currentStage: "active",
+          gates: {
+            allowShadowExecution: false,
+            allowActiveExecution: true,
+          },
+          repo: { repoUrl: "https://github.com/Ancora-Labs/ATLAS" },
+        },
+        canary: { enabled: false },
+        systemGuardian: { enabled: false },
+        governanceFreeze: { enabled: false, manualOverrideActive: false },
+      };
+      const result = await evaluatePreDispatchGovernanceGate(
+        config,
+        [],
+        "force-checkpoint-single-target-resume-bypass",
+        null,
+        { resumeSource: "live_review" },
+      );
+      assert.equal(result.blocked, false);
+      assert.equal(result.reason, null);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks dispatch on the canonical autonomy execution gate when exploitationReady=false", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-gate-autonomy-"));
     try {
@@ -105,6 +154,93 @@ describe("orchestrator governance gate dry-run parity", () => {
       assert.equal(result.blocked, true);
       assert.equal(result.gateIndex, GATE_PRECEDENCE.AUTONOMY_EXECUTION);
       assert.equal(result.dispatchBlockReason, `${BLOCK_REASON.AUTONOMY_EXECUTION_GATE_NOT_READY}:insufficient_exploitation_window`);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not block lane diversity in single-target shadow execution mode", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-gate-shadow-lane-bypass-"));
+    try {
+      const config = {
+        paths: { stateDir },
+        env: { targetRepo: "CanerDoqdu/Box" },
+        platformModeState: { currentMode: "single_target_delivery" },
+        activeTargetSession: {
+          projectId: "target_box",
+          sessionId: "sess_shadow_lane_bypass",
+          currentStage: "shadow",
+          gates: {
+            allowShadowExecution: true,
+            allowActiveExecution: false,
+          },
+          repo: { repoUrl: "https://github.com/Ancora-Labs/Box" },
+        },
+        canary: { enabled: false },
+        systemGuardian: { enabled: false },
+        governanceFreeze: { enabled: false, manualOverrideActive: false },
+        runtime: { disableDriftDebtGate: true },
+        workerPool: { minLanes: 2 },
+      };
+      const plans = [
+        {
+          id: "shadow-plan-1",
+          task: "Ship the first bounded ATLAS shadow slice",
+          role: "evolution-worker",
+          target_files: ["src/dashboard/live_dashboard.ts"],
+          verification_commands: ["npm test -- tests/core/orchestrator_governance_gate.test.ts"],
+          acceptance_criteria: ["shadow dispatch is allowed with one effective lane"],
+          dependsOn: [],
+        },
+      ];
+
+      const result = await evaluatePreDispatchGovernanceGate(config, plans, "shadow-lane-bypass");
+      assert.equal(result.blocked, false);
+      assert.equal(result.reason, null);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("negative path: still blocks one-lane dispatch outside single-target shadow execution", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-gate-active-lane-block-"));
+    try {
+      const config = {
+        paths: { stateDir },
+        env: { targetRepo: "CanerDoqdu/Box" },
+        platformModeState: { currentMode: "single_target_delivery" },
+        activeTargetSession: {
+          projectId: "target_box",
+          sessionId: "sess_active_lane_block",
+          currentStage: "active",
+          gates: {
+            allowShadowExecution: false,
+            allowActiveExecution: true,
+          },
+          repo: { repoUrl: "https://github.com/Ancora-Labs/Box" },
+        },
+        canary: { enabled: false },
+        systemGuardian: { enabled: false },
+        governanceFreeze: { enabled: false, manualOverrideActive: false },
+        runtime: { disableDriftDebtGate: true },
+        workerPool: { minLanes: 2 },
+      };
+      const plans = [
+        {
+          id: "active-plan-1",
+          task: "Ship the first active ATLAS slice",
+          role: "evolution-worker",
+          target_files: ["src/dashboard/live_dashboard.ts"],
+          verification_commands: ["npm test -- tests/core/orchestrator_governance_gate.test.ts"],
+          acceptance_criteria: ["active execution still enforces lane diversity"],
+          dependsOn: [],
+        },
+      ];
+
+      const result = await evaluatePreDispatchGovernanceGate(config, plans, "active-lane-block");
+      assert.equal(result.blocked, true);
+      assert.equal(result.gateIndex, GATE_PRECEDENCE.LANE_DIVERSITY);
+      assert.ok(String(result.reason || "").startsWith(BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT));
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }

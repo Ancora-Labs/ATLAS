@@ -276,9 +276,88 @@ function aggregateClaudeByMonth(entries) {
 
 const PROGRESS_MAX_LINES = 200;
 let _progressLineCount = -1; // lazy init
+let _lastProgressContextKey = "";
 
 function resolveProgressFilePath(config) {
   return String(config?.paths?.progressFile || path.join(config?.paths?.stateDir || "state", "progress.txt"));
+}
+
+function resolveProgressLiveMirrorPath(config) {
+  return path.join(String(config?.paths?.stateDir || "state"), "progress_live.txt");
+}
+
+function buildProgressContextFromParts(mode: string, projectId: string | null, sessionId: string | null) {
+  return {
+    mode: String(mode || PLATFORM_MODE.SELF_DEV).trim() || PLATFORM_MODE.SELF_DEV,
+    projectId: String(projectId || "").trim() || null,
+    sessionId: String(sessionId || "").trim() || null,
+  };
+}
+
+function buildProgressContextKey(context: { mode: string; projectId: string | null; sessionId: string | null }): string {
+  return [
+    String(context?.mode || ""),
+    String(context?.projectId || ""),
+    String(context?.sessionId || ""),
+  ].join("|");
+}
+
+async function resolveAuthoritativeRuntimeLoggingContext(config, overrides = null) {
+  const base = resolveRuntimeLoggingContextWithOverrides(config, overrides);
+  const hasSessionOverride = Boolean(String(overrides?.projectId || "").trim() && String(overrides?.sessionId || "").trim());
+  const hasModeOverride = Boolean(String(overrides?.mode || "").trim());
+  if (hasSessionOverride || hasModeOverride) {
+    return buildProgressContextFromParts(base.mode, base.projectId, base.sessionId);
+  }
+
+  // If a target session is already bound on the config, keep that binding for
+  // logging instead of re-reading the global active session pointer. The global
+  // pointer is process-shared and can belong to a different runner.
+  if (
+    base.mode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY
+    && base.projectId
+    && base.sessionId
+  ) {
+    return buildProgressContextFromParts(base.mode, base.projectId, base.sessionId);
+  }
+
+  const stateDir = String(config?.paths?.stateDir || "state");
+  const modeStatePath = path.join(stateDir, "platform", "mode_state.json");
+  const activeSessionPath = path.join(stateDir, "active_target_session.json");
+
+  try {
+    const [modeStateRaw, activeSessionRaw] = await Promise.all([
+      readJson(modeStatePath, null),
+      readJson(activeSessionPath, null),
+    ]);
+
+    const mode = String(modeStateRaw?.currentMode || base.mode || PLATFORM_MODE.SELF_DEV).trim() || PLATFORM_MODE.SELF_DEV;
+    const fileProjectId = String(activeSessionRaw?.projectId || "").trim() || null;
+    const fileSessionId = String(activeSessionRaw?.sessionId || "").trim() || null;
+
+    const resolved = mode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY
+      ? buildProgressContextFromParts(mode, fileProjectId || base.projectId, fileSessionId || base.sessionId)
+      : buildProgressContextFromParts(mode, null, null);
+
+    config.platformModeState = {
+      ...(config.platformModeState || {}),
+      currentMode: resolved.mode,
+      activeTargetProjectId: resolved.projectId,
+      activeTargetSessionId: resolved.sessionId,
+    };
+
+    if (resolved.mode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY && resolved.projectId && resolved.sessionId) {
+      config.activeTargetSession = {
+        ...(config.activeTargetSession || {}),
+        projectId: resolved.projectId,
+        sessionId: resolved.sessionId,
+      };
+    }
+
+    return resolved;
+  } catch {
+    return buildProgressContextFromParts(base.mode, base.projectId, base.sessionId);
+  }
 }
 
 export function resolveRuntimeLoggingContext(config) {
@@ -315,6 +394,10 @@ function resolveRuntimeLoggingContextWithOverrides(config, overrides = null) {
 
 export function buildProgressLogPrefix(config, overrides = null) {
   const context = resolveRuntimeLoggingContextWithOverrides(config, overrides);
+  return buildProgressLogPrefixFromContext(context);
+}
+
+function buildProgressLogPrefixFromContext(context) {
   const parts = [`mode=${context.mode}`];
   if (context.mode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY && context.projectId && context.sessionId) {
     parts.push(`projectId=${context.projectId}`);
@@ -323,14 +406,40 @@ export function buildProgressLogPrefix(config, overrides = null) {
   return `[${parts.join(" ")}]`;
 }
 
+async function appendLogLineWithFlush(filePath, line) {
+  const handle = await fs.open(filePath, "a");
+  try {
+    await handle.appendFile(line, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+
+  const now = new Date();
+  await fs.utimes(filePath, now, now).catch(() => {});
+}
+
 export async function appendProgress(config, message, overrides = null) {
   const progressFilePath = resolveProgressFilePath(config);
-  const loggingContext = resolveRuntimeLoggingContextWithOverrides(config, overrides);
-  const prefix = buildProgressLogPrefix(config, overrides);
+  const progressLiveMirrorPath = resolveProgressLiveMirrorPath(config);
+  const loggingContext = await resolveAuthoritativeRuntimeLoggingContext(config, overrides);
+  const prefix = buildProgressLogPrefixFromContext(loggingContext);
   await ensureParent(progressFilePath);
+  await ensureParent(progressLiveMirrorPath);
   const safeMessage = String(message || "").trim();
+  const contextKey = buildProgressContextKey(loggingContext);
+
+  if (_lastProgressContextKey && _lastProgressContextKey !== contextKey) {
+    const [prevMode, prevProjectId, prevSessionId] = _lastProgressContextKey.split("|");
+    const transitionLine = `[${new Date().toISOString()}] [SESSION_SWITCH] mode=${prevMode || "unknown"} projectId=${prevProjectId || "none"} sessionId=${prevSessionId || "none"} -> mode=${loggingContext.mode || "unknown"} projectId=${loggingContext.projectId || "none"} sessionId=${loggingContext.sessionId || "none"} ${prefix}\n`;
+    await appendLogLineWithFlush(progressFilePath, transitionLine);
+    await appendLogLineWithFlush(progressLiveMirrorPath, transitionLine).catch(() => {});
+  }
+
   const line = `[${new Date().toISOString()}] ${safeMessage}${safeMessage ? " " : ""}${prefix}\n`;
-  await fs.appendFile(progressFilePath, line, "utf8");
+  await appendLogLineWithFlush(progressFilePath, line);
+  await appendLogLineWithFlush(progressLiveMirrorPath, line).catch(() => {});
+  _lastProgressContextKey = contextKey;
 
   if (
     loggingContext.mode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY
@@ -343,7 +452,7 @@ export async function appendProgress(config, message, overrides = null) {
       loggingContext.sessionId,
     );
     await ensureParent(sessionLogPath);
-    await fs.appendFile(sessionLogPath, line, "utf8").catch(() => {});
+    await appendLogLineWithFlush(sessionLogPath, line).catch(() => {});
   }
 
   // Auto-trim: keep only the last PROGRESS_MAX_LINES lines

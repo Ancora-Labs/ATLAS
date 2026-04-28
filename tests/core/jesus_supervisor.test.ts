@@ -283,7 +283,7 @@ describe("jesus_supervisor — validateDirectivePayload", () => {
 describe("jesus_supervisor — buildDirectiveStrategyBrief", () => {
   it("emits a typed strategy brief artifact from the directive payload", () => {
     const artifact = buildDirectiveStrategyBrief(VALID_DIRECTIVE, VALID_EXPECTED_OUTCOME, {
-      repo: "Ancora-Labs/Box",
+      repo: "Ancora-Labs/ATLAS",
       emittedAt: "2026-04-13T18:05:02.838Z",
     });
     assert.equal(artifact.source, "jesus_strategy_brief");
@@ -293,7 +293,7 @@ describe("jesus_supervisor — buildDirectiveStrategyBrief", () => {
     assert.equal(artifact.wakeAthena, true);
     assert.deepEqual(artifact.capacityDelta.topBottleneckAreas, []);
     assert.equal(artifact.expectedOutcome?.expectedNextDecision, "tactical");
-    assert.equal(artifact.repo, "Ancora-Labs/Box");
+    assert.equal(artifact.repo, "Ancora-Labs/ATLAS");
   });
 
   it("negative path: preserves nulls for missing measurable outcome fields", () => {

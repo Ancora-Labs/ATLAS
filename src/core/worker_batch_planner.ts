@@ -29,11 +29,13 @@ import { rankModelsByTaskKindExpectedValue } from "./model_policy.js";
 import {
   buildThinPacketRejectionReason,
   computePacketDensityMetrics,
+  estimatePlanOrderedStepComplexity,
   isThinPacketForAdmission,
   MAX_ACTIONABLE_STEPS_PER_PACKET,
   PACKET_OVERSIZE_REASON,
   resolvePacketSizePolicy,
 } from "./plan_contract_validator.js";
+import { NON_UI_BATCH_AFFINITY_KEY, resolveUiBatchIdentity } from "./ui_batch_affinity.js";
 
 const CHARS_PER_TOKEN = 4;
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 100000;
@@ -488,9 +490,7 @@ export function computeBatchOrderedStepCount(plans: any[] = []): number {
   if (!Array.isArray(plans) || plans.length === 0) return 0;
   let total = 0;
   for (const plan of plans) {
-    const steps = Array.isArray(plan?.orderedSteps) ? plan.orderedSteps.length
-      : Array.isArray(plan?.acceptance_criteria) ? plan.acceptance_criteria.length
-      : 1;
+    const steps = estimatePlanOrderedStepComplexity(plan);
     total += Math.max(1, steps);
   }
   return total;
@@ -503,11 +503,7 @@ export function computePlanEstimatedDurationMinutes(plan: any): number {
   }
 
   const tokenEstimate = Number(plan?.estimatedExecutionTokens);
-  const orderedSteps = Array.isArray(plan?.orderedSteps)
-    ? plan.orderedSteps.length
-    : Array.isArray(plan?.acceptance_criteria)
-      ? plan.acceptance_criteria.length
-      : 1;
+  const orderedSteps = estimatePlanOrderedStepComplexity(plan);
   const fileCount = Array.isArray(plan?.target_files)
     ? plan.target_files.filter(Boolean).length
     : Array.isArray(plan?.filesInScope)
@@ -961,6 +957,25 @@ function hasConflictFiles(plan: any, existing: any): boolean {
   return filesA.map(normalize).some((file) => bSet.has(file));
 }
 
+function splitRolePlansByUiBatchAffinity(rolePlans: any[] = [], roleName = "worker") {
+  const groups = new Map<string, any[]>();
+  const orderedKeys: string[] = [];
+  for (let index = 0; index < rolePlans.length; index += 1) {
+    const plan = rolePlans[index];
+    const identity = resolveUiBatchIdentity(
+      plan,
+      `${String(roleName || "worker")}:${String((plan as any)?.task_id || (plan as any)?.task || index + 1)}`,
+    );
+    const key = identity.isUiTask ? identity.affinityKey : NON_UI_BATCH_AFFINITY_KEY;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      orderedKeys.push(key);
+    }
+    groups.get(key)!.push(plan);
+  }
+  return orderedKeys.map((key) => groups.get(key) || []).filter((group) => group.length > 0);
+}
+
 /**
  * Default maximum number of tasks per micro-wave when splitting large waves.
  * Keeps each dependency layer small so workers can reason without context overload.
@@ -1313,27 +1328,32 @@ export function buildRoleExecutionBatches(plans = [], config, capabilityPoolResu
     // batch so the worker can execute them in deterministic order. When
     // planner.splitConflictingPlansAcrossBatches=true, fallback to greedy
     // conflict coloring to isolate conflicting plans into separate sub-groups.
+    const affinityGroups = splitRolePlansByUiBatchAffinity(rolePlans, roleName);
     const subGroups: Array<typeof rolePlans> = [];
-    if (splitConflictingPlansAcrossBatches) {
-      for (let i = 0; i < rolePlans.length; i++) {
-        const plan = rolePlans[i];
+    for (const affinityGroup of affinityGroups) {
+      if (splitConflictingPlansAcrossBatches) {
+        const affinitySubGroups: Array<typeof rolePlans> = [];
+        for (let i = 0; i < affinityGroup.length; i++) {
+          const plan = affinityGroup[i];
 
-        // Find the first group that has no conflict with this plan
-        let placed = false;
-        for (let g = 0; g < subGroups.length; g++) {
-          const hasConflict = subGroups[g].some((existing) => arePlansConflicting(plan, existing));
-          if (!hasConflict) {
-            subGroups[g].push(plan);
-            placed = true;
-            break;
+          let placed = false;
+          for (let g = 0; g < affinitySubGroups.length; g++) {
+            const hasConflict = affinitySubGroups[g].some((existing) => arePlansConflicting(plan, existing));
+            if (!hasConflict) {
+              affinitySubGroups[g].push(plan);
+              placed = true;
+              break;
+            }
+          }
+          if (!placed) {
+            affinitySubGroups.push([plan]);
           }
         }
-        if (!placed) {
-          subGroups.push([plan]);
-        }
+        subGroups.push(...affinitySubGroups);
+        continue;
       }
-    } else {
-      subGroups.push(rolePlans);
+
+      subGroups.push(affinityGroup);
     }
 
     // ── Wave-boundary enforcement ─────────────────────────────────────────
@@ -1814,20 +1834,28 @@ export function buildTokenFirstBatches(
     const roleCoeff = getCoeff(role);
 
     // Group plans by wave number (preserving insertion order within each wave)
-    const plansByWave = new Map<number, any[]>();
-    for (const plan of groupPlans) {
-      const waveNum = Number.isFinite(Number(plan.wave)) && Number(plan.wave) > 0
-        ? Number(plan.wave)
-        : 1;
-      if (!plansByWave.has(waveNum)) plansByWave.set(waveNum, []);
-      plansByWave.get(waveNum)!.push(plan);
+    const affinityGroups = splitRolePlansByUiBatchAffinity(groupPlans, role);
+    const waveScopedAffinityGroups: Array<{ waveNum: number; plans: any[] }> = [];
+    for (const affinityGroup of affinityGroups) {
+      const plansByWave = new Map<number, any[]>();
+      for (const plan of affinityGroup) {
+        const waveNum = Number.isFinite(Number(plan.wave)) && Number(plan.wave) > 0
+          ? Number(plan.wave)
+          : 1;
+        if (!plansByWave.has(waveNum)) plansByWave.set(waveNum, []);
+        plansByWave.get(waveNum)!.push(plan);
+      }
+      const sortedWaveNums = [...plansByWave.keys()].sort((a, b) => a - b);
+      for (const waveNum of sortedWaveNums) {
+        waveScopedAffinityGroups.push({ waveNum, plans: plansByWave.get(waveNum)! });
+      }
     }
-    const sortedWaveNums = [...plansByWave.keys()].sort((a, b) => a - b);
 
-    for (const waveNum of sortedWaveNums) {
-      const wavePlans = plansByWave.get(waveNum)!;
+    const roleBatchTotals = new Map<number, number>();
+    const flattenedBatches: Array<{ waveNum: number; plans: any[]; tokens: number }> = [];
+    for (const waveGroup of waveScopedAffinityGroups) {
       const batches: Array<{ plans: any[]; tokens: number }> = [];
-      for (const plan of wavePlans) {
+      for (const plan of waveGroup.plans) {
         const planTokens = estimatePlanTokens(plan, roleCoeff);
         let placed = false;
         for (const batch of batches) {
@@ -1844,32 +1872,40 @@ export function buildTokenFirstBatches(
         }
       }
 
-      batches.forEach((batch, index) => {
-        const taskKind = String(
-          batch.plans[0]?.taskKind || batch.plans[0]?.kind || "implementation"
-        );
-        const sharedBranch = buildSharedBranchName(role, batch.plans);
-        const utilization = usableTokens > 0
-          ? Math.round((batch.tokens / usableTokens) * 100)
-          : 0;
+      roleBatchTotals.set(waveGroup.waveNum, (roleBatchTotals.get(waveGroup.waveNum) || 0) + batches.length);
+      for (const batch of batches) {
+        flattenedBatches.push({ waveNum: waveGroup.waveNum, plans: batch.plans, tokens: batch.tokens });
+      }
+    }
 
-        flattened.push({
-          role,
-          plans: batch.plans,
-          model: defaultModel,
-          contextWindowTokens,
-          usableContextTokens: usableTokens,
-          estimatedTokens: batch.tokens,
-          contextUtilizationPercent: utilization,
-          taskKind,
-          sharedBranch,
-          wave: waveNum,
-          roleBatchIndex: index + 1,
-          roleBatchTotal: batches.length,
-          githubFinalizer: index === batches.length - 1,
-          tokenFirstPacked: true,
-          diversityViolation: null,
-        });
+    const roleBatchIndexByWave = new Map<number, number>();
+    for (const batch of flattenedBatches) {
+      const nextIndex = (roleBatchIndexByWave.get(batch.waveNum) || 0) + 1;
+      roleBatchIndexByWave.set(batch.waveNum, nextIndex);
+      const taskKind = String(
+        batch.plans[0]?.taskKind || batch.plans[0]?.kind || "implementation"
+      );
+      const sharedBranch = buildSharedBranchName(role, batch.plans);
+      const utilization = usableTokens > 0
+        ? Math.round((batch.tokens / usableTokens) * 100)
+        : 0;
+
+      flattened.push({
+        role,
+        plans: batch.plans,
+        model: defaultModel,
+        contextWindowTokens,
+        usableContextTokens: usableTokens,
+        estimatedTokens: batch.tokens,
+        contextUtilizationPercent: utilization,
+        taskKind,
+        sharedBranch,
+        wave: batch.waveNum,
+        roleBatchIndex: nextIndex,
+        roleBatchTotal: roleBatchTotals.get(batch.waveNum) || 1,
+        githubFinalizer: nextIndex === (roleBatchTotals.get(batch.waveNum) || 1),
+        tokenFirstPacked: true,
+        diversityViolation: null,
       });
     }
   }

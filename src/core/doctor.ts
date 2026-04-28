@@ -166,7 +166,7 @@ export async function runDoctor(config: any) {
   info("doctor checks", checks);
 
   if (!checks.githubToken || !checks.targetRepo) {
-    warnings.push("GitHub integration not ready: set GITHUB_TOKEN and TARGET_REPO in .env");
+    warnings.push("GitHub integration not ready: set GITHUB_TOKEN and TARGET_REPO in your environment or BOX_SECRETS_FILE");
   }
   if (!checks.stateDir) {
     warnings.push(`State directory "${stateDir}" does not exist`);

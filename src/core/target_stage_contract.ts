@@ -12,6 +12,12 @@ export const SHADOW_SAFE_TASK_KINDS = Object.freeze([
   "documentation",
   "verification",
   "implementation",
+  "bugfix",
+]);
+
+const SHADOW_IMPLEMENTATION_LIKE_TASK_KINDS = Object.freeze([
+  "implementation",
+  "bugfix",
 ]);
 
 export const SHADOW_MAX_TARGET_FILES = 4;
@@ -74,6 +80,22 @@ function getShadowTargetFileLimit(taskKind: string): number {
   return SHADOW_MAX_TARGET_FILES;
 }
 
+function isEvidenceOnlyFile(filePath: string): boolean {
+  const normalized = normalizeString(filePath).replace(/\\/g, "/").toLowerCase();
+  if (!normalized) return false;
+  return normalized.startsWith("tests/")
+    || normalized.includes("/__tests__/")
+    || normalized.startsWith("docs/")
+    || /\.(test|spec)\.[a-z0-9]+$/i.test(normalized);
+}
+
+function getShadowScopedFileCount(taskKind: string, targetFiles: string[]): number {
+  if (SHADOW_IMPLEMENTATION_LIKE_TASK_KINDS.includes(taskKind)) {
+    return targetFiles.filter((filePath) => !isEvidenceOnlyFile(filePath)).length;
+  }
+  return targetFiles.length;
+}
+
 function extractTargetFiles(entry: Record<string, unknown>): string[] {
   return normalizeStringArray(
     entry?.target_files
@@ -97,6 +119,25 @@ function buildPlanSignal(entry: Record<string, unknown>): string {
     .map((value) => normalizeString(value).toLowerCase())
     .filter(Boolean)
     .join("\n");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function findUnnegatedHighRiskPattern(signal: string): string | null {
+  const clauses = signal.split(/[\n.!?;]+/).map((entry) => entry.trim()).filter(Boolean);
+  for (const pattern of SHADOW_HIGH_RISK_PATTERNS) {
+    const patternRegex = new RegExp(`\\b${escapeRegExp(pattern)}\\b`, "i");
+    for (const clause of clauses) {
+      if (!patternRegex.test(clause)) continue;
+      const negated = /\b(do not|don't|dont|avoid|without|forbid|forbidden|no)\b/i.test(clause);
+      if (!negated) {
+        return pattern;
+      }
+    }
+  }
+  return null;
 }
 
 function hasConcreteVerification(entry: Record<string, unknown>): boolean {
@@ -157,6 +198,7 @@ export function evaluateShadowPlanEntryContract(
   const targetFiles = extractTargetFiles(entry);
   const signal = buildPlanSignal(entry);
   const targetFileLimit = getShadowTargetFileLimit(taskKind);
+  const scopedFileCount = getShadowScopedFileCount(taskKind, targetFiles);
   const violations: TargetStagePlanViolation[] = [];
 
   if (!SHADOW_SAFE_TASK_KINDS.includes(taskKind)) {
@@ -169,17 +211,17 @@ export function evaluateShadowPlanEntryContract(
     });
   }
 
-  if (targetFiles.length > targetFileLimit) {
+  if (scopedFileCount > targetFileLimit) {
     violations.push({
       code: TARGET_STAGE_CONTRACT_CODE.SHADOW_SCOPE_TOO_LARGE,
-      message: `shadow mode limits planned scope to ${targetFileLimit} files for ${taskKind}; received ${targetFiles.length}`,
+      message: `shadow mode limits planned scope to ${targetFileLimit} files for ${taskKind}; received ${scopedFileCount}`,
       planIndex,
       taskKind,
       task,
     });
   }
 
-  const matchedPattern = SHADOW_HIGH_RISK_PATTERNS.find((pattern) => signal.includes(pattern));
+  const matchedPattern = findUnnegatedHighRiskPattern(signal);
   if (matchedPattern) {
     violations.push({
       code: TARGET_STAGE_CONTRACT_CODE.SHADOW_HIGH_RISK_ACTION,
@@ -190,7 +232,7 @@ export function evaluateShadowPlanEntryContract(
     });
   }
 
-  if (taskKind === "implementation" && !hasConcreteVerification(entry)) {
+  if (SHADOW_IMPLEMENTATION_LIKE_TASK_KINDS.includes(taskKind) && !hasConcreteVerification(entry)) {
     violations.push({
       code: TARGET_STAGE_CONTRACT_CODE.SHADOW_IMPLEMENTATION_REQUIRES_VERIFICATION,
       message: "shadow implementation packets must include concrete verification evidence, not a vague or missing verification step",
@@ -297,7 +339,7 @@ export function splitTargetStagePlans(plans: unknown[], config: any): TargetStag
     const taskKind = plan && typeof plan === "object"
       ? normalizeTaskKind((plan as Record<string, unknown>)?.taskKind ?? (plan as Record<string, unknown>)?.kind ?? "implementation") || "implementation"
       : "implementation";
-    if (violations.length === 0 && taskKind === "implementation") {
+    if (violations.length === 0 && SHADOW_IMPLEMENTATION_LIKE_TASK_KINDS.includes(taskKind)) {
       if (admittedImplementationCount >= SHADOW_MAX_IMPLEMENTATION_PLANS) {
         violations.push({
           code: TARGET_STAGE_CONTRACT_CODE.SHADOW_TOO_MANY_IMPLEMENTATION_PLANS,
@@ -310,7 +352,7 @@ export function splitTargetStagePlans(plans: unknown[], config: any): TargetStag
     }
     if (violations.length === 0) {
       admittedPlans.push(plan);
-      if (taskKind === "implementation") {
+      if (SHADOW_IMPLEMENTATION_LIKE_TASK_KINDS.includes(taskKind)) {
         admittedImplementationCount += 1;
       }
       continue;

@@ -196,6 +196,8 @@ export interface ModelCallSettingsOverlay {
   maxTurns?: number;
   /** Optional per-task no-ask-user toggle for deterministic execution. */
   noAskUser?: boolean;
+  /** Optional opt-in allowing ask-user behavior even when broad tools are enabled. */
+  allowInteractiveUserInput?: boolean;
   /** Optional per-task silent mode toggle for lower-noise calls. */
   silent?: boolean;
 }
@@ -211,6 +213,7 @@ function normalizeModelCallSettingsOverlay(input: unknown): ModelCallSettingsOve
     out.maxTurns = Math.max(1, Math.min(200, Math.round(rawMaxTurns)));
   }
   if (src.noAskUser === true) out.noAskUser = true;
+  if (src.allowInteractiveUserInput === true) out.allowInteractiveUserInput = true;
   if (src.silent === true) out.silent = true;
   return out;
 }

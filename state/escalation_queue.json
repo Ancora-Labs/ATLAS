@@ -134,7 +134,61 @@
       "prUrl": null,
       "resolved": false,
       "createdAt": "2026-04-16T16:55:34.356Z"
+    },
+    {
+      "schemaVersion": 1,
+      "role": "evolution-worker",
+      "taskFingerprint": "ecc8ff11cc931b91",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo",
+      "blockingReasonClass": "WORKER_ERROR",
+      "attempts": 0,
+      "nextAction": "RETRY",
+      "summary": "Timeout: [BOX] Process killed after 5400s timeout",
+      "prUrl": null,
+      "resolved": true,
+      "createdAt": "2026-04-25T18:47:38.281Z",
+      "projectId": "target_atlas",
+      "sessionId": "sess_20260424090112_a4d8cf",
+      "resolvedAt": "2026-04-25T20:10:27.996Z",
+      "resolutionSummary": "Worker recovered after runtime failure with status=done",
+      "resolvedBy": "worker:evolution-worker"
+    },
+    {
+      "schemaVersion": 1,
+      "role": "integration-worker",
+      "taskFingerprint": "1772f634e9ec70ae",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo",
+      "blockingReasonClass": "WORKER_ERROR",
+      "attempts": 0,
+      "nextAction": "RETRY",
+      "summary": "Error exit=1: \nYou've reached your weekly rate limit. Please wait for your limit to reset in 6 hours 47 minutes or switch to auto model to continue. Learn More (https://docs.github.com/en/copilot/concepts/rate-limits). (Request ID: A4D2:1CDA58:368B904:451B442:69EE47CD)\n\nChanges   +0 -0\nRequests  1 Premium (12m 51...",
+      "prUrl": null,
+      "resolved": true,
+      "createdAt": "2026-04-26T17:23:58.026Z",
+      "projectId": "target_atlas",
+      "sessionId": "sess_20260424090112_a4d8cf",
+      "resolvedAt": "2026-04-27T10:35:12.007Z",
+      "resolutionSummary": "Worker recovered after runtime failure with status=done",
+      "resolvedBy": "worker:integration-worker"
+    },
+    {
+      "schemaVersion": 1,
+      "role": "integration-worker",
+      "taskFingerprint": "1772f634e9ec70ae",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo",
+      "blockingReasonClass": "WORKER_ERROR",
+      "attempts": 0,
+      "nextAction": "RETRY",
+      "summary": "Error exit=3221225477: I’m validating the workspace and reading the relevant codepaths first so the fix stays scoped and safe. After that I’ll wire the live-state refresh changes, then reshape the selected-session pane on top of the updated contract.\n\n● Read package.json\n  └ L1:220 (73 lines read)\n\n● Read home.ts\n  │ src\\...",
+      "prUrl": null,
+      "resolved": true,
+      "createdAt": "2026-04-27T09:25:43.651Z",
+      "projectId": "target_atlas",
+      "sessionId": "sess_20260424090112_a4d8cf",
+      "resolvedAt": "2026-04-27T10:35:12.007Z",
+      "resolutionSummary": "Worker recovered after runtime failure with status=done",
+      "resolvedBy": "worker:integration-worker"
     }
   ],
-  "updatedAt": "2026-04-16T16:55:34.373Z"
+  "updatedAt": "2026-04-27T10:35:12.007Z"
 }

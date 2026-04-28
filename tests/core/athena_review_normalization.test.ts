@@ -7,6 +7,7 @@ import {
   PREMORTEM_RISK_LEVEL,
   validatePatchedPlan,
   normalizePatchedPlansForDispatch,
+  preparePatchedPlansForDispatch,
   revalidatePatchedPlansAfterNormalization,
   PATCHED_PLAN_REVALIDATION_REASON,
   correctBoundedPacketDefects,
@@ -21,8 +22,10 @@ import {
   buildPatchedPlanCorrectionTracking,
   PATCHED_PLAN_MUTATION_KIND,
   ATHENA_FAST_PATH_REASON,
+  ATHENA_PLAN_REVIEW_REASON_CODE,
   isAthenaReviewAlignedToTargetSession,
   evaluateStaleArtifactClosureFastpath,
+  validateUiBatchContract,
 } from "../../src/core/athena_reviewer.js";
 import { evaluatePreDispatchGovernanceGate, BLOCK_REASON } from "../../src/core/orchestrator.js";
 import fs from "node:fs/promises";
@@ -531,6 +534,103 @@ describe("normalizePatchedPlansForDispatch", () => {
       assert.ok(Array.isArray(result));
     });
   });
+
+  it("restores leverage_rank and implementationEvidence from matching source plans", () => {
+    const result = normalizePatchedPlansForDispatch([
+      {
+        task: "Use the richer session/history data already available in the ATLAS state bridge",
+        role: "integration-worker",
+        wave: 3,
+        target_files: ["src/atlas/state_bridge.ts"],
+        scope: "Sessions read-model wiring and focused workspace rendering",
+        acceptance_criteria: ["Focused-session context uses richer state-bridge data"],
+      }
+    ], {
+      sourcePlans: [
+        {
+          task: "Use the richer session/history data already available in the ATLAS state bridge",
+          leverage_rank: ["architecture", "worker-specialization"],
+          implementationEvidence: ["src/atlas/state_bridge.ts is the concrete implementation surface"],
+        }
+      ],
+    });
+
+    assert.deepEqual(result[0].leverage_rank, ["architecture", "worker-specialization"]);
+    assert.deepEqual(result[0].implementationEvidence, ["src/atlas/state_bridge.ts is the concrete implementation surface"]);
+  });
+
+  it("stamps explicit UI dispatch metadata for UI contract plans", () => {
+    const result = normalizePatchedPlansForDispatch([
+      {
+        task: "Repair runtime shell against UI contract",
+        role: "evolution-worker",
+        wave: 1,
+        uiContract: {
+          contractId: "shell@v1",
+          schemaVersion: 1,
+          targetSurfaces: ["web-runtime"],
+          fields: { layoutModel: "shell" },
+          requiredFields: ["layoutModel"],
+          forbiddenPatterns: ["modal_inside_modal"],
+          accessibilityFloor: "WCAG-AA",
+        },
+        uiHtml: "<main><nav></nav></main>",
+        target_files: ["src/ui/shell.tsx"],
+        scope: "src/ui",
+        acceptance_criteria: ["Shell conforms to contract"],
+      },
+    ]);
+
+    assert.equal(result[0].capabilityTag, "ui-contract");
+    assert.equal(result[0].taskKind, "ui-contract");
+    assert.equal(result[0].kind, "ui-contract");
+    assert.equal(result[0].uiSurface, "web-runtime");
+    assert.deepEqual(result[0].targetSurfaces, ["web-runtime"]);
+    assert.equal((result[0].uiScenarioMatrix as any).scenarios[0].surface, "web-runtime");
+  });
+
+  it("keeps matched patched plans reviewable during revalidation when Athena omits source metadata", () => {
+    const result = preparePatchedPlansForDispatch([
+      {
+        task: "Use the richer session/history data already available in the ATLAS state bridge to replace the current card list with a focused ledger-detail workspace.",
+        role: "integration-worker",
+        wave: 3,
+        target_files: ["src/atlas/state_bridge.ts", "src/atlas/routes/sessions.ts"],
+        scope: "Sessions read-model wiring and focused workspace rendering",
+        acceptance_criteria: [
+          "Focused-session context uses richer state-bridge data instead of only shallow card metadata with >= 1 deterministic assertion"
+        ],
+        verification: "npm test -- tests/core/sessions.test.ts",
+      }
+    ], {
+      sourcePlans: [
+        {
+          task: "Use the richer session/history data already available in the ATLAS state bridge to replace the current card list with a focused ledger-detail workspace.",
+          role: "integration-worker",
+          wave: 3,
+          leverage_rank: ["architecture", "task-quality", "worker-specialization"],
+          implementationEvidence: [
+            "src/atlas/state_bridge.ts is the concrete implementation surface",
+            "src/atlas/routes/sessions.ts is the concrete implementation surface"
+          ],
+          target_files: ["src/atlas/state_bridge.ts", "src/atlas/routes/sessions.ts"],
+          scope: "Sessions read-model wiring and focused workspace rendering",
+          acceptance_criteria: [
+            "Focused-session context uses richer state-bridge data instead of only shallow card metadata with >= 1 deterministic assertion"
+          ],
+          verification: "npm test -- tests/core/sessions.test.ts",
+          capacityDelta: 0.1,
+          requestROI: 1,
+        }
+      ],
+    });
+
+    assert.equal(result.valid, true);
+    assert.deepEqual((result.plans[0] as any).implementationEvidence, [
+      "src/atlas/state_bridge.ts is the concrete implementation surface",
+      "src/atlas/routes/sessions.ts is the concrete implementation surface"
+    ]);
+  });
 });
 
 describe("evaluatePreDispatchGovernanceGate — cross-cycle prerequisite token gate", () => {
@@ -659,13 +759,45 @@ describe("revalidatePatchedPlansAfterNormalization (Task 3)", () => {
         target_files: ["src/core/orchestrator.ts"],
         scope: "src/core/",
         acceptance_criteria: ["Verification passes"],
-        verification: "npm test",
+        verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+        verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
         dependencies: [],
+        capacityDelta: 0.1,
+        requestROI: 1.2,
       }
     ]);
     assert.equal(result.valid, true);
     assert.equal(result.code, PATCHED_PLAN_REVALIDATION_REASON.OK);
     assert.deepEqual(result.violations, []);
+  });
+
+  it("fails when a patched plan softens protected direct executable intent into a launcher script", () => {
+    const result = revalidatePatchedPlansAfterNormalization([
+      {
+        task: "Configure electron-builder packaging and create resources/Launch ATLAS.bat launcher",
+        role: "infrastructure-worker",
+        wave: 1,
+        target_files: ["resources/Launch ATLAS.bat", "package.json"],
+        scope: "Windows packaging and launcher flow",
+        acceptance_criteria: ["A launcher in resources opens ATLAS"],
+        verification: "npm test -- tests/core/windows_packaging.test.ts",
+      }
+    ], {
+      activeTargetSession: {
+        objective: {
+          summary: "Build ATLAS as a Windows-first Electron desktop application with a root resources executable that opens the app directly.",
+          desiredOutcome: "Direct app launch from a clickable executable in the root resources folder",
+        },
+        intent: {
+          summary: "ATLAS must launch directly from a clickable executable in the root resources folder.",
+          mustHaveFlows: ["Direct app launch from a clickable executable in the root resources folder"],
+          scopeIn: ["Root resources executable that opens the GUI directly"],
+          successCriteria: ["The app launches directly from a clickable executable in the root resources folder"],
+        },
+      },
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.violations.some((entry) => /direct user-facing executable launch path|silent downgrade/i.test(entry)));
   });
 
   it("fails when task is missing or too short", () => {
@@ -805,10 +937,83 @@ describe("revalidatePatchedPlansAfterNormalization (Task 3)", () => {
         scope: "src/core/",
         acceptance_criteria: ["Dispatch succeeds"],
         dependencies: ["T-001"],
+        capacityDelta: 0.1,
+        requestROI: 1.1,
         // verification is intentionally absent
       }
     ]);
     assert.equal(result.valid, true, "absent verification field must not cause a violation");
+  });
+
+  it("fails when Athena assigns a ui-contract plan and a non-ui plan to the same batch", () => {
+    const result = revalidatePatchedPlansAfterNormalization([
+      {
+        task: "Repair shell visual contract",
+        role: "integration-worker",
+        wave: 1,
+        _batchIndex: 1,
+        _batchTotal: 1,
+        _batchWave: 1,
+        _batchWorkerRole: "integration-worker",
+        taskKind: "ui-contract",
+        capabilityTag: "ui-contract",
+        uiSurface: "web-runtime",
+        targetSurfaces: ["web-runtime"],
+        continuationFamilyKey: "atlas:shell",
+        uiContract: {
+          contractId: "atlas-shell@v1",
+          schemaVersion: 1,
+          targetSurfaces: ["web-runtime"],
+          fields: {},
+          requiredFields: [],
+          forbiddenPatterns: [],
+          accessibilityFloor: "WCAG-AA",
+        },
+        target_files: ["src/ui/shell.tsx"],
+        scope: "src/ui/",
+        acceptance_criteria: ["UI contract passes"],
+      },
+      {
+        task: "Wire shell session state",
+        role: "integration-worker",
+        wave: 1,
+        _batchIndex: 1,
+        _batchTotal: 1,
+        _batchWave: 1,
+        _batchWorkerRole: "integration-worker",
+        taskKind: "integration",
+        target_files: ["src/state/session.ts"],
+        scope: "src/state/",
+        acceptance_criteria: ["State wiring passes"],
+      },
+    ]);
+
+    assert.equal(result.valid, false);
+    assert.ok(result.violations.some((entry) => /incompatible UI batch/i.test(entry)));
+  });
+});
+
+describe("validateUiBatchContract", () => {
+  it("rejects mixed UI and non-UI patched batches", () => {
+    const result = validateUiBatchContract([
+      {
+        _batchIndex: 1,
+        taskKind: "ui-contract",
+        capabilityTag: "ui-contract",
+        uiSurface: "web-runtime",
+        targetSurfaces: ["web-runtime"],
+        continuationFamilyKey: "atlas:shell",
+      },
+      {
+        _batchIndex: 1,
+        taskKind: "integration",
+        task: "Update session store",
+      },
+    ] as any[]);
+
+    assert.equal(result.valid, false);
+    assert.ok(result.violations.some((entry) => /batch 1: incompatible UI batch/i.test(entry)));
+    assert.equal(ATHENA_PLAN_REVIEW_REASON_CODE.UI_BATCH_CONTRACT_VIOLATION, "UI_BATCH_CONTRACT_VIOLATION");
   });
 });
 

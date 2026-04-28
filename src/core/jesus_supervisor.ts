@@ -51,6 +51,11 @@ import {
   resolveAutonomyExecutionGateBlockReason,
 } from "./governance_contract.js";
 import {
+  getTargetSessionPath,
+  mirrorJsonArtifactToTargetSession,
+  readTargetSessionArtifactJson,
+} from "./target_session_state.js";
+import {
   buildPromptTruthMaintenanceSection,
   buildPromptTruthMaintenanceSnapshot,
   collectPromptTruthSignals,
@@ -167,6 +172,45 @@ export function stampDirectiveTargetSession(config: any, directive: any): any {
 
   directive.targetSession = runtimeTargetSession;
   return directive;
+}
+
+function isPrometheusAnalysisAlignedToTargetSession(config: any, analysis: any): boolean {
+  const runtimeTargetSession = resolveDirectiveTargetSessionStamp(config);
+  const analysisTargetSession = analysis?.targetSession && typeof analysis.targetSession === "object"
+    ? analysis.targetSession
+    : null;
+
+  if (!runtimeTargetSession) {
+    return true;
+  }
+  if (!analysisTargetSession) {
+    return false;
+  }
+
+  return String(analysisTargetSession.projectId || "") === String(runtimeTargetSession.projectId || "")
+    && String(analysisTargetSession.sessionId || "") === String(runtimeTargetSession.sessionId || "");
+}
+
+async function loadPrometheusAnalysisForJesus(config: any, stateDir: string): Promise<any> {
+  const globalAnalysis = await readJson(path.join(stateDir, "prometheus_analysis.json"), {});
+
+  if (!isSingleTargetLeadershipIsolationActive(config)) {
+    return globalAnalysis;
+  }
+
+  const projectId = String(config?.activeTargetSession?.projectId || "").trim();
+  const sessionId = String(config?.activeTargetSession?.sessionId || "").trim();
+  if (!projectId || !sessionId) {
+    return {};
+  }
+
+  const sessionStateDir = getTargetSessionPath(stateDir, projectId, sessionId);
+  const sessionScopedAnalysis = await readJson(path.join(sessionStateDir, "prometheus_analysis.json"), null);
+  if (sessionScopedAnalysis && typeof sessionScopedAnalysis === "object" && !Array.isArray(sessionScopedAnalysis)) {
+    return sessionScopedAnalysis;
+  }
+
+  return {};
 }
 
 function normalizeGitHubRepoIdentifier(repo: unknown): string | null {
@@ -634,52 +678,54 @@ export async function runSystemHealthAudit(
   }
 
   // 6. Knowledge memory — check if self-improvement detected critical issues
-  try {
-    const stateDir = config.paths?.stateDir || "state";
-    const km = await readJson(path.join(stateDir, "knowledge_memory.json"), {});
-    // Support v1 (flat .lessons) and v2 (partitioned .working.lessons + .episodic.lessons)
-    const workingLessons  = Array.isArray(km.working?.lessons)  ? km.working.lessons  : [];
-    const episodicLessons = Array.isArray(km.episodic?.lessons) ? km.episodic.lessons : [];
-    const flatLessons     = Array.isArray(km.lessons)           ? km.lessons          : [];
-    const allLessons = km.schemaVersion >= 2
-      ? [...workingLessons, ...episodicLessons]
-      : flatLessons;
-    const criticalLessons = allLessons.filter(l => l.severity === "critical").slice(-3);
-    const capGaps = Array.isArray(km.capabilityGaps) ? km.capabilityGaps.slice(-5) : [];
-    const sourceIndex = await loadSourceEvidenceIndex(process.cwd());
-    const capabilityExecutionSummary = await loadCapabilityExecutionSummary(config);
+  if (!isSingleTargetLeadershipIsolationActive(config)) {
+    try {
+      const stateDir = config.paths?.stateDir || "state";
+      const km = await readJson(path.join(stateDir, "knowledge_memory.json"), {});
+      // Support v1 (flat .lessons) and v2 (partitioned .working.lessons + .episodic.lessons)
+      const workingLessons  = Array.isArray(km.working?.lessons)  ? km.working.lessons  : [];
+      const episodicLessons = Array.isArray(km.episodic?.lessons) ? km.episodic.lessons : [];
+      const flatLessons     = Array.isArray(km.lessons)           ? km.lessons          : [];
+      const allLessons = km.schemaVersion >= 2
+        ? [...workingLessons, ...episodicLessons]
+        : flatLessons;
+      const criticalLessons = allLessons.filter(l => l.severity === "critical").slice(-3);
+      const capGaps = Array.isArray(km.capabilityGaps) ? km.capabilityGaps.slice(-5) : [];
+      const sourceIndex = await loadSourceEvidenceIndex(process.cwd());
+      const capabilityExecutionSummary = await loadCapabilityExecutionSummary(config);
 
-    if (criticalLessons.length > 0) {
-      // Annotate with the live CI conclusion so hasCiSystemLearningDebt (and downstream
-      // consumers) can distinguish stale CI-break debt from active failures.
-      const liveMainCiConclusion = String(githubState?.latestMainCi?.conclusion || "").trim().toLowerCase();
-      findings.push({
-        area: "system-learning",
-        severity: "warning",
-        finding: `Self-improvement flagged ${criticalLessons.length} critical lesson(s): ${criticalLessons.map(l => l.lesson).join("; ").slice(0, 300)}`,
-        remediation: "Address critical lessons in next cycle planning",
-        capabilityNeeded: "system-improvement",
-        ...(liveMainCiConclusion ? { latestMainCiConclusion: liveMainCiConclusion } : {}),
-      });
-    }
-
-    if (capGaps.length > 0) {
-      for (const gap of capGaps.slice(0, 3)) {
-        const originalSeverity = String(gap?.severity || "warning").toLowerCase();
-        const verifiedPresent = isCapabilityGapVerifiedPresentAndExecuted(sourceIndex, capabilityExecutionSummary, gap);
-        const shouldDowngrade =
-          verifiedPresent && (originalSeverity === "critical" || originalSeverity === "warning" || originalSeverity === "important");
+      if (criticalLessons.length > 0) {
+        const liveMainCiConclusion = String(githubState?.latestMainCi?.conclusion || "").trim().toLowerCase();
         findings.push({
-          area: "capability-gap",
-          severity: shouldDowngrade ? "info" : (gap.severity || "warning"),
-          finding: `Missing capability: ${gap.gap}`,
-          remediation: gap.proposedFix || "Add missing capability to system",
-          capabilityNeeded: gap.capability || "unknown",
-          ...(shouldDowngrade ? { note: "verified_present_in_source_and_executed" } : {})
+          area: "system-learning",
+          severity: "warning",
+          finding: `Self-improvement flagged ${criticalLessons.length} critical lesson(s): ${criticalLessons.map(l => l.lesson).join("; ").slice(0, 300)}`,
+          remediation: "Address critical lessons in next cycle planning",
+          capabilityNeeded: "system-improvement",
+          ...(liveMainCiConclusion ? { latestMainCiConclusion: liveMainCiConclusion } : {}),
         });
       }
+
+      if (capGaps.length > 0) {
+        for (const gap of capGaps.slice(0, 3)) {
+          const originalSeverity = String(gap?.severity || "warning").toLowerCase();
+          const verifiedPresent = isCapabilityGapVerifiedPresentAndExecuted(sourceIndex, capabilityExecutionSummary, gap);
+          const shouldDowngrade =
+            verifiedPresent && (originalSeverity === "critical" || originalSeverity === "warning" || originalSeverity === "important");
+          findings.push({
+            area: "capability-gap",
+            severity: shouldDowngrade ? "info" : (gap.severity || "warning"),
+            finding: `Missing capability: ${gap.gap}`,
+            remediation: gap.proposedFix || "Add missing capability to system",
+            capabilityNeeded: gap.capability || "unknown",
+            ...(shouldDowngrade ? { note: "verified_present_in_source_and_executed" } : {})
+          });
+        }
+      }
+    } catch {
+      // Non-fatal: knowledge memory is advisory only.
     }
-  } catch { /* knowledge memory not available — no-op */ }
+  }
 
   return findings;
 }
@@ -698,7 +744,16 @@ function formatHealthAuditFindings(findings) {
 async function fetchGitHubState(config) {
   const token = config?.env?.githubToken;
   const repo = normalizeGitHubRepoIdentifier(resolvePromptTargetRepo(config));
-  if (!token || !repo) return { issues: [], pullRequests: [], repoInfo: null };
+  if (!token || !repo) {
+    return {
+      issues: [],
+      pullRequests: [],
+      repoInfo: null,
+      failedCiRuns: [],
+      recentlyMergedPrs: [],
+      latestMainCi: null,
+    };
+  }
 
   const headers = {
     Authorization: `Bearer ${token}`,
@@ -833,6 +888,12 @@ export function sanitizeDirectiveFieldForPersistence(text: string): string {
     if (/^(tool_call|tool_result|function_call|assistant:|system:|user:)/i.test(norm)) return false;
     if (/^copilot>/i.test(norm)) return false;
     if (/^\[?(synthesizer_start|synthesizer_end|research_synthesizer_live)\]/i.test(norm)) return false;
+    // Drop brittle source-access mandates that can deadlock planning when tooling context changes.
+    if (/^═══\s*CRITICAL READ CONSTRAINT/i.test(norm)) return false;
+    if (/\.box-target-workspaces/i.test(norm)) return false;
+    if (/github api/i.test(norm) && /\b(instead|must|only|verify|required|read all)\b/i.test(norm)) return false;
+    if (/^If a specific file cannot be found at its expected path, state that explicitly/i.test(norm)) return false;
+    if (/^════════+$/i.test(norm)) return false;
     return true;
   });
   return filtered.join("\n").trim();
@@ -1206,6 +1267,8 @@ export async function runJesusCycle(config) {
   chatLog(stateDir, jesusName, "Awakening — reading system state...");
   chatLog(stateDir, jesusName, "[LIVE] loading state snapshots (directive, coordination, prometheus, github, sessions)");
 
+  const leadershipIsolationActive = isSingleTargetLeadershipIsolationActive(config);
+
   // Read all state (no budget)
   const [
     lastDirectiveRaw,
@@ -1214,18 +1277,31 @@ export async function runJesusCycle(config) {
     githubState,
     sessionLoadResult
   ] = await Promise.all([
-    readJson(path.join(stateDir, "jesus_directive.json"), {}),
+    leadershipIsolationActive
+      ? readTargetSessionArtifactJson(config, "jesus_directive.json", {})
+      : readJson(path.join(stateDir, "jesus_directive.json"), {}),
     readJson(path.join(stateDir, "athena_coordination.json"), {}),
-    readJson(path.join(stateDir, "prometheus_analysis.json"), {}),
+    loadPrometheusAnalysisForJesus(config, stateDir),
     fetchGitHubState(config),
-    loadWorkerSessionsForHealthAudit(config, stateDir)
+    leadershipIsolationActive
+      ? Promise.resolve({
+        sessions: {},
+        source: "empty" as const,
+        cycleId: null,
+        canonicalSessionsAvailable: false,
+        legacySessionsAvailable: false,
+        workerSessionSourceConflict: false,
+        conflictReason: null,
+        staleSessionsFiltered: 0,
+        filteredStaleRoles: [],
+      })
+      : loadWorkerSessionsForHealthAudit(config, stateDir)
   ]);
   const lastDirective = isDirectiveAlignedToTargetSession(config, lastDirectiveRaw)
     ? lastDirectiveRaw
     : {};
 
   const sessions = sessionLoadResult.sessions;
-  const leadershipIsolationActive = isSingleTargetLeadershipIsolationActive(config);
 
   chatLog(
     stateDir,
@@ -1385,35 +1461,38 @@ export async function runJesusCycle(config) {
 
   // ── Capacity trends from scoreboard ────────────────────────────────────────
   let capacityTrendBlock = "";
-  try {
-    const recentEntries = await getRecentCapacity(config, 10);
-    if (recentEntries.length >= 3) {
-      const confTrend = computeTrend(recentEntries, "parserConfidence");
-      const planTrend = computeTrend(recentEntries, "planCount");
-      const budgetTrend = computeTrend(recentEntries, "budgetUsed");
-      const workerTrend = computeTrend(recentEntries, "workersDone");
-      capacityTrendBlock = `\n**Capacity Trends (last ${recentEntries.length} cycles):**
+  if (!leadershipIsolationActive) {
+    try {
+      const recentEntries = await getRecentCapacity(config, 10);
+      if (recentEntries.length >= 3) {
+        const confTrend = computeTrend(recentEntries, "parserConfidence");
+        const planTrend = computeTrend(recentEntries, "planCount");
+        const budgetTrend = computeTrend(recentEntries, "budgetUsed");
+        const workerTrend = computeTrend(recentEntries, "workersDone");
+        capacityTrendBlock = `\n**Capacity Trends (last ${recentEntries.length} cycles):**
   Parser confidence trend: ${confTrend}
   Plan count trend: ${planTrend}
   Budget usage trend: ${budgetTrend}
   Worker completion trend: ${workerTrend}`;
-    }
-  } catch { /* non-critical */ }
+      }
+    } catch { /* non-critical */ }
+  }
 
   let realizedExecutionBlock = "";
-  try {
-    const [cycleAnalyticsState, governanceBlockSummary, agentControlSummary] = await Promise.all([
-      readCycleAnalytics(config),
-      loadGovernanceBlockSummary(config, 20),
-      summarizeAgentControlPlane(config, 20),
-    ]);
-    const lastCycle = cycleAnalyticsState?.lastCycle;
-    const workerTopology = lastCycle?.workerTopology;
-    const routingSummary = lastCycle?.routingROISummary;
-    const modelRoutingTelemetry = lastCycle?.modelRoutingTelemetry?.byTaskKind || {};
-    const topTaskKindEntry = Object.entries(modelRoutingTelemetry)
-      .sort((a: any, b: any) => Number((b?.[1] as any)?.default?.outcomeScore || 0) - Number((a?.[1] as any)?.default?.outcomeScore || 0))[0];
-    realizedExecutionBlock = `\n**Realized Execution Signals (last recorded cycle):**
+  if (!leadershipIsolationActive) {
+    try {
+      const [cycleAnalyticsState, governanceBlockSummary, agentControlSummary] = await Promise.all([
+        readCycleAnalytics(config),
+        loadGovernanceBlockSummary(config, 20),
+        summarizeAgentControlPlane(config, 20),
+      ]);
+      const lastCycle = cycleAnalyticsState?.lastCycle;
+      const workerTopology = lastCycle?.workerTopology;
+      const routingSummary = lastCycle?.routingROISummary;
+      const modelRoutingTelemetry = lastCycle?.modelRoutingTelemetry?.byTaskKind || {};
+      const topTaskKindEntry = Object.entries(modelRoutingTelemetry)
+        .sort((a: any, b: any) => Number((b?.[1] as any)?.default?.outcomeScore || 0) - Number((a?.[1] as any)?.default?.outcomeScore || 0))[0];
+      realizedExecutionBlock = `\n**Realized Execution Signals (last recorded cycle):**
   Outcome status: ${String(lastCycle?.outcomes?.status || "unknown")}
   Dispatch block: ${String(lastCycle?.outcomes?.dispatchBlockReason || governanceBlockSummary.latestBlockReason || "none")}
   Worker topology: effectiveLanes=${Number(workerTopology?.effectiveLaneCount || 0)} nominalLanes=${Number(workerTopology?.nominalLaneCount || 0)} reservedSpecialistLanes=${Number(workerTopology?.reservedSpecialistLaneCount || 0)} collapseRate=${Number(workerTopology?.fallbackCollapseRate || 0)}
@@ -1422,7 +1501,8 @@ export async function runJesusCycle(config) {
   Strongest realized taskKind: ${topTaskKindEntry ? `${topTaskKindEntry[0]} score=${Number((topTaskKindEntry[1] as any)?.default?.outcomeScore || 0).toFixed(3)}` : "n/a"}
   Recent governance blocks: ${governanceBlockSummary.recentBlockCount} (${Object.entries(governanceBlockSummary.byReasonCode).map(([code, count]) => `${code}=${count}`).join(", ") || "none"})
   Agent control plane: active=${agentControlSummary.activeAgents.join(", ") || "none"} completed=${agentControlSummary.completionCount} failed=${agentControlSummary.failureCount} handoffs=${agentControlSummary.handoffCount}`;
-  } catch { /* advisory only */ }
+    } catch { /* advisory only */ }
+  }
 
   let truthMaintenanceSection = "";
   if (!leadershipIsolationActive) {
@@ -1631,9 +1711,22 @@ ${workersList}`;
   const aiCallStartedAt = Date.now();
   const latencyWarningCorrelationId = `jesus-latency-${aiCallStartedAt}`;
   const heartbeatIntervalMs = Math.max(30_000, Number(config?.runtime?.jesusHeartbeatIntervalMs || 30_000));
+  const progressHeartbeatIntervalMs = Math.max(
+    heartbeatIntervalMs,
+    Number(config?.runtime?.jesusProgressHeartbeatIntervalMs || 60_000),
+  );
+  let lastProgressHeartbeatAt = 0;
   const heartbeatTimer = setInterval(() => {
     const elapsedSec = Math.floor((Date.now() - aiCallStartedAt) / 1000);
     chatLog(stateDir, jesusName, `[LIVE] AI analysis in progress elapsed=${elapsedSec}s`);
+    const nowMs = Date.now();
+    if ((nowMs - lastProgressHeartbeatAt) >= progressHeartbeatIntervalMs) {
+      lastProgressHeartbeatAt = nowMs;
+      void appendProgress(
+        config,
+        `[JESUS] AI analysis in progress elapsed=${elapsedSec}s tier=${finalTierLabel}`,
+      ).catch(() => {});
+    }
   }, heartbeatIntervalMs);
 
   chatLog(stateDir, jesusName, "Calling AI for strategic analysis...");
@@ -1901,6 +1994,14 @@ ${workersList}`;
     } catch { /* non-fatal: if athena_plan_rejection doesn't exist or is malformed, continue */ }
   }
 
+  if (d.callPrometheus && String(d.briefForPrometheus || "").trim() === "") {
+    d.briefForPrometheus = `Check GitHub issues and activate appropriate workers. Target repo: ${effectivePromptTargetRepo}`;
+    await appendProgress(
+      config,
+      "[JESUS] briefForPrometheus backfilled after override — using safe fallback directive for Prometheus"
+    );
+  }
+
   chatLog(stateDir, jesusName,
     `Decision: ${d.decision || "?"} | Health: ${d.systemHealth || "?"} | callPrometheus: ${d.callPrometheus} | wakeAthena: ${d.wakeAthena}`
   );
@@ -2017,6 +2118,7 @@ ${workersList}`;
   }
 
   await writeJson(path.join(stateDir, "jesus_directive.json"), directive);
+  await mirrorJsonArtifactToTargetSession(config, "jesus_directive.json", directive).catch(() => {});
 
   return directive;
 }

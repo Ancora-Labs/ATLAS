@@ -160,10 +160,12 @@ export const POST_MERGE_PLACEHOLDER = "POST_MERGE_TEST_OUTPUT";
 export const POST_MERGE_SHA_PLACEHOLDER = "<paste git rev-parse HEAD here>";
 
 /**
- * Template placeholder for the npm test output field inside the post-merge artifact block.
- * Workers must replace this with the actual stdout from `npm test`.
+ * Template placeholder for the targeted verification output field inside the
+ * post-merge artifact block. Workers must replace this with the actual stdout
+ * from the task-scoped verification command they ran on merged state.
  */
 export const POST_MERGE_OUTPUT_PLACEHOLDER = "<paste full raw npm test stdout here>";
+const LEGACY_POST_MERGE_OUTPUT_PLACEHOLDER = "<paste full raw targeted test stdout here>";
 
 /**
  * All known template placeholder literals that constitute unfilled residue.
@@ -174,6 +176,7 @@ export const ALL_POST_MERGE_PLACEHOLDERS: readonly string[] = Object.freeze([
   POST_MERGE_PLACEHOLDER,
   POST_MERGE_SHA_PLACEHOLDER,
   POST_MERGE_OUTPUT_PLACEHOLDER,
+  LEGACY_POST_MERGE_OUTPUT_PLACEHOLDER,
 ]);
 
 /**
@@ -182,9 +185,9 @@ export const ALL_POST_MERGE_PLACEHOLDERS: readonly string[] = Object.freeze([
  * regardless of which finalization path triggers the artifact check.
  */
 export const ARTIFACT_GAP = Object.freeze({
-  UNFILLED_PLACEHOLDER: "Post-merge artifact block contains unfilled template placeholders — replace every placeholder with actual output (BOX_MERGED_SHA=<sha>, CLEAN_TREE_STATUS=clean, and the ===NPM TEST OUTPUT START=== block with real test output)",
+  UNFILLED_PLACEHOLDER: "Post-merge artifact block contains unfilled template placeholders — replace every placeholder with actual output (BOX_MERGED_SHA=<sha>, CLEAN_TREE_STATUS=clean, and the ===NPM TEST OUTPUT START=== block with real targeted test output)",
   MISSING_SHA:          "Post-merge explicit BOX_MERGED_SHA marker missing — run 'git rev-parse HEAD' after merge and include 'BOX_MERGED_SHA=<sha>' in your output (loose hex strings are not accepted)",
-  MISSING_TEST_OUTPUT:  "Post-merge raw npm test output missing — run 'npm test' on merged state and paste raw stdout",
+  MISSING_TEST_OUTPUT:  "Post-merge raw targeted test output missing — run the task-scoped verification command on merged state and paste raw stdout",
   DIRTY_TREE:           "Post-merge clean-tree evidence missing — include CLEAN_TREE_STATUS=clean from 'git status --porcelain', or for shared dirty worktrees include CLEAN_TREE_STATUS=dirty-other-tasks-only plus TASK_SCOPED_CLEAN_STATUS=clean and TASK_SCOPED_CLEAN_TARGETS=<files>",
 });
 
@@ -256,7 +259,7 @@ export const ARTIFACT_GAP_CODE = Object.freeze({
 
 /**
  * Check if worker output contains the required post-merge verification artifact.
- * The artifact is: an explicit BOX_MERGED_SHA marker + raw npm test stdout block.
+ * The artifact is: an explicit BOX_MERGED_SHA marker + raw targeted test stdout block.
  *
  * SHA detection is strict — only the explicit BOX_MERGED_SHA=<sha> marker is
  * accepted.  Loose 7-40 hex string matching has been removed to prevent
@@ -282,7 +285,7 @@ export function checkPostMergeArtifact(output, options: { expectedTargetFiles?: 
   const hasTestOutput = hasExplicitTestBlock;
   const cleanTreeEvidence = buildCleanTreeEvidence(text, options?.expectedTargetFiles);
   const hasCleanTreeEvidence = cleanTreeEvidence.hasCleanTreeEvidence;
-  // Replay-and-attach completion is represented by the explicit raw npm test output block.
+  // Replay-and-attach completion is represented by the explicit raw targeted test output block.
   const hasReplayAttachEvidence = hasExplicitTestBlock;
 
   // Deterministic rejection: any known template placeholder literal means the
@@ -1324,6 +1327,11 @@ export interface ValidateWorkerContractOptions {
   /** Config.gates object to upgrade optional evidence fields to required. */
   gatesConfig?: Record<string, unknown>;
   /**
+   * Active isolated single-target delivery completes locally in the target
+   * workspace, so PR URL and post-merge SHA evidence should not be required.
+   */
+  allowLocalTargetCompletion?: boolean;
+  /**
    * The task kind from the instruction (e.g. "backend", "scan", "doc").
    * Non-merge task kinds (scan, doc, observation, diagnosis) are exempt from
    * the artifact gate even when the worker role is done-capable.
@@ -1376,6 +1384,7 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
     toolExecutionTelemetry: toolTelemetry,
   };
   const status = String(parsedResponse?.status || "done").toLowerCase();
+  const allowLocalTargetCompletion = options.allowLocalTargetCompletion === true;
   const allExempt = Object.values(profile.evidence).every(v => v === "exempt");
   const hasRequiredFields = Object.values(profile.evidence).some(v => v === "required");
   const requireArtifact = hasRequiredFields
@@ -1440,7 +1449,7 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
   // kind is a non-merge kind (scan, doc, observation, diagnosis) — those tasks
   // do not produce a merged commit and are exempt from artifact requirements.
   // This gate is NON-BYPASSABLE — no caller option can disable it.
-  if (requireArtifact) {
+  if (requireArtifact && !allowLocalTargetCompletion) {
     // Reuse a pre-computed artifact object when the caller already evaluated
     // the same output (e.g., the hard-block gate in worker_runner), avoiding
     // a redundant call to checkPostMergeArtifact on the same string.
@@ -1451,7 +1460,7 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
     for (const gap of collectArtifactGaps(artifact)) gaps.push(gap);
   }
 
-  if (options.verificationText && requireArtifact) {
+  if (options.verificationText && requireArtifact && !allowLocalTargetCompletion) {
     const verificationText = String(options.verificationText).trim();
     const forbiddenVerification = checkForbiddenCommands(verificationText);
     if (forbiddenVerification.forbidden) {
@@ -1563,7 +1572,7 @@ export function validateWorkerContract(workerKind: string, parsedResponse: Recor
   }
 
   // PR URL check — generic for all implementation roles that require it
-  if (profile.evidence.prUrl === "required") {
+  if (profile.evidence.prUrl === "required" && !allowLocalTargetCompletion) {
     if (!prUrl) {
       gaps.push("BOX_PR_URL missing — worker must push a branch and open a real GitHub PR. Prose claims of completion are not accepted.");
     }
@@ -1613,7 +1622,7 @@ ${CANONICAL_VERIFICATION_REPORT_TEMPLATE}
    BOX_MERGED_SHA=<7-40 char hex SHA from git rev-parse HEAD>
    CLEAN_TREE_STATUS=clean
    ===NPM TEST OUTPUT START===
-   <paste full raw npm test stdout here>
+  <paste full raw targeted test stdout here>
    ===NPM TEST OUTPUT END===
 
    ⚠️ Do NOT use the old POST_MERGE_TEST_OUTPUT format — it will be detected as an unfilled placeholder and reject your output.

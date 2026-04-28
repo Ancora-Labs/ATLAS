@@ -5,6 +5,7 @@ import {
   buildTargetResearchCoverageSection,
   buildTargetResearchSessionStamp,
   deriveTargetResearchCoveragePlan,
+  interpretTargetResearchIntent,
 } from "../../src/core/research_scout.js";
 
 describe("research_scout target intent context", () => {
@@ -67,6 +68,8 @@ describe("research_scout target intent context", () => {
     });
 
     assert.equal(plan.adaptive, true);
+  assert.equal(plan.intentDecision.experienceType, "marketing");
+  assert.equal(plan.intentDecision.assetNeeds.media, "required");
     assert.ok(plan.obligations.includes("visual_design"));
     assert.ok(plan.obligations.includes("media_surfaces"));
     assert.ok(plan.obligations.includes("responsive_experience"));
@@ -87,8 +90,59 @@ describe("research_scout target intent context", () => {
     });
 
     assert.ok(sectionText.includes("## TARGET RESEARCH COVERAGE PLAN"));
+    assert.ok(sectionText.includes("Experience type:"));
+    assert.ok(sectionText.includes("Asset needs:"));
     assert.ok(sectionText.includes("Coverage obligations:"));
     assert.ok(sectionText.includes("implementation_patterns"));
     assert.ok(!sectionText.toLowerCase().includes("food gate"));
+  });
+
+  it("does not infer media surfaces from visual polish alone for interface work", () => {
+    const plan = deriveTargetResearchCoveragePlan({
+      intent: {
+        repoState: "existing",
+        productType: "session control interface",
+        summary: "Build a calm premium interface with strong visual polish and clear status design.",
+        mustHaveFlows: ["start session", "resume session", "safe stop controls"],
+        successCriteria: ["looks polished and understandable without raw logs"],
+      },
+    });
+
+    assert.ok(plan.obligations.includes("visual_design"));
+    assert.ok(!plan.obligations.includes("media_surfaces"));
+    assert.equal(plan.intentDecision.assetNeeds.media, "none");
+    assert.ok(!plan.optionalInvestigations.includes("media_surfaces"));
+    assert.ok(!plan.recommendedSourceTypes.includes("asset and media patterns"));
+  });
+
+  it("separates intent interpretation from research obligations for branded product interfaces", () => {
+    const decision = interpretTargetResearchIntent({
+      intent: {
+        repoState: "existing",
+        productType: "branded consumer app",
+        summary: "Create a branded consumer app with strong logo presence and polished onboarding.",
+        mustHaveFlows: ["onboarding", "account overview"],
+        successCriteria: ["feels branded without depending on photography"],
+      },
+    });
+
+    assert.equal(decision.experienceType, "product_interface");
+    assert.equal(decision.assetNeeds.media, "optional");
+    assert.equal(decision.assetNeeds.branding, "required");
+
+    const plan = deriveTargetResearchCoveragePlan({
+      intent: {
+        repoState: "existing",
+        productType: "branded consumer app",
+        summary: "Create a branded consumer app with strong logo presence and polished onboarding.",
+        mustHaveFlows: ["onboarding", "account overview"],
+        successCriteria: ["feels branded without depending on photography"],
+      },
+    });
+
+    assert.ok(plan.obligations.includes("visual_design"));
+    assert.ok(!plan.obligations.includes("media_surfaces"));
+    assert.ok(plan.optionalInvestigations.includes("media_surfaces"));
+    assert.equal(plan.intentDecision.assetNeeds.branding, "required");
   });
 });

@@ -1,12 +1,19 @@
 import { appendProgress } from "./state_tracker.js";
 import { readJson, spawnAsync, writeJson } from "./fs_utils.js";
 import { agentFileExists, appendAgentLiveLog, appendAgentLiveLogDetail, buildAgentArgs, parseAgentOutput, writeAgentDebugFile } from "./agent_loader.js";
+import { requestDaemonReload } from "./daemon_control.js";
 import {
   loadActiveTargetSession,
   saveActiveTargetSession,
   TARGET_INTENT_STATUS,
   TARGET_SESSION_STAGE,
 } from "./target_session_state.js";
+
+const MODE_APPROVAL_SEMANTIC_SLOT = "mode_approval";
+
+function getTemporaryDefaultDeliveryMode() {
+  return "active";
+}
 
 function normalizeNullableString(value: unknown): string | null {
   const normalized = String(value || "").trim();
@@ -20,6 +27,11 @@ function normalizeStringArray(values: unknown): string[] {
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function normalizeNumber(value: unknown, fallback: number | null = null): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function buildQuestionMap(contract: any) {
@@ -37,9 +49,26 @@ function getQuestionStatus(question: any) {
   return String(question?.status || "pending").trim().toLowerCase() || "pending";
 }
 
+function resolveSemanticQuestionId(question: any, fallbackQuestionId: string | null = null) {
+  const semanticId = String(
+    question?.semanticSlot
+    || question?.sourceQuestionId
+    || fallbackQuestionId
+    || question?.id
+    || "",
+  ).trim();
+  return semanticId || String(fallbackQuestionId || question?.id || "question").trim() || "question";
+}
+
 function getCurrentPendingQuestion(contract: any) {
   const openQuestions = Array.isArray(contract?.openQuestions) ? contract.openQuestions : [];
   return openQuestions.find((question) => getQuestionStatus(question) === "pending") || null;
+}
+
+function countQuestionsByPrefix(contract: any, prefix: string) {
+  return (Array.isArray(contract?.openQuestions) ? contract.openQuestions : [])
+    .filter((question) => String(question?.id || "").trim().startsWith(prefix))
+    .length;
 }
 
 function normalizeSelectedOptions(input: unknown) {
@@ -51,8 +80,23 @@ function normalizeSelectedOptions(input: unknown) {
   return uniqueStrings(text.split(/[|,]/).map((entry) => entry.trim()));
 }
 
+function questionRequiresAnswer(question: any) {
+  return question?.required !== false;
+}
+
 function isNegativeNoneResponse(text: string) {
   return /^(none|no|nothing|n-a|n\/a|yok|gerek yok)$/i.test(text.trim());
+}
+
+function isOtherSelection(value: string) {
+  return /^(other|custom|something else|başka|diger|diğer)(\b|\s|$)/i.test(String(value || "").trim());
+}
+
+function prunePlaceholderSelections(selectedOptions: string[], answerText: string) {
+  if (!String(answerText || "").trim()) {
+    return selectedOptions;
+  }
+  return selectedOptions.filter((option) => !isOtherSelection(option));
 }
 
 function buildFollowUpPrompt(questionId: string, repoState: string) {
@@ -81,8 +125,12 @@ function buildFollowUpPrompt(questionId: string, repoState: string) {
 
 function inferAnswerNeedsFollowUp(question: any, answerText: string, selectedOptions: string[]) {
   const answerMode = String(question?.answerMode || "").trim();
+  const choseOther = selectedOptions.some((option) => isOtherSelection(option));
   if (isNegativeNoneResponse(answerText)) {
     return false;
+  }
+  if (choseOther && answerText.length < 8) {
+    return true;
   }
   if ((answerMode === "single_select" || answerMode === "multi_select") && selectedOptions.length === 0 && answerText.length === 0) {
     return true;
@@ -99,16 +147,123 @@ function inferAnswerNeedsFollowUp(question: any, answerText: string, selectedOpt
   return false;
 }
 
+function normalizeAuthoredFollowUpQuestion(rawQuestion: any, fallbackSemanticSlot: string, sourceQuestion: any, index: number) {
+  if (!rawQuestion || typeof rawQuestion !== "object") return null;
+  const title = String(rawQuestion?.title || sourceQuestion?.title || "Follow-up").trim();
+  const prompt = String(rawQuestion?.prompt || "").trim();
+  if (!title || !prompt) return null;
+  const semanticSlot = normalizeNullableString(rawQuestion?.semanticSlot)
+    || fallbackSemanticSlot
+    || resolveSemanticQuestionId(sourceQuestion);
+  return {
+    ...rawQuestion,
+    id: String(rawQuestion?.id || `follow_up_${resolveSemanticQuestionId(sourceQuestion)}_${index + 1}`).trim(),
+    semanticSlot,
+    title,
+    prompt,
+    answerMode: ["hybrid", "single_select", "multi_select"].includes(String(rawQuestion?.answerMode || "").trim().toLowerCase())
+      ? String(rawQuestion.answerMode).trim().toLowerCase()
+      : "hybrid",
+    options: Array.isArray(rawQuestion?.options)
+      ? uniqueStrings(rawQuestion.options.map((entry: unknown) => String(entry || "").trim()))
+      : Array.isArray(sourceQuestion?.options)
+        ? uniqueStrings(sourceQuestion.options.map((entry: unknown) => String(entry || "").trim()))
+        : [],
+    status: "pending",
+    askedAt: new Date().toISOString(),
+    sourceQuestionId: normalizeNullableString(rawQuestion?.sourceQuestionId)
+      || normalizeNullableString(sourceQuestion?.id)
+      || null,
+  };
+}
+
+function resolveAuthoredFollowUpQuestion(question: any, answerText: string, selectedOptions: string[]) {
+  const rawFollowUps = Array.isArray(question?.followUps)
+    ? question.followUps
+    : question?.followUp
+      ? [question.followUp]
+      : [];
+  if (rawFollowUps.length === 0) {
+    return null;
+  }
+
+  const normalizedAnswerText = String(answerText || "").trim();
+  const normalizedSelections = uniqueStrings(selectedOptions.map((entry) => String(entry || "").trim()));
+  const selectedLower = normalizedSelections.map((entry) => entry.toLowerCase());
+  const choseOther = normalizedSelections.some((option) => isOtherSelection(option));
+
+  for (let index = 0; index < rawFollowUps.length; index += 1) {
+    const rawFollowUp = rawFollowUps[index];
+    const minAnswerLength = normalizeNumber(rawFollowUp?.minAnswerLength, null);
+    const triggerOnEmpty = rawFollowUp?.triggerOnEmpty === true;
+    const triggerOnOtherWithoutText = rawFollowUp?.triggerOnOtherWithoutText !== false;
+    const requireTextWhenOptionsSelected = normalizeStringArray(rawFollowUp?.requireTextWhenOptionsSelected).map((entry) => entry.toLowerCase());
+    const whenSelectedOptionsAny = normalizeStringArray(rawFollowUp?.whenSelectedOptionsAny).map((entry) => entry.toLowerCase());
+    const whenSelectedOptionsAll = normalizeStringArray(rawFollowUp?.whenSelectedOptionsAll).map((entry) => entry.toLowerCase());
+    const triggeredByEmpty = triggerOnEmpty && !normalizedAnswerText && normalizedSelections.length === 0;
+    const triggeredByOther = triggerOnOtherWithoutText && choseOther && normalizedAnswerText.length < 8;
+    const triggeredByLength = minAnswerLength != null && normalizedAnswerText.length > 0 && normalizedAnswerText.length < minAnswerLength;
+    const triggeredBySelectedAny = whenSelectedOptionsAny.length > 0 && whenSelectedOptionsAny.some((entry) => selectedLower.includes(entry));
+    const triggeredBySelectedAll = whenSelectedOptionsAll.length > 0 && whenSelectedOptionsAll.every((entry) => selectedLower.includes(entry));
+    const triggeredByRequiredText = requireTextWhenOptionsSelected.length > 0
+      && requireTextWhenOptionsSelected.some((entry) => selectedLower.includes(entry))
+      && normalizedAnswerText.length < 8;
+    const hasExplicitTriggers = triggerOnEmpty || minAnswerLength != null || requireTextWhenOptionsSelected.length > 0 || whenSelectedOptionsAny.length > 0 || whenSelectedOptionsAll.length > 0 || rawFollowUp?.triggerOnOtherWithoutText != null;
+    const shouldTrigger = triggeredByEmpty
+      || triggeredByOther
+      || triggeredByLength
+      || triggeredBySelectedAny
+      || triggeredBySelectedAll
+      || triggeredByRequiredText
+      || (!hasExplicitTriggers && inferAnswerNeedsFollowUp(question, normalizedAnswerText, normalizedSelections));
+
+    if (!shouldTrigger) {
+      continue;
+    }
+
+    return normalizeAuthoredFollowUpQuestion(rawFollowUp, resolveSemanticQuestionId(question), question, index);
+  }
+
+  return null;
+}
+
 function buildAgentQuestionTurn(question: any) {
   return {
     actor: "agent",
     kind: "question",
     questionId: String(question?.id || "").trim() || null,
+    semanticSlot: resolveSemanticQuestionId(question),
     title: String(question?.title || "").trim() || null,
     prompt: String(question?.prompt || "").trim() || null,
     options: Array.isArray(question?.options) ? question.options : [],
     askedAt: new Date().toISOString(),
   };
+}
+
+function buildAgentGuidanceTurn(input: {
+  decision: any;
+  understanding?: string | null;
+  prompt?: string | null;
+}) {
+  return {
+    actor: "agent",
+    kind: "guidance",
+    decision: input.decision || null,
+    understanding: normalizeNullableString(input.understanding),
+    prompt: normalizeNullableString(input.prompt),
+    recordedAt: new Date().toISOString(),
+  };
+}
+
+function getLatestAgentGuidance(transcript: any) {
+  const turns = Array.isArray(transcript?.turns) ? transcript.turns : [];
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    if (turn?.actor === "agent" && turn?.kind === "guidance") {
+      return turn;
+    }
+  }
+  return null;
 }
 
 function ensureQuestionAsked(transcript: any, question: any) {
@@ -145,6 +300,7 @@ function ensureQuestionEntry(contract: any, question: any) {
       {
         ...question,
         id: questionId,
+        semanticSlot: resolveSemanticQuestionId(question, questionId),
         status: "pending",
         answerText: null,
         selectedOptions: [],
@@ -165,11 +321,13 @@ function updateClarifiedIntent(contract: any, questionId: string, answerText: st
     deploymentExpectations: normalizeStringArray(contract?.clarifiedIntent?.deploymentExpectations),
     successCriteria: normalizeStringArray(contract?.clarifiedIntent?.successCriteria),
   };
-  const mergedValues = uniqueStrings([...selectedOptions, ...(answerText ? [answerText] : [])]);
+  const semanticSelections = prunePlaceholderSelections(selectedOptions, answerText);
+  const primarySelection = semanticSelections[0] || null;
+  const mergedValues = uniqueStrings([...semanticSelections, ...(answerText ? [answerText] : [])]);
 
   switch (questionId) {
     case "product_goal":
-      clarifiedIntent.productType = selectedOptions[0] || answerText || clarifiedIntent.productType || session?.objective?.summary || null;
+      clarifiedIntent.productType = primarySelection || answerText || clarifiedIntent.productType || session?.objective?.summary || null;
       clarifiedIntent.scopeIn = uniqueStrings([...clarifiedIntent.scopeIn, ...mergedValues]);
       break;
     case "target_users":
@@ -180,7 +338,7 @@ function updateClarifiedIntent(contract: any, questionId: string, answerText: st
       clarifiedIntent.scopeIn = uniqueStrings([...clarifiedIntent.scopeIn, ...mergedValues]);
       break;
     case "quality_bar":
-      clarifiedIntent.preferredQualityBar = selectedOptions[0] || answerText || clarifiedIntent.preferredQualityBar || null;
+      clarifiedIntent.preferredQualityBar = primarySelection || answerText || clarifiedIntent.preferredQualityBar || null;
       if (clarifiedIntent.preferredQualityBar) {
         clarifiedIntent.successCriteria = uniqueStrings([
           ...clarifiedIntent.successCriteria,
@@ -189,7 +347,7 @@ function updateClarifiedIntent(contract: any, questionId: string, answerText: st
       }
       break;
     case "repo_purpose_confirmation":
-      clarifiedIntent.productType = selectedOptions[0] || answerText || clarifiedIntent.productType || null;
+      clarifiedIntent.productType = primarySelection || answerText || clarifiedIntent.productType || null;
       break;
     case "requested_change":
       clarifiedIntent.scopeIn = uniqueStrings([...clarifiedIntent.scopeIn, ...mergedValues]);
@@ -201,6 +359,8 @@ function updateClarifiedIntent(contract: any, questionId: string, answerText: st
       break;
     case "success_signal":
       clarifiedIntent.successCriteria = uniqueStrings([...clarifiedIntent.successCriteria, ...mergedValues]);
+      break;
+    case MODE_APPROVAL_SEMANTIC_SLOT:
       break;
     default:
       if (questionId.startsWith("follow_up_product_goal")) {
@@ -228,7 +388,152 @@ function updateClarifiedIntent(contract: any, questionId: string, answerText: st
   return clarifiedIntent;
 }
 
+function buildModeApprovalQuestion(contract: any, decision: any) {
+  const questionIndex = countQuestionsByPrefix(contract, "mode_approval_") + 1;
+  const proposedMode = getTemporaryDefaultDeliveryMode();
+  const understanding = normalizeNullableString(decision?.understanding);
+  const rationale = normalizeNullableString(decision?.rationale);
+  const promptParts = [];
+  if (understanding) {
+    promptParts.push(`Here is my current understanding: ${understanding}`);
+  }
+  promptParts.push(`I recommend opening in ${proposedMode} mode.`);
+  if (rationale) {
+    promptParts.push(`Reason: ${rationale}`);
+  }
+  promptParts.push("Approve this mode and continue, or tell me not yet so I can ask one more targeted question.");
+  return {
+    id: `mode_approval_${questionIndex}`,
+    semanticSlot: MODE_APPROVAL_SEMANTIC_SLOT,
+    title: "Mode confirmation",
+    prompt: promptParts.join(" "),
+    answerMode: "single_select",
+    options: [
+      `Approve ${proposedMode} and continue`,
+      "Not yet, ask one more question",
+    ],
+    status: "pending",
+    askedAt: new Date().toISOString(),
+    sourceQuestionId: MODE_APPROVAL_SEMANTIC_SLOT,
+  };
+}
+
+function isAffirmativeModeApproval(answerText: string, selectedOptions: string[]) {
+  const values = [answerText, ...selectedOptions]
+    .map((entry) => String(entry || "").trim().toLowerCase())
+    .filter(Boolean);
+  return values.some((entry) => /^(approve|yes|continue|ok|tamam|onay)/i.test(entry));
+}
+
+function isRejectedModeApproval(answerText: string, selectedOptions: string[]) {
+  const values = [answerText, ...selectedOptions]
+    .map((entry) => String(entry || "").trim().toLowerCase())
+    .filter(Boolean);
+  return values.some((entry) => /(not yet|ask one more|more question|hayir|hayır|no|reject|not now)/i.test(entry));
+}
+
+function normalizeTurnQuestion(rawQuestion: any, fallbackSemanticSlot = "requested_change") {
+  if (!rawQuestion || typeof rawQuestion !== "object") return null;
+  const id = String(rawQuestion?.id || "").trim();
+  const title = String(rawQuestion?.title || "").trim();
+  const prompt = String(rawQuestion?.prompt || "").trim();
+  if (!id || !title || !prompt) return null;
+  const answerMode = String(rawQuestion?.answerMode || "hybrid").trim().toLowerCase();
+  const normalizedAnswerMode = ["hybrid", "single_select", "multi_select"].includes(answerMode)
+    ? answerMode
+    : "hybrid";
+  return {
+    id,
+    semanticSlot: normalizeNullableString(rawQuestion?.semanticSlot) || fallbackSemanticSlot,
+    title,
+    prompt,
+    answerMode: normalizedAnswerMode,
+    options: Array.isArray(rawQuestion?.options)
+      ? uniqueStrings(rawQuestion.options.map((entry: unknown) => String(entry || "").trim()))
+      : [],
+    status: "pending",
+    askedAt: new Date().toISOString(),
+    sourceQuestionId: normalizeNullableString(rawQuestion?.sourceQuestionId) || null,
+  };
+}
+
+function normalizeClarificationTurnDecision(rawDecision: any, selectedAgentSlug: string | null) {
+  if (!rawDecision || typeof rawDecision !== "object") return null;
+  const rawOutcome = String(rawDecision?.outcome || rawDecision?.action || rawDecision?.status || "").trim().toLowerCase();
+  const outcome = rawOutcome === "ready" || rawOutcome === "ready_for_confirmation"
+    ? "ready_to_confirm"
+    : rawOutcome;
+  if (!["ask_more", "ready_to_confirm"].includes(outcome)) {
+    return null;
+  }
+
+  const proposedMode = String(rawDecision?.proposedMode || rawDecision?.recommendation || rawDecision?.mode || "").trim().toLowerCase();
+  const normalizedMode = proposedMode === "direct_active"
+    ? "active"
+    : proposedMode === "shadow_required"
+      ? "shadow"
+      : proposedMode;
+  const nextQuestion = normalizeTurnQuestion(
+    rawDecision?.nextQuestion,
+    normalizeNullableString(rawDecision?.nextQuestion?.semanticSlot) || "requested_change",
+  );
+
+  if (outcome === "ask_more" && !nextQuestion) {
+    return null;
+  }
+  if (outcome === "ready_to_confirm" && !["active", "shadow"].includes(normalizedMode)) {
+    return null;
+  }
+
+  return {
+    source: normalizeNullableString(rawDecision?.source) || selectedAgentSlug || "clarification_agent",
+    outcome,
+    understanding: normalizeNullableString(rawDecision?.understanding) || normalizeNullableString(rawDecision?.summary),
+    rationale: normalizeNullableString(rawDecision?.rationale) || normalizeNullableString(rawDecision?.reason),
+    confidence: normalizeNullableString(rawDecision?.confidence),
+    proposedMode: outcome === "ready_to_confirm" ? normalizedMode : null,
+    nextQuestion,
+    decidedAt: new Date().toISOString(),
+  };
+}
+
+function resolveMockClarificationTurnDecision(mockText: string | null, questionId: string) {
+  if (!mockText) return null;
+  try {
+    const parsed = JSON.parse(mockText);
+    if (parsed && typeof parsed === "object") {
+      if (Array.isArray(parsed.decisions)) {
+        const matched = parsed.decisions.find((entry: any) => String(entry?.questionId || "").trim() === questionId)
+          || parsed.decisions.find((entry: any) => String(entry?.questionId || "").trim() === "*");
+        return matched?.decision || matched || null;
+      }
+      if (parsed.byQuestionId && typeof parsed.byQuestionId === "object") {
+        return parsed.byQuestionId[questionId] || parsed.byQuestionId["*"] || null;
+      }
+      if (parsed.decision) {
+        return parsed.decision;
+      }
+      return parsed;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function computeMissingIntentFields(contract: any, session: any) {
+  const openQuestions = Array.isArray(contract?.openQuestions) ? contract.openQuestions : [];
+  const requiredSemanticSlots = uniqueStrings(normalizeStringArray(contract?.requiredSemanticSlots));
+  if (requiredSemanticSlots.length > 0) {
+    const answeredRequiredSlots = new Set(
+      openQuestions
+        .filter((question) => questionRequiresAnswer(question) && getQuestionStatus(question) === "answered")
+        .map((question) => resolveSemanticQuestionId(question))
+        .filter(Boolean),
+    );
+    return requiredSemanticSlots.filter((slot) => !answeredRequiredSlots.has(slot));
+  }
+
   const clarifiedIntent = contract?.clarifiedIntent || {};
   const repoState = String(contract?.repoState || session?.repoProfile?.repoState || "unknown").trim();
   const missing: string[] = [];
@@ -241,7 +546,7 @@ function computeMissingIntentFields(contract: any, session: any) {
   const successCriteria = normalizeStringArray(clarifiedIntent.successCriteria);
   const preferredQualityBar = normalizeNullableString(clarifiedIntent.preferredQualityBar);
   const protectedAreasAnswered = (Array.isArray(contract?.openQuestions) ? contract.openQuestions : [])
-    .some((question: any) => String(question?.id || "").trim() === "protected_areas" && getQuestionStatus(question) === "answered");
+    .some((question: any) => resolveSemanticQuestionId(question) === "protected_areas" && getQuestionStatus(question) === "answered");
 
   if (!productType && !normalizeNullableString(session?.objective?.summary)) missing.push("product_type");
   if (targetUsers.length === 0) missing.push("target_users");
@@ -278,9 +583,50 @@ function buildIntentSummary(contract: any, session: any) {
   ].join(" | ");
 }
 
+function buildResolvedIntentPacket(packet: any, transcript: any, contract: any, session: any) {
+  const answeredQuestions = (Array.isArray(transcript?.turns) ? transcript.turns : [])
+    .filter((turn) => turn?.actor !== "agent" && turn?.kind === "answer")
+    .map((turn) => ({
+      questionId: String(turn?.questionId || "").trim() || null,
+      semanticSlot: String(turn?.semanticSlot || "").trim() || null,
+      answerText: normalizeNullableString(turn?.answerText),
+      selectedOptions: normalizeStringArray(turn?.selectedOptions),
+      answeredAt: normalizeNullableString(turn?.answeredAt),
+    }));
+
+  return {
+    schemaVersion: 1,
+    projectId: session?.projectId || null,
+    sessionId: session?.sessionId || null,
+    repoState: normalizeNullableString(contract?.repoState) || normalizeNullableString(packet?.repoState) || normalizeNullableString(session?.repoProfile?.repoState),
+    selectedAgentSlug: normalizeNullableString(contract?.selectedAgentSlug) || normalizeNullableString(packet?.selectedAgentSlug),
+    objectiveSummary: normalizeNullableString(contract?.objectiveSummary) || normalizeNullableString(session?.objective?.summary),
+    desiredOutcome: normalizeNullableString(contract?.desiredOutcome) || normalizeNullableString(session?.objective?.desiredOutcome),
+    summary: buildIntentSummary(contract, session),
+    readyForPlanning: contract?.readyForPlanning === true,
+    planningMode: normalizeNullableString(contract?.planningMode),
+    clarifiedIntent: contract?.clarifiedIntent || {},
+    answeredQuestions,
+    requiredSemanticSlots: uniqueStrings(normalizeStringArray(contract?.requiredSemanticSlots)),
+    assumptions: normalizeStringArray(contract?.assumptions),
+    deliveryModeDecision: contract?.deliveryModeDecision || null,
+    authoredPacket: packet || null,
+    authoredUnderstanding: contract?.authoredUnderstanding || packet?.understanding || null,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 function resolveAgentAuthoredDeliveryModeDecision(contract: any) {
+  const forcedMode = getTemporaryDefaultDeliveryMode();
   const decision = contract?.deliveryModeDecision;
-  if (!decision || typeof decision !== "object") return null;
+  if (!decision || typeof decision !== "object") {
+    return {
+      eligible: forcedMode === "active",
+      planningMode: forcedMode,
+      recommendedNextStage: TARGET_SESSION_STAGE.ACTIVE,
+      reason: "temporary_forced_active_default",
+    };
+  }
 
   const rawRecommendation = String(
     decision?.recommendation
@@ -291,27 +637,18 @@ function resolveAgentAuthoredDeliveryModeDecision(contract: any) {
 
   if (!rawRecommendation) return null;
 
-  const normalizedRecommendation = rawRecommendation === "direct_active"
-    ? "active"
-    : rawRecommendation === "shadow_required"
-      ? "shadow"
-      : rawRecommendation;
-
-  if (!["active", "shadow"].includes(normalizedRecommendation)) {
-    return null;
-  }
+  const normalizedRecommendation = forcedMode;
 
   return {
-    eligible: normalizedRecommendation === "active",
+    eligible: true,
     planningMode: normalizedRecommendation,
-    recommendedNextStage: normalizedRecommendation === "active"
-      ? TARGET_SESSION_STAGE.ACTIVE
-      : TARGET_SESSION_STAGE.SHADOW,
-    reason: `agent_authored source=${String(decision?.source || contract?.selectedAgentSlug || "agent").trim() || "agent"} recommendation=${normalizedRecommendation}`,
+    recommendedNextStage: TARGET_SESSION_STAGE.ACTIVE,
+    reason: `temporary_forced_active_default source=${String(decision?.source || contract?.selectedAgentSlug || "agent").trim() || "agent"} original=${rawRecommendation || "none"}`,
   };
 }
 
 function normalizeAgentDeliveryModeDecision(rawDecision: any, selectedAgentSlug: string | null) {
+  const forcedMode = getTemporaryDefaultDeliveryMode();
   if (!rawDecision || typeof rawDecision !== "object") return null;
   const recommendation = String(
     rawDecision?.recommendation
@@ -322,15 +659,7 @@ function normalizeAgentDeliveryModeDecision(rawDecision: any, selectedAgentSlug:
   ).trim().toLowerCase();
   if (!recommendation) return null;
 
-  const normalizedRecommendation = recommendation === "direct_active"
-    ? "active"
-    : recommendation === "shadow_required"
-      ? "shadow"
-      : recommendation;
-
-  if (!["active", "shadow"].includes(normalizedRecommendation)) {
-    return null;
-  }
+  const normalizedRecommendation = forcedMode;
 
   const rationale = normalizeNullableString(rawDecision?.rationale)
     || normalizeNullableString(rawDecision?.reason)
@@ -515,6 +844,143 @@ ${JSON.stringify({
   return normalizedDecision;
 }
 
+async function requestClarificationTurnDecision(config: any, session: any, packet: any, transcript: any, intentContract: any, input: {
+  answeredQuestion: any;
+  answerText: string;
+  selectedOptions: string[];
+}) {
+  const selectedAgentSlug = normalizeNullableString(session?.clarification?.selectedAgentSlug)
+    || normalizeNullableString(packet?.selectedAgentSlug)
+    || normalizeNullableString(intentContract?.selectedAgentSlug);
+  if (!selectedAgentSlug) {
+    return null;
+  }
+
+  const answeredQuestionId = String(input?.answeredQuestion?.id || "").trim();
+  const mockedDecision = normalizeClarificationTurnDecision(
+    resolveMockClarificationTurnDecision(normalizeNullableString(config?.env?.mockClarificationTurnDecisions), answeredQuestionId),
+    selectedAgentSlug,
+  );
+  if (mockedDecision) {
+    return mockedDecision;
+  }
+
+  const command = String(config?.env?.copilotCliCommand || "").trim();
+  if (!command) {
+    return null;
+  }
+
+  const model = config?.roleRegistry?.targetOnboarding?.model || "Claude Sonnet 4.6";
+  const prompt = `You are BOX's selected onboarding clarification agent.
+You are conducting one guided onboarding conversation for a single target session.
+
+Task:
+- Read the current repo context, clarified intent, transcript, and the user's latest answer.
+- Decide whether you need exactly one more question or whether intent is now clear enough to ask for final approval on mode selection.
+- Do not ask multiple questions at once.
+- Stop asking questions as soon as the user's intent is clear enough for planning.
+- If intent is clear, propose either "shadow" or "active" and provide a concise rationale.
+
+Rules:
+- Keep the next question highly targeted and dependent on the latest answer.
+- Do not restart the conversation.
+- Do not ask the user to repeat the selected repository identity or repo URL/name.
+- Do not re-ask what the repo is unless the user's latest answer conflicts with the observed repo context.
+- Prefer product-language over internal jargon.
+- If the user just rejected a mode proposal, ask one focused follow-up instead of repeating the same proposal.
+- Output strict JSON only inside markers.
+
+Context:
+${JSON.stringify({
+    projectId: session?.projectId || null,
+    sessionId: session?.sessionId || null,
+    repoState: intentContract?.repoState || packet?.repoState || session?.repoProfile?.repoState || null,
+    objectiveSummary: session?.objective?.summary || null,
+    desiredOutcome: session?.objective?.desiredOutcome || null,
+    clarifiedIntent: intentContract?.clarifiedIntent || {},
+    currentSummary: intentContract?.summary || null,
+    lastAgentGuidance: intentContract?.lastAgentGuidance || null,
+    answeredQuestion: input?.answeredQuestion || null,
+    latestAnswer: {
+      answerText: input?.answerText || null,
+      selectedOptions: input?.selectedOptions || [],
+    },
+    transcriptTurns: Array.isArray(transcript?.turns) ? transcript.turns : [],
+  }, null, 2)}
+
+===DECISION===
+{
+  "decision": {
+    "outcome": "ask_more|ready_to_confirm",
+    "understanding": "string",
+    "rationale": "string",
+    "confidence": "high|medium|low",
+    "proposedMode": "shadow|active",
+    "nextQuestion": {
+      "id": "machine_readable_id",
+      "semanticSlot": "canonical_slot_name",
+      "title": "short title",
+      "prompt": "single direct question",
+      "answerMode": "hybrid|single_select|multi_select",
+      "options": ["Option A", "Option B", "Other"]
+    }
+  }
+}
+===END===`;
+
+  const args = buildAgentArgs({
+    agentSlug: agentFileExists(selectedAgentSlug) ? selectedAgentSlug : undefined,
+    prompt,
+    model,
+    allowAll: false,
+    noAskUser: true,
+    autopilot: false,
+    silent: true,
+  });
+
+  try {
+    appendAgentLiveLog(config, {
+      agentSlug: selectedAgentSlug,
+      session,
+      contextLabel: "clarification_turn",
+      status: "starting",
+      message: `answeredQuestion=${answeredQuestionId || "unknown"}`,
+    });
+    const result: any = await spawnAsync(command, args, {
+      env: { ...process.env, ...(config?.env || {}) },
+      timeoutMs: 120000,
+    });
+    const stdout = String(result?.stdout || "");
+    const stderr = String(result?.stderr || "");
+    const rawOutput = [stdout, stderr].filter(Boolean).join("\n");
+    writeAgentDebugFile(config, {
+      agentSlug: selectedAgentSlug,
+      prompt,
+      result,
+      session,
+      contextLabel: "clarification_turn",
+      metadata: {
+        answeredQuestionId,
+      },
+    });
+    appendAgentLiveLogDetail(config, {
+      agentSlug: selectedAgentSlug,
+      session,
+      contextLabel: "clarification_turn",
+      stage: "result",
+      title: `clarification turn [exit=${String(result?.status ?? "unknown")}]`,
+      content: rawOutput || "(no output)",
+    });
+    if (Number(result?.status ?? 1) !== 0 || (!stdout.trim() && !stderr.trim())) {
+      return null;
+    }
+    const parsed = parseAgentOutput(stdout || stderr);
+    return normalizeClarificationTurnDecision(parsed?.parsed?.decision, selectedAgentSlug);
+  } catch {
+    return null;
+  }
+}
+
 function buildSessionIntent(contract: any, session: any, status: string) {
   const clarifiedIntent = contract?.clarifiedIntent || {};
   const openQuestions = (Array.isArray(contract?.openQuestions) ? contract.openQuestions : [])
@@ -562,11 +1028,12 @@ function markQuestionAnswered(contract: any, questionId: string, answerText: str
 }
 
 function appendFollowUpQuestion(contract: any, question: any, repoState: string) {
-  const sourceQuestionId = String(question?.id || "follow_up").trim() || "follow_up";
+  const sourceQuestionId = resolveSemanticQuestionId(question, "follow_up");
   const existingQuestions = Array.isArray(contract?.openQuestions) ? contract.openQuestions : [];
   const followUpIndex = existingQuestions.filter((entry) => String(entry?.id || "").startsWith(`follow_up_${sourceQuestionId}`)).length + 1;
   const followUpQuestion = {
     id: `follow_up_${sourceQuestionId}_${followUpIndex}`,
+    semanticSlot: sourceQuestionId,
     title: `Follow-up for ${String(question?.title || sourceQuestionId).trim()}`,
     prompt: buildFollowUpPrompt(sourceQuestionId, repoState),
     answerMode: "hybrid",
@@ -605,6 +1072,7 @@ function buildClarificationPromptView(session: any, packet: any, transcript: any
     transcript,
     intentContract,
     currentQuestion,
+    latestAgentGuidance: intentContract?.lastAgentGuidance || getLatestAgentGuidance(transcript),
     intentSummary: buildSessionIntent(intentContract, session, intentContract?.readyForPlanning === true ? TARGET_INTENT_STATUS.READY_FOR_PLANNING : TARGET_INTENT_STATUS.CLARIFYING),
   };
 }
@@ -662,6 +1130,8 @@ export async function submitTargetClarificationAnswer(config: any, input: {
     throw new Error(`Clarification question already answered: ${questionId}`);
   }
 
+  const semanticQuestionId = resolveSemanticQuestionId(targetQuestion, questionId);
+
   transcript = {
     ...transcript,
     turns: [
@@ -670,6 +1140,7 @@ export async function submitTargetClarificationAnswer(config: any, input: {
         actor: answeredBy,
         kind: "answer",
         questionId,
+        semanticSlot: semanticQuestionId,
         answerText: answerText || null,
         selectedOptions,
         answeredAt: new Date().toISOString(),
@@ -681,24 +1152,100 @@ export async function submitTargetClarificationAnswer(config: any, input: {
   intentContract = markQuestionAnswered(intentContract, questionId, answerText, selectedOptions);
   intentContract = {
     ...intentContract,
-    clarifiedIntent: updateClarifiedIntent(intentContract, questionId, answerText, selectedOptions, session),
+    clarifiedIntent: updateClarifiedIntent(intentContract, semanticQuestionId, answerText, selectedOptions, session),
     updatedAt: new Date().toISOString(),
   };
 
-  const needsFollowUp = inferAnswerNeedsFollowUp(targetQuestion, answerText, selectedOptions);
+  let nextQuestion = null;
   let followUpQuestion = null;
-  if (needsFollowUp) {
-    const followUpResult = appendFollowUpQuestion(intentContract, targetQuestion, String(session.repoProfile?.repoState || intentContract.repoState || "unknown"));
-    intentContract = followUpResult.contract;
-    followUpQuestion = followUpResult.followUpQuestion;
+  let missingFields: string[] = [];
+  let readyForPlanning = false;
+  let agentDeliveryModeDecision = null;
+
+  if (semanticQuestionId === MODE_APPROVAL_SEMANTIC_SLOT && isAffirmativeModeApproval(answerText, selectedOptions)) {
+    readyForPlanning = true;
+  } else {
+    if (semanticQuestionId === MODE_APPROVAL_SEMANTIC_SLOT && isRejectedModeApproval(answerText, selectedOptions)) {
+      intentContract = {
+        ...intentContract,
+        deliveryModeDecision: null,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    // Target onboarding is single-call by design: the agent generates one intake packet,
+    // then runtime progresses deterministically from the user's answers.
+    const agentTurnDecision = null;
+
+    if (agentTurnDecision) {
+      transcript = {
+        ...transcript,
+        turns: [
+          ...(Array.isArray(transcript?.turns) ? transcript.turns : []),
+          buildAgentGuidanceTurn({
+            decision: agentTurnDecision,
+            understanding: agentTurnDecision.understanding,
+            prompt: agentTurnDecision.outcome === "ask_more"
+              ? agentTurnDecision.nextQuestion?.prompt || null
+              : agentTurnDecision.rationale || null,
+          }),
+        ],
+        updatedAt: new Date().toISOString(),
+      };
+      intentContract = {
+        ...intentContract,
+        lastAgentGuidance: agentTurnDecision,
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (agentTurnDecision.outcome === "ask_more" && agentTurnDecision.nextQuestion) {
+        intentContract = ensureQuestionEntry(intentContract, agentTurnDecision.nextQuestion);
+        nextQuestion = getCurrentPendingQuestion(intentContract);
+      } else if (agentTurnDecision.outcome === "ready_to_confirm" && agentTurnDecision.proposedMode) {
+        agentDeliveryModeDecision = normalizeAgentDeliveryModeDecision({
+          recommendation: agentTurnDecision.proposedMode,
+          rationale: agentTurnDecision.rationale,
+          confidence: agentTurnDecision.confidence,
+          source: agentTurnDecision.source,
+        }, session?.clarification?.selectedAgentSlug || runtime.packet?.selectedAgentSlug || null);
+        if (agentDeliveryModeDecision) {
+          intentContract = {
+            ...intentContract,
+            deliveryModeDecision: agentDeliveryModeDecision,
+            updatedAt: new Date().toISOString(),
+          };
+          const approvalQuestion = buildModeApprovalQuestion(intentContract, {
+            recommendation: agentDeliveryModeDecision.recommendation,
+            understanding: agentTurnDecision.understanding,
+            rationale: agentDeliveryModeDecision.rationale,
+          });
+          intentContract = ensureQuestionEntry(intentContract, approvalQuestion);
+          nextQuestion = getCurrentPendingQuestion(intentContract);
+        }
+      }
+    }
+
+    if (!agentTurnDecision || (!nextQuestion && !agentDeliveryModeDecision)) {
+      const authoredFollowUp = resolveAuthoredFollowUpQuestion(targetQuestion, answerText, selectedOptions);
+      if (authoredFollowUp) {
+        intentContract = ensureQuestionEntry(intentContract, authoredFollowUp);
+        followUpQuestion = authoredFollowUp;
+      } else {
+        const needsFollowUp = inferAnswerNeedsFollowUp(targetQuestion, answerText, selectedOptions);
+        if (needsFollowUp) {
+        const followUpResult = appendFollowUpQuestion(intentContract, targetQuestion, String(session.repoProfile?.repoState || intentContract.repoState || "unknown"));
+        intentContract = followUpResult.contract;
+        followUpQuestion = followUpResult.followUpQuestion;
+        }
+      }
+
+      missingFields = computeMissingIntentFields(intentContract, session);
+      nextQuestion = followUpQuestion || getCurrentPendingQuestion(intentContract);
+      readyForPlanning = !followUpQuestion && missingFields.length === 0 && !nextQuestion;
+      agentDeliveryModeDecision = null;
+    }
   }
 
-  const missingFields = computeMissingIntentFields(intentContract, session);
-  const nextQuestion = followUpQuestion || getCurrentPendingQuestion(intentContract);
-  const readyForPlanning = !followUpQuestion && missingFields.length === 0 && !nextQuestion;
-  const agentDeliveryModeDecision = readyForPlanning
-    ? await requestClarificationDeliveryModeDecision(config, session, runtime.packet, transcript, intentContract)
-    : null;
   if (agentDeliveryModeDecision) {
     intentContract = {
       ...intentContract,
@@ -710,13 +1257,17 @@ export async function submitTargetClarificationAnswer(config: any, input: {
     ? resolveAgentAuthoredDeliveryModeDecision(intentContract)
     : null;
   const nextIntentStatus = readyForPlanning ? TARGET_INTENT_STATUS.READY_FOR_PLANNING : TARGET_INTENT_STATUS.CLARIFYING;
-  intentContract = {
+  const resolvedPacketContract = {
     ...intentContract,
     status: readyForPlanning ? "ready_for_planning" : "clarifying",
     readyForPlanning,
-    planningMode: readyForPlanning ? deliveryModeDecision?.planningMode || "shadow" : null,
+    planningMode: readyForPlanning ? deliveryModeDecision?.planningMode || getTemporaryDefaultDeliveryMode() : null,
     summary: buildIntentSummary(intentContract, session),
     missingFields,
+  };
+  intentContract = {
+    ...resolvedPacketContract,
+    resolvedPacket: buildResolvedIntentPacket(runtime.packet, transcript, resolvedPacketContract, session),
     updatedAt: new Date().toISOString(),
   };
 
@@ -739,6 +1290,11 @@ export async function submitTargetClarificationAnswer(config: any, input: {
   const nextStage = readyForPlanning
     ? deliveryModeDecision?.recommendedNextStage || TARGET_SESSION_STAGE.SHADOW
     : TARGET_SESSION_STAGE.AWAITING_INTENT_CLARIFICATION;
+  const pendingQuestionTitles = (Array.isArray(intentContract?.openQuestions) ? intentContract.openQuestions : [])
+    .filter((question: any) => getQuestionStatus(question) !== "answered")
+    .map((question: any) => String(question?.title || question?.prompt || question?.id || "").trim())
+    .filter(Boolean);
+
   const updatedSession = {
     ...session,
     currentStage: nextStage,
@@ -749,10 +1305,7 @@ export async function submitTargetClarificationAnswer(config: any, input: {
     clarification: {
       ...session.clarification,
       status: readyForPlanning ? "completed" : "pending",
-      pendingQuestions: (Array.isArray(intentContract?.openQuestions) ? intentContract.openQuestions : [])
-        .filter((question: any) => getQuestionStatus(question) !== "answered")
-        .map((question: any) => String(question?.title || question?.prompt || question?.id || "").trim())
-        .filter(Boolean),
+      pendingQuestions: readyForPlanning ? [] : pendingQuestionTitles,
       questionCount: Array.isArray(intentContract?.openQuestions) ? intentContract.openQuestions.length : 0,
       loopCount: Number(session.clarification?.loopCount || 0) + 1,
       readyForPlanning,
@@ -784,7 +1337,7 @@ export async function submitTargetClarificationAnswer(config: any, input: {
     handoff: {
       ...session.handoff,
       carriedContextSummary: buildIntentSummary(intentContract, session),
-      requiredHumanInputs,
+      requiredHumanInputs: readyForPlanning ? [] : requiredHumanInputs,
       lastAction: `clarification_answered:${questionId}`,
       nextAction: readyForPlanning
         ? nextStage === TARGET_SESSION_STAGE.ACTIVE
@@ -801,10 +1354,11 @@ export async function submitTargetClarificationAnswer(config: any, input: {
 
   await persistClarificationArtifacts(updatedSession, transcript, intentContract);
   const persistedSession = await saveActiveTargetSession(config, updatedSession);
+  await requestDaemonReload(config, readyForPlanning ? "clarification-completed" : "clarification-updated");
   await appendProgress(
     config,
     readyForPlanning
-      ? `[CLARIFICATION] completed session=${persistedSession.sessionId} planningMode=${persistedSession.intent?.planningMode || "shadow"} nextStage=${persistedSession.currentStage} intentSummary=${persistedSession.intent?.summary || "none"}`
+      ? `[CLARIFICATION] completed session=${persistedSession.sessionId} planningMode=${persistedSession.intent?.planningMode || getTemporaryDefaultDeliveryMode()} nextStage=${persistedSession.currentStage} intentSummary=${persistedSession.intent?.summary || "none"}`
       : `[CLARIFICATION] answered question=${questionId} nextQuestion=${String(nextQuestion?.id || "none")} followUp=${followUpQuestion ? followUpQuestion.id : "none"}`,
     {
       projectId: persistedSession.projectId,

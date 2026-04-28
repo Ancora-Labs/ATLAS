@@ -8,6 +8,8 @@
  * Integration: called by Prometheus normalizer to enrich plans before Athena review.
  */
 
+import { TARGETED_TEST_COMMAND_PLACEHOLDER } from "./verification_command_registry.js";
+
 /**
  * Known verification patterns by task kind.
  * These are used as templates when a plan lacks specific verification.
@@ -176,11 +178,11 @@ export function compileAcceptanceCriteria(plan) {
     if (taskKind === "test" && primaryTarget !== "changed file") {
       verification = `node --test ${primaryTarget}`;
     } else {
-      verification = "npm test";
+      verification = TARGETED_TEST_COMMAND_PLACEHOLDER;
     }
   }
   if (!/npm|node|test|assert/i.test(verification)) {
-    verification = `${verification}\nnpm test`;
+    verification = `${verification}\n${TARGETED_TEST_COMMAND_PLACEHOLDER}`;
   }
 
   const combined = verification;

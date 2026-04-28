@@ -638,7 +638,7 @@ describe("runAthenaPostmortem — fallback learning-grade guard", () => {
           policyFile: path.join(stateDir, "policy.json"),
         },
         env: {
-          targetRepo: "Ancora-Labs/Box",
+          targetRepo: "Ancora-Labs/ATLAS",
           copilotCliCommand: "__missing_copilot_binary__",
         },
         roleRegistry: {
@@ -1715,7 +1715,7 @@ describe("runAthenaPostmortem — closure boundary enforcement (fail-close path)
           policyFile: path.join(stateDir, "policy.json"),
         },
         env: {
-          targetRepo: "Ancora-Labs/Box",
+          targetRepo: "Ancora-Labs/ATLAS",
           copilotCliCommand: "__missing_copilot_binary__",
         },
         roleRegistry: {

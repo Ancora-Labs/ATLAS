@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { buildAgentArgs, resolveAgentExecutionProfile, validateAgentContract } from "../../src/core/agent_loader.js";
 
 describe("buildAgentArgs", () => {
@@ -40,6 +43,18 @@ describe("buildAgentArgs", () => {
     assert.ok(args.includes("gpt-5.3-codex"));
   });
 
+  it("allows interactive operator input with allow-all when explicitly requested", () => {
+    const args = buildAgentArgs({
+      agentSlug: "evolution-worker",
+      prompt: "interactive-access-test",
+      allowAll: true,
+      allowInteractiveUserInput: true,
+    });
+
+    assert.ok(args.includes("--allow-all"));
+    assert.ok(!args.includes("--no-ask-user"));
+  });
+
   it("leaves model selection to Copilot when configured as auto", () => {
     const args = buildAgentArgs({
       agentSlug: "research-scout",
@@ -55,18 +70,48 @@ describe("buildAgentArgs", () => {
   });
 
   it("skips --agent when the execution workspace does not contain the agent file", () => {
+    const executionCwd = path.join(os.tmpdir(), `box-missing-agent-${process.pid}-${Date.now()}`);
+    rmSync(executionCwd, { recursive: true, force: true });
+
     const args = buildAgentArgs({
       agentSlug: "quality-worker",
       prompt: "continue the task",
       model: "gpt-5.4",
       runContract: {
-        executionCwd: "C:\\__box_missing_agent_workspace__",
+        executionCwd,
       },
     });
 
     assert.ok(!args.includes("--agent"));
     assert.ok(args.includes("--model"));
     assert.ok(args.includes("gpt-5.4"));
+  });
+
+  it("writes oversized prompt artifacts into the execution workspace when one is provided", () => {
+    const executionCwd = path.join(os.tmpdir(), `box-agent-loader-${process.pid}-${Date.now()}`);
+    mkdirSync(executionCwd, { recursive: true });
+
+    try {
+      const args = buildAgentArgs({
+        agentSlug: "quality-worker",
+        prompt: "x".repeat(26_000),
+        model: "gpt-5.4",
+        runContract: {
+          executionCwd,
+        },
+      });
+
+      const promptIndex = args.indexOf("-p");
+      const promptText = String(args[promptIndex + 1] || "");
+      const match = promptText.match(/Your full instructions are in the file: (.+)\nRead that file NOW/i);
+
+      assert.ok(match, "expected prompt-file indirection for oversized prompt");
+      const promptFile = String(match?.[1] || "");
+      assert.ok(promptFile.startsWith(path.join(executionCwd, ".box", "prompts")));
+      assert.ok(existsSync(promptFile));
+    } finally {
+      rmSync(executionCwd, { recursive: true, force: true });
+    }
   });
 
   it("blocks broad allow-all when the agent profile is no_tools", () => {
@@ -77,6 +122,20 @@ describe("buildAgentArgs", () => {
       noAskUser: true,
     });
 
+    assert.ok(!args.includes("--allow-all"));
+    assert.ok(args.includes("--no-ask-user"));
+  });
+
+  it("loads the dedicated target-prometheus persona for single-target planning", () => {
+    const args = buildAgentArgs({
+      agentSlug: "target-prometheus",
+      prompt: "plan the active target session",
+      noAskUser: true,
+      allowAll: true,
+    });
+
+    assert.ok(args.includes("--agent"));
+    assert.ok(args.includes("target-prometheus"));
     assert.ok(!args.includes("--allow-all"));
     assert.ok(args.includes("--no-ask-user"));
   });

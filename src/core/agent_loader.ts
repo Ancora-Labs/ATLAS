@@ -62,12 +62,33 @@ export function agentFileExists(slug) {
   return existsSync(path.join(AGENTS_DIR, `${slug}.agent.md`));
 }
 
+function ensureAgentFileAvailableForExecution(slug, executionCwd) {
+  const normalizedSlug = String(slug || "").trim();
+  if (!normalizedSlug) return false;
+  const normalizedCwd = String(executionCwd || "").trim();
+  if (!normalizedCwd) return agentFileExists(normalizedSlug);
+  if (!existsSync(normalizedCwd)) return false;
+
+  const repoAgentPath = path.join(AGENTS_DIR, `${normalizedSlug}.agent.md`);
+  const executionAgentPath = path.join(normalizedCwd, ".github", "agents", `${normalizedSlug}.agent.md`);
+  if (existsSync(executionAgentPath)) return true;
+  if (!existsSync(repoAgentPath)) return false;
+
+  try {
+    mkdirSync(path.dirname(executionAgentPath), { recursive: true });
+    writeFileSync(executionAgentPath, readFileSync(repoAgentPath, "utf8"), "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function agentFileExistsForExecution(slug, executionCwd) {
   const normalizedSlug = String(slug || "").trim();
   if (!normalizedSlug) return false;
   const normalizedCwd = String(executionCwd || "").trim();
   if (!normalizedCwd) return agentFileExists(normalizedSlug);
-  return existsSync(path.join(normalizedCwd, ".github", "agents", `${normalizedSlug}.agent.md`));
+  return ensureAgentFileAvailableForExecution(normalizedSlug, normalizedCwd);
 }
 
 function readAgentFrontmatterSnapshot(slug: string): AgentFrontmatterSnapshot {
@@ -196,6 +217,23 @@ export function toCopilotModelSlug(name) {
 // For prompts >25KB, write to a temp file and pass a short -p telling the agent to read it.
 const PROMPT_FILE_THRESHOLD = 25_000;
 const STATE_DIR = path.join(__dirname, "..", "..", "state");
+
+function resolvePromptArtifactDirectory(executionCwd: unknown): string {
+  const normalizedCwd = String(executionCwd || "").trim();
+  if (normalizedCwd) {
+    return path.join(normalizedCwd, ".box", "prompts");
+  }
+  return STATE_DIR;
+}
+
+function writePromptArtifact(slug: string, promptText: string, executionCwd: unknown): string {
+  const promptDir = resolvePromptArtifactDirectory(executionCwd);
+  mkdirSync(promptDir, { recursive: true });
+  const promptFile = path.join(promptDir, `prompt_${slug}_${Date.now()}.md`);
+  writeFileSync(promptFile, promptText, "utf8");
+  pruneOldPromptFiles(slug, promptDir);
+  return promptFile;
+}
 
 function normalizeAgentDebugSlug(value: unknown): string {
   return String(value || "agent")
@@ -367,6 +405,7 @@ export function buildAgentArgs({
   prompt,
   model,
   allowAll = false,
+  allowInteractiveUserInput = false,
   autopilot = false,
   noAskUser = false,
   silent = false,
@@ -390,6 +429,7 @@ export function buildAgentArgs({
   );
   const allowAllRequested = allowAll || effectiveSessionInputPolicy === "allow_all";
   const effectiveNoAskUser = noAskUser || normalizedModelCallSettings.noAskUser === true;
+  const effectiveAllowInteractiveUserInput = allowInteractiveUserInput || normalizedModelCallSettings.allowInteractiveUserInput === true;
   const effectiveSilent = silent || normalizedModelCallSettings.silent === true;
   const effectiveModel = normalizedModelCallSettings.model || model;
 
@@ -408,7 +448,7 @@ export function buildAgentArgs({
   };
 
   if (effectiveSessionInputPolicy === "allow_all") args.push("--allow-all");
-  if (effectiveNoAskUser || allowAllRequested) args.push("--no-ask-user");
+  if (effectiveNoAskUser || (allowAllRequested && !effectiveAllowInteractiveUserInput)) args.push("--no-ask-user");
   if (autopilot) {
     args.push("--autopilot");
     // runContract.maxTurns takes precedence over the legacy maxContinues arg.
@@ -443,9 +483,7 @@ export function buildAgentArgs({
   }
   if (promptText.length > PROMPT_FILE_THRESHOLD) {
     const slug = agentSlug || "agent";
-    const promptFile = path.join(STATE_DIR, `prompt_${slug}_${Date.now()}.md`);
-    writeFileSync(promptFile, promptText, "utf8");
-    pruneOldPromptFiles(slug);
+    const promptFile = writePromptArtifact(slug, promptText, executionCwd);
     promptText = `${lineagePreamble ? `${lineagePreamble}\n\n` : ""}Your full instructions are in the file: ${promptFile}\nRead that file NOW with your read_file / view tool, then follow every instruction in it.`;
   }
   args.push("-p", promptText);
@@ -469,7 +507,7 @@ export function readAgentPersona(slug) {
 // No --agent, no --autopilot, no --allow-all, no tool calls.
 // The worker must output everything in a single response.
 
-export function buildWorkerPromptArgs({ agentSlug, prompt, model }) {
+export function buildWorkerPromptArgs({ agentSlug, prompt, model, executionCwd = null }) {
   const args = [];
 
   // Resolve model
@@ -491,9 +529,7 @@ export function buildWorkerPromptArgs({ agentSlug, prompt, model }) {
 
   if (fullPrompt.length > PROMPT_FILE_THRESHOLD) {
     const slug = agentSlug || "worker";
-    const promptFile = path.join(STATE_DIR, `prompt_${slug}_${Date.now()}.md`);
-    writeFileSync(promptFile, fullPrompt, "utf8");
-    pruneOldPromptFiles(slug);
+    const promptFile = writePromptArtifact(slug, fullPrompt, executionCwd);
     fullPrompt = `Your full instructions are in the file: ${promptFile}\nRead that file NOW, then follow every instruction in it.`;
   }
   args.push("-p", fullPrompt);
@@ -502,15 +538,15 @@ export function buildWorkerPromptArgs({ agentSlug, prompt, model }) {
 
 // pruneOldPromptFiles — keep only the last `maxKeep` prompt files for a slug.
 // Called immediately after writing each new prompt file so state/ stays clean.
-function pruneOldPromptFiles(slug: string, maxKeep = 3): void {
+function pruneOldPromptFiles(slug: string, promptDir = STATE_DIR, maxKeep = 3): void {
   try {
     const prefix = `prompt_${slug}_`;
-    const files = readdirSync(STATE_DIR)
+    const files = readdirSync(promptDir)
       .filter(f => f.startsWith(prefix) && f.endsWith(".md"))
       .sort(); // timestamps embedded in name → lexicographic = chronological
     const toDelete = files.slice(0, Math.max(0, files.length - maxKeep));
     for (const f of toDelete) {
-      try { unlinkSync(path.join(STATE_DIR, f)); } catch { /* best-effort */ }
+      try { unlinkSync(path.join(promptDir, f)); } catch { /* best-effort */ }
     }
   } catch { /* non-fatal */ }
 }
@@ -831,7 +867,7 @@ export function validateCriticalAgentContracts(): {
   results: AgentContractValidation[];
   violations: AgentContractValidation[];
 } {
-  const criticalSlugs = ["prometheus", "athena"];
+  const criticalSlugs = ["prometheus", "target-prometheus", "athena"];
   return validateRequiredAgentContracts(criticalSlugs);
 }
 

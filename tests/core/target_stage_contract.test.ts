@@ -169,4 +169,34 @@ describe("target_stage_contract", () => {
     assert.equal(result.rejectedPlans.length, 2);
     assert.match(result.summary || "", /requires at least one evidence-producing packet/i);
   });
+
+  it("allows a bounded shadow bugfix packet when the extra file is only evidence", () => {
+    const result = splitTargetStagePlans([
+      {
+        title: "Scaffold the first CLI slice",
+        task: "Implement the initial modular CLI scaffold and verify it with one focused registry test.",
+        taskKind: "bugfix",
+        targetFiles: ["package.json", "tsconfig.json", "src/core/registry.ts", "src/index.ts", "tests/core/registry.test.ts"],
+        verification: "npm run typecheck && node --test tests/core/registry.test.ts",
+      },
+    ], buildShadowConfig());
+
+    assert.equal(result.admittedPlans.length, 1);
+    assert.equal(result.rejectedPlans.length, 0);
+  });
+
+  it("does not treat negated deployment wording as a high-risk shadow intent", () => {
+    const result = splitTargetStagePlans([
+      {
+        title: "Bound the first scaffold",
+        task: "Implement a small CLI foundation only. Do not add deployment, rollout, or release steps in this shadow cycle.",
+        taskKind: "implementation",
+        targetFiles: ["package.json", "src/index.ts"],
+        verification: "node --test tests/core/registry.test.ts && npm run typecheck -- --pretty false",
+      },
+    ], buildShadowConfig());
+
+    assert.equal(result.admittedPlans.length, 1);
+    assert.equal(result.rejectedPlans.length, 0);
+  });
 });

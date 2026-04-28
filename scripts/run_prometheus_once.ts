@@ -1,5 +1,7 @@
 import { loadConfig } from "../src/config.js";
 import { runPrometheusAnalysis } from "../src/core/prometheus.js";
+import { loadPlatformModeState } from "../src/core/mode_state.js";
+import { loadActiveTargetSession } from "../src/core/target_session_state.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -12,6 +14,8 @@ function appendLiveLog(filePath, text) {
 }
 
 const config = await loadConfig();
+config.platformModeState = await loadPlatformModeState(config);
+config.activeTargetSession = await loadActiveTargetSession(config);
 const stateDir = config?.paths?.stateDir || "state";
 const analysisPath = path.join(stateDir, "prometheus_analysis.json");
 const liveWorkerLogPath = path.join(stateDir, "live_worker_prometheus.log");

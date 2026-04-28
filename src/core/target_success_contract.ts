@@ -30,6 +30,10 @@ const PRODUCT_PRESENTER_AGENT_SLUG = "product-presenter";
 const DEBUG_WORKER_FILE_PATTERN = /^debug_worker_[A-Za-z0-9_-]+\.txt$/;
 const PROJECT_READINESS_LEDGER_FILE = "project_readiness_ledger.json";
 const PROJECT_READINESS_REPORT_FILE = "project_readiness_report.json";
+const PROJECT_READINESS_MODE = Object.freeze({
+  BEST_EFFORT: "best_effort",
+  STRICT_SATURATION: "strict_saturation",
+});
 const DEFAULT_PROJECT_READINESS_THRESHOLDS = Object.freeze({
   stableSampleMin: 3,
   maxGrowthSignalsInStableWindow: 0,
@@ -243,6 +247,13 @@ function requiresProjectReadiness(session: any): boolean {
     || session?.feedback?.pendingResearchRefresh === true;
 }
 
+function resolveProjectReadinessMode(session: any): string {
+  const blockingCriteria = getBlockingAcceptanceCriteria(session);
+  return blockingCriteria.includes("saturated_best_effort_delivery")
+    ? PROJECT_READINESS_MODE.STRICT_SATURATION
+    : PROJECT_READINESS_MODE.BEST_EFFORT;
+}
+
 function isResearchArtifactAlignedToSession(raw: any, session: any): boolean {
   if (!raw || typeof raw !== "object") return false;
   const targetSession = raw?.targetSession;
@@ -265,14 +276,20 @@ function getProjectReadinessLedgerPath(stateDir: string, session: any): string |
   return path.join(getTargetSessionPath(stateDir, projectId, sessionId), PROJECT_READINESS_LEDGER_FILE);
 }
 
-function isStableResearchSample(sample: any): boolean {
-  return sample?.pendingRefresh !== true
+function isStableResearchSample(sample: any, readinessMode: string): boolean {
+  const commonStable = sample?.pendingRefresh !== true
     && sample?.scoutAligned === true
     && sample?.synthesisAligned === true
     && Number(sample?.sourceCount || 0) > 0
     && sample?.coveragePassed === true
-    && sample?.refreshRecommended !== true
-    && (Number(sample?.totalPairs || 0) === 0 || sample?.topicSiteSaturated === true);
+    && sample?.refreshRecommended !== true;
+
+  if (!commonStable) return false;
+  if (readinessMode === PROJECT_READINESS_MODE.STRICT_SATURATION) {
+    return Number(sample?.totalPairs || 0) === 0 || sample?.topicSiteSaturated === true;
+  }
+
+  return true;
 }
 
 async function appendProjectReadinessSample(stateDir: string, session: any, sample: Record<string, unknown>) {
@@ -306,11 +323,15 @@ async function appendProjectReadinessSample(stateDir: string, session: any, samp
   return { ledgerPath, samples: samples.slice(-24) };
 }
 
-function computeResearchHistoryEvidence(samples: any[], thresholds: { stableSampleMin: number; maxGrowthSignalsInStableWindow: number; }) {
+function computeResearchHistoryEvidence(
+  samples: any[],
+  thresholds: { stableSampleMin: number; maxGrowthSignalsInStableWindow: number; },
+  readinessMode: string,
+) {
   const stableStreak: any[] = [];
   for (let index = samples.length - 1; index >= 0; index -= 1) {
     const sample = samples[index];
-    if (!isStableResearchSample(sample)) break;
+    if (!isStableResearchSample(sample, readinessMode)) break;
     stableStreak.unshift(sample);
   }
 
@@ -323,10 +344,12 @@ function computeResearchHistoryEvidence(samples: any[], thresholds: { stableSamp
     for (let index = 1; index < recentWindow.length; index += 1) {
       const prev = recentWindow[index - 1] || {};
       const next = recentWindow[index] || {};
-      const grew = Number(next.sourceCount || 0) > Number(prev.sourceCount || 0)
-        || Number(next.topicCount || 0) > Number(prev.topicCount || 0)
-        || Number(next.completedPairs || 0) > Number(prev.completedPairs || 0)
-        || Number(next.totalPairs || 0) > Number(prev.totalPairs || 0);
+      const grew = readinessMode === PROJECT_READINESS_MODE.STRICT_SATURATION
+        ? Number(next.sourceCount || 0) > Number(prev.sourceCount || 0)
+          || Number(next.topicCount || 0) > Number(prev.topicCount || 0)
+          || Number(next.completedPairs || 0) > Number(prev.completedPairs || 0)
+          || Number(next.totalPairs || 0) > Number(prev.totalPairs || 0)
+        : Number(next.topicCount || 0) > Number(prev.topicCount || 0);
       if (grew) growthSignals += 1;
     }
     noveltyDecayed = growthSignals <= thresholds.maxGrowthSignalsInStableWindow;
@@ -343,6 +366,7 @@ function computeResearchHistoryEvidence(samples: any[], thresholds: { stableSamp
 
 async function evaluateResearchSaturationDimension(stateDir: string, session: any, config: any) {
   const required = requiresProjectReadiness(session);
+  const readinessMode = resolveProjectReadinessMode(session);
   const pendingRefresh = session?.feedback?.pendingResearchRefresh === true;
   const [scoutOutput, synthesis, topicSiteState] = await Promise.all([
     readJson(path.join(stateDir, "research_scout_output.json"), null),
@@ -397,9 +421,9 @@ async function evaluateResearchSaturationDimension(stateDir: string, session: an
 
   const thresholds = resolveProjectReadinessThresholds(config);
   const ledger = await appendProjectReadinessSample(stateDir, session, sample);
-  const history = computeResearchHistoryEvidence(ledger.samples, thresholds);
+  const history = computeResearchHistoryEvidence(ledger.samples, thresholds, readinessMode);
 
-  const satisfied = isStableResearchSample(sample)
+  const satisfied = isStableResearchSample(sample, readinessMode)
     && history.historyEnough
     && history.noveltyDecayed;
 
@@ -423,7 +447,11 @@ async function evaluateResearchSaturationDimension(stateDir: string, session: an
       missingObligations,
       completedPairs,
       totalPairs,
+      remainingPairs: Math.max(0, totalPairs - completedPairs),
+      completionRatio: totalPairs > 0 ? completedPairs / totalPairs : 1,
       saturationSignals,
+      readinessMode,
+      topicSiteSaturatedRequired: readinessMode === PROJECT_READINESS_MODE.STRICT_SATURATION,
       historyEnough: history.historyEnough,
       stableSampleCount: history.stableSampleCount,
       sampleCount: history.sampleCount,
@@ -1885,19 +1913,41 @@ export async function evaluateTargetSuccessContract(config: any, providedSession
     },
   };
 
+  let effectiveResult = result;
   try {
-    await writeJson(path.join(stateDir, "last_target_project_readiness.json"), result);
+    const persistedReport = await readJson(path.join(stateDir, "last_target_project_readiness.json"), null);
+    const sameSession = persistedReport
+      && persistedReport.projectId === session.projectId
+      && persistedReport.sessionId === session.sessionId;
+    if (
+      sameSession
+      && isTargetSuccessContractTerminal(persistedReport)
+      && !isTargetSuccessContractTerminal(result)
+    ) {
+      effectiveResult = {
+        ...persistedReport,
+        evaluatedAt: new Date().toISOString(),
+        stickyTerminal: true,
+        stickyTerminalReason: "previous_terminal_success_preserved",
+      };
+    }
+  } catch {
+    // best-effort sticky terminal preservation
+  }
+
+  try {
+    await writeJson(path.join(stateDir, "last_target_project_readiness.json"), effectiveResult);
     if (session?.projectId && session?.sessionId) {
       await writeJson(
         path.join(getTargetSessionPath(stateDir, String(session.projectId), String(session.sessionId)), PROJECT_READINESS_REPORT_FILE),
-        result,
+        effectiveResult,
       );
     }
   } catch {
     // best-effort persistence; evaluation result remains authoritative in memory
   }
 
-  return result;
+  return effectiveResult;
 }
 
 export async function persistTargetSuccessContract(config: any, report: any) {

@@ -202,6 +202,59 @@ describe("target_success_contract", () => {
     assert.equal(report.delivery.openTarget, path.join(workspacePath, "index.html"));
   });
 
+  it("preserves a terminal report for the same session even if a later evaluation would reopen it", async () => {
+    const session = buildSession();
+    const persistedTerminalReport = {
+      schemaVersion: 1,
+      status: TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED,
+      evaluatedAt: "2026-04-20T19:00:00.000Z",
+      projectId: session.projectId,
+      sessionId: session.sessionId,
+      objectiveSummary: session.objective.summary,
+      summary: "Target success contract satisfied: fulfilled",
+      blockers: [],
+      pendingHumanInputs: [],
+      ignoredHumanInputs: [],
+      delivery: {
+        status: "documented",
+        locationType: "repo",
+        primaryLocation: "https://github.com/acme/portal",
+        autoOpenEligible: false,
+        openTarget: null,
+        preserveWorkspace: false,
+        instructions: ["Open https://github.com/acme/portal."],
+      },
+      dimensions: {
+        delivery: { status: "satisfied", evidence: {} },
+        releaseVerification: { status: "satisfied", evidence: {} },
+        intentCore: { status: "satisfied", evidence: {} },
+        preferences: { status: "not_applicable", evidence: {} },
+        evidenceAlignment: { status: "satisfied", evidence: {} },
+        researchSaturation: { status: "not_applicable", evidence: {} },
+        projectReadiness: { status: "not_applicable", evidence: {} },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(config.paths.stateDir, "last_target_project_readiness.json"),
+      JSON.stringify(persistedTerminalReport, null, 2),
+      "utf8",
+    );
+
+    const report = await evaluateTargetSuccessContract(config, session);
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(config.paths.stateDir, "last_target_project_readiness.json"), "utf8"),
+    );
+
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED);
+    assert.equal(report.stickyTerminal, true);
+    assert.equal(report.stickyTerminalReason, "previous_terminal_success_preserved");
+    assert.deepEqual(report.blockers, []);
+    assert.equal(isTargetSuccessContractTerminal(report), true);
+    assert.equal(persisted.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED);
+    assert.equal(persisted.stickyTerminal, true);
+  });
+
   it("keeps the contract open when final release sign-off evidence is missing", async () => {
     await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
       "BOX_STATUS=done",
@@ -363,6 +416,148 @@ describe("target_success_contract", () => {
     assert.equal(report.dimensions.projectReadiness.status, "satisfied");
     assert.equal(report.dimensions.researchSaturation.status, "satisfied");
     assert.equal(report.dimensions.researchSaturation.evidence.historyEnough, true);
+  });
+
+  it("treats single_target_project_readiness as best-effort saturation once coverage is stable and no new topics emerge", async () => {
+    const workspacePath = path.join(tempRoot, "best-effort-readiness-workspace");
+    await fs.mkdir(workspacePath, { recursive: true });
+    const session = {
+      ...buildSession(),
+      workspace: { path: workspacePath },
+      objective: {
+        summary: "build the best possible premium food landing page",
+        acceptanceCriteria: ["clarified", "single_target_project_readiness"],
+      },
+      feedback: {
+        pendingResearchRefresh: false,
+      },
+    };
+
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
+      "BOX_STATUS=skipped",
+      "BOX_SKIP_REASON=already-merged",
+      "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+      "BOX_ACTUAL_OUTCOME=the premium landing page is already live on main and tests pass",
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
+      "DELIVERED: Premium landing page is live on main.",
+      "BOX_STATUS=skipped",
+      "BOX_SKIP_REASON=already-merged-on-main",
+      "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+      "BOX_ACTUAL_OUTCOME=Verified build, lint, and release checks passed for the premium landing page.",
+    ].join("\n"), "utf8");
+
+    await seedProjectReadinessLedger(config, session, [
+      {
+        refreshRecommended: false,
+        coveragePassed: true,
+        sourceCount: 8,
+        topicCount: 3,
+        completedPairs: 0,
+        totalPairs: 20,
+        scoutAt: "2026-04-19T08:00:00.000Z",
+        synthAt: "2026-04-19T08:01:00.000Z",
+      },
+      {
+        refreshRecommended: false,
+        coveragePassed: true,
+        sourceCount: 9,
+        topicCount: 3,
+        completedPairs: 1,
+        totalPairs: 24,
+        scoutAt: "2026-04-19T09:00:00.000Z",
+        synthAt: "2026-04-19T09:01:00.000Z",
+      },
+      {
+        refreshRecommended: false,
+        coveragePassed: true,
+        sourceCount: 6,
+        topicCount: 3,
+        completedPairs: 1,
+        totalPairs: 30,
+        scoutAt: "2026-04-19T10:00:00.000Z",
+        synthAt: "2026-04-19T10:01:00.000Z",
+      },
+    ]);
+
+    const report = await evaluateTargetSuccessContract(config, session);
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED);
+    assert.equal(report.dimensions.researchSaturation.status, "satisfied");
+    assert.equal(report.dimensions.researchSaturation.evidence.readinessMode, "best_effort");
+    assert.equal(report.dimensions.researchSaturation.evidence.topicSiteSaturatedRequired, false);
+  });
+
+  it("keeps saturated_best_effort_delivery open until topic-site exhaustion is complete", async () => {
+    const workspacePath = path.join(tempRoot, "strict-saturation-workspace");
+    await fs.mkdir(workspacePath, { recursive: true });
+    const session = {
+      ...buildSession(),
+      workspace: { path: workspacePath },
+      objective: {
+        summary: "push the repo until research is fully exhausted",
+        acceptanceCriteria: ["clarified", "saturated_best_effort_delivery"],
+      },
+      feedback: {
+        pendingResearchRefresh: false,
+      },
+    };
+
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
+      "BOX_STATUS=skipped",
+      "BOX_SKIP_REASON=already-merged",
+      "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+      "BOX_ACTUAL_OUTCOME=the repo is already in a strong delivered state",
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
+      "DELIVERED: Repo is live on main.",
+      "BOX_STATUS=skipped",
+      "BOX_SKIP_REASON=already-merged-on-main",
+      "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+      "BOX_ACTUAL_OUTCOME=Verified build, lint, and release checks passed.",
+    ].join("\n"), "utf8");
+
+    await seedProjectReadinessLedger(config, session, [
+      {
+        refreshRecommended: false,
+        coveragePassed: true,
+        sourceCount: 8,
+        topicCount: 3,
+        completedPairs: 0,
+        totalPairs: 20,
+        scoutAt: "2026-04-19T08:00:00.000Z",
+        synthAt: "2026-04-19T08:01:00.000Z",
+      },
+      {
+        refreshRecommended: false,
+        coveragePassed: true,
+        sourceCount: 8,
+        topicCount: 3,
+        completedPairs: 1,
+        totalPairs: 20,
+        scoutAt: "2026-04-19T09:00:00.000Z",
+        synthAt: "2026-04-19T09:01:00.000Z",
+      },
+      {
+        refreshRecommended: false,
+        coveragePassed: true,
+        sourceCount: 8,
+        topicCount: 3,
+        completedPairs: 1,
+        totalPairs: 20,
+        scoutAt: "2026-04-19T10:00:00.000Z",
+        synthAt: "2026-04-19T10:01:00.000Z",
+      },
+    ]);
+
+    const report = await evaluateTargetSuccessContract(config, session);
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.OPEN);
+    assert.ok(report.blockers.includes("project_readiness_unverified"));
+    assert.equal(report.dimensions.researchSaturation.evidence.readinessMode, "strict_saturation");
+    assert.equal(report.dimensions.researchSaturation.evidence.topicSiteSaturatedRequired, true);
   });
 
   it("does not auto-fulfill a fresh existing-repo session from already-merged evidence", async () => {

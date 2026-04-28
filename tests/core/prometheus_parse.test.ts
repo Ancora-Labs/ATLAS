@@ -95,10 +95,18 @@ import {
   PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES,
   applyPlanLifecycleAdmissionFilter,
   TARGET_PROMETHEUS_STATIC_SECTIONS,
+  TARGET_PROMETHEUS_AGENT_SLUG,
+  isPrometheusAgentResolutionFailure,
+  buildPrometheusPersonaFallbackPrompt,
+  buildCanonicalTargetOperatorObjective,
+  buildPrometheusAnalysisInputFingerprint,
+  evaluatePrometheusFreshAnalysisCache,
   resolvePrometheusPromptFamilyLabel,
   resolvePrometheusPromptRepoPath,
+  resolvePrometheusAgentSlug,
   resolvePrometheusStaticSections,
   buildPrometheusWorkflowPrompt,
+  isSingleTargetFullPlanAdmissionBypassExpected,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments, CANDIDATE_GENERATION_SECTION, buildCandidateGenerationSection } from "../../src/core/prompt_compiler.js";
 import { PLATFORM_MODE } from "../../src/core/mode_state.js";
@@ -249,6 +257,68 @@ describe("normalizePrometheusParsedOutput", () => {
     assert.match(normalized.plans[0].verification, /test:/i);
     assert.equal(normalized.plans[0].priority, 1);
     assert.ok(normalized.plans[0]._planningRubric, "planning rubric metadata should be attached");
+  });
+
+  it("preserves UI runtime recipe fields and upgrades the plan into ui-contract routing", () => {
+    const parsed = {
+      analysis: "UI delivery requires an explicit runtime recipe",
+      projectHealth: "needs-work",
+      executionStrategy: { waves: [] },
+      plans: [
+        {
+          task: "Run the visual contract loop against the desktop session shell",
+          role: "evolution-worker",
+          wave: 1,
+          scope: "src/atlas",
+          target_files: ["src/atlas/app.tsx"],
+          acceptance_criteria: ["UI contract loop can launch the desktop shell"],
+          verification: "npm test -- tests/core/ui_contract_dispatch.test.ts",
+          targetSurfaces: ["electron-runtime", "web-runtime"],
+          uiSurface: "electron-runtime",
+          uiRuntimeRecipe: {
+            primarySurface: "electron-runtime",
+            candidateSurfaces: ["electron-runtime", "web-runtime"],
+            launchCommand: "npm run atlas:desktop",
+            readinessProbe: { type: "stdout", pattern: "WINDOW_READY" },
+            installSteps: ["npm install"],
+            fallbackOrder: ["web-runtime", "static-dom"],
+          },
+          uiContract: {
+            contractId: "atlas-shell@v1",
+            schemaVersion: 1,
+            targetSurfaces: ["electron-runtime", "web-runtime"],
+            fields: { layoutModel: "desktop-shell" },
+            requiredFields: ["layoutModel"],
+            forbiddenPatterns: ["dashboard_downgrade"],
+            accessibilityFloor: "WCAG-AA",
+          },
+          uiScenarioMatrix: {
+            matrixId: "atlas-shell@v1:matrix",
+            schemaVersion: 1,
+            scenarios: [
+              {
+                scenarioId: "desktop-default",
+                kind: "default",
+                description: "desktop shell default state",
+                surface: "electron-runtime",
+                state: { fixture: "selected-session" },
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    const normalized = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    assert.equal(normalized.plans[0].taskKind, "ui-contract");
+    assert.equal(normalized.plans[0].capabilityTag, "ui-contract");
+    assert.equal(normalized.plans[0].capabilityLane, "implementation");
+    assert.deepEqual(normalized.plans[0].targetSurfaces, ["electron-runtime", "web-runtime"]);
+    assert.equal(normalized.plans[0].uiSurface, "electron-runtime");
+    assert.equal((normalized.plans[0].uiRuntimeRecipe as any).launchCommand, "npm run atlas:desktop");
+    assert.equal((normalized.plans[0].uiContract as any).targetSurfaces[0], "electron-runtime");
+    assert.equal((normalized.plans[0].uiScenarioMatrix as any).scenarios[0].surface, "electron-runtime");
   });
 
   it("upgrades generic governance-heavy plans to governance-worker with lane hints", () => {
@@ -666,6 +736,35 @@ Wave 2
   });
 });
 
+describe("isSingleTargetFullPlanAdmissionBypassExpected", () => {
+  it("returns true for active single-target sessions", () => {
+    assert.equal(
+      isSingleTargetFullPlanAdmissionBypassExpected({
+        platformModeState: { currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY },
+        activeTargetSession: { sessionId: "sess_123" },
+      }),
+      true,
+    );
+  });
+
+  it("returns false when single-target admission bypass is not active", () => {
+    assert.equal(
+      isSingleTargetFullPlanAdmissionBypassExpected({
+        platformModeState: { currentMode: "self_dev" },
+        activeTargetSession: { sessionId: "sess_123" },
+      }),
+      false,
+    );
+    assert.equal(
+      isSingleTargetFullPlanAdmissionBypassExpected({
+        platformModeState: { currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY },
+        activeTargetSession: null,
+      }),
+      false,
+    );
+  });
+});
+
 describe("resolveCapturedAgentRawOutput", () => {
   it("prefers streamed output when early-exit truncates returned buffers", () => {
     const resultRaw = '{"plans":[]}';
@@ -781,6 +880,7 @@ describe("buildTrustedMemoryShortlist", () => {
     assert.equal((reconciled.promptHints[0] as any).id, "hint-open");
     assert.equal(reconciled.retiredPromptHints.length, 1);
   });
+
 });
 
 describe("buildPromptTruthMaintenanceSnapshot", () => {
@@ -1847,12 +1947,41 @@ describe("single-target prompt isolation helpers", () => {
       currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
     },
     activeTargetSession: {
+      projectId: "target_atlas",
       sessionId: "sess_target_1",
+      currentStage: "active",
       workspace: {
         path: "C:\\isolated\\target-workspace",
       },
       repo: {
         localPath: "C:\\isolated\\target-workspace",
+      },
+      objective: {
+        summary: "Ship ATLAS as a dedicated product surface without dashboard downgrade",
+        desiredOutcome: "Dedicated ATLAS product shell in the target workspace",
+        acceptanceCriteria: ["ATLAS launches directly", "Dashboard remains untouched"],
+      },
+      constraints: {
+        protectedPaths: ["src/dashboard/**"],
+        forbiddenActions: ["route-based downgrade"],
+      },
+      gates: {
+        allowPlanning: true,
+        allowShadowExecution: true,
+        allowActiveExecution: true,
+        quarantine: false,
+      },
+      hints: {
+        stackHint: "Node.js + TypeScript",
+        knownBuildCommand: "npm run build",
+        knownTestCommand: "npm test",
+        notes: ["Do not add ATLAS into existing dashboard shell"],
+      },
+      intent: {
+        mustHaveFlows: ["launch atlas", "open dedicated shell"],
+        scopeIn: ["src/atlas/**", "scripts/atlas-launcher.ts"],
+        scopeOut: ["src/dashboard/**"],
+        successCriteria: ["ATLAS runs independently"],
       },
     },
   };
@@ -1867,11 +1996,156 @@ describe("single-target prompt isolation helpers", () => {
   });
 
   it("uses a single-target prompt family label and workspace path in target mode", () => {
-    assert.equal(resolvePrometheusPromptFamilyLabel(targetConfig), "prometheus-single_target_delivery");
+    assert.equal(resolvePrometheusAgentSlug(targetConfig), TARGET_PROMETHEUS_AGENT_SLUG);
+    assert.equal(resolvePrometheusPromptFamilyLabel(targetConfig), "target-prometheus-single_target_delivery");
     assert.equal(
       resolvePrometheusPromptRepoPath(targetConfig, "C:\\Users\\caner\\Desktop\\Box"),
       "C:\\isolated\\target-workspace",
     );
+  });
+
+  it("detects missing target agent slugs and can fall back to an embedded persona prompt", () => {
+    assert.equal(
+      isPrometheusAgentResolutionFailure("Analysis failed — exited 1: No such agent: target-prometheus"),
+      true,
+    );
+
+    const fallbackPrompt = buildPrometheusPersonaFallbackPrompt(TARGET_PROMETHEUS_AGENT_SLUG, "Plan the target delivery work");
+    assert.match(fallbackPrompt, /## YOUR ROLE/);
+    assert.match(fallbackPrompt, /TARGET PROMETHEUS/i);
+    assert.match(fallbackPrompt, /Plan the target delivery work/);
+  });
+
+  it("builds the operator objective from the active target session contract instead of relying on Jesus summary text", () => {
+    const objective = buildCanonicalTargetOperatorObjective(targetConfig, "Build the safest next packet");
+
+    assert.match(objective, /Authoritative objective source: ACTIVE TARGET SESSION CONTRACT/i);
+    assert.match(objective, /Ship ATLAS as a dedicated product surface without dashboard downgrade/);
+    assert.match(objective, /Desired outcome class: Dedicated ATLAS product shell in the target workspace/);
+    assert.match(objective, /Protected paths: src\/dashboard\/\*\*/i);
+    assert.doesNotMatch(objective, /Secondary advisory brief from Jesus \(non-authoritative\):/);
+    assert.match(objective, /Treat this contract as higher priority than Jesus summary text/i);
+  });
+
+  it("prefers the canonical target intent contract over the softened active session summary when present", () => {
+    const objective = buildCanonicalTargetOperatorObjective(
+      {
+        ...targetConfig,
+        activeTargetSession: {
+          ...targetConfig.activeTargetSession,
+          objective: {
+            ...targetConfig.activeTargetSession.objective,
+            summary: "Generic ATLAS surface",
+          },
+          intent: {
+            ...targetConfig.activeTargetSession.intent,
+            scopeIn: ["generic scope"],
+            successCriteria: ["generic success"],
+          },
+        },
+      },
+      "Keep the target aligned",
+      {
+        status: "ready_for_planning",
+        summary: "Launch ATLAS as a non-dashboard desktop-style control surface",
+        objectiveSummary: "Launch ATLAS as a non-dashboard desktop-style control surface",
+        desiredOutcome: "Desktop-style ATLAS shell outside browser-tab downgrade paths",
+        planningMode: "active",
+        clarifiedIntent: {
+          mustHaveFlows: ["open dedicated control surface"],
+          scopeIn: ["desktop shell", "native-feeling session control"],
+          scopeOut: ["browser-tab delivery"],
+          successCriteria: ["ATLAS does not ship as a browser tab"],
+        },
+      },
+    );
+
+    assert.match(objective, /Canonical intent contract status: ready_for_planning/i);
+    assert.match(objective, /Canonical planning mode: active/i);
+    assert.match(objective, /Launch ATLAS as a non-dashboard desktop-style control surface/i);
+    assert.match(objective, /Scope in: desktop shell \| native-feeling session control/i);
+    assert.match(objective, /Scope out: browser-tab delivery/i);
+    assert.match(objective, /Intent success criteria: ATLAS does not ship as a browser tab/i);
+    assert.doesNotMatch(objective, /generic scope/i);
+  });
+
+  it("changes the planning fingerprint when the canonical target intent contract changes", () => {
+    const firstFingerprint = buildPrometheusAnalysisInputFingerprint(targetConfig, {
+      status: "ready_for_planning",
+      summary: "ChatGPT-style ATLAS shell with sessions replacing old chats",
+      objectiveSummary: "Ship a ChatGPT-style ATLAS shell with sessions replacing old chats",
+      desiredOutcome: "Blank new-session canvas plus live session detail drill-down",
+      clarifiedIntent: {
+        designDirection: "ChatGPT mechanics with sessions replacing old chats",
+        scopeIn: ["left sessions rail", "blank new session state"],
+        successCriteria: ["Selecting a session opens live details"],
+      },
+    });
+    const secondFingerprint = buildPrometheusAnalysisInputFingerprint(targetConfig, {
+      status: "ready_for_planning",
+      summary: "Dashboard-adjacent ATLAS shell",
+      objectiveSummary: "Ship ATLAS inside the existing dashboard shell",
+      desiredOutcome: "Route-based workspace shell",
+      clarifiedIntent: {
+        designDirection: "dashboard reuse",
+        scopeIn: ["route mode switch"],
+        successCriteria: ["Dashboard shell remains primary"],
+      },
+    });
+
+    assert.notEqual(firstFingerprint, secondFingerprint);
+  });
+
+  it("rejects a fresh cached analysis when the target planning fingerprint changed", () => {
+    const currentInputFingerprint = buildPrometheusAnalysisInputFingerprint(targetConfig, {
+      objectiveSummary: "Ship a ChatGPT-style ATLAS shell with sessions replacing old chats",
+      desiredOutcome: "Blank new-session canvas plus live session detail drill-down",
+      clarifiedIntent: {
+        designDirection: "ChatGPT mechanics with sessions replacing old chats",
+        scopeIn: ["left sessions rail", "blank new session state"],
+        successCriteria: ["Selecting a session opens live details"],
+      },
+    });
+
+    const decision = evaluatePrometheusFreshAnalysisCache(
+      {
+        analyzedAt: "2026-04-25T15:30:00.000Z",
+        analysisInputFingerprint: "old-fingerprint",
+      },
+      {
+        freshnessMinutes: 60,
+        latestResearchArtifactUpdatedAtMs: new Date("2026-04-25T15:00:00.000Z").getTime(),
+        currentInputFingerprint,
+        nowMs: new Date("2026-04-25T15:45:00.000Z").getTime(),
+      },
+    );
+
+    assert.equal(decision.reusable, false);
+    assert.equal(decision.reason, "analysis_input_changed");
+  });
+
+  it("rejects legacy target caches that predate planning fingerprint persistence", () => {
+    const currentInputFingerprint = buildPrometheusAnalysisInputFingerprint(targetConfig, {
+      objectiveSummary: "Ship a ChatGPT-style ATLAS shell with sessions replacing old chats",
+      clarifiedIntent: {
+        designDirection: "ChatGPT mechanics with sessions replacing old chats",
+      },
+    });
+
+    const decision = evaluatePrometheusFreshAnalysisCache(
+      {
+        analyzedAt: "2026-04-25T15:30:00.000Z",
+      },
+      {
+        freshnessMinutes: 60,
+        latestResearchArtifactUpdatedAtMs: new Date("2026-04-25T15:00:00.000Z").getTime(),
+        currentInputFingerprint,
+        nowMs: new Date("2026-04-25T15:45:00.000Z").getTime(),
+      },
+    );
+
+    assert.equal(decision.reusable, false);
+    assert.equal(decision.reason, "legacy_cache_missing_input_fingerprint");
   });
 
   it("builds a target-only workflow that avoids BOX src/core browsing", () => {
@@ -1883,6 +2157,15 @@ describe("single-target prompt isolation helpers", () => {
     assert.match(workflow, /Do NOT silently downgrade explicit user intent/i);
     assert.match(workflow, /placeholders, mocks, demo-only flows/i);
     assert.doesNotMatch(workflow, /browse src\/core\/, src\/workers\/, src\/types\//i);
+  });
+
+  it("adds a repair-first UI contract directive when the active target session is already GUI-oriented", () => {
+    const workflow = buildPrometheusWorkflowPrompt(targetConfig, "C:\\Users\\caner\\Desktop\\Box");
+
+    assert.match(workflow, /plan repair-first rather than proposing a greenfield rebuild/i);
+    assert.match(workflow, /Do NOT discard the current GUI/i);
+    assert.match(workflow, /ui-contract repair packet/i);
+    assert.match(workflow, /uiContract, uiScenarioMatrix, and uiRuntimeRecipe/i);
   });
 });
 
@@ -2472,6 +2755,17 @@ describe("buildDriftDebtTasks — quality gate contract compliance", () => {
         task.verification_targets.every((t: string) => t.includes("architecture_drift.test.ts")),
         "each verification target must reference architecture_drift.test.ts"
       );
+    }
+  });
+
+  it("drift debt tasks keep targeted verification_commands after Prometheus contract hardening", () => {
+    const report = {
+      staleReferences: [{ docPath: "docs/arch.md", referencedPath: "src/core/x.ts", line: 1 }],
+      deprecatedTokenRefs: [{ docPath: "docs/arch.md", token: "resume_dispatch", hint: "use runResumeDispatch", line: 5 }],
+    };
+    const tasks = buildDriftDebtTasks(report);
+    for (const task of tasks) {
+      assert.deepEqual(task.verification_commands, ["npm test -- tests/core/architecture_drift.test.ts"]);
     }
   });
 
@@ -4826,7 +5120,8 @@ describe("seedDiscoveryGapPackets", () => {
     for (const seed of result) {
       assert.equal(seed._discoveryGapSeed, true);
       assert.ok(typeof seed.task === "string" && seed.task.length > 0);
-      assert.equal(seed.verification, "npm test");
+      assert.equal(seed.verification, "npm test -- tests/core/<module>.test.ts");
+      assert.deepEqual(seed.verification_commands, ["npm test -- tests/core/<module>.test.ts"]);
       assert.ok(Array.isArray(seed.leverage_rank) && seed.leverage_rank.length > 0);
     }
   });

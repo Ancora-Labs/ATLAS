@@ -49,6 +49,7 @@ export function buildSingleTargetStartupGuardMessage(result: {
     "How to fix:",
     "- Set GITHUB_TOKEN to your GitHub classic/repo-capable token.",
     "- Set COPILOT_GITHUB_TOKEN to your fine-grained/Copilot-capable GitHub token.",
+    "- Prefer exporting them in your shell or storing them in a repo-external BOX_SECRETS_FILE (for example %USERPROFILE%\\.box\\secrets.env).",
     "- Then restart BOX after the environment variables are available.",
     "BOX will not auto-create or auto-fetch GitHub tokens, API keys, database credentials, or paid service secrets on your behalf.",
   ].join("\n");

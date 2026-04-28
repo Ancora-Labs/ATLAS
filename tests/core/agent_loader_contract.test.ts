@@ -7,6 +7,7 @@ import os from "node:os";
 import {
   validateAgentContract,
   validateAllAgentContracts,
+  agentFileExistsForExecution,
   validateCriticalAgentContracts,
   validateRequiredAgentContracts,
   type AgentContractValidation,
@@ -92,6 +93,17 @@ describe("validateCriticalAgentContracts", () => {
     const slugs = result.results.map(r => r.slug);
     assert.ok(slugs.includes("prometheus"), "results must include prometheus");
     assert.ok(slugs.includes("athena"), "results must include athena");
+  });
+
+  it("mirrors repo agent files into an execution workspace when the target cwd lacks them", async () => {
+    const executionDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-agent-exec-"));
+    const mirroredAgentPath = path.join(executionDir, ".github", "agents", "target-prometheus.agent.md");
+
+    assert.equal(existsSync(mirroredAgentPath), false, "temp execution cwd should start without the agent file");
+    assert.equal(agentFileExistsForExecution("target-prometheus", executionDir), true, "agent must become execution-available");
+    assert.equal(existsSync(mirroredAgentPath), true, "agent file should be mirrored into the execution cwd");
+
+    await fs.rm(executionDir, { recursive: true, force: true });
   });
 });
 

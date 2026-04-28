@@ -730,6 +730,27 @@ export function getPacketThresholdsForLane(targetFileCount: number): PacketDensi
   return LANE_PACKET_SIZE_DEFAULTS[lane];
 }
 
+export function buildPacketAdmissionThresholds(
+  targetFileCount: number,
+  opts: { strictnessMultiplier?: number; laneDifficulty?: string | null } = {},
+): PacketDensityThresholds {
+  const laneThresholds = getPacketThresholdsForLane(targetFileCount);
+  const strictnessMultiplier = Number(opts.strictnessMultiplier);
+  const strictness = Number.isFinite(strictnessMultiplier) && strictnessMultiplier > 0
+    ? strictnessMultiplier
+    : 1;
+  const laneStrictness = opts.laneDifficulty === "hard" ? 1.2
+    : opts.laneDifficulty === "moderate" ? 1.1
+    : 1.0;
+  const multiplier = strictness * laneStrictness;
+  return {
+    minTaskChars: Math.max(1, Math.ceil(laneThresholds.minTaskChars * multiplier)),
+    minTargetFiles: laneThresholds.minTargetFiles,
+    minAcceptanceCriteria: Math.max(1, Math.ceil(laneThresholds.minAcceptanceCriteria * multiplier)),
+    minExecutionTokens: Math.max(1, Math.ceil(laneThresholds.minExecutionTokens * multiplier)),
+  };
+}
+
 
 export const EQUAL_DIMENSION_SET = Object.freeze([
   "architecture",
@@ -807,6 +828,8 @@ const PROTECTED_INTENT_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
   /\breal(?:-time)?\b/i,
   /\breal\s+(?:api|integration|payment|auth|data|photo(?:s|graphy)?)\b/i,
   /\bfull\s+(?:integration|experience|flow)\b/i,
+  /\b(?:native\s+desktop\s+window|desktop\s+gui|desktop-first|browser\s+route|dashboard\s+page|terminal\s+wrapper)\b/i,
+  /\b(?:launcher\s+script|root\s+resources\s+executable|direct\s+(?:executable|app\s+launch))\b/i,
   /\b(?:food|dish|menu|restaurant|cafe|bakery|chef|checkout|payment|auth|onboarding)\b/i,
   /\b(?:landing\s*page|hero|gallery|testimonial|story|brand)\b/i,
 ]);
@@ -841,6 +864,34 @@ const EXPLICIT_FALLBACK_DISCLOSURE_PATTERNS: ReadonlyArray<RegExp> = Object.free
   /\bdocumented\s+fallback\b/i,
 ]);
 
+const NEGATED_LAUNCHER_SCRIPT_REFERENCE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bdoes\s+not\s+require\b[\s\S]{0,120}\.(?:bat|cmd|ps1)\b/gi,
+  /\bwithout\b[\s\S]{0,80}\.(?:bat|cmd|ps1)\b/gi,
+  /\bno\s+(?:need|requirement)\s+for\b[\s\S]{0,80}\.(?:bat|cmd|ps1)\b/gi,
+]);
+
+const NEGATED_DOWNGRADE_REFERENCE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bwithout\b[\s\S]{0,80}\b(?:placeholder(?:s)?|mock(?:ed|ing|s|up)?|stub(?:bed|s)?|demo(?:-only)?|fake|dummy|simplif(?:y|ied)|stand-?ins?)\b/gi,
+  /\b(?:no|avoid|avoidance\s+of|ban(?:ned)?|forbid(?:den)?|prevent|exclude)\b[\s\S]{0,80}\b(?:placeholder(?:s)?|mock(?:ed|ing|s|up)?|stub(?:bed|s)?|demo(?:-only)?|fake|dummy|simplif(?:y|ied)|stand-?ins?)\b/gi,
+  /\bdo\s+not\s+(?:use|ship|add|introduce|render|show)\b[\s\S]{0,80}\b(?:placeholder(?:s)?|mock(?:ed|ing|s|up)?|stub(?:bed|s)?|demo(?:-only)?|fake|dummy|simplif(?:y|ied)|stand-?ins?)\b/gi,
+]);
+
+function stripNegatedLauncherScriptReferences(text: string): string {
+  let sanitized = text;
+  for (const pattern of NEGATED_LAUNCHER_SCRIPT_REFERENCE_PATTERNS) {
+    sanitized = sanitized.replace(pattern, " ");
+  }
+  return sanitized;
+}
+
+function stripNegatedDowngradeReferences(text: string): string {
+  let sanitized = text;
+  for (const pattern of NEGATED_DOWNGRADE_REFERENCE_PATTERNS) {
+    sanitized = sanitized.replace(pattern, " ");
+  }
+  return sanitized;
+}
+
 function extractPlanIntentText(plan: any): string {
   const values: string[] = [
     plan?.title,
@@ -861,14 +912,109 @@ function extractPlanIntentText(plan: any): string {
   return values.join("\n");
 }
 
-function isSilentIntentDowngrade(plan: any): boolean {
-  const text = extractPlanIntentText(plan);
+export interface PlanValidationOptions {
+  activeTargetSession?: any;
+}
+
+type ProtectedIntentContext = {
+  protectedIntentText: string;
+  requiresDirectRootExecutable: boolean;
+  forbiddenDowngradePatterns: RegExp[];
+};
+
+function normalizeIntentStringArray(values: unknown): string[] {
+  return Array.isArray(values)
+    ? values.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+}
+
+function extractProtectedIntentContext(activeTargetSession: any): ProtectedIntentContext {
+  if (!activeTargetSession || typeof activeTargetSession !== "object") {
+    return {
+      protectedIntentText: "",
+      requiresDirectRootExecutable: false,
+      forbiddenDowngradePatterns: [],
+    };
+  }
+
+  const intent = activeTargetSession?.intent && typeof activeTargetSession.intent === "object"
+    ? activeTargetSession.intent
+    : null;
+  const objective = activeTargetSession?.objective && typeof activeTargetSession.objective === "object"
+    ? activeTargetSession.objective
+    : null;
+  const constraints = activeTargetSession?.constraints && typeof activeTargetSession.constraints === "object"
+    ? activeTargetSession.constraints
+    : null;
+  const protectedIntentText = [
+    objective?.summary,
+    objective?.desiredOutcome,
+    intent?.summary,
+    ...(normalizeIntentStringArray(intent?.mustHaveFlows)),
+    ...(normalizeIntentStringArray(intent?.scopeIn)),
+    ...(normalizeIntentStringArray(intent?.scopeOut)),
+    ...(normalizeIntentStringArray(intent?.successCriteria)),
+    ...(normalizeIntentStringArray(activeTargetSession?.assumptions)),
+    ...(normalizeIntentStringArray(constraints?.forbiddenActions)),
+  ].map((value) => String(value || "").trim()).filter(Boolean).join("\n");
+
+  const requiresDirectRootExecutable = /(?:clickable|direct)\s+(?:executable|app\s+launch)|root\s+resources\s+executable|root\s+resources\s+folder.*launch(?:es)?\s+the\s+app\s+directly|launch(?:es)?\s+directly.*root\s+resources\s+folder/i.test(protectedIntentText);
+
+  const forbiddenDowngradePatterns: RegExp[] = [];
+  const pushForbiddenPattern = (pattern: RegExp): void => {
+    if (!forbiddenDowngradePatterns.some((entry) => entry.source === pattern.source && entry.flags === pattern.flags)) {
+      forbiddenDowngradePatterns.push(pattern);
+    }
+  };
+
+  if (/browser\s+(?:route|tab|page)|localhost\s*\+\s*browser|native\s+desktop\s+window|desktop\s+gui|terminal\s+wrapper|dashboard\s+page/i.test(protectedIntentText)) {
+    pushForbiddenPattern(/\b(?:browser\s+(?:route|tab|page|shell|wrapper)|dashboard\s+page|terminal\s+wrapper|localhost\s*(?:plus|\+)\s*browser|open(?:ing)?\s+in\s+a?\s*browser)\b/i);
+  }
+
+  if (/launcher\s+script|\.bat|\.cmd|\.ps1|direct\s+(?:executable|app\s+launch)|root\s+resources\s+executable/i.test(protectedIntentText)) {
+    pushForbiddenPattern(/\b(?:launcher\s+script|launcher\s+wrapper)\b/i);
+  }
+
+  if (/cheap\s+ai\s+clone|ai-knockoff|not\s+look\s+like\s+.*(?:openai|claude)|original\s+high-end\s+experience|premium\s+original/i.test(protectedIntentText)) {
+    pushForbiddenPattern(/\b(?:cheap\s+ai\s+clone|ai-knockoff|copy\s+(?:openai|claude)|clone\s+of\s+(?:openai|claude)|generic\s+ai\s+chat\s+clone)\b/i);
+  }
+
+  return {
+    protectedIntentText,
+    requiresDirectRootExecutable,
+    forbiddenDowngradePatterns,
+  };
+}
+
+const LAUNCHER_SCRIPT_DOWNGRADE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:create|add|introduce|ship|provide|use|configure)\b[\s\S]{0,80}\b(?:launcher|wrapper|batch|script)\b[\s\S]{0,40}\.(?:bat|cmd|ps1)\b/i,
+  /\.(?:bat|cmd|ps1)\b[\s\S]{0,120}\b(?:launcher|launch|open|start|bootstrap|wrapper)\b/i,
+  /\b(?:batch|launcher|wrapper)\b[\s\S]{0,40}\.(?:bat|cmd|ps1)\b/i,
+]);
+
+function isLauncherScriptSoftening(plan: any, opts?: PlanValidationOptions): boolean {
+  const context = extractProtectedIntentContext(opts?.activeTargetSession);
+  if (!context.requiresDirectRootExecutable) return false;
+
+  const text = stripNegatedLauncherScriptReferences(extractPlanIntentText(plan));
   if (!text) return false;
 
-  const hasProtectedIntent = PROTECTED_INTENT_PATTERNS.some((pattern) => pattern.test(text));
+  return LAUNCHER_SCRIPT_DOWNGRADE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function isSilentIntentDowngrade(plan: any, opts?: PlanValidationOptions): boolean {
+  const context = extractProtectedIntentContext(opts?.activeTargetSession);
+  const text = stripNegatedDowngradeReferences(
+    stripNegatedLauncherScriptReferences(extractPlanIntentText(plan))
+  );
+  if (!text) return false;
+
+  const protectedCorpus = [text, context.protectedIntentText].filter(Boolean).join("\n");
+  const hasProtectedIntent = PROTECTED_INTENT_PATTERNS.some((pattern) => pattern.test(protectedCorpus));
   if (!hasProtectedIntent) return false;
 
-  const hasDowngradeSignal = DOWNGRADE_SUBSTITUTE_PATTERNS.some((pattern) => pattern.test(text));
+  const hasDowngradeSignal = DOWNGRADE_SUBSTITUTE_PATTERNS.some((pattern) => pattern.test(text)) ||
+    context.forbiddenDowngradePatterns.some((pattern) => pattern.test(text));
   if (!hasDowngradeSignal) return false;
 
   const disclosedTemporaryFallback = EXPLICIT_FALLBACK_DISCLOSURE_PATTERNS.some((pattern) => pattern.test(text));
@@ -1002,9 +1148,10 @@ export interface PlanViolation {
  * Validate a single plan against the contract schema.
  *
  * @param {object} plan
+ * @param {PlanValidationOptions} [opts]
  * @returns {{ valid: boolean, violations: PlanViolation[] }}
  */
-export function validatePlanContract(plan): { valid: boolean; violations: PlanViolation[] } {
+export function validatePlanContract(plan, opts: PlanValidationOptions = {}): { valid: boolean; violations: PlanViolation[] } {
   if (!plan || typeof plan !== "object") {
     return {
       valid: false,
@@ -1171,10 +1318,19 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
     }
   }
 
-  if (isSilentIntentDowngrade(plan)) {
+  if (isSilentIntentDowngrade(plan, opts)) {
     violations.push({
       field: "protectedIntent",
       message: "Plan silently downgrades an explicit operator requirement or quality bar into a cheaper substitute. Temporary fallbacks are allowed only when they are clearly disclosed with the blocker reason and preserve the promised outcome class.",
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+      code: PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED,
+    });
+  }
+
+  if (isLauncherScriptSoftening(plan, opts)) {
+    violations.push({
+      field: "protectedIntent",
+      message: "Target intent requires a direct user-facing executable launch path from the root resources surface. Replacing that contract with a .bat/.cmd/.ps1 launcher is a silent downgrade and is not dispatchable.",
       severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
       code: PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED,
     });
@@ -1327,15 +1483,16 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
  * Validate all plans in a batch and compute aggregate pass rate.
  *
  * @param {object[]} plans
+ * @param {PlanValidationOptions} [opts]
  * @returns {{ passRate: number, totalPlans: number, validCount: number, invalidCount: number, results: Array<{ planIndex: number, task: string, valid: boolean, violations: object[] }> }}
  */
-export function validateAllPlans(plans) {
+export function validateAllPlans(plans, opts: PlanValidationOptions = {}) {
   if (!Array.isArray(plans) || plans.length === 0) {
     return { passRate: 1.0, totalPlans: 0, validCount: 0, invalidCount: 0, results: [] };
   }
 
   const results = plans.map((plan, i) => {
-    const r = validatePlanContract(plan);
+    const r = validatePlanContract(plan, opts);
     return {
       planIndex: i,
       task: String(plan?.task || "").slice(0, 80),
@@ -1555,6 +1712,54 @@ export const MAX_ACTIONABLE_STEPS_PER_PACKET = 3 as const;
 export const PACKET_OVERSIZE_REASON = "packet_exceeds_actionable_steps_cap" as const;
 
 /**
+ * Estimate dispatch complexity for a plan.
+ *
+ * Explicit ordered steps remain authoritative. When a plan only carries
+ * acceptance criteria, treat them as a bounded proxy rather than a literal
+ * execution-step count; otherwise detailed review checklists incorrectly trip
+ * the hard packet gate.
+ */
+export function estimatePlanOrderedStepComplexity(plan: any): number {
+  const explicitOrderedSteps = Array.isArray(plan?.orderedSteps)
+    ? plan.orderedSteps.length
+    : Array.isArray(plan?.ordered_steps)
+      ? plan.ordered_steps.length
+      : null;
+  if (Number.isFinite(explicitOrderedSteps) && explicitOrderedSteps! > 0) {
+    return Math.max(1, Math.floor(Number(explicitOrderedSteps)));
+  }
+
+  const acceptanceCriteriaCount = Array.isArray(plan?.acceptance_criteria)
+    ? plan.acceptance_criteria.filter(Boolean).length
+    : Array.isArray(plan?.acceptanceCriteria)
+      ? plan.acceptanceCriteria.filter(Boolean).length
+      : 0;
+  const fileCount = Array.isArray(plan?.target_files)
+    ? plan.target_files.filter(Boolean).length
+    : Array.isArray(plan?.targetFiles)
+      ? plan.targetFiles.filter(Boolean).length
+      : Array.isArray(plan?.filesInScope)
+        ? plan.filesInScope.filter(Boolean).length
+        : 0;
+  const verificationSurface = Array.isArray(plan?.verification_commands)
+    ? plan.verification_commands.filter(Boolean).length
+    : Array.isArray(plan?.verificationCommands)
+      ? plan.verificationCommands.filter(Boolean).length
+      : 0;
+  const fallbackSurface = Math.max(1, fileCount, verificationSurface);
+
+  if (acceptanceCriteriaCount > 0) {
+    return Math.max(1, Math.min(acceptanceCriteriaCount, fallbackSurface * 2));
+  }
+
+  if (Array.isArray(plan?.plans) && plan.plans.length > 0) {
+    return Math.max(1, plan.plans.length);
+  }
+
+  return fallbackSurface;
+}
+
+/**
  * Bounded packet-size policy defaults to prevent over-bundling.
  *
  * Over-bundling occurs when too many plans are packed into one worker batch,
@@ -1688,9 +1893,23 @@ export function validatePacketBatchAdmission(
     const batchIndex = hasBatchIndex ? Math.floor(rawBatchIndex) : null;
     const groupKey = hasBatchIndex ? `${role}#batch:${batchIndex}` : role;
     const label = hasBatchIndex ? `${role}[batch ${batchIndex}]` : role;
-    const orderedSteps = Array.isArray(plan?.orderedSteps) ? plan.orderedSteps.length
-      : Array.isArray(plan?.acceptance_criteria) ? plan.acceptance_criteria.length
-      : 1;
+    const explicitOrderedSteps = Array.isArray(plan?.orderedSteps)
+      ? plan.orderedSteps.filter(Boolean).length
+      : Array.isArray(plan?.ordered_steps)
+        ? plan.ordered_steps.filter(Boolean).length
+        : 0;
+    const acceptanceCriteriaCount = explicitOrderedSteps === 0
+      ? Array.isArray(plan?.acceptance_criteria)
+        ? plan.acceptance_criteria.filter(Boolean).length
+        : Array.isArray(plan?.acceptanceCriteria)
+          ? plan.acceptanceCriteria.filter(Boolean).length
+          : 0
+      : 0;
+    const orderedSteps = explicitOrderedSteps > 0
+      ? explicitOrderedSteps
+      : acceptanceCriteriaCount > 0
+        ? acceptanceCriteriaCount
+        : estimatePlanOrderedStepComplexity(plan);
     roleGroups.set(groupKey, (roleGroups.get(groupKey) ?? 0) + Math.max(1, orderedSteps));
     if (!groupLabels.has(groupKey)) {
       groupLabels.set(groupKey, label);
@@ -1898,7 +2117,7 @@ function buildRoleCoverageSkeleton(role: string, wave: number): any {
 
 export function validateAndInjectRolePlans(
   payload: any,
-  opts: { injectMissing?: boolean } = {},
+  opts: { injectMissing?: boolean; activeTargetSession?: any } = {},
 ): RolePlanCoverageValidationResult {
   const source = (payload && typeof payload === "object") ? payload : {};
   const plans = Array.isArray(source.plans) ? source.plans.slice() : [];
@@ -1926,7 +2145,7 @@ export function validateAndInjectRolePlans(
     const role = normalizeRoleValue(plan?.role);
     if (!role || !firstWaveByRole.has(role)) continue;
     const candidate = toRoleCoverageContractCandidate(plan, role, firstWaveByRole.get(role) || 1);
-    if (validatePlanContract(candidate).valid) {
+    if (validatePlanContract(candidate, { activeTargetSession: opts.activeTargetSession }).valid) {
       validRoles.add(role);
     } else {
       invalidRolePlans.add(role);
@@ -1951,7 +2170,7 @@ export function validateAndInjectRolePlans(
     for (const role of initialMissingRoles) {
       const wave = firstWaveByRole.get(role) || 1;
       const skeleton = buildRoleCoverageSkeleton(role, wave);
-      if (validatePlanContract(skeleton).valid) {
+      if (validatePlanContract(skeleton, { activeTargetSession: opts.activeTargetSession }).valid) {
         plans.push(skeleton);
         validRoles.add(role);
         injectedRoles.push(role);

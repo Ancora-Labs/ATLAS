@@ -317,10 +317,10 @@ export function buildVerificationChecklist(workerKind) {
   lines.push("   CLEAN_TREE_STATUS=dirty-other-tasks-only");
   lines.push("   TASK_SCOPED_CLEAN_STATUS=clean");
   lines.push("   TASK_SCOPED_CLEAN_TARGETS=<comma-separated task files>   — prove with: git status --porcelain -- <task files>");
-  lines.push("3. A raw npm test block using these exact markers:");
+  lines.push("3. A raw targeted test block using these exact markers:");
   lines.push("");
   lines.push("===NPM TEST OUTPUT START===");
-  lines.push("<paste full raw npm test stdout here>");
+  lines.push("<paste full raw targeted test stdout here>");
   lines.push("===NPM TEST OUTPUT END===");
   lines.push("");
   lines.push("⚠️ Do NOT use the old POST_MERGE_TEST_OUTPUT format — use the markers above or the gate will reject the artifact.");

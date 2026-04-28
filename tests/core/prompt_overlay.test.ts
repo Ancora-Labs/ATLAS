@@ -16,7 +16,7 @@ describe("prompt_overlay", () => {
           },
         },
         env: {
-          targetRepo: "Ancora-Labs/Box",
+          targetRepo: "Ancora-Labs/ATLAS",
         },
       },
     });
@@ -42,7 +42,7 @@ describe("prompt_overlay", () => {
           currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
         },
         env: {
-          targetRepo: "Ancora-Labs/Box",
+          targetRepo: "Ancora-Labs/ATLAS",
         },
       },
       stage: "active",
@@ -153,7 +153,7 @@ describe("prompt_overlay", () => {
         currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
       },
       env: {
-        targetRepo: "Ancora-Labs/Box",
+        targetRepo: "Ancora-Labs/ATLAS",
       },
       activeTargetSession: {
         repo: {

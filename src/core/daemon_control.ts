@@ -23,46 +23,212 @@ const WORKER_STATE_PATTERN = /^worker_[a-z_]+\.json$/;
 const DEBUG_WORKER_PATTERN = /^debug_worker_[A-Za-z_]+\.txt$/;
 const DEBUG_AGENT_PATTERN = /^debug_agent_[A-Za-z0-9_-]+\.txt$/;
 
-function daemonPidFile(config) {
-  return path.join(config.paths.stateDir, "daemon.pid.json");
+export const MAX_CONCURRENT_TARGET_SESSION_RUNNERS = 3;
+
+function normalizeNullableString(value) {
+  const normalized = String(value || "").trim();
+  return normalized ? normalized : null;
 }
 
-function daemonStopFile(config) {
-  return path.join(config.paths.stateDir, "daemon.stop.json");
+function resolveConfiguredTargetSessionSelector(config) {
+  return {
+    projectId: normalizeNullableString(config?.targetSessionSelector?.projectId || process.env.BOX_TARGET_PROJECT_ID),
+    sessionId: normalizeNullableString(config?.targetSessionSelector?.sessionId || process.env.BOX_TARGET_SESSION_ID),
+  };
 }
 
-function daemonReloadFile(config) {
-  return path.join(config.paths.stateDir, "daemon.reload.json");
+function sanitizeSessionKeyPart(value, fallback) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized || fallback;
 }
 
-export async function readDaemonPid(config) {
-  return readJson(daemonPidFile(config), null);
+function getTargetRunnerControlDir(config) {
+  return path.join(config.paths.stateDir, "session_runners");
 }
 
-export async function writeDaemonPid(config, _pid?: any) {
-  const pidFile = daemonPidFile(config);
-  const content = JSON.stringify({
-    pid: process.pid,
-    startedAt: new Date().toISOString()
-  });
-  // O_EXCL ensures atomic creation — fails if file already exists
+function buildTargetRunnerControlKey(projectId, sessionId) {
+  return `${sanitizeSessionKeyPart(projectId, "project")}_${sanitizeSessionKeyPart(sessionId, "session")}`;
+}
+
+function targetRunnerPidFile(config, selector) {
+  return path.join(getTargetRunnerControlDir(config), `${buildTargetRunnerControlKey(selector.projectId, selector.sessionId)}.pid.json`);
+}
+
+function targetRunnerStopFile(config, selector) {
+  return path.join(getTargetRunnerControlDir(config), `${buildTargetRunnerControlKey(selector.projectId, selector.sessionId)}.stop.json`);
+}
+
+function targetRunnerReloadFile(config, selector) {
+  return path.join(getTargetRunnerControlDir(config), `${buildTargetRunnerControlKey(selector.projectId, selector.sessionId)}.reload.json`);
+}
+
+function hasTargetRunnerSelector(config) {
+  const selector = resolveConfiguredTargetSessionSelector(config);
+  return Boolean(selector.sessionId);
+}
+
+function getControlScopeFiles(config) {
+  const selector = resolveConfiguredTargetSessionSelector(config);
+  if (selector.sessionId) {
+    return {
+      selector,
+      pidFile: targetRunnerPidFile(config, selector),
+      stopFile: targetRunnerStopFile(config, selector),
+      reloadFile: targetRunnerReloadFile(config, selector),
+      scope: "target-session",
+    };
+  }
+
+  return {
+    selector: null,
+    pidFile: path.join(config.paths.stateDir, "daemon.pid.json"),
+    stopFile: path.join(config.paths.stateDir, "daemon.stop.json"),
+    reloadFile: path.join(config.paths.stateDir, "daemon.reload.json"),
+    scope: "global",
+  };
+}
+
+async function readControlJson(filePath) {
+  return readJson(filePath, null);
+}
+
+async function writeScopedPidFile(pidFile, content) {
   try {
     const fh = await fs.open(pidFile, "wx");
     await fh.writeFile(content, "utf8");
     await fh.close();
   } catch (err) {
     if (err.code === "EEXIST") {
-      // PID file already exists — check if stale
       const existing = await readJson(pidFile, null);
       if (existing?.pid && isProcessAlive(existing.pid)) {
         throw new Error(`daemon already running (pid=${existing.pid})`, { cause: err });
       }
-      // Stale PID file — overwrite safely
       await writeJson(pidFile, JSON.parse(content));
     } else {
       throw err;
     }
   }
+}
+
+export async function listTargetSessionRunnerStates(config) {
+  const controlDir = getTargetRunnerControlDir(config);
+  await fs.mkdir(controlDir, { recursive: true });
+  const entries = await fs.readdir(controlDir, { withFileTypes: true }).catch(() => []);
+  const pidFiles = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".pid.json"));
+  const results = [];
+  for (const entry of pidFiles) {
+    const filePath = path.join(controlDir, entry.name);
+    const state = await readJson(filePath, null);
+    if (!state?.pid || !isProcessAlive(state.pid)) {
+      await fs.rm(filePath, { force: true }).catch(() => {});
+      continue;
+    }
+    results.push(state);
+  }
+  return results;
+}
+
+export async function countRunningTargetSessionRunners(config) {
+  const states = await listTargetSessionRunnerStates(config);
+  return states.filter((state) => isProcessAlive(state.pid)).length;
+}
+
+function daemonPidFile(config) {
+  return getControlScopeFiles(config).pidFile;
+}
+
+function daemonStopFile(config) {
+  return getControlScopeFiles(config).stopFile;
+}
+
+function daemonReloadFile(config) {
+  return getControlScopeFiles(config).reloadFile;
+}
+
+function globalDaemonPidFile(config) {
+  return path.join(config.paths.stateDir, "daemon.pid.json");
+}
+
+export async function readDaemonPid(config) {
+  return readJson(daemonPidFile(config), null);
+}
+
+export async function findDaemonStartConflict(config) {
+  const selector = resolveConfiguredTargetSessionSelector(config);
+
+  if (selector.sessionId) {
+    const matchingRunner = (await listTargetSessionRunnerStates(config)).find((state) => {
+      const stateSessionId = normalizeNullableString(state?.sessionId);
+      return stateSessionId === selector.sessionId;
+    });
+    if (matchingRunner) {
+      const matchingPid = Number(matchingRunner.pid || 0);
+      return {
+        scope: "target-session",
+        pid: matchingPid,
+        projectId: normalizeNullableString(matchingRunner.projectId) || selector.projectId,
+        sessionId: selector.sessionId,
+        reason: `target session runner already running pid=${matchingPid} project=${normalizeNullableString(matchingRunner.projectId) || selector.projectId || "unknown"} session=${selector.sessionId || "unknown"}`,
+      };
+    }
+
+    const globalPidFile = globalDaemonPidFile(config);
+    const globalState = await readJson(globalPidFile, null);
+    const globalPid = Number(globalState?.pid || 0);
+    if (globalPid > 0) {
+      if (!isProcessAlive(globalPid)) {
+        await fs.rm(globalPidFile, { force: true }).catch(() => {});
+      } else {
+        return {
+          scope: "global",
+          pid: globalPid,
+          reason: `global daemon already running pid=${globalPid}`,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  const targetRunnerStates = await listTargetSessionRunnerStates(config);
+  if (targetRunnerStates.length === 0) {
+    return null;
+  }
+
+  const conflict = targetRunnerStates.find((state) => normalizeNullableString(state?.projectId)) || targetRunnerStates[0];
+  return {
+    scope: "target-session",
+    pid: Number(conflict.pid || 0),
+    projectId: normalizeNullableString(conflict.projectId),
+    sessionId: normalizeNullableString(conflict.sessionId),
+    reason: `target session runner already running pid=${Number(conflict.pid || 0)} project=${normalizeNullableString(conflict.projectId) || "unknown"} session=${normalizeNullableString(conflict.sessionId) || "unknown"}`,
+  };
+}
+
+export async function writeDaemonPid(config, _pid?: any) {
+  const pidFile = daemonPidFile(config);
+  const selector = resolveConfiguredTargetSessionSelector(config);
+  if (selector.sessionId) {
+    await fs.mkdir(getTargetRunnerControlDir(config), { recursive: true });
+    const concurrentRunnerCount = await countRunningTargetSessionRunners(config);
+    const existingRunnerState = await readJson(pidFile, null);
+    const isReplacingCurrentRunner = Boolean(existingRunnerState?.pid && isProcessAlive(existingRunnerState.pid));
+    if (!isReplacingCurrentRunner && concurrentRunnerCount >= MAX_CONCURRENT_TARGET_SESSION_RUNNERS) {
+      throw new Error(`target session runner limit reached (${MAX_CONCURRENT_TARGET_SESSION_RUNNERS})`);
+    }
+  }
+  const content = JSON.stringify({
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    projectId: selector.projectId,
+    sessionId: selector.sessionId,
+    scope: hasTargetRunnerSelector(config) ? "target-session" : "global",
+  });
+  await writeScopedPidFile(pidFile, content);
 }
 
 export async function clearDaemonPid(config) {
@@ -282,6 +448,9 @@ export async function clearAllAIState(config) {
       }
     }
   } catch { /* state dir may not exist */ }
+
+  await fs.rm(getTargetRunnerControlDir(config), { recursive: true, force: true }).catch(() => {});
+  cleared.push("session_runners/");
 
   return cleared;
 }

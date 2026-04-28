@@ -10,11 +10,17 @@ import {
   createTargetSession,
   getTargetCompletionPath,
   getTargetIntakeManifestPath,
+  getTargetIntentContractPath,
+  getOpenTargetSessionsPath,
   getTargetWorkspaceRootPath,
   getTargetSessionPath,
   getTargetWorkspacePath,
   getLegacyTargetWorkspacePath,
+  listOpenTargetSessions,
   loadActiveTargetSession,
+  saveActiveTargetSession,
+  loadTargetSession,
+  selectActiveTargetSession,
   TARGET_SESSION_STAGE,
   transitionActiveTargetSession,
   validateTargetIntakeManifest,
@@ -162,19 +168,25 @@ describe("target_session_state", () => {
     assert.equal(session.repo.localPath, session.workspace.path);
   });
 
-  it("negative path: rejects opening a new target while another session is still active", async () => {
+  it("keeps the selected active session intact while opening a second session for a different repo", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
     const config = buildConfig(tempRoot);
-    await createTargetSession(buildManifest(), config);
+    const firstSession = await createTargetSession(buildManifest(), config);
 
-    await assert.rejects(
-      () => createTargetSession(buildManifest({ target: {
+    const secondSession = await createTargetSession(buildManifest({ target: {
         repoUrl: "https://github.com/acme/second.git",
         defaultBranch: "main",
         provider: "github",
-      } }), config),
-      /Active target session already exists/
-    );
+      } }), config);
+
+    const selectedSession = await loadActiveTargetSession(config);
+    const openSessions = await listOpenTargetSessions(config);
+    const registry = JSON.parse(await fs.readFile(getOpenTargetSessionsPath(config.paths.stateDir), "utf8"));
+
+    assert.equal(selectedSession?.sessionId, firstSession.sessionId);
+    assert.equal(secondSession.sessionId !== firstSession.sessionId, true);
+    assert.equal(openSessions.length, 2);
+    assert.equal(registry.length, 2);
   });
 
   it("rejects opening the same repo while that repo already has an active session", async () => {
@@ -186,6 +198,76 @@ describe("target_session_state", () => {
       () => createTargetSession(buildManifest({ requestId: "req_target_same_repo_002" }), config),
       /Active target session for this repo already exists/
     );
+  });
+
+  it("selects a different open session without archiving the previous one", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
+    const config = buildConfig(tempRoot);
+    const firstSession = await createTargetSession(buildManifest(), config);
+    const secondSession = await createTargetSession(buildManifest({
+      target: {
+        repoUrl: "https://github.com/acme/second.git",
+        defaultBranch: "main",
+        provider: "github",
+      },
+    }), config);
+
+    const selectedSession = await selectActiveTargetSession(config, { sessionId: secondSession.sessionId, projectId: secondSession.projectId });
+    const reloadedSelectedSession = await loadActiveTargetSession(config);
+    const loadedSecondSession = await loadTargetSession(config, { sessionId: secondSession.sessionId, projectId: secondSession.projectId });
+    const openSessions = await listOpenTargetSessions(config);
+
+    assert.equal(selectedSession.sessionId, secondSession.sessionId);
+    assert.equal(reloadedSelectedSession?.sessionId, secondSession.sessionId);
+    assert.equal(loadedSecondSession?.sessionId, secondSession.sessionId);
+    assert.equal(openSessions.some((session) => session.sessionId === firstSession.sessionId), true);
+    assert.equal(openSessions.some((session) => session.sessionId === secondSession.sessionId), true);
+  });
+
+  it("loads and archives a bound session without replacing the globally selected session", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
+    const config = buildConfig(tempRoot);
+    const firstSession = await createTargetSession(buildManifest(), config);
+    const secondSession = await createTargetSession(buildManifest({
+      target: {
+        repoUrl: "https://github.com/acme/bound.git",
+        defaultBranch: "main",
+        provider: "github",
+      },
+    }), config);
+
+    const boundConfig = {
+      ...config,
+      targetSessionSelector: {
+        sessionId: secondSession.sessionId,
+        projectId: secondSession.projectId,
+      },
+    };
+
+    const boundLoadedSession = await loadActiveTargetSession(boundConfig);
+    assert.equal(boundLoadedSession?.sessionId, secondSession.sessionId);
+
+    await saveActiveTargetSession(boundConfig, {
+      ...boundLoadedSession,
+      handoff: {
+        ...boundLoadedSession.handoff,
+        lastAction: "bound-update",
+      },
+    });
+
+    const selectedSession = await loadActiveTargetSession(config);
+    assert.equal(selectedSession?.sessionId, firstSession.sessionId);
+
+    const archived = await archiveTargetSession(boundConfig, {
+      completionStage: TARGET_SESSION_STAGE.COMPLETED,
+      completionReason: "bound_session_closed",
+    });
+    const reloadedSelectedSession = await loadActiveTargetSession(config);
+    const openSessions = await listOpenTargetSessions(config);
+
+    assert.equal(archived.sessionId, secondSession.sessionId);
+    assert.equal(reloadedSelectedSession?.sessionId, firstSession.sessionId);
+    assert.equal(openSessions.some((session) => session.sessionId === secondSession.sessionId), false);
   });
 
   it("normalizes modern intake manifests and rejects non-target modes", async () => {
@@ -227,6 +309,59 @@ describe("target_session_state", () => {
     );
     assert.ok(Array.isArray(session?.warnings));
     assert.ok(session?.warnings.some((entry: string) => entry.includes("normalized")));
+  });
+
+  it("treats archived active-session snapshots as closed and removes them from open tracking", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
+    const config = buildConfig(tempRoot);
+    const activePath = getActiveTargetSessionPath(config.paths.stateDir);
+    const stateDir = config.paths.stateDir;
+    const workspacePath = getTargetWorkspacePath(config.paths.workspaceDir, "target_portal", "sess_archived", config.rootDir);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(activePath, JSON.stringify({
+      projectId: "target_portal",
+      sessionId: "sess_archived",
+      currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+      currentStage: TARGET_SESSION_STAGE.ACTIVE,
+      repo: {
+        repoUrl: "https://github.com/acme/portal.git",
+      },
+      workspace: {
+        path: workspacePath,
+      },
+      objective: { summary: "Resume the same session" },
+      lifecycle: {
+        openedAt: "2026-04-24T09:01:12.000Z",
+        updatedAt: "2026-04-25T12:34:36.000Z",
+        closedAt: "2026-04-25T12:34:36.000Z",
+        archivedAt: "2026-04-25T12:34:36.000Z",
+        status: "open",
+        completionReason: "fresh_session_opened_by_mistake",
+      },
+      handoff: {
+        lastAction: "session_archived",
+        nextAction: "await_next_target",
+      },
+    }, null, 2));
+    await fs.writeFile(getOpenTargetSessionsPath(stateDir), JSON.stringify([
+      {
+        projectId: "target_portal",
+        sessionId: "sess_archived",
+        currentStage: TARGET_SESSION_STAGE.ACTIVE,
+        repoUrl: "https://github.com/acme/portal.git",
+        objectiveSummary: "Resume the same session",
+        workspacePath,
+        updatedAt: "2026-04-25T12:34:36.000Z",
+      },
+    ], null, 2));
+
+    const session = await loadActiveTargetSession(config);
+    const openSessions = await listOpenTargetSessions(config);
+
+    assert.equal(session, null);
+    assert.equal(openSessions.length, 0);
+    await assert.rejects(() => fs.access(activePath));
   });
 
   it("migrates legacy in-repo target workspaces to the external isolated workspace root", async () => {
@@ -419,6 +554,75 @@ describe("target_session_state", () => {
     assert.equal(reopenedSession.currentStage, TARGET_SESSION_STAGE.ONBOARDING);
   });
 
+  it("preserves richer session intent fields when canonical contract style fields are empty", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
+    const config = buildConfig(tempRoot);
+    const session = await createTargetSession(buildManifest(), config);
+    const intentContractPath = getTargetIntentContractPath(config.paths.stateDir, session.projectId, session.sessionId);
+
+    const enrichedSession = await saveActiveTargetSession(config, {
+      ...session,
+      clarification: {
+        ...session.clarification,
+        status: "completed",
+        readyForPlanning: true,
+        intentContractPath,
+        completedAt: "2026-04-24T10:00:00.000Z",
+      },
+      intent: {
+        ...session.intent,
+        status: "ready_for_planning",
+        summary: "Session intent carries the richer desktop UI contract.",
+        planningMode: "active",
+        scopeOut: ["generic dark dashboard grid"],
+        protectedAreas: ["premium monochrome product identity"],
+        preferredQualityBar: "Premium, original monochrome desktop workspace",
+        designDirection: "Avoid older dashboard resemblance and AI knockoff drift",
+        successCriteria: ["UI stays product-owned and non-derivative"],
+        updatedAt: "2026-04-24T10:00:00.000Z",
+      },
+      lifecycle: {
+        ...session.lifecycle,
+        updatedAt: "2026-04-24T10:00:00.000Z",
+      },
+    });
+
+    await fs.writeFile(intentContractPath, JSON.stringify({
+      schemaVersion: 1,
+      projectId: session.projectId,
+      sessionId: session.sessionId,
+      status: "ready_for_planning",
+      readyForPlanning: true,
+      planningMode: "active",
+      summary: "Contract refreshed after onboarding.",
+      clarifiedIntent: {
+        productType: "Windows-first Electron desktop app",
+        targetUsers: [],
+        mustHaveFlows: [],
+        scopeIn: [],
+        scopeOut: [],
+        protectedAreas: [],
+        preferredQualityBar: null,
+        designDirection: null,
+        deploymentExpectations: [],
+        successCriteria: [],
+      },
+      assumptions: [],
+      openQuestions: [],
+      updatedAt: "2026-04-24T11:00:00.000Z",
+      createdAt: "2026-04-24T09:00:00.000Z",
+    }, null, 2));
+
+    const reloaded = await loadActiveTargetSession(config);
+
+    assert.equal(reloaded?.intent.summary, "Contract refreshed after onboarding.");
+    assert.deepEqual(reloaded?.intent.scopeOut, enrichedSession.intent.scopeOut);
+    assert.deepEqual(reloaded?.intent.protectedAreas, enrichedSession.intent.protectedAreas);
+    assert.equal(reloaded?.intent.preferredQualityBar, enrichedSession.intent.preferredQualityBar);
+    assert.equal(reloaded?.intent.designDirection, enrichedSession.intent.designDirection);
+    assert.deepEqual(reloaded?.intent.successCriteria, enrichedSession.intent.successCriteria);
+  });
+
   it("transitions an active target session with stage-specific gates and preserved human inputs", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
     const config = buildConfig(tempRoot);
@@ -471,6 +675,78 @@ describe("target_session_state", () => {
     assert.equal(loaded?.feedback?.pendingResearchRefresh, true);
     assert.equal(loaded?.feedback?.lastAthenaReview?.category, "research");
     assert.deepEqual(loaded?.feedback?.lastAthenaReview?.corrections, ["Bring stack evidence"]);
+  });
+
+  it("hydrates stale active session snapshots from the canonical target intent contract", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
+    const config = buildConfig(tempRoot);
+    const created = await createTargetSession(buildManifest(), config);
+
+    const staleSnapshot = {
+      ...created,
+      currentStage: TARGET_SESSION_STAGE.AWAITING_INTENT_CLARIFICATION,
+      clarification: {
+        ...created.clarification,
+        status: "pending",
+        readyForPlanning: false,
+        pendingQuestions: ["Old question"],
+      },
+      intent: {
+        ...created.intent,
+        status: "pending",
+        summary: null,
+        planningMode: null,
+        scopeIn: [],
+        successCriteria: [],
+        updatedAt: "2026-04-22T11:13:28.134Z",
+      },
+      lifecycle: {
+        ...created.lifecycle,
+        updatedAt: "2026-04-22T11:13:28.134Z",
+      },
+    };
+
+    await fs.writeFile(getActiveTargetSessionPath(config.paths.stateDir), JSON.stringify(staleSnapshot, null, 2), "utf8");
+    await fs.writeFile(path.join(getTargetSessionPath(config.paths.stateDir, created.projectId, created.sessionId), "target_session.json"), JSON.stringify(staleSnapshot, null, 2), "utf8");
+    await fs.writeFile(
+      getTargetIntentContractPath(config.paths.stateDir, created.projectId, created.sessionId),
+      JSON.stringify({
+        schemaVersion: 1,
+        projectId: created.projectId,
+        sessionId: created.sessionId,
+        status: "ready_for_planning",
+        readyForPlanning: true,
+        planningMode: "active",
+        summary: "repoState=existing | goal=Dedicated desktop-style ATLAS shell | scope=Native-feeling control surface",
+        updatedAt: "2026-04-22T11:27:11.715Z",
+        clarifiedIntent: {
+          productType: "Dedicated desktop-style ATLAS shell",
+          targetUsers: ["Internal operators"],
+          mustHaveFlows: ["Launch separate shell"],
+          scopeIn: ["Native-feeling control surface"],
+          scopeOut: ["Dashboard reuse"],
+          protectedAreas: ["src/dashboard/**"],
+          preferredQualityBar: null,
+          designDirection: "Calm and focused",
+          deploymentExpectations: [],
+          successCriteria: ["No browser-tab downgrade"],
+        },
+        assumptions: [],
+        openQuestions: [],
+      }, null, 2),
+      "utf8",
+    );
+
+    const loaded = await loadActiveTargetSession(config);
+
+    assert.equal(loaded?.currentStage, TARGET_SESSION_STAGE.ACTIVE);
+    assert.equal(loaded?.clarification?.readyForPlanning, true);
+    assert.equal(loaded?.gates?.allowPlanning, true);
+    assert.equal(loaded?.gates?.allowActiveExecution, true);
+    assert.equal(loaded?.intent?.planningMode, "active");
+    assert.match(String(loaded?.intent?.summary || ""), /Dedicated desktop-style ATLAS shell/i);
+    assert.deepEqual(loaded?.intent?.scopeIn, ["Native-feeling control surface"]);
+    assert.ok(loaded?.warnings?.some((entry: string) => entry.includes("hydrated_from_target_intent_contract")));
   });
 
   it("active stage gates do not keep shadow execution enabled", async () => {

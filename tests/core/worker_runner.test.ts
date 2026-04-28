@@ -15,6 +15,7 @@ import {
   extractStreamingWorkerResultMarker,
   shouldTreatAbortedWorkerRunAsTerminalResult,
   deriveDeterministicCleanTreeEvidence,
+  ensureWorkerOutputClosureFields,
   resolveCleanTreeEvidenceTargets,
   inferWorkerReportedTaskScopedCleanTreeEvidence,
   detectRepoContamination,
@@ -50,9 +51,14 @@ describe("parseWorkerResponse", () => {
     assert.equal(result.status, "done");
   });
 
-  it("defaults to done when no BOX_STATUS marker is present", () => {
+  it("defaults to partial when no BOX_STATUS marker is present", () => {
     const result = parseWorkerResponse("Worker completed the task successfully.", "");
-    assert.equal(result.status, "done");
+    assert.equal(result.status, "partial");
+  });
+
+  it("downgrades unknown BOX_STATUS values to partial", () => {
+    const result = parseWorkerResponse("BOX_STATUS=complete", "");
+    assert.equal(result.status, "partial");
   });
 
   it("parses blocked status", () => {
@@ -108,6 +114,80 @@ describe("parseWorkerResponse", () => {
     assert.equal(result.status, "partial");
   });
 
+  it("normalizes partial to done when only pre-existing global lint backlog blocks merge", () => {
+    const stdout = [
+      "BOX_STATUS=partial",
+      "BOX_PR_URL=https://github.com/Ancora-Labs/ATLAS/pull/366",
+      "acceptance criterion 4: FAIL — npm run lint fails because src/ has a pre-existing repo-wide lint backlog",
+      "TOTAL_WARNINGS=1507",
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=pass",
+      "EDGE_CASES=pass",
+      "===END_VERIFICATION===",
+      "BOX_ACCESS=repo:ok;files:ok;tools:ok;api:ok",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "done");
+    assert.equal(result.dispatchBlockReason, null);
+  });
+
+  it("normalizes partial to done when merged SHA + prUrl + build/tests pass (evidenced partial)", () => {
+    const stdout = [
+      "BOX_STATUS=partial",
+      "BOX_PR_URL=https://github.com/Ancora-Labs/ATLAS/pull/366",
+      "BOX_MERGED_SHA=a972d8f8e46ba089c08aadeace767eecb182e69d",
+      "BOX_BRANCH=governance/onboarding-clarification-shell",
+      "BOX_FILES_TOUCHED=docs/DESIGN.md,src/core/clarification_runtime.ts",
+      "BOX_ACCESS=repo:ok;files:ok;tools:ok;api:ok",
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=pass",
+      "RESPONSIVE=n/a",
+      "===END_VERIFICATION===",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "done",
+      "partial with merged SHA + prUrl + build/tests=pass must be normalized to done");
+    assert.equal(result.normalizedFromEvidencedPartial, true);
+    assert.equal(result.dispatchBlockReason, null);
+    assert.equal(result.mergedSha, "a972d8f8e46ba089c08aadeace767eecb182e69d");
+  });
+
+  it("keeps partial when merged SHA is absent even if build/tests pass", () => {
+    const stdout = [
+      "BOX_STATUS=partial",
+      "BOX_PR_URL=https://github.com/Ancora-Labs/ATLAS/pull/366",
+      "BOX_BRANCH=governance/onboarding-clarification-shell",
+      "BOX_ACCESS=repo:ok;files:ok;tools:ok;api:ok",
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=pass",
+      "===END_VERIFICATION===",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "partial",
+      "partial without BOX_MERGED_SHA must not be normalized to done");
+    assert.equal(result.normalizedFromEvidencedPartial, false);
+  });
+
+  it("keeps partial when tests fail even if merged SHA present", () => {
+    const stdout = [
+      "BOX_STATUS=partial",
+      "BOX_PR_URL=https://github.com/Ancora-Labs/ATLAS/pull/366",
+      "BOX_MERGED_SHA=a972d8f8e46ba089c08aadeace767eecb182e69d",
+      "BOX_ACCESS=repo:ok;files:ok;tools:ok;api:ok",
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=fail",
+      "===END_VERIFICATION===",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "partial",
+      "partial with failing tests must not be normalized to done");
+    assert.equal(result.normalizedFromEvidencedPartial, false);
+  });
+
   it("normalizes already-completed partial output to skipped", () => {
     const stdout = [
       "BOX_STATUS=partial",
@@ -124,9 +204,9 @@ describe("parseWorkerResponse", () => {
     assert.equal(result.status, "error");
   });
 
-  it("normalizes unknown status values to done", () => {
+  it("normalizes unknown status values to partial", () => {
     const result = parseWorkerResponse("BOX_STATUS=complete", "");
-    assert.equal(result.status, "done");
+    assert.equal(result.status, "partial");
   });
 
   it("extracts BOX_PR_URL", () => {
@@ -680,6 +760,81 @@ describe("tool access + capability guards", () => {
     assert.ok(!prompt.includes("[TOOL_INTENT] scope=<repo-path-or-subsystem> intent=<goal> impact=<low|medium|high|critical> clearance=<read|write|admin>"));
   });
 
+  it("worker prompt still requires closure evidence for observation tasks", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Run install and verify the CLI help output.",
+        taskKind: "observation",
+        verification: "1. npm install\n2. npm run build\n3. node dist/index.js --help",
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-prompt-test") },
+      },
+      "quality",
+      {},
+    );
+
+    assert.ok(prompt.includes("BOX_EXPECTED_OUTCOME=<one-line: what this task was supposed to achieve>"));
+    assert.ok(prompt.includes("BOX_ACTUAL_OUTCOME=<one-line: what was actually done/delivered>"));
+    assert.ok(prompt.includes("BOX_DEVIATION=none|minor|major"));
+    assert.ok(!prompt.includes("BOX_MERGED_SHA=<actual sha>"));
+  });
+
+  it("synthesizes missing closure evidence for successful observation runs", () => {
+    const result = ensureWorkerOutputClosureFields(
+      [
+        "BOX_STATUS=done",
+        "===VERIFICATION_REPORT===",
+        "BUILD=pass",
+        "TESTS=pass",
+        "===END_VERIFICATION===",
+      ].join("\n"),
+      {
+        task: "Verify install, typecheck, build, and CLI help output.",
+        taskKind: "observation",
+      },
+      {
+        status: "done",
+        summary: "Completed install, typecheck, build, and CLI help verification.",
+        verificationReport: { build: "pass", tests: "pass" },
+      },
+    );
+
+    assert.equal(result.valid, true);
+    assert.equal(result.synthesized, true);
+    assert.ok(result.output.includes("BOX_EXPECTED_OUTCOME=Verify install, typecheck, build, and CLI help output."));
+    assert.ok(result.output.includes("BOX_ACTUAL_OUTCOME=Completed install, typecheck, build, and CLI help verification."));
+    assert.ok(result.output.includes("BOX_DEVIATION=none"));
+  });
+
+  it("synthesizes missing closure evidence for successful implementation runs", () => {
+    const result = ensureWorkerOutputClosureFields(
+      [
+        "BOX_STATUS=done",
+        "BOX_PR_URL=https://github.com/Ancora-Labs/ATLAS/pull/367",
+        "DELIVERED: Added Electron packaging scripts and builder config.",
+      ].join("\n"),
+      {
+        task: "Add Electron build and packaging dependencies plus additive npm scripts for development, build, and internal Windows packaging without replacing the current ATLAS commands.",
+        taskKind: "implementation",
+      },
+      {
+        status: "done",
+        summary: "Added Electron packaging scripts and builder configuration for the desktop shell.",
+        deliverable: "Electron packaging scripts and builder configuration.",
+      },
+    );
+
+    assert.equal(result.valid, true);
+    assert.equal(result.synthesized, true);
+    assert.ok(result.output.includes("BOX_EXPECTED_OUTCOME=Add Electron build and packaging dependencies plus additive npm scripts for development, build, and internal Windows packaging without replacing the current ATLAS commands."));
+    assert.ok(result.output.includes("BOX_ACTUAL_OUTCOME=Added Electron packaging scripts and builder configuration for the desktop shell."));
+    assert.ok(result.output.includes("BOX_DEVIATION=none"));
+  });
+
   it("worker prompt forbids upstream-only deferrals for red PRs", () => {
     const prompt = buildConversationContext(
       [],
@@ -700,6 +855,37 @@ describe("tool access + capability guards", () => {
 
     assert.ok(prompt.includes("A red PR is NOT resolved by saying main is red too."));
     assert.ok(prompt.includes("reproduce the failing branch check"));
+  });
+
+  it("worker prompt includes same-call interactive access recovery rules for target sessions", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Add schema support for the target booking flow.",
+        taskKind: "implementation",
+        acceptance_criteria: ["schema updated", "verification documented"],
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-prompt-test") },
+        activeTargetSession: {
+          sessionId: "sess_access",
+          prerequisites: {
+            requiredNow: ["database_access_credentials"],
+            requiredLater: ["deploy_platform_access"],
+            optional: [],
+          },
+        },
+      },
+      "quality",
+      {},
+    );
+
+    assert.ok(prompt.includes("## INTERACTIVE ACCESS RESOLUTION"));
+    assert.ok(prompt.includes("reply with `done`"));
+    assert.ok(prompt.includes("requiredNow: database_access_credentials"));
+    assert.ok(prompt.includes("Reason from repo evidence and feature scope"));
   });
 
   it("worker prompt adds a final placeholder self-check before done responses", () => {

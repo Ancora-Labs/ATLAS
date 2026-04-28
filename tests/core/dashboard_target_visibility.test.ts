@@ -11,6 +11,7 @@ describe("dashboard target runtime visibility", () => {
         fallbackModeAfterCompletion: PLATFORM_MODE.SELF_DEV,
       },
       activeTargetSession: null,
+      allTargetSessions: [],
       rootDir: "C:/box",
     });
 
@@ -55,6 +56,15 @@ describe("dashboard target runtime visibility", () => {
           },
         },
       },
+      allTargetSessions: [{
+        projectId: "target_portal",
+        sessionId: "sess_123",
+        currentStage: "awaiting_credentials",
+        repo: { repoUrl: "https://github.com/acme/portal.git" },
+        objective: { summary: "Stabilize CI and auth flow" },
+        workspace: { path: "C:/box/.box-work/targets/portal/sess_123" },
+        lifecycle: { updatedAt: "2026-04-21T10:00:00.000Z" },
+      }],
       rootDir: "C:/box",
     });
 
@@ -67,6 +77,8 @@ describe("dashboard target runtime visibility", () => {
     assert.equal(runtime.bootstrapLastError, "Missing package registry token");
     assert.ok(runtime.blockers.includes("Missing package registry token"));
     assert.equal(runtime.waitingReason, "Missing package registry token");
+    assert.equal(runtime.openSessionCount, 1);
+    assert.equal(runtime.canOpenNewSession, true);
   });
 
   it("flags missing active target session when single target mode is set without session truth", () => {
@@ -76,6 +88,7 @@ describe("dashboard target runtime visibility", () => {
         fallbackModeAfterCompletion: PLATFORM_MODE.IDLE,
       },
       activeTargetSession: null,
+      allTargetSessions: [],
       rootDir: "C:/box",
     });
 
@@ -124,6 +137,42 @@ describe("dashboard target runtime visibility", () => {
           },
         },
       },
+      allTargetSessions: [
+        {
+          projectId: "target_restaurant",
+          sessionId: "sess_clarify_1",
+          currentStage: "awaiting_intent_clarification",
+          repo: {
+            repoUrl: "https://github.com/acme/restaurant-site.git",
+          },
+          objective: {
+            summary: "Clarify restaurant delivery scope",
+          },
+          workspace: {
+            path: "C:/box/.box-work/targets/restaurant/sess_clarify_1",
+          },
+          lifecycle: {
+            updatedAt: "2026-04-21T10:05:00.000Z",
+          },
+        },
+        {
+          projectId: "target_admin",
+          sessionId: "sess_admin_2",
+          currentStage: "active",
+          repo: {
+            repoUrl: "https://github.com/acme/admin-ui.git",
+          },
+          objective: {
+            summary: "Ship admin UI improvements",
+          },
+          workspace: {
+            path: "C:/box/.box-work/targets/admin/sess_admin_2",
+          },
+          lifecycle: {
+            updatedAt: "2026-04-21T10:06:00.000Z",
+          },
+        },
+      ],
       rootDir: "C:/box",
     });
 
@@ -133,5 +182,7 @@ describe("dashboard target runtime visibility", () => {
     assert.equal(runtime.clarificationAgent, "onboarding-empty-repo");
     assert.equal(runtime.clarificationStatus, "pending");
     assert.deepEqual(runtime.clarificationPendingQuestions, ["What should BOX build?", "Who is it for?"]);
+    assert.equal(runtime.openSessionCount, 2);
+    assert.equal(runtime.otherOpenSessionsCount, 1);
   });
 });

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "updatedAt": "2026-04-16T19:26:03.941Z",
+  "updatedAt": "2026-04-27T10:43:41.619Z",
   "entries": [
     {
       "roleName": "infrastructure-worker",
@@ -2518,6 +2518,1496 @@
           "strategy": "resume_from_failed_phase",
           "instructions": [
             "Keep scope anchored to: index.html, style.css, app.js, README.md.",
+            "Inspect the last touched files before any new search.",
+            "Resume edits from: none."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "quality-worker",
+      "taskKind": "observation",
+      "taskFingerprint": "c76507ea6a8d10ff2fbcd4f45f8cc1d3ef78b01b",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "partial",
+        "retryAction": "rework",
+        "failureClass": "logic_defect",
+        "recordedAt": "2026-04-20T10:26:57.332Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "push",
+        "failedPhase": "push",
+        "resumeFromPhase": "push",
+        "lastCompletedPhase": "test",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "package.json, tsconfig.json, src/core/registry.ts, src/index.ts, tests/core/registry.test.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "src/index.ts, tests/core/registry.test.ts, tests/index.test.ts, tests/runner.test.js",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "qa/cli-help-version-metadata",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/dogducaner66-byte/modular-cli-platform/pull/2",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "f025feec87a439054b783760023146bff4898caf",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "package.json, tsconfig.json, src/core/registry.ts, src/index.ts, tests/core/registry.test.ts",
+            "source": "instruction"
+          },
+          {
+            "code": "failure_class",
+            "detail": "logic_defect",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "rework",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "src/index.ts, tests/core/registry.test.ts, tests/index.test.ts, tests/runner.test.js",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "qa/cli-help-version-metadata",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/dogducaner66-byte/modular-cli-platform/pull/2",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: package.json, tsconfig.json, src/core/registry.ts, src/index.ts, tests/core/registry.test.ts.",
+            "Reuse the recorded branch/PR context and resolve git or clean-tree blockers before another push.",
+            "Continue from branch: qa/cli-help-version-metadata.",
+            "Update the existing PR instead of opening a duplicate: https://github.com/dogducaner66-byte/modular-cli-platform/pull/2."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "quality-worker",
+      "taskKind": "observation",
+      "taskFingerprint": "c76507ea6a8d10ff2fbcd4f45f8cc1d3ef78b01b",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "skipped",
+        "retryAction": null,
+        "failureClass": null,
+        "recordedAt": "2026-04-20T10:51:45.078Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "edit",
+        "failedPhase": "edit",
+        "resumeFromPhase": "edit",
+        "lastCompletedPhase": "plan",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "package.json, tsconfig.json, src/core/registry.ts, src/index.ts, tests/core/registry.test.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "none",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "main",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/dogducaner66-byte/modular-cli-platform/pull/2",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "f025feec87a439054b783760023146bff4898caf",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "package.json, tsconfig.json, src/core/registry.ts, src/index.ts, tests/core/registry.test.ts",
+            "source": "instruction"
+          },
+          {
+            "code": "files_touched",
+            "detail": "none",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "main",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/dogducaner66-byte/modular-cli-platform/pull/2",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "f025feec87a439054b783760023146bff4898caf",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: package.json, tsconfig.json, src/core/registry.ts, src/index.ts, tests/core/registry.test.ts.",
+            "Inspect the last touched files before any new search.",
+            "Resume edits from: none."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "integration-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "171d48a5fd80b0e74a0edc352132bf008c84f111",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "verification_failed",
+        "retryAction": "rework",
+        "failureClass": "verification",
+        "recordedAt": "2026-04-22T12:20:59.778Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "test",
+        "failedPhase": "test",
+        "resumeFromPhase": "test",
+        "lastCompletedPhase": "edit",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "src/atlas/, package.json, state/open_target_sessions.json, state/archive/, tests/atlas/, tests/atlas/atlas_regression_fence.test.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "src/atlas/state_bridge.ts, tests/atlas/atlas_regression_fence.test.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "verification_gaps",
+                "detail": "VERIFICATION_REPORT marker found but report is malformed/unparseable — use the canonical ===VERIFICATION_REPORT=== block",
+                "source": "verification_gate"
+              }
+            ]
+          },
+          "push": {
+            "status": "pending",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "integration-atlas-runtime",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/ATLAS/pull/364",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "2e6d5619f7434dd057114de9ec0f59b12ffc2e57",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "src/atlas/, package.json, state/open_target_sessions.json, state/archive/, tests/atlas/, tests/atlas/atlas_regression_fence.test.ts",
+            "source": "instruction"
+          },
+          {
+            "code": "failure_class",
+            "detail": "verification",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "rework",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "src/atlas/state_bridge.ts, tests/atlas/atlas_regression_fence.test.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "verification_gaps",
+            "detail": "VERIFICATION_REPORT marker found but report is malformed/unparseable — use the canonical ===VERIFICATION_REPORT=== block",
+            "source": "verification_gate"
+          },
+          {
+            "code": "branch",
+            "detail": "integration-atlas-runtime",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/ATLAS/pull/364",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "2e6d5619f7434dd057114de9ec0f59b12ffc2e57",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: src/atlas/, package.json, state/open_target_sessions.json, state/archive/, tests/atlas/, tests/atlas/atlas_regression_fence.test.ts.",
+            "Start by reproducing the recorded verification/build/test evidence before wider edits."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "governance-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "20103ed202e1d7e4f75e783b3e13c8a665673fe4",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "partial",
+        "retryAction": "rework",
+        "failureClass": "verification",
+        "recordedAt": "2026-04-22T21:19:53.512Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "push",
+        "failedPhase": "push",
+        "resumeFromPhase": "push",
+        "lastCompletedPhase": "test",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts, src/cli.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "governance/onboarding-clarification-shell",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/ATLAS/pull/366",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "a972d8f8e46ba089c08aadeace767eecb182e69d",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts",
+            "source": "instruction"
+          },
+          {
+            "code": "failure_class",
+            "detail": "verification",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "rework",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts, src/cli.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "governance/onboarding-clarification-shell",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/ATLAS/pull/366",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts.",
+            "Reuse the recorded branch/PR context and resolve git or clean-tree blockers before another push.",
+            "Continue from branch: governance/onboarding-clarification-shell.",
+            "Update the existing PR instead of opening a duplicate: https://github.com/Ancora-Labs/ATLAS/pull/366."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "governance-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "20103ed202e1d7e4f75e783b3e13c8a665673fe4",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "skipped",
+        "retryAction": null,
+        "failureClass": null,
+        "recordedAt": "2026-04-22T21:56:17.810Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "edit",
+        "failedPhase": "edit",
+        "resumeFromPhase": "edit",
+        "lastCompletedPhase": "plan",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "main",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/ATLAS/pull/366",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "fa41f844f57cfda5e37cd145094e6d958df55c2e",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts",
+            "source": "instruction"
+          },
+          {
+            "code": "files_touched",
+            "detail": "docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "main",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/ATLAS/pull/366",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "fa41f844f57cfda5e37cd145094e6d958df55c2e",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts.",
+            "Inspect the last touched files before any new search.",
+            "Resume edits from: docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "governance-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "20103ed202e1d7e4f75e783b3e13c8a665673fe4",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "verification_failed",
+        "retryAction": "rework",
+        "failureClass": "verification",
+        "recordedAt": "2026-04-22T22:08:41.710Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "test",
+        "failedPhase": "test",
+        "resumeFromPhase": "test",
+        "lastCompletedPhase": "edit",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "verification_gaps",
+                "detail": "VERIFICATION_REPORT marker found but report is malformed/unparseable — use the canonical ===VERIFICATION_REPORT=== block",
+                "source": "verification_gate"
+              }
+            ]
+          },
+          "push": {
+            "status": "pending",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "governance/onboarding-clarification-shell",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/ATLAS/pull/366",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "fa41f844f57cfda5e37cd145094e6d958df55c2e",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts",
+            "source": "instruction"
+          },
+          {
+            "code": "failure_class",
+            "detail": "verification",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "rework",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "verification_gaps",
+            "detail": "VERIFICATION_REPORT marker found but report is malformed/unparseable — use the canonical ===VERIFICATION_REPORT=== block",
+            "source": "verification_gate"
+          },
+          {
+            "code": "branch",
+            "detail": "governance/onboarding-clarification-shell",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/ATLAS/pull/366",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "fa41f844f57cfda5e37cd145094e6d958df55c2e",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: docs/DESIGN.md, src/core/clarification_runtime.ts, tests/core/clarification_runtime.test.ts, src/core/onboarding_runner.ts, tests/core/onboarding_runner.test.ts.",
+            "Start by reproducing the recorded verification/build/test evidence before wider edits."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "governance-worker",
+      "taskKind": "rework",
+      "taskFingerprint": "f5271672f7d02c71e9c70a7c545e708140661f52",
+      "taskSnippet": "## AUTO-REWORK — VERIFICATION GAPS DETECTED (attempt 1/2)\n\nYour previous completion was REJECTED by the verification gate because the following evidence was missing or failed:\n\n  1. VERIFICATION_REPORT marker found but report is malformed/u",
+      "outcome": {
+        "status": "skipped",
+        "retryAction": null,
+        "failureClass": null,
+        "recordedAt": "2026-04-22T22:11:17.839Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "edit",
+        "failedPhase": "edit",
+        "resumeFromPhase": "edit",
+        "lastCompletedPhase": "plan",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": []
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "docs/DESIGN.md, src/core/clarification_runtime.ts, src/core/onboarding_runner.ts, tests/core/clarification_runtime.test.ts, tests/core/onboarding_runner.test.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "governance/onboarding-clarification-shell",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/ATLAS/pull/366",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "fa41f844f57cfda5e37cd145094e6d958df55c2e",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "files_touched",
+            "detail": "docs/DESIGN.md, src/core/clarification_runtime.ts, src/core/onboarding_runner.ts, tests/core/clarification_runtime.test.ts, tests/core/onboarding_runner.test.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "governance/onboarding-clarification-shell",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/ATLAS/pull/366",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "fa41f844f57cfda5e37cd145094e6d958df55c2e",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Inspect the last touched files before any new search.",
+            "Resume edits from: docs/DESIGN.md, src/core/clarification_runtime.ts, src/core/onboarding_runner.ts, tests/core/clarification_runtime.test.ts, tests/core/onboarding_runner.test.ts."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "infrastructure-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "fcc60d919d8b747edde6ae5215237e78c261c1be",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "partial",
+        "retryAction": "rework",
+        "failureClass": "verification",
+        "recordedAt": "2026-04-23T11:46:46.647Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "test",
+        "failedPhase": "test",
+        "resumeFromPhase": "test",
+        "lastCompletedPhase": "edit",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "package.json, electron-builder.yml, scripts\\**, README.md",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": []
+          },
+          "test": {
+            "status": "failed",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "package.json, electron-builder.yml, scripts\\**, README.md",
+            "source": "instruction"
+          },
+          {
+            "code": "failure_class",
+            "detail": "verification",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "rework",
+            "source": "retry_strategy"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: package.json, electron-builder.yml, scripts\\**, README.md.",
+            "Start by reproducing the recorded verification/build/test evidence before wider edits."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "infrastructure-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "057a40a793d91c375443751bf03ca39544030e49",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "verification_failed",
+        "retryAction": "rework",
+        "failureClass": "verification",
+        "recordedAt": "2026-04-24T17:26:21.102Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "test",
+        "failedPhase": "test",
+        "resumeFromPhase": "test",
+        "lastCompletedPhase": "edit",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "package.json, scripts\\atlas_desktop_package.ts, README.md, tests\\atlas\\atlas_regression_fence.test.ts, dist\\",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": []
+          },
+          "test": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "verification_gaps",
+                "detail": "Post-merge explicit BOX_MERGED_SHA marker missing — run 'git rev-parse HEAD' after merge and include 'BOX_MERGED_SHA=<sha>' in your output (loose hex strings are not accepted); Post-merge raw targeted test output missing — run the task-scop...",
+                "source": "verification_gate"
+              },
+              {
+                "code": "missing_test_output",
+                "detail": "raw npm test output missing",
+                "source": "verification_gate"
+              }
+            ]
+          },
+          "push": {
+            "status": "pending",
+            "evidence": [
+              {
+                "code": "missing_sha",
+                "detail": "BOX_MERGED_SHA evidence missing",
+                "source": "verification_gate"
+              },
+              {
+                "code": "missing_clean_tree",
+                "detail": "clean-tree evidence missing",
+                "source": "verification_gate"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "package.json, scripts\\atlas_desktop_package.ts, README.md, tests\\atlas\\atlas_regression_fence.test.ts, dist\\",
+            "source": "instruction"
+          },
+          {
+            "code": "failure_class",
+            "detail": "verification",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "rework",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "verification_gaps",
+            "detail": "Post-merge explicit BOX_MERGED_SHA marker missing — run 'git rev-parse HEAD' after merge and include 'BOX_MERGED_SHA=<sha>' in your output (loose hex strings are not accepted); Post-merge raw targeted test output missing — run the task-scop...",
+            "source": "verification_gate"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: package.json, scripts\\atlas_desktop_package.ts, README.md, tests\\atlas\\atlas_regression_fence.test.ts, dist\\.",
+            "Start by reproducing the recorded verification/build/test evidence before wider edits."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "evolution-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "fe074a603445535f8f522c7aa905a2fa1a477cdc",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "error",
+        "retryAction": "cooldown_retry",
+        "failureClass": "environment",
+        "recordedAt": "2026-04-25T18:47:38.316Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "push",
+        "failedPhase": "push",
+        "resumeFromPhase": "push",
+        "lastCompletedPhase": "test",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "src/atlas/renderer.ts, src/atlas/routes/home.ts, src/atlas/routes/sessions.ts, src/atlas/desktop_state.ts, tests/atlas/renderer.test.ts, tests/atlas/routes/home.test.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": []
+          },
+          "test": {
+            "status": "completed",
+            "evidence": []
+          },
+          "push": {
+            "status": "failed",
+            "evidence": []
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "src/atlas/renderer.ts, src/atlas/routes/home.ts, src/atlas/routes/sessions.ts, src/atlas/desktop_state.ts, tests/atlas/renderer.test.ts, tests/atlas/routes/home.test.ts",
+            "source": "instruction"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: src/atlas/renderer.ts, src/atlas/routes/home.ts, src/atlas/routes/sessions.ts, src/atlas/desktop_state.ts, tests/atlas/renderer.test.ts, tests/atlas/routes/home.test.ts.",
+            "Reuse the recorded branch/PR context and resolve git or clean-tree blockers before another push."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "integration-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "dc327dba1dfa6b794aec57626d3a9f802f583f48",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "error",
+        "retryAction": "cooldown_retry",
+        "failureClass": "model",
+        "recordedAt": "2026-04-26T17:23:58.064Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "plan",
+        "failedPhase": "plan",
+        "resumeFromPhase": "plan",
+        "lastCompletedPhase": null,
+        "phaseStates": {
+          "plan": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "src\\atlas\\renderer.ts, src\\atlas\\routes\\home.ts, src\\atlas\\state_bridge.ts, electron\\main.ts, tests\\atlas\\server.test.ts, src\\atlas\\snapshot.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "pending",
+            "evidence": []
+          },
+          "test": {
+            "status": "pending",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "src\\atlas\\renderer.ts, src\\atlas\\routes\\home.ts, src\\atlas\\state_bridge.ts, electron\\main.ts, tests\\atlas\\server.test.ts, src\\atlas\\snapshot.ts",
+            "source": "instruction"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: src\\atlas\\renderer.ts, src\\atlas\\routes\\home.ts, src\\atlas\\state_bridge.ts, electron\\main.ts, tests\\atlas\\server.test.ts, src\\atlas\\snapshot.ts.",
+            "Re-validate repo, tools, and scoped files before editing."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "integration-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "dc327dba1dfa6b794aec57626d3a9f802f583f48",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "error",
+        "retryAction": "rework",
+        "failureClass": "logic_defect",
+        "recordedAt": "2026-04-27T09:25:43.737Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "test",
+        "failedPhase": "test",
+        "resumeFromPhase": "test",
+        "lastCompletedPhase": "edit",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "src\\atlas\\renderer.ts, src\\atlas\\routes\\home.ts, src\\atlas\\state_bridge.ts, electron\\main.ts, tests\\atlas\\server.test.ts, src\\atlas\\snapshot.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": []
+          },
+          "test": {
+            "status": "failed",
+            "evidence": []
+          },
+          "push": {
+            "status": "pending",
+            "evidence": []
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "src\\atlas\\renderer.ts, src\\atlas\\routes\\home.ts, src\\atlas\\state_bridge.ts, electron\\main.ts, tests\\atlas\\server.test.ts, src\\atlas\\snapshot.ts",
+            "source": "instruction"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: src\\atlas\\renderer.ts, src\\atlas\\routes\\home.ts, src\\atlas\\state_bridge.ts, electron\\main.ts, tests\\atlas\\server.test.ts, src\\atlas\\snapshot.ts.",
+            "Start by reproducing the recorded verification/build/test evidence before wider edits."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "integration-worker",
+      "taskKind": "implementation",
+      "taskFingerprint": "dc327dba1dfa6b794aec57626d3a9f802f583f48",
+      "taskSnippet": "Execute this bundled work package in a single worker session.\nYou MUST execute tasks in exact numeric order (1 -> N).\nDo not parallelize steps inside this batch.\nDo not skip a step; if a step is blocked, stop and report blocked with the exa",
+      "outcome": {
+        "status": "verification_failed",
+        "retryAction": "rework",
+        "failureClass": "verification",
+        "recordedAt": "2026-04-27T10:35:12.048Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "test",
+        "failedPhase": "test",
+        "resumeFromPhase": "test",
+        "lastCompletedPhase": "edit",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "target_files",
+                "detail": "src\\atlas\\renderer.ts, src\\atlas\\routes\\home.ts, src\\atlas\\state_bridge.ts, electron\\main.ts, tests\\atlas\\server.test.ts, src\\atlas\\snapshot.ts",
+                "source": "instruction"
+              }
+            ]
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "electron/main.ts, electron/preload.ts, electron/resource_paths.ts, src/atlas/clarification.ts, src/atlas/desktop_state.ts, src/atlas/renderer.ts",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "failed",
+            "evidence": [
+              {
+                "code": "verification_gaps",
+                "detail": "VERIFICATION_REPORT marker found but report is malformed/unparseable — use the canonical ===VERIFICATION_REPORT=== block",
+                "source": "verification_gate"
+              }
+            ]
+          },
+          "push": {
+            "status": "pending",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "integration-atlas-live-pane",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/ATLAS/pull/394",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "def29257445655a477ba7d5011ce89f736e60aec",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "target_files",
+            "detail": "src\\atlas\\renderer.ts, src\\atlas\\routes\\home.ts, src\\atlas\\state_bridge.ts, electron\\main.ts, tests\\atlas\\server.test.ts, src\\atlas\\snapshot.ts",
+            "source": "instruction"
+          },
+          {
+            "code": "failure_class",
+            "detail": "verification",
+            "source": "failure_classifier"
+          },
+          {
+            "code": "retry_action",
+            "detail": "rework",
+            "source": "retry_strategy"
+          },
+          {
+            "code": "files_touched",
+            "detail": "electron/main.ts, electron/preload.ts, electron/resource_paths.ts, src/atlas/clarification.ts, src/atlas/desktop_state.ts, src/atlas/renderer.ts",
+            "source": "worker_output"
+          },
+          {
+            "code": "verification_gaps",
+            "detail": "VERIFICATION_REPORT marker found but report is malformed/unparseable — use the canonical ===VERIFICATION_REPORT=== block",
+            "source": "verification_gate"
+          },
+          {
+            "code": "branch",
+            "detail": "integration-atlas-live-pane",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/ATLAS/pull/394",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "def29257445655a477ba7d5011ce89f736e60aec",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
+            "Keep scope anchored to: src\\atlas\\renderer.ts, src\\atlas\\routes\\home.ts, src\\atlas\\state_bridge.ts, electron\\main.ts, tests\\atlas\\server.test.ts, src\\atlas\\snapshot.ts.",
+            "Start by reproducing the recorded verification/build/test evidence before wider edits."
+          ]
+        }
+      }
+    },
+    {
+      "roleName": "integration-worker",
+      "taskKind": "rework",
+      "taskFingerprint": "d6476868e543b23cbdcc0775be663553daf7914b",
+      "taskSnippet": "## AUTO-REWORK — VERIFICATION GAPS DETECTED (attempt 1/2)\n\nYour previous completion was REJECTED by the verification gate because the following evidence was missing or failed:\n\n  1. VERIFICATION_REPORT marker found but report is malformed/u",
+      "outcome": {
+        "status": "skipped",
+        "retryAction": null,
+        "failureClass": null,
+        "recordedAt": "2026-04-27T10:43:41.619Z"
+      },
+      "retryState": {
+        "schemaVersion": 1,
+        "phaseOrder": [
+          "plan",
+          "edit",
+          "test",
+          "push"
+        ],
+        "currentPhase": "edit",
+        "failedPhase": "edit",
+        "resumeFromPhase": "edit",
+        "lastCompletedPhase": "plan",
+        "phaseStates": {
+          "plan": {
+            "status": "completed",
+            "evidence": []
+          },
+          "edit": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "files_touched",
+                "detail": "none",
+                "source": "worker_output"
+              }
+            ]
+          },
+          "test": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "build_status",
+                "detail": "BUILD=pass",
+                "source": "verification_report"
+              },
+              {
+                "code": "tests_status",
+                "detail": "TESTS=pass",
+                "source": "verification_report"
+              }
+            ]
+          },
+          "push": {
+            "status": "completed",
+            "evidence": [
+              {
+                "code": "branch",
+                "detail": "main",
+                "source": "worker_output"
+              },
+              {
+                "code": "pr_url",
+                "detail": "https://github.com/Ancora-Labs/ATLAS/pull/394",
+                "source": "worker_output"
+              },
+              {
+                "code": "merged_sha",
+                "detail": "def29257445655a477ba7d5011ce89f736e60aec",
+                "source": "worker_output"
+              }
+            ]
+          }
+        },
+        "evidence": [
+          {
+            "code": "files_touched",
+            "detail": "none",
+            "source": "worker_output"
+          },
+          {
+            "code": "build_status",
+            "detail": "BUILD=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "tests_status",
+            "detail": "TESTS=pass",
+            "source": "verification_report"
+          },
+          {
+            "code": "branch",
+            "detail": "main",
+            "source": "worker_output"
+          },
+          {
+            "code": "pr_url",
+            "detail": "https://github.com/Ancora-Labs/ATLAS/pull/394",
+            "source": "worker_output"
+          },
+          {
+            "code": "merged_sha",
+            "detail": "def29257445655a477ba7d5011ce89f736e60aec",
+            "source": "worker_output"
+          }
+        ],
+        "mutation": {
+          "strategy": "resume_from_failed_phase",
+          "instructions": [
             "Inspect the last touched files before any new search.",
             "Resume edits from: none."
           ]

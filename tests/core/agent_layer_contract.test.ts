@@ -12,7 +12,7 @@ describe("agent_layer_contract", () => {
         enabled: true,
       },
       env: {
-        targetRepo: "Ancora-Labs/Box",
+        targetRepo: "Ancora-Labs/ATLAS",
       },
     });
 
@@ -29,7 +29,7 @@ describe("agent_layer_contract", () => {
         enabled: true,
       },
       env: {
-        targetRepo: "Ancora-Labs/Box",
+        targetRepo: "Ancora-Labs/ATLAS",
       },
     });
 
@@ -38,7 +38,7 @@ describe("agent_layer_contract", () => {
         enabled: true,
       },
       env: {
-        targetRepo: "Ancora-Labs/Box",
+        targetRepo: "Ancora-Labs/ATLAS",
       },
     });
 
@@ -57,7 +57,7 @@ describe("agent_layer_contract", () => {
         enabled: true,
       },
       env: {
-        targetRepo: "Ancora-Labs/Box",
+        targetRepo: "Ancora-Labs/ATLAS",
       },
     });
 

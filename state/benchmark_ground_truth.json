@@ -1,103 +1,16 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-04-19T19:15:36.137Z",
+  "updatedAt": "2026-04-26T16:23:01.505Z",
   "entries": [
     {
-      "cycleId": "2026-04-19T18:29:20.996Z",
-      "evaluatedAt": "2026-04-19T19:15:36.137Z",
+      "cycleId": "2026-04-26T15:55:51.012Z",
+      "evaluatedAt": "2026-04-26T16:23:01.495Z",
       "schemaVersion": 1,
       "recommendations": [
         {
-          "id": "rec-motion-safe-interaction-and-image-delive-0",
-          "topic": "Motion-safe interaction and image delivery",
-          "summary": "1. Which implementation surface changes? `src/main.tsx`, `src/App.tsx`, `src/components/Navbar.tsx`, `src/components/MobileMenu.tsx`, and `src/components/Hero.tsx`.\n2. What exactly changes? Add a top-level `MotionConfig reducedMotion=\"user\"`, then branch menu and hero animation variants with `useRed",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-responsive-structure-and-semantic-naviga-1",
-          "topic": "Responsive structure and semantic navigation",
-          "summary": "1. Which implementation surface changes? `index.html`, `src/styles/global.css`, `src/styles/layout.css`, `src/components/Navbar.tsx`, `src/components/Categories.tsx`, `src/components/FeaturedDishes.tsx`, and `src/components/Testimonials.tsx`.\n2. What exactly changes? Add the viewport meta tag, imple",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-spa-stack-and-deterministic-test-harness-2",
-          "topic": "SPA stack and deterministic test harness",
-          "summary": "1. Which implementation surface changes? `package.json`, `index.html`, `src/main.tsx`, `src/App.tsx`, and `src/routes\\*`.\n2. What exactly changes? Bootstrap the target repo as a client-rendered React SPA with Vite-backed routing, keep the initial product to a single landing-page route, and avoid ser",
-          "implementationStatus": "implemented_correctly",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-19T19:15:36.133Z: linked synthesis_sources match",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-premium-perception-as-a-product-requirem-3",
-          "topic": "Premium perception as a product requirement",
-          "summary": "1. Which implementation surface changes? `src/styles/tokens.css`, `src/styles/global.css`, `src/components/Hero.tsx`, `src/components/Categories.tsx`, `src/components/FeaturedDishes.tsx`, `src/components/Testimonials.tsx`, and `src/components/CTA.tsx`.\n2. What exactly changes? Define a deliberate vi",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-scout-package-narration-4",
-          "topic": "Scout package narration",
-          "summary": "Relevance: LOW - no clear BOX integration path. Reason: This source is a packaging artifact from the scout run, not a research source Prometheus should plan against.",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-19T17:47:40.617Z",
-      "evaluatedAt": "2026-04-19T18:15:17.965Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-accessible-navigation-and-faq-disclosure-0",
-          "topic": "Accessible navigation and FAQ disclosure patterns",
-          "summary": "1. **Which implementation surface changes?** `src/components/Navbar.tsx`, `src/components/MobileNav.tsx`, `src/hooks/useDisclosureGroup.ts`, `tests/e2e/navigation.spec.ts`.\n2. **What exactly changes?** Build the navbar and mobile menu as disclosure groups inside a named `<nav>`, keep one group open ",
+          "id": "rec-desktop-shell-and-native-window-contract-0",
+          "topic": "Desktop shell and native window contract",
+          "summary": "1. Which target repo file changes? `src/atlas/renderer.ts`, `electron/preload.ts`, and `electron/main.ts`.\n2. What is the specific behavior change? Keep the existing single-window `focusRole`/workspace-draft contract, but replace the current 15-second full-surface refresh loop with a bridge shape th",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -111,9 +24,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-responsive-media-adaptive-styles-and-vie-1",
-          "topic": "Responsive media, adaptive styles, and viewport verification",
-          "summary": "1. **Which implementation surface changes?** `index.html`, `src/components/Hero.tsx`, `src/components/FeaturedDishes.tsx`, `src/components/ChefStory.tsx`, `public/images/*`, `tests/e2e/responsive-images.spec.ts`.\n2. **What exactly changes?** Implement hero and chef media with `<picture>` for mobile-",
+          "id": "rec-session-rail-semantics-and-responsive-na-1",
+          "topic": "Session rail semantics and responsive navigation",
+          "summary": "1. Which target repo file changes? `src/atlas/renderer.ts`.\n2. What is the specific behavior change? Keep session rows as anchors with `href=\"/?focusRole=<role>\"`, wrap the rail in a proper navigation landmark, use `aria-current=\"page\"` for the selected row, and replace full-rail host replacement wi",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -127,9 +40,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-carousel-restraint-and-motion-stable-her-2",
-          "topic": "Carousel restraint and motion-stable hero/testimonial delivery",
-          "summary": "1. **Which implementation surface changes?** `src/components/Hero.tsx`, `src/components/Testimonials.tsx`, `tests/e2e/home.spec.ts`, `tests/e2e/motion.spec.ts`.\n2. **What exactly changes?** Do not implement the initial hero or testimonials as autoplaying carousels; render a static hero composition a",
+          "id": "rec-live-status-accessibility-and-state-indi-2",
+          "topic": "Live status accessibility and state indicators",
+          "summary": "1. Which target repo file changes? `src/atlas/renderer.ts`.\n2. What is the specific behavior change? Add a dedicated, labeled `role=\"status\"` region near the top of the selected-session main pane that updates atomically with worker/stage/freshness summary text, while leaving the log excerpt outside ",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -143,9 +56,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-trust-building-content-architecture-and--3",
-          "topic": "Trust-building content architecture and premium visual systems",
-          "summary": "1. **Which implementation surface changes?** `src/styles/tokens.css`, `src/styles/global.css`, `src/App.tsx`, `src/components/Hero.tsx`, `src/components/Categories.tsx`, `src/components/FeaturedDishes.tsx`, `src/components/ChefStory.tsx`, `src/components/Testimonials.tsx`, `src/components/FAQ.tsx`, ",
+          "id": "rec-visual-spacing-and-readability-3",
+          "topic": "Visual spacing and readability",
+          "summary": "1. Which target repo file changes? `src/atlas/renderer.ts`.\n2. What is the specific behavior change? Normalize the workspace CSS to a small 4px-based spacing system and remove ad hoc values like `14px`, `18px`, `22px`, and `28px` from core shell/layout surfaces.\n3. What is the verifiable outcome? Th",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -159,9 +72,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-scout-package-narration-4",
-          "topic": "Scout package narration",
-          "summary": "Relevance: LOW - no clear target-repo integration path. Reason: This entry is scout workflow narration rather than implementation evidence.\n## Cross-Topic Connections\nAccessible navigation and FAQ disclosure patterns ↔ Responsive media, adaptive styles, and viewport verification: The same nav and FA",
+          "id": "rec-scout-framing-note-4",
+          "topic": "Scout framing note",
+          "summary": "Relevance: LOW - no clear BOX integration path. Reason: this is the Scout's own framing note rather than an external source with implementation evidence.",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -177,16 +90,16 @@
       ]
     },
     {
-      "cycleId": "2026-04-19T12:00:21.156Z",
-      "evaluatedAt": "2026-04-19T17:41:41.559Z",
+      "cycleId": "2026-04-26T10:01:37.249Z",
+      "evaluatedAt": "2026-04-26T10:16:30.561Z",
       "schemaVersion": 1,
       "recommendations": [
         {
-          "id": "rec-accessible-interaction-patterns-and-sema-0",
-          "topic": "Accessible interaction patterns and semantic regression testing",
-          "summary": "1. **Which files change**: `src/components/Navbar.tsx`, `src/components/FAQ.tsx`, `tests/browser/navigation.browser.test.tsx`, `tests/browser/faq.browser.test.tsx`.\n2. **What changes**: Implement the mobile navigation toggle and each FAQ item as disclosure buttons with `aria-expanded` and `aria-cont",
+          "id": "rec-desktop-shell-boundaries-and-live-transp-0",
+          "topic": "Desktop shell boundaries and live transport",
+          "summary": "1. Which target repo file changes? `electron/main.ts`, `electron/preload.ts`, `src/atlas/routes/home.ts`, and `src/atlas/renderer.ts`.\n2. What is the specific behavior change? Keep the renderer on a narrow preload bridge, then add an explicit workspace-events subscription API on `window.atlasDesktop",
           "implementationStatus": "pending",
-          "benchmarkScore": 1,
+          "benchmarkScore": null,
           "capacityGain": null,
           "evidence": "",
           "source_url": null,
@@ -198,11 +111,11 @@
           "ciClosed": null
         },
         {
-          "id": "rec-frontend-foundation-and-real-browser-tes-1",
-          "topic": "Frontend foundation and real-browser test harness",
-          "summary": "1. **Which files change**: `package.json`, `vite.config.ts`, `index.html`, `src/main.tsx`, `src/App.tsx`, `src/index.css`, `tsconfig.json`.\n2. **What changes**: Scaffold the empty repo directly with Vite's `react-ts` template in the repo root, keep the default React plugin config, and structure the ",
+          "id": "rec-session-rail-identity-current-location-s-1",
+          "topic": "Session rail identity, current-location semantics, and responsive navigation",
+          "summary": "1. Which target repo file changes? `src/atlas/renderer.ts` and `src/atlas/state_bridge.ts`.\n2. What is the specific behavior change? Replace full rail `innerHTML` replacement with keyed row reconciliation by `session.role`, preserving selection, focus, pulse, and scroll continuity while still allowi",
           "implementationStatus": "pending",
-          "benchmarkScore": 1,
+          "benchmarkScore": null,
           "capacityGain": null,
           "evidence": "",
           "source_url": null,
@@ -214,11 +127,11 @@
           "ciClosed": null
         },
         {
-          "id": "rec-responsive-layout-system-and-media-deliv-2",
-          "topic": "Responsive layout system and media delivery",
-          "summary": "1. **Which files change**: `src/index.css`, `src/App.tsx`, `src/components/Hero.tsx`, `src/components/Navbar.tsx`, `src/components/Categories.tsx`, `src/components/FeaturedDishes.tsx`, `src/components/Testimonials.tsx`, `src/components/FAQ.tsx`.\n2. **What changes**: Build the page mobile-first with ",
+          "id": "rec-status-indicators-progress-and-busy-stat-2",
+          "topic": "Status indicators, progress, and busy-state accessibility",
+          "summary": "1. Which target repo file changes? `src/atlas/state_bridge.ts` and `src/atlas/renderer.ts`.\n2. What is the specific behavior change? Normalize live-status labels to short, consistent badge text that matches the product contract (`Active`, `Warning`, `Stopped`, `Failed`, `Ready`, `Completed` as appli",
           "implementationStatus": "pending",
-          "benchmarkScore": 1,
+          "benchmarkScore": null,
           "capacityGain": null,
           "evidence": "",
           "source_url": null,
@@ -230,11 +143,34 @@
           "ciClosed": null
         },
         {
-          "id": "rec-motion-safety-and-reduced-motion-behavio-3",
-          "topic": "Motion safety and reduced-motion behavior",
-          "summary": "1. **Which files change**: `src/index.css`, `src/components/Hero.tsx`, `src/components/Navbar.tsx`, `src/components/FeaturedDishes.tsx`, `tests/browser/motion.browser.test.tsx`.\n2. **What changes**: Add a site-wide reduced-motion styling branch that removes or tones down large transform-based animat",
+          "id": "rec-scout-framing-note-3",
+          "topic": "Scout framing note",
+          "summary": "Relevance: LOW - no clear BOX integration path. Reason: this is a framing note rather than a source with implementable evidence.\n## Cross-Topic Connections\nDesktop shell boundaries and live transport ↔ Status indicators, progress, and busy-state accessibility: once ATLAS moves from 15-second polling",
           "implementationStatus": "pending",
-          "benchmarkScore": 1,
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        }
+      ]
+    },
+    {
+      "cycleId": "2026-04-25T16:42:56.597Z",
+      "evaluatedAt": "2026-04-25T17:11:47.829Z",
+      "schemaVersion": 1,
+      "recommendations": [
+        {
+          "id": "rec-live-session-delivery-and-accessible-upd-0",
+          "topic": "Live session delivery and accessible updates",
+          "summary": "1. Which target repo file changes? `electron/main.ts`, `electron/preload.ts`, and `electron/renderer/app.js`.\n2. What is the specific behavior change? Keep snapshot/bootstrap requests on `ipcMain.handle` + `ipcRenderer.invoke`, then add explicit preload subscription wrappers with unsubscribe dispose",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
           "capacityGain": null,
           "evidence": "",
           "source_url": null,
@@ -246,11 +182,146 @@
           "ciClosed": null
         },
         {
-          "id": "rec-trust-signals-and-conversion-credibility-4",
-          "topic": "Trust signals and conversion credibility",
-          "summary": "1. **Which files change**: `src/components/Hero.tsx`, `src/components/ChefStory.tsx`, `src/components/Testimonials.tsx`, `src/components/FAQ.tsx`, `src/components/CTA.tsx`, `src/components/Footer.tsx`, `src/content/siteContent.ts`.\n2. **What changes**: Fill the landing page with credibility-bearing ",
+          "id": "rec-visual-language-and-readability-1",
+          "topic": "Visual language and readability",
+          "summary": "1. Which target repo file changes? `electron/renderer/index.html` and `electron/renderer/app.js`.\n2. What is the specific behavior change? Define a single renderer type system built on `Segoe UI Variable` with Windows-consistent tokens (`12/16`, `14/20`, `20/28`, `28/36`), sentence-case labels, semi",
           "implementationStatus": "pending",
-          "benchmarkScore": 1,
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-native-window-shell-and-os-adaptation-2",
+          "topic": "Native window shell and OS adaptation",
+          "summary": "1. Which target repo file changes? `electron/main.ts`, `electron/window_policy.ts`, and `electron/renderer/index.html`.\n2. What is the specific behavior change? Create the main workspace window with native title-bar overlay support (`titleBarStyle: \"hidden\"` plus `titleBarOverlay`), consume overlay-",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-navigation-shell-and-adaptive-pane-layou-3",
+          "topic": "Navigation shell and adaptive pane layout",
+          "summary": "1. Which target repo file changes? `electron/renderer/layout.js`, `electron/renderer/app.js`, and `electron/renderer/index.html`.\n2. What is the specific behavior change? Keep the left rail as a persistent navigation spine with `New Session` at the top, a single active-selection treatment, brief sen",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-scout-framing-note-4",
+          "topic": "Scout framing note",
+          "summary": "Relevance: LOW - no clear BOX integration path. Reason: this is the Scout's framing note, not an external source with implementation detail.",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        }
+      ]
+    },
+    {
+      "cycleId": "2026-04-25T13:15:40.153Z",
+      "evaluatedAt": "2026-04-25T13:50:31.241Z",
+      "schemaVersion": 1,
+      "recommendations": [
+        {
+          "id": "rec-i-m-loading-the-synthesizer-prompt-and-t-0",
+          "topic": "I'm loading the synthesizer prompt and the state context first so I can produce the full catalog in the expected format.",
+          "summary": "I'm loading the synthesizer prompt and the state context first so I can produce the full catalog in the expected format.",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-renderer-bridge-ipc-and-live-snapshot-de-1",
+          "topic": "Renderer bridge, IPC, and live snapshot delivery",
+          "summary": "1. Which target repo file changes? `electron/preload.ts`, `electron/main.ts`, and `src/atlas/routes/home.ts`.\n2. What is the specific behavior change? Keep snapshot/bootstrap invokes for first load, then add named subscribe/unsubscribe bridge methods for session-list, focused-session, and log deltas",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-navigation-shell-user-flow-and-adaptive--2",
+          "topic": "Navigation shell, user flow, and adaptive pane layout",
+          "summary": "1. Which target repo file changes? `src/atlas/renderer.ts`, `electron/renderer/layout.js`, and `electron/window_policy.ts`.\n2. What is the specific behavior change? Replace the current two-mode shell with explicit `expanded`, `compact`, and `minimal-overlay` rail states, keep the rail strictly navig",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-native-windows-shell-material-discipline-3",
+          "topic": "Native Windows shell, material discipline, and visual design",
+          "summary": "1. Which target repo file changes? `electron/window_policy.ts` and `electron/main.ts`.\n2. What is the specific behavior change? Keep the no-flash launch path, add Windows-native title-bar overlay configuration instead of renderer-faked chrome, and persist desktop state on Windows session-end as well",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-accessible-session-rail-and-live-activit-4",
+          "topic": "Accessible session rail and live activity surfaces",
+          "summary": "1. Which target repo file changes? `src/atlas/renderer.ts`.\n2. What is the specific behavior change? Replace the whole-panel live treatment with a compact `role=\"status\"` summary plus a named append-only `role=\"log\"` surface, while leaving the full log excerpt visible but not the main live region.\n3",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
           "capacityGain": null,
           "evidence": "",
           "source_url": null,
@@ -264,149 +335,7 @@
         {
           "id": "rec-scout-framing-note-5",
           "topic": "Scout framing note",
-          "summary": "Relevance: LOW - no clear target-repo integration path. Reason: This entry is a scouting note, not implementation evidence.",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-16T19:03:15.065Z",
-      "evaluatedAt": "2026-04-16T19:26:04.196Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-react-state-architecture-for-todo-crud-0",
-          "topic": "React State Architecture for Todo CRUD",
-          "summary": "1. **Which file changes**: `src/features/todos/TasksContext.tsx`, `src/App.tsx`, `src/features/todos/AddTask.tsx`, `src/features/todos/TaskList.tsx`.\n2. **Specific behavior change**: Implement reducer-driven todo state with `TasksProvider`, action union (`added|changed|deleted`), and context hooks; ",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-build-and-github-pages-deployment-pipeli-1",
-          "topic": "Build and GitHub Pages Deployment Pipeline",
-          "summary": "1. **Which file changes**: `vite.config.ts`, `src/vite-env.d.ts`.\n2. **Specific behavior change**: Set `base` to `'/TestRepoForSingleTargetMode/'`, keep `appType: 'spa'`, and expose only explicit compile-time constants through `define` with typed declarations.\n3. **Verifiable outcome**: Built app lo",
-          "implementationStatus": "implemented",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-16T19:26:04.194Z: linked synthesis_sources match",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-test-reliability-and-coverage-gates-2",
-          "topic": "Test Reliability and Coverage Gates",
-          "summary": "1. **Which file changes**: `playwright.config.ts`, `tests/e2e/todo.spec.ts`, `.github/workflows/ci.yml`.\n2. **Specific behavior change**: Add role-based E2E specs for add/complete/delete flows, enable trace on first retry, and run Chromium-only Playwright install on CI Linux.\n3. **Verifiable outcome",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-storage-and-offline-resilience-3",
-          "topic": "Storage and Offline Resilience",
-          "summary": "1. **Which file changes**: `src/lib/storage.ts`, `src/lib/storage.test.ts`.\n2. **Specific behavior change**: Implement guarded localStorage persistence with explicit `try/catch` for `QuotaExceededError`, optional storage estimate telemetry hook, and deterministic fallback behavior when writes fail.\n",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-16T18:34:30.206Z",
-      "evaluatedAt": "2026-04-16T18:45:10.465Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-react-state-transition-reliability-0",
-          "topic": "React State Transition Reliability",
-          "summary": "1. **Which BOX file changes**: `src/core/prometheus.ts` and `.github/agents/prometheus.agent.md`  \n2. **Specific behavior change**: Add deterministic React-task generation rules that require functional updater form for list mutations and forbid in-place mutation patterns in generated implementation ",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-browser-persistence-contract-1",
-          "topic": "Browser Persistence Contract",
-          "summary": "1. **Which BOX file changes**: `src/core/prometheus.ts`  \n2. **Specific behavior change**: Add a persistence-task template contract requiring explicit `JSON.stringify`/`JSON.parse`, versioned key naming, and a quota-error handling branch in implementation steps.  \n3. **Verifiable outcome**: Generate",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-frontend-scaffolding-and-deployment-defa-2",
-          "topic": "Frontend Scaffolding and Deployment Defaults",
-          "summary": "1. **Which BOX file changes**: `.github/agents/prometheus.agent.md` and `src/core/prometheus.ts`  \n2. **Specific behavior change**: Add Vite-specific planning rules that default to minimal config, allow async config only when required, and require explicit command/mode branching when env-driven beha",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-todo-behavioral-acceptance-contract-3",
-          "topic": "Todo Behavioral Acceptance Contract",
-          "summary": "1. **Which BOX file changes**: `src/core/prometheus.ts`, `src/core/athena.ts`, and `.github/agents/prometheus.agent.md`  \n2. **Specific behavior change**: Encode TodoMVC contract as mandatory plan rubric for todo-app objectives, including route filtering, edit-cancel semantics, and persistence exclu",
+          "summary": "Relevance: LOW - no clear target-repo integration path. Reason: this is the Scout's framing note, not an external source with implementation detail.\n## Cross-Topic Connections\nRenderer bridge, IPC, and live snapshot delivery ↔ Accessible session rail and live activity surfaces: push-based worker/ses",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -422,69 +351,14 @@
       ]
     },
     {
-      "cycleId": "2026-04-16T16:57:48.898Z",
-      "evaluatedAt": "2026-04-16T18:25:59.566Z",
+      "cycleId": "2026-04-25T10:18:27.838Z",
+      "evaluatedAt": "2026-04-25T10:42:28.211Z",
       "schemaVersion": 1,
       "recommendations": [
         {
-          "id": "rec-todo-ui-interaction-contract-add-complet-0",
-          "topic": "Todo UI Interaction Contract (Add/Complete/Delete/Edit)",
-          "summary": "1. **File changes**: `src/features/todos/components/Input.jsx`, `Item.jsx`, `Main.jsx`, `Footer.jsx`, and `src/features/todos/App.jsx`.  \n2. **Behavior change**: Implement TodoMVC-grade UI flow (sanitized Enter submit, toggle, delete, edit-on-dblclick, clear-completed, route filters) and fix callbac",
-          "implementationStatus": "implemented_correctly",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-16T18:25:59.563Z: linked synthesis_sources match",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-persistence-bootstrap-deployment-pipelin-1",
-          "topic": "Persistence + Bootstrap + Deployment Pipeline",
-          "summary": "1. **File changes**: `src/lib/storage/todosStorage.js` and `src/features/todos/state/useTodos.js`.  \n2. **Behavior change**: Centralize persistence key in one constant and call `removeItem` during full reset flows; keep in-memory reducer reset in same transaction path.  \n3. **Verifiable outcome**: A",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-acceptance-contract-and-test-harness-rel-2",
-          "topic": "Acceptance Contract and Test Harness Reliability",
-          "summary": "1. **File changes**: `tests/e2e/todo.contract.spec.ts` and `playwright.config.ts`.  \n2. **Behavior change**: Port TodoMVC behavioral contract (including Escape-cancel edit, counter text, persistence, routing/back navigation) into deterministic Playwright tests with explicit setup/teardown.  \n3. **Ve",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-16T15:55:28.971Z",
-      "evaluatedAt": "2026-04-16T16:03:26.363Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-browser-persistence-and-startup-hydratio-0",
-          "topic": "Browser Persistence and Startup Hydration for Todo Data",
-          "summary": "1. **File changes**: `src/storage/tasksStorage.ts` (new), `src/App.tsx` (wire persistence side effect).\n2. **Behavior change**: Add a typed storage adapter with `saveTasks(tasks)` that serializes task arrays, writes only to `todo:v1:tasks`, and throws/returns explicit quota failure information; call",
+          "id": "rec-atlas-desktop-shell-evidence-and-current-0",
+          "topic": "ATLAS desktop shell evidence and current integration gap",
+          "summary": "Relevance: LOW - no clear target-repo integration path. Reason: this is the scout's own framing note, not an external source with implementation detail.",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -498,9 +372,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-react-task-state-architecture-reducer-im-1",
-          "topic": "React Task-State Architecture (Reducer + Immutable Updates)",
-          "summary": "1. **File changes**: `src/App.tsx` (create reducer-driven state owner), `src/components/AddTask.tsx`, `src/components/TaskList.tsx`.\n2. **Behavior change**: Replace scattered `useState` task mutations with one typed `useReducer` and dispatch-only child callbacks for add/change/delete.\n3. **Verifiabl",
+          "id": "rec-windows-responsive-layout-and-visual-sys-1",
+          "topic": "Windows responsive layout and visual system",
+          "summary": "1. **Implementation surface**: `electron/renderer/layout.js`, `electron/window_policy.ts`, `src/atlas/renderer.ts`.\n2. **Specific behavior change**: replace the `<1100 => stacked` heuristic with explicit Windows width classes (`compact`, `medium`, `large`), lower the desktop `minWidth` so medium/com",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -514,9 +388,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-testing-strategy-for-reliable-todo-mvp-d-2",
-          "topic": "Testing Strategy for Reliable Todo MVP Delivery",
-          "summary": "1. **File changes**: `vitest.config.ts`, `src/storage/tasksStorage.test.ts`, `src/reducers/tasksReducer.test.ts`.\n2. **Behavior change**: Add deterministic unit tests with isolated mocks for storage boundaries; enforce automatic env/global unstub and per-test mock reset.\n3. **Verifiable outcome**: T",
+          "id": "rec-native-window-chrome-and-title-bar-behav-2",
+          "topic": "Native window chrome and title-bar behavior",
+          "summary": "1. **Implementation surface**: `electron/window_policy.ts` plus the top-shell CSS/markup in the workspace renderer (`src/atlas/renderer.ts` or the desktop shell HTML that wraps it).\n2. **Specific behavior change**: switch the desktop window to `titleBarStyle: \"hidden\"` with `titleBarOverlay`, keep `",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -530,9 +404,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-vite-build-ts-guardrails-and-deployment--3",
-          "topic": "Vite Build, TS Guardrails, and Deployment Readiness",
-          "summary": "1. **File changes**: `vite.config.ts`, `src/main.tsx`, `package.json`.\n2. **Behavior change**: Set deploy-safe `base`, add runtime `vite:preloadError` refresh handler, and define build script for static output readiness.\n3. **Verifiable outcome**: Production build emits valid assets for selected hos",
+          "id": "rec-accessible-live-activity-and-scalable-li-3",
+          "topic": "Accessible live activity and scalable list interaction",
+          "summary": "1. **Implementation surface**: `src/atlas/renderer.ts` and the snapshot-refresh logic in `electron/renderer/app.js`.\n2. **Specific behavior change**: add a dedicated session-activity feed with `role=\"feed\"` and per-update `role=\"article\"` semantics, label each article with worker/stage/timestamp met",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -548,14 +422,14 @@
       ]
     },
     {
-      "cycleId": "2026-04-16T13:35:57.909Z",
-      "evaluatedAt": "2026-04-16T13:56:21.336Z",
+      "cycleId": "2026-04-25T07:40:56.963Z",
+      "evaluatedAt": "2026-04-25T08:04:08.535Z",
       "schemaVersion": 1,
       "recommendations": [
         {
-          "id": "rec-todo-mvp-behavioral-contract-0",
-          "topic": "Todo MVP Behavioral Contract",
-          "summary": "1. **File to change**: `src/core/prometheus.ts`  \n2. **Specific behavior change**: Add deterministic task-plan generation that emits a two-phase to-do roadmap: Phase 1 enforces create/complete/delete/persist acceptance tests; Phase 2 enforces edit/routing/counter/bulk-toggle/clear-completed parity f",
+          "id": "rec-electron-desktop-state-bridge-0",
+          "topic": "Electron desktop state bridge",
+          "summary": "1. **Which implementation surface changes?** `electron\\main.ts`, `electron\\preload.ts`, and `electron\\renderer\\app.js`.\n2. **What is the specific behavior change?** Implement a narrow ATLAS IPC contract where renderer actions (`start session`, `list sessions`, `open session detail`) call `ipcRendere",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -569,9 +443,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-react-state-transition-design-for-todo-f-1",
-          "topic": "React State Transition Design for Todo Flows",
-          "summary": "1. **File to change**: `src/core/worker_runner.ts`  \n2. **Specific behavior change**: Inject a mandatory implementation clause into worker task prompts: use a pure `useReducer` state machine with lazy initializer for persisted state and explicit unknown-action throws.  \n3. **Verifiable outcome**: Wo",
+          "id": "rec-accessible-live-updates-and-progressive--1",
+          "topic": "Accessible live updates and progressive disclosure",
+          "summary": "1. **Which implementation surface changes?** `electron\\renderer\\index.html` and `electron\\renderer\\app.js`.\n2. **What is the specific behavior change?** Split session detail into a labelled append-only worker log region (`role=\"log\"`) plus separate summary/status surfaces; append new lines to the en",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -585,9 +459,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-browser-persistence-reliability-localsto-2",
-          "topic": "Browser Persistence Reliability (localStorage + cross-tab sync)",
-          "summary": "1. **File to change**: `src/core/prometheus.ts`  \n2. **Specific behavior change**: Generate implementation tasks that require a storage adapter with availability guard, safe JSON parse, and optional cross-tab `storage` event synchronization for the todo key.  \n3. **Verifiable outcome**: Task accepta",
+          "id": "rec-native-windows-shell-and-secondary-detai-2",
+          "topic": "Native Windows shell and secondary detail surfaces",
+          "summary": "1. **Which implementation surface changes?** `electron\\main.ts`, `electron\\window_policy.ts`, and `electron\\renderer\\index.html`.\n2. **What is the specific behavior change?** Configure a Windows-native custom title bar with `titleBarStyle: 'hidden'` plus `titleBarOverlay`, keep caption controls nati",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -601,9 +475,25 @@
           "ciClosed": null
         },
         {
-          "id": "rec-fast-bootstrap-test-and-deployment-pipel-3",
-          "topic": "Fast Bootstrap, Test, and Deployment Pipeline for MVP",
-          "summary": "1. **File to change**: `src/core/prometheus.ts`  \n2. **Specific behavior change**: For empty repositories with web-app objectives, force initial plan to scaffold via non-interactive Vite React-TS in-place command and preserve default dev/build/preview scripts.  \n3. **Verifiable outcome**: First gene",
+          "id": "rec-chat-first-workspace-composition-3",
+          "topic": "Chat-first workspace composition",
+          "summary": "1. **Which implementation surface changes?** `electron\\renderer\\app.js` and `electron\\renderer\\layout.js`.\n2. **What is the specific behavior change?** When the user opens a different session, reset prior session logs/events/status first, keep the live subscription layer mounted independently of det",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-scout-payload-hygiene-4",
+          "topic": "Scout payload hygiene",
+          "summary": "Relevance: LOW - no clear target integration path. Reason: this record is scout narration rather than a source-backed research item.\n## Cross-Topic Connections\nElectron desktop state bridge ↔ Chat-first workspace composition: the minimal rail/composer/detail shell only works if live session state, w",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -619,14 +509,14 @@
       ]
     },
     {
-      "cycleId": "2026-04-16T13:27:29.593Z",
-      "evaluatedAt": "2026-04-16T13:40:50.831Z",
+      "cycleId": "2026-04-24T15:16:42.771Z",
+      "evaluatedAt": "2026-04-24T15:36:15.678Z",
       "schemaVersion": 1,
       "recommendations": [
         {
-          "id": "rec-mvp-bootstrap-and-deployment-path-0",
-          "topic": "MVP Bootstrap and Deployment Path",
-          "summary": "1. **Which file changes?** `vite.config.ts`, `package.json`, `.github/workflows/deploy.yml`  \n2. **What is the specific behavior change?** Set `base` dynamically for Pages (`'/'` for user/custom-domain deploys, `'/<repo>/'` for project Pages), keep `build`/`preview` scripts explicit, and ensure depl",
+          "id": "rec-secure-desktop-bridge-and-native-shell-p-0",
+          "topic": "Secure desktop bridge and native shell plumbing",
+          "summary": "1. **Which implementation surface changes?** `electron/preload.ts`, `electron/main.ts`, and `electron/renderer/app.js`.\n2. **What is the specific behavior change?** Replace the current two-method preload bridge with a namespaced `window.atlasDesktop` API that exposes only helper-shaped desktop actio",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -640,9 +530,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-todo-domain-state-architecture-1",
-          "topic": "Todo Domain State Architecture",
-          "summary": "1. **Which file changes?** `src/todo/reducer.ts`, `src/todo/constants.ts`, `src/App.tsx`  \n2. **What is the specific behavior change?** Implement a single reducer-driven todo state machine with explicit action constants and fail-fast unknown action handling; route all UI mutations through `dispatch`",
+          "id": "rec-windows-packaging-and-launch-artifact-co-1",
+          "topic": "Windows packaging and launch artifact contract",
+          "summary": "1. **Which implementation surface changes?** `package.json`, `scripts/atlas_desktop_package.ts`, `electron/main.ts`, and `src/atlas/desktop_state.ts`.\n2. **What is the specific behavior change?** Keep the existing `win.target=[\"dir\"]` package as the default ATLAS deliverable, and only add a separate",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -656,9 +546,57 @@
           "ciClosed": null
         },
         {
-          "id": "rec-local-persistence-and-test-harness-2",
-          "topic": "Local Persistence and Test Harness",
-          "summary": "1. **Which file changes?** `src/storage/todoStorage.ts`, `src/App.tsx`  \n2. **What is the specific behavior change?** Add guarded localStorage adapter (`storageAvailable`, safe parse/stringify, versioned key) and optional cross-tab state sync via `storage` event listener.  \n3. **What is the verifiab",
+          "id": "rec-component-scoped-adaptive-responsiveness-2",
+          "topic": "Component-scoped adaptive responsiveness",
+          "summary": "1. **Which implementation surface changes?** `electron/renderer/layout.js`, `electron/renderer/index.html`, `electron/renderer/app.js`, and the layout CSS emitted by `src/atlas/renderer.ts`.\n2. **What is the specific behavior change?** Replace the current single viewport breakpoint with named contai",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-shell-hierarchy-commands-and-local-navig-3",
+          "topic": "Shell hierarchy, commands, and local navigation",
+          "summary": "1. **Which implementation surface changes?** `src/atlas/renderer.ts`, `src/atlas/routes/home.ts`, and `src/atlas/routes/sessions.ts`.\n2. **What is the specific behavior change?** Replace the current plain top nav plus scattered per-card controls with a single branded top command band: left side for ",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-trust-inline-feedback-and-accessible-sta-4",
+          "topic": "Trust, inline feedback, and accessible status visibility",
+          "summary": "1. **Which implementation surface changes?** `electron/renderer/index.html`, `electron/renderer/app.js`, `src/atlas/routes/lifecycle.ts`, `src/atlas/routes/home.ts`, `src/atlas/routes/sessions.ts`, and `src/atlas/renderer.ts`.\n2. **What is the specific behavior change?** Add a persistent inline stat",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-scout-payload-hygiene-5",
+          "topic": "Scout payload hygiene",
+          "summary": "Relevance: LOW - no clear BOX integration path. Reason: this record is scout narration rather than a source-backed research item.",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -674,85 +612,14 @@
       ]
     },
     {
-      "cycleId": "2026-04-15T15:00:34.621Z",
-      "evaluatedAt": "2026-04-15T19:00:58.870Z",
+      "cycleId": "2026-04-24T14:00:50.989Z",
+      "evaluatedAt": "2026-04-24T14:30:55.056Z",
       "schemaVersion": 1,
       "recommendations": [
         {
-          "id": "rec-retry-semantics-and-prompt-cost-control-0",
-          "topic": "Retry Semantics and Prompt-Cost Control",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`  \n2. **What is the specific behavior change?** Add centralized HTTP error classification (`retryable`, `nonRetryable`, `nextRetryDelayMs`, `reason`) for provider failures; disable provider SDK auto-retries where configurable; propagate `next",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-benchmarking-and-failure-taxonomy-for-co-1",
-          "topic": "Benchmarking and Failure Taxonomy for Coding Agents",
-          "summary": "1. **Which BOX file changes?** `src/core/verification_gate.ts`  \n2. **What is the specific behavior change?** Replace binary verification outcomes with structured failure taxonomy (`COMPLETE`, `CLE`, `IF`, `IA`, `TLE`) and attach category-specific remediation hints consumed by Athena.  \n3. **What is",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-agent-control-flow-patterns-for-planner--2",
-          "topic": "Agent Control-Flow Patterns for Planner/Worker Orchestration",
-          "summary": "1. **Which BOX file changes?** `src/core/prometheus.ts`  \n2. **What is the specific behavior change?** Add deterministic pattern-selection gate per task: default to single-call/retrieval, escalate to workflow (prompt-chain/routing/parallel/orchestrator-workers) only when prior-cycle metrics justify ",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-self-improvement-via-iterative-feedback--3",
-          "topic": "Self-Improvement via Iterative Feedback and Skill Memory",
-          "summary": "1. **Which BOX file changes?** `src/core/athena.ts`  \n2. **What is the specific behavior change?** Add a bounded critique-revision optimization loop for failed or low-score outputs: generate structured critique, apply one targeted revision instruction, re-evaluate, and repeat up to fixed `maxOptimiz",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-15T06:51:16.881Z",
-      "evaluatedAt": "2026-04-15T07:05:17.091Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-runtime-orchestration-contracts-for-dura-0",
-          "topic": "Runtime orchestration contracts for durable agent execution",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`.  \n2. **What is the specific behavior change?** Enforce child-session attach mode: require `SESSION_ID` for extension workers, register explicit permission callback policy for every tool request, and reject runtime start if session/protocol ",
+          "id": "rec-windows-packaging-and-artifact-contract-0",
+          "topic": "Windows packaging and artifact contract",
+          "summary": "1. **Which implementation surface changes?** `package.json` and `scripts/atlas_desktop_package.ts`.\n2. **What is the specific behavior change?** Keep the default Windows build on the existing `dir` target and codify the folder-first artifact contract explicitly; do **not** replace it with `build.por",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -766,9 +633,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-self-improvement-loops-with-memory-and-c-1",
-          "topic": "Self-improvement loops with memory and curriculum",
-          "summary": "1. **Which BOX file changes?** `src/core/athena.ts`.  \n2. **What is the specific behavior change?** On failed worker runs, Athena must emit a structured reflection object (`failure_type`, `root_cause`, `next_attempt_rule`) into persistent memory keyed by task fingerprint; orchestrator injects top-k ",
+          "id": "rec-desktop-shell-navigation-and-adaptive-la-1",
+          "topic": "Desktop shell navigation and adaptive layout",
+          "summary": "1. **Which implementation surface changes?** `src/atlas/renderer.ts`.\n2. **What is the specific behavior change?** Replace the current masthead link row with a real ATLAS shell structure: a branded shell region, a separate page-title/header region, a persistent back-control slot, and a primary navig",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -782,9 +649,25 @@
           "ciClosed": null
         },
         {
-          "id": "rec-benchmarking-and-evaluation-design-for-a-2",
-          "topic": "Benchmarking and evaluation design for autonomous coding agents",
-          "summary": "1. **Which BOX file changes?** `src/core/verification_gate.ts`.  \n2. **What is the specific behavior change?** Expand verification output from pass/fail to weighted multi-axis scorecard plus standardized failure codes (`CLE`, `IA`, `InvalidFormat`, `TLE`, `PolicyViolation`) derived from worker artif",
+          "id": "rec-trust-accessibility-and-inline-feedback-2",
+          "topic": "Trust, accessibility, and inline feedback",
+          "summary": "1. **Which implementation surface changes?** `src/atlas/renderer.ts` and `electron/renderer/index.html`.\n2. **What is the specific behavior change?** Add explicit accessible naming and keyboard-first behavior for every shell control introduced in the redesign, add forced-colors/high-contrast CSS sup",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-scout-payload-hygiene-3",
+          "topic": "Scout payload hygiene",
+          "summary": "Relevance: LOW - no clear BOX integration path. Reason: this is a malformed scout header, not a source-backed research entry.",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -800,14 +683,14 @@
       ]
     },
     {
-      "cycleId": "2026-04-15T05:50:41.846Z",
-      "evaluatedAt": "2026-04-15T06:08:24.721Z",
+      "cycleId": "2026-04-24T13:53:13.836Z",
+      "evaluatedAt": "2026-04-24T14:29:35.377Z",
       "schemaVersion": 1,
       "recommendations": [
         {
-          "id": "rec-long-running-worker-harnesses-and-evalua-0",
-          "topic": "Long-running worker harnesses and evaluation reliability",
-          "summary": "1. Which BOX file changes? `src/core/worker_runner.ts` and `.github/agents/research-synthesizer.agent.md` (pattern reuse for worker prompts).  \n2. What is the specific behavior change? Add mandatory per-task artifact protocol: bootstrap `init.sh` + progress ledger + machine-editable feature-status J",
+          "id": "rec-accessible-modal-confirmation-and-keyboa-0",
+          "topic": "Accessible modal confirmation and keyboard-safe lifecycle actions",
+          "summary": "1. **Which implementation surface changes?** `src/atlas/renderer.ts` and `src/atlas/routes/lifecycle.ts` (optionally create a small client helper under `electron/renderer/` if JS is needed).\n2. **What is the specific behavior change?** Convert risky lifecycle actions such as `archive` and `stop` fro",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -821,9 +704,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-copilot-cli-mcp-governance-and-delegatio-1",
-          "topic": "Copilot CLI MCP governance and delegation contracts",
-          "summary": "1. Which BOX file changes? `src/core/worker_runner.ts`.  \n2. What is the specific behavior change? Generate role-scoped `~/.copilot/mcp-config.json` before worker invocation, default to strict per-server `tools` allowlists, and implement runtime `/mcp disable|enable` toggling for escalation paths wi",
+          "id": "rec-windows-packaging-contract-and-direct-la-1",
+          "topic": "Windows packaging contract and direct-launch folder delivery",
+          "summary": "1. **Which implementation surface changes?** `package.json`, `electron/resource_paths.ts`, and the missing `electron/renderer/*` asset surface.\n2. **What is the specific behavior change?** Make the Windows packaging contract explicit: keep `ATLAS.exe` and root companion files in the packaged folder ",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -837,9 +720,25 @@
           "ciClosed": null
         },
         {
-          "id": "rec-agent-architecture-and-planning-control--2",
-          "topic": "Agent architecture and planning-control tradeoffs",
-          "summary": "1. Which BOX file changes? `src/core/orchestrator.ts`, `src/core/prometheus.ts`, and `src/core/verification_gate.ts`.  \n2. What is the specific behavior change? Introduce risk-tiered execution policy: classify actions as low/high impact, enforce schema/policy validation before tool execution, and dy",
+          "id": "rec-native-desktop-shell-chrome-navigation-c-2",
+          "topic": "Native desktop shell chrome, navigation continuity, and responsive window behavior",
+          "summary": "1. **Which implementation surface changes?** `electron/main.ts` and `src/atlas/renderer.ts`.\n2. **What is the specific behavior change?** Hide the default title bar, enable `titleBarOverlay` on Windows, and move brand, repo identity, and top-level navigation into a thin custom drag region while keep",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-premium-monochrome-hierarchy-spacing-and-3",
+          "topic": "Premium monochrome hierarchy, spacing, and trust signaling",
+          "summary": "1. **Which implementation surface changes?** `src/atlas/renderer.ts` and `src/atlas/routes/home.ts`.\n2. **What is the specific behavior change?** Replace the many equal-weight bordered panels with a smaller set of larger layout regions driven by a shared 4px spacing system, wider whitespace, and bre",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -855,14 +754,14 @@
       ]
     },
     {
-      "cycleId": "2026-04-15T05:33:30.376Z",
-      "evaluatedAt": "2026-04-15T05:43:05.580Z",
+      "cycleId": "2026-04-24T13:57:49.114Z",
+      "evaluatedAt": "2026-04-24T14:16:36.174Z",
       "schemaVersion": 1,
       "recommendations": [
         {
-          "id": "rec-durable-execution-checkpointing-and-retr-0",
-          "topic": "Durable execution, checkpointing, and retry control",
-          "summary": "1. Which BOX file changes? `src/core/orchestrator.ts` and `src/core/research_synthesizer.ts`.  \n2. What is the specific behavior change? Add checkpointed stage persistence keyed by cycle `thread_id`; after each stage write a snapshot record (`stage`, `metadata.step`, `writes`, `parent_checkpoint_id`",
+          "id": "rec-accessible-confirmation-flows-and-focus--0",
+          "topic": "Accessible confirmation flows and focus safety",
+          "summary": "1. **Which implementation surface changes?** `src/atlas/renderer.ts` and the lifecycle route wiring in `src/atlas/server.ts`.\n2. **What exactly changes?** Wrap `archive` and `stop` actions in a real modal confirmation flow that renders `role=\"dialog\"`, `aria-modal=\"true\"`, a visible title, a visible",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -876,9 +775,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-search-based-planning-and-agent-architec-1",
-          "topic": "Search-based planning and agent architecture strategy",
-          "summary": "1. Which BOX file changes? `src/core/prometheus.ts` and `src/core/athena.ts`.  \n2. What is the specific behavior change? Add a task-structure classifier in Prometheus that routes tasks into workflow, orchestrator-worker, or evaluator-optimizer execution templates; Athena enforces stop-condition and ",
+          "id": "rec-windows-packaging-and-root-launch-contra-1",
+          "topic": "Windows packaging and root-launch contract",
+          "summary": "1. **Which implementation surface changes?** `package.json` and `scripts/atlas_desktop_package.ts`.\n2. **What exactly changes?** Keep `win.target` on `dir`, codify the folder-output contract explicitly, and add any root-level companion assets through `extraFiles` rather than `extraResources` so the ",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -892,9 +791,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-copilot-runtime-policy-tool-boundaries-a-2",
-          "topic": "Copilot runtime policy, tool boundaries, and agent profile controls",
-          "summary": "1. Which BOX file changes? `src/core/worker_runner.ts`.  \n2. What is the specific behavior change? Standardize worker invocation to strict non-interactive contract (`-p -s --no-ask-user`), generated per-task allowlists (`--allow-tool`, `--allow-url`, scoped `--add-dir`), explicit model pinning, and ",
+          "id": "rec-desktop-shell-structure-navigation-conti-2",
+          "topic": "Desktop shell structure, navigation continuity, and window chrome",
+          "summary": "1. **Which implementation surface changes?** `electron/main.ts`, `electron/preload.ts`, and `src/atlas/renderer.ts`.\n2. **What exactly changes?** Enable `titleBarStyle: \"hidden\"` with a restrained `titleBarOverlay`, render a thin draggable shell band for brand/page/back context, and expose only non-",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -908,9 +807,25 @@
           "ciClosed": null
         },
         {
-          "id": "rec-external-benchmark-calibration-and-regre-3",
-          "topic": "External benchmark calibration and regression tracking",
-          "summary": "1. Which BOX file changes? `src/core/prometheus.ts` and `src/core/orchestrator.ts`.  \n2. What is the specific behavior change? Add benchmark export schema matching SWE-bench result fields (`resolved`, `cost`, `instance_calls`, `instance_cost`, per-instance status, split, harness version) and enforce",
+          "id": "rec-visual-color-discipline-for-a-premium-mo-3",
+          "topic": "Visual color discipline for a premium monochrome shell",
+          "summary": "1. **Which implementation surface changes?** `electron/renderer/index.html` and `src/atlas/renderer.ts`.\n2. **What exactly changes?** Remove decorative blue/green gradient accents from the default shell, convert the visual system to neutral-first tokens, and reserve non-neutral color only for semant",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-scout-payload-hygiene-4",
+          "topic": "Scout payload hygiene",
+          "summary": "Relevance: LOW - no clear BOX integration path. Reason: this is a malformed scout header, not a source-backed record.",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -926,14 +841,14 @@
       ]
     },
     {
-      "cycleId": "2026-04-14T19:27:49.412Z",
-      "evaluatedAt": "2026-04-14T19:41:48.585Z",
+      "cycleId": "2026-04-24T10:37:59.189Z",
+      "evaluatedAt": "2026-04-24T10:57:06.902Z",
       "schemaVersion": 1,
       "recommendations": [
         {
-          "id": "rec-deterministic-agent-runtime-setup-orches-0",
-          "topic": "Deterministic agent runtime setup, orchestration, and durability",
-          "summary": "1. Which BOX file changes? `src/core/worker_runner.ts`.  \n2. What is the specific behavior change? Add a deterministic preflight validator that checks `.github/workflows/copilot-setup-steps.yml` exists on default branch, enforces job name `copilot-setup-steps`, enforces allowed keys (`permissions`,`",
+          "id": "rec-windows-packaging-contract-and-launch-sh-0",
+          "topic": "Windows packaging contract and launch shape",
+          "summary": "1. **Which implementation surface changes?** `package.json`.\n2. **What exactly changes?** Add explicit electron-builder Windows config that locks ATLAS to `win.target: \"dir\"`, `requestedExecutionLevel: \"asInvoker\"`, `verifyUpdateCodeSignature: true`, `signAndEditExecutable: true`, and a fixed execut",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -947,9 +862,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-benchmark-calibrated-model-and-cost-rout-1",
-          "topic": "Benchmark-calibrated model and cost routing",
-          "summary": "1. Which BOX file changes? `src/core/prometheus.ts`.  \n2. What is the specific behavior change? Add model-routing policy that maps task complexity tiers to model classes using explicit score/cost thresholds derived from SWE-bench Verified and enforces split-normalized comparisons.  \n3. What is the v",
+          "id": "rec-native-shell-lifecycle-state-locality-an-1",
+          "topic": "Native shell lifecycle, state locality, and accessibility",
+          "summary": "1. **Which implementation surface changes?** `electron/main.ts` and `src/atlas/desktop_state.ts`.\n2. **What exactly changes?** Add `app.setAppUserModelId(\"com.ancoralabs.atlas\")` before window creation, acquire a single-instance lock and focus the existing window on relaunch, align `userData` / `ses",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -963,9 +878,25 @@
           "ciClosed": null
         },
         {
-          "id": "rec-self-improvement-via-memory-reflection-a-2",
-          "topic": "Self-improvement via memory, reflection, and search",
-          "summary": "1. Which BOX file changes? `src/core/orchestrator.ts`.  \n2. What is the specific behavior change? Insert a reflection stage after failed worker attempts that writes compact, structured lessons keyed by task signature and injects top-k lessons into the next retry prompt.  \n3. What is the verifiable o",
+          "id": "rec-windows-information-architecture-visual--2",
+          "topic": "Windows information architecture, visual rhythm, and trust feedback",
+          "summary": "1. **Which implementation surface changes?** `src/atlas/renderer.ts`, `src/atlas/routes/home.ts`, and `src/atlas/routes/sessions.ts`.\n2. **What exactly changes?** Replace the current top card-grid nav with a persistent collapsible left rail that keeps Home and Sessions in fixed order, supports at mo",
+          "implementationStatus": "pending",
+          "benchmarkScore": null,
+          "capacityGain": null,
+          "evidence": "",
+          "source_url": null,
+          "submission_id": null,
+          "model_tag": null,
+          "attempt_count": null,
+          "prId": null,
+          "mergedSha": null,
+          "ciClosed": null
+        },
+        {
+          "id": "rec-scout-payload-hygiene-3",
+          "topic": "Scout payload hygiene",
+          "summary": "Relevance: LOW - no clear BOX integration path. Reason: malformed scout header with no source metadata or implementation evidence.",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -981,14 +912,14 @@
       ]
     },
     {
-      "cycleId": "2026-04-14T15:28:00.786Z",
-      "evaluatedAt": "2026-04-14T15:44:51.848Z",
+      "cycleId": "2026-04-24T09:15:49.282Z",
+      "evaluatedAt": "2026-04-24T10:03:14.735Z",
       "schemaVersion": 1,
       "recommendations": [
         {
-          "id": "rec-runtime-control-contracts-for-box-worker-0",
-          "topic": "Runtime control contracts for BOX workers and checkpoints",
-          "summary": "1. Which BOX file changes? `src/core/worker_runner.ts` and `src/core/policy_engine.js`.  \n2. What is the specific behavior change? Introduce a typed Copilot session adapter that (a) subscribes before `send()`, (b) enforces timeout + explicit `abort()` on overrun, (c) maps `onPreToolUse` decisions in",
+          "id": "rec-portable-windows-packaging-and-state-loc-0",
+          "topic": "Portable Windows packaging and state locality",
+          "summary": "1. Change `package.json`, `electron/main.ts`, and `src/atlas/server.ts`.\n2. Keep ATLAS on `electron-builder --dir --win`; do **not** switch to the `portable` target. Add a folder-based packaging contract that launches `ATLAS.exe` from the unpacked root and keeps runtime/state paths rooted in the del",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -1002,9 +933,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-self-improvement-policy-loops-and-benchm-1",
-          "topic": "Self-improvement policy loops and benchmarked coding-agent outcomes",
-          "summary": "1. Which BOX file changes? `src/core/prometheus.ts` and `src/core/athena_reviewer.ts`.  \n2. What is the specific behavior change? Add planning-mode classification per task (`single-step`, `workflow`, `agentic`) with Athena rejecting plans that use agentic mode when deterministic workflow mode suffic",
+          "id": "rec-electron-shell-security-and-native-windo-1",
+          "topic": "Electron shell security and native-window behavior",
+          "summary": "1. Change `electron/main.ts`, `electron/window_policy.ts`, `electron/preload.ts`, and `electron/renderer/index.html`.\n2. Turn on main-window sandboxing, register a default permission-request denylist/allowlist after `app.whenReady()`, keep strict origin-checked navigation/window-open handling, add a",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -1018,32 +949,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-worker-lifecycle-hardening-and-policy-in-2",
-          "topic": "Worker lifecycle hardening and policy injection patterns (Temporal-derived)",
-          "summary": "1. Which BOX file changes? `src/core/worker_runner.ts` and `docker/**/Dockerfile` used by worker containers.  \n2. What is the specific behavior change? Implement explicit worker process states (`running`, `stopping`, `draining`, `stopped`) with grace/force timeouts, and enforce Docker base-image har",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-14T10:46:34.367Z",
-      "evaluatedAt": "2026-04-14T10:59:10.082Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-deliberate-planning-and-self-improvement-0",
-          "topic": "Deliberate planning and self-improvement policies for BOX",
-          "summary": "1. Which BOX file changes? `src/core/prometheus.ts`  \n2. What is the specific behavior change? Add a bounded branch-search planner mode that generates `k` candidate first-step plans, scores each with an evaluator pass, expands only top branches, and emits the highest-scoring executable branch plus d",
+          "id": "rec-windows-information-architecture-accessi-2",
+          "topic": "Windows information architecture, accessibility, and visual rhythm",
+          "summary": "1. Change `src/atlas/renderer.ts` and `src/atlas/routes/sessions.ts`.\n2. Keep Home and Sessions as the only top-level peer destinations for now, but refactor the Sessions surface into a Windows-style list/details workspace instead of adding deeper route nesting; treat modals/popups as transient UI w",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -1057,9 +965,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-copilot-sdk-contracts-for-deterministic--1",
-          "topic": "Copilot SDK contracts for deterministic BOX worker control",
-          "summary": "1. Which BOX file changes? `src/core/worker_runner.ts`  \n2. What is the specific behavior change? Build session configs via a single typed factory that always sets `hooks.onPreToolUse`, `onPermissionRequest`, `systemMessage.mode=\"customize\"`, and explicit `availableTools`/`excludedTools` for each BO",
+          "id": "rec-trust-calibration-and-explainability-in--3",
+          "topic": "Trust calibration and explainability in AI-assisted surfaces",
+          "summary": "1. Change `src/atlas/state_bridge.ts`, `src/atlas/renderer.ts`, `src/atlas/routes/home.ts`, and `electron/renderer/app.js`.\n2. Extend the session read model and onboarding UI with explanation fields that state why ATLAS is showing a status/action now, what state signals produced it, what data is mis",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -1073,9 +981,9 @@
           "ciClosed": null
         },
         {
-          "id": "rec-durable-multi-agent-runtime-patterns-and-2",
-          "topic": "Durable multi-agent runtime patterns and replayable state contracts",
-          "summary": "1. Which BOX file changes? `src/core/orchestrator.ts`  \n2. What is the specific behavior change? Add per-phase checkpoint snapshots keyed by canonical string cycle ID, with explicit interrupt/resume records including resume IDs for multi-interrupt cases.  \n3. What is the verifiable outcome? Restarti",
+          "id": "rec-scout-payload-hygiene-and-malformed-inpu-4",
+          "topic": "Scout payload hygiene and malformed inputs",
+          "summary": "1. No ATLAS product file should change from this entry alone.\n2. Treat this record as non-actionable scout metadata and exclude it from target-repo task generation.\n3. Success is verified when Prometheus produces no implementation task from this malformed entry.",
           "implementationStatus": "pending",
           "benchmarkScore": null,
           "capacityGain": null,
@@ -1087,1581 +995,6 @@
           "prId": null,
           "mergedSha": null,
           "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-14T07:55:33.393Z",
-      "evaluatedAt": "2026-04-14T09:37:46.628Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-execution-pattern-selection-for-box-plan-0",
-          "topic": "Execution pattern selection for BOX planners",
-          "summary": "1. **Which BOX file changes?** `src/core/prometheus.ts`\n2. **What is the specific behavior change?** Add an explicit execution-pattern selector to plan generation. For every plan, Prometheus must classify the task as `single-call`, `chain`, `route`, `parallel`, `orchestrator-workers`, `evaluator-opt",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-durable-execution-and-prompt-reuse-mecha-1",
-          "topic": "Durable execution and prompt reuse mechanics",
-          "summary": "1. **Which BOX file changes?** `src/core/orchestrator.ts`\n2. **What is the specific behavior change?** Add phase-boundary run checkpoints that persist a parent-linked snapshot after planning, Athena review, and each worker wave. Each checkpoint must record the completed branches in that super-step, ",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-search-reflection-and-reusable-reasoning-2",
-          "topic": "Search, reflection, and reusable reasoning scaffolds",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`\n2. **What is the specific behavior change?** Replace linear multi-attempt retries with a bounded branch-search controller for hard tasks. The worker runner must generate 3-5 candidate first moves, run cheap verification on each branch, score",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-copilot-native-persona-configuration-3",
-          "topic": "Copilot-native persona configuration",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`\n2. **What is the specific behavior change?** Load and enforce documented custom-agent frontmatter semantics when invoking BOX role agents: honor `model`, `tools`, `disable-model-invocation`, `user-invocable`, and namespaced MCP tool allowlis",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-14T06:14:16.845Z",
-      "evaluatedAt": "2026-04-14T07:32:20.135Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-temporal-control-plane-patterns-for-long-0",
-          "topic": "Temporal control-plane patterns for long-running BOX cycles",
-          "summary": "1. **Which BOX file changes?** `src/core/orchestrator.ts`\n2. **What exactly changes?** Add an explicit control-request layer that separates read-only status queries, non-blocking signals, and acknowledged state-changing updates. Store an `updateId` on each mutating request, reject duplicate `updateI",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-14T04:24:39.579Z",
-      "evaluatedAt": "2026-04-14T06:00:38.063Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-runtime-hardening-and-bounded-control-0",
-          "topic": "Runtime hardening and bounded control",
-          "summary": "1. **Which BOX file changes?** `.github/workflows/copilot-setup-steps.yml` and `src/core/worker_runner.ts`.\n2. **What is the specific behavior change?** Add a checked-in Copilot setup workflow with the exact `copilot-setup-steps` job name, pinned Node/tool installation, dependency warmup, and the do",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-durable-state-checkpoint-rollover-and-lo-1",
-          "topic": "Durable state, checkpoint rollover, and local session persistence",
-          "summary": "1. **Which BOX file changes?** `src/core/checkpoint_engine.ts` and `src/core/orchestrator.ts`.\n2. **What is the specific behavior change?** Implement checkpoint tuples keyed by `thread_id`, `checkpoint_ns`, and lexically sortable `checkpoint_id`, store parent lineage and pending writes separately fr",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-planning-reflection-and-tool-routing-arc-2",
-          "topic": "Planning, reflection, and tool-routing architecture",
-          "summary": "1. **Which BOX file changes?** `src/core/prometheus.ts`, `src/core/athena_reviewer.ts`, and `src/core/worker_runner.ts`.\n2. **What is the specific behavior change?** Change Prometheus to emit task decompositions as structured subgoal DAGs with explicit dependencies and phase-specific tool policies; ",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-memory-augmented-repair-loops-and-benchm-3",
-          "topic": "Memory-augmented repair loops and benchmark evidence",
-          "summary": "1. **Which BOX file changes?** `src/core/prometheus.ts`, `src/core/worker_runner.ts`, and `src/core/cycle_analytics.ts`.\n2. **What is the specific behavior change?** Split repair tasks into explicit reproduction, localization, generation, and validation subphases; retrieve top-k prior demonstrations",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-13T23:10:41.147Z",
-      "evaluatedAt": "2026-04-13T23:30:09.280Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-evaluation-harnesses-and-benchmark-compa-0",
-          "topic": "Evaluation harnesses and benchmark comparability",
-          "summary": "1. **Which BOX file changes?** `src/core/cycle_analytics.ts`, `src/core/orchestrator.ts`, and `src/core/worker_runner.ts`.\n2. **What is the specific behavior change?** Extend BOX benchmark and cycle telemetry records to store `harnessVersion`, `actionSemantics` (`tool_calling` vs `string_parsed`), `",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-durable-memory-and-retrieval-1",
-          "topic": "Durable memory and retrieval",
-          "summary": "1. **Which BOX file changes?** `src/core/checkpoint_engine.ts`, `src/core/orchestrator.ts`, and `src/core/worker_runner.ts`.\n2. **What is the specific behavior change?** Add persistent per-cycle/per-task checkpoint records keyed by stable `thread_id`, record `checkpoint_id` and `parent_checkpoint_id",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-orchestration-topologies-and-control-bou-2",
-          "topic": "Orchestration topologies and control boundaries",
-          "summary": "1. **Which BOX file changes?** `src/core/prometheus.ts`, `src/core/worker_runner.ts`, and `src/core/athena_reviewer.ts`.\n2. **What is the specific behavior change?** Require Prometheus to assign each task a `controlPattern` from a fixed enum (`direct`, `prompt_chain`, `route`, `parallel`, `orchestra",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-planning-reflection-and-stuckness-contro-3",
-          "topic": "Planning, reflection, and stuckness control",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts` and `src/core/prometheus.ts`.\n2. **What is the specific behavior change?** Add per-attempt action/observation fingerprinting, detect repeated identical failure trajectories as stuckness, inject at most three relevant reflection items into th",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-13T22:17:22.744Z",
-      "evaluatedAt": "2026-04-13T22:29:49.714Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-executable-policy-enforcement-from-agent-0",
-          "topic": "Executable policy enforcement from agent instructions",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`, `src/core/verification_gate.ts`, and `.github/agents/*.agent.md`.\n2. **What is the specific behavior change?** Parse BOX agent instruction files into a compiled policy artifact keyed by stable rule IDs and heading paths; enforce process rul",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-stage-aligned-memory-for-long-horizon-so-1",
-          "topic": "Stage-aligned memory for long-horizon software tasks",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts` and `src/core/orchestrator.ts`.\n2. **What is the specific behavior change?** Refactor worker execution into explicit stages (`analyze`, `reproduce`, `edit`, `verify`), generate a structured stage intent with `objective` and `keywords`, retri",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-13T10:33:40.421Z",
-      "evaluatedAt": "2026-04-13T10:46:36.981Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-copilot-cli-runtime-controls-and-agent-p-0",
-          "topic": "Copilot CLI runtime controls and agent-policy contracts",
-          "summary": "1. **Which BOX file changes**: `src/core/worker_runner.ts` and `.github/agents/*.agent.md`.  \n2. **Specific behavior change**: Add startup validation for all BOX agent profiles (required `description`, prompt length <= 30000, explicit non-wildcard `tools`, and banned cloud-inapplicable aliases), the",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-worker-retry-durability-and-failure-isol-1",
-          "topic": "Worker retry durability and failure isolation patterns",
-          "summary": "1. **Which BOX file changes**: `src/core/worker_runner.ts`.  \n2. **Specific behavior change**: Implement phase-level retry policies (`plan/edit/test/push`) with typed `retry_on` predicates, exponential backoff + optional jitter, attempt-index telemetry, and explicit resume-state propagation between ",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-search-based-planning-and-reflective-ret-2",
-          "topic": "Search-based planning and reflective retries for code tasks",
-          "summary": "1. **Which BOX file changes**: `src/core/prometheus.ts`.  \n2. **Specific behavior change**: Replace single-plan generation with bounded branch search (`n` candidate plans per expansion, `k` capped iterations), score each branch with verifier signals (lint/test/policy), and select highest-value plan ",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-multi-agent-coordination-contracts-and-r-3",
-          "topic": "Multi-agent coordination contracts and reliability evaluation under hard tasks",
-          "summary": "1. **Which BOX file changes**: `src/core/prometheus.ts` and `src/core/athena.ts`.  \n2. **Specific behavior change**: Enforce typed handoff artifacts between roles (`strategy_brief`, `plan_json`, `review_findings`, `execution_report`) and add dependency gating so downstream roles run only when requir",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-13T09:34:19.693Z",
-      "evaluatedAt": "2026-04-13T09:52:52.914Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-swe-bench-verified-performance-targets-a-0",
-          "topic": "SWE-bench Verified performance targets and evaluation integrity",
-          "summary": "1. **File**: `src/core/orchestrator.ts` and `src/core/verification_gate.ts`  \n2. **Behavior change**: Add a benchmark-result contract that records `resolved_rate`, per-repo and per-year buckets, and explicit integrity flags (`attempts_per_instance`, `checked_status`, `artifact_paths`) for each evalu",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-search-and-reflection-control-loops-for--1",
-          "topic": "Search-and-reflection control loops for harder coding tasks",
-          "summary": "1. **File**: `src/core/prometheus.ts`  \n2. **Behavior change**: Add bounded multi-candidate planning (`n` candidates, `k` iterations) with UCT-style scoring using external verifier rewards (tests/lint/policy) and reflection notes fed into next iteration prompts.  \n3. **Verifiable outcome**: Planning",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-runtime-controls-durability-and-strict-p-2",
-          "topic": "Runtime controls, durability, and strict planner contracts",
-          "summary": "1. **File**: `src/core/worker_runner.ts`  \n2. **Behavior change**: Add worker launch profile resolver that emits explicit capability flags (`can_delegate`, `can_code_search`, `can_mcp`) from auth/model mode and fails closed on provider misconfiguration before running Copilot CLI.  \n3. **Verifiable o",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-long-horizon-memory-hierarchy-for-self-i-3",
-          "topic": "Long-horizon memory hierarchy for self-improving loops",
-          "summary": "1. **File**: `src/core/prometheus.ts` and `src/core/athena.ts`  \n2. **Behavior change**: Add explicit three-tier memory manager with token-pressure triggers: keep active planning context small, page summarized prior rounds from Tier-1, and retrieve signature-matched archival experiences from Tier-2 ",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-13T08:56:11.636Z",
-      "evaluatedAt": "2026-04-13T09:18:38.222Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-benchmark-grounded-evaluation-contracts-0",
-          "topic": "Benchmark-grounded evaluation contracts",
-          "summary": "1. **File change**: `src/core/verification_gate.ts` and `src/core/athena.ts`.  \n2. **Behavior change**: Add mandatory benchmark-policy checks (`pass_at_1`, `uses_hints=false`, `uses_pass_to_pass=false`, `uses_fail_to_pass=false`, `web_leakage_mitigated=true`) and require per-repo/per-era metrics in ",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-copilot-cli-deterministic-runtime-govern-1",
-          "topic": "Copilot CLI deterministic runtime governance",
-          "summary": "1. **File change**: `src/core/worker_runner.ts`.  \n2. **Behavior change**: Standardize worker launch to `copilot -p ... -s --no-ask-user` only, forbid broad permission flags by default, compile explicit `--allow-tool/--deny-tool/--allow-url` lists, and always emit `--share=<artifact_path>`.  \n3. **V",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-multi-agent-control-loops-and-self-impro-2",
-          "topic": "Multi-agent control loops and self-improvement planners",
-          "summary": "1. **File change**: `src/core/orchestrator.ts` and `src/core/worker_runner.ts`.  \n2. **Behavior change**: Implement delegate-style sub-run handling with explicit parent/child terminal observation propagation, plus explicit `RATE_LIMITED` and loop-recovery states before hard failure.  \n3. **Verifiabl",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-13T08:37:01.377Z",
-      "evaluatedAt": "2026-04-13T08:47:39.031Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-copilot-cli-deterministic-runtime-govern-0",
-          "topic": "Copilot CLI deterministic runtime governance",
-          "summary": "1. **File change**: `src/core/worker_runner.ts` and `src/core/verification_gate.ts`.  \n2. **Behavior change**: Worker launch must always compile and pass both policy layers (`--available-tools` + `--allow-tool/--deny-tool`) into Copilot CLI; verification gate must assert launch args include explicit",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-agent-definitions-runtime-compatibility--1",
-          "topic": "Agent definitions, runtime compatibility, and checkpoint durability",
-          "summary": "1. **File change**: `src/core/worker_runner.ts` and `.github/agents/*.agent.md` validation path via `src/core/prometheus.ts`.  \n2. **Behavior change**: Add strict frontmatter schema loading for agent files before dispatch; reject invalid `permission_mode`, invalid `hooks`, and malformed `max_iterati",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-self-improvement-loops-for-retries-and-p-2",
-          "topic": "Self-improvement loops for retries and planning memory",
-          "summary": "1. **File change**: `src/core/worker_runner.ts`, `src/core/prometheus.ts`, `state/reflection_memory.json`.  \n2. **Behavior change**: After failed worker execution, generate and persist a structured reflection artifact (`failure_signature`, `root_cause_hypothesis`, `next_attempt_constraints`); inject",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-11T12:06:31.996Z",
-      "evaluatedAt": "2026-04-11T12:17:19.774Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-model-session-control-plane-and-durable--0",
-          "topic": "Model/session control plane and durable memory primitives",
-          "summary": "1. **File change**: `src/core/worker_runner.ts` (primary), plus model config wiring in `src/core/prometheus.ts`.\n2. **Behavior change**: Introduce a typed BOX `ModelSettings` resolver with deterministic overlay semantics (explicitly set `parallel_tool_calls`, `store`, retry/backoff), and apply per-t",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-benchmark-driven-planning-and-routing-ta-1",
-          "topic": "Benchmark-driven planning and routing targets",
-          "summary": "1. **File change**: `src/core/prometheus.ts`.\n2. **Behavior change**: Add SWE-bench-aware model routing policy using split-specific targets (`Verified`, `Lite`, `Multilingual`, `Multimodal`) and cost-aware tie-breaking (`instance_cost`), with explicit scaffold-version normalization.\n3. **Verifiable ",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-governance-policy-precedence-and-auditab-2",
-          "topic": "Governance policy precedence and auditability",
-          "summary": "1. **File change**: `src/core/worker_runner.ts` and `src/core/jesus_supervisor.ts`.\n2. **Behavior change**: Implement hierarchical policy resolver with per-policy conflict strategy (`most_restrictive` vs `least_restrictive`) and explicit scope source (`enterprise`, `org`, `run`).\n3. **Verifiable out",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-self-improvement-loops-and-multi-agent-o-3",
-          "topic": "Self-improvement loops and multi-agent orchestration patterns",
-          "summary": "1. **File change**: `src/core/worker_runner.ts` and `src/core/athena.ts`.\n2. **Behavior change**: Add structured reflection generation after failed runs/rejections, store in persistent reflection memory, and inject top-k task-signature-matched reflections into retry prompts before next worker attemp",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-copilot-cloud-agent-control-plane-ci-clo-4",
-          "topic": "Copilot Cloud Agent Control Plane Patterns for BOX Execution",
-          "summary": "Split execution into plan_only and execution phases; worker_runner refuses code execution until approved_plan=true; Athena reviews branch diffs before merge.",
-          "implementationStatus": "implemented",
-          "benchmarkScore": 0.82,
-          "capacityGain": 0.15,
-          "evidence": "PR #268 merged; CI green on all required checks",
-          "source_url": "https://github.com/Ancora-Labs/Box/pull/268",
-          "submission_id": "box-ci-268",
-          "model_tag": "claude-sonnet-4-6",
-          "attempt_count": 1,
-          "prId": "https://github.com/Ancora-Labs/Box/pull/268",
-          "mergedSha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-          "ciClosed": true
-        },
-        {
-          "id": "rec-multi-agent-team-runtime-contracts-ci-cl-5",
-          "topic": "Multi-Agent Team Runtime Contracts (AutoGen)",
-          "summary": "Critic-loop review contract with deterministic stop token; max-iteration/cancellation fallback; persist stop_reason and streamed message events into task telemetry.",
-          "implementationStatus": "implemented",
-          "benchmarkScore": 0.78,
-          "capacityGain": 0.12,
-          "evidence": "PR #271 merged; CI green on all required checks",
-          "source_url": "https://github.com/Ancora-Labs/Box/pull/271",
-          "submission_id": "box-ci-271",
-          "model_tag": "claude-sonnet-4-6",
-          "attempt_count": 2,
-          "prId": "https://github.com/Ancora-Labs/Box/pull/271",
-          "mergedSha": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
-          "ciClosed": true
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-11T10:07:20.054Z",
-      "evaluatedAt": "2026-04-11T10:29:09.593Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-copilot-cli-deterministic-execution-and--0",
-          "topic": "Copilot CLI Deterministic Execution and Governance",
-          "summary": "1. **Which BOX file changes**: `src/core/worker_runner.ts` and `src/core/verification_gate.ts`.\n2. **Specific behavior change**: force worker launches to always include `--output-format=json --no-ask-user`, parse output as JSONL, and inject a deterministic `preToolUse` hook profile that enforces all",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-multi-agent-runtime-reliability-patterns-1",
-          "topic": "Multi-Agent Runtime Reliability Patterns for BOX Worker Loops",
-          "summary": "1. **Which BOX file changes**: `src/core/worker_runner.ts`.\n2. **Specific behavior change**: implement a retry-policy module with normalized error context, hard-veto semantics, provider-advice separation, and composable `all/any` policy combinators for model/tool calls.\n3. **Verifiable outcome**: re",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-external-benchmark-calibration-for-box-s-2",
-          "topic": "External Benchmark Calibration for BOX Self-Improvement Targets",
-          "summary": "1. **Which BOX file changes**: `src/core/prometheus.ts`.\n2. **Specific behavior change**: add benchmark ingestion with provenance keys (`source_url`, `submission_id`, `model_tag`, `attempt_count`) and track BOX-vs-benchmark deltas by repository and year slices.\n3. **Verifiable outcome**: Prometheus ",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-11T08:00:41.643Z",
-      "evaluatedAt": "2026-04-11T09:26:29.954Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-copilot-cloud-agent-control-plane-patter-0",
-          "topic": "Copilot Cloud Agent Control Plane Patterns for BOX Execution",
-          "summary": "1. **File(s)**: `src/core/prometheus.ts`, `src/core/worker_runner.ts`, `src/core/athena.ts`  \n2. **Specific behavior change**: Split execution into two explicit phases: Prometheus emits a `plan_only` artifact; worker_runner refuses code execution until `approved_plan=true`; Athena reviews branch dif",
-          "implementationStatus": "implemented",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-11T09:26:29.952Z: verified worker completion fallback (missing synthesis_sources linkage)",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-multi-agent-team-runtime-contracts-autog-1",
-          "topic": "Multi-Agent Team Runtime Contracts (AutoGen)",
-          "summary": "1. **File(s)**: `src/core/athena.ts`, `src/core/worker_runner.ts`  \n2. **Specific behavior change**: Implement critic-loop review contract with deterministic stop token and max-iteration/cancellation fallback; persist `stop_reason` and streamed message events into task telemetry.  \n3. **Verifiable o",
-          "implementationStatus": "implemented",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-11T09:26:29.952Z: verified worker completion fallback (missing synthesis_sources linkage)",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        },
-        {
-          "id": "rec-durable-state-self-improvement-planning--2",
-          "topic": "Durable State + Self-Improvement Planning Algorithms",
-          "summary": "1. **File(s)**: `src/core/orchestrator.ts`, `src/core/worker_runner.ts`  \n2. **Specific behavior change**: Introduce checkpointed cycle execution keyed by `thread_id=<cycle-id>/<task-id>` and persist/reload orchestration state at super-step boundaries with resumable `checkpoint_id` replay.  \n3. **Ve",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "",
-          "source_url": null,
-          "submission_id": null,
-          "model_tag": null,
-          "attempt_count": null,
-          "prId": null,
-          "mergedSha": null,
-          "ciClosed": null
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-11T07:11:50.664Z",
-      "evaluatedAt": "2026-04-11T07:21:25.033Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-external-benchmark-signals-for-box-orche-0",
-          "topic": "External benchmark signals for BOX orchestration quality",
-          "summary": "1. **File to change**: `src/core/orchestrator.ts` and `src/core/prometheus.ts`  \n2. **Specific behavior change**: add SWE-bench-style stratified cycle metrics (`byRepository`, `byYear`, plus global) to BOX postmortem outputs and planning inputs, and require Prometheus to prioritize next-cycle tasks ",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-runtime-contracts-for-delegation-safety--1",
-          "topic": "Runtime contracts for delegation, safety, and tool control",
-          "summary": "1. **File to change**: `src/core/worker_runner.ts`  \n2. **Specific behavior change**: implement a strict worker session contract mirroring Copilot SDK semantics: pre-registered event listeners, explicit permission-kind routing (`shell/write/mcp/read/url/custom-tool`), and typed pre/post tool hook ha",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-reflection-memory-and-lifelong-skill-acc-2",
-          "topic": "Reflection memory and lifelong skill accumulation for self-improvement",
-          "summary": "1. **File to change**: `src/core/orchestrator.ts` and `src/core/prometheus.ts`  \n2. **Specific behavior change**: after failed worker cycles, generate and persist structured reflection objects keyed by failure signature, and require Prometheus to retrieve and inject top-matching reflections into the",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-11T06:11:33.606Z",
-      "evaluatedAt": "2026-04-11T07:09:48.432Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-copilot-cli-governance-and-runtime-contr-0",
-          "topic": "Copilot CLI governance and runtime control",
-          "summary": "1. **File to change**: `src/core/worker_runner.ts`  \n2. **Behavior change**: Before invoking Copilot CLI, generate a deterministic hooks config with `preToolUse` deny rules (destructive shell patterns, out-of-scope file writes, restricted URLs) and `postToolUse` JSONL telemetry; inject it into each ",
-          "implementationStatus": "implemented",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-11T07:09:48.430Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        },
-        {
-          "id": "rec-retry-and-timeout-reliability-patterns-f-1",
-          "topic": "Retry and timeout reliability patterns for autonomous loops",
-          "summary": "1. **File to change**: `src/core/orchestrator.ts` and `src/core/worker_runner.ts`  \n2. **Behavior change**: Implement Temporal-inspired retry contract for worker-side effects: explicit `initialDelayMs`, `backoffCoefficient`, `maxDelayMs`, `maxAttempts`, and `nonRetryableErrorCodes`; do not apply thi",
-          "implementationStatus": "implemented",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-11T07:09:48.430Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        },
-        {
-          "id": "rec-self-improvement-memory-and-external-cod-2",
-          "topic": "Self-improvement memory and external coding-agent benchmark signals",
-          "summary": "1. **File to change**: `src/core/postmortem` flow via `src/core/orchestrator.ts` and planning memory path in `src/core/prometheus.ts`  \n2. **Behavior change**: Add a structured reflection memory store keyed by `{task_class, failure_signature}`; after any failed worker run, generate compact “next-att",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-10T20:08:21.761Z",
-      "evaluatedAt": "2026-04-10T20:21:30.646Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-copilot-governance-and-runtime-failure-c-0",
-          "topic": "Copilot Governance and Runtime Failure Controls",
-          "summary": "1. **File**: `src/core/worker_runner.ts`  \n2. **Behavior change**: Add deterministic pre-dispatch hook-decision emission before each tool-executing command generation: evaluate command text against configured regex rules, emit `[HOOK_DECISION] tool=execute decision=<allow|deny> reason_code=<code> ru",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-deterministic-retry-orchestration-and-st-1",
-          "topic": "Deterministic Retry Orchestration and State Application",
-          "summary": "1. **File**: `src/core/worker_runner.ts`  \n2. **Behavior change**: Add typed worker attempt policy object (`default|retry`) with per-attempt budget clamping and deterministic attempt artifact directories (`state/attempt_<n>/...`), plus explicit retry control tokens in runner output for orchestration",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-self-improvement-planning-patterns-for-l-2",
-          "topic": "Self-Improvement Planning Patterns for LLM Systems",
-          "summary": "1. **File**: `src/core/worker_runner.ts`  \n2. **Behavior change**: Upgrade reflection memory retrieval from loose task-text matching to deterministic task-family keys (`roleName + taskKind + failureClass`) and inject top-k recent reflections before retry attempt prompt compilation.  \n3. **Verifiable",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-external-benchmark-grounding-for-box-eva-3",
-          "topic": "External Benchmark Grounding for BOX Evaluation",
-          "summary": "1. **File**: `src/core/research_synthesizer.ts`  \n2. **Behavior change**: Extend benchmark persistence to ingest SWE-bench category frontiers into a normalized structure (`category`, `resolved`, `cost`, `instance_calls`, `date`, `model`, optional per-instance map), with null-safe coercion and catego",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-10T18:38:50.032Z",
-      "evaluatedAt": "2026-04-10T19:08:59.473Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-durable-agent-session-memory-contracts-0",
-          "topic": "Durable Agent Session Memory Contracts",
-          "summary": "1. **File to change**: `src/core/worker_runner.ts`  \n2. **Specific behavior change**: Add a typed `WorkerSession` adapter contract (`get_items/add_items/pop_item/clear_session`, `session_id`, optional compaction support), perform runtime contract check before run start, and implement deterministic c",
-          "implementationStatus": "implemented",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-10T19:08:59.471Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        },
-        {
-          "id": "rec-multi-agent-control-flow-and-durable-orc-1",
-          "topic": "Multi-Agent Control Flow and Durable Orchestration Patterns",
-          "summary": "Relevance: LOW - no clear BOX integration path. Reason: BOX currently orchestrates in Node/JSON without Temporal runtime, so direct adoption requires architecture migration.",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-reflection-driven-self-improvement-and-a-2",
-          "topic": "Reflection-Driven Self-Improvement and Agent Evaluation Metrics",
-          "summary": "1. **File to change**: `src/core/athena.ts`  \n2. **Specific behavior change**: After failed plan/review outcomes, generate a structured reflection artifact (`failure_cause`, `incorrect_assumption`, `next_attempt_rule`, `do_not_repeat`) and persist only top-N recent reflections into state for prompt ",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-copilot-governance-and-auditability-cont-3",
-          "topic": "Copilot Governance and Auditability Controls",
-          "summary": "1. **File to change**: `src/core/verification_gate.ts`  \n2. **Specific behavior change**: Require each worker completion artifact to include governance metadata (`agent`, `organization`, `repository`, `status`, `timeframe_bucket`, `user`, `agent_session_id`), and reject artifacts missing correlation",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-10T16:05:35.833Z",
-      "evaluatedAt": "2026-04-10T18:08:33.104Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-reliability-and-retry-control-for-autono-0",
-          "topic": "Reliability and Retry Control for Autonomous Runs",
-          "summary": "1. **File to change**: `src/core/worker_runner.ts`  \n2. **Specific behavior change**: Add a deterministic retry policy object for worker tool execution (`initialIntervalMs`, `backoffCoefficient`, `maxIntervalMs`, `maxAttempts`, `nonRetryableErrorTypes`), classify permanent failures as non-retryable,",
-          "implementationStatus": "implemented",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-10T18:08:33.102Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        },
-        {
-          "id": "rec-deterministic-multi-agent-coordination-a-1",
-          "topic": "Deterministic Multi-Agent Coordination and Tool Governance",
-          "summary": "1. **File to change**: `src/core/worker_runner.ts`  \n2. **Specific behavior change**: Implement supervisor-style worker delegation with explicit handoff tools (`transfer_to_<agent>`), enforce unique worker role names, set `parallel_tool_calls: false` for supported providers, and run workers in `last",
-          "implementationStatus": "implemented",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-10T18:08:33.102Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        },
-        {
-          "id": "rec-search-guided-deliberation-and-self-refl-2",
-          "topic": "Search-Guided Deliberation and Self-Reflection for Planning/Execution",
-          "summary": "1. **File to change**: `src/core/worker_runner.ts`  \n2. **Specific behavior change**: Add bounded MCTS-like branching for code-change attempts (`maxBranches`, `maxDepth`, `rolloutBudget`) with score backprop from test/lint outcomes and choose highest-value branch for final merge.  \n3. **Verifiable o",
-          "implementationStatus": "implemented",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-10T18:08:33.102Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        },
-        {
-          "id": "rec-long-horizon-skill-memory-and-automatic--3",
-          "topic": "Long-Horizon Skill Memory and Automatic Curriculum",
-          "summary": "1. **File to change**: `src/core/prometheus.ts`  \n2. **Specific behavior change**: Before generating a new task plan, query a persisted skill index of prior successful task patterns and pre-seed candidate plans with retrieved skill templates ranked by task similarity.  \n3. **Verifiable outcome**: Pr",
-          "implementationStatus": "implemented",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-10T18:08:33.102Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-10T13:35:20.483Z",
-      "evaluatedAt": "2026-04-10T15:21:59.383Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-openai-agent-run-contracts-retries-and-m-0",
-          "topic": "OpenAI agent run contracts, retries, and memory compaction for BOX workers",
-          "summary": "1. **Which BOX file changes**: `src/core/worker_runner.ts`  \n2. **Specific behavior change**: Introduce a typed `runConfig` object for each worker dispatch with fields `maxTurns`, `workflowName`, `groupId`, `traceMetadata`, `traceIncludeSensitiveData`, `sessionInputPolicy`, and `toolErrorFormatter`;",
-          "implementationStatus": "implemented",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-10T15:21:59.380Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        },
-        {
-          "id": "rec-retry-semantics-in-graph-task-runtimes-a-1",
-          "topic": "Retry semantics in graph/task runtimes and durability contracts",
-          "summary": "1. **Which BOX file changes**: `src/core/worker_runner.ts`  \n2. **Specific behavior change**: Add attempt-scoped execution metadata (`runId`, `taskId`, `attempt`, `firstAttemptAt`) to every retry loop and reset transient task-write buffers before each retry; route nested retry escalations using pare",
-          "implementationStatus": "implemented",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-10T15:21:59.380Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        },
-        {
-          "id": "rec-benchmark-driven-planning-priors-for-aut-2",
-          "topic": "Benchmark-driven planning priors for autonomous coding loops",
-          "summary": "1. **Which BOX file changes**: `src/core/prometheus.ts`  \n2. **Specific behavior change**: Add repository-difficulty priors into plan generation: when task touches historically hard repos/classes, automatically increase verification strictness (extra review pass, stronger evidence requirements) and ",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-copilot-cloud-agent-configuration-govern-3",
-          "topic": "Copilot cloud-agent configuration governance for BOX agent profiles",
-          "summary": "1. **Which BOX file changes**: `.github/agents/prometheus.agent.md`, `.github/agents/athena.agent.md`, `.github/agents/research-scout.agent.md`, `.github/agents/research-synthesizer.agent.md`  \n2. **Specific behavior change**: Normalize each agent profile to explicit `tools` allowlist, explicit `tar",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-10T10:02:56.705Z",
-      "evaluatedAt": "2026-04-10T11:56:07.851Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-copilot-cloud-agent-governance-and-custo-0",
-          "topic": "Copilot cloud-agent governance and custom-agent contracts",
-          "summary": "1. Which BOX file changes: `.github/agents/prometheus.agent.md`, `.github/agents/athena.agent.md`, `.github/agents/research-scout.agent.md`, `.github/agents/research-synthesizer.agent.md`, `src/core/worker_runner.ts`.  \n2. Specific behavior change: enforce explicit YAML frontmatter contracts for eve",
-          "implementationStatus": "implemented_partially",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-10T11:56:07.849Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        },
-        {
-          "id": "rec-durable-side-effect-safety-patterns-and--1",
-          "topic": "Durable side-effect safety patterns and workflow lifecycle signals",
-          "summary": "Relevance: LOW - no clear BOX integration path. Reason: BOX does not run Temporal workflows, so this API cannot be applied without a runtime migration.",
-          "implementationStatus": "implemented_partially",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-10T11:56:07.849Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        },
-        {
-          "id": "rec-long-horizon-memory-architectures-for-se-2",
-          "topic": "Long-horizon memory architectures for self-improving agents",
-          "summary": "1. Which BOX file changes: `src/core/prometheus.ts`, `src/core/jesus_supervisor.ts`, `state/knowledge_memory.json`.  \n2. Specific behavior change: implement tri-part memory indexing for planning (`working` current-cycle signals, `episodic` event log by keyword/topic posting lists, `profile` long-ter",
-          "implementationStatus": "implemented_partially",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-10T11:56:07.849Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-10T08:43:49.774Z",
-      "evaluatedAt": "2026-04-10T09:22:31.154Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-agent-runtime-control-contracts-for-box--0",
-          "topic": "Agent runtime control contracts for BOX loops",
-          "summary": "1. Which BOX file changes: `src/core/worker_runner.ts` and `src/core/verification_gate.ts`  \n2. Specific behavior change: replace the current implicit worker loop with an explicit step-state machine (`RUN_AGAIN | HANDOFF | FINAL_OUTPUT | INTERRUPTION`), enforce `max_turns` with configurable handler ",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-deterministic-state-orchestration-patter-1",
-          "topic": "Deterministic state orchestration patterns",
-          "summary": "1. Which BOX file changes: `src/core/orchestrator.ts` and `src/core/prometheus.ts`  \n2. Specific behavior change: add a typed cycle-state graph declaration (nodes, allowed edges, interrupt points) and perform pre-execution graph validation before any worker dispatch; persist cycle state snapshots ke",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-worker-execution-harness-and-side-effect-2",
-          "topic": "Worker execution harness and side-effect control",
-          "summary": "1. Which BOX file changes: `src/core/worker_runner.ts` and `src/core/verification_gate.ts`  \n2. Specific behavior change: standardize worker tool execution around typed `ActionRequest`/`Observation` envelopes, enforce per-session auth token on worker RPC calls, and serialize action dispatch under a ",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-faithfulness-verification-before-memory--3",
-          "topic": "Faithfulness verification before memory/action commit",
-          "summary": "1. Which BOX file changes: `src/core/athena.ts`, `src/core/verification_gate.ts`, `src/core/prometheus.ts`, `state/knowledge_memory.json`  \n2. Specific behavior change: insert a pre-dispatch faithfulness audit stage for Prometheus plans that outputs typed violations and a repair pass; block plan dis",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-10T08:02:48.801Z",
-      "evaluatedAt": "2026-04-10T08:29:23.194Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-runtime-determinism-and-failure-signalin-0",
-          "topic": "Runtime determinism and failure signaling patterns",
-          "summary": "Relevance: LOW - no clear BOX integration path. Reason: this API requires Temporal runtime/test-server primitives that BOX does not use today.",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-shared-state-coherence-for-multi-agent-d-1",
-          "topic": "Shared-state coherence for multi-agent decisions",
-          "summary": "1. Which BOX file changes: `src/core/orchestrator.ts`, `src/core/prometheus.ts`, `src/core/athena.ts`, `src/core/verification_gate.ts`  \n2. Specific behavior change: introduce a typed shared context bus artifact (JSON schema) where each role publishes structured snapshot blocks (`task`, `repo`, `ver",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-adaptive-compute-and-experience-driven-s-2",
-          "topic": "Adaptive compute and experience-driven self-improvement",
-          "summary": "1. Which BOX file changes: `src/core/worker_runner.ts`  \n2. Specific behavior change: implement per-step adaptive sampling for worker decision points (`k_min`, `k_max`, `agreement_threshold`), using majority action commit when agreement is high and additional rollouts only when agreement is low.  \n3",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-10T05:28:29.062Z",
-      "evaluatedAt": "2026-04-10T05:40:01.158Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-durable-orchestration-and-replay-safe-ev-0",
-          "topic": "Durable orchestration and replay-safe evolution",
-          "summary": "Relevance: LOW - no clear BOX integration path. Reason: BOX currently runs a local Node/JSON orchestrator and does not use Temporal runtime primitives.",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-runtime-loop-control-handoffs-and-execut-1",
-          "topic": "Runtime loop control, handoffs, and execution reliability",
-          "summary": "1. Which BOX file changes: `src/core/worker_runner.ts`  \n2. Specific behavior change: add typed run-policy config per worker (`toolUseBehavior`, `stopAtToolNames`, `resetToolChoice`) and enforce schema validation before launching Copilot CLI, rejecting malformed task configs early.  \n3. Verifiable o",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-copilot-cloud-agent-assignment-contract--2",
-          "topic": "Copilot cloud-agent assignment contract and dispatch safety",
-          "summary": "1. Which BOX file changes: `src/core/worker_runner.ts`  \n2. Specific behavior change: add a pre-dispatch Copilot assignment preflight that verifies `suggestedActors` includes `copilot-swe-agent`, then always sends full `agentAssignment` payload (base branch, custom agent, model, custom instructions)",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-agent-cognition-patterns-for-planning-re-3",
-          "topic": "Agent cognition patterns for planning, reflection, and memory",
-          "summary": "1. Which BOX file changes: `src/core/prometheus.ts`  \n2. Specific behavior change: require every generated task plan to include explicit decomposition nodes, retry reflection fields (`priorFailureClass`, `counterfactualAction`), and a tool-evidence requirement flag for fact-sensitive tasks.  \n3. Ver",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-09T20:07:29.298Z",
-      "evaluatedAt": "2026-04-09T20:28:42.243Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-copilot-agent-policy-and-tool-governance-0",
-          "topic": "Copilot Agent Policy and Tool Governance",
-          "summary": "1. **File(s)**: `.github/agents/prometheus.agent.md`, `.github/agents/athena.agent.md`, `.github/agents/research-synthesizer.agent.md`, `src/core/worker_runner.ts`  \n2. **Behavior change**: Enforce per-agent hard frontmatter contract at worker dispatch: require `description`, force explicit `tools` ",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-copilot-cloud-agent-assignment-api-for-p-1",
-          "topic": "Copilot Cloud-Agent Assignment API for PR Creation",
-          "summary": "1. **File(s)**: `src/core/orchestrator.ts`, `src/core/worker_runner.ts`  \n2. **Behavior change**: Add optional “cloud assignment mode” that creates/updates issue envelopes and dispatches via GraphQL/REST agent assignment contract, including required `GraphQL-Features` header and preflight `suggested",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-deterministic-multi-agent-state-and-retr-2",
-          "topic": "Deterministic Multi-Agent State and Retry Patterns",
-          "summary": "1. **File(s)**: `src/core/orchestrator.ts`, `src/core/prometheus.ts`  \n2. **Behavior change**: Implement explicit round-robin turn scheduler for internal role handoffs (Prometheus → Athena → Worker feedback) with persisted `nextSpeakerIndex`, `currentTurn`, and bounded `maxTurns`; add state-schema v",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-external-performance-targets-for-autonom-3",
-          "topic": "External Performance Targets for Autonomous Coding",
-          "summary": "1. **File(s)**: `src/core/prometheus.ts`, `src/core/athena.ts`  \n2. **Behavior change**: Add benchmark-aware planning/review rubric that scores proposed tasks against two explicit target tracks (`Attempts-1` and `Attempts-2+`) and records model+system tags per cycle.  \n3. **Verifiable outcome**: Eac",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-09T18:45:22.060Z",
-      "evaluatedAt": "2026-04-09T20:05:29.177Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-durable-state-and-budget-constrained-exe-0",
-          "topic": "Durable State and Budget-Constrained Execution",
-          "summary": "1. **Which BOX file changes?** `src/core/orchestrator.ts` and `src/core/worker_runner.ts` (state boundary persistence wiring).  \n2. **What exactly changes?** Add checkpoint persistence API with keys `{thread_id, checkpoint_ns, checkpoint_id}`; persist cycle state after each major stage (Jesus, Prome",
-          "implementationStatus": "implemented",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-09T20:05:29.176Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        },
-        {
-          "id": "rec-agent-session-policy-and-pr-orchestratio-1",
-          "topic": "Agent Session Policy and PR Orchestration on Copilot Cloud Agent",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts` and `src/core/orchestrator.ts`.  \n2. **What exactly changes?** Add unified Copilot assignment launcher abstraction that accepts `{target_repo, base_branch, custom_instructions, custom_agent, model}` and dispatches GraphQL/REST/CLI/MCP based ",
-          "implementationStatus": "implemented",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-09T20:05:29.176Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        },
-        {
-          "id": "rec-deterministic-runtime-controls-and-failu-2",
-          "topic": "Deterministic Runtime Controls and Failure Taxonomy",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts` and `src/core/prometheus.ts`.  \n2. **What exactly changes?** Introduce composable termination policy objects (token, message-count, timeout, function-call-completion, external kill-switch) and evaluate them per message/tool event; persist an",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-external-benchmark-targets-and-evaluatio-3",
-          "topic": "External Benchmark Targets and Evaluation Integrity",
-          "summary": "1. **Which BOX file changes?** `src/core/prometheus.ts` and `src/core/verification_gate.ts`.  \n2. **What exactly changes?** Add benchmark-ingestion validator that cross-checks README claims against metadata fields (including `verified`), run constraints (pass@1/hints/browsing), and per-repo tables b",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-09T16:58:12.787Z",
-      "evaluatedAt": "2026-04-09T18:43:21.994Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-durable-multi-agent-execution-primitives-0",
-          "topic": "Durable Multi-Agent Execution Primitives (Temporal + AutoGen + LangGraph)",
-          "summary": "1. **File**: `src/core/orchestrator.ts` (and state persistence wiring in `src/core/worker_runner.ts`).  \n2. **Behavior change**: Add resumable cycle state model with explicit per-role checkpoints (`jesus/prometheus/athena/worker`) and enforce non-reentrant worker execution; reject second run attempt",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-benchmark-signal-quality-and-evaluation--1",
-          "topic": "Benchmark Signal Quality and Evaluation Reliability (OSWorld)",
-          "summary": "1. **File**: `src/core/prometheus.ts`.  \n2. **Behavior change**: Add benchmark ingestion normalizer that parses OSWorld verified/self-reported artifacts into strict schema, removes placeholder columns, normalizes date + step budget, and computes step-adjusted comparison metrics by approach type.  \n3",
-          "implementationStatus": "implemented",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-09T18:43:21.993Z: linked synthesis_sources match"
-        },
-        {
-          "id": "rec-copilot-cloud-agent-policy-control-and-r-2",
-          "topic": "Copilot Cloud-Agent Policy Control and Reliability",
-          "summary": "1. **File**: `src/core/worker_runner.ts` (plus hook config generation in agent setup path).  \n2. **Behavior change**: Enforce deterministic hook policy wiring for worker sessions: generate/validate `.github/hooks/*.json` with `preToolUse` deny rules, and require machine-readable `[HOOK_DECISION]` em",
-          "implementationStatus": "implemented",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-09T18:43:21.993Z: linked synthesis_sources match"
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-09T16:18:04.546Z",
-      "evaluatedAt": "2026-04-09T16:56:12.673Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-runtime-reliability-loop-detection-and-b-0",
-          "topic": "Runtime reliability, loop detection, and bounded retries",
-          "summary": "1. **File change**: `src/core/worker_runner.ts` and `src/core/orchestrator.ts`.\n2. **Specific behavior change**: Add a `StuckDetector` module in BOX that classifies loop types (`repeating_action_observation`, `repeating_action_error`, `monologue`, `repeating_action_observation_pattern`, `context_win",
-          "implementationStatus": "implemented",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-09T16:56:12.672Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        },
-        {
-          "id": "rec-agent-architecture-patterns-and-control--1",
-          "topic": "Agent architecture patterns and control topology",
-          "summary": "1. **File change**: `src/core/prometheus.ts` and `src/core/athena.ts`.\n2. **Specific behavior change**: Add a planning-policy router in Prometheus that chooses one of `{prompt_chain, routing, parallel, orchestrator_workers}` from task complexity signals; add Athena evaluator loop with explicit rubri",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-copilot-cloud-agent-phase-control-and-pr-2",
-          "topic": "Copilot cloud-agent phase control and PR iteration",
-          "summary": "1. **File change**: `src/core/prometheus.ts` and `src/core/orchestrator.ts`.\n2. **Specific behavior change**: Encode a strict task lifecycle state machine (`RESEARCH_DONE`, `PLAN_APPROVED`, `IMPLEMENTED`, `DIFF_REVIEWED`, `PR_OPEN`) and block PR-opening transitions unless Athena approval is present ",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-external-coding-agent-benchmark-signal-f-3",
-          "topic": "External coding-agent benchmark signal for policy calibration",
-          "summary": "1. **File change**: `src/core/verification_gate.ts` and `src/core/orchestrator.ts`.\n2. **Specific behavior change**: Add benchmark-ingestion adapter for SWE-bench-style JSON artifacts (`resolved_by_repo`, `resolved_by_time`, `results`) and compute stratified pass@1 + failure-bucket metrics in BOX cy",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-09T15:51:48.578Z",
-      "evaluatedAt": "2026-04-09T16:10:02.224Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-multi-agent-coordination-protocols-for-p-0",
-          "topic": "Multi-agent coordination protocols for planning and execution",
-          "summary": "1. **File change**: `src/core/prometheus.ts` and `src/core/orchestrator.ts`.  \n2. **Specific behavior change**: Implement a layered plan-synthesis mode: Prometheus emits `numLayers` and `fanout`; orchestrator runs parallel candidate-plan generation for each layer, then deterministic merge before tas",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-benchmark-ingestion-and-outcome-measurem-1",
-          "topic": "Benchmark ingestion and outcome measurement for autonomous coding quality",
-          "summary": "1. **File change**: `src/core/research_scout.ts` and `src/core/prometheus.ts`.  \n2. **Specific behavior change**: Add scheduled SWE-bench ingestion from embedded `leaderboard-data`, normalize row schema (including nullable cost fields), and compute model policy candidates using resolved-rate + avail",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-failure-classification-retries-and-runti-2",
-          "topic": "Failure classification, retries, and runtime control-plane governance",
-          "summary": "1. **File change**: `src/core/worker_runner.ts` and `src/core/verification_gate.ts`.  \n2. **Specific behavior change**: Introduce explicit retry taxonomy: classify failures into `non_retryable_policy`, `retryable_infra`, `retryable_tool`, apply bounded attempts/backoff, and enforce stage-specific ti",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-cost-aware-autonomous-loop-design-and-bo-3",
-          "topic": "Cost-aware autonomous loop design and bounded memory",
-          "summary": "1. **File change**: `src/core/orchestrator.ts` and `src/core/research_synthesizer.ts`.  \n2. **Specific behavior change**: Separate cycle phases into decision turns (LLM-enabled) and monitor turns (LLM-disabled), add bounded rolling memory compaction and exponential cooldown on repeated non-progress ",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-09T09:22:17.683Z",
-      "evaluatedAt": "2026-04-09T09:37:32.613Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-copilot-cloud-agent-assignment-and-custo-0",
-          "topic": "Copilot cloud-agent assignment and custom-agent control plane",
-          "summary": "1. **File change**: `src/core/worker_runner.ts` (task launch), `src/core/orchestrator.ts` (session tracking), `src/core/verification_gate.ts` (launch-contract checks).  \n2. **Behavior change**: Add a strict launch adapter that builds `agent_assignment` from Prometheus output (`target_repo`, `base_br",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-multi-agent-turn-orchestration-and-hando-1",
-          "topic": "Multi-agent turn orchestration and handoff-state durability",
-          "summary": "1. **File change**: `src/core/orchestrator.ts`, `src/core/worker_runner.ts`, `src/core/prometheus.ts`.  \n2. **Behavior change**: Add a typed coordination loop with explicit participant registry, active-speaker drain barrier, bounded `max_turns`, and unified termination event emission; classify inval",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-worker-lifecycle-safety-and-scheduled-cy-2",
-          "topic": "Worker lifecycle safety and scheduled-cycle control patterns",
-          "summary": "1. **File change**: `src/core/worker_runner.ts`, `src/core/orchestrator.ts`, `docker\\\\**\\\\*.Dockerfile` (where BOX worker image is defined).  \n2. **Behavior change**: Add explicit worker lifecycle state machine and graceful shutdown timers (`grace` + `force`), emit state transitions to telemetry, an",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-reflection-memory-retry-learning-for-sel-3",
-          "topic": "Reflection-memory retry learning for self-improving agents",
-          "summary": "1. **File change**: `src/core/athena.ts`, `src/core/verification_gate.ts`, `src/core/prometheus.ts`, `state/knowledge_memory.json`.  \n2. **Behavior change**: Add bounded reflection-memory retries: Athena emits structured failure reflections, verification gate emits evaluator-confidence metadata, Pro",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-09T05:25:41.196Z",
-      "evaluatedAt": "2026-04-09T09:20:17.583Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-copilot-cloud-agent-governance-controls-0",
-          "topic": "Copilot Cloud-Agent Governance Controls",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`  \n2. **What is the specific behavior change?** Add a pre-dispatch governance check that reads repo policy profile (`validationToolsEnabled`, `requireWorkflowApproval`) and blocks autonomous runs when task diff touches `.github/workflows/**` ",
-          "implementationStatus": "implemented",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": "auto-resolved@2026-04-09T09:20:17.581Z: verified worker completion fallback (missing synthesis_sources linkage)"
-        },
-        {
-          "id": "rec-durable-multi-agent-routing-and-state-1",
-          "topic": "Durable Multi-Agent Routing and State",
-          "summary": "1. **Which BOX file changes?** `src/core/orchestrator.ts`  \n2. **What is the specific behavior change?** Introduce checkpointed worker-cycle execution keyed by deterministic `thread_id` (`repo:cycle:task:attempt`) and persist latest checkpoint metadata after each major phase (plan, patch, test, veri",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-timeout-and-retry-semantics-for-autonomo-2",
-          "topic": "Timeout and Retry Semantics for Autonomous Runs",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`  \n2. **What is the specific behavior change?** Add explicit retry taxonomy (`nonRetryable` vs `retryable`) and bounded retry config per failure class, with conservative default of no automatic workflow-level retries.  \n3. **What is the verif",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-evaluator-driven-self-improvement-and-ag-3",
-          "topic": "Evaluator-Driven Self-Improvement and Agent Design",
-          "summary": "1. **Which BOX file changes?** `src/core/prometheus.ts`  \n2. **What is the specific behavior change?** Introduce planner mode selection (`workflow_template` vs `agentic_exploration`) with default to workflow templates for known task classes and escalation to exploratory mode only after bounded failu",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-08T19:14:59.482Z",
-      "evaluatedAt": "2026-04-08T19:44:32.934Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-copilot-cloud-agent-runtime-hardening-mc-0",
-          "topic": "Copilot Cloud Agent Runtime Hardening (MCP, Skills, Hooks)",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`  \n2. **What is the specific behavior change?** Add MCP preflight validation before worker dispatch: reject non-`COPILOT_MCP_*` secret references, reject unsupported server types/auth modes, and enforce explicit tool allowlists (block `[\"*\"]`",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-durable-multi-agent-orchestration-patter-1",
-          "topic": "Durable Multi-Agent Orchestration Patterns (LangGraph, CrewAI, AutoGen)",
-          "summary": "1. **Which BOX file changes?** `src/core/orchestrator.ts`  \n2. **What is the specific behavior change?** Introduce per-cycle checkpoint envelope `{thread_id, checkpoint_id, state_snapshot}` and resume logic that restarts from the last persisted checkpoint instead of restarting the full cycle.  \n3. *",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-reliability-defaults-and-external-benchm-2",
-          "topic": "Reliability Defaults and External Benchmark Feedback Loops",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`  \n2. **What is the specific behavior change?** Implement retry policy object `{initialIntervalMs, backoffCoefficient, maximumIntervalMs, maximumAttempts, nonRetryableErrorTypes}` and classify deterministic planner/policy/schema failures as n",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-08T17:03:01.304Z",
-      "evaluatedAt": "2026-04-08T17:28:52.653Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-deterministic-retry-and-failure-semantic-0",
-          "topic": "Deterministic Retry and Failure Semantics",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts`  \n2. **What exactly changes?** Add explicit worker-step retry policy execution with fields `{initialIntervalMs, backoffCoefficient, maximumIntervalMs, maximumAttempts, nonRetryableErrorTypes}`; enforce timeout-coupled retries; allow per-erro",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-schema-constrained-planning-and-session--1",
-          "topic": "Schema-Constrained Planning and Session Control",
-          "summary": "1. **Which BOX file changes?** `src/core/prometheus.ts`  \n2. **What exactly changes?** Add a strict Prometheus response schema with required fields `{plan_reasoning, init_plan, plan, current_plan_step, stop, send_to, message}`, `additionalProperties:false`, and fixed `stop` enum; enforce two-phase p",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-adaptive-multi-agent-routing-and-hierarc-2",
-          "topic": "Adaptive Multi-Agent Routing and Hierarchical Orchestration",
-          "summary": "1. **Which BOX file changes?** `src/core/prometheus.ts`  \n2. **What exactly changes?** Replace static worker ordering with selector-based routing: optional deterministic `selectorFunc`, optional `candidateFunc`, max selection attempts, strict participant validation, and deterministic fallback policy",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-08T16:20:15.540Z",
-      "evaluatedAt": "2026-04-08T16:50:00.374Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-copilot-cloud-agent-runtime-controls-mcp-0",
-          "topic": "Copilot Cloud Agent Runtime Controls (MCP + Skills)",
-          "summary": "1. **File to change**: `src/core/worker_runner.ts`  \n2. **Specific behavior change**: Add an MCP policy block to worker prompt assembly and post-run parsing that (a) rejects wildcard MCP tool exposure for privileged roles, (b) requires explicit server/tool allowlists, and (c) records MCP startup evi",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-durable-orchestration-patterns-for-long--1",
-          "topic": "Durable Orchestration Patterns for Long-Running Cycles",
-          "summary": "1. **File to change**: `src/core/orchestrator.ts`  \n2. **Specific behavior change**: Introduce Temporal-inspired deterministic run-chain controls without adding Temporal runtime: explicit retry policy object (`initialInterval`, `backoffCoefficient`, `maximumInterval`, `maximumAttempts`, `nonRetryabl",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-benchmark-validity-and-reproducible-eval-2",
-          "topic": "Benchmark Validity and Reproducible Evaluation Protocols",
-          "summary": "1. **File to change**: `src/core/verification_gate.ts`  \n2. **Specific behavior change**: Add benchmark-evidence schema checks for BOX evaluation tasks requiring protocol metadata fields (`split`, `resolved_count`, `split_total`, `agent_framework`, `framework_version`, `tool_calling_mode`, `temperat",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-08T14:16:59.009Z",
-      "evaluatedAt": "2026-04-08T16:18:15.437Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-durable-execution-state-and-workflow-con-0",
-          "topic": "Durable execution state and workflow control semantics",
-          "summary": "1. **Which BOX file changes?** `src/core/orchestrator.ts` and `src/core/research_synthesizer.ts` (state persistence path shared through orchestrator state handling).\n2. **What exactly changes?** Introduce checkpoint chain records for each cycle step with fields `{thread_id, checkpoint_ns, checkpoint",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-copilot-cloud-agent-configuration-and-en-1",
-          "topic": "Copilot cloud-agent configuration and enforcement surfaces",
-          "summary": "1. **Which BOX file changes?** `.github/agents/prometheus.agent.md`, `.github/agents/athena.agent.md`, `.github/agents/research-scout.agent.md`, `.github/agents/research-synthesizer.agent.md`.\n2. **What exactly changes?** Add explicit frontmatter for each agent with strict `tools` allowlist, `target",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-autonomous-agent-safety-architecture-and-2",
-          "topic": "Autonomous-agent safety architecture and reviewer quality evidence",
-          "summary": "1. **Which BOX file changes?** `src/core/worker_runner.ts` and `src/core/verification_gate.ts`.\n2. **What exactly changes?** Insert an execution-kernel layer that receives structured tool intents `{tool, args, scope, intent, impact, clearance}` from workers, performs policy evaluation before any too",
-          "implementationStatus": "pending",
-          "benchmarkScore": 1,
-          "capacityGain": null,
-          "evidence": ""
-        }
-      ]
-    },
-    {
-      "cycleId": "2026-04-08T12:57:51.139Z",
-      "evaluatedAt": "2026-04-08T13:13:41.664Z",
-      "schemaVersion": 1,
-      "recommendations": [
-        {
-          "id": "rec-swe-bench-multi-agent-repair-pipelines-a-0",
-          "topic": "SWE-bench multi-agent repair pipelines and measurable planning priors",
-          "summary": "1. **File**: `src/core/prometheus.ts`  \n2. **Behavior change**: Add a benchmark-prior table keyed by repository family (e.g., django-like, sympy-like) and use it to set initial task strategy (single specialist vs split roles) and attempt budget before plan emission.  \n3. **Verifiable outcome**: Gene",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-deterministic-worker-runtime-governance--1",
-          "topic": "Deterministic worker runtime governance (retry, concurrency, Copilot policy)",
-          "summary": "1. **File**: `src/core/worker_runner.ts`  \n2. **Behavior change**: Introduce a typed retry-policy validator/normalizer before worker launch; reject invalid configs with explicit errors and persist normalized policy on dispatch records.  \n3. **Verifiable outcome**: Worker dispatch fails fast for inva",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
-        },
-        {
-          "id": "rec-multi-agent-orchestration-contracts-and--2",
-          "topic": "Multi-agent orchestration contracts and anti-loop replanning",
-          "summary": "1. **File**: `src/core/orchestrator.ts`  \n2. **Behavior change**: Implement a two-loop controller with persisted `task/facts/plan/n_rounds/n_stalls`, schema-validated progress ledger, and automatic replan when stalls hit threshold (default 3).  \n3. **Verifiable outcome**: Orchestrator state JSON alw",
-          "implementationStatus": "pending",
-          "benchmarkScore": null,
-          "capacityGain": null,
-          "evidence": ""
         }
       ]
     }

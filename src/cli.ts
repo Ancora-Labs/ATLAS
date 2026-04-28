@@ -9,14 +9,17 @@ import { runOnce, runDaemon, runRebase, runResumeDispatch } from "./core/orchest
 import { runDoctor } from "./core/doctor.js";
 import { loadPlatformModeState, PLATFORM_MODE, summarizePlatformModeState, updatePlatformModeState } from "./core/mode_state.js";
 import { readSiControl, writeSiControl, isSelfImprovementActive, readSiLiveLog, siLogAsync } from "./core/si_control.js";
+import { archiveActiveSessionForFreshActivation } from "./core/activation_flow.js";
 import {
   archiveTargetSession,
-  clearLastArchivedTargetSession,
   createTargetSession,
+  getTargetSessionProgressLogPath,
+  listOpenTargetSessions,
   loadActiveTargetSession,
-  loadLastArchivedTargetSession,
-  purgeArchivedTargetSessionArtifacts,
+  loadTargetSession,
+  purgeAllTargetSessionArtifacts,
   saveActiveTargetSession,
+  selectActiveTargetSession,
   summarizeActiveTargetSession,
   TARGET_SESSION_STAGE,
   transitionActiveTargetSession,
@@ -25,6 +28,10 @@ import { getTargetClarificationRuntimeState, submitTargetClarificationAnswer } f
 import { buildSingleTargetStartupGuardMessage, evaluateSingleTargetStartupRequirements } from "./core/single_target_startup_guard.js";
 import { runTargetOnboarding } from "./core/onboarding_runner.js";
 import {
+  countRunningTargetSessionRunners,
+  listTargetSessionRunnerStates,
+  MAX_CONCURRENT_TARGET_SESSION_RUNNERS,
+  findDaemonStartConflict,
   readDaemonPid,
   readStopRequest,
   isDaemonProcess,
@@ -123,6 +130,86 @@ function printTargetStatus(modeSummary: string, sessionSummary: string, readines
   if (readinessSummary) {
     console.log(`[box target] readiness=${readinessSummary}`);
   }
+}
+
+function getTargetSessionSelectionFromCli(): { sessionId: string | null; projectId: string | null } {
+  return {
+    sessionId: getArgValue("--session") || getArgValue("--session-id"),
+    projectId: getArgValue("--project") || getArgValue("--project-id"),
+  };
+}
+
+function bindTargetSessionSelector(config: Config, selection: { sessionId: string | null; projectId: string | null }): Config {
+  if (!selection?.sessionId) {
+    return config;
+  }
+
+  return Object.assign({}, config, {
+    targetSessionSelector: {
+      sessionId: selection.sessionId,
+      projectId: selection.projectId,
+    },
+  });
+}
+
+async function resolveTargetSessionFromCli(config: Config) {
+  const selection = getTargetSessionSelectionFromCli();
+  if (selection.sessionId) {
+    const session = await loadTargetSession(config, selection);
+    if (!session) {
+      throw new Error(`target session not found: ${selection.sessionId}`);
+    }
+    return session;
+  }
+  return loadActiveTargetSession(config);
+}
+
+function printTargetSessionLogPath(config: Config, session: any): void {
+  const progressLogPath = session?.projectId && session?.sessionId
+    ? getTargetSessionProgressLogPath(config.paths.stateDir, session.projectId, session.sessionId)
+    : null;
+  printProductField("progress log", progressLogPath || "none");
+}
+
+async function printTargetSessionList(config: Config): Promise<void> {
+  const selectedSession = await loadActiveTargetSession(config);
+  const openSessions = await listOpenTargetSessions(config);
+  const runnerStates = await listTargetSessionRunnerStates(config);
+  printProductHeader("BOX Target Sessions", "Open target sessions and their per-session logs");
+  if (openSessions.length === 0) {
+    printProductField("sessions", "none");
+    return;
+  }
+
+  for (const session of openSessions) {
+    const isSelected = String(session?.sessionId || "") === String(selectedSession?.sessionId || "");
+    const runnerState = runnerStates.find((entry) => String(entry?.sessionId || "") === String(session?.sessionId || "") && String(entry?.projectId || "") === String(session?.projectId || ""));
+    console.log(`[box target] ${isSelected ? "selected" : "open"} project=${String(session?.projectId || "unknown")} session=${String(session?.sessionId || "unknown")} stage=${String(session?.currentStage || "unknown")} runner=${runnerState ? `pid=${runnerState.pid}` : "stopped"} repo=${String(session?.repo?.repoUrl || session?.repo?.localPath || "unknown")}`);
+    printTargetSessionLogPath(config, session);
+  }
+}
+
+async function spawnTargetSessionRunner(config: Config, session: any): Promise<number | undefined> {
+  const runningCount = await countRunningTargetSessionRunners(config);
+  if (runningCount >= MAX_CONCURRENT_TARGET_SESSION_RUNNERS) {
+    throw new Error(`target session runner limit reached (${MAX_CONCURRENT_TARGET_SESSION_RUNNERS})`);
+  }
+
+  const root = path.resolve(config.paths?.stateDir || "state", "..");
+  return spawnDetached(
+    "node",
+    [
+      "--import",
+      "tsx",
+      "src/cli.ts",
+      "start",
+      "--session",
+      String(session.sessionId),
+      "--project",
+      String(session.projectId),
+    ],
+    root,
+  );
 }
 
 async function summarizeTargetReadinessState(config: Config): Promise<string | null> {
@@ -283,6 +370,9 @@ async function handleActivationCommand(config: Config): Promise<void> {
   const selectedOptions = getArgValue("--options");
   const interactiveEnabled = !process.argv.includes("--no-interactive");
   const deleteRepoOnRestart = hasArgFlag("--delete-repo");
+  const replaceActive = hasArgFlag("--replace-active");
+  const selectNewSession = replaceActive || hasArgFlag("--select");
+  const existingSelectedSession = await loadActiveTargetSession(config);
 
   if (hasArgFlag("--restart") && (answerText || selectedOptions || manifestPath)) {
     throw new Error("--restart cannot be combined with --manifest, --answer, or --options");
@@ -294,12 +384,23 @@ async function handleActivationCommand(config: Config): Promise<void> {
   if (manifestPath) {
     const resolvedManifestPath = path.resolve(manifestPath);
     const manifest = JSON.parse(readFileSync(resolvedManifestPath, "utf8"));
-    const session = await createTargetSession(manifest, config);
+    if (replaceActive) {
+      await archiveActiveSessionForFreshActivation(config, {
+        reason: "activate_manifest_requested_fresh_session",
+        completionSummary: "Activation archived the previous target session before opening a new manifest-driven session.",
+      });
+    }
+    const willSelectNewSession = selectNewSession || !existingSelectedSession;
+    const session = await createTargetSession(manifest, config, { selectAsActive: willSelectNewSession });
     const onboardingResult = await runTargetOnboarding(config, session);
-    const finalSession = interactiveEnabled && isInteractiveTerminal()
+    const finalSession = interactiveEnabled && isInteractiveTerminal() && willSelectNewSession
       ? await runInteractiveClarificationSession(config, onboardingResult.session)
       : onboardingResult.session;
     await printActivationScreen(config, finalSession);
+    if (existingSelectedSession && !willSelectNewSession) {
+      console.log(`[box activate] opened session=${finalSession.sessionId} without replacing selected active session=${existingSelectedSession.sessionId}`);
+      console.log(`[box activate] select later: node --import tsx src/cli.ts target select --session ${finalSession.sessionId} --project ${finalSession.projectId}`);
+    }
     return;
   }
 
@@ -317,32 +418,37 @@ async function handleActivationCommand(config: Config): Promise<void> {
     return;
   }
 
-  const activeSession = await resolveActivationEntrySession(config, interactiveEnabled);
-  if (!activeSession && interactiveEnabled && isInteractiveTerminal()) {
+  if (interactiveEnabled && isInteractiveTerminal()) {
+    if (replaceActive) {
+      await archiveActiveSessionForFreshActivation(config, {
+        reason: "activate_interactive_requested_fresh_session",
+        completionSummary: "Activation archived the previous target session before opening a new interactive onboarding session.",
+      });
+    }
     const wizardResult = await runInteractiveActivationWizard(config);
-    const session = await createTargetSession(wizardResult.manifest, config);
+    const willSelectNewSession = selectNewSession || !existingSelectedSession;
+    const session = await createTargetSession(wizardResult.manifest, config, { selectAsActive: willSelectNewSession });
     const onboardingResult = await runTargetOnboarding(config, session);
-    const finalSession = await runInteractiveClarificationSession(config, onboardingResult.session);
+    const finalSession = willSelectNewSession
+      ? await runInteractiveClarificationSession(config, onboardingResult.session)
+      : onboardingResult.session;
     if (wizardResult.createdRepo?.full_name) {
       printProductField("created repo", String(wizardResult.createdRepo.full_name));
     }
     await printActivationScreen(config, finalSession);
+    if (existingSelectedSession && !willSelectNewSession) {
+      console.log(`[box activate] opened session=${finalSession.sessionId} without replacing selected active session=${existingSelectedSession.sessionId}`);
+      console.log(`[box activate] select later: node --import tsx src/cli.ts target select --session ${finalSession.sessionId} --project ${finalSession.projectId}`);
+    }
     return;
   }
 
-  if (!activeSession && hasArgFlag("--restart")) {
+  if (hasArgFlag("--restart")) {
+    await restartActiveTargetSession(config, {
+      reason: hasArgFlag("--delete-repo") ? "restart_flag_requested_delete_repo" : "restart_flag_requested",
+      deleteRemoteRepo: hasArgFlag("--delete-repo"),
+    });
     await printActivationScreen(config);
-    return;
-  }
-
-  if (
-    activeSession
-    && interactiveEnabled
-    && isInteractiveTerminal()
-    && activeSession.currentStage === TARGET_SESSION_STAGE.AWAITING_INTENT_CLARIFICATION
-  ) {
-    const finalSession = await runInteractiveClarificationSession(config, activeSession);
-    await printActivationScreen(config, finalSession);
     return;
   }
 
@@ -405,6 +511,10 @@ async function promptChoice(promptText: string, allowed: string[], fallback?: st
   }
 }
 
+function isOtherClarificationOption(value: string): boolean {
+  return /^(other|custom|something else|başka|diger|diğer)(\b|\s|$)/i.test(String(value || "").trim());
+}
+
 function parseClarificationOptionSelection(rawAnswer: string, options: string[]): { answerText: string; selectedOptions: string[] } {
   const trimmedAnswer = String(rawAnswer || "").trim();
   if (!trimmedAnswer || !Array.isArray(options) || options.length === 0) {
@@ -437,6 +547,31 @@ function parseClarificationOptionSelection(rawAnswer: string, options: string[])
   return { answerText: trimmedAnswer, selectedOptions: [] };
 }
 
+function hasClarificationUserAnswers(transcript: any): boolean {
+  return Array.isArray(transcript?.turns)
+    && transcript.turns.some((turn: any) => turn?.actor === "user" && turn?.kind === "answer");
+}
+
+function printCleanClarificationQuestion(runtime: any, currentQuestion: any): void {
+  const openingPrompt = String(runtime?.packet?.openingPrompt || "").trim();
+  const prompt = String(currentQuestion?.prompt || currentQuestion?.title || currentQuestion?.id || "What should ATLAS do?").trim();
+  const isFirstTurn = !hasClarificationUserAnswers(runtime?.transcript);
+  if (isFirstTurn && openingPrompt) {
+    console.log(`\nATLAS: ${openingPrompt}`);
+  }
+  if (!(isFirstTurn && openingPrompt && openingPrompt === prompt)) {
+    console.log(`\nATLAS: ${prompt}`);
+  }
+  const options = Array.isArray(currentQuestion?.options)
+    ? currentQuestion.options.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
+    : [];
+  if (options.length > 0) {
+    for (let index = 0; index < options.length; index += 1) {
+      console.log(`${index + 1}. ${options[index]}`);
+    }
+  }
+}
+
 async function runInteractiveClarificationSession(config: Config, session?: any | null): Promise<any> {
   let currentSession = session || await loadActiveTargetSession(config);
   while (currentSession?.currentStage === TARGET_SESSION_STAGE.AWAITING_INTENT_CLARIFICATION) {
@@ -445,20 +580,15 @@ async function runInteractiveClarificationSession(config: Config, session?: any 
     if (!currentQuestion) {
       return runtime?.session || currentSession;
     }
-
-    printProductHeader("BOX Activate", "Clarification required");
-    printProductField("session", runtime.session?.sessionId || currentSession?.sessionId || "unknown");
-    printProductField("question", currentQuestion.title || currentQuestion.id || "question");
-    printProductField("prompt", currentQuestion.prompt || "-");
+    printCleanClarificationQuestion(runtime, currentQuestion);
     const options = Array.isArray(currentQuestion.options)
       ? currentQuestion.options.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
       : [];
-    if (options.length > 0) {
-      printProductField("options", options.map((option, index) => `${index + 1}. ${option}`).join(" | "));
-    }
-
-    const rawAnswer = await promptRequired("your answer: ");
+    const rawAnswer = await promptRequired("You: ");
     const parsedAnswer = parseClarificationOptionSelection(rawAnswer, options);
+    if (parsedAnswer.selectedOptions.some((option) => isOtherClarificationOption(option)) && !parsedAnswer.answerText) {
+      parsedAnswer.answerText = await promptRequired("You: ");
+    }
     const result = await submitTargetClarificationAnswer(config, {
       questionId: currentQuestion.id,
       answerText: parsedAnswer.answerText,
@@ -508,64 +638,6 @@ async function restartActiveTargetSession(
   console.log(`[box activate] previous session archived=${archived.sessionId} reason=${reason}`);
 }
 
-async function resolveActivationEntrySession(config: Config, interactiveEnabled: boolean): Promise<any | null> {
-  const activeSession = await loadActiveTargetSession(config);
-  if (!activeSession) {
-    return null;
-  }
-
-  if (hasArgFlag("--restart")) {
-    await restartActiveTargetSession(config, {
-      reason: hasArgFlag("--delete-repo") ? "restart_flag_requested_delete_repo" : "restart_flag_requested",
-      deleteRemoteRepo: hasArgFlag("--delete-repo"),
-    });
-    return null;
-  }
-
-  if (!interactiveEnabled || !isInteractiveTerminal()) {
-    return activeSession;
-  }
-
-  printProductHeader("BOX Activate", "Existing target session detected");
-  printProductField("session", activeSession.sessionId);
-  printProductField("stage", humanizeMode(activeSession.currentStage));
-  printProductField("repo", activeSession.repo?.repoUrl || activeSession.repo?.localPath || "unknown");
-  printProductField("objective", activeSession.objective?.summary || "unknown");
-  const canDeleteCreatedRepo = canDeleteSessionRepo(activeSession);
-  console.log("1. Continue current target session");
-  console.log("2. Start over and keep current repo");
-  console.log("3. Cancel current session");
-  console.log(canDeleteCreatedRepo ? "4. Cancel current session and delete created repo" : "4. Keep everything and exit");
-  const decision = await promptChoice("select [1/2/3/4]: ", ["1", "2", "3", "4"], "1");
-  if (decision === "1") {
-    return activeSession;
-  }
-  if (decision === "2") {
-    await restartActiveTargetSession(config, {
-      reason: "restart_selected_in_activation_wizard_keep_repo",
-    });
-    return null;
-  }
-
-  if (decision === "3") {
-    await restartActiveTargetSession(config, {
-      reason: "cancel_selected_keep_existing_repo",
-    });
-    return null;
-  }
-
-  if (decision === "4" && canDeleteCreatedRepo) {
-    await restartActiveTargetSession(config, {
-      reason: "cancel_selected_delete_created_repo",
-      deleteRemoteRepo: true,
-    });
-    return null;
-  }
-
-  console.log("[box activate] cancelled by user");
-  process.exit(0);
-}
-
 async function githubApiRequest(config: Config, pathname: string, init: RequestInit = {}): Promise<any> {
   const token = String(config?.env?.githubToken || "").trim();
   if (!token) {
@@ -611,47 +683,6 @@ function canDeleteSessionRepo(session: any): boolean {
     && String(session?.repo?.repoFullName || "").trim().length > 0;
 }
 
-async function promptLastArchivedSessionCleanup(config: Config, interactiveEnabled: boolean): Promise<void> {
-  if (!interactiveEnabled || !isInteractiveTerminal()) {
-    return;
-  }
-
-  const archivedSession = await loadLastArchivedTargetSession(config);
-  if (!archivedSession) {
-    return;
-  }
-
-  printProductHeader("BOX Activate", "Last target session found");
-  printProductField("last session", archivedSession.sessionId);
-  printProductField("repo", archivedSession.repo?.repoUrl || archivedSession.repo?.localPath || "unknown");
-  printProductField("objective", archivedSession.objective?.summary || "unknown");
-  console.log("1. Keep last session archive and continue");
-  console.log("2. Delete last session archive");
-  console.log(canDeleteSessionRepo(archivedSession)
-    ? "3. Delete last session archive and created repo"
-    : "3. Clear last session reminder only");
-  const decision = await promptChoice("select [1/2/3]: ", ["1", "2", "3"], "1");
-  if (decision === "1") {
-    return;
-  }
-  if (decision === "2") {
-    await purgeArchivedTargetSessionArtifacts(config, archivedSession);
-    console.log(`[box activate] deleted archived session=${archivedSession.sessionId}`);
-    return;
-  }
-
-  if (canDeleteSessionRepo(archivedSession)) {
-    await deleteGithubRepo(config, String(archivedSession.repo.repoFullName));
-    console.log(`[box activate] deleted created repo=${String(archivedSession.repo.repoFullName)}`);
-    await purgeArchivedTargetSessionArtifacts(config, archivedSession);
-    console.log(`[box activate] deleted archived session=${archivedSession.sessionId}`);
-    return;
-  }
-
-  await clearLastArchivedTargetSession(config);
-  console.log("[box activate] cleared last session reminder");
-}
-
 async function listGithubRepos(config: Config): Promise<Array<Record<string, unknown>>> {
   const repos = await githubApiRequest(config, "/user/repos?per_page=30&sort=updated&affiliation=owner,collaborator");
   return Array.isArray(repos) ? repos : [];
@@ -675,10 +706,12 @@ async function createGithubRepo(config: Config, repoInput: {
 
 function buildInteractiveManifest(
   repoUrl: string,
-  objectiveSummary: string,
+  objectiveSummary?: string | null,
   repoName?: string | null,
   repoOptions: { repoFullName?: string | null; repoCreatedByBox?: boolean; deleteOnCancel?: boolean } = {},
 ): Record<string, unknown> {
+  const resolvedObjectiveSummary = String(objectiveSummary || "").trim()
+    || `Clarify the requested change for ${repoName || repoUrl} through AI-led onboarding, then continue single-target delivery.`;
   return {
     mode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
     requestId: `req_target_${Date.now()}`,
@@ -691,7 +724,7 @@ function buildInteractiveManifest(
       deleteOnCancel: repoOptions.deleteOnCancel === true,
     },
     objective: {
-      summary: objectiveSummary,
+      summary: resolvedObjectiveSummary,
       desiredOutcome: `${repoName || repoUrl} reaches single_target_project_readiness for delivery`,
       acceptanceCriteria: ["clarified", "single_target_project_readiness"],
     },
@@ -708,6 +741,7 @@ function buildInteractiveManifest(
 
 async function runInteractiveActivationWizard(config: Config): Promise<{ manifest: Record<string, unknown>; createdRepo?: Record<string, unknown> }> {
   printProductHeader("BOX Activate", "Choose repo source");
+  console.log("ATLAS will open a fresh session, lead the onboarding conversation, and shape the target with you in real time.");
   console.log("1. Existing GitHub repo");
   console.log("2. New GitHub repo");
   console.log("3. Manual repo URL");
@@ -718,8 +752,7 @@ async function runInteractiveActivationWizard(config: Config): Promise<{ manifes
     if (repos.length === 0) {
       console.log("No repos found. Falling back to manual URL.");
       const repoUrl = await promptRequired("repo url: ");
-      const objectiveSummary = await promptRequired("what should BOX build or change? ");
-      return { manifest: buildInteractiveManifest(repoUrl, objectiveSummary) };
+      return { manifest: buildInteractiveManifest(repoUrl) };
     }
 
     const shownRepos = repos.slice(0, 12);
@@ -732,8 +765,7 @@ async function runInteractiveActivationWizard(config: Config): Promise<{ manifes
     const selection = await promptRequired("pick repo number: ");
     if (selection.toLowerCase() === "m") {
       const repoUrl = await promptRequired("repo url: ");
-      const objectiveSummary = await promptRequired("what should BOX build or change? ");
-      return { manifest: buildInteractiveManifest(repoUrl, objectiveSummary) };
+      return { manifest: buildInteractiveManifest(repoUrl) };
     }
 
     const selectedRepo = shownRepos[Number(selection) - 1];
@@ -741,11 +773,10 @@ async function runInteractiveActivationWizard(config: Config): Promise<{ manifes
       throw new Error("Invalid repo selection");
     }
 
-    const objectiveSummary = await promptRequired("what should BOX build or change? ");
     return {
       manifest: buildInteractiveManifest(
         String(selectedRepo.clone_url || selectedRepo.html_url || "").trim(),
-        objectiveSummary,
+        null,
         String(selectedRepo.full_name || selectedRepo.name || "").trim(),
       ),
     };
@@ -755,7 +786,6 @@ async function runInteractiveActivationWizard(config: Config): Promise<{ manifes
     const repoName = await promptRequired("new repo name: ");
     const visibility = await promptChoice("visibility [public/private] (default: private): ", ["public", "private"], "private");
     const description = await promptInput("description (optional): ");
-    const objectiveSummary = await promptRequired("what should BOX build in this new repo? ");
     const createdRepo = await createGithubRepo(config, {
       name: repoName,
       description,
@@ -764,7 +794,7 @@ async function runInteractiveActivationWizard(config: Config): Promise<{ manifes
     return {
       manifest: buildInteractiveManifest(
         String(createdRepo.clone_url || createdRepo.html_url || "").trim(),
-        objectiveSummary,
+        null,
         String(createdRepo.full_name || createdRepo.name || repoName).trim(),
         {
           repoFullName: String(createdRepo.full_name || createdRepo.name || repoName).trim(),
@@ -777,8 +807,7 @@ async function runInteractiveActivationWizard(config: Config): Promise<{ manifes
   }
 
   const repoUrl = await promptRequired("repo url: ");
-  const objectiveSummary = await promptRequired("what should BOX build or change? ");
-  return { manifest: buildInteractiveManifest(repoUrl, objectiveSummary) };
+  return { manifest: buildInteractiveManifest(repoUrl) };
 }
 
 async function boxOn(config: Config): Promise<void> {
@@ -903,6 +932,26 @@ async function main(): Promise<void> {
   if (command === "target") {
     const subCommand = process.argv[3] || "status";
 
+    if (subCommand === "list") {
+      await printTargetSessionList(config);
+      return;
+    }
+
+    if (subCommand === "select") {
+      const selection = getTargetSessionSelectionFromCli();
+      if (!selection.sessionId) {
+        throw new Error("target select requires --session <id>");
+      }
+      const session = await selectActiveTargetSession(config, selection);
+      printTargetStatus(
+        summarizePlatformModeState(await loadPlatformModeState(config)),
+        summarizeActiveTargetSession(session),
+        await summarizeTargetReadinessState(config),
+      );
+      printTargetSessionLogPath(config, session);
+      return;
+    }
+
     if (subCommand === "start") {
       if (!(await ensureSingleTargetStartupReady(config, { forceSingleTarget: true }))) {
         return;
@@ -913,21 +962,90 @@ async function main(): Promise<void> {
       }
       const resolvedManifestPath = path.resolve(manifestPath);
       const manifest = JSON.parse(readFileSync(resolvedManifestPath, "utf8"));
-      const session = await createTargetSession(manifest, config);
+      const existingSelectedSession = await loadActiveTargetSession(config);
+      const shouldSelectStartedSession = hasArgFlag("--select") || !existingSelectedSession;
+      const session = await createTargetSession(manifest, config, { selectAsActive: shouldSelectStartedSession });
+      const shouldRunDetached = hasArgFlag("--run");
       printTargetStatus(
         summarizePlatformModeState(await loadPlatformModeState(config)),
         summarizeActiveTargetSession(session),
         await summarizeTargetReadinessState(config),
       );
+      printTargetSessionLogPath(config, session);
+      if (shouldRunDetached) {
+        const runnerPid = await spawnTargetSessionRunner(config, session);
+        console.log(`[box target] runner started pid=${String(runnerPid || "unknown")} session=${session.sessionId}`);
+      }
+      if (existingSelectedSession && !shouldSelectStartedSession) {
+        console.log(`[box target] opened additional session without replacing selected session=${existingSelectedSession.sessionId}`);
+      }
+      return;
+    }
+
+    if (subCommand === "run") {
+      const session = await resolveTargetSessionFromCli(config);
+      if (!session) {
+        throw new Error("target run requires an open session or --session <id>");
+      }
+      const runnerPid = await spawnTargetSessionRunner(config, session);
+      console.log(`[box target] runner started pid=${String(runnerPid || "unknown")} session=${session.sessionId}`);
+      printTargetSessionLogPath(config, session);
+      return;
+    }
+
+    if (subCommand === "runner-status") {
+      const session = await resolveTargetSessionFromCli(config);
+      if (!session) {
+        throw new Error("target runner-status requires an open session or --session <id>");
+      }
+      const scopedConfig = bindTargetSessionSelector(config, {
+        sessionId: String(session.sessionId || "") || null,
+        projectId: String(session.projectId || "") || null,
+      });
+      const runnerState = await readDaemonPid(scopedConfig);
+      const runnerPid = Number(runnerState?.pid || 0);
+      console.log(`[box target] runner session=${session.sessionId} running=${runnerPid && isProcessAlive(runnerPid) ? "true" : "false"} pid=${runnerPid || "none"}`);
+      printTargetSessionLogPath(config, session);
+      return;
+    }
+
+    if (subCommand === "stop-runner") {
+      const session = await resolveTargetSessionFromCli(config);
+      if (!session) {
+        throw new Error("target stop-runner requires an open session or --session <id>");
+      }
+      const scopedConfig = bindTargetSessionSelector(config, {
+        sessionId: String(session.sessionId || "") || null,
+        projectId: String(session.projectId || "") || null,
+      });
+      const runnerState = await readDaemonPid(scopedConfig);
+      const runnerPid = Number(runnerState?.pid || 0);
+      if (!runnerPid || !isProcessAlive(runnerPid)) {
+        await clearDaemonPid(scopedConfig);
+        await clearStopRequest(scopedConfig);
+        console.log(`[box target] runner not running session=${session.sessionId}`);
+        return;
+      }
+      await requestDaemonStop(scopedConfig, "cli-target-stop-runner");
+      console.log(`[box target] stop requested pid=${runnerPid} session=${session.sessionId}`);
       return;
     }
 
     if (subCommand === "status") {
+      const session = await resolveTargetSessionFromCli(config);
       printTargetStatus(
         summarizePlatformModeState(await loadPlatformModeState(config)),
-        summarizeActiveTargetSession(await loadActiveTargetSession(config)),
-        await summarizeTargetReadinessState(config),
+        summarizeActiveTargetSession(session),
+        !getTargetSessionSelectionFromCli().sessionId ? await summarizeTargetReadinessState(config) : null,
       );
+      printTargetSessionLogPath(config, session);
+      printProductField("selected active", String(session?.sessionId || "") === String((await loadActiveTargetSession(config))?.sessionId || "") ? "yes" : "no");
+      return;
+    }
+
+    if (subCommand === "log-path") {
+      const session = await resolveTargetSessionFromCli(config);
+      printTargetSessionLogPath(config, session);
       return;
     }
 
@@ -936,7 +1054,8 @@ async function main(): Promise<void> {
       if (!nextStage) {
         throw new Error("target stage requires --to <stage>");
       }
-      const session = await transitionActiveTargetSession(config, {
+      const scopedConfig = bindTargetSessionSelector(config, getTargetSessionSelectionFromCli());
+      const session = await transitionActiveTargetSession(scopedConfig, {
         nextStage,
         actor: "cli",
         reason: getArgValue("--reason"),
@@ -951,9 +1070,10 @@ async function main(): Promise<void> {
     }
 
     if (subCommand === "close") {
+      const scopedConfig = bindTargetSessionSelector(config, getTargetSessionSelectionFromCli());
       const deleteRemoteRepo = hasArgFlag("--delete-repo");
       if (deleteRemoteRepo) {
-        const activeSession = await loadActiveTargetSession(config);
+        const activeSession = await loadActiveTargetSession(scopedConfig);
         if (!canDeleteSessionRepo(activeSession)) {
           throw new Error("Active target session does not have a BOX-created repo that can be deleted");
         }
@@ -961,7 +1081,7 @@ async function main(): Promise<void> {
         console.log(`[box target] deleted created repo=${String(activeSession.repo.repoFullName)}`);
       }
       const completionStage = getArgValue("--status") || TARGET_SESSION_STAGE.COMPLETED;
-      const archived = await archiveTargetSession(config, {
+      const archived = await archiveTargetSession(scopedConfig, {
         completionStage,
         completionReason: getArgValue("--reason"),
         completionSummary: getArgValue("--summary"),
@@ -975,17 +1095,29 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (subCommand === "purge-all") {
+      await purgeAllTargetSessionArtifacts(config);
+      console.log("[box target] purged all target sessions, archived session records, and session workspaces");
+      printTargetStatus(
+        summarizePlatformModeState(await loadPlatformModeState(config)),
+        summarizeActiveTargetSession(await loadActiveTargetSession(config)),
+        await summarizeTargetReadinessState(config),
+      );
+      return;
+    }
+
     if (subCommand === "clarify") {
+      const scopedConfig = bindTargetSessionSelector(config, getTargetSessionSelectionFromCli());
       const answerText = getArgValue("--answer");
       const questionId = getArgValue("--question-id");
       const selectedOptions = getArgValue("--options");
       if (!answerText && !selectedOptions) {
-        const runtime = await getTargetClarificationRuntimeState(config, { persistPrompt: true });
+        const runtime = await getTargetClarificationRuntimeState(scopedConfig, { persistPrompt: true });
         printClarificationState(runtime);
         return;
       }
 
-      const result = await submitTargetClarificationAnswer(config, {
+      const result = await submitTargetClarificationAnswer(scopedConfig, {
         questionId,
         answerText,
         selectedOptions,
@@ -1008,16 +1140,27 @@ async function main(): Promise<void> {
   }
 
   if (command === "start") {
-    if (!(await ensureSingleTargetStartupReady(config))) {
+    const targetSelection = getTargetSessionSelectionFromCli();
+    const sessionScopedConfig = bindTargetSessionSelector(config, targetSelection);
+    if (!(await ensureSingleTargetStartupReady(sessionScopedConfig))) {
       return;
     }
-    // Kill orphan daemons before starting — prevents multiple instances
-    const orphans = killAllDaemonProcesses();
-    if (orphans.length > 0) {
-      console.log(`[box] killed ${orphans.length} orphan daemon(s): ${orphans.join(", ")}`);
+
+    const startConflict = await findDaemonStartConflict(sessionScopedConfig);
+    if (startConflict) {
+      console.log(`[box] ${startConflict.reason}`);
+      return;
     }
 
-    const daemonPidState = await readDaemonPid(config);
+    if (!targetSelection.sessionId) {
+      // Kill orphan daemons before starting — prevents multiple instances
+      const orphans = killAllDaemonProcesses();
+      if (orphans.length > 0) {
+        console.log(`[box] killed ${orphans.length} orphan daemon(s): ${orphans.join(", ")}`);
+      }
+    }
+
+    const daemonPidState = await readDaemonPid(sessionScopedConfig);
     const daemonPid = Number(daemonPidState?.pid || 0);
     if (daemonPid && isDaemonProcess(daemonPid)) {
       console.log(`[box] daemon already running pid=${daemonPid}`);
@@ -1025,9 +1168,9 @@ async function main(): Promise<void> {
     }
 
     // Starting should always clear any previously persisted stop request.
-    await clearStopRequest(config);
+    await clearStopRequest(sessionScopedConfig);
 
-    await runDaemon(config);
+    await runDaemon(sessionScopedConfig);
     return;
   }
 
@@ -1038,56 +1181,66 @@ async function main(): Promise<void> {
   }
 
   if (command === "resume") {
-    await runResumeDispatch(config);
+    const sessionScopedConfig = bindTargetSessionSelector(config, getTargetSessionSelectionFromCli());
+    const startConflict = await findDaemonStartConflict(sessionScopedConfig);
+    if (startConflict) {
+      console.log(`[box] ${startConflict.reason}`);
+      return;
+    }
+    sessionScopedConfig.platformModeState = await loadPlatformModeState(sessionScopedConfig);
+    sessionScopedConfig.activeTargetSession = await loadActiveTargetSession(sessionScopedConfig);
+    await runResumeDispatch(sessionScopedConfig);
     console.log("[box] resume completed from dispatch checkpoint");
     return;
   }
 
   if (command === "reload") {
-    const daemonPidState = await readDaemonPid(config);
+    const sessionScopedConfig = bindTargetSessionSelector(config, getTargetSessionSelectionFromCli());
+    const daemonPidState = await readDaemonPid(sessionScopedConfig);
     const daemonPid = Number(daemonPidState?.pid || 0);
     if (!daemonPid || !isDaemonProcess(daemonPid)) {
       console.log("[box] daemon not running — nothing to reload");
       return;
     }
-    await requestDaemonReload(config, "cli-reload");
+    await requestDaemonReload(sessionScopedConfig, "cli-reload");
     console.log(`[box] reload requested for daemon pid=${daemonPid} — config will refresh on next loop iteration`);
     return;
   }
 
   if (command === "stop") {
-    const daemonPidState = await readDaemonPid(config);
+    const sessionScopedConfig = bindTargetSessionSelector(config, getTargetSessionSelectionFromCli());
+    const daemonPidState = await readDaemonPid(sessionScopedConfig);
     const daemonPid = Number(daemonPidState?.pid || 0);
     if (!daemonPid) {
-      await clearDaemonPid(config);
-      await clearStopRequest(config);
+      await clearDaemonPid(sessionScopedConfig);
+      await clearStopRequest(sessionScopedConfig);
       console.log("[box] daemon not running");
       return;
     }
 
     if (!isDaemonProcess(daemonPid)) {
-      await clearDaemonPid(config);
-      await clearStopRequest(config);
+      await clearDaemonPid(sessionScopedConfig);
+      await clearStopRequest(sessionScopedConfig);
       console.log("[box] cleared stale daemon control files");
       console.log("[box] daemon not running");
       return;
     }
 
-    const existingStopRequest = await readStopRequest(config);
+    const existingStopRequest = await readStopRequest(sessionScopedConfig);
     if (existingStopRequest?.requestedAt) {
       const requestedAtMs = new Date(existingStopRequest.requestedAt).getTime();
       const ageMs = Number.isFinite(requestedAtMs) ? (Date.now() - requestedAtMs) : Number.MAX_SAFE_INTEGER;
       const staleMs = Math.max(120000, Number(config.loopIntervalMs || 0) * 2);
       if (ageMs > staleMs) {
-        await clearDaemonPid(config);
-        await clearStopRequest(config);
+        await clearDaemonPid(sessionScopedConfig);
+        await clearStopRequest(sessionScopedConfig);
         console.log("[box] cleared stale daemon control files");
         console.log("[box] daemon not running");
         return;
       }
     }
 
-    await requestDaemonStop(config, "cli-stop");
+    await requestDaemonStop(sessionScopedConfig, "cli-stop");
     console.log(`[box] stop requested for daemon pid=${daemonPid}`);
     return;
   }
@@ -1210,18 +1363,29 @@ async function main(): Promise<void> {
   }
 
   if (command === "once") {
-    if (!(await ensureSingleTargetStartupReady(config))) {
+    const sessionScopedConfig = bindTargetSessionSelector(config, getTargetSessionSelectionFromCli());
+    if (!(await ensureSingleTargetStartupReady(sessionScopedConfig))) {
       return;
     }
-    const existingStopRequest = await readStopRequest(config);
+    const startConflict = await findDaemonStartConflict(sessionScopedConfig);
+    if (startConflict) {
+      console.log(`[box] ${startConflict.reason}`);
+      return;
+    }
+    const existingStopRequest = await readStopRequest(sessionScopedConfig);
     if (existingStopRequest?.requestedAt) {
-      await clearStopRequest(config);
+      await clearStopRequest(sessionScopedConfig);
       console.log("[box once] cleared stale stop request before one-shot run");
     }
-    await runOnce(config);
+    await runOnce(sessionScopedConfig);
     return;
   }
 
+  const startConflict = await findDaemonStartConflict(config);
+  if (startConflict) {
+    console.log(`[box] ${startConflict.reason}`);
+    return;
+  }
   await runOnce(config);
 }
 

@@ -5,15 +5,15 @@ import crypto from "node:crypto";
 import { execSync, spawn } from "node:child_process";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import dotenv from "dotenv";
+import { bootstrapEnvironment } from "../env_bootstrap.js";
 import { readPipelineProgress, SYSTEM_STATUS_REASON_CODE } from "../core/pipeline_progress.js";
 import { parseTypedEvent } from "../core/event_schema.js";
 import { readCycleAnalytics } from "../core/cycle_analytics.js";
 import { collectHypothesisScorecard } from "../core/hypothesis_scorecard.js";
 import { normalizePlatformModeState, PLATFORM_MODE } from "../core/mode_state.js";
-import { getTargetSessionProgressLogPath, normalizeActiveTargetSession } from "../core/target_session_state.js";
+import { getTargetSessionProgressLogPath, listOpenTargetSessions, normalizeActiveTargetSession } from "../core/target_session_state.js";
 
-dotenv.config();
+bootstrapEnvironment();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,8 +31,8 @@ const CLAUDE_RATE_LIMIT_BACKOFF_MS = Number(process.env.BOX_CLAUDE_RATE_LIMIT_BA
 const CLAUDE_COST_WINDOW_DAYS = Math.max(1, Number(process.env.BOX_CLAUDE_COST_WINDOW_DAYS || "30"));
 const CLAUDE_COST_START_AT = String(process.env.BOX_CLAUDE_COST_START_AT || "").trim();
 const CLAUDE_COST_END_AT = String(process.env.BOX_CLAUDE_COST_END_AT || "").trim();
-const GITHUB_TOKEN = process.env.GITHUB_FINEGRADED || process.env.GITHUBFINEGRADEDPERSONALINTEL || process.env.GITHUB_TOKEN || process.env.GITHUB_TOKENPERSONAL || "";
-const GITHUB_BILLING_TOKEN = process.env.GITHUBFINEGRADEDPERSONALINTEL || process.env.GITHUB_FINEGRADED || GITHUB_TOKEN;
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "";
+const GITHUB_BILLING_TOKEN = process.env.BOX_GITHUB_BILLING_TOKEN || process.env.COPILOT_GITHUB_TOKEN || GITHUB_TOKEN;
 const GITHUB_BILLING_SUMMARY_URL = process.env.BOX_GITHUB_BILLING_SUMMARY_URL
   || `https://api.github.com/users/${COPILOT_SOURCE_ACCOUNT}/settings/billing/premium_request/usage`;
 const GITHUB_API_VERSION = process.env.BOX_GITHUB_API_VERSION || "2022-11-28";
@@ -1199,6 +1199,7 @@ function normalizeStringList(values: unknown): string[] {
 export function deriveTargetRuntimeView(input: {
   platformModeState?: Record<string, any> | null;
   activeTargetSession?: Record<string, any> | null;
+  allTargetSessions?: Array<Record<string, any>> | null;
   targetRepo?: string | null;
   rootDir?: string | null;
 }) {
@@ -1208,6 +1209,9 @@ export function deriveTargetRuntimeView(input: {
   const activeTargetSession = input?.activeTargetSession && typeof input.activeTargetSession === "object"
     ? input.activeTargetSession
     : null;
+  const allTargetSessions = Array.isArray(input?.allTargetSessions)
+    ? input.allTargetSessions.filter((entry) => entry && typeof entry === "object")
+    : [];
   const currentMode = String(platformModeState.currentMode || PLATFORM_MODE.SELF_DEV);
   const targetRepo = String(activeTargetSession?.repo?.repoUrl || input?.targetRepo || "").trim();
   const projectLabel = deriveProjectLabel(targetRepo, String(activeTargetSession?.repo?.name || "").trim() || null);
@@ -1268,6 +1272,15 @@ export function deriveTargetRuntimeView(input: {
   const bootstrap = activeTargetSession?.workspace?.bootstrap && typeof activeTargetSession.workspace.bootstrap === "object"
     ? activeTargetSession.workspace.bootstrap
     : {};
+  const openTargetSessions = allTargetSessions.map((session) => ({
+    projectId: String(session?.projectId || "").trim() || null,
+    sessionId: String(session?.sessionId || "").trim() || null,
+    repoUrl: String(session?.repo?.repoUrl || "").trim() || null,
+    stage: String(session?.currentStage || "unknown").trim() || null,
+    objectiveSummary: String(session?.objective?.summary || "").trim() || null,
+    workspacePath: String(session?.workspace?.path || "").trim() || null,
+    updatedAt: String(session?.lifecycle?.updatedAt || "").trim() || null,
+  }));
 
   return {
     currentMode,
@@ -1300,7 +1313,13 @@ export function deriveTargetRuntimeView(input: {
     bootstrapStrategy: String(bootstrap.strategy || "pending").trim() || null,
     bootstrapLastError: String(bootstrap.lastError || "").trim() || null,
     hasActiveTargetSession: activeTargetSession != null,
-    canOpenNewSession: activeTargetSession == null,
+    canOpenNewSession: true,
+    multiSessionSupported: true,
+    openSessionCount: openTargetSessions.length,
+    otherOpenSessionsCount: activeTargetSession != null
+      ? openTargetSessions.filter((session) => session.sessionId !== String(activeTargetSession?.sessionId || "")).length
+      : openTargetSessions.length,
+    openTargetSessions,
   };
 }
 
@@ -1477,10 +1496,12 @@ async function collectDashboardData() {
   };
   const normalizedActiveTargetSessionResult = normalizeActiveTargetSession(rawActiveTargetSession, normalizedConfig);
   const normalizedActiveTargetSession = normalizedActiveTargetSessionResult.session;
+  const openTargetSessions = await listOpenTargetSessions(normalizedConfig);
   const normalizedPlatformModeState = normalizePlatformModeState(rawPlatformModeState, normalizedActiveTargetSession, normalizedConfig);
   const targetRuntime = deriveTargetRuntimeView({
     platformModeState: normalizedPlatformModeState,
     activeTargetSession: normalizedActiveTargetSession,
+    allTargetSessions: openTargetSessions,
     targetRepo: TARGET_REPO,
     rootDir: ROOT,
   });
@@ -1490,6 +1511,28 @@ async function collectDashboardData() {
   const targetSessionLogTail = targetSessionProgressPath
     ? await readTailLines(targetSessionProgressPath, 80).catch(() => [])
     : [];
+  const openTargetSessionEntries = await Promise.all(
+    openTargetSessions.map(async (session) => {
+      const progressLogPath = session?.projectId && session?.sessionId
+        ? getTargetSessionProgressLogPath(STATE_DIR, session.projectId, session.sessionId)
+        : null;
+      const progressLogTail = progressLogPath
+        ? await readTailLines(progressLogPath, 20).catch(() => [])
+        : [];
+      return {
+        projectId: String(session?.projectId || "").trim() || null,
+        sessionId: String(session?.sessionId || "").trim() || null,
+        repoUrl: String(session?.repo?.repoUrl || "").trim() || null,
+        stage: String(session?.currentStage || "unknown").trim() || null,
+        objectiveSummary: String(session?.objective?.summary || "").trim() || null,
+        workspacePath: String(session?.workspace?.path || "").trim() || null,
+        updatedAt: String(session?.lifecycle?.updatedAt || "").trim() || null,
+        sessionProgressLogPath: progressLogPath,
+        sessionProgressTail: progressLogTail,
+        isSelectedActiveSession: String(session?.sessionId || "") === String(normalizedActiveTargetSession?.sessionId || ""),
+      };
+    })
+  );
 
   // Read last thinking snippet from each worker's debug file
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1569,6 +1612,7 @@ async function collectDashboardData() {
       activeTarget: {
         ...targetRuntime,
         sessionProgressLogPath: targetSessionProgressPath,
+        openTargetSessions: openTargetSessionEntries,
       },
       /** Source freshness timestamp from the authoritative event-driven state file. */
       statusFreshnessAt: statusResult.statusFreshnessAt,

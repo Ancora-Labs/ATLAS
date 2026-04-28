@@ -12,6 +12,7 @@ import {
   promotePrometheusAnalysisFromWorkerEvidence,
   rebatchOversizedAthenaPlanGroupsForAdmission,
   resolveInterBatchCooldownDecision,
+  shouldRunSelfEvolutionRuntimeHooks,
   shouldBypassLaneDiversityHardGate,
   shouldBypassSpecializationAdmissionGate,
   recoverStaleWorkerSessions,
@@ -51,6 +52,26 @@ describe("orchestrator runtime contracts - timeout recovery", () => {
   });
 });
 
+describe("orchestrator runtime contracts - self-evolution runtime gating", () => {
+  it("runs self-evolution hooks only in self-dev mode", () => {
+    assert.equal(
+      shouldRunSelfEvolutionRuntimeHooks({
+        platformModeState: { currentMode: "self_dev" },
+      }),
+      true,
+    );
+  });
+
+  it("does not run self-evolution hooks during single-target delivery", () => {
+    assert.equal(
+      shouldRunSelfEvolutionRuntimeHooks({
+        platformModeState: { currentMode: "single_target_delivery" },
+      }),
+      false,
+    );
+  });
+});
+
 describe("orchestrator runtime contracts - lane diversity hard gate bypass", () => {
   it("bypasses the hard gate when same-lane conflicts will be serialized into batches", () => {
     const result = shouldBypassLaneDiversityHardGate({
@@ -65,6 +86,27 @@ describe("orchestrator runtime contracts - lane diversity hard gate bypass", () 
 
     assert.equal(result.bypass, true);
     assert.equal(result.reason, "same_lane_conflicts_will_serialize_into_distinct_batches");
+  });
+
+  it("bypasses the hard gate for single-target endgame closure work on one remaining lane", () => {
+    const result = shouldBypassLaneDiversityHardGate({
+      plans: [
+        {
+          task: "Emit the final verification report and recompute project readiness for the active target session",
+          taskKind: "verification",
+          role: "quality-worker",
+          _capabilityLane: "quality",
+          currentMode: "single_target_delivery",
+          currentStage: "active",
+        },
+      ],
+      minLanes: 2,
+      capabilityPoolResult: { activeLaneCount: 1 },
+      laneConflicts: [],
+    });
+
+    assert.equal(result.bypass, true);
+    assert.equal(result.reason, "single_target_endgame_single_lane_closure");
   });
 
   it("does not bypass the hard gate for plain monoculture without conflict serialization", () => {
@@ -98,6 +140,22 @@ describe("orchestrator runtime contracts - specialization admission bypass", () 
 
     assert.equal(result.bypass, true);
     assert.equal(result.reason, "serialized_same_lane_batch_topology_makes_specialization_target_infeasible");
+  });
+
+  it("bypasses specialization for single-target endgame closure on one remaining lane", () => {
+    const result = shouldBypassSpecializationAdmissionGate({
+      laneDiversityBypassReason: "single_target_endgame_single_lane_closure",
+      capabilityPoolResult: {
+        activeLaneCount: 1,
+        specializationUtilization: {
+          specializedShare: 0,
+          specializedDeficit: 1,
+        },
+      },
+    });
+
+    assert.equal(result.bypass, true);
+    assert.equal(result.reason, "single_target_endgame_single_lane_closure_makes_specialization_target_infeasible");
   });
 
   it("does not bypass specialization without a connected lane-diversity serialization signal", () => {
@@ -388,6 +446,46 @@ describe("orchestrator runtime contracts - startup stale worker recovery", () =>
       false,
     );
   });
+
+  it("recovers working sessions when the recorded daemon pid is dead and the session is stale", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-dead-daemon-"));
+
+    try {
+      await fs.writeFile(
+        path.join(tmpDir, "daemon.pid.json"),
+        JSON.stringify({ pid: 999999, startedAt: "2026-04-09T12:41:34.037Z" }, null, 2),
+        "utf8",
+      );
+
+      const sessions = {
+        "evolution-worker": {
+          status: "working",
+          startedAt: "2026-04-09T12:15:26.307Z",
+          updatedAt: "2026-04-09T12:16:26.307Z",
+        },
+      };
+
+      const recovered = await recoverStaleWorkerSessions(
+        {
+          paths: {
+            stateDir: tmpDir,
+            progressFile: path.join(tmpDir, "progress.txt"),
+          },
+        },
+        tmpDir,
+        sessions,
+      );
+
+      assert.equal(recovered, true);
+      assert.equal(sessions["evolution-worker"].status, "idle");
+
+      const persisted = JSON.parse(await fs.readFile(path.join(tmpDir, "worker_sessions.json"), "utf8"));
+      assert.equal(persisted["evolution-worker"].status, "idle");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
 });
 
 describe("orchestrator runtime contracts - adaptive inter-batch cooldown", () => {

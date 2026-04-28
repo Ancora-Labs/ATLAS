@@ -38,6 +38,13 @@ function normalizeNullableString(value: unknown): string | null {
   return normalized ? normalized : null;
 }
 
+function resolveConfiguredTargetSessionSelector(config: any) {
+  return {
+    activeTargetProjectId: normalizeNullableString(config?.targetSessionSelector?.projectId || process.env.BOX_TARGET_PROJECT_ID),
+    activeTargetSessionId: normalizeNullableString(config?.targetSessionSelector?.sessionId || process.env.BOX_TARGET_SESSION_ID),
+  };
+}
+
 export function getPlatformModeStatePath(stateDir: string): string {
   return path.join(stateDir, "platform", "mode_state.json");
 }
@@ -59,6 +66,11 @@ export function normalizePlatformModeState(rawState: any, activeTargetSession: a
     : DEFAULT_PLATFORM_MODE_STATE.fallbackModeAfterCompletion;
   let activeTargetSessionId = normalizeNullableString(rawState?.activeTargetSessionId);
   let activeTargetProjectId = normalizeNullableString(rawState?.activeTargetProjectId);
+  const configuredSelector = resolveConfiguredTargetSessionSelector(config);
+
+  if (configuredSelector.activeTargetSessionId) {
+    currentMode = PLATFORM_MODE.SINGLE_TARGET_DELIVERY;
+  }
 
   const activeSessionIdFromFile = normalizeNullableString(activeTargetSession?.sessionId);
   const activeProjectIdFromFile = normalizeNullableString(activeTargetSession?.projectId);
@@ -80,13 +92,21 @@ export function normalizePlatformModeState(rawState: any, activeTargetSession: a
     activeTargetSessionId = null;
     activeTargetProjectId = null;
   } else if (currentMode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY) {
+    if (configuredSelector.activeTargetSessionId) {
+      activeTargetSessionId = configuredSelector.activeTargetSessionId;
+      activeTargetProjectId = configuredSelector.activeTargetProjectId;
+    }
     if (!activeTargetSessionId && activeSessionIdFromFile) {
       activeTargetSessionId = activeSessionIdFromFile;
       activeTargetProjectId = activeProjectIdFromFile;
     } else if (activeTargetSessionId && activeSessionIdFromFile && activeTargetSessionId !== activeSessionIdFromFile) {
-      warnings.push("active target session pointer disagreed with active_target_session.json; trusting active_target_session.json");
-      activeTargetSessionId = activeSessionIdFromFile;
-      activeTargetProjectId = activeProjectIdFromFile;
+      if (configuredSelector.activeTargetSessionId) {
+        warnings.push("active target session pointer disagreed with active_target_session.json; trusting configured target session selector");
+      } else {
+        warnings.push("active target session pointer disagreed with active_target_session.json; trusting active_target_session.json");
+        activeTargetSessionId = activeSessionIdFromFile;
+        activeTargetProjectId = activeProjectIdFromFile;
+      }
     }
 
     if (!activeTargetSessionId) {
@@ -123,10 +143,14 @@ export async function loadPlatformModeState(config: any) {
   const activeTargetSessionPath = getActiveTargetSessionPath(stateDir);
   await fs.mkdir(path.dirname(modeStatePath), { recursive: true });
 
-  const [rawState, activeTargetSession] = await Promise.all([
+  const [persistedRawState, activeTargetSession] = await Promise.all([
     readJson(modeStatePath, null),
     readJson(activeTargetSessionPath, null),
   ]);
+  const inMemoryState = config?.platformModeState && typeof config.platformModeState === "object"
+    ? config.platformModeState
+    : null;
+  const rawState = persistedRawState || inMemoryState;
 
   const normalized = normalizePlatformModeState(rawState, activeTargetSession, config);
   await writeJson(modeStatePath, normalized);

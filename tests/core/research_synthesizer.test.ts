@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   stripExecutionTranscriptNoise,
+  resolveSynthesizerOutputText,
   sanitizeResearchSynthesisForPersistence,
   computeSynthesisActionableDensity,
   quarantineLowDensityTopics,
@@ -113,6 +114,26 @@ describe("research_synthesizer persistence hardening", () => {
     });
     assert.equal(output.topicCount, 0);
     assert.deepEqual(output.topics, []);
+  });
+
+  it("prefers the stream that actually contains synthesized topic output", () => {
+    const stdout = [
+      "I am gathering evidence now.",
+      "tool_call: read file",
+      "Search complete.",
+    ].join("\n");
+    const stderr = [
+      "## Research Synthesis Header",
+      "- Date: 2026-04-24",
+      "## Topic: Status visibility and operator trust signals",
+      "**Topic Metadata:**",
+      "- Source Count: 1",
+    ].join("\n");
+
+    const resolved = resolveSynthesizerOutputText(stdout, stderr);
+
+    assert.equal(resolved, stderr);
+    assert.ok(resolved.includes("## Topic: Status visibility and operator trust signals"));
   });
 });
 

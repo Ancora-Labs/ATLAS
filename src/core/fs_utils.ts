@@ -238,6 +238,10 @@ export function spawnAsync(command, args, options) {
     const stdoutChunks = [];
     const stderrChunks = [];
     const stdinInput = options.input || null;
+    const mirrorOutput = options.mirrorOutput === true;
+    const mirrorStderr = options.mirrorStderr === true || mirrorOutput;
+    const forwardUserInput = options.forwardUserInput === true;
+    const suppressMirroredOutputAfterMarker = String(options.suppressMirroredOutputAfterMarker || "").trim() || null;
     // Always keep stdin as pipe so we can write '\n' to answer CLI prompts
     // (e.g. "Do you want to continue?") without restarting the process.
     const child = spawn(command, args, {
@@ -246,6 +250,68 @@ export function spawnAsync(command, args, options) {
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"]
     });
+    let stdinForwarder = null;
+    let mirrorSuppressed = false;
+    let mirrorCarry = "";
+    let stdinWasPaused = false;
+
+    const cleanupInteractiveBridge = () => {
+      if (stdinForwarder) {
+        process.stdin.off("data", stdinForwarder);
+        stdinForwarder = null;
+      }
+      if (forwardUserInput && process.stdin.isTTY && !stdinWasPaused) {
+        try { process.stdin.pause(); } catch { /* ignore */ }
+        stdinWasPaused = true;
+      }
+    };
+
+    const mirrorStdoutChunk = (text) => {
+      if (!mirrorOutput || !text) return;
+      if (!suppressMirroredOutputAfterMarker || mirrorSuppressed) {
+        if (!mirrorSuppressed) {
+          try { process.stdout.write(text); } catch { /* ignore */ }
+        }
+        return;
+      }
+
+      mirrorCarry += text;
+      const markerIndex = mirrorCarry.indexOf(suppressMirroredOutputAfterMarker);
+      if (markerIndex >= 0) {
+        const visibleText = mirrorCarry.slice(0, markerIndex);
+        if (visibleText) {
+          try { process.stdout.write(visibleText); } catch { /* ignore */ }
+        }
+        mirrorSuppressed = true;
+        mirrorCarry = "";
+        return;
+      }
+
+      const safeLength = Math.max(0, mirrorCarry.length - suppressMirroredOutputAfterMarker.length + 1);
+      if (safeLength > 0) {
+        const visibleText = mirrorCarry.slice(0, safeLength);
+        mirrorCarry = mirrorCarry.slice(safeLength);
+        if (visibleText) {
+          try { process.stdout.write(visibleText); } catch { /* ignore */ }
+        }
+      }
+    };
+
+    if (forwardUserInput && child.stdin && !child.stdin.destroyed) {
+      stdinForwarder = (chunk) => {
+        if (child.stdin && !child.stdin.destroyed) {
+          try { child.stdin.write(chunk); } catch { /* ignore */ }
+        }
+        if (options.onUserInput) {
+          try { options.onUserInput(chunk); } catch { /* ignore */ }
+        }
+      };
+      process.stdin.on("data", stdinForwarder);
+      if (process.stdin.isTTY) {
+        try { process.stdin.resume(); } catch { /* ignore */ }
+      }
+    }
+
     if (stdinInput) {
       child.stdin.write(stdinInput);
       child.stdin.end();
@@ -276,6 +342,7 @@ export function spawnAsync(command, args, options) {
       if (options.onStdout) options.onStdout(chunk);
 
       const text = chunk.toString("utf8");
+      mirrorStdoutChunk(text);
 
       // Auto-answer continuation prompts by sending Enter to stdin.
       if (autoConfirm && !settled && child.stdin && !child.stdin.destroyed) {
@@ -312,6 +379,9 @@ export function spawnAsync(command, args, options) {
     child.stderr.on("data", (chunk) => {
       stderrChunks.push(chunk);
       if (options.onStderr) options.onStderr(chunk);
+      if (mirrorStderr) {
+        try { process.stderr.write(chunk.toString("utf8")); } catch { /* ignore */ }
+      }
     });
 
     let settled = false;
@@ -329,6 +399,7 @@ export function spawnAsync(command, args, options) {
             stderr: `[BOX] Process killed after ${timeoutMs / 1000}s timeout`,
             timedOut: true
           });
+          cleanupInteractiveBridge();
         }, timeoutMs)
       : null;
 
@@ -345,6 +416,7 @@ export function spawnAsync(command, args, options) {
           stderr: String(options.signal.reason || "[BOX] Process aborted via signal"),
           aborted: true
         });
+        cleanupInteractiveBridge();
       };
       if (options.signal.aborted) { onAbort(); return; }
       options.signal.addEventListener("abort", onAbort, { once: true });
@@ -354,6 +426,10 @@ export function spawnAsync(command, args, options) {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (!mirrorSuppressed && mirrorCarry) {
+        try { process.stdout.write(mirrorCarry); } catch { /* ignore */ }
+      }
+      cleanupInteractiveBridge();
       resolve({
         status: code ?? 1,
         stdout: Buffer.concat(stdoutChunks).toString("utf8"),

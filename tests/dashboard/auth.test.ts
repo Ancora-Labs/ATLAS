@@ -41,12 +41,7 @@ function requestJson(port, method, pathname, headers = {}, body = "") {
         raw += String(chunk);
       });
       res.on("end", () => {
-        let parsed = null;
-        try {
-          parsed = raw ? JSON.parse(raw) : null;
-        } catch {
-          parsed = null;
-        }
+        const parsed = raw ? parseJsonOrNull(raw) : null;
         resolve({ status: Number(res.statusCode || 0), body: parsed, text: raw });
       });
     });
@@ -54,6 +49,14 @@ function requestJson(port, method, pathname, headers = {}, body = "") {
     if (body) req.write(body);
     req.end();
   });
+}
+
+function parseJsonOrNull(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 describe("dashboard API auth regression", () => {

@@ -81,6 +81,15 @@ If blocked:
 3. Propose the smallest unblocking action.
 4. Mark status as blocked with evidence.
 
+If the blocker is missing external service access and the operator can fix it during the current run:
+1. Explain what exact access is missing.
+2. Explain why this current task needs it.
+3. Tell the operator the preferred setup path and an alternative when possible.
+4. Tell the operator the exact command, env var, file, or placement step.
+5. Ask the operator to reply with `done` after completing the step.
+6. Run a short non-destructive verification.
+7. Continue the task in the same call if verification succeeds.
+
 ## Git Workflow (REQUIRED for every implementation task)
 
 After all edits pass lint/tests/build, you MUST create a PR before reporting done:

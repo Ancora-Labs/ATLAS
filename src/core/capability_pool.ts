@@ -27,6 +27,7 @@ import {
   resolveInterventionLineageJoinKey,
   type InterventionLineageContract,
 } from "./state_tracker.js";
+import { taskRequiresUiWorkerCapabilities } from "../workers/ui_capabilities.js";
 
 // Re-export lane-kind types so callers only need one import
 export { TASK_LANE_KIND, classifyTaskLaneKind };
@@ -108,6 +109,7 @@ export function getLaneScore(ledger: LanePerformanceLedger, lane: string): numbe
 const DEFAULT_CAPABILITY_MAP = Object.freeze({
   "planner-improvement":  { lane: "quality",         fallback: "evolution-worker" },
   "runtime-refactor":     { lane: "implementation",  fallback: "evolution-worker" },
+  "ui-contract":          { lane: "implementation",  fallback: "evolution-worker" },
   "test-infra":           { lane: "quality",         fallback: "evolution-worker" },
   "state-governance":     { lane: "governance",      fallback: "evolution-worker" },
   "integration":          { lane: "integration",     fallback: "evolution-worker" },
@@ -256,6 +258,8 @@ export function inferCapabilityTag(plan) {
 
   const explicitCapabilityTag = getExplicitCapabilityTag(plan);
   if (explicitCapabilityTag) return explicitCapabilityTag;
+
+  if (taskRequiresUiWorkerCapabilities(plan)) return "ui-contract";
 
   const laneHintCapabilityTag = getCapabilityTagFromLaneHint(plan);
   if (laneHintCapabilityTag) return laneHintCapabilityTag;

@@ -21,6 +21,7 @@ import {
   computePlanEstimatedDurationMinutes,
   computeBatchEstimatedDurationMinutes,
 } from "../../src/core/worker_batch_planner.js";
+import { analyzeUiBatchCompatibility } from "../../src/core/ui_batch_affinity.js";
 import { validatePacketBatchAdmission } from "../../src/core/plan_contract_validator.js";
 import { buildWorkerTopologyContract, selectExecutionPatternForPlans } from "../../src/core/role_registry.js";
 import {
@@ -216,6 +217,161 @@ describe("worker_batch_planner", () => {
     assert.equal(batches.flatMap((batch) => batch.plans).length, 5);
     assert.ok(batches.every((batch) => batch.plans.length <= 3), "fragile task kinds must stay within adaptive cap");
     assert.ok(batches.every((batch: any) => typeof batch.adaptivePacketCap === "number" && batch.adaptivePacketCap <= 3));
+  });
+
+  it("never mixes ui-contract plans with non-ui plans in the same batch", () => {
+    const config = {
+      copilot: {
+        defaultModel: "Claude Sonnet 4.6",
+        modelContextWindows: {
+          "Claude Sonnet 4.6": 100000,
+        },
+        modelContextReserveTokens: 0,
+      },
+    };
+    const uiPlan = {
+      role: "integration-worker",
+      task: "Repair Atlas shell render contract",
+      wave: 1,
+      taskKind: "ui-contract",
+      capabilityTag: "ui-contract",
+      uiSurface: "web-runtime",
+      targetSurfaces: ["web-runtime"],
+      continuationFamilyKey: "atlas:shell",
+      uiContract: {
+        contractId: "atlas-shell@v1",
+        schemaVersion: 1,
+        targetSurfaces: ["web-runtime"],
+        fields: {},
+        requiredFields: [],
+        forbiddenPatterns: [],
+        accessibilityFloor: "WCAG-AA",
+      },
+    };
+    const nonUiPlan = {
+      role: "integration-worker",
+      task: "Wire atlas shell session state",
+      wave: 1,
+      taskKind: "integration",
+      target_files: ["src/core/session.ts"],
+    };
+
+    const batches = buildRoleExecutionBatches([uiPlan, nonUiPlan], config);
+
+    assert.equal(batches.length, 2);
+    assert.equal(batches.some((batch) => batch.plans.includes(uiPlan) && batch.plans.includes(nonUiPlan)), false);
+    const uiBatch = batches.find((batch) => batch.plans.includes(uiPlan));
+    assert.ok(uiBatch);
+    assert.equal(uiBatch?.taskKind, "ui-contract");
+  });
+
+  it("allows ui-contract batching only for the same surface set and continuation family", () => {
+    const config = {
+      copilot: {
+        defaultModel: "Claude Sonnet 4.6",
+        modelContextWindows: {
+          "Claude Sonnet 4.6": 100000,
+        },
+        modelContextReserveTokens: 0,
+      },
+    };
+    const sharedUiFields = {
+      role: "integration-worker",
+      wave: 1,
+      taskKind: "ui-contract",
+      capabilityTag: "ui-contract",
+      uiSurface: "web-runtime",
+      targetSurfaces: ["web-runtime"],
+      continuationFamilyKey: "atlas:shell",
+      uiContract: {
+        contractId: "atlas-shell@v1",
+        schemaVersion: 1,
+        targetSurfaces: ["web-runtime"],
+        fields: {},
+        requiredFields: [],
+        forbiddenPatterns: [],
+        accessibilityFloor: "WCAG-AA",
+      },
+    };
+    const planA = { ...sharedUiFields, task: "Refine shell spacing" };
+    const planB = { ...sharedUiFields, task: "Fix shell navigation states" };
+    const planC = {
+      ...sharedUiFields,
+      task: "Adjust dashboard surface",
+      uiSurface: "dashboard-runtime",
+      targetSurfaces: ["dashboard-runtime"],
+      uiContract: {
+        ...sharedUiFields.uiContract,
+        contractId: "atlas-dashboard@v1",
+        targetSurfaces: ["dashboard-runtime"],
+      },
+    };
+
+    const batches = buildRoleExecutionBatches([planA, planB, planC], config);
+
+    assert.equal(batches.length, 2);
+    assert.ok(batches.some((batch) => batch.plans.includes(planA) && batch.plans.includes(planB)));
+    assert.equal(batches.some((batch) => batch.plans.includes(planA) && batch.plans.includes(planC)), false);
+  });
+
+  it("keeps separate ui affinity groups apart when conflict splitting is enabled", () => {
+    const config = {
+      copilot: {
+        defaultModel: "Claude Sonnet 4.6",
+        modelContextWindows: { "Claude Sonnet 4.6": 100000 },
+        modelContextReserveTokens: 0,
+      },
+      planner: {
+        splitConflictingPlansAcrossBatches: true,
+      },
+    };
+    const uiBase = {
+      role: "integration-worker",
+      wave: 1,
+      taskKind: "ui-contract",
+      capabilityTag: "ui-contract",
+      continuationFamilyKey: "atlas:shell",
+      uiContract: {
+        contractId: "atlas-shell@v1",
+        schemaVersion: 1,
+        targetSurfaces: ["web-runtime"],
+        fields: {},
+        requiredFields: [],
+        forbiddenPatterns: [],
+        accessibilityFloor: "WCAG-AA",
+      },
+    };
+    const planA = { ...uiBase, task: "Fix shell spacing", uiSurface: "web-runtime", targetSurfaces: ["web-runtime"], target_files: ["src/a.ts"] };
+    const planB = { ...uiBase, task: "Fix shell tabs", uiSurface: "web-runtime", targetSurfaces: ["web-runtime"], target_files: ["src/b.ts"] };
+    const planC = { ...uiBase, task: "Fix dashboard layout", uiSurface: "dashboard-runtime", targetSurfaces: ["dashboard-runtime"], target_files: ["src/c.ts"], uiContract: { ...uiBase.uiContract, contractId: "atlas-dashboard@v1", targetSurfaces: ["dashboard-runtime"] } };
+
+    const batches = buildRoleExecutionBatches([planA, planB, planC], config);
+
+    assert.ok(batches.some((batch) => batch.plans.includes(planA) && batch.plans.includes(planB)));
+    assert.equal(batches.some((batch) => batch.plans.includes(planA) && batch.plans.includes(planC)), false);
+    assert.equal(batches.some((batch) => batch.plans.includes(planB) && batch.plans.includes(planC)), false);
+  });
+});
+
+describe("ui_batch_affinity", () => {
+  it("marks mixed ui and non-ui bundles as incompatible", () => {
+    const result = analyzeUiBatchCompatibility([
+      {
+        taskKind: "ui-contract",
+        capabilityTag: "ui-contract",
+        uiSurface: "web-runtime",
+        targetSurfaces: ["web-runtime"],
+        continuationFamilyKey: "atlas:shell",
+      },
+      {
+        taskKind: "integration",
+        task: "Update session store",
+      },
+    ]);
+
+    assert.equal(result.containsUi, true);
+    assert.equal(result.isCompatible, false);
+    assert.equal(result.reasonCode, "mixed_ui_non_ui");
   });
 });
 
@@ -1576,6 +1732,46 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps same-role ui affinity groups isolated during token-first packing", () => {
+    const config = {
+      copilot: {
+        defaultModel: "Claude Sonnet 4.6",
+        modelContextWindows: { "Claude Sonnet 4.6": 100000 },
+        modelContextReserveTokens: 0,
+      },
+    };
+    const uiBase = {
+      role: "integration-worker",
+      wave: 1,
+      taskKind: "ui-contract",
+      capabilityTag: "ui-contract",
+      continuationFamilyKey: "atlas:shell",
+      uiContract: {
+        contractId: "atlas-shell@v1",
+        schemaVersion: 1,
+        targetSurfaces: ["web-runtime"],
+        fields: {},
+        requiredFields: [],
+        forbiddenPatterns: [],
+        accessibilityFloor: "WCAG-AA",
+      },
+    };
+    const planA = { ...uiBase, task: "Fix shell spacing", uiSurface: "web-runtime", targetSurfaces: ["web-runtime"] };
+    const planB = { ...uiBase, task: "Fix shell tabs", uiSurface: "web-runtime", targetSurfaces: ["web-runtime"] };
+    const planC = { ...uiBase, task: "Fix dashboard layout", uiSurface: "dashboard-runtime", targetSurfaces: ["dashboard-runtime"], uiContract: { ...uiBase.uiContract, contractId: "atlas-dashboard@v1", targetSurfaces: ["dashboard-runtime"] } };
+
+    const batches = buildTokenFirstBatches([planA, planB, planC], config);
+
+    assert.ok(batches.some((batch) => {
+      const tasks = batch.plans.map((plan) => plan.task);
+      return tasks.includes("Fix shell spacing") && tasks.includes("Fix shell tabs");
+    }));
+    assert.equal(batches.some((batch) => {
+      const tasks = batch.plans.map((plan) => plan.task);
+      return tasks.includes("Fix shell spacing") && tasks.includes("Fix dashboard layout");
+    }), false);
   });
 });
 

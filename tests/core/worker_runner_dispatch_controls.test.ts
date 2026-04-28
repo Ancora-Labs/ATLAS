@@ -732,7 +732,7 @@ describe("worker_runner verification closure pipeline", () => {
           policyFile: path.join(stateDir, "policy.json"),
         },
         env: {
-          targetRepo: "Ancora-Labs/Box",
+          targetRepo: "Ancora-Labs/ATLAS",
           copilotCliCommand: "__missing_copilot_binary__",
         },
         roleRegistry: {

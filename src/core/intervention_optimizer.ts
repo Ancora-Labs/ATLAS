@@ -68,6 +68,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { applyClassificationToSuccessProbability, normalizeRoleKey } from "./failure_classifier.js";
 import { readJson, writeJson } from "./fs_utils.js";
+import { estimatePlanOrderedStepComplexity } from "./plan_contract_validator.js";
 import {
   IMPACT_ATTRIBUTION_OUTCOME,
   summarizeImpactAttributionWindow,
@@ -293,15 +294,21 @@ export function checkOverbundleHardAdmission(
   for (let idx = 0; idx < plans.length; idx += 1) {
     const plan = plans[idx];
     const id = String(plan?.id ?? plan?.task_id ?? "").trim();
-    const steps = Array.isArray(plan?.orderedSteps)
-      ? plan.orderedSteps.length
+    const explicitOrderedSteps = Array.isArray(plan?.orderedSteps)
+      ? plan.orderedSteps.filter(Boolean).length
       : Array.isArray(plan?.ordered_steps)
-        ? plan.ordered_steps.length
-      : Array.isArray(plan?.acceptance_criteria)
-        ? plan.acceptance_criteria.length
-        : Array.isArray(plan?.plans)
-          ? plan.plans.length
-          : 1;
+        ? plan.ordered_steps.filter(Boolean).length
+        : 0;
+    const acceptanceCriteriaSteps = Array.isArray(plan?.acceptance_criteria)
+      ? plan.acceptance_criteria.filter(Boolean).length
+      : Array.isArray(plan?.acceptanceCriteria)
+        ? plan.acceptanceCriteria.filter(Boolean).length
+        : 0;
+    const steps = explicitOrderedSteps > 0
+      ? explicitOrderedSteps
+      : acceptanceCriteriaSteps > 0
+        ? acceptanceCriteriaSteps
+        : estimatePlanOrderedStepComplexity(plan);
     if (steps > cap) {
       rejectedIds.push(id || `plan-idx-${idx}`);
     }

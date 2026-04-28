@@ -22,6 +22,7 @@ import {
   PACKET_LANE,
   LANE_PACKET_SIZE_DEFAULTS,
   classifyPacketLane,
+  buildPacketAdmissionThresholds,
   getPacketThresholdsForLane,
   validateAndInjectRolePlans,
   ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX,
@@ -797,6 +798,94 @@ describe("PACKET_VIOLATION_CODE — deterministic violation taxonomy", () => {
       assert.equal(plan._missingRoleMarker, `${ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX}:api-worker:wave:2`);
       assert.equal(plan._rolePlanSkeletonSource, ROLE_PLAN_SKELETON_METADATA_SOURCE);
     });
+
+    it("treats launcher-softened role coverage as invalid when target intent requires direct root executable launch", () => {
+      const payload = {
+        executionStrategy: {
+          waves: [
+            {
+              wave: 1,
+              tasks: [{ task: "Desktop packaging", role: "infrastructure-worker" }],
+            },
+          ],
+        },
+        plans: [
+          {
+            task: "Create resources/Launch ATLAS.bat launcher for Windows desktop packaging",
+            title: "Add BAT launcher for packaged desktop app",
+            role: "infrastructure-worker",
+            wave: 1,
+            scope: "Windows desktop packaging",
+            target_files: ["resources/Launch ATLAS.bat", "package.json"],
+            dependencies: [],
+            acceptance_criteria: ["A launcher script in resources opens ATLAS"],
+            verification: "tests/core/prometheus_parse.test.ts --test-name-pattern=desktop packaging",
+            capacityDelta: 0.02,
+            requestROI: 1.2,
+          },
+        ],
+      };
+
+      const result = validateAndInjectRolePlans(payload, {
+        injectMissing: false,
+        activeTargetSession: {
+          objective: {
+            summary: "Build ATLAS as a Windows desktop product with direct app launch from a clickable executable in the root resources folder.",
+            desiredOutcome: "A direct executable in the root resources folder opens the app",
+          },
+          intent: {
+            summary: "ATLAS must launch directly from a clickable executable in the root resources folder.",
+            mustHaveFlows: ["Direct app launch from a clickable executable in the root resources folder"],
+            scopeIn: ["Root resources executable that opens the GUI directly"],
+            successCriteria: ["The app launches directly from a clickable executable in the root resources folder"],
+          },
+        },
+      });
+
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.initialMissingRoles, ["infrastructure-worker"]);
+      assert.deepEqual(result.invalidRolePlans, ["infrastructure-worker"]);
+    });
+  });
+
+  describe("target-session forbidden action enforcement", () => {
+    it("rejects browser-wrapper downgrade when the active target session forbids desktop softening", () => {
+      const plan = {
+        task: "Wrap the app in a localhost dashboard page and open it in the browser",
+        role: "integration-worker",
+        wave: 1,
+        scope: "browser wrapper fallback",
+        target_files: ["src/dashboard/live_dashboard.ts"],
+        dependencies: [],
+        acceptance_criteria: ["The localhost dashboard opens the product in a browser tab"],
+        verification: "tests/core/prometheus_parse.test.ts --test-name-pattern=browser wrapper",
+        capacityDelta: 0.05,
+        requestROI: 1.1,
+      };
+
+      const result = validatePlanContract(plan, {
+        activeTargetSession: {
+          objective: {
+            summary: "Build the product as a native desktop GUI, not a browser-first shell.",
+            desiredOutcome: "The main product opens in its own native desktop window",
+          },
+          intent: {
+            summary: "Desktop-first native application",
+            mustHaveFlows: ["Native desktop window for the main product experience"],
+            scopeOut: ["Browser route", "Dashboard page", "Terminal wrapper"],
+            successCriteria: ["The product does not open as localhost plus browser launch"],
+          },
+          constraints: {
+            forbiddenActions: [
+              "Do not silently downgrade the requested desktop GUI into a browser route, dashboard page, or terminal wrapper.",
+            ],
+          },
+        },
+      });
+
+      assert.equal(result.valid, false);
+      assert.ok(result.violations.some((entry) => entry.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED));
+    });
   });
 });
 
@@ -1442,6 +1531,212 @@ describe("validatePlanContract — protected intent preservation", () => {
     );
   });
 
+  it("rejects launcher-script softening when target intent requires direct executable launch from root resources", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Build a Windows-first Electron desktop app with a root resources executable that opens the app directly.",
+      },
+      intent: {
+        mustHaveFlows: ["Direct app launch from a clickable executable in the root resources folder"],
+        scopeIn: ["Root resources executable that opens the GUI directly"],
+        successCriteria: ["The app launches directly from a clickable executable in the root resources folder"],
+      },
+      assumptions: [
+        "The root resources executable requirement refers to a user-facing launcher artifact placed in the repository's root resources location.",
+      ],
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Configure Windows packaging and create resources/Launch ATLAS.bat launcher for the packaged desktop app",
+      after_state: "Users click resources/Launch ATLAS.bat to open the packaged app instead of a direct root executable.",
+      target_files: ["resources/Launch ATLAS.bat", "electron-builder.yml"],
+      acceptance_criteria: [
+        "resources/Launch ATLAS.bat opens the packaged app",
+        "The desktop app remains launchable on Windows through the batch launcher",
+      ],
+    }), {
+      activeTargetSession,
+    });
+
+    const v = result.violations.find((x) => x.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED);
+    assert.ok(v, "launcher-script downgrade must emit INTENT_REQUIREMENT_SOFTENED");
+    assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.CRITICAL);
+    assert.equal(result.valid, false, "launcher-script downgrade must make the plan invalid");
+  });
+
+  it("allows a direct executable packaging plan when root executable launch is protected", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Build a Windows-first Electron desktop app with a root resources executable that opens the app directly.",
+      },
+      intent: {
+        mustHaveFlows: ["Direct app launch from a clickable executable in the root resources folder"],
+        scopeIn: ["Root resources executable that opens the GUI directly"],
+        successCriteria: ["The app launches directly from a clickable executable in the root resources folder"],
+      },
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Configure Windows packaging to emit resources/ATLAS.exe as the direct desktop launcher",
+      after_state: "Users click resources/ATLAS.exe and the desktop app opens directly without an intermediate script wrapper.",
+      target_files: ["resources/ATLAS.exe", "electron-builder.yml"],
+      acceptance_criteria: [
+        "resources/ATLAS.exe launches the packaged desktop app directly",
+        "No batch or script-based launcher is required for normal desktop use",
+      ],
+    }), {
+      activeTargetSession,
+    });
+
+    assert.equal(
+      result.violations.find((v) => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED),
+      undefined,
+      "direct executable packaging must remain dispatchable",
+    );
+  });
+
+  it("allows plans that explicitly remove cmd launcher dependence", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Build a Windows-first Electron desktop app with a root resources executable that opens the app directly.",
+      },
+      intent: {
+        mustHaveFlows: ["Direct app launch from a clickable executable in the root resources folder"],
+        scopeIn: ["Root resources executable that opens the GUI directly"],
+        successCriteria: ["The app launches directly from a clickable executable in the root resources folder"],
+      },
+      constraints: {
+        forbiddenActions: ["Do not replace the direct executable contract with a launcher script."],
+      },
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Lock Windows packaging so the shipped folder root contains ATLAS.exe and does not require ATLAS.cmd, Node.js, or npm.",
+      after_state: "ATLAS ships with a direct root executable and no cmd wrapper requirement for end users.",
+      target_files: ["package.json", "ATLAS.cmd", "electron/main.ts"],
+      acceptance_criteria: [
+        "The packaged folder root contains ATLAS.exe with 0 regressions",
+        "Launching ATLAS.exe does not require ATLAS.cmd, Node.js, or npm with >= 1 deterministic assertion",
+      ],
+    }), {
+      activeTargetSession,
+    });
+
+    assert.equal(
+      result.violations.find((v) => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED),
+      undefined,
+      "negated cmd references should not be treated as launcher softening",
+    );
+    assert.equal(result.valid, true, "direct executable plan should remain valid");
+  });
+
+  it("allows the real packaging-plan wording when cmd is described as a non-final dev surface", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Build a Windows-first Electron desktop app with a root resources executable that opens the app directly.",
+      },
+      intent: {
+        mustHaveFlows: ["Direct app launch from a clickable executable in the root resources folder"],
+        scopeIn: ["Root resources executable that opens the GUI directly"],
+        successCriteria: ["The app launches directly from a clickable executable in the root resources folder"],
+      },
+      constraints: {
+        forbiddenActions: [
+          "Do not silently downgrade the requested desktop GUI into a browser route, dashboard page, terminal wrapper, or launcher script.",
+        ],
+      },
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      title: "Productize the Windows portable packaging contract",
+      task: "Add explicit Electron Builder Windows packaging metadata and a deterministic portable-folder packaging flow so ATLAS ships as a user-facing Windows app folder with a root-level ATLAS.exe instead of an internal unpacked build artifact.",
+      scope: "Windows packaging identity and output layout",
+      target_files: ["package.json", "scripts/", "ATLAS.cmd", "README.md"],
+      before_state: "ATLAS can be launched in development via Electron, and an internal `electron-builder --dir --win` build exists, but there is no explicit productized Windows packaging contract for a portable folder with root-level `ATLAS.exe`. `ATLAS.cmd` still depends on Node/npm and is not the final delivery surface.",
+      after_state: "The repo defines an explicit Windows packaging contract for ATLAS with product identity, executable naming, and output layout that produces a portable packaged app folder whose root contains `ATLAS.exe` and does not require Node/npm for end-user launch.",
+      acceptance_criteria: [
+        "Packaging metadata names the product and executable as ATLAS for Windows output with >= 1 targeted test case",
+        "A deterministic packaging command emits a portable Windows app folder for a fresh session with 0 regressions",
+        "The packaged folder's root contains `ATLAS.exe` as the intended launch surface with >= 1 deterministic assertion",
+        "The final launch path does not depend on `ATLAS.cmd`, Node, or npm being present on the user's machine with >= 1 deterministic assertion",
+      ],
+      verification: "tests/core/plan_contract_validator.test.ts — test: packaging-plan wording stays dispatchable",
+    }), {
+      activeTargetSession,
+    });
+
+    assert.equal(
+      result.violations.find((v) => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED),
+      undefined,
+      "describing ATLAS.cmd as a dev-only/non-final surface should not be treated as softening",
+    );
+    assert.equal(result.valid, true, "real packaging-plan wording should remain dispatchable");
+  });
+
+  it("does not treat anti-fake UI constraints as a silent downgrade", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Ship a premium native desktop workspace with current live session data.",
+      },
+      intent: {
+        successCriteria: [
+          "The desktop UI keeps native product identity and current live session data without fabricated browser chrome.",
+        ],
+      },
+      constraints: {
+        forbiddenActions: [
+          "Do not ship fake browser chrome, faux macOS controls, or placeholder desktop framing.",
+        ],
+      },
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Reshape the renderer into a permanent sessions rail and single live detail pane",
+      after_state: "ATLAS uses one permanent desktop sidebar and one main pane while preserving premium desktop identity.",
+      acceptance_criteria: [
+        "The sidebar remains permanently visible with current session state indicators and no route-level mode switch.",
+        "The desktop shell stays readable without fake browser chrome or fabricated window controls.",
+      ],
+    }), {
+      activeTargetSession,
+    });
+
+    assert.equal(
+      result.violations.find((v) => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED),
+      undefined,
+      "anti-fake UI wording should not be classified as a downgrade",
+    );
+    assert.equal(result.valid, true, "native UI guardrails should remain dispatchable");
+  });
+
+  it("propagates protected launcher validation through validateAllPlans", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Ship a root resources executable that opens the app directly.",
+      },
+      intent: {
+        mustHaveFlows: ["Direct app launch from a clickable executable in the root resources folder"],
+      },
+    };
+
+    const report = validateAllPlans([
+      baseIntentPlan({
+        task: "Create resources/Launch ATLAS.bat launcher for packaged Windows startup",
+        after_state: "Desktop launch goes through resources/Launch ATLAS.bat instead of a direct executable.",
+        target_files: ["resources/Launch ATLAS.bat"],
+        acceptance_criteria: [
+          "resources/Launch ATLAS.bat starts the app",
+          "Windows users use the batch launcher from resources",
+        ],
+      }),
+    ], {
+      activeTargetSession,
+    });
+
+    assert.equal(report.invalidCount, 1);
+    assert.ok(report.results[0]?.violations.some((v) => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED));
+  });
+
   it("keeps media-specific regressions covered under the general protected-intent rule", () => {
     const result = validatePlanContract(baseIntentPlan({
       task: "Use high-quality placeholder imagery for the restaurant landing page hero and chef story",
@@ -1516,6 +1811,27 @@ describe("thin-packet density contract", () => {
       estimatedExecutionTokens: 2000,
     });
     const thresholds = getPacketThresholdsForLane(3);
+    assert.equal(isThinPacketForAdmission(metrics, thresholds), false);
+  });
+
+  it("builds admission thresholds from lane density instead of the 120-char prompt floor", () => {
+    const thresholds = buildPacketAdmissionThresholds(4, { strictnessMultiplier: 1 });
+    assert.deepEqual(thresholds, {
+      minTaskChars: 30,
+      minTargetFiles: 3,
+      minAcceptanceCriteria: 2,
+      minExecutionTokens: 2000,
+    });
+
+    const metrics = computePacketDensityMetrics({
+      task: "Implement deterministic session freshness gating across desktop views",
+      target_files: ["src/a.ts", "src/b.ts", "src/c.ts", "tests/a.test.ts"],
+      acceptance_criteria: [
+        "Current state hides stale detail",
+        "Desktop refresh preserves focused session",
+      ],
+      estimatedExecutionTokens: 2000,
+    });
     assert.equal(isThinPacketForAdmission(metrics, thresholds), false);
   });
 

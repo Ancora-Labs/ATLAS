@@ -232,6 +232,8 @@ export function buildPromptAssemblySections(input: {
         `intentScopeIn: ${(Array.isArray(activeTargetSession.intent?.scopeIn) ? activeTargetSession.intent.scopeIn : []).join(", ") || "none"}`,
         `intentScopeOut: ${(Array.isArray(activeTargetSession.intent?.scopeOut) ? activeTargetSession.intent.scopeOut : []).join(", ") || "none"}`,
         `intentProtectedAreas: ${(Array.isArray(activeTargetSession.intent?.protectedAreas) ? activeTargetSession.intent.protectedAreas : []).join(", ") || "none"}`,
+        `intentPreferredQualityBar: ${String(activeTargetSession.intent?.preferredQualityBar || "none")}`,
+        `intentDesignDirection: ${String(activeTargetSession.intent?.designDirection || "none")}`,
         `intentSuccessCriteria: ${(Array.isArray(activeTargetSession.intent?.successCriteria) ? activeTargetSession.intent.successCriteria : []).join(", ") || "none"}`,
         `intentAssumptions: ${(Array.isArray(activeTargetSession.intent?.assumptions) ? activeTargetSession.intent.assumptions : []).join(", ") || "none"}`,
         `intentOpenQuestions: ${(Array.isArray(activeTargetSession.intent?.openQuestions) ? activeTargetSession.intent.openQuestions : []).join(", ") || "none"}`,

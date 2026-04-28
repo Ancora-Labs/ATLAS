@@ -1,9 +1,9 @@
 ﻿import fs from "node:fs/promises";
 import path from "node:path";
-import dotenv from "dotenv";
 import type { Config } from "./types/index.js";
+import { bootstrapEnvironment } from "./env_bootstrap.js";
 
-dotenv.config({ override: true });
+bootstrapEnvironment();
 
 function must(value: string | undefined, _key: string): string | null {
   if (!value || !value.trim()) {
@@ -20,21 +20,15 @@ export async function loadConfig(): Promise<Config> {
 
   const env = {
     githubToken: must(
-      process.env.canerdogduGITHUB_TOKEN
-      || process.env.GITHUB_TOKEN
-      || process.env.GITHUB_TOKENPERSONAL,
+      process.env.GITHUB_TOKEN
+      || process.env.GH_TOKEN,
       "GITHUB_TOKEN"
     ),
     // Copilot CLI needs a fine-grained PAT (github_pat_) with Copilot permissions.
-    // Classic PATs (ghp_) are NOT supported by Copilot CLI.
-    // Support legacy/local variable names used in older .env files.
+    // Legacy local variable names are canonicalized by bootstrapEnvironment().
     copilotGithubToken: must(
-      process.env.canerdoqdu_FINEGRADED
-      || process.env.COPILOT_GITHUB_TOKEN
-      || process.env.CanerdoqduFINEGRADED
-      || process.env.CanerdoqduFINEGRADEDGENERALANDTRUMP
-      || process.env.GITHUB_FINEGRADED
-      || process.env.GITHUBFINEGRADEDPERSONALINTEL,
+      process.env.COPILOT_GITHUB_TOKEN
+      || process.env.GITHUB_FINEGRADED,
       "COPILOT_GITHUB_TOKEN"
     ),
     targetRepo: must(process.env.TARGET_REPO, "TARGET_REPO"),
@@ -108,7 +102,10 @@ export async function loadConfig(): Promise<Config> {
     cloudAssignmentIssue: process.env.BOX_CLOUD_ASSIGNMENT_ISSUE?.trim() || null,
     cloudAssignmentPr: process.env.BOX_CLOUD_ASSIGNMENT_PR?.trim() || null,
     cloudAssignmentPollIntervalMs: process.env.BOX_CLOUD_ASSIGNMENT_POLL_INTERVAL_MS?.trim() || null,
-    cloudAssignmentMaxWaitMs: process.env.BOX_CLOUD_ASSIGNMENT_MAX_WAIT_MS?.trim() || null
+    cloudAssignmentMaxWaitMs: process.env.BOX_CLOUD_ASSIGNMENT_MAX_WAIT_MS?.trim() || null,
+    mockTargetOnboardingClarificationPacket: process.env.BOX_MOCK_TARGET_ONBOARDING_CLARIFICATION_PACKET?.trim() || null,
+    targetOnboardingRequireSingleCallCompletion: process.env.BOX_TARGET_ONBOARDING_REQUIRE_SINGLE_CALL_COMPLETION?.trim() || null,
+    targetOnboardingUseCurrentTerminal: process.env.BOX_TARGET_ONBOARDING_USE_CURRENT_TERMINAL?.trim() || null,
   };
 
   const parsedAllowedModels = env.copilotAllowedModels
@@ -438,8 +435,8 @@ export async function loadConfig(): Promise<Config> {
       : Number(fileConfig?.cloudAssignment?.maxWaitMs ?? 3600000),
   };
 
-  // Propagate resolved tokens into process.env so child Copilot/GitHub processes
-  // always inherit the active account selected by the .env file.
+  // Propagate resolved canonical tokens into process.env so child processes use
+  // one consistent env surface regardless of where the backing secret came from.
   if (env.githubToken) {
     process.env.GITHUB_TOKEN = env.githubToken;
     process.env.GH_TOKEN = env.githubToken;

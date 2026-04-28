@@ -28,7 +28,7 @@ import { buildAgentArgs, parseAgentOutput } from "./agent_loader.js";
 import { spawnAsync } from "./fs_utils.js";
 import { getRoleRegistry } from "./role_registry.js";
 import { checkPostMergeArtifact, collectArtifactGaps, ARTIFACT_GATE_ERROR_PREFIX, isArtifactGateRequired, buildArtifactAuditEntry } from "./verification_gate.js";
-import { VERIFICATION_DEFAULTS, rewriteVerificationCommand, checkForbiddenCommands, normalizeCommandBatch } from "./verification_command_registry.js";
+import { REPO_WIDE_TEST_COMMAND, VERIFICATION_DEFAULTS, rewriteVerificationCommand, checkForbiddenCommands, normalizeCommandBatch, isPlaceholderVerificationCommand } from "./verification_command_registry.js";
 import { isNonSpecificVerification } from "./plan_contract_validator.js";
 import { CancelledError } from "./daemon_control.js";
 import type { CancellationToken } from "./daemon_control.js";
@@ -312,16 +312,38 @@ function normalizeAcceptanceCriteria(criteria = []) {
   return criteria.map(item => ACCEPTANCE_CRITERIA_REWRITES.get(item) || item);
 }
 
+function normalizeTaskFilesHint(task: EvolutionTask = {}): string[] {
+  const direct = Array.isArray(task.files_hint) ? task.files_hint : [];
+  const targetFiles = Array.isArray((task as any).targetFiles)
+    ? (task as any).targetFiles
+    : Array.isArray((task as any).target_files)
+      ? (task as any).target_files
+      : [];
+  return normalizeStringList([...direct, ...targetFiles]);
+}
+
 function normalizeVerificationCommands(commands = []) {
   const normalized = normalizeCommandBatch(Array.isArray(commands) ? commands : []);
-  return normalized.length > 0 ? normalized : [VERIFICATION_DEFAULTS.test];
+  return normalized;
+}
+
+function replaceGenericTestCommandsWithPlaceholder(commands: string[]): string[] {
+  if (!Array.isArray(commands) || commands.length === 0) return [];
+  return normalizeCommandBatch(
+    commands.map((cmd) => {
+      if (/^\s*(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b/i.test(String(cmd || ""))) {
+        return VERIFICATION_DEFAULTS.test;
+      }
+      return cmd;
+    })
+  );
 }
 
 function normalizeEvolutionTask(task) {
   return {
     ...task,
     acceptance_criteria: normalizeAcceptanceCriteria(task.acceptance_criteria || []),
-    verification_commands: normalizeVerificationCommands(task.verification_commands || [VERIFICATION_DEFAULTS.test])
+    verification_commands: normalizeVerificationCommands(task.verification_commands || [])
   };
 }
 
@@ -356,23 +378,41 @@ export function inferVerificationFromFilesHint(filesHint: string[]): string[] {
   if (!Array.isArray(filesHint) || filesHint.length === 0) return [];
   const testFiles = filesHint.filter(f => /\.(test|spec)\.(ts|js|tsx|jsx)$/i.test(f));
   if (testFiles.length === 0) return [];
-  // Build one targeted node --test command per test file, capped at 3
-  return testFiles.slice(0, 3).map(f => `node --test --import tsx ${f}`);
+  // Build one targeted npm test command per test file, capped at 3
+  return testFiles.slice(0, 3).map(f => `npm test -- ${f}`);
 }
 
 export function repairPrometheusTask(task: EvolutionTask = {}): PreparedEvolutionTask {
-  const filesHint = normalizeStringList(task.files_hint);
-  const rawCommands = normalizeStringList(task.verification_commands);
+  const filesHint = normalizeTaskFilesHint(task);
+  const rawCommands = normalizeStringList([
+    ...(Array.isArray(task.verification_commands) ? task.verification_commands : []),
+    ...((typeof (task as any).verification === "string" && (task as any).verification.trim()) ? [(task as any).verification] : []),
+  ]);
   let verificationCommands = normalizeVerificationCommands(rawCommands);
 
   // If all normalized commands are still non-specific (all just "npm test" / "node --test"),
   // and the files_hint explicitly names test files, inject those as specific targets.
-  const allNonSpecific = verificationCommands.every(cmd => isNonSpecificVerification(cmd));
+  const allNonSpecific = verificationCommands.length === 0 || verificationCommands.every(cmd => isNonSpecificVerification(cmd));
   if (allNonSpecific && filesHint.length > 0) {
     const inferred = inferVerificationFromFilesHint(filesHint);
     if (inferred.length > 0) {
-      verificationCommands = [...inferred, ...verificationCommands];
+      const retainedNonTestCommands = verificationCommands.filter((cmd) => {
+        if (!isNonSpecificVerification(cmd)) return true;
+        return !/^\s*(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b/i.test(cmd)
+          && !/^\s*node\s+--test\b/i.test(cmd);
+      });
+      verificationCommands = [...inferred, ...retainedNonTestCommands];
     }
+  }
+
+  if (verificationCommands.length === 0) {
+    verificationCommands = [REPO_WIDE_TEST_COMMAND];
+  } else if (verificationCommands.some((cmd) => !isNonSpecificVerification(cmd))) {
+    verificationCommands = verificationCommands.filter((cmd) => {
+      if (!isNonSpecificVerification(cmd)) return true;
+      return !/^\s*(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b/i.test(cmd)
+        && !/^\s*node\s+--test\b/i.test(cmd);
+    });
   }
 
   const repaired = {
@@ -419,7 +459,7 @@ export function injectAthenaMissingItems(task: PreparedEvolutionTask, preReview:
     acceptance_criteria: updatedCriteria,
     verification_commands: normalizeVerificationCommands([
       ...(task.verification_commands || []),
-      VERIFICATION_DEFAULTS.test,
+      REPO_WIDE_TEST_COMMAND,
       VERIFICATION_DEFAULTS.lint
     ])
   });
@@ -454,7 +494,7 @@ export function hardenTaskForAthena(task: PreparedEvolutionTask, preReview: Athe
   ];
 
   const hardeningCommands = [
-    VERIFICATION_DEFAULTS.test,
+    REPO_WIDE_TEST_COMMAND,
     VERIFICATION_DEFAULTS.lint
   ];
 
@@ -892,9 +932,21 @@ function runVerificationCommands(task) {
   // Normalize commands first: rewrite any forbidden glob patterns to their canonical
   // equivalents before executing. This is defense-in-depth — callers already normalize
   // via repairPrometheusTask, but this guarantees no glob pattern ever reaches execSync.
-  const rawCmds = task.verification_commands || [VERIFICATION_DEFAULTS.test];
+  const rawCmds = Array.isArray(task?.verification_commands) ? task.verification_commands : [];
   const normalized = normalizeCommandBatch(rawCmds);
-  const allCmds = normalized.length > 0 ? normalized : [VERIFICATION_DEFAULTS.test];
+  const inferredSpecificCmds = inferVerificationFromFilesHint(normalizeTaskFilesHint(task));
+  const normalizedWithoutPlaceholders = normalized.filter((cmd) => !isPlaceholderVerificationCommand(cmd));
+  const hasSpecificVerificationCmd = normalizedWithoutPlaceholders.some((cmd) => !isNonSpecificVerification(cmd));
+  const strippedGenericTests = (inferredSpecificCmds.length > 0 || hasSpecificVerificationCmd)
+    ? normalizedWithoutPlaceholders.filter((cmd) => {
+      if (!isNonSpecificVerification(cmd)) return true;
+      return !/^\s*(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b/i.test(cmd)
+        && !/^\s*node\s+--test\b/i.test(cmd);
+    })
+    : normalizedWithoutPlaceholders;
+  const allCmds = inferredSpecificCmds.length > 0
+    ? normalizeCommandBatch([...inferredSpecificCmds, ...strippedGenericTests])
+    : strippedGenericTests;
 
   const blockedCmds: string[] = [];
   const cmds = allCmds.filter(cmd => {
@@ -907,10 +959,17 @@ function runVerificationCommands(task) {
   });
 
   let usedFallback: string | null = null;
+  if (cmds.length === 0 && inferredSpecificCmds.length > 0) {
+    cmds.push(...inferredSpecificCmds);
+    usedFallback = inferredSpecificCmds.join(" ; ");
+  }
+
   if (cmds.length === 0) {
-    // All task-named commands were blocked — run test suite as safety net
-    cmds.push(VERIFICATION_DEFAULTS.test);
-    usedFallback = VERIFICATION_DEFAULTS.test;
+    const summary = inferredSpecificCmds.length === 0
+      ? "[FAIL] No executable targeted verification commands were available. Generic placeholders must be replaced with task-specific tests."
+      : "[FAIL] All verification commands were blocked before execution.";
+    const targets = buildVerificationTargets(allCmds, [], blockedCmds, usedFallback);
+    return { passed: false, results: [], summary, targets };
   }
 
   const results: Array<{ cmd: string; passed: boolean; output: string }> = [];

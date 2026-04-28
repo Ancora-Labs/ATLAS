@@ -26,6 +26,11 @@ import { appendAgentContextUsage, resolveMaxPromptBudget } from "./context_usage
 import { appendAggregateLiveLogSync } from "./live_log.js";
 import { buildPromptAssemblySections } from "./prompt_overlay.js";
 import { deriveTargetResearchCoveragePlan, type TargetResearchCoveragePlan } from "./research_scout.js";
+import {
+  mirrorJsonArtifactToTargetSession,
+  readTargetSessionArtifactJson,
+  resolveTargetSessionArtifactPath,
+} from "./target_session_state.js";
 
 function liveLogPath(stateDir: string): string {
   return path.join(stateDir, "live_worker_research-synthesizer.log");
@@ -36,6 +41,35 @@ function appendLiveLogSync(stateDir: string, text: string): void {
     appendFileSync(liveLogPath(stateDir), text, "utf8");
     appendAggregateLiveLogSync(stateDir, "research-synthesizer", text);
   } catch { /* best-effort */ }
+}
+
+function hasSynthesisMarkers(text: string): boolean {
+  const normalized = String(text || "").trim();
+  return normalized.includes("## Research Synthesis") || normalized.includes("## Research Synthesis Header") || normalized.includes("## Topic:");
+}
+
+export function resolveSynthesizerOutputText(stdoutText: string, stderrText: string): string {
+  const stdout = String(stdoutText || "").trim();
+  const stderr = String(stderrText || "").trim();
+
+  const stdoutHasSynthesis = hasSynthesisMarkers(stdout);
+  const stderrHasSynthesis = hasSynthesisMarkers(stderr);
+
+  if (stdoutHasSynthesis && !stderrHasSynthesis) {
+    return stdout;
+  }
+  if (stderrHasSynthesis && !stdoutHasSynthesis) {
+    return stderr;
+  }
+  if (stdoutHasSynthesis && stderrHasSynthesis) {
+    return stdout.length >= stderr.length ? stdout : stderr;
+  }
+
+  const combined = [stdout, stderr].filter(Boolean).join("\n").trim();
+  if (hasSynthesisMarkers(combined)) {
+    return combined;
+  }
+  return stdout || stderr;
 }
 
 /**
@@ -512,6 +546,8 @@ export function buildTargetModeSynthesisTaskSection(
   coveragePlan?: TargetResearchCoveragePlan | null,
 ): string {
   const plan = coveragePlan || deriveTargetResearchCoveragePlan(activeTargetSession);
+  const obligations = Array.isArray(plan?.obligations) ? plan.obligations : ["implementation_patterns"];
+  const optionalInvestigations = Array.isArray(plan?.optionalInvestigations) ? plan.optionalInvestigations : [];
   return `## TARGET-REPO SYNTHESIS TASK
 You are preparing research for an external target repo delivery, not BOX self-improvement.
 Do NOT reframe this as BOX self-improvement or answer only in terms of BOX internal file changes.
@@ -519,7 +555,10 @@ Translate the research into implementation guidance for the target repo's produc
 Target product: ${String(activeTargetSession?.intent?.productType || "unknown")}
 Must-have flows: ${(Array.isArray(activeTargetSession?.intent?.mustHaveFlows) ? activeTargetSession.intent.mustHaveFlows : []).join(", ") || "none"}
 Success criteria: ${(Array.isArray(activeTargetSession?.intent?.successCriteria) ? activeTargetSession.intent.successCriteria : []).join(", ") || "none"}
-Coverage obligations: ${plan.obligations.join(", ") || "implementation_patterns"}
+Coverage obligations: ${obligations.join(", ") || "implementation_patterns"}
+Optional investigations: ${optionalInvestigations.join(", ") || "none"}
+Experience type: ${plan.intentDecision?.experienceType || "unknown"}
+Asset needs: media=${plan.intentDecision?.assetNeeds?.media || "none"}, branding=${plan.intentDecision?.assetNeeds?.branding || "none"}, motion=${plan.intentDecision?.assetNeeds?.motion || "none"}
 For each medium/high relevance source, explain what the target repo should implement, what user-facing behavior it improves, and what evidence supports that change.`;
 }
 
@@ -987,7 +1026,7 @@ ${scoutRawText}`),
 
   const stdout = String((result as any)?.stdout || "");
   const stderr = String((result as any)?.stderr || "");
-  const raw = stdout || stderr;
+  const raw = resolveSynthesizerOutputText(stdout, stderr);
   const cleanRaw = stripExecutionTranscriptNoise(raw);
   await appendAgentContextUsage(config, {
     agent: "research-synthesizer",
@@ -1182,7 +1221,9 @@ Follow your agent definition's output format exactly.`),
   };
 
   // Persist synthesis for Prometheus to read
-  await writeJson(path.join(stateDir, "research_synthesis.json"), sanitizeResearchSynthesisForPersistence(output));
+  const persistedSynthesis = sanitizeResearchSynthesisForPersistence(output);
+  await writeJson(path.join(stateDir, "research_synthesis.json"), persistedSynthesis);
+  await mirrorJsonArtifactToTargetSession(config, "research_synthesis.json", persistedSynthesis).catch(() => {});
 
   await appendProgress(
     config,
@@ -1445,7 +1486,14 @@ export async function persistBenchmarkEntry(
   const filePath = path.join(stateDir, "benchmark_ground_truth.json");
   try {
     const entry = buildBenchmarkEntry(cycleId, topics, categoryFrontiers);
-    const existing = await readJson(filePath, {
+    const scopedBenchmarkPath = resolveTargetSessionArtifactPath(config, "benchmark_ground_truth.json");
+    const existing = scopedBenchmarkPath
+      ? await readTargetSessionArtifactJson(config, "benchmark_ground_truth.json", {
+        schemaVersion: BENCHMARK_ENTRY_SCHEMA_VERSION,
+        updatedAt: null,
+        entries: [],
+      })
+      : await readJson(filePath, {
       schemaVersion: BENCHMARK_ENTRY_SCHEMA_VERSION,
       updatedAt: null,
       entries: [],
@@ -1453,11 +1501,13 @@ export async function persistBenchmarkEntry(
     const entries: unknown[] = Array.isArray(existing.entries) ? existing.entries : [];
     entries.unshift(entry);
     if (entries.length > 50) entries.length = 50;
-    await writeJson(filePath, {
+    const payload = {
       schemaVersion: BENCHMARK_ENTRY_SCHEMA_VERSION,
       updatedAt: new Date().toISOString(),
       entries,
-    });
+    };
+    await writeJson(filePath, payload);
+    await mirrorJsonArtifactToTargetSession(config, "benchmark_ground_truth.json", payload).catch(() => {});
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[research_synthesizer] persistBenchmarkEntry failed: ${msg}`);

@@ -13,6 +13,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseContractHealth, isContractHealthy, formatContractHealth, parseStartupContractAnchor, formatStartupContractAnchor, STARTUP_CONTRACT_ANCHOR_KEY } from "../../src/workers/contract_health.js";
+import { requiredUiWorkerCapabilities } from "../../src/workers/ui_capabilities.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENTRY = path.resolve(__dirname, "../../src/workers/run_task.ts");
@@ -84,7 +85,7 @@ describe("run_task.js — containerised worker entry point", () => {
 // ── Contract health gate ──────────────────────────────────────────────────────
 
 describe("run_task.js — WORKER_CONTRACT_HEALTH runtime gate", () => {
-  it("emits WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass on success", () => {
+  it("emits WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass;ui_caps:n/a on success", () => {
     const task = JSON.stringify({ id: "t-42", kind: "implementation" });
     const result = run({
       WORKER_ROLE: "evolution-worker",
@@ -95,7 +96,7 @@ describe("run_task.js — WORKER_CONTRACT_HEALTH runtime gate", () => {
     assert.equal(result.status, 0);
     assert.match(
       result.stdout,
-      /WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass/,
+      /WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass;ui_caps:n\/a/,
       "stdout must contain the full-pass contract health line"
     );
   });
@@ -115,6 +116,7 @@ describe("run_task.js — WORKER_CONTRACT_HEALTH runtime gate", () => {
     );
     assert.match(result.stderr, /payload:n\/a/, "payload must be n/a when env_vars fail");
     assert.match(result.stderr, /role:n\/a/, "role must be n/a when env_vars fail");
+    assert.match(result.stderr, /ui_caps:n\/a/, "ui_caps must be n/a when env_vars fail");
   });
 
   it("emits WORKER_CONTRACT_HEALTH=env_vars:pass;payload:fail on invalid JSON (written to stderr)", () => {
@@ -131,24 +133,27 @@ describe("run_task.js — WORKER_CONTRACT_HEALTH runtime gate", () => {
       "stderr must show env_vars:pass and payload:fail when JSON is invalid"
     );
     assert.match(result.stderr, /role:n\/a/, "role must be n/a when payload fails to parse");
+    assert.match(result.stderr, /ui_caps:n\/a/, "ui_caps must be n/a when payload fails to parse");
   });
 
   it("parseContractHealth correctly parses a full-pass health line", () => {
-    const line = "WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass";
+    const line = "WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass;ui_caps:n/a";
     const health = parseContractHealth(line);
     assert.ok(health !== null, "parseContractHealth must return a non-null object for a valid line");
     assert.equal(health!.env_vars, "pass");
     assert.equal(health!.payload, "pass");
     assert.equal(health!.role, "pass");
+    assert.equal(health!.ui_caps, "n/a");
   });
 
   it("parseContractHealth correctly parses an env_vars:fail line", () => {
-    const line = "WORKER_CONTRACT_HEALTH=env_vars:fail;payload:n/a;role:n/a";
+    const line = "WORKER_CONTRACT_HEALTH=env_vars:fail;payload:n/a;role:n/a;ui_caps:n/a";
     const health = parseContractHealth(line);
     assert.ok(health !== null);
     assert.equal(health!.env_vars, "fail");
     assert.equal(health!.payload, "n/a");
     assert.equal(health!.role, "n/a");
+    assert.equal(health!.ui_caps, "n/a");
   });
 
   it("parseContractHealth returns null for lines without the health marker", () => {
@@ -158,16 +163,18 @@ describe("run_task.js — WORKER_CONTRACT_HEALTH runtime gate", () => {
   });
 
   it("isContractHealthy returns true only when all three slots are pass", () => {
-    assert.equal(isContractHealthy({ env_vars: "pass", payload: "pass", role: "pass" }), true);
-    assert.equal(isContractHealthy({ env_vars: "fail", payload: "pass", role: "pass" }), false);
-    assert.equal(isContractHealthy({ env_vars: "pass", payload: "n/a", role: "pass" }), false);
-    assert.equal(isContractHealthy({ env_vars: "pass", payload: "pass", role: "fail" }), false);
+    assert.equal(isContractHealthy({ env_vars: "pass", payload: "pass", role: "pass", ui_caps: "n/a" }), true);
+    assert.equal(isContractHealthy({ env_vars: "pass", payload: "pass", role: "pass", ui_caps: "pass" }), true);
+    assert.equal(isContractHealthy({ env_vars: "fail", payload: "pass", role: "pass", ui_caps: "n/a" }), false);
+    assert.equal(isContractHealthy({ env_vars: "pass", payload: "n/a", role: "pass", ui_caps: "n/a" }), false);
+    assert.equal(isContractHealthy({ env_vars: "pass", payload: "pass", role: "fail", ui_caps: "n/a" }), false);
+    assert.equal(isContractHealthy({ env_vars: "pass", payload: "pass", role: "pass", ui_caps: "fail" }), false);
   });
 
   it("formatContractHealth produces a deterministic, machine-parseable line", () => {
-    const health = { env_vars: "pass" as const, payload: "pass" as const, role: "pass" as const };
+    const health = { env_vars: "pass" as const, payload: "pass" as const, role: "pass" as const, ui_caps: "n/a" as const };
     const line = formatContractHealth(health);
-    assert.equal(line, "WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass");
+    assert.equal(line, "WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass;ui_caps:n/a");
     const parsed = parseContractHealth(line);
     assert.deepEqual(parsed, health);
   });
@@ -188,6 +195,51 @@ describe("run_task.js — WORKER_CONTRACT_HEALTH runtime gate", () => {
     assert.equal(isContractHealthy(health!), false,
       "startup contract must not be healthy when required env vars are missing"
     );
+  });
+});
+
+describe("run_task.js — UI worker capability gate", () => {
+  it("emits ui_caps:fail and exits 1 when a UI task lacks explicit worker capabilities", () => {
+    const task = JSON.stringify({
+      id: "ui-missing",
+      kind: "ui-contract",
+      uiContract: { contractId: "contract-1" },
+    });
+    const result = run({
+      WORKER_ROLE: "integration-worker",
+      TASK_PAYLOAD: task,
+      TARGET_REPO: "owner/repo",
+      GITHUB_TOKEN: "ghp_fake",
+    });
+    assert.equal(result.status, 1, "UI tasks must fail closed when worker capabilities were not granted");
+    assert.match(result.stderr, /UI task requires explicit worker capabilities/);
+    assert.match(result.stderr, /Missing UI capabilities:/);
+    const health = parseContractHealth(result.stderr);
+    assert.ok(health !== null, "UI capability failures must still emit WORKER_CONTRACT_HEALTH");
+    assert.equal(health!.env_vars, "pass");
+    assert.equal(health!.payload, "pass");
+    assert.equal(health!.role, "pass");
+    assert.equal(health!.ui_caps, "fail");
+  });
+
+  it("emits ui_caps:pass and exits 0 when a UI task has the required worker capabilities", () => {
+    const task = JSON.stringify({
+      id: "ui-pass",
+      kind: "ui-contract",
+      uiContract: { contractId: "contract-1" },
+    });
+    const result = run({
+      WORKER_ROLE: "integration-worker",
+      TASK_PAYLOAD: task,
+      TARGET_REPO: "owner/repo",
+      GITHUB_TOKEN: "ghp_fake",
+      WORKER_GRANTED_CAPABILITIES: requiredUiWorkerCapabilities().join(","),
+    });
+    assert.equal(result.status, 0, `UI tasks must start when all required capabilities are granted; stderr: ${result.stderr}`);
+    assert.match(result.stdout, /UI capability gate passed/);
+    const health = parseContractHealth(result.stdout);
+    assert.ok(health !== null, "successful UI startups must emit WORKER_CONTRACT_HEALTH");
+    assert.equal(health!.ui_caps, "pass");
   });
 });
 
@@ -215,6 +267,9 @@ describe("run_task.js — startup ordering and env/startup contract gaps", () =>
     assert.equal(health!.role, "n/a",
       "role slot must be 'n/a' when env_vars fails (role check not reached)"
     );
+    assert.equal(health!.ui_caps, "n/a",
+      "ui_caps slot must be 'n/a' when env_vars fails (UI capability check not reached)"
+    );
   });
 
   it("single missing env var triggers env_vars:fail (partial env_vars failure)", () => {
@@ -231,6 +286,7 @@ describe("run_task.js — startup ordering and env/startup contract gaps", () =>
     assert.equal(health!.env_vars, "fail",
       "env_vars must be 'fail' even for a single missing variable"
     );
+    assert.equal(health!.ui_caps, "n/a");
   });
 
   it("startup log line appears in stdout before the contract health line on success", () => {
@@ -375,6 +431,8 @@ describe("run_task.js — exact named required-env-var contract", () => {
       "payload must be 'n/a' when env_vars check fails (not reached)");
     assert.equal(health!.role, "n/a",
       "role must be 'n/a' when env_vars check fails (not reached)");
+    assert.equal(health!.ui_caps, "n/a",
+      "ui_caps must be 'n/a' when env_vars check fails (not reached)");
   });
 
   it("GITHUB_TOKEN alone missing → env_vars:fail with GITHUB_TOKEN named in stderr", () => {
@@ -393,6 +451,7 @@ describe("run_task.js — exact named required-env-var contract", () => {
       "env_vars must be 'fail' when GITHUB_TOKEN is missing");
     assert.equal(health!.payload, "n/a");
     assert.equal(health!.role, "n/a");
+    assert.equal(health!.ui_caps, "n/a");
   });
 
   it("TASK_PAYLOAD alone missing → env_vars:fail with TASK_PAYLOAD named in stderr", () => {
@@ -409,6 +468,7 @@ describe("run_task.js — exact named required-env-var contract", () => {
     assert.ok(health !== null, "WORKER_CONTRACT_HEALTH must be emitted to stderr");
     assert.equal(health!.env_vars, "fail",
       "env_vars must be 'fail' when TASK_PAYLOAD is missing (treated as absent by the env check)");
+    assert.equal(health!.ui_caps, "n/a");
   });
 
   it("all four required vars present → exits 0 with full-pass contract health on stdout", () => {
@@ -426,6 +486,7 @@ describe("run_task.js — exact named required-env-var contract", () => {
     assert.equal(health!.env_vars, "pass");
     assert.equal(health!.payload, "pass");
     assert.equal(health!.role, "pass");
+    assert.equal(health!.ui_caps, "n/a");
   });
 });
 
@@ -463,7 +524,7 @@ describe("run_task.js — STARTUP_CONTRACT_ANCHOR named verification anchor", ()
 
   it("STARTUP_CONTRACT_ANCHOR: parseStartupContractAnchor returns false for unrelated lines", () => {
     assert.equal(parseStartupContractAnchor(""), false);
-    assert.equal(parseStartupContractAnchor("WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass"), false);
+    assert.equal(parseStartupContractAnchor("WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass;ui_caps:n/a"), false);
     assert.equal(parseStartupContractAnchor("BOX_STATUS=done"), false);
     assert.equal(parseStartupContractAnchor("[run_task] Worker ready."), false);
   });

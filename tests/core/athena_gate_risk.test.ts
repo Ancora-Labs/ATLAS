@@ -132,6 +132,7 @@ describe("athena gate risk dry-run integration", () => {
     }
   });
 
+
   it("salvages shadow-compatible plans before rejecting the whole batch", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-athena-shadow-salvage-"));
     try {

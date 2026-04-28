@@ -75,6 +75,27 @@ describe("architecture_drift", () => {
     assert.equal(report.staleReferences[0].line, 4);
   });
 
+  it("treats .js references as present when a sibling .ts source file exists", async () => {
+    await fs.mkdir(path.join(rootDir, "docs"), { recursive: true });
+    await fs.mkdir(path.join(rootDir, "src", "core"), { recursive: true });
+
+    await fs.writeFile(
+      path.join(rootDir, "src", "core", "fs_utils.ts"),
+      "export {}\n",
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(rootDir, "docs", "architecture.md"),
+      "Runtime helper: `src/core/fs_utils.js`\n",
+      "utf8"
+    );
+
+    const report = await checkArchitectureDrift({ rootDir });
+    assert.equal(report.staleCount, 0);
+    assert.equal(report.presentCount, 1);
+    assert.deepEqual(report.staleReferences, []);
+  });
+
   it("negative path: ignores absolute and environment paths — no false positives", async () => {
     await fs.mkdir(path.join(rootDir, "docs"), { recursive: true });
 
@@ -158,6 +179,50 @@ describe("architecture_drift", () => {
     const report = await checkArchitectureDrift({ rootDir });
     // Same path in same doc should only be counted once
     assert.equal(report.staleCount, 1);
+  });
+
+  it("scans only explicitly requested docPaths when provided", async () => {
+    await fs.mkdir(path.join(rootDir, "docs"), { recursive: true });
+    await fs.mkdir(path.join(rootDir, "src", "core"), { recursive: true });
+
+    await fs.writeFile(
+      path.join(rootDir, "src", "core", "orchestrator.ts"),
+      "export {}\n",
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(rootDir, "docs", "included.md"),
+      "Present: `src/core/orchestrator.ts`\n",
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(rootDir, "docs", "excluded.md"),
+      "Missing: `src/core/ghost.ts`\n",
+      "utf8"
+    );
+
+    const report = await checkArchitectureDrift({
+      rootDir,
+      docPaths: ["docs/included.md"],
+    });
+
+    assert.equal(report.staleCount, 0);
+    assert.equal(report.presentCount, 1);
+    assert.deepEqual(report.scannedDocs, ["docs/included.md"]);
+  });
+
+  it("keeps reporting a stale ref when neither the referenced extension nor its sibling exists", async () => {
+    await fs.mkdir(path.join(rootDir, "docs"), { recursive: true });
+
+    await fs.writeFile(
+      path.join(rootDir, "docs", "arch.md"),
+      "Missing helper: `src/core/ghost_utils.js`\n",
+      "utf8"
+    );
+
+    const report = await checkArchitectureDrift({ rootDir });
+    assert.equal(report.staleCount, 1);
+    assert.equal(report.staleReferences[0].referencedPath, "src/core/ghost_utils.js");
   });
 });
 

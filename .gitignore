@@ -14,10 +14,14 @@ state/*.json
 state/*.txt
 state/*.jsonl
 state/*.pid
+state/*.flag
 state/*.md
 state/archive/
 state/platform/
 state/projects/
+state/ui_contract/
+# Local planning notebooks
+state/projects/year1-foundation-session-notes.md
 state/synth_clean/
 state/synth_fetch/
 state/synth_fetch2/
@@ -26,6 +30,11 @@ state/synth_fetch4/
 tmp_research/
 .box-evolution-prompt-cache-lineage/
 tmp_evolution_worktree/
+tmp_*
+tmp_*/
+tmp_research_fetches/
+tmp_log_context_validation/
+state/tmp_*
 # Schema and reference documents in state/ are committed (not runtime state)
 # Logs
 *.log

@@ -16,20 +16,26 @@ function tryParseJson(text) {
   const s = String(text || "");
   try {
     return JSON.parse(s);
-  } catch {}
+  } catch {
+    return null;
+  }
 
   const fence = s.match(/```json\s*([\s\S]*?)```/);
   if (fence) {
     try {
       return JSON.parse(fence[1].trim());
-    } catch {}
+    } catch {
+      return null;
+    }
   }
 
   const anyFence = s.match(/```\s*([\s\S]*?)```/);
   if (anyFence) {
     try {
       return JSON.parse(anyFence[1].trim());
-    } catch {}
+    } catch {
+      return null;
+    }
   }
 
   return null;

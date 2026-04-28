@@ -13,9 +13,15 @@
  * Default verification commands.
  * These are used when box.config.json does not override them.
  */
+export const TARGETED_TEST_COMMAND_PLACEHOLDER = "npm test -- tests/core/<module>.test.ts";
+export const REPO_WIDE_TEST_COMMAND = "npm test";
+
 const DEFAULTS = Object.freeze({
-  /** Primary test command — must match package.json "test" script. */
-  test: "npm test",
+  /**
+   * Primary test command for planning/worker prompts.
+   * This defaults to a targeted test placeholder unless config overrides it.
+   */
+  test: TARGETED_TEST_COMMAND_PLACEHOLDER,
   /** Lint command. */
   lint: "npm run lint",
   /** Build command (optional — some projects don't have a build step). */
@@ -46,6 +52,12 @@ export function getVerificationCommands(config) {
  */
 export function getTestCommand(config) {
   return getVerificationCommands(config).test;
+}
+
+export function isPlaceholderVerificationCommand(command: string): boolean {
+  const text = String(command || "").trim();
+  if (!text) return false;
+  return /tests\/core\/<module>\.test\.ts/i.test(text);
 }
 
 /**
@@ -106,27 +118,27 @@ export function isNonSpecificVerificationCommand(command: string): boolean {
 export const FORBIDDEN_VERIFICATION_PATTERNS = Object.freeze([
   {
     pattern: /node\s+--test\s+tests\/?\*\*/i,
-    reason: "Glob patterns are not expanded on Windows — use 'npm test' instead"
+    reason: "Glob patterns are not expanded on Windows — use a targeted 'npm test -- tests/core/<module>.test.ts' command instead"
   },
   {
     pattern: /node\s+--test\s+[^\s]*\*/i,
-    reason: "Wildcard glob in node --test fails on Windows — use 'npm test' instead"
+    reason: "Wildcard glob in node --test fails on Windows — use a targeted 'npm test -- tests/core/<module>.test.ts' command instead"
   },
   {
     pattern: /^bash\s+/i,
-    reason: "bash is not available on Windows — use 'npm test' instead"
+    reason: "bash is not available on Windows — use a targeted 'npm test -- tests/core/<module>.test.ts' command instead"
   },
   {
     pattern: /^sh\s+/i,
-    reason: "sh is not available on Windows — use 'npm test' instead"
+    reason: "sh is not available on Windows — use a targeted 'npm test -- tests/core/<module>.test.ts' command instead"
   },
   {
     pattern: /^npx\s+tsx\s+[^\s]*\*/i,
-    reason: "Glob patterns via npx tsx are not expanded on Windows — use 'npm test' instead"
+    reason: "Glob patterns via npx tsx are not expanded on Windows — use a targeted 'npm test -- tests/core/<module>.test.ts' command instead"
   },
   {
     pattern: /^ts-node\s+[^\s]*\*/i,
-    reason: "Glob patterns via ts-node are not expanded on Windows — use 'npm test' instead"
+    reason: "Glob patterns via ts-node are not expanded on Windows — use a targeted 'npm test -- tests/core/<module>.test.ts' command instead"
   },
 ]);
 
@@ -144,20 +156,20 @@ export const FORBIDDEN_VERIFICATION_PATTERNS = Object.freeze([
  */
 export const VERIFICATION_CMD_REWRITE_RULES: ReadonlyArray<{ match: RegExp; replacement: string }> = Object.freeze([
   // Shell-glob patterns: not expanded on Windows — rewrite to portable test runner
-  { match: /node\s+--test\s+[^\s]*\*/i, replacement: DEFAULTS.test },
+  { match: /node\s+--test\s+[^\s]*\*/i, replacement: TARGETED_TEST_COMMAND_PLACEHOLDER },
   // Bash/sh scripts are not available on Windows
-  { match: /^bash\s+/i, replacement: DEFAULTS.test },
-  { match: /^sh\s+/i, replacement: DEFAULTS.test },
+  { match: /^bash\s+/i, replacement: TARGETED_TEST_COMMAND_PLACEHOLDER },
+  { match: /^sh\s+/i, replacement: TARGETED_TEST_COMMAND_PLACEHOLDER },
   // npx tsx / ts-node with glob patterns — not expanded on Windows
-  { match: /^npx\s+tsx\s+[^\s]*\*/i, replacement: DEFAULTS.test },
-  { match: /^ts-node\s+[^\s]*\*/i, replacement: DEFAULTS.test },
+  { match: /^npx\s+tsx\s+[^\s]*\*/i, replacement: TARGETED_TEST_COMMAND_PLACEHOLDER },
+  { match: /^ts-node\s+[^\s]*\*/i, replacement: TARGETED_TEST_COMMAND_PLACEHOLDER },
   // BOX daemon/start commands that would launch the full agent stack
-  { match: /^node\s+src\/cli\.js\s+once$/i, replacement: DEFAULTS.test },
-  { match: /^npm\s+run\s+box:once$/i, replacement: DEFAULTS.test },
-  { match: /^node\s+src\/cli\.js\s+start$/i, replacement: DEFAULTS.test },
-  { match: /^node\s+src\/cli\.js\s+doctor$/i, replacement: DEFAULTS.test },
+  { match: /^node\s+src\/cli\.js\s+once$/i, replacement: TARGETED_TEST_COMMAND_PLACEHOLDER },
+  { match: /^npm\s+run\s+box:once$/i, replacement: TARGETED_TEST_COMMAND_PLACEHOLDER },
+  { match: /^node\s+src\/cli\.js\s+start$/i, replacement: TARGETED_TEST_COMMAND_PLACEHOLDER },
+  { match: /^node\s+src\/cli\.js\s+doctor$/i, replacement: TARGETED_TEST_COMMAND_PLACEHOLDER },
   // Dashboard is a daemon — rewrite to canonical test runner
-  { match: /^node\s+src\/dashboard\/live_dashboard\.js$/i, replacement: DEFAULTS.test },
+  { match: /^node\s+src\/dashboard\/live_dashboard\.js$/i, replacement: TARGETED_TEST_COMMAND_PLACEHOLDER },
 ]);
 
 /**

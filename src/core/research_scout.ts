@@ -18,6 +18,11 @@ import { section, compilePrompt, estimateTokens } from "./prompt_compiler.js";
 import { appendAgentContextUsage, resolveMaxPromptBudget } from "./context_usage.js";
 import { appendAggregateLiveLogSync } from "./live_log.js";
 import { buildPromptAssemblySections, resolvePromptRuntimeContext } from "./prompt_overlay.js";
+import {
+  mirrorJsonArtifactToTargetSession,
+  readTargetSessionArtifactJson,
+  resolveTargetSessionArtifactPath,
+} from "./target_session_state.js";
 
 const SCOUT_SEEN_URLS_FILE = "research_scout_seen_urls.json";
 const SCOUT_TOPIC_SITE_STATUS_FILE = "research_scout_topic_site_status.json";
@@ -40,10 +45,94 @@ export interface TargetResearchCoveragePlan {
   adaptive: boolean;
   repoState: string;
   obligations: string[];
+  optionalInvestigations: string[];
   recommendedSourceTypes: string[];
   targetSourceCount: number;
   rationale: string[];
+  intentDecision: TargetResearchIntentDecision;
 }
+
+export type TargetExperienceType =
+  | "marketing"
+  | "product_interface"
+  | "admin_interface"
+  | "content_site"
+  | "ecommerce"
+  | "portfolio"
+  | "unknown";
+
+export type TargetAssetNeedLevel = "required" | "optional" | "none";
+
+export interface TargetResearchIntentDecision {
+  repoState: string;
+  experienceType: TargetExperienceType;
+  assetNeeds: {
+    media: TargetAssetNeedLevel;
+    branding: TargetAssetNeedLevel;
+    motion: TargetAssetNeedLevel;
+  };
+  rationale: string[];
+}
+
+const REQUIRED_MEDIA_PRODUCT_RULES = Object.freeze([
+  /\bfood\b/i,
+  /\brestaurant\b/i,
+  /\bmenu\b/i,
+  /\bcatalog\b/i,
+  /\bportfolio\b/i,
+  /\bshowcase\b/i,
+  /\bgallery\b/i,
+  /\be-?commerce\b/i,
+  /\bstorefront\b/i,
+  /\bproduct\s+(?:gallery|card|detail|listing)\b/i,
+  /\bbrand\s+site\b/i,
+  /\blanding\s+page\b/i,
+  /\btravel\b/i,
+  /\bhotel\b/i,
+]);
+
+
+const EXPERIENCE_TYPE_RULES: ReadonlyArray<{ type: TargetExperienceType; patterns: readonly RegExp[] }> = Object.freeze([
+  {
+    type: "ecommerce",
+    patterns: [/\be-?commerce\b/i, /\bstorefront\b/i, /\bcatalog\b/i, /\bproduct(?:\b|\s+(?:gallery|listing|detail|card))\b/i, /\bcheckout\b/i, /\bcart\b/i],
+  },
+  {
+    type: "portfolio",
+    patterns: [/\bportfolio\b/i, /\bshowcase\b/i, /\bgallery\b/i, /\bcase study\b/i],
+  },
+  {
+    type: "marketing",
+    patterns: [/\blanding page\b/i, /\bbrand site\b/i, /\bmarketing\b/i, /\bcampaign\b/i, /\bhero\b/i],
+  },
+  {
+    type: "admin_interface",
+    patterns: [/\badmin\b/i, /\bdashboard\b/i, /\bbackoffice\b/i, /\bcontrol(?:\b|\s+panel)\b/i, /\bstaff\b/i, /\boperator\b/i],
+  },
+  {
+    type: "content_site",
+    patterns: [/\bblog\b/i, /\bdocs?\b/i, /\bdocumentation\b/i, /\bknowledge base\b/i, /\bcontent site\b/i, /\beditorial\b/i],
+  },
+  {
+    type: "product_interface",
+    patterns: [/\bapp\b/i, /\bapplication\b/i, /\binterface\b/i, /\bworkspace\b/i, /\bportal\b/i, /\bsession control\b/i, /\bflow\b/i],
+  },
+]);
+
+const EXPLICIT_BRANDING_RULES = Object.freeze([
+  /\bbrand(?:ed|ing)?\b/i,
+  /\blogo\b/i,
+  /\bidentity\b/i,
+  /\bvisual identity\b/i,
+]);
+
+const EXPLICIT_MOTION_RULES = Object.freeze([
+  /\bmotion\b/i,
+  /\banimation\b/i,
+  /\banimated\b/i,
+  /\btransition\b/i,
+  /\bmicro-?interaction\b/i,
+]);
 
 const COVERAGE_SIGNAL_RULES = Object.freeze({
   visual_design: [/\blanding\b/i, /\bhero\b/i, /\bvisual\b/i, /\bbrand(?:ed|ing)?\b/i, /\bshowcase\b/i, /\bpremium\b/i, /\bmarketing\b/i, /\bportfolio\b/i],
@@ -54,6 +143,17 @@ const COVERAGE_SIGNAL_RULES = Object.freeze({
   accessibility_clarity: [/\baccessibility\b/i, /\ba11y\b/i, /\bkeyboard\b/i, /\bcontrast\b/i, /\bsemantic\b/i, /\baria\b/i],
 });
 
+const EXPLICIT_MEDIA_RULES = Object.freeze([
+  ...COVERAGE_SIGNAL_RULES.media_surfaces,
+  /\bimage-heavy\b/i,
+  /\blogo-driven\b/i,
+]);
+
+const EXPLICIT_MEDIA_EXCLUSION_RULES = Object.freeze([
+  /\bwithout\s+(?:depending\s+on\s+)?(?:real\s+)?(?:image|images|photo(?:graphy)?|gallery|video)s?\b/i,
+  /\bno\s+(?:real\s+)?(?:image|images|photo(?:graphy)?|gallery|video)s?\b/i,
+  /\bwithout\s+raw\s+logs\b/i,
+]);
 function pushUnique(list: string[], value: string): void {
   if (!value || list.includes(value)) return;
   list.push(value);
@@ -80,12 +180,101 @@ function collectTargetIntentText(activeTargetSession: any): string {
     .toLowerCase();
 }
 
-export function deriveTargetResearchCoveragePlan(activeTargetSession: any): TargetResearchCoveragePlan {
+function shouldRequireMediaSurfaces(text: string): boolean {
+  return textMatchesAny(text, EXPLICIT_MEDIA_RULES)
+    || textMatchesAny(text, REQUIRED_MEDIA_PRODUCT_RULES);
+}
+
+function resolveExperienceType(text: string): TargetExperienceType {
+  for (const rule of EXPERIENCE_TYPE_RULES) {
+    if (textMatchesAny(text, rule.patterns)) {
+      return rule.type;
+    }
+  }
+  return "unknown";
+}
+
+function resolveMediaNeed(text: string, experienceType: TargetExperienceType): TargetAssetNeedLevel {
+  if (textMatchesAny(text, EXPLICIT_MEDIA_EXCLUSION_RULES)) {
+    return textMatchesAny(text, EXPLICIT_BRANDING_RULES) || experienceType === "marketing" || experienceType === "portfolio"
+      ? "optional"
+      : "none";
+  }
+  if (shouldRequireMediaSurfaces(text)) {
+    return "required";
+  }
+  if (experienceType === "marketing" || experienceType === "portfolio") {
+    return "optional";
+  }
+  return "none";
+}
+
+function resolveBrandingNeed(text: string, experienceType: TargetExperienceType): TargetAssetNeedLevel {
+  if (textMatchesAny(text, EXPLICIT_BRANDING_RULES) || /\bbrand site\b/i.test(text)) {
+    return "required";
+  }
+  if (experienceType === "marketing" || experienceType === "portfolio") {
+    return "optional";
+  }
+  return "none";
+}
+
+function resolveMotionNeed(text: string, experienceType: TargetExperienceType): TargetAssetNeedLevel {
+  if (textMatchesAny(text, EXPLICIT_MOTION_RULES)) {
+    return "required";
+  }
+  if (experienceType === "marketing" || experienceType === "portfolio" || experienceType === "product_interface") {
+    return "optional";
+  }
+  return "none";
+}
+
+export function interpretTargetResearchIntent(activeTargetSession: any): TargetResearchIntentDecision {
   const repoState = String(activeTargetSession?.intent?.repoState || activeTargetSession?.repoProfile?.repoState || "unknown").trim() || "unknown";
   const text = collectTargetIntentText(activeTargetSession);
-  const obligations: string[] = [];
-  const recommendedSourceTypes: string[] = [];
+  const experienceType = resolveExperienceType(text);
+  const assetNeeds = {
+    media: resolveMediaNeed(text, experienceType),
+    branding: resolveBrandingNeed(text, experienceType),
+    motion: resolveMotionNeed(text, experienceType),
+  };
   const rationale: string[] = [];
+
+  if (experienceType !== "unknown") {
+    rationale.push(`experience type resolved as ${experienceType}`);
+  }
+  if (assetNeeds.media === "required") {
+    rationale.push("product intent explicitly depends on media-bearing surfaces");
+  } else if (assetNeeds.media === "optional") {
+    rationale.push("media can improve the experience but is not a delivery gate");
+  }
+  if (assetNeeds.branding === "required") {
+    rationale.push("brand identity is part of the declared product requirement");
+  } else if (assetNeeds.branding === "optional") {
+    rationale.push("brand sensitivity matters even if a full identity system is not mandatory");
+  }
+  if (assetNeeds.motion === "required") {
+    rationale.push("motion is explicitly part of the requested interaction model");
+  } else if (assetNeeds.motion === "optional") {
+    rationale.push("interaction motion can be researched without becoming a hard coverage gate");
+  }
+
+  return {
+    repoState,
+    experienceType,
+    assetNeeds,
+    rationale,
+  };
+}
+
+export function deriveTargetResearchCoveragePlan(activeTargetSession: any): TargetResearchCoveragePlan {
+  const intentDecision = interpretTargetResearchIntent(activeTargetSession);
+  const repoState = intentDecision.repoState;
+  const text = collectTargetIntentText(activeTargetSession);
+  const obligations: string[] = [];
+  const optionalInvestigations: string[] = [];
+  const recommendedSourceTypes: string[] = [];
+  const rationale: string[] = [...intentDecision.rationale];
 
   pushUnique(obligations, "implementation_patterns");
   pushUnique(obligations, "user_flow_clarity");
@@ -99,19 +288,34 @@ export function deriveTargetResearchCoveragePlan(activeTargetSession: any): Targ
     rationale.push("repo is empty so initial build-direction evidence matters");
   }
 
-  if (textMatchesAny(text, COVERAGE_SIGNAL_RULES.visual_design)) {
+  if (
+    textMatchesAny(text, COVERAGE_SIGNAL_RULES.visual_design)
+    || intentDecision.assetNeeds.branding !== "none"
+    || intentDecision.experienceType === "marketing"
+    || intentDecision.experienceType === "portfolio"
+  ) {
     pushUnique(obligations, "visual_design");
     pushUnique(recommendedSourceTypes, "visual exemplars");
-    rationale.push("intent suggests a visual-first or brand-sensitive surface");
+    rationale.push("intent decision indicates a visual-first or brand-sensitive surface");
   }
 
-  if (textMatchesAny(text, COVERAGE_SIGNAL_RULES.media_surfaces) || textMatchesAny(text, COVERAGE_SIGNAL_RULES.visual_design)) {
+  if (intentDecision.assetNeeds.media === "required") {
     pushUnique(obligations, "media_surfaces");
     pushUnique(recommendedSourceTypes, "asset and media patterns");
-    rationale.push("delivery likely depends on imagery or media presentation");
+    rationale.push("media is a hard delivery requirement for this product shape");
+  } else if (intentDecision.assetNeeds.media === "optional") {
+    pushUnique(optionalInvestigations, "media_surfaces");
+    pushUnique(recommendedSourceTypes, "asset and media patterns");
+    rationale.push("media should be explored opportunistically without becoming a coverage gate");
   }
 
-  if (textMatchesAny(text, COVERAGE_SIGNAL_RULES.responsive_experience) || textMatchesAny(text, COVERAGE_SIGNAL_RULES.visual_design)) {
+  if (
+    textMatchesAny(text, COVERAGE_SIGNAL_RULES.responsive_experience)
+    || intentDecision.experienceType === "marketing"
+    || intentDecision.experienceType === "ecommerce"
+    || intentDecision.experienceType === "content_site"
+    || textMatchesAny(text, COVERAGE_SIGNAL_RULES.visual_design)
+  ) {
     pushUnique(obligations, "responsive_experience");
     pushUnique(recommendedSourceTypes, "responsive UX guidance");
     rationale.push("the experience needs to hold across mobile and desktop");
@@ -129,23 +333,34 @@ export function deriveTargetResearchCoveragePlan(activeTargetSession: any): Targ
     rationale.push("user-facing delivery benefits from usability evidence");
   }
 
+  if (intentDecision.assetNeeds.motion !== "none") {
+    pushUnique(optionalInvestigations, "motion_guidance");
+    pushUnique(recommendedSourceTypes, "motion and interaction references");
+  }
+
   const targetSourceCount = Math.max(8, Math.min(24, 6 + (obligations.length * 2) + (repoState === "empty" ? 2 : 0)));
 
   return {
     adaptive: true,
     repoState,
     obligations,
+    optionalInvestigations,
     recommendedSourceTypes,
     targetSourceCount,
     rationale,
+    intentDecision,
   };
 }
 
 export function buildTargetResearchCoverageSection(activeTargetSession: any): string {
   const plan = deriveTargetResearchCoveragePlan(activeTargetSession);
+  const { intentDecision } = plan;
   return `## TARGET RESEARCH COVERAGE PLAN
 Adaptive coverage: enabled
+Experience type: ${intentDecision.experienceType}
+Asset needs: media=${intentDecision.assetNeeds.media}, branding=${intentDecision.assetNeeds.branding}, motion=${intentDecision.assetNeeds.motion}
 Coverage obligations: ${plan.obligations.join(", ") || "implementation_patterns"}
+Optional investigations: ${plan.optionalInvestigations.join(", ") || "none"}
 Preferred source mix: ${plan.recommendedSourceTypes.join(", ") || "implementation docs"}
 Adaptive source target: ${plan.targetSourceCount}
 Stop condition: do not stop once only stack docs are found; continue until the obligation list is materially represented in the evidence set.
@@ -186,6 +401,41 @@ async function loadSeenScoutUrls(stateDir: string): Promise<Set<string>> {
   return seen;
 }
 
+async function loadSeenScoutUrlsForConfig(config: any, stateDir: string): Promise<Set<string>> {
+  const scopedScoutPath = resolveTargetSessionArtifactPath(config, "research_scout_output.json");
+  if (!scopedScoutPath) {
+    return loadSeenScoutUrls(stateDir);
+  }
+
+  const seen = new Set<string>();
+  const [memoryRaw, prevScout] = await Promise.all([
+    readTargetSessionArtifactJson(config, SCOUT_SEEN_URLS_FILE, { urls: [] }),
+    readTargetSessionArtifactJson(config, "research_scout_output.json", null),
+  ]);
+
+  const memoryUrls = Array.isArray(memoryRaw?.urls) ? memoryRaw.urls : [];
+  for (const item of memoryUrls) {
+    const normalized = normalizeUrl(String(item || ""));
+    if (normalized) seen.add(normalized);
+  }
+
+  const prevSources = Array.isArray(prevScout?.sources) ? prevScout.sources : [];
+  for (const source of prevSources) {
+    const normalized = normalizeUrl(String((source as any)?.url || ""));
+    if (normalized) seen.add(normalized);
+  }
+
+  return seen;
+}
+
+async function loadTopicSiteStateForConfig(config: any, stateDir: string): Promise<TopicSiteState> {
+  const scopedTopicStatePath = resolveTargetSessionArtifactPath(config, SCOUT_TOPIC_SITE_STATUS_FILE);
+  if (!scopedTopicStatePath) {
+    return loadTopicSiteState(stateDir);
+  }
+  return readTargetSessionArtifactJson(config, SCOUT_TOPIC_SITE_STATUS_FILE, { updatedAt: null, entries: [] });
+}
+
 async function saveSeenScoutUrls(stateDir: string, seenUrls: Set<string>): Promise<void> {
   const cap = 5000;
   const urls = Array.from(seenUrls).slice(-cap);
@@ -194,6 +444,18 @@ async function saveSeenScoutUrls(stateDir: string, seenUrls: Set<string>): Promi
     count: urls.length,
     urls,
   });
+}
+
+async function saveSeenScoutUrlsForConfig(config: any, stateDir: string, seenUrls: Set<string>): Promise<void> {
+  const cap = 5000;
+  const urls = Array.from(seenUrls).slice(-cap);
+  const payload = {
+    updatedAt: new Date().toISOString(),
+    count: urls.length,
+    urls,
+  };
+  await writeJson(path.join(stateDir, SCOUT_SEEN_URLS_FILE), payload);
+  await mirrorJsonArtifactToTargetSession(config, SCOUT_SEEN_URLS_FILE, payload).catch(() => {});
 }
 
 function normalizeTopic(raw: string): string {
@@ -267,6 +529,17 @@ async function saveTopicSiteState(stateDir: string, map: Map<string, TopicSiteEn
     updatedAt: new Date().toISOString(),
     entries,
   });
+}
+
+async function saveTopicSiteStateForConfig(config: any, stateDir: string, map: Map<string, TopicSiteEntry>): Promise<void> {
+  const entries = Array.from(map.values())
+    .sort((a, b) => (a.site + a.topic).localeCompare(b.site + b.topic));
+  const payload = {
+    updatedAt: new Date().toISOString(),
+    entries,
+  };
+  await writeJson(path.join(stateDir, SCOUT_TOPIC_SITE_STATUS_FILE), payload);
+  await mirrorJsonArtifactToTargetSession(config, SCOUT_TOPIC_SITE_STATUS_FILE, payload).catch(() => {});
 }
 
 function buildBlockedSourcesSection(
@@ -352,12 +625,14 @@ async function buildScoutContext(config: any): Promise<string> {
     seenUrls,
     topicSiteState,
   ] = await Promise.all([
-    readJson(path.join(stateDir, "prometheus_analysis.json"), null),
-    readJson(path.join(stateDir, "jesus_directive.json"), null),
-    readJson(path.join(stateDir, "capacity_scoreboard.json"), null),
-    readJson(path.join(stateDir, "research_scout_output.json"), null),
-    loadSeenScoutUrls(stateDir),
-    loadTopicSiteState(stateDir),
+    readTargetSessionArtifactJson(config, "prometheus_analysis.json", null),
+    readTargetSessionArtifactJson(config, "jesus_directive.json", null),
+    resolveTargetSessionArtifactPath(config, "prometheus_analysis.json")
+      ? Promise.resolve(null)
+      : readJson(path.join(stateDir, "capacity_scoreboard.json"), null),
+    readTargetSessionArtifactJson(config, "research_scout_output.json", null),
+    loadSeenScoutUrlsForConfig(config, stateDir),
+    loadTopicSiteStateForConfig(config, stateDir),
   ]);
 
   const sections: Array<{ name: string; content: string }> = [];
@@ -779,8 +1054,8 @@ Follow the output format specified in your agent definition exactly.`;
       });
     }
   }
-  await saveSeenScoutUrls(stateDir, seenUrls);
-  await saveTopicSiteState(stateDir, topicSiteMap);
+  await saveSeenScoutUrlsForConfig(config, stateDir, seenUrls);
+  await saveTopicSiteStateForConfig(config, stateDir, topicSiteMap);
 
   await appendProgress(
     config,
@@ -807,6 +1082,7 @@ Follow the output format specified in your agent definition exactly.`;
 
   // Persist raw research package
   await writeJson(path.join(stateDir, "research_scout_output.json"), output);
+  await mirrorJsonArtifactToTargetSession(config, "research_scout_output.json", output).catch(() => {});
 
   if (filteredRepeatCount > 0) {
     await appendProgress(config, `[RESEARCH_SCOUT][DEDUPE] Filtered ${filteredRepeatCount} previously-seen source(s)`);

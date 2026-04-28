@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { classifySingleTargetAthenaFeedback } from "../../src/core/orchestrator.js";
+import { buildSingleTargetResumeDirective, classifySingleTargetAthenaFeedback } from "../../src/core/orchestrator.js";
 import { isResearchArtifactAlignedToTargetSession } from "../../src/core/prometheus.js";
 
 describe("single target feedback routing", () => {
@@ -32,6 +32,62 @@ describe("single target feedback routing", () => {
     });
 
     assert.equal(category, "intent");
+  });
+
+  it("routes ui quality-bar downgrade rejections back into research refresh", () => {
+    const category = classifySingleTargetAthenaFeedback({
+      reason: {
+        code: "PATCHED_PLAN_CONTRACT_FAILED",
+        message: "Normalized patched plans failed contract re-validation: plan[2] silently downgrades an explicit operator requirement or quality bar into a cheaper substitute.",
+      },
+      corrections: [
+        "plan[2]: do not replace the product shell with a cheaper dashboard-style onboarding page",
+      ],
+    }, {
+      repoProfile: { repoState: "existing" },
+      intent: {
+        repoState: "existing",
+        preferredQualityBar: "Premium Windows desktop product quality with no generic dashboard drift.",
+        designDirection: "Preserve a product-owned monochrome desktop shell.",
+        scopeOut: ["Generic dark dashboard-card reskins"],
+        successCriteria: ["The UI does not degrade into a cheaper substitute."],
+      },
+    });
+
+    assert.equal(category, "research");
+  });
+
+  it("builds a resume directive that bypasses Jesus for pending research refresh handoffs", () => {
+    const directive = buildSingleTargetResumeDirective({
+      platformModeState: { currentMode: "single_target_delivery" },
+      activeTargetSession: {
+        projectId: "target_atlas",
+        sessionId: "sess_123",
+        objective: {
+          summary: "Continue the Windows-first ATLAS desktop shell build",
+        },
+        intent: {
+          preferredQualityBar: "Premium monochrome desktop shell",
+          designDirection: "No dashboard-card drift",
+        },
+        feedback: {
+          pendingResearchRefresh: true,
+          lastAthenaReview: {
+            message: "Carry the existing implementation evidence through the patched plan handoff.",
+            corrections: ["Preserve implementationEvidence and leverage_rank from the current plan."],
+          },
+        },
+        handoff: {
+          nextAction: "run_target_research_refresh",
+          carriedContextSummary: "Resume from Athena research refresh.",
+        },
+      },
+    });
+
+    assert.ok(directive);
+    assert.equal(directive?.wait, false);
+    assert.match(String(directive?.briefForPrometheus || ""), /without restarting from Jesus/i);
+    assert.match(String(directive?.briefForPrometheus || ""), /run_target_research_refresh/i);
   });
 });
 

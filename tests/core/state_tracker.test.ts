@@ -77,10 +77,12 @@ describe("state_tracker", () => {
     await appendProgress(config, "target lifecycle advanced");
 
     const globalLog = await fs.readFile(config.paths.progressFile, "utf8");
+    const liveMirrorLog = await fs.readFile(path.join(stateDir, "progress_live.txt"), "utf8");
     const sessionLogPath = getTargetSessionProgressLogPath(stateDir, "target_portal", "sess_123");
     const sessionLog = await fs.readFile(sessionLogPath, "utf8");
 
     assert.ok(globalLog.includes("target lifecycle advanced"));
+    assert.ok(liveMirrorLog.includes("target lifecycle advanced"));
     assert.ok(globalLog.includes(buildProgressLogPrefix(config)));
     assert.match(globalLog, /target lifecycle advanced \[mode=single_target_delivery projectId=target_portal sessionId=sess_123\]/);
     assert.ok(sessionLog.includes("target lifecycle advanced"));

@@ -37,7 +37,7 @@ function buildManifest(overrides: Record<string, unknown> = {}) {
 }
 
 describe("clarification_runtime", () => {
-  it("records transcript turns and promotes empty-repo clarification into shadow planning", async () => {
+  it("records transcript turns and promotes empty-repo clarification into active planning after one intake pass", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-clarification-"));
     const localRepo = path.join(tempRoot, "empty-target-repo");
     await fs.mkdir(path.join(localRepo, ".git"), { recursive: true });
@@ -64,17 +64,22 @@ describe("clarification_runtime", () => {
       selectedOptions: ["Homepage", "Booking flow", "Content management"],
       answerText: "Homepage, booking flow, and content editing must exist in v1",
     });
-    const finalResult = await submitTargetClarificationAnswer(config, {
+    await submitTargetClarificationAnswer(config, {
       selectedOptions: ["Business conversion"],
+    });
+    const finalResult = await submitTargetClarificationAnswer(config, {
+      questionId: "design_direction",
+      answerText: "Clean and professional with strong food photography and a polished booking-first feel.",
+      selectedOptions: ["Clean and professional"],
     });
 
     assert.equal(finalResult.readyForPlanning, true);
-    assert.equal(finalResult.session.currentStage, TARGET_SESSION_STAGE.SHADOW);
+    assert.equal(finalResult.session.currentStage, TARGET_SESSION_STAGE.ACTIVE);
     assert.equal(finalResult.session.clarification.status, "completed");
     assert.equal(finalResult.session.intent.status, TARGET_INTENT_STATUS.READY_FOR_PLANNING);
     assert.equal(finalResult.session.gates.allowPlanning, true);
-    assert.equal(finalResult.session.gates.allowShadowExecution, true);
-    assert.equal(finalResult.session.gates.allowActiveExecution, false);
+    assert.equal(finalResult.session.gates.allowShadowExecution, false);
+    assert.equal(finalResult.session.gates.allowActiveExecution, true);
     assert.match(String(finalResult.session.intent.summary || ""), /fish restaurant/i);
     assert.ok(Array.isArray(finalResult.transcript.turns));
     assert.ok(finalResult.transcript.turns.length >= 8);
@@ -109,7 +114,31 @@ describe("clarification_runtime", () => {
     assert.ok(result.session.intent.openQuestions.some((entry: string) => entry.includes("Follow-up for")));
   });
 
-  it("keeps clarification fail-closed in shadow when no agent mode decision is available", async () => {
+  it("asks for custom detail when Other is selected without any explanation", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-clarification-other-"));
+    const localRepo = path.join(tempRoot, "empty-target-repo");
+    await fs.mkdir(path.join(localRepo, ".git"), { recursive: true });
+    await fs.writeFile(path.join(localRepo, "README.md"), "# Empty target\n");
+
+    const config = buildConfig(tempRoot, {
+      githubToken: "token",
+      copilotCliCommand: "__missing_copilot_binary__",
+    });
+    const session = await createTargetSession(buildManifest({ localPath: localRepo }), config);
+    await runTargetOnboarding(config, session);
+
+    await getTargetClarificationRuntimeState(config, { persistPrompt: true });
+    const result = await submitTargetClarificationAnswer(config, {
+      questionId: "product_goal",
+      selectedOptions: ["Other"],
+    });
+
+    assert.equal(result.readyForPlanning, false);
+    assert.equal(result.session.currentStage, TARGET_SESSION_STAGE.AWAITING_INTENT_CLARIFICATION);
+    assert.equal(String(result.currentQuestion?.id || "").startsWith("follow_up_product_goal_"), true);
+  });
+
+  it("completes existing-repo intake directly from the initial question set without extra AI mode routing", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-clarification-simple-"));
     const localRepo = path.join(tempRoot, "existing-simple-target-repo");
     await fs.mkdir(path.join(localRepo, ".git"), { recursive: true });
@@ -150,25 +179,35 @@ describe("clarification_runtime", () => {
     });
 
     assert.equal(finalResult.readyForPlanning, true);
-    assert.equal(finalResult.session.currentStage, TARGET_SESSION_STAGE.SHADOW);
-    assert.equal(finalResult.session.intent.planningMode, "shadow");
+    assert.equal(finalResult.session.currentStage, TARGET_SESSION_STAGE.ACTIVE);
+    assert.equal(finalResult.session.intent.planningMode, "active");
     assert.equal(finalResult.session.gates.allowPlanning, true);
-    assert.equal(finalResult.session.gates.allowShadowExecution, true);
-    assert.equal(finalResult.session.gates.allowActiveExecution, false);
-    assert.equal(finalResult.session.handoff.nextAction, "run_shadow_planning");
+    assert.equal(finalResult.session.gates.allowShadowExecution, false);
+    assert.equal(finalResult.session.gates.allowActiveExecution, true);
+    assert.equal(finalResult.session.handoff.nextAction, "run_active_planning");
   });
 
-  it("honors an agent-authored delivery mode decision without any heuristic fallback", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-clarification-agent-route-"));
-    const localRepo = path.join(tempRoot, "existing-agent-routed-target-repo");
+  it("ignores per-answer AI turn decisions and completes from the initial intake packet only", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-clarification-single-call-"));
+    const localRepo = path.join(tempRoot, "existing-single-call-target-repo");
     await fs.mkdir(path.join(localRepo, ".git"), { recursive: true });
     await fs.writeFile(path.join(localRepo, "index.html"), "<main>Home</main>\n");
     await fs.writeFile(path.join(localRepo, "style.css"), "body { margin: 0; }\n");
-    await fs.writeFile(path.join(localRepo, "package.json"), JSON.stringify({ name: "agent-routed-target" }, null, 2));
+    await fs.writeFile(path.join(localRepo, "package.json"), JSON.stringify({ name: "single-call-target" }, null, 2));
 
     const config = buildConfig(tempRoot, {
       githubToken: "token",
-      mockClarificationDeliveryModeDecision: "shadow",
+      mockClarificationTurnDecisions: JSON.stringify({
+        byQuestionId: {
+          success_signal: {
+            outcome: "ready_to_confirm",
+            understanding: "This should never be used because intake is single-call only.",
+            rationale: "obsolete per-answer routing",
+            confidence: "high",
+            proposedMode: "shadow",
+          },
+        },
+      }),
     });
     const session = await createTargetSession(buildManifest({ localPath: localRepo }), config);
     await runTargetOnboarding(config, session);
@@ -199,15 +238,15 @@ describe("clarification_runtime", () => {
     });
 
     assert.equal(finalResult.readyForPlanning, true);
-    assert.equal(finalResult.session.currentStage, TARGET_SESSION_STAGE.SHADOW);
-    assert.equal(finalResult.session.intent.planningMode, "shadow");
-    assert.equal(finalResult.session.gates.allowShadowExecution, true);
-    assert.equal(finalResult.session.gates.allowActiveExecution, false);
-    assert.equal(finalResult.intentContract.deliveryModeDecision?.recommendation, "shadow");
-    assert.equal(finalResult.intentContract.deliveryModeDecision?.source, "onboarding-existing-repo");
+    assert.equal(finalResult.session.currentStage, TARGET_SESSION_STAGE.ACTIVE);
+    assert.equal(finalResult.session.intent.planningMode, "active");
+    assert.equal(finalResult.session.gates.allowPlanning, true);
+    assert.equal(finalResult.session.gates.allowShadowExecution, false);
+    assert.equal(finalResult.session.gates.allowActiveExecution, true);
+    assert.equal(finalResult.intentContract.deliveryModeDecision ?? null, null);
   });
 
-  it("opens directly in active mode when the selected onboarding agent decides active", async () => {
+  it("opens directly in active mode after the initial intake questions for existing repos", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-clarification-agent-active-"));
     const localRepo = path.join(tempRoot, "existing-agent-active-target-repo");
     await fs.mkdir(path.join(localRepo, ".git"), { recursive: true });
@@ -217,7 +256,6 @@ describe("clarification_runtime", () => {
 
     const config = buildConfig(tempRoot, {
       githubToken: "token",
-      mockClarificationDeliveryModeDecision: "active",
     });
     const session = await createTargetSession(buildManifest({ localPath: localRepo }), config);
     await runTargetOnboarding(config, session);
@@ -252,6 +290,85 @@ describe("clarification_runtime", () => {
     assert.equal(finalResult.session.gates.allowPlanning, true);
     assert.equal(finalResult.session.gates.allowShadowExecution, false);
     assert.equal(finalResult.session.gates.allowActiveExecution, true);
-    assert.equal(finalResult.intentContract.deliveryModeDecision?.recommendation, "active");
+    assert.equal(finalResult.intentContract.deliveryModeDecision ?? null, null);
   });
+
+  it("uses authored follow-up flow from the initial packet and preserves the final resolved packet", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-clarification-authored-flow-"));
+    const localRepo = path.join(tempRoot, "authored-flow-target-repo");
+    await fs.mkdir(path.join(localRepo, ".git"), { recursive: true });
+    await fs.writeFile(path.join(localRepo, "README.md"), "# Empty target\n");
+
+    const config = buildConfig(tempRoot, {
+      githubToken: "token",
+      mockTargetOnboardingClarificationPacket: JSON.stringify({
+        openingPrompt: "Tell ATLAS what you want to build.",
+        understanding: {
+          likelyIntent: "A non-trivial product request needs a precise v1 definition.",
+        },
+        requiredSemanticSlots: ["product_goal", "target_users"],
+        packetBlueprint: {
+          preserve: ["summary", "users", "constraints"],
+        },
+        questions: [
+          {
+            id: "product_goal",
+            semanticSlot: "product_goal",
+            title: "What should BOX build?",
+            prompt: "Describe the product in one sentence.",
+            answerMode: "hybrid",
+            options: ["CLI tool", "Backend service", "Other"],
+            followUps: [
+              {
+                id: "product_goal_follow_up_detail",
+                semanticSlot: "product_goal",
+                title: "What exactly should it do first?",
+                prompt: "Make it concrete: what should the very first usable version actually do?",
+                answerMode: "hybrid",
+                minAnswerLength: 12,
+              },
+            ],
+          },
+          {
+            id: "target_users",
+            semanticSlot: "target_users",
+            title: "Who is it for?",
+            prompt: "Who will use it first?",
+            answerMode: "hybrid",
+            options: ["Operators", "Customers", "Other"],
+          },
+        ],
+      }),
+    });
+    const session = await createTargetSession(buildManifest({ localPath: localRepo }), config);
+    await runTargetOnboarding(config, session);
+
+    const initialRuntime = await getTargetClarificationRuntimeState(config, { persistPrompt: true });
+    assert.equal(initialRuntime.currentQuestion.id, "product_goal");
+
+    const followUpResult = await submitTargetClarificationAnswer(config, {
+      questionId: "product_goal",
+      answerText: "tool",
+    });
+
+    assert.equal(followUpResult.readyForPlanning, false);
+    assert.equal(followUpResult.currentQuestion?.id, "product_goal_follow_up_detail");
+    assert.equal(followUpResult.currentQuestion?.prompt, "Make it concrete: what should the very first usable version actually do?");
+
+    await submitTargetClarificationAnswer(config, {
+      questionId: "product_goal_follow_up_detail",
+      answerText: "A release helper that versions packages and publishes release notes.",
+    });
+    const finalResult = await submitTargetClarificationAnswer(config, {
+      questionId: "target_users",
+      answerText: "Internal operators who prepare releases.",
+      selectedOptions: ["Operators"],
+    });
+
+    assert.equal(finalResult.readyForPlanning, true);
+    assert.equal(finalResult.intentContract.resolvedPacket.authoredPacket.packetBlueprint.preserve[0], "summary");
+    assert.equal(finalResult.intentContract.resolvedPacket.authoredUnderstanding.likelyIntent, "A non-trivial product request needs a precise v1 definition.");
+    assert.equal(finalResult.intentContract.resolvedPacket.answeredQuestions.length, 3);
+  });
+
 });

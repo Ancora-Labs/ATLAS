@@ -21,7 +21,7 @@ describe("self_dev_guard", () => {
   it("disables self-dev mode when single_target_delivery is the active runtime mode", () => {
     assert.equal(isSelfDevMode({
       selfDev: { enabled: true },
-      env: { targetRepo: "Ancora-Labs/Box" },
+      env: { targetRepo: "Ancora-Labs/ATLAS" },
       platformModeState: {
         currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
       },
@@ -65,7 +65,7 @@ describe("self_dev_guard", () => {
         protectedPrefixes: ["state/"],
         forbiddenBranchTargets: ["main", "release"],
       },
-      env: { targetRepo: "Ancora-Labs/Box" },
+      env: { targetRepo: "Ancora-Labs/ATLAS" },
     });
 
     assert.equal(contract.enabled, true);
@@ -83,7 +83,7 @@ describe("self_dev_guard", () => {
         criticalFiles: ["src/core/orchestrator.ts"],
         forbiddenBranchTargets: ["main"],
       },
-      env: { targetRepo: "Ancora-Labs/Box" },
+      env: { targetRepo: "Ancora-Labs/ATLAS" },
     };
 
     const result = evaluateSelfDevProtectionBoundary({

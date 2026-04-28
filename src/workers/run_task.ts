@@ -20,6 +20,7 @@
  *
  * Optional:
  *   BOX_LOG_LEVEL    — "debug" | "info" | "warn" | "error" (default: "info")
+ *   WORKER_GRANTED_CAPABILITIES — comma-separated or JSON-array capability ids for UI tasks
  *
  * Contract health gate:
  *   After validation this module emits a WORKER_CONTRACT_HEALTH= line to stdout
@@ -27,15 +28,21 @@
  *   as a first-class runtime gate: downstream systems can inspect the line to
  *   verify all contract slots before allowing the worker to proceed.
  *
- *   Format:  WORKER_CONTRACT_HEALTH=env_vars:<pass|fail|n/a>;payload:<pass|fail|n/a>;role:<pass|fail|n/a>
- *   Success: WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass
- *   Failure: WORKER_CONTRACT_HEALTH=env_vars:fail;payload:n/a;role:n/a  (emitted to stderr)
+ *   Format:  WORKER_CONTRACT_HEALTH=env_vars:<pass|fail|n/a>;payload:<pass|fail|n/a>;role:<pass|fail|n/a>;ui_caps:<pass|fail|n/a>
+ *   Success: WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass;ui_caps:n/a
+ *   Failure: WORKER_CONTRACT_HEALTH=env_vars:fail;payload:n/a;role:n/a;ui_caps:n/a  (emitted to stderr)
  *
  * Exports: see src/workers/contract_health.ts for types and parsers.
  */
 
 import process from "node:process";
 import { formatContractHealth, formatStartupContractAnchor } from "./contract_health.js";
+import {
+  checkUiWorkerCapabilities,
+  parseGrantedUiWorkerCapabilities,
+  requiredUiWorkerCapabilities,
+  taskRequiresUiWorkerCapabilities,
+} from "./ui_capabilities.js";
 
 const REQUIRED_VARS = ["WORKER_ROLE", "TASK_PAYLOAD", "TARGET_REPO", "GITHUB_TOKEN"];
 
@@ -48,7 +55,7 @@ function main(): void {
       `[run_task] Set these variables and re-run the container.\n`
     );
     // Emit contract health evidence to stderr so the runtime gate can observe it
-    process.stderr.write(formatContractHealth({ env_vars: "fail", payload: "n/a", role: "n/a" }) + "\n");
+    process.stderr.write(formatContractHealth({ env_vars: "fail", payload: "n/a", role: "n/a", ui_caps: "n/a" }) + "\n");
     process.exit(1);
   }
 
@@ -68,7 +75,7 @@ function main(): void {
       "[run_task] ERROR: TASK_PAYLOAD is not valid JSON.\n"
     );
     // Emit partial health: env_vars passed, payload failed
-    process.stderr.write(formatContractHealth({ env_vars: "pass", payload: "fail", role: "n/a" }) + "\n");
+    process.stderr.write(formatContractHealth({ env_vars: "pass", payload: "fail", role: "n/a", ui_caps: "n/a" }) + "\n");
     process.exit(1);
   }
 
@@ -76,10 +83,32 @@ function main(): void {
     `[run_task] Task received — id=${task.id ?? "(none)"} kind=${task.kind ?? "(none)"}\n`
   );
 
+  let uiCaps: "pass" | "n/a" = "n/a";
+  if (taskRequiresUiWorkerCapabilities(task)) {
+    const granted = parseGrantedUiWorkerCapabilities(process.env.WORKER_GRANTED_CAPABILITIES);
+    const capabilityCheck = checkUiWorkerCapabilities(granted);
+    if (!capabilityCheck.ok || capabilityCheck.unknown.length > 0) {
+      process.stderr.write("[run_task] ERROR: UI task requires explicit worker capabilities.\n");
+      if (capabilityCheck.missing.length > 0) {
+        process.stderr.write(`[run_task] Missing UI capabilities: ${capabilityCheck.missing.join(", ")}\n`);
+      }
+      if (capabilityCheck.unknown.length > 0) {
+        process.stderr.write(`[run_task] Unknown UI capabilities: ${capabilityCheck.unknown.join(", ")}\n`);
+      }
+      process.stderr.write(
+        `[run_task] Required UI capabilities: ${requiredUiWorkerCapabilities().join(", ")}\n`
+      );
+      process.stderr.write(formatContractHealth({ env_vars: "pass", payload: "pass", role: "pass", ui_caps: "fail" }) + "\n");
+      process.exit(1);
+    }
+    uiCaps = "pass";
+    process.stdout.write(`[run_task] UI capability gate passed — granted=${granted.length}\n`);
+  }
+
   // ── Step 3: role presence contract ──────────────────────────────────────
   // WORKER_ROLE was already confirmed non-empty by REQUIRED_VARS check.
   // Emit the full-pass health line to stdout as a first-class runtime gate signal.
-  process.stdout.write(formatContractHealth({ env_vars: "pass", payload: "pass", role: "pass" }) + "\n");
+  process.stdout.write(formatContractHealth({ env_vars: "pass", payload: "pass", role: "pass", ui_caps: uiCaps }) + "\n");
   // Emit the named startup-contract verification anchor immediately after the
   // health line.  This anchor unambiguously marks that all contract checks
   // completed in THIS startup cycle — downstream gates use it to distinguish
