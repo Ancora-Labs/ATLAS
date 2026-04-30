@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VELORA | Firelight dining with memorable first impressions</title>
+  <meta
+    name="description"
+    content="VELORA pairs bold typography, warm layered lighting, and a craveable hero composition with clear menu, reservation, and ordering actions."
+  />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Cormorant+Garamond:wght@600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="VELORA home">
+        <span class="brand-mark">V</span>
+        <span class="brand-copy">
+          <strong>VELORA</strong>
+          <span>Firelight Supper Club</span>
+        </span>
+      </a>
+
+      <nav class="site-nav" aria-label="Primary">
+        <a href="#menu">Menu</a>
+        <a href="#reserve">Reserve</a>
+        <a href="#order">Order</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Golden-hour dining. Chef-led pacing. City-night energy.</p>
+          <h1 id="hero-title">VELORA</h1>
+          <p class="tagline">Warm light, bold plates, and a table worth arriving early for.</p>
+          <p class="hero-message">
+            VELORA brings fire-kissed cooking, candlelit hospitality, and distinctive plating into one memorable first
+            impression from the moment the page opens.
+          </p>
+
+          <div class="hero-actions">
+            <a class="button button-primary" href="#menu">Explore the tasting menu</a>
+            <a class="button button-secondary" href="#reserve">Reserve a table</a>
+            <a class="button button-secondary" href="#order">Order for tonight</a>
+          </div>
+
+          <div class="hero-highlights" aria-label="Service highlights">
+            <article class="highlight-card">
+              <span>Chef's spotlight</span>
+              <strong>Ember ribeye with smoked date glaze and charred shallot butter.</strong>
+            </article>
+            <article class="highlight-card">
+              <span>Tonight's rhythm</span>
+              <strong>Walk-ins for lounge seats, reservations for the dining room, ordering open until 11:30.</strong>
+            </article>
+          </div>
+        </div>
+
+        <div class="hero-visual" aria-label="Illustrated signature plate">
+          <div class="ambient ambient-amber" aria-hidden="true"></div>
+          <div class="ambient ambient-rose" aria-hidden="true"></div>
+          <div class="ambient ambient-gold" aria-hidden="true"></div>
+
+          <div class="presentation-note">
+            <p>Signature presentation</p>
+            <strong>Ember ribeye, saffron carrots, and citrus smoke.</strong>
+          </div>
+
+          <div class="plate-stage" aria-hidden="true">
+            <div class="plate-shadow"></div>
+            <div class="plate">
+              <div class="plate-rim"></div>
+              <div class="food-cluster">
+                <span class="protein protein-main"></span>
+                <span class="protein protein-cut"></span>
+                <span class="protein protein-sear"></span>
+                <span class="garnish garnish-leaf"></span>
+                <span class="garnish garnish-carrot"></span>
+                <span class="garnish garnish-bloom"></span>
+                <span class="sauce sauce-one"></span>
+                <span class="sauce sauce-two"></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="visual-metrics">
+            <article>
+              <span>Reservations</span>
+              <strong>Dining room from 5 PM</strong>
+            </article>
+            <article>
+              <span>Ordering</span>
+              <strong>Pickup and courier in 30 minutes</strong>
+            </article>
+            <article>
+              <span>Menu mood</span>
+              <strong>Wood-fired, bright, and layered</strong>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="service-strip" aria-label="Primary service actions">
+        <article id="menu" class="service-card is-active" data-service-card>
+          <p>Menu</p>
+          <h2>Lead with the food.</h2>
+          <span>Seasonal tasting, raw bar, late-night lounge plates.</span>
+          <button class="service-button" type="button" data-service-trigger="menu">Make menu primary</button>
+        </article>
+        <article id="reserve" class="service-card" data-service-card>
+          <p>Reservation</p>
+          <h2>Book the room.</h2>
+          <span>Counter seats, dining room tables, and chef's rail experiences.</span>
+          <button class="service-button" type="button" data-service-trigger="reserve">Highlight reservations</button>
+        </article>
+        <article id="order" class="service-card" data-service-card>
+          <p>Ordering</p>
+          <h2>Bring VELORA home.</h2>
+          <span>Curated dinner bundles, desserts, and cocktail pairings ready to go.</span>
+          <button class="service-button" type="button" data-service-trigger="order">Highlight ordering</button>
+        </article>
+      </section>
+
+      <p class="service-status" aria-live="polite" data-service-status>
+        Menu is leading the first impression right now.
+      </p>
+    </main>
+  </div>
+
+  <script type="module" src="./script.js"></script>
+</body>
+</html>
