@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { loadConfig } from "../config.js";
 import { isDaemonProcess, isProcessAlive, readDaemonPid, requestDaemonReload } from "../core/daemon_control.js";
@@ -174,16 +175,61 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
-async function resolveRootBoxCliLaunchSpec(stateDir: string): Promise<RootBoxCliLaunchSpec> {
+function uniquePaths(paths: Array<string | null>): string[] {
+  return [...new Set(paths.filter((entry): entry is string => Boolean(entry && entry.trim())))];
+}
+
+function resolvePackagedAppRootCandidates(rootDir: string): string[] {
+  const resourcesAppRoot = typeof process.resourcesPath === "string" && process.resourcesPath.trim()
+    ? path.join(process.resourcesPath, "app.asar")
+    : null;
+  const executableAppRoot = process.execPath
+    ? path.join(path.dirname(process.execPath), "resources", "app.asar")
+    : null;
+  const extractedAppRoot = path.join(rootDir, "resources", "app.asar");
+
+  return uniquePaths([resourcesAppRoot, executableAppRoot, extractedAppRoot]);
+}
+
+async function resolvePackagedRootBoxCliLaunchSpec(
+  rootDir: string,
+  runtimeStateDir: string,
+  env: NodeJS.ProcessEnv,
+): Promise<RootBoxCliLaunchSpec | null> {
+  for (const packagedAppRoot of resolvePackagedAppRootCandidates(rootDir)) {
+    if (!await pathExists(packagedAppRoot)) {
+      continue;
+    }
+
+    const packagedCompiledCliPath = path.join(packagedAppRoot, "src", "cli.js");
+    if (await pathExists(packagedCompiledCliPath)) {
+      return {
+        command: process.execPath,
+        args: [packagedCompiledCliPath],
+        env,
+        cwd: rootDir,
+        runtimeStateDir,
+      };
+    }
+
+    const packagedSourceCliPath = path.join(packagedAppRoot, "src", "cli.ts");
+    const packagedTsxLoaderPath = path.join(packagedAppRoot, "node_modules", "tsx", "dist", "loader.mjs");
+    return {
+      command: process.execPath,
+      args: ["--import", pathToFileURL(packagedTsxLoaderPath).href, packagedSourceCliPath],
+      env,
+      cwd: rootDir,
+      runtimeStateDir,
+    };
+  }
+
+  return null;
+}
+
+export async function resolveRootBoxCliLaunchSpec(stateDir: string): Promise<RootBoxCliLaunchSpec> {
   const runtimeStateDir = await resolveAtlasRuntimeStateDir(stateDir);
   const rootDir = path.dirname(runtimeStateDir);
   const compiledCliPath = path.join(rootDir, "src", "cli.js");
-  const packagedAppRoot = typeof process.resourcesPath === "string" && process.resourcesPath.trim()
-    ? path.join(process.resourcesPath, "app.asar")
-    : null;
-  const packagedCompiledCliPath = packagedAppRoot
-    ? path.join(packagedAppRoot, "src", "cli.js")
-    : null;
   const env = { ...process.env };
 
   if (typeof process.versions.electron === "string" && !env.ELECTRON_RUN_AS_NODE) {
@@ -200,14 +246,9 @@ async function resolveRootBoxCliLaunchSpec(stateDir: string): Promise<RootBoxCli
     };
   }
 
-  if (packagedCompiledCliPath && await pathExists(packagedCompiledCliPath)) {
-    return {
-      command: process.execPath,
-      args: [packagedCompiledCliPath],
-      env,
-      cwd: rootDir,
-      runtimeStateDir,
-    };
+  const packagedLaunchSpec = await resolvePackagedRootBoxCliLaunchSpec(rootDir, runtimeStateDir, env);
+  if (packagedLaunchSpec) {
+    return packagedLaunchSpec;
   }
 
   const sourceCliPath = path.join(rootDir, "src", "cli.ts");
@@ -215,19 +256,6 @@ async function resolveRootBoxCliLaunchSpec(stateDir: string): Promise<RootBoxCli
     return {
       command: process.execPath,
       args: ["--import", "tsx", sourceCliPath],
-      env,
-      cwd: rootDir,
-      runtimeStateDir,
-    };
-  }
-
-  const packagedSourceCliPath = packagedAppRoot
-    ? path.join(packagedAppRoot, "src", "cli.ts")
-    : null;
-  if (packagedSourceCliPath && await pathExists(packagedSourceCliPath)) {
-    return {
-      command: process.execPath,
-      args: ["--import", "tsx", packagedSourceCliPath],
       env,
       cwd: rootDir,
       runtimeStateDir,

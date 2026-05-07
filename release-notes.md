@@ -1,8 +1,8 @@
-# ATLAS v0.1.1
+# ATLAS v0.1.2
 
 Patch release for **ATLAS** on Windows.
 
-This update fixes the packaged desktop build so sessions started from the downloaded ZIP can launch correctly after extraction.
+This update fixes the packaged desktop build so sessions started from the downloaded ZIP can launch the bundled ATLAS runtime correctly after extraction.
 
 ---
 
@@ -23,7 +23,7 @@ ATLAS is for:
 
 ## How to open ATLAS (step by step)
 
-1. **Download** the file `ATLAS-v0.1.1-win-x64.zip` from this release page (it's attached below).
+1. **Download** the file `ATLAS-v0.1.2-win-x64.zip` from this release page (it's attached below).
 2. Find the downloaded ZIP file (usually in your **Downloads** folder).
 3. **Right-click** the ZIP file → choose **"Extract All…"** → pick a folder you can find again (for example, your Desktop) → click **Extract**.
 4. Open the new **ATLAS** folder that just appeared.
@@ -48,4 +48,4 @@ That's it. No installer, no admin rights, no extra setup.
 
 - Source code: see the repository on GitHub.
 - This build was packaged with `electron-builder`. The `ATLAS.exe` is unsigned, hence the SmartScreen prompt on first launch.
-- This patch fixes a packaged runtime path issue that could leave new sessions in `Needs attention` immediately after launch.
+- This patch fixes the packaged runtime launcher so it loads the bundled CLI from `resources/app.asar` with the bundled `tsx` loader.
