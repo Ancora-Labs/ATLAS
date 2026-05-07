@@ -115,7 +115,7 @@ const EXPERIENCE_TYPE_RULES: ReadonlyArray<{ type: TargetExperienceType; pattern
   },
   {
     type: "product_interface",
-    patterns: [/\bapp\b/i, /\bapplication\b/i, /\binterface\b/i, /\bworkspace\b/i, /\bportal\b/i, /\bsession control\b/i, /\bflow\b/i],
+    patterns: [/\bapp\b/i, /\bapplication\b/i, /\binterface\b/i, /\bworkspace\b/i, /\bportal\b/i, /\bsession control\b/i],
   },
 ]);
 
@@ -154,6 +154,14 @@ const EXPLICIT_MEDIA_EXCLUSION_RULES = Object.freeze([
   /\bno\s+(?:real\s+)?(?:image|images|photo(?:graphy)?|gallery|video)s?\b/i,
   /\bwithout\s+raw\s+logs\b/i,
 ]);
+
+const GENERIC_PUBLIC_WEBSITE_RULES = Object.freeze([
+  /\bwebsite\b/i,
+  /\bweb\s*site\b/i,
+  /\bweb\s?page\b/i,
+  /\bhomepage\b/i,
+]);
+
 function pushUnique(list: string[], value: string): void {
   if (!value || list.includes(value)) return;
   list.push(value);
@@ -185,13 +193,27 @@ function shouldRequireMediaSurfaces(text: string): boolean {
     || textMatchesAny(text, REQUIRED_MEDIA_PRODUCT_RULES);
 }
 
-function resolveExperienceType(text: string): TargetExperienceType {
+function resolveExperienceTypeDecision(text: string): { type: TargetExperienceType; usedGenericWebsiteFallback: boolean } {
   for (const rule of EXPERIENCE_TYPE_RULES) {
     if (textMatchesAny(text, rule.patterns)) {
-      return rule.type;
+      return {
+        type: rule.type,
+        usedGenericWebsiteFallback: false,
+      };
     }
   }
-  return "unknown";
+
+  if (textMatchesAny(text, GENERIC_PUBLIC_WEBSITE_RULES)) {
+    return {
+      type: "marketing",
+      usedGenericWebsiteFallback: true,
+    };
+  }
+
+  return {
+    type: "unknown",
+    usedGenericWebsiteFallback: false,
+  };
 }
 
 function resolveMediaNeed(text: string, experienceType: TargetExperienceType): TargetAssetNeedLevel {
@@ -232,7 +254,8 @@ function resolveMotionNeed(text: string, experienceType: TargetExperienceType): 
 export function interpretTargetResearchIntent(activeTargetSession: any): TargetResearchIntentDecision {
   const repoState = String(activeTargetSession?.intent?.repoState || activeTargetSession?.repoProfile?.repoState || "unknown").trim() || "unknown";
   const text = collectTargetIntentText(activeTargetSession);
-  const experienceType = resolveExperienceType(text);
+  const experienceTypeDecision = resolveExperienceTypeDecision(text);
+  const experienceType = experienceTypeDecision.type;
   const assetNeeds = {
     media: resolveMediaNeed(text, experienceType),
     branding: resolveBrandingNeed(text, experienceType),
@@ -242,6 +265,9 @@ export function interpretTargetResearchIntent(activeTargetSession: any): TargetR
 
   if (experienceType !== "unknown") {
     rationale.push(`experience type resolved as ${experienceType}`);
+  }
+  if (experienceTypeDecision.usedGenericWebsiteFallback) {
+    rationale.push("generic website phrasing defaults to a public-facing marketing surface until a narrower product class is stated");
   }
   if (assetNeeds.media === "required") {
     rationale.push("product intent explicitly depends on media-bearing surfaces");
@@ -321,7 +347,11 @@ export function deriveTargetResearchCoveragePlan(activeTargetSession: any): Targ
     rationale.push("the experience needs to hold across mobile and desktop");
   }
 
-  if (textMatchesAny(text, COVERAGE_SIGNAL_RULES.trust_signals) || /\bpremium\b|\bconversion\b|\blanding\b/i.test(text)) {
+  if (
+    textMatchesAny(text, COVERAGE_SIGNAL_RULES.trust_signals)
+    || intentDecision.experienceType === "marketing"
+    || /\bpremium\b|\bconversion\b|\blanding\b/i.test(text)
+  ) {
     pushUnique(obligations, "trust_signals");
     pushUnique(recommendedSourceTypes, "trust/conversion UX examples");
     rationale.push("user confidence and conversion clarity are part of success");

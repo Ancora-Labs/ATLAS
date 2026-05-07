@@ -25,6 +25,8 @@ import {
   resolveDirectiveTargetSessionStamp,
   isDirectiveAlignedToTargetSession,
   stampDirectiveTargetSession,
+  buildProtectedTargetPlanningBrief,
+  applySingleTargetIntentAuthorityToDirective,
   shouldWarnJesusDecisionLatency,
   hasReachedJesusSoftTimeout,
   formatJesusTierEscalationMessage,
@@ -167,6 +169,129 @@ describe("jesus_supervisor — single-target directive alignment", () => {
       ),
       true,
     );
+  });
+
+  it("builds a fail-closed Prometheus brief from the active target contract once clarification is ready", () => {
+    const config = {
+      platformModeState: { currentMode: "single_target_delivery" },
+      activeTargetSession: {
+        projectId: "steak-house",
+        sessionId: "sess_ready",
+        currentStage: "active",
+        repo: {
+          repoUrl: "https://github.com/dogducaner66-byte/steak-house-test-7",
+          localPath: "C:/isolated/steak-house-test-7",
+        },
+        workspace: {
+          path: "C:/isolated/steak-house-test-7",
+        },
+        objective: {
+          summary: "Ship a polished steakhouse site with booking and premium visual fidelity.",
+        },
+        clarification: {
+          readyForPlanning: true,
+        },
+        intent: {
+          status: "ready_for_planning",
+          summary: "repoState=empty | goal=steakhouse site | assets=Real external assets allowed when needed; do not silently downgrade to placeholders.",
+          mustHaveFlows: ["Browse the menu", "Book a table"],
+          scopeIn: ["Premium steakhouse landing page", "Booking flow"],
+          scopeOut: ["Placeholder-only imagery"],
+          protectedAreas: ["Booking flow"],
+          preferredQualityBar: "Premium restaurant conversion surface",
+          designDirection: "Authentic food photography with a polished editorial feel",
+          implementationFlexibility: "Best-fit implementation allowed; framework choice is not operator-constrained.",
+          operatorIntentBrief: "Build a premium restaurant conversion surface with authentic food photography, keep the booking-first posture, and do not soften the brief into generic placeholders.",
+          operatorIntentEvidence: ["Use real imagery when needed.", "Do not soften the booking-first surface."],
+          assetSourcingPolicy: "Real external assets allowed when needed; preserve requested source visuals.",
+          assetRequirements: ["Preserve requested visuals as source requirements."],
+          successCriteria: ["The shipped site keeps authentic imagery rather than placeholders."],
+        },
+        constraints: {
+          protectedPaths: ["src/ui/**"],
+          forbiddenActions: ["Do not replace requested visuals with placeholder imagery."],
+        },
+      },
+    };
+
+    const protectedBrief = buildProtectedTargetPlanningBrief(config);
+    assert.match(String(protectedBrief?.brief || ""), /Authoritative planning brief source: ACTIVE TARGET SESSION CONTRACT\./i);
+    assert.match(String(protectedBrief?.brief || ""), /Detailed operator intent brief:/i);
+    assert.match(String(protectedBrief?.brief || ""), /do not soften the brief into generic placeholders/i);
+    assert.match(String(protectedBrief?.brief || ""), /Operator intent evidence: Use real imagery when needed\./i);
+    assert.match(String(protectedBrief?.brief || ""), /Implementation latitude: Best-fit implementation allowed; framework choice is not operator-constrained\./i);
+    assert.match(String(protectedBrief?.brief || ""), /Asset sourcing policy: Real external assets allowed when needed; preserve requested source visuals\./i);
+
+    const directive = applySingleTargetIntentAuthorityToDirective(config, {
+      decision: "tactical",
+      callPrometheus: true,
+      briefForPrometheus: "Use CSS placeholder imagery for now and simplify the booking surface.",
+      priorities: ["Take the cheapest adjacent route"],
+    });
+
+    assert.match(String(directive.briefForPrometheus || ""), /Authoritative planning brief source: ACTIVE TARGET SESSION CONTRACT\./i);
+    assert.doesNotMatch(String(directive.briefForPrometheus || ""), /CSS placeholder imagery/i);
+    assert.equal(directive.intentAuthority?.source, "active_target_session_contract");
+    assert.equal(directive.intentAuthority?.locked, true);
+    assert.equal(
+      directive.priorities[0],
+      "Honor the active target session contract exactly; do not substitute cheaper adjacent outcomes.",
+    );
+  });
+
+  it("does not override a directive before clarification is ready for planning", () => {
+    const config = {
+      platformModeState: { currentMode: "single_target_delivery" },
+      activeTargetSession: {
+        projectId: "portal",
+        sessionId: "sess_waiting",
+        currentStage: "awaiting_intent_clarification",
+        clarification: {
+          readyForPlanning: false,
+        },
+        intent: {
+          status: "clarifying",
+        },
+      },
+    };
+
+    const directive = applySingleTargetIntentAuthorityToDirective(config, {
+      callPrometheus: true,
+      briefForPrometheus: "Ask Prometheus for a fresh repo scan.",
+      priorities: ["Normal routing"],
+    });
+
+    assert.equal(directive.briefForPrometheus, "Ask Prometheus for a fresh repo scan.");
+    assert.equal(directive.intentAuthority, undefined);
+    assert.deepEqual(directive.priorities, ["Normal routing"]);
+  });
+
+  it("adds fallback ambition guidance only when quality or implementation latitude is still unspecified", () => {
+    const config = {
+      platformModeState: { currentMode: "single_target_delivery" },
+      activeTargetSession: {
+        projectId: "atlas",
+        sessionId: "sess_guidance",
+        currentStage: "active",
+        clarification: {
+          readyForPlanning: true,
+        },
+        objective: {
+          summary: "Ship a polished public-facing ATLAS shell",
+        },
+        intent: {
+          status: "ready_for_planning",
+          summary: "repoState=empty | goal=atlas website",
+          scopeIn: ["landing page", "contact flow"],
+        },
+      },
+    };
+
+    const protectedBrief = buildProtectedTargetPlanningBrief(config);
+
+    assert.match(String(protectedBrief?.brief || ""), /Fallback ambition policy:/i);
+    assert.match(String(protectedBrief?.brief || ""), /Visual medium policy:/i);
+    assert.match(String(protectedBrief?.brief || ""), /Safety boundary: this fallback is advisory only/i);
   });
 });
 

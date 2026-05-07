@@ -67,13 +67,51 @@ describe("prompt_overlay", () => {
         platformModeState: {
           currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
         },
+        activeTargetSession: {
+          projectId: "target_brand_site",
+          sessionId: "sess_ui_001",
+          currentStage: "onboarding",
+          objective: {
+            summary: "Build a more premium landing page",
+          },
+          onboarding: {
+            readiness: "partial",
+            recommendedNextStage: "shadow",
+            readinessScore: 55,
+          },
+          prerequisites: {
+            requiredNow: [],
+            requiredLater: [],
+            optional: [],
+          },
+          gates: {
+            allowPlanning: true,
+            allowShadowExecution: true,
+            allowActiveExecution: false,
+            quarantine: false,
+            quarantineReason: null,
+          },
+          handoff: {
+            requiredHumanInputs: [],
+            carriedContextSummary: "UI polish requested.",
+          },
+          constraints: {
+            protectedPaths: ["infra/prod"],
+            forbiddenActions: ["force push"],
+          },
+        },
       },
       stage: "onboarding",
     });
 
     assert.ok(prompt.includes("MODE OVERLAY — SINGLE_TARGET_DELIVERY"));
     assert.ok(prompt.includes("Operate inside the active target workspace"));
+    assert.ok(prompt.includes("If the assigned packet touches UI, UX, landing pages, heroes, visual polish, design systems, or other design-led surfaces"));
+    assert.ok(prompt.includes("always inspect carried scout/synthesis evidence and then inspect a narrow set of high-quality current internet design references before implementation"));
+    assert.ok(prompt.includes("When the packet already includes design references, treat them as the baseline and still inspect additional current references yourself"));
     assert.ok(prompt.includes("target objective, protected paths, forbidden actions, and completion criteria"));
+    assert.ok(prompt.includes("always inspect any provided design references plus carried repo/scout evidence, then inspect current high-quality internet design references before implementation"));
+    assert.ok(prompt.includes("Do not skip that design-reference pass because the packet already has a direction"));
     assert.ok(prompt.includes("STAGE OVERLAY — onboarding"));
     assert.ok(prompt.includes("understand and classify the repo before execution begins"));
   });
@@ -140,6 +178,68 @@ describe("prompt_overlay", () => {
     assert.ok(prompt.includes("optionalPrerequisites: sentry_access_token"));
     assert.ok(prompt.includes("requiredHumanInputs: confirm staging URL"));
     assert.ok(prompt.includes("If allowPlanning=true but allowActiveExecution=false, keep plans shadow-safe"));
+  });
+
+  it("adds sequential visual inspection guidance for prometheus on design-heavy target sessions", () => {
+    const prompt = buildPromptAssemblyPrompt({
+      agentName: "prometheus",
+      config: {
+        selfDev: {
+          enabled: false,
+          futureModeFlags: {
+            singleTargetDelivery: true,
+            targetSessionState: true,
+          },
+        },
+        platformModeState: {
+          currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+        },
+        activeTargetSession: {
+          projectId: "target_pizza",
+          sessionId: "sess_visual_001",
+          currentStage: "shadow",
+          repo: {
+            repoUrl: "https://github.com/acme/pizza",
+          },
+          objective: {
+            summary: "Plan a premium pizza hero with high-quality imagery",
+          },
+          onboarding: {
+            readiness: "partial",
+            recommendedNextStage: "shadow",
+            readinessScore: 64,
+          },
+          prerequisites: {
+            requiredNow: [],
+            requiredLater: [],
+            optional: [],
+          },
+          gates: {
+            allowPlanning: true,
+            allowShadowExecution: true,
+            allowActiveExecution: false,
+            quarantine: false,
+            quarantineReason: null,
+          },
+          handoff: {
+            requiredHumanInputs: [],
+            carriedContextSummary: "Need premium pizza imagery planning.",
+          },
+          intent: {
+            scopeIn: ["hero image", "brand storytelling"],
+            successCriteria: ["use premium pizza photography"],
+          },
+          constraints: {
+            protectedPaths: [],
+            forbiddenActions: [],
+          },
+        },
+      },
+    });
+
+    assert.ok(prompt.includes("inspect them strictly one at a time"));
+    assert.ok(prompt.includes("never batch multiple visual reads into one pass"));
+    assert.ok(prompt.includes("read one artifact, analyze it, write the planning finding, then move to the next artifact"));
   });
 
   it("resolves the active target repo instead of the BOX repo in single target mode", () => {
@@ -252,5 +352,51 @@ describe("prompt_overlay", () => {
     assert.ok(prompt.includes("clarificationPendingQuestions: What should BOX build?, Who is it for?"));
     assert.ok(prompt.includes("intentSummary: repoState=empty | goal=restaurant website"));
     assert.ok(prompt.includes("intentOpenQuestions: What matters most?"));
+  });
+
+  it("includes the detailed operator intent brief and evidence in the target overlay", () => {
+    const prompt = buildPromptAssemblyPrompt({
+      agentName: "prometheus",
+      config: {
+        selfDev: {
+          enabled: false,
+          futureModeFlags: {
+            singleTargetDelivery: true,
+            targetSessionState: true,
+          },
+        },
+        platformModeState: {
+          currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+        },
+        activeTargetSession: {
+          projectId: "target_brief",
+          sessionId: "sess_brief",
+          currentStage: "active",
+          clarification: {
+            readyForPlanning: true,
+          },
+          intent: {
+            status: "ready_for_planning",
+            summary: "premium storefront",
+            operatorIntentBrief: "Build a premium storefront and keep authentic product imagery rather than generic placeholders.",
+            operatorIntentEvidence: ["Do not use fabricated stand-ins."],
+          },
+          gates: {
+            allowPlanning: true,
+            allowShadowExecution: false,
+            allowActiveExecution: true,
+            quarantine: false,
+          },
+          prerequisites: {
+            requiredNow: [],
+            requiredLater: [],
+            optional: [],
+          },
+        },
+      },
+    });
+
+    assert.ok(prompt.includes("intentOperatorIntentBrief: Build a premium storefront and keep authentic product imagery rather than generic placeholders."));
+    assert.ok(prompt.includes("intentOperatorIntentEvidence: Do not use fabricated stand-ins."));
   });
 });

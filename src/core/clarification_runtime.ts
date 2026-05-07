@@ -29,9 +29,235 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
 }
 
+function collectStructuredText(value: unknown): string[] {
+  if (value == null) {
+    return [];
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    const normalized = String(value).trim();
+    return normalized ? [normalized] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectStructuredText(entry));
+  }
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).flatMap((entry) => collectStructuredText(entry));
+  }
+  return [];
+}
+
+const FLEXIBLE_IMPLEMENTATION_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:stack|framework|tech(?:nology)?|implementation|webpack|next(?:\.?js)?)\b[\s\S]{0,60}\b(?:does(?:n't| not)\s+matter|is(?:n't| not)\s+important|not important|umrumda değil)\b/i,
+  /\b(?:use|pick|choose)\b[\s\S]{0,30}\b(?:whatever|whichever|the best|best-fit|best possible)\b[\s\S]{0,40}\b(?:stack|framework|tooling|implementation|approach|solution)\b/i,
+  /\bbest\s+(?:possible|fit)\s+(?:system|solution|approach)\b/i,
+  /\bframework\s+choice\s+is\s+not\s+operator-constrained\b/i,
+]);
+
+const STACK_CONSTRAINT_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:must|should|needs?\s+to|have\s+to|required\s+to|only)\b[\s\S]{0,40}\b(?:use|ship\s+with|stay\s+on|be\s+built\s+with|be\s+in)\b[\s\S]{0,60}\b(?:next(?:\.?js)?|react|vue|svelte|angular|electron|tauri|django|fastapi|express|nestjs|laravel|rails|webpack|vite)\b/i,
+  /\bbuilt\s+with\b[\s\S]{0,40}\b(?:next(?:\.?js)?|react|vue|svelte|angular|electron|tauri|django|fastapi|express|nestjs|laravel|rails|webpack|vite)\b/i,
+]);
+
+const REAL_ASSET_NEED_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:real|authentic|premium|stock|external)\s+(?:images?|photos?|photography|imagery|assets?|visual\s+assets?|logos?|brand\s+marks?|textures?)\b/i,
+  /\b(?:food|product|restaurant|dish|menu|hero|gallery|brand|logo|texture)\b[\s\S]{0,40}\b(?:photos?|photography|images?|imagery|logos?|brand\s+marks?|textures?|assets?)\b/i,
+  /\b(?:use|needs?|want|include|allow|source)\b[\s\S]{0,80}\b(?:stock\s+(?:images?|photos?)|images?\s+from\s+the\s+internet|external\s+images?|real\s+photos?|logos?|brand\s+marks?|wood\s*\/\s*texture\s+assets?|textures?)\b[\s\S]{0,80}\b(?:internet|external|source\s+originals?|royalty-free|commercially\s+licensed|lawfully\s+usable)?\b/i,
+  /\bdo\s+not\b[\s\S]{0,40}\b(?:placeholder(?:s)?|generic\s+illustration)\b/i,
+]);
+
+const EXTERNAL_ASSET_AVOIDANCE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:do\s+not|avoid|no)\b[\s\S]{0,40}\b(?:stock\s+(?:images?|photos?)|external\s+images?|internet\s+images?)\b/i,
+]);
+
+const REAL_IMAGE_ASSET_SOURCING_POLICY = "Real external assets allowed when needed; prefer operator-provided or internet-sourced visual assets when real imagery, logos, brand marks, or textures are required, and do not narrow this to stock-image sourcing by default.";
+
+const STRONGEST_PLAUSIBLE_EMPTY_REPO_IMPLEMENTATION = "Best-fit implementation is allowed; if the brief is broad, resolve it toward the strongest plausible product direction instead of a generic starter. Framework choice is not operator-constrained unless the operator explicitly says otherwise.";
+const STRONGEST_PLAUSIBLE_CONSTRAINED_IMPLEMENTATION = "Honor the operator's stated stack constraints, but within those constraints choose the strongest plausible implementation instead of defaulting to a generic starter.";
+const STRONGEST_PLAUSIBLE_EXISTING_REPO_IMPLEMENTATION = "Choose the strongest plausible improvement within the existing repo direction and constraints instead of defaulting to a generic minimal patch.";
+const STRONGEST_PLAUSIBLE_EMPTY_REPO_QUALITY_BAR = "Deliver the strongest credible first release for the requested product class; favor differentiated, production-ready execution over a safe generic shell when the brief leaves room for interpretation.";
+const STRONGEST_PLAUSIBLE_SUCCESS_DEFAULT = "ship the strongest credible outcome for the stated scope, not a generic handoff";
+const QUALITY_SIGNAL_QUESTION_KEYS = Object.freeze(["quality_bar", "success_signal"]);
+
 function normalizeNumber(value: unknown, fallback: number | null = null): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function buildClarifiedIntentShape(contract: any) {
+  return {
+    ...(contract?.clarifiedIntent && typeof contract?.clarifiedIntent === "object" ? contract.clarifiedIntent : {}),
+    productType: normalizeNullableString(contract?.clarifiedIntent?.productType),
+    operatorIntentBrief: normalizeNullableString(contract?.clarifiedIntent?.operatorIntentBrief),
+    targetUsers: normalizeStringArray(contract?.clarifiedIntent?.targetUsers),
+    mustHaveFlows: normalizeStringArray(contract?.clarifiedIntent?.mustHaveFlows),
+    scopeIn: normalizeStringArray(contract?.clarifiedIntent?.scopeIn),
+    scopeOut: normalizeStringArray(contract?.clarifiedIntent?.scopeOut),
+    protectedAreas: normalizeStringArray(contract?.clarifiedIntent?.protectedAreas),
+    preferredQualityBar: normalizeNullableString(contract?.clarifiedIntent?.preferredQualityBar),
+    designDirection: normalizeNullableString(contract?.clarifiedIntent?.designDirection),
+    deploymentExpectations: normalizeStringArray(contract?.clarifiedIntent?.deploymentExpectations),
+    successCriteria: normalizeStringArray(contract?.clarifiedIntent?.successCriteria),
+    implementationFlexibility: normalizeNullableString(contract?.clarifiedIntent?.implementationFlexibility),
+    operatorIntentEvidence: normalizeStringArray(contract?.clarifiedIntent?.operatorIntentEvidence),
+    assetSourcingPolicy: normalizeNullableString(contract?.clarifiedIntent?.assetSourcingPolicy),
+    assetRequirements: normalizeStringArray(contract?.clarifiedIntent?.assetRequirements),
+  };
+}
+
+function buildClarificationEvidenceText(contract: any, session: any, clarifiedIntentInput?: any): string {
+  const clarifiedIntent = clarifiedIntentInput && typeof clarifiedIntentInput === "object"
+    ? clarifiedIntentInput
+    : buildClarifiedIntentShape(contract);
+  const answeredEvidence = (Array.isArray(contract?.openQuestions) ? contract.openQuestions : [])
+    .filter((question) => getQuestionStatus(question) === "answered")
+    .flatMap((question) => [
+      normalizeNullableString(question?.answerText),
+      ...normalizeStringArray(question?.selectedOptions),
+    ])
+    .filter(Boolean);
+  const authoredUnderstanding = collectStructuredText(contract?.authoredUnderstanding || contract?.resolvedPacket?.authoredUnderstanding || contract?.resolvedPacket?.understanding);
+
+  return uniqueStrings([
+    normalizeNullableString(session?.objective?.summary),
+    normalizeNullableString(session?.objective?.desiredOutcome),
+    normalizeNullableString(contract?.summary),
+    normalizeNullableString(clarifiedIntent.productType),
+    normalizeNullableString(clarifiedIntent.operatorIntentBrief),
+    normalizeNullableString(clarifiedIntent.preferredQualityBar),
+    normalizeNullableString(clarifiedIntent.designDirection),
+    normalizeNullableString(clarifiedIntent.implementationFlexibility),
+    ...normalizeStringArray(clarifiedIntent.operatorIntentEvidence),
+    normalizeNullableString(clarifiedIntent.assetSourcingPolicy),
+    ...normalizeStringArray(clarifiedIntent.targetUsers),
+    ...normalizeStringArray(clarifiedIntent.mustHaveFlows),
+    ...normalizeStringArray(clarifiedIntent.scopeIn),
+    ...normalizeStringArray(clarifiedIntent.scopeOut),
+    ...normalizeStringArray(clarifiedIntent.protectedAreas),
+    ...normalizeStringArray(clarifiedIntent.deploymentExpectations),
+    ...normalizeStringArray(clarifiedIntent.successCriteria),
+    ...normalizeStringArray(clarifiedIntent.assetRequirements),
+    ...normalizeStringArray(contract?.assumptions),
+    ...authoredUnderstanding,
+    ...answeredEvidence,
+  ]).join("\n");
+}
+
+function buildOperatorIntentBrief(contract: any, session: any, clarifiedIntent: any): string | null {
+  const explicitBrief = normalizeNullableString(clarifiedIntent?.operatorIntentBrief)
+    || normalizeNullableString(contract?.resolvedPacket?.operatorIntentBrief);
+  if (explicitBrief) {
+    return explicitBrief;
+  }
+
+  const authoredUnderstanding = collectStructuredText(contract?.authoredUnderstanding || contract?.resolvedPacket?.authoredUnderstanding || contract?.resolvedPacket?.understanding);
+  const lines = uniqueStrings([
+    normalizeNullableString(session?.objective?.summary),
+    normalizeNullableString(session?.objective?.desiredOutcome),
+    normalizeNullableString(contract?.summary),
+    normalizeNullableString(clarifiedIntent?.productType) ? `Requested product: ${normalizeNullableString(clarifiedIntent.productType)}` : null,
+    normalizeStringArray(clarifiedIntent?.mustHaveFlows).length > 0 ? `Must-have flows: ${normalizeStringArray(clarifiedIntent.mustHaveFlows).join(" | ")}` : null,
+    normalizeStringArray(clarifiedIntent?.scopeIn).length > 0 ? `Scope in: ${normalizeStringArray(clarifiedIntent.scopeIn).join(" | ")}` : null,
+    normalizeStringArray(clarifiedIntent?.scopeOut).length > 0 ? `Scope out: ${normalizeStringArray(clarifiedIntent.scopeOut).join(" | ")}` : null,
+    normalizeStringArray(clarifiedIntent?.protectedAreas).length > 0 ? `Protected areas: ${normalizeStringArray(clarifiedIntent.protectedAreas).join(" | ")}` : null,
+    normalizeNullableString(clarifiedIntent?.preferredQualityBar) ? `Preferred quality bar: ${normalizeNullableString(clarifiedIntent.preferredQualityBar)}` : null,
+    normalizeNullableString(clarifiedIntent?.designDirection) ? `Design direction: ${normalizeNullableString(clarifiedIntent.designDirection)}` : null,
+    normalizeNullableString(clarifiedIntent?.implementationFlexibility) ? `Implementation latitude: ${normalizeNullableString(clarifiedIntent.implementationFlexibility)}` : null,
+    normalizeNullableString(clarifiedIntent?.assetSourcingPolicy) ? `Asset sourcing policy: ${normalizeNullableString(clarifiedIntent.assetSourcingPolicy)}` : null,
+    normalizeStringArray(clarifiedIntent?.assetRequirements).length > 0 ? `Asset requirements: ${normalizeStringArray(clarifiedIntent.assetRequirements).join(" | ")}` : null,
+    normalizeStringArray(clarifiedIntent?.successCriteria).length > 0 ? `Success criteria: ${normalizeStringArray(clarifiedIntent.successCriteria).join(" | ")}` : null,
+    ...normalizeStringArray(clarifiedIntent?.operatorIntentEvidence),
+    ...authoredUnderstanding,
+  ]);
+
+  return lines.length > 0 ? lines.join("\n") : null;
+}
+
+function buildDerivedClarifiedIntent(contract: any, session: any) {
+  const clarifiedIntent = buildClarifiedIntentShape(contract);
+  const repoState = normalizeNullableString(contract?.repoState) || normalizeNullableString(session?.repoProfile?.repoState) || "unknown";
+  const evidenceText = buildClarificationEvidenceText(contract, session, clarifiedIntent);
+
+  let implementationFlexibility = clarifiedIntent.implementationFlexibility;
+  const hasExplicitStackConstraint = STACK_CONSTRAINT_PATTERNS.some((pattern) => pattern.test(evidenceText));
+  if (!implementationFlexibility) {
+    if (hasExplicitStackConstraint) {
+      implementationFlexibility = STRONGEST_PLAUSIBLE_CONSTRAINED_IMPLEMENTATION;
+    } else if (FLEXIBLE_IMPLEMENTATION_PATTERNS.some((pattern) => pattern.test(evidenceText)) || repoState === "empty") {
+      implementationFlexibility = STRONGEST_PLAUSIBLE_EMPTY_REPO_IMPLEMENTATION;
+    } else {
+      implementationFlexibility = STRONGEST_PLAUSIBLE_EXISTING_REPO_IMPLEMENTATION;
+    }
+  }
+
+  let preferredQualityBar = clarifiedIntent.preferredQualityBar;
+  if (!preferredQualityBar && repoState === "empty") {
+    preferredQualityBar = STRONGEST_PLAUSIBLE_EMPTY_REPO_QUALITY_BAR;
+  }
+
+  let assetSourcingPolicy = clarifiedIntent.assetSourcingPolicy;
+  if (!assetSourcingPolicy) {
+    const avoidExternalAssets = EXTERNAL_ASSET_AVOIDANCE_PATTERNS.some((pattern) => pattern.test(evidenceText));
+    const needsRealAssets = REAL_ASSET_NEED_PATTERNS.some((pattern) => pattern.test(evidenceText));
+    if (needsRealAssets && !avoidExternalAssets) {
+      assetSourcingPolicy = REAL_IMAGE_ASSET_SOURCING_POLICY;
+    }
+  }
+
+  const assetRequirements = uniqueStrings([
+    ...clarifiedIntent.assetRequirements,
+    ...(assetSourcingPolicy === REAL_IMAGE_ASSET_SOURCING_POLICY
+      ? [
+          "Use authentic imagery, logos, brand marks, textures, or other real external assets when the requested visual fidelity depends on them, preferring operator-provided or internet-sourced visual assets.",
+          "Preserve requested visual assets as source requirements in the final build.",
+        ]
+      : []),
+  ]);
+
+  const successCriteria = uniqueStrings([
+    ...clarifiedIntent.successCriteria,
+    ...(assetSourcingPolicy === REAL_IMAGE_ASSET_SOURCING_POLICY
+      ? [
+          "Requested visual assets keep their intended fidelity and use real/operator-provided or internet-sourced imagery, logos, brand marks, or textures when real assets are needed.",
+        ]
+      : []),
+  ]);
+  const operatorIntentEvidence = uniqueStrings([
+    ...clarifiedIntent.operatorIntentEvidence,
+    ...(Array.isArray(contract?.openQuestions) ? contract.openQuestions : [])
+      .filter((question) => getQuestionStatus(question) === "answered")
+      .flatMap((question) => [
+        normalizeNullableString(question?.answerText),
+        ...normalizeStringArray(question?.selectedOptions),
+      ])
+      .filter((value): value is string => Boolean(value)),
+  ]);
+  const operatorIntentBrief = buildOperatorIntentBrief(contract, session, {
+    ...clarifiedIntent,
+    preferredQualityBar,
+    implementationFlexibility,
+    operatorIntentEvidence,
+    assetSourcingPolicy,
+    assetRequirements,
+    successCriteria,
+  });
+
+  return {
+    ...clarifiedIntent,
+    operatorIntentBrief,
+    preferredQualityBar,
+    implementationFlexibility,
+    operatorIntentEvidence,
+    assetSourcingPolicy,
+    assetRequirements,
+    successCriteria,
+  };
+}
+
+function applyDerivedClarifiedIntent(contract: any, session: any) {
+  return {
+    ...contract,
+    clarifiedIntent: buildDerivedClarifiedIntent(contract, session),
+  };
 }
 
 function buildQuestionMap(contract: any) {
@@ -58,6 +284,19 @@ function resolveSemanticQuestionId(question: any, fallbackQuestionId: string | n
     || "",
   ).trim();
   return semanticId || String(fallbackQuestionId || question?.id || "question").trim() || "question";
+}
+
+function hasClarificationQuestionForAnyKey(contract: any, keys: readonly string[]) {
+  const normalizedKeys = new Set(keys.map((key) => String(key || "").trim()).filter(Boolean));
+  if (normalizedKeys.size === 0) {
+    return false;
+  }
+
+  return (Array.isArray(contract?.openQuestions) ? contract.openQuestions : []).some((question) => {
+    const semanticId = resolveSemanticQuestionId(question);
+    const questionId = String(question?.id || "").trim();
+    return normalizedKeys.has(semanticId) || normalizedKeys.has(questionId);
+  });
 }
 
 function getCurrentPendingQuestion(contract: any) {
@@ -311,16 +550,7 @@ function ensureQuestionEntry(contract: any, question: any) {
 }
 
 function updateClarifiedIntent(contract: any, questionId: string, answerText: string, selectedOptions: string[], session: any) {
-  const clarifiedIntent = {
-    ...(contract?.clarifiedIntent && typeof contract.clarifiedIntent === "object" ? contract.clarifiedIntent : {}),
-    targetUsers: normalizeStringArray(contract?.clarifiedIntent?.targetUsers),
-    mustHaveFlows: normalizeStringArray(contract?.clarifiedIntent?.mustHaveFlows),
-    scopeIn: normalizeStringArray(contract?.clarifiedIntent?.scopeIn),
-    scopeOut: normalizeStringArray(contract?.clarifiedIntent?.scopeOut),
-    protectedAreas: normalizeStringArray(contract?.clarifiedIntent?.protectedAreas),
-    deploymentExpectations: normalizeStringArray(contract?.clarifiedIntent?.deploymentExpectations),
-    successCriteria: normalizeStringArray(contract?.clarifiedIntent?.successCriteria),
-  };
+  const clarifiedIntent = buildClarifiedIntentShape(contract);
   const semanticSelections = prunePlaceholderSelections(selectedOptions, answerText);
   const primarySelection = semanticSelections[0] || null;
   const mergedValues = uniqueStrings([...semanticSelections, ...(answerText ? [answerText] : [])]);
@@ -345,6 +575,9 @@ function updateClarifiedIntent(contract: any, questionId: string, answerText: st
           `Optimize for ${clarifiedIntent.preferredQualityBar}`,
         ]);
       }
+      break;
+    case "design_direction":
+      clarifiedIntent.designDirection = answerText || primarySelection || clarifiedIntent.designDirection || null;
       break;
     case "repo_purpose_confirmation":
       clarifiedIntent.productType = primarySelection || answerText || clarifiedIntent.productType || null;
@@ -373,6 +606,8 @@ function updateClarifiedIntent(contract: any, questionId: string, answerText: st
         clarifiedIntent.scopeIn = uniqueStrings([...clarifiedIntent.scopeIn, ...mergedValues]);
       } else if (questionId.startsWith("follow_up_quality_bar")) {
         clarifiedIntent.preferredQualityBar = answerText || selectedOptions[0] || clarifiedIntent.preferredQualityBar || null;
+      } else if (questionId.startsWith("follow_up_design_direction")) {
+        clarifiedIntent.designDirection = answerText || selectedOptions[0] || clarifiedIntent.designDirection || null;
       } else if (questionId.startsWith("follow_up_requested_change")) {
         clarifiedIntent.scopeIn = uniqueStrings([...clarifiedIntent.scopeIn, ...mergedValues]);
       } else if (questionId.startsWith("follow_up_protected_areas")) {
@@ -545,6 +780,8 @@ function computeMissingIntentFields(contract: any, session: any) {
   const protectedAreas = normalizeStringArray(clarifiedIntent.protectedAreas);
   const successCriteria = normalizeStringArray(clarifiedIntent.successCriteria);
   const preferredQualityBar = normalizeNullableString(clarifiedIntent.preferredQualityBar);
+  const packetCollectsQualitySignal = hasClarificationQuestionForAnyKey(contract, QUALITY_SIGNAL_QUESTION_KEYS);
+  const packetCollectsSuccessSignal = hasClarificationQuestionForAnyKey(contract, ["success_signal"]);
   const protectedAreasAnswered = (Array.isArray(contract?.openQuestions) ? contract.openQuestions : [])
     .some((question: any) => resolveSemanticQuestionId(question) === "protected_areas" && getQuestionStatus(question) === "answered");
 
@@ -552,24 +789,27 @@ function computeMissingIntentFields(contract: any, session: any) {
   if (targetUsers.length === 0) missing.push("target_users");
   if (repoState === "empty") {
     if (mustHaveFlows.length === 0) missing.push("must_have_flows");
-    if (!preferredQualityBar && successCriteria.length === 0) missing.push("quality_bar_or_success_criteria");
+    if (!preferredQualityBar && successCriteria.length === 0 && packetCollectsQualitySignal) missing.push("quality_bar_or_success_criteria");
   } else {
     if (scopeIn.length === 0) missing.push("requested_change");
     if (protectedAreas.length === 0 && !protectedAreasAnswered) {
       missing.push("protected_areas");
     }
-    if (successCriteria.length === 0) missing.push("success_criteria");
+    if (successCriteria.length === 0 && packetCollectsSuccessSignal) missing.push("success_criteria");
   }
   return missing;
 }
 
 function buildIntentSummary(contract: any, session: any) {
-  const clarifiedIntent = contract?.clarifiedIntent || {};
+  const clarifiedIntent = buildDerivedClarifiedIntent(contract, session);
   const scopeIn = normalizeStringArray(clarifiedIntent.scopeIn);
   const targetUsers = normalizeStringArray(clarifiedIntent.targetUsers);
   const mustHaveFlows = normalizeStringArray(clarifiedIntent.mustHaveFlows);
   const protectedAreas = normalizeStringArray(clarifiedIntent.protectedAreas);
   const successCriteria = normalizeStringArray(clarifiedIntent.successCriteria);
+  const designDirection = normalizeNullableString(clarifiedIntent.designDirection);
+  const implementationFlexibility = normalizeNullableString(clarifiedIntent.implementationFlexibility);
+  const assetSourcingPolicy = normalizeNullableString(clarifiedIntent.assetSourcingPolicy);
   const productType = normalizeNullableString(clarifiedIntent.productType) || normalizeNullableString(session?.objective?.summary) || "target delivery";
   const repoState = normalizeNullableString(contract?.repoState) || normalizeNullableString(session?.repoProfile?.repoState) || "unknown";
 
@@ -578,12 +818,16 @@ function buildIntentSummary(contract: any, session: any) {
     `goal=${productType}`,
     `users=${targetUsers.join(", ") || "unspecified"}`,
     `scope=${scopeIn.join(", ") || mustHaveFlows.join(", ") || "unspecified"}`,
+    `design=${designDirection || "unspecified"}`,
+    `implementation=${implementationFlexibility || "unspecified"}`,
+    `assets=${assetSourcingPolicy || "unspecified"}`,
     `protect=${protectedAreas.join(", ") || "none_specified"}`,
-    `success=${successCriteria.join(", ") || "optimize for safe planning handoff"}`,
+    `success=${successCriteria.join(", ") || STRONGEST_PLAUSIBLE_SUCCESS_DEFAULT}`,
   ].join(" | ");
 }
 
 function buildResolvedIntentPacket(packet: any, transcript: any, contract: any, session: any) {
+  const clarifiedIntent = buildDerivedClarifiedIntent(contract, session);
   const answeredQuestions = (Array.isArray(transcript?.turns) ? transcript.turns : [])
     .filter((turn) => turn?.actor !== "agent" && turn?.kind === "answer")
     .map((turn) => ({
@@ -605,7 +849,7 @@ function buildResolvedIntentPacket(packet: any, transcript: any, contract: any, 
     summary: buildIntentSummary(contract, session),
     readyForPlanning: contract?.readyForPlanning === true,
     planningMode: normalizeNullableString(contract?.planningMode),
-    clarifiedIntent: contract?.clarifiedIntent || {},
+    clarifiedIntent,
     answeredQuestions,
     requiredSemanticSlots: uniqueStrings(normalizeStringArray(contract?.requiredSemanticSlots)),
     assumptions: normalizeStringArray(contract?.assumptions),
@@ -635,7 +879,14 @@ function resolveAgentAuthoredDeliveryModeDecision(contract: any) {
     ?? "",
   ).trim().toLowerCase();
 
-  if (!rawRecommendation) return null;
+  if (!rawRecommendation) {
+    return {
+      eligible: forcedMode === "active",
+      planningMode: forcedMode,
+      recommendedNextStage: TARGET_SESSION_STAGE.ACTIVE,
+      reason: "temporary_forced_active_default_empty_agent_recommendation",
+    };
+  }
 
   const normalizedRecommendation = forcedMode;
 
@@ -982,7 +1233,7 @@ ${JSON.stringify({
 }
 
 function buildSessionIntent(contract: any, session: any, status: string) {
-  const clarifiedIntent = contract?.clarifiedIntent || {};
+  const clarifiedIntent = buildDerivedClarifiedIntent(contract, session);
   const openQuestions = (Array.isArray(contract?.openQuestions) ? contract.openQuestions : [])
     .filter((question) => getQuestionStatus(question) !== "answered")
     .map((question) => String(question?.title || question?.prompt || question?.id || "").trim())
@@ -994,6 +1245,7 @@ function buildSessionIntent(contract: any, session: any, status: string) {
     repoState: normalizeNullableString(contract?.repoState) || normalizeNullableString(session?.repoProfile?.repoState) || "unknown",
     planningMode: contract?.planningMode || null,
     productType: normalizeNullableString(clarifiedIntent.productType),
+    operatorIntentBrief: normalizeNullableString(clarifiedIntent.operatorIntentBrief),
     targetUsers: normalizeStringArray(clarifiedIntent.targetUsers),
     mustHaveFlows: normalizeStringArray(clarifiedIntent.mustHaveFlows),
     scopeIn: normalizeStringArray(clarifiedIntent.scopeIn),
@@ -1003,6 +1255,10 @@ function buildSessionIntent(contract: any, session: any, status: string) {
     designDirection: normalizeNullableString(clarifiedIntent.designDirection),
     deploymentExpectations: normalizeStringArray(clarifiedIntent.deploymentExpectations),
     successCriteria: normalizeStringArray(clarifiedIntent.successCriteria),
+    implementationFlexibility: normalizeNullableString(clarifiedIntent.implementationFlexibility),
+    operatorIntentEvidence: normalizeStringArray(clarifiedIntent.operatorIntentEvidence),
+    assetSourcingPolicy: normalizeNullableString(clarifiedIntent.assetSourcingPolicy),
+    assetRequirements: normalizeStringArray(clarifiedIntent.assetRequirements),
     assumptions: normalizeStringArray(contract?.assumptions),
     openQuestions,
     sourceIntentContractPath: normalizeNullableString(session?.clarification?.intentContractPath),
@@ -1155,6 +1411,7 @@ export async function submitTargetClarificationAnswer(config: any, input: {
     clarifiedIntent: updateClarifiedIntent(intentContract, semanticQuestionId, answerText, selectedOptions, session),
     updatedAt: new Date().toISOString(),
   };
+  intentContract = applyDerivedClarifiedIntent(intentContract, session);
 
   let nextQuestion = null;
   let followUpQuestion = null;

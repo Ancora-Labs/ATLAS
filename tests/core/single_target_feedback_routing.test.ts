@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildSingleTargetResumeDirective, classifySingleTargetAthenaFeedback } from "../../src/core/orchestrator.js";
+import {
+  buildSingleTargetResumeDirective,
+  classifySingleTargetAthenaFeedback,
+  shouldForceAthenaApprovalForSingleTarget,
+} from "../../src/core/orchestrator.js";
 import { isResearchArtifactAlignedToTargetSession } from "../../src/core/prometheus.js";
 
 describe("single target feedback routing", () => {
@@ -34,7 +38,7 @@ describe("single target feedback routing", () => {
     assert.equal(category, "intent");
   });
 
-  it("routes ui quality-bar downgrade rejections back into research refresh", () => {
+  it("treats ui quality-bar downgrade rejections as planning feedback", () => {
     const category = classifySingleTargetAthenaFeedback({
       reason: {
         code: "PATCHED_PLAN_CONTRACT_FAILED",
@@ -54,7 +58,51 @@ describe("single target feedback routing", () => {
       },
     });
 
-    assert.equal(category, "research");
+    assert.equal(category, "planning");
+  });
+
+  it("force-approves active single-target Athena rejections even when they flag a cheaper substitute", () => {
+    const shouldForceApprove = shouldForceAthenaApprovalForSingleTarget({
+      platformModeState: { currentMode: "single_target_delivery" },
+      activeTargetSession: {
+        currentStage: "active",
+        gates: { allowActiveExecution: true },
+        intent: {
+          preferredQualityBar: "Premium product presentation with real imagery where requested.",
+          designDirection: "Do not downgrade into placeholder-heavy layouts.",
+          successCriteria: ["Do not silently replace requested visuals with cheaper substitutes."],
+        },
+      },
+    }, {
+      reason: {
+        code: "PATCHED_PLAN_CONTRACT_FAILED",
+        message: "Normalized patched plans failed contract re-validation: plan[0] silently downgrades an explicit operator requirement or quality bar into a cheaper substitute.",
+      },
+      corrections: ["Do not replace requested visuals with placeholders or fabricated stand-ins."],
+    });
+
+    assert.equal(shouldForceApprove, true);
+  });
+
+  it("negative path: still force-approves generic active single-target Athena rejections", () => {
+    const shouldForceApprove = shouldForceAthenaApprovalForSingleTarget({
+      platformModeState: { currentMode: "single_target_delivery" },
+      activeTargetSession: {
+        currentStage: "active",
+        gates: { allowActiveExecution: true },
+        intent: {
+          preferredQualityBar: "Premium mobile-first storefront",
+        },
+      },
+    }, {
+      reason: {
+        code: "MISSING_PREMORTEM",
+        message: "Add a premortem for the remaining medium-risk packet.",
+      },
+      corrections: ["Add one premortem."],
+    });
+
+    assert.equal(shouldForceApprove, true);
   });
 
   it("builds a resume directive that bypasses Jesus for pending research refresh handoffs", () => {

@@ -145,4 +145,23 @@ describe("research_scout target intent context", () => {
     assert.ok(plan.optionalInvestigations.includes("media_surfaces"));
     assert.equal(plan.intentDecision.assetNeeds.branding, "required");
   });
+
+  it("treats a generic website brief as a public-facing marketing surface instead of unknown research", () => {
+    const plan = deriveTargetResearchCoveragePlan({
+      intent: {
+        repoState: "empty",
+        productType: "website",
+        summary: "Build a website for a new consulting brand with a polished public-facing feel.",
+        mustHaveFlows: ["homepage", "contact flow"],
+        successCriteria: [],
+      },
+    });
+
+    assert.equal(plan.intentDecision.experienceType, "marketing");
+    assert.ok(plan.rationale.some((entry) => /generic website phrasing defaults to a public-facing marketing surface/i.test(entry)));
+    assert.ok(plan.obligations.includes("visual_design"));
+    assert.ok(plan.obligations.includes("responsive_experience"));
+    assert.ok(plan.obligations.includes("trust_signals"));
+    assert.ok(plan.recommendedSourceTypes.includes("visual exemplars"));
+  });
 });

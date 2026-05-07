@@ -158,6 +158,22 @@ describe("orchestrator runtime contracts - specialization admission bypass", () 
     assert.equal(result.reason, "single_target_endgame_single_lane_closure_makes_specialization_target_infeasible");
   });
 
+  it("bypasses specialization when a resumed checkpoint preserves admitted multi-lane topology", () => {
+    const result = shouldBypassSpecializationAdmissionGate({
+      laneDiversityBypassReason: "checkpoint_resume_preserve_admitted_multi_lane_topology",
+      capabilityPoolResult: {
+        activeLaneCount: 1,
+        specializationUtilization: {
+          specializedShare: 0,
+          specializedDeficit: 2,
+        },
+      },
+    });
+
+    assert.equal(result.bypass, true);
+    assert.equal(result.reason, "checkpoint_resume_preserved_admitted_multi_lane_topology_specialization_not_required");
+  });
+
   it("does not bypass specialization without a connected lane-diversity serialization signal", () => {
     const result = shouldBypassSpecializationAdmissionGate({
       laneDiversityBypassReason: null,

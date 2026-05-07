@@ -79,6 +79,43 @@ describe("writeDaemonPid — stale PID overwrite", () => {
     assert.equal(stored?.pid, process.pid, "overwritten PID must equal the current process PID");
     await clearDaemonPid(config);
   });
+
+  it("keeps daemon pid scope stable when the runtime later binds a target session selector", async () => {
+    const config = {
+      paths: { stateDir: tmpDir },
+      daemonControlScope: {
+        projectId: null,
+        sessionId: null,
+      },
+      targetSessionSelector: {
+        projectId: "target_atlas",
+        sessionId: "sess_bound_later",
+      },
+    };
+
+    await writeDaemonPid(config);
+
+    const globalPidState = await readDaemonPid({ paths: { stateDir: tmpDir } });
+    assert.equal(globalPidState?.pid, process.pid);
+
+    let scopedPidExists = true;
+    try {
+      await fs.access(path.join(tmpDir, "session_runners", "target_atlas_sess_bound_later.pid.json"));
+    } catch {
+      scopedPidExists = false;
+    }
+    assert.equal(scopedPidExists, false, "global daemon pid writes must not drift into a scoped session runner file");
+
+    await clearDaemonPid(config);
+
+    let globalPidExists = true;
+    try {
+      await fs.access(path.join(tmpDir, "daemon.pid.json"));
+    } catch {
+      globalPidExists = false;
+    }
+    assert.equal(globalPidExists, false, "stable daemon scope must clear the original global pid file");
+  });
 });
 
 // ── writeDaemonPid — forced termination block ────────────────────────────────

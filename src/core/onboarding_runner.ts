@@ -80,6 +80,7 @@ function normalizeClarifiedIntent(rawIntent: any) {
   const source = rawIntent && typeof rawIntent === "object" ? rawIntent : {};
   return {
     productType: normalizeNullableString(source?.productType),
+    operatorIntentBrief: normalizeNullableString(source?.operatorIntentBrief),
     targetUsers: normalizeStringArray(source?.targetUsers),
     mustHaveFlows: normalizeStringArray(source?.mustHaveFlows),
     scopeIn: normalizeStringArray(source?.scopeIn),
@@ -89,6 +90,7 @@ function normalizeClarifiedIntent(rawIntent: any) {
     designDirection: normalizeNullableString(source?.designDirection),
     deploymentExpectations: normalizeStringArray(source?.deploymentExpectations),
     successCriteria: normalizeStringArray(source?.successCriteria),
+    operatorIntentEvidence: normalizeStringArray(source?.operatorIntentEvidence),
   };
 }
 
@@ -1301,6 +1303,7 @@ function buildIntentContractSkeleton(preparedSession: any, clarificationPacket: 
       ? normalizeClarifiedIntent(clarificationPacket?.clarifiedIntent)
       : {
           productType: null,
+          operatorIntentBrief: null,
           targetUsers: [],
           mustHaveFlows: [],
           scopeIn: [],
@@ -1310,6 +1313,7 @@ function buildIntentContractSkeleton(preparedSession: any, clarificationPacket: 
           designDirection: null,
           deploymentExpectations: [],
           successCriteria: [],
+          operatorIntentEvidence: [],
         },
     assumptions: conversationComplete ? normalizeStringArray(clarificationPacket?.assumptions) : [],
     openQuestions: clarificationPacket.questions.map((question: any) => ({

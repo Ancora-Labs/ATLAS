@@ -85,7 +85,6 @@ import { computeFrontier } from "./dag_scheduler.js";
 import { agentFileExists, nameToSlug, validateCriticalAgentContracts, validateRequiredAgentContracts } from "./agent_loader.js";
 import { buildWorkerTopologyContract, getRoleRegistry, assertRoleCapabilityForTask, isAthenaReviewOrPostmortemTask } from "./role_registry.js";
 import type { WorkerTopologyContract } from "./role_registry.js";
-import { analyzeUiBatchCompatibility, buildUiDispatchMetadataFromPlans } from "./ui_batch_affinity.js";
 import { normalizePromptLineageContract } from "./prompt_compiler.js";
 import { VERIFICATION_DEFAULTS } from "./verification_command_registry.js";
 import {
@@ -465,59 +464,74 @@ export async function prepareTargetSessionForCycle(config: any): Promise<{ actio
       || persistedDeliveryHandoff?.delivery?.userMessage
       || "",
     ).trim();
-    if (persistedHandoffMatchesSession && persistedHandoffSummary) {
+    const computedTargetSuccessReport = await evaluateTargetSuccessContract(config, activeTargetSession);
+    await persistTargetSuccessContract(config, computedTargetSuccessReport);
+    const persistedReportCanRemainTerminal = persistedReportMatchesSession
+      && isTargetSuccessContractTerminal(persistedTargetSuccessReport)
+      && isTargetSuccessContractTerminal(computedTargetSuccessReport);
+    const targetSuccessReport = persistedReportCanRemainTerminal
+      ? persistedTargetSuccessReport
+      : computedTargetSuccessReport;
+    const targetClosure = (targetSuccessReport as any)?.closure || null;
+    if (persistedHandoffMatchesSession && persistedHandoffSummary && isTargetSuccessContractTerminal(targetSuccessReport)) {
       activeTargetSession = await transitionActiveTargetSession(config, {
-        nextStage: TARGET_SESSION_STAGE.COMPLETED,
+        nextStage: String(targetSuccessReport?.status || "") === TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED_WITH_HANDOFF
+          ? TARGET_SESSION_STAGE.COMPLETED_WITH_HANDOFF
+          : TARGET_SESSION_STAGE.COMPLETED,
         actor: "target_delivery_handoff_guard",
         reason: "target_delivery_handoff_presented",
         nextAction: "await_next_target",
         handoff: {
           carriedContextSummary: persistedHandoffSummary,
-          requiredHumanInputs: [],
-        },
-      });
-      bindRuntimeTargetContext(config, platformModeState, activeTargetSession);
-      await appendProgress(
-        config,
-        `[TARGET_SESSION] delivery handoff guard engaged session=${activeTargetSession.sessionId} stage=${activeTargetSession.currentStage} source=persisted_handoff`,
-      );
-    } else {
-      const computedTargetSuccessReport = await evaluateTargetSuccessContract(config, activeTargetSession);
-      await persistTargetSuccessContract(config, computedTargetSuccessReport);
-      const targetSuccessReport = persistedReportMatchesSession && isTargetSuccessContractTerminal(persistedTargetSuccessReport)
-        ? persistedTargetSuccessReport
-        : computedTargetSuccessReport;
-    if (isTargetSuccessContractTerminal(targetSuccessReport)) {
-      const handoff = await performTargetDeliveryHandoff(config, targetSuccessReport);
-      activeTargetSession = await transitionActiveTargetSession(config, {
-        nextStage: String(targetSuccessReport?.status || "") === TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED_WITH_HANDOFF
-          ? TARGET_SESSION_STAGE.COMPLETED_WITH_HANDOFF
-          : TARGET_SESSION_STAGE.COMPLETED,
-        actor: "target_success_guard",
-        reason: `target_success:${String(targetSuccessReport?.status || "unknown")}`,
-        nextAction: "await_next_target",
-        handoff: {
-          carriedContextSummary: String(
-            handoff?.summary
-            || targetSuccessReport?.summary
-            || activeTargetSession?.objective?.summary
-            || "",
-          ).trim() || null,
           requiredHumanInputs: Array.isArray(targetSuccessReport?.pendingHumanInputs)
             ? targetSuccessReport.pendingHumanInputs
             : [],
+          targetDeliveryHandoff: persistedDeliveryHandoff,
         },
       });
       bindRuntimeTargetContext(config, platformModeState, activeTargetSession);
       await appendProgress(
         config,
-        `[TARGET_SESSION] terminal success guard engaged session=${activeTargetSession.sessionId} stage=${activeTargetSession.currentStage} status=${String(targetSuccessReport?.status || "unknown")} source=${persistedReportMatchesSession && isTargetSuccessContractTerminal(persistedTargetSuccessReport) ? "persisted" : "computed"}`,
+        `[TARGET_SESSION] delivery handoff guard engaged session=${activeTargetSession.sessionId} stage=${activeTargetSession.currentStage} closure=${String(targetClosure?.decision || "legacy")} reason=${String(targetClosure?.reasonCode || "n/a")} source=persisted_handoff`,
       );
-      await appendProgress(
-        config,
-        `[TARGET_DELIVERY] skipped planning and worker dispatch via success-contract=${String(targetSuccessReport?.status || "unknown")}`,
-      );
-    }
+    } else {
+      if (isTargetSuccessContractTerminal(targetSuccessReport)) {
+        const handoff = await performTargetDeliveryHandoff(config, targetSuccessReport);
+        activeTargetSession = await transitionActiveTargetSession(config, {
+          nextStage: String(targetSuccessReport?.status || "") === TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED_WITH_HANDOFF
+            ? TARGET_SESSION_STAGE.COMPLETED_WITH_HANDOFF
+            : TARGET_SESSION_STAGE.COMPLETED,
+          actor: "target_success_guard",
+          reason: `target_success:${String(targetSuccessReport?.status || "unknown")}`,
+          nextAction: "await_next_target",
+          handoff: {
+            carriedContextSummary: String(
+              handoff?.summary
+              || targetSuccessReport?.summary
+              || activeTargetSession?.objective?.summary
+              || "",
+            ).trim() || null,
+            requiredHumanInputs: Array.isArray(targetSuccessReport?.pendingHumanInputs)
+              ? targetSuccessReport.pendingHumanInputs
+              : [],
+            targetDeliveryHandoff: handoff,
+          },
+        });
+        bindRuntimeTargetContext(config, platformModeState, activeTargetSession);
+        await appendProgress(
+          config,
+          `[TARGET_SESSION] terminal success guard engaged session=${activeTargetSession.sessionId} stage=${activeTargetSession.currentStage} status=${String(targetSuccessReport?.status || "unknown")} closure=${String(targetClosure?.decision || "legacy")} reason=${String(targetClosure?.reasonCode || "n/a")} source=${persistedReportCanRemainTerminal ? "persisted" : "computed"}`,
+        );
+        await appendProgress(
+          config,
+          `[TARGET_DELIVERY] skipped planning and worker dispatch via success-contract=${String(targetSuccessReport?.status || "unknown")}`,
+        );
+      } else if (persistedHandoffMatchesSession && persistedHandoffSummary) {
+        await appendProgress(
+          config,
+          `[TARGET_SESSION] persisted delivery handoff ignored because closure is not terminal session=${activeTargetSession.sessionId} closure=${String(targetClosure?.decision || "legacy")} reason=${String(targetClosure?.reasonCode || "n/a")}`,
+        );
+      }
     }
   } catch (targetSuccessErr) {
     warn(`[orchestrator] target success prepare guard failed (non-fatal): ${String((targetSuccessErr as Error)?.message || targetSuccessErr)}`);
@@ -582,6 +596,8 @@ export async function prepareTargetSessionForCycle(config: any): Promise<{ actio
       completionStage: activeTargetSession.currentStage,
       completionReason: activeTargetSession.lifecycle?.completionReason || `session_closed:${activeTargetSession.currentStage}`,
       completionSummary: activeTargetSession.handoff?.carriedContextSummary || activeTargetSession.objective?.summary || null,
+      presentationHandoff: activeTargetSession.handoff?.targetDeliveryHandoff || null,
+      preserveWorkspace: activeTargetSession.handoff?.targetDeliveryHandoff?.delivery?.preserveWorkspace === true,
     });
     const refreshedModeState = await loadPlatformModeState(config);
     bindRuntimeTargetContext(config, refreshedModeState, null);
@@ -592,6 +608,39 @@ export async function prepareTargetSessionForCycle(config: any): Promise<{ actio
   }
 
   return { action: "continue" };
+}
+
+export function shouldRunProjectCompletionForCycle(config: any, targetSuccessReport: any): boolean {
+  const isSingleTargetDelivery = config?.platformModeState?.currentMode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY
+    && Boolean(config?.activeTargetSession);
+  if (!isSingleTargetDelivery) {
+    return true;
+  }
+  if (!isTargetSuccessContractTerminal(targetSuccessReport)) {
+    return false;
+  }
+  const reportProjectId = String(targetSuccessReport?.projectId || "").trim();
+  const reportSessionId = String(targetSuccessReport?.sessionId || "").trim();
+  if (!reportProjectId && !reportSessionId) {
+    return true;
+  }
+  return reportProjectId === String(config.activeTargetSession?.projectId || "").trim()
+    && reportSessionId === String(config.activeTargetSession?.sessionId || "").trim();
+}
+
+export function resolveProjectCompletionEligibility(
+  config: any,
+  currentCycleTargetSuccessReport: any,
+  persistedTargetSuccessReport: any = null,
+): boolean {
+  const isSingleTargetDelivery = config?.platformModeState?.currentMode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY
+    && Boolean(config?.activeTargetSession);
+
+  if (isSingleTargetDelivery) {
+    return shouldRunProjectCompletionForCycle(config, currentCycleTargetSuccessReport);
+  }
+
+  return shouldRunProjectCompletionForCycle(config, persistedTargetSuccessReport);
 }
 
 function normalizeStringArray(values: unknown): string[] {
@@ -610,40 +659,18 @@ function buildSingleTargetAthenaFeedbackText(planReview: any): string {
   return [reasonCode, reasonMessage, ...corrections].join(" ").toLowerCase();
 }
 
-function hasSingleTargetUiQualityContract(activeTargetSession: any): boolean {
-  return Boolean(
-    String(activeTargetSession?.intent?.preferredQualityBar || "").trim()
-    || String(activeTargetSession?.intent?.designDirection || "").trim()
-    || normalizeStringArray(activeTargetSession?.intent?.scopeOut).length > 0
-    || normalizeStringArray(activeTargetSession?.intent?.protectedAreas).length > 0
-    || normalizeStringArray(activeTargetSession?.intent?.successCriteria).length > 0
-  );
-}
-
-function isUiQualityBarDowngradeFeedback(planReview: any, activeTargetSession: any): boolean {
-  if (!hasSingleTargetUiQualityContract(activeTargetSession)) {
-    return false;
-  }
-
-  const text = buildSingleTargetAthenaFeedbackText(planReview);
-  const reasonCode = String(planReview?.reason?.code || "").trim().toUpperCase();
-  const downgradeSignal = /(downgrade|quality bar|cheaper substitute|operator requirement|dashboard|copycat|browser-first|gimmicky gradients|ai-knockoff)/i;
-
-  return downgradeSignal.test(text)
-    && [
-      ATHENA_PLAN_REVIEW_REASON_CODE.LOW_PLAN_QUALITY,
-      ATHENA_PLAN_REVIEW_REASON_CODE.PATCHED_PLAN_VALIDATION_FAILED,
-      "PATCHED_PLAN_CONTRACT_FAILED",
-    ].includes(reasonCode as any);
-}
-
 export function classifySingleTargetAthenaFeedback(planReview: any, activeTargetSession: any): string {
   const text = buildSingleTargetAthenaFeedbackText(planReview);
   const reasonCode = String(planReview?.reason?.code || "").trim();
+  const normalizedReasonCode = reasonCode.toUpperCase();
   const repoState = String(activeTargetSession?.intent?.repoState || activeTargetSession?.repoProfile?.repoState || "unknown").trim().toLowerCase();
 
-  if (isUiQualityBarDowngradeFeedback(planReview, activeTargetSession)) {
-    return TARGET_FEEDBACK_CATEGORY.RESEARCH;
+  if ([
+    ATHENA_PLAN_REVIEW_REASON_CODE.TARGET_STAGE_CONTRACT_VIOLATION,
+    ATHENA_PLAN_REVIEW_REASON_CODE.PATCHED_PLAN_VALIDATION_FAILED,
+    "PATCHED_PLAN_CONTRACT_FAILED",
+  ].includes(normalizedReasonCode as any)) {
+    return TARGET_FEEDBACK_CATEGORY.PLANNING;
   }
 
   if (/(intent|clarif|unclear|ambiguous|product|goal|user(s)?|scope|must-have|success criteria)/i.test(text)) {
@@ -728,6 +755,7 @@ function isSingleTargetShadowLaneDiversityBypassActive(config: any): boolean {
 
 const SINGLE_TARGET_SHADOW_LANE_DIVERSITY_BYPASS_REASON = "single_target_shadow_mode_single_lane_allowed";
 const LIVE_REVIEW_RESUME_LANE_DIVERSITY_BYPASS_REASON = "approved_live_review_resume_single_lane_allowed";
+const CHECKPOINT_RESUME_LANE_DIVERSITY_BYPASS_REASON = "checkpoint_resume_preserve_admitted_multi_lane_topology";
 
 export function shouldPromoteShadowSessionAfterCleanWave(input: {
   config: any;
@@ -899,7 +927,7 @@ async function clearSingleTargetFeedbackFlags(config: any, reviewStatus: "approv
   });
 }
 
-function shouldForceAthenaApprovalForSingleTarget(config: any): boolean {
+export function shouldForceAthenaApprovalForSingleTarget(config: any, planReview: any = null): boolean {
   if (config?.platformModeState?.currentMode !== PLATFORM_MODE.SINGLE_TARGET_DELIVERY) {
     return false;
   }
@@ -908,6 +936,8 @@ function shouldForceAthenaApprovalForSingleTarget(config: any): boolean {
   if (!activeTargetSession) {
     return false;
   }
+
+  void planReview;
 
   return activeTargetSession.currentStage === TARGET_SESSION_STAGE.ACTIVE
     && activeTargetSession.gates?.allowActiveExecution === true;
@@ -929,6 +959,36 @@ function shouldBypassForceCheckpointForSingleTargetResume(
   return activeTargetSession.currentStage === TARGET_SESSION_STAGE.ACTIVE
     && activeTargetSession.gates?.allowActiveExecution === true
     && (opts?.resumeSource === "checkpoint_snapshot" || opts?.resumeSource === "live_review");
+}
+
+function shouldTreatAutonomyExecutionGateAsAdvisoryForSingleTarget(config: any): boolean {
+  if (config?.platformModeState?.currentMode !== PLATFORM_MODE.SINGLE_TARGET_DELIVERY) {
+    return false;
+  }
+
+  const activeTargetSession = config?.activeTargetSession;
+  if (!activeTargetSession) {
+    return false;
+  }
+
+  if (activeTargetSession.currentStage === TARGET_SESSION_STAGE.ACTIVE) {
+    return activeTargetSession.gates?.allowActiveExecution === true;
+  }
+
+  if (activeTargetSession.currentStage === TARGET_SESSION_STAGE.SHADOW) {
+    return activeTargetSession.gates?.allowShadowExecution === true;
+  }
+
+  return false;
+}
+
+async function appendGovernanceGateAuditEntry(
+  stateDir: string,
+  entry: Record<string, unknown>,
+): Promise<void> {
+  const auditPath = path.join(stateDir, "governance_gate_audit.jsonl");
+  await fs.mkdir(path.dirname(auditPath), { recursive: true });
+  await fs.appendFile(auditPath, `${JSON.stringify(entry)}\n`, "utf8");
 }
 
 export interface CloudAgentGovernanceProfileContract {
@@ -1522,10 +1582,11 @@ export interface GovernanceBlockDecision {
 
 /**
  * Attempt to rebatch an oversized plan set by reassigning _batchIndex values
- * so that no role-group batch exceeds `cap` ordered steps.
+ * so that no hard-boundary batch exceeds `cap` ordered steps.
  *
- * Plans in the same original _batchIndex are processed role-by-role. Each role
- * group is greedily repacked into sub-batches. When earlier batches split,
+ * Plans in the same original _batchIndex are processed in original order while
+ * preserving hard dispatch boundaries: worker role changes and UI/non-UI
+ * affinity changes always force a new sub-batch. When earlier batches split,
  * subsequent batches shift their index upward to preserve global ordering.
  *
  * Mutates plans in place. Returns true when all groups now fit within cap
@@ -1534,6 +1595,27 @@ export interface GovernanceBlockDecision {
  * @param plans — normalized plan objects with _batchIndex / _batchWorkerRole set
  * @param cap   — max ordered steps per batch group
  */
+function splitAdmissionPlansByHardDispatchBoundary(plans: any[] = []): any[][] {
+  const groups: any[][] = [];
+  let currentBoundaryKey: string | null = null;
+
+  for (let index = 0; index < plans.length; index += 1) {
+    const plan = plans[index];
+    const roleName = String(plan?._batchWorkerRole || plan?.role || "worker").trim().toLowerCase() || "worker";
+    const boundaryKey = roleName;
+
+    if (groups.length === 0 || boundaryKey !== currentBoundaryKey) {
+      groups.push([plan]);
+      currentBoundaryKey = boundaryKey;
+      continue;
+    }
+
+    groups[groups.length - 1].push(plan);
+  }
+
+  return groups;
+}
+
 function tryRebatchOversizedPlans(plans: any[], cap: number): boolean {
   if (!Array.isArray(plans) || plans.length === 0) return true;
 
@@ -1559,22 +1641,20 @@ function tryRebatchOversizedPlans(plans: any[], cap: number): boolean {
   for (const origBatch of origIndices) {
     const batchPlans = origGroupMap.get(origBatch)!;
     const assignedBatch = origBatch + cumulativeShift;
-
-    // Group plans within this batch by role.
-    const byRole = new Map<string, any[]>();
-    for (const plan of batchPlans) {
-      const role = String(plan._batchWorkerRole || plan.role || "unknown").toLowerCase();
-      if (!byRole.has(role)) byRole.set(role, []);
-      byRole.get(role)!.push(plan);
-    }
-
+    const boundaryGroups = splitAdmissionPlansByHardDispatchBoundary(batchPlans);
     let maxSlotUsedInBatch = assignedBatch;
 
-    for (const rolePlans of byRole.values()) {
-      let currentSlot = assignedBatch;
-      let currentSteps = 0;
+    let currentSlot = assignedBatch;
+    let currentSteps = 0;
+    let hasAssignedPlans = false;
 
-      for (const plan of rolePlans) {
+    for (const boundaryGroup of boundaryGroups) {
+      if (hasAssignedPlans) {
+        currentSlot += 1;
+        currentSteps = 0;
+      }
+
+      for (const plan of boundaryGroup) {
         const steps = estimateAdmissionBatchStepCount(plan);
 
         // Overflow: start a new sub-batch slot.
@@ -1585,6 +1665,7 @@ function tryRebatchOversizedPlans(plans: any[], cap: number): boolean {
 
         plan._batchIndex = currentSlot;
         currentSteps += steps;
+        hasAssignedPlans = true;
         if (currentSlot > maxSlotUsedInBatch) maxSlotUsedInBatch = currentSlot;
       }
     }
@@ -1791,6 +1872,15 @@ export function shouldBypassSpecializationAdmissionGate(opts: {
     return {
       bypass: true,
       reason: "approved_live_review_resume_specialization_not_required",
+    };
+  }
+  if (
+    String(opts?.laneDiversityBypassReason || "") ===
+    CHECKPOINT_RESUME_LANE_DIVERSITY_BYPASS_REASON
+  ) {
+    return {
+      bypass: true,
+      reason: "checkpoint_resume_preserved_admitted_multi_lane_topology_specialization_not_required",
     };
   }
   return { bypass: false, reason: null };
@@ -2124,17 +2214,34 @@ export async function evaluatePreDispatchGovernanceGate(
       const autonomyBandStatus = await readJson(path.join(stateDir, "autonomy_band_status.json"), null);
       const autonomyExecutionGate = resolveAutonomyExecutionGateBlockReason(autonomyBandStatus);
       if (autonomyExecutionGate.blocked && autonomyExecutionGate.blockReason) {
-        return {
-          blocked: true,
-          reason: autonomyExecutionGate.blockReason,
-          action: undefined,
-          dispatchBlockReason: autonomyExecutionGate.blockReason,
-          graphResult: null,
-          cycleId,
-          budgetEligibility,
-          gateKey: "AUTONOMY_EXECUTION",
-          gateIndex: GATE_PRECEDENCE.AUTONOMY_EXECUTION,
-        };
+        if (shouldTreatAutonomyExecutionGateAsAdvisoryForSingleTarget(config)) {
+          try {
+            await appendGovernanceGateAuditEntry(stateDir, {
+              ts: new Date().toISOString(),
+              kind: "autonomy_execution_single_target_advisory",
+              cycleId,
+              reason: autonomyExecutionGate.blockReason,
+              projectId: String(config?.activeTargetSession?.projectId || "").trim() || null,
+              sessionId: String(config?.activeTargetSession?.sessionId || "").trim() || null,
+              stage: String(config?.activeTargetSession?.currentStage || "").trim() || null,
+              by: "orchestrator",
+            });
+          } catch (auditErr) {
+            warn(`[orchestrator] autonomy execution advisory audit write failed: ${String(auditErr?.message || auditErr)}`);
+          }
+        } else {
+          return {
+            blocked: true,
+            reason: autonomyExecutionGate.blockReason,
+            action: undefined,
+            dispatchBlockReason: autonomyExecutionGate.blockReason,
+            graphResult: null,
+            cycleId,
+            budgetEligibility,
+            gateKey: "AUTONOMY_EXECUTION",
+            gateIndex: GATE_PRECEDENCE.AUTONOMY_EXECUTION,
+          };
+        }
       }
     } catch (autonomyErr) {
       warn(`[orchestrator] autonomy execution governance gate check failed: ${String(autonomyErr?.message || autonomyErr)}`);
@@ -2408,12 +2515,14 @@ export async function evaluatePreDispatchGovernanceGate(
   // Runs in pre-dispatch governance so both standard and resume dispatch paths
   // block before wave-1 using a canonical block reason contract.
   let laneDiversityBypassReason: string | null = null;
-  const singleTargetShadowLaneDiversityBypass = isSingleTargetShadowLaneDiversityBypassActive(config);
-  const liveReviewResumeLaneDiversityBypass = opts?.resumeSource === "live_review";
   const diversityMinLanesRaw = Number(config?.workerPool?.minLanes);
   const diversityMinLanes = Number.isFinite(diversityMinLanesRaw) && diversityMinLanesRaw > 1
     ? Math.floor(diversityMinLanesRaw)
     : null;
+  const singleTargetShadowLaneDiversityBypass = isSingleTargetShadowLaneDiversityBypassActive(config);
+  const liveReviewResumeLaneDiversityBypass = opts?.resumeSource === "live_review";
+  const checkpointResumeLaneDiversityBypass = opts?.resumeSource === "checkpoint_snapshot"
+    && Number(admittedWorkerTopology?.laneCount ?? 0) >= (diversityMinLanes || 0);
   const hasConcreteLaneScope = normalizedPlans.some((plan: any) => {
     const targetFiles = Array.isArray(plan?.target_files)
       ? plan.target_files
@@ -2437,6 +2546,9 @@ export async function evaluatePreDispatchGovernanceGate(
         } else if (liveReviewResumeLaneDiversityBypass) {
           laneDiversityBypassReason = LIVE_REVIEW_RESUME_LANE_DIVERSITY_BYPASS_REASON;
           warn("[orchestrator] lane diversity gate bypassed for approved live-review resume");
+        } else if (checkpointResumeLaneDiversityBypass) {
+          laneDiversityBypassReason = CHECKPOINT_RESUME_LANE_DIVERSITY_BYPASS_REASON;
+          warn("[orchestrator] lane diversity gate bypassed for checkpoint resume preserving admitted multi-lane topology");
         } else {
           const diversityBypass = shouldBypassLaneDiversityHardGate({
             plans: normalizedPlans,
@@ -2879,18 +2991,12 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Attempt to start the dashboard server alongside the daemon (non-blocking, non-fatal). */
-async function tryStartDashboard() {
-  try {
-    const { startDashboard } = await import("../dashboard/live_dashboard.js");
-    startDashboard();
-  } catch (err) {
-    warn(`[orchestrator] dashboard auto-start failed (non-fatal): ${String(err?.message || err)}`);
-  }
-}
-
 export async function runDaemon(config) {
   const liveConfig = Object.assign({}, config);
+  liveConfig.daemonControlScope = {
+    projectId: config?.targetSessionSelector?.projectId || null,
+    sessionId: config?.targetSessionSelector?.sessionId || null,
+  };
   const stateDir = liveConfig.paths?.stateDir || "state";
   await fs.mkdir(stateDir, { recursive: true });
   const startupGuard = await evaluateSingleTargetStartupRequirements(liveConfig);
@@ -2903,8 +3009,6 @@ export async function runDaemon(config) {
   const pid = process.pid;
   await writeDaemonPid(liveConfig, pid);
   await appendProgress(liveConfig, `[BOX] Daemon started pid=${pid}`);
-
-  await tryStartDashboard();
 
   process.on("SIGTERM", async () => {
     await appendProgress(liveConfig, "[BOX] SIGTERM received, stopping");
@@ -3190,6 +3294,11 @@ async function readDispatchCheckpoint(config) {
   }
 }
 
+function findFirstIncompatibleUiBatchSnapshot(workerBatches: any[] = []): { batchIndex: number; reasonCode: string } | null {
+  void workerBatches;
+  return null;
+}
+
 async function readScopedStateJsonWithLegacyFallback(config: any, fileName: string, fallbackValue: any = null) {
   const scopedPath = resolveScopedStatePath(config, fileName);
   const scopedResult = await readJsonSafe(scopedPath);
@@ -3371,17 +3480,36 @@ export function resolveCheckpointPlanCompletion(
       const admittedIds = new Set(
         admittedPlans.map((plan: any, index: number) => getPlanIdentity(plan, index)).filter(Boolean)
       );
-      const currentIds = new Set(
-        plans.map((plan: any, index: number) => getPlanIdentity(plan, index)).filter(Boolean)
-      );
-      const admittedSubsetMatchesCurrentPlanSet = admittedIds.size > 0
-        && Array.from(admittedIds).every((id) => currentIds.has(id));
-      if (admittedSubsetMatchesCurrentPlanSet) {
-        return {
-          completed: plans.map((plan) => ({ plan, workerState: null, lastLog: null })),
-          pending: [],
-        };
+      if (admittedIds.size > 0) {
+        const completed = [];
+        const pending = [];
+        for (const [index, plan] of plans.entries()) {
+          const planId = getPlanIdentity(plan, index);
+          if (planId && (completedTaskIds.has(planId) || admittedIds.has(planId))) {
+            completed.push({ plan, workerState: null, lastLog: null });
+          } else {
+            pending.push(plan);
+          }
+        }
+        if (completed.length > 0) {
+          return { completed, pending };
+        }
       }
+    }
+  }
+
+  if (completedTaskIds.size > 0) {
+    const completed = [];
+    const pending = [];
+    for (const [index, plan] of plans.entries()) {
+      if (completedTaskIds.has(getPlanIdentity(plan, index))) {
+        completed.push({ plan, workerState: null, lastLog: null });
+      } else {
+        pending.push(plan);
+      }
+    }
+    if (completed.length > 0) {
+      return { completed, pending };
     }
   }
 
@@ -3453,6 +3581,18 @@ export async function evaluateDispatchResumeReadiness(config): Promise<{
       planSource: "checkpoint_snapshot",
       planCount: checkpointPlanSnapshot.length,
       workerBatchCount: checkpointWorkerBatches.length,
+    };
+  }
+
+  if (effectiveCheckpoint && !checkpointResumable && effectiveCheckpoint.status !== "complete") {
+    return {
+      checkpoint: effectiveCheckpoint,
+      interrupted: false,
+      ready: false,
+      reason: "checkpoint_not_resumable",
+      planSource: "none",
+      planCount: 0,
+      workerBatchCount: 0,
     };
   }
 
@@ -3781,23 +3921,28 @@ function resolveReviewerPromptLineageFromReview(review: unknown, analysis: unkno
 
 function buildDispatchReadyPlans(rawPlans: any[]): any[] {
   const plans = Array.isArray(rawPlans)
-    ? rawPlans.map((plan: any) => ({
-      ...plan,
-      role: resolveWorkerRole(plan?.role, plan?.taskKind || plan?.kind || "implementation", plan?.task || plan?.title || ""),
-      capacityDelta: Number.isFinite(Number(plan?.capacityDelta)) && Number(plan.capacityDelta) >= -1 && Number(plan.capacityDelta) <= 1
-        ? Number(plan.capacityDelta)
-        : 0.1,
-      requestROI: Number.isFinite(Number(plan?.requestROI)) && Number(plan.requestROI) > 0
-        ? Number(plan.requestROI)
-        : 1.0,
-      verification_commands: Array.isArray(plan?.verification_commands) && plan.verification_commands.length > 0
-        ? plan.verification_commands
-        : [String(plan?.verification || VERIFICATION_DEFAULTS.test)],
-      acceptance_criteria: Array.isArray(plan?.acceptance_criteria) && plan.acceptance_criteria.length > 0
-        ? plan.acceptance_criteria
-        : [String(plan?.task || "Task completes successfully")],
-      dependencies: Array.isArray(plan?.dependencies) ? plan.dependencies : [],
-    }))
+    ? rawPlans
+      .filter((plan: any) => {
+        const status = String(plan?.implementationStatus || "pending").toLowerCase().trim();
+        return !["implemented", "implemented_correctly", "already_implemented", "completed", "complete"].includes(status);
+      })
+      .map((plan: any) => ({
+        ...plan,
+        role: resolveWorkerRole(plan?.role, plan?.taskKind || plan?.kind || "implementation", plan?.task || plan?.title || ""),
+        capacityDelta: Number.isFinite(Number(plan?.capacityDelta)) && Number(plan.capacityDelta) >= -1 && Number(plan.capacityDelta) <= 1
+          ? Number(plan.capacityDelta)
+          : 0.1,
+        requestROI: Number.isFinite(Number(plan?.requestROI)) && Number(plan.requestROI) > 0
+          ? Number(plan.requestROI)
+          : 1.0,
+        verification_commands: Array.isArray(plan?.verification_commands) && plan.verification_commands.length > 0
+          ? plan.verification_commands
+          : [String(plan?.verification || VERIFICATION_DEFAULTS.test)],
+        acceptance_criteria: Array.isArray(plan?.acceptance_criteria) && plan.acceptance_criteria.length > 0
+          ? plan.acceptance_criteria
+          : [String(plan?.task || "Task completes successfully")],
+        dependencies: Array.isArray(plan?.dependencies) ? plan.dependencies : [],
+      }))
     : [];
 
   bindNamedVerificationTargets(plans as any[]);
@@ -3966,8 +4111,16 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
   }
   const checkpointWorkerBatches = getCheckpointWorkerBatchesSnapshot(checkpoint);
   const checkpointPlanSnapshot = getCheckpointDispatchPlanSnapshot(checkpoint);
+  const checkpointUiBatchViolation = findFirstIncompatibleUiBatchSnapshot(checkpointWorkerBatches);
   const hasCheckpointBatchSnapshot = checkpointWorkerBatches.length > 0;
   const hasCheckpointPlanSnapshot = checkpointPlanSnapshot.length > 0;
+  const checkpointResumable = isDispatchCheckpointResumable(checkpoint);
+  if (checkpointUiBatchViolation) {
+    await appendProgress(
+      config,
+      `[RESUME] Ignoring incompatible checkpoint worker batch snapshot: batch ${checkpointUiBatchViolation.batchIndex} (${checkpointUiBatchViolation.reasonCode}) — rebuilding worker batches from saved plans`,
+    );
+  }
 
   const athenaReview = await readScopedStateJsonWithLegacyFallback(config, "athena_plan_review.json", null);
   const reviewPlansAvailable = Array.isArray(athenaReview?.patchedPlans) && athenaReview.patchedPlans.length > 0;
@@ -3999,16 +4152,23 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
   const livePlans = reviewPlansAvailable
     ? athenaReview.patchedPlans
     : (Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans : []);
-  const plans = hasCheckpointPlanSnapshot ? checkpointPlanSnapshot : livePlans;
-  const planSource = hasCheckpointPlanSnapshot ? "checkpoint_snapshot" : "live_review";
-  if (!hasCheckpointPlanSnapshot && (!athenaReview?.approved || plans.length === 0)) return false;
-  const _normalizedPlansResume = hasCheckpointPlanSnapshot
+  const useApprovedLiveReviewContinuation = Boolean(
+    checkpoint?.status === "complete"
+    && reviewPlansAvailable
+    && livePlans.length > 0
+  );
+  const useCheckpointPlanSnapshot = hasCheckpointPlanSnapshot && !useApprovedLiveReviewContinuation;
+  const useCheckpointBatchSnapshot = hasCheckpointBatchSnapshot && useCheckpointPlanSnapshot && !checkpointUiBatchViolation;
+  const plans = useCheckpointPlanSnapshot ? checkpointPlanSnapshot : livePlans;
+  const planSource = useCheckpointPlanSnapshot ? "checkpoint_snapshot" : "live_review";
+  if (!useCheckpointPlanSnapshot && (!athenaReview?.approved || plans.length === 0)) return false;
+  const _normalizedPlansResume = useCheckpointPlanSnapshot
     ? plans.map((p: any) => {
       const resolved = resolveWorkerRole(p?.role, p?.taskKind || p?.kind || "implementation", p?.task || p?.title || "");
       return resolved !== (p?.role || "") ? { ...p, role: resolved } : p;
     })
     : buildDispatchReadyPlans(plans);
-  if (!hasCheckpointPlanSnapshot && reviewPlansAvailable) {
+  if (!useCheckpointPlanSnapshot && reviewPlansAvailable) {
     try {
       await persistDispatchReadyPrometheusAnalysis(stateDir, prometheusAnalysis, _normalizedPlansResume);
     } catch (persistErr) {
@@ -4017,13 +4177,13 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
       await appendProgress(config, `[RESUME] Non-fatal: failed to persist Athena-reviewed plans to prometheus_analysis.json — ${msg}`);
     }
   }
-  const _rawWorkerBatchesResume = hasCheckpointBatchSnapshot
+  const _rawWorkerBatchesResume = useCheckpointBatchSnapshot
     ? checkpointWorkerBatches
     : buildRoleExecutionBatches(_normalizedPlansResume, config);
   // ── Final dispatch-boundary hard cap (resume path) ───────────────────────
   // Apply only when rebuilding from live plans; checkpoint snapshots already
   // reflect the exact admitted dispatch topology from the interrupted run.
-  const workerBatches = hasCheckpointBatchSnapshot
+  const workerBatches = useCheckpointBatchSnapshot
     ? _rawWorkerBatchesResume
     : applyDispatchBoundaryHardCap(_rawWorkerBatchesResume as any[]) as typeof _rawWorkerBatchesResume;
   if (workerBatches.length === 0) return false;
@@ -4042,15 +4202,13 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
     plans,
     String(prometheusAnalysis?.analyzedAt || athenaReview?.reviewedAt || ""),
   );
+  const completedTaskIdsFromArtifacts = await loadCompletedTaskIdsFromWorkerArtifacts(config, checkpoint);
 
   if (!force && checkpointMatchesPlanIdentity && isDispatchCheckpointCompleteForTotal(checkpoint, workerBatches.length)) {
     return false;
   }
 
-  if (!isDispatchCheckpointResumable(checkpoint)) {
-    if (!force && checkpoint && checkpoint.status === "complete" && checkpointMatchesPlanIdentity) {
-      return false;
-    }
+  if (!checkpointResumable) {
     checkpoint = await beginDispatchCheckpoint(config, workerBatches, plans.length, {
       planAnalyzedAt: String(prometheusAnalysis?.analyzedAt || athenaReview?.reviewedAt || ""),
       plannerPromptLineage,
@@ -4058,7 +4216,6 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
     });
   }
 
-  const completedTaskIdsFromArtifacts = await loadCompletedTaskIdsFromWorkerArtifacts(config, checkpoint);
   const reconciledCompletedBatches = Math.max(
     Number(checkpoint?.completedPlans || 0),
     resolveCompletedBatchCountFromTaskIds(workerBatches, completedTaskIdsFromArtifacts),
@@ -4215,6 +4372,8 @@ async function tryResumeDispatchFromCheckpoint(config, options: { force?: boolea
             premiumUsageData: resumeRetryTelemetry.premiumUsageData,
             benchmarkGroundTruth: resumeRetryTelemetry.benchmarkGroundTruth,
             minExpectedGain: Number(config?.runtime?.retryRoiMinExpectedGain ?? 0.18),
+            failureClass: workerResult?.retryDecision?.failureClass ?? null,
+            finishCode: workerResult?.reasonCode ?? null,
           })
         : null;
       if (isTransient && retryDecision?.allowRetry) {
@@ -5226,10 +5385,6 @@ async function dispatchWorker(config, plan) {
     }
   } catch { /* non-critical — routing telemetry log must never block dispatch */ }
 
-  const plannedDispatchItems = batchPlans || [plan];
-  const uiBatchCompatibility = analyzeUiBatchCompatibility(plannedDispatchItems);
-  const uiDispatchMetadata = buildUiDispatchMetadataFromPlans(plannedDispatchItems);
-
   const result = await runWorkerConversation(config, roleName, {
     task,
     context,
@@ -5237,8 +5392,6 @@ async function dispatchWorker(config, plan) {
     taskKind,
     targetFiles,
     ...(batchPlans ? { batchPlans } : {}),
-    ...(uiBatchCompatibility.containsUi ? { uiBatchCompatibility } : {}),
-    ...(uiDispatchMetadata ? uiDispatchMetadata : {}),
   });
 
   const workerResult = {
@@ -5248,6 +5401,10 @@ async function dispatchWorker(config, plan) {
     summary: result?.summary || "",
     filesChanged: result?.filesTouched || "",
     raw: String(result?.fullOutput || "").slice(0, 3000),
+    reasonCode: result?.reasonCode || null,
+    retryClass: result?.retryClass || null,
+    retryDecision: result?.retryDecision || null,
+    failureClassification: result?.failureClassification || null,
     verificationEvidence: result?.verificationEvidence || null,
     dispatchContract: result?.dispatchContract || null,
     dispatchBlockReason: result?.dispatchContract?.dispatchBlockReason || null,
@@ -5702,7 +5859,15 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
           title: "Preflight capability checks failed",
           message: `Failed: ${failedChecks}. ${doctorResult.warnings.join("; ")}`
         });
-        // Non-blocking: log but continue (critical checks would have thrown)
+        const copilotCliReady = doctorResult.checks?.copilotCli === true;
+        const copilotAuthReady = doctorResult.checks?.copilotAuth === true;
+        if (copilotCliReady && !copilotAuthReady) {
+          await appendProgress(
+            config,
+            "[CYCLE][PREFLIGHT] Blocking premium agent calls until Copilot auth is restored"
+          );
+          return;
+        }
       } else if (doctorResult.warnings.length > 0) {
         await appendProgress(config, `[CYCLE][PREFLIGHT] All checks passed. Warnings: ${doctorResult.warnings.join("; ")}`);
       }
@@ -6486,7 +6651,7 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
 
   let athenaCorrectionDispatchBlockReason = resolveAthenaCorrectionDispatchBlockReason(planReview?.corrections || []);
 
-  if (!planReview?.approved && shouldForceAthenaApprovalForSingleTarget(config)) {
+  if (!planReview?.approved && shouldForceAthenaApprovalForSingleTarget(config, planReview)) {
     const forcedApprovedAt = new Date().toISOString();
     const originalReason = planReview?.reason && typeof planReview.reason === "object"
       ? { ...planReview.reason }
@@ -6718,6 +6883,23 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
     );
   }
 
+  try {
+    const completedTaskIdsFromArtifacts = await loadCompletedTaskIdsFromWorkerArtifacts(config);
+    if (Array.isArray(rawPlans) && completedTaskIdsFromArtifacts.size > 0) {
+      const beforeCount = rawPlans.length;
+      rawPlans = rawPlans.filter((plan: any, index: number) => !completedTaskIdsFromArtifacts.has(getPlanIdentity(plan, index)));
+      const skippedCount = beforeCount - rawPlans.length;
+      if (skippedCount > 0) {
+        await appendProgress(
+          config,
+          `[CYCLE] Artifact completion reconciliation skipped ${skippedCount} already-completed plan(s) before dispatch admission`,
+        );
+      }
+    }
+  } catch (artifactErr) {
+    warn(`[orchestrator] fresh-cycle completed-task reconciliation failed (non-fatal): ${String((artifactErr as Error)?.message || artifactErr)}`);
+  }
+
   // ── Ensure synthesizable defaults on all plans ─────────────────────────────
   // Athena's patchedPlans come from AI output and may lack fields that
   // normalizePlanFromTask would synthesize (capacityDelta, requestROI,
@@ -6807,6 +6989,8 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
   try {
     const contractReport = validateAllPlans(plans, {
       activeTargetSession: config?.activeTargetSession,
+      disableProtectedIntentValidation: config?.runtime?.disableProtectedIntentValidation === true,
+      disableIntentDowngradeValidation: true,
     });
     if (contractReport.passRate < 1) {
       await appendProgress(config,
@@ -7724,6 +7908,8 @@ async function runSingleCycle(config, _token?: CancellationToken | null) {
             premiumUsageData: cycleRetryTelemetry.premiumUsageData,
             benchmarkGroundTruth: cycleRetryTelemetry.benchmarkGroundTruth,
             minExpectedGain: Number(config?.runtime?.retryRoiMinExpectedGain ?? 0.18),
+            failureClass: workerResult?.retryDecision?.failureClass ?? null,
+            finishCode: workerResult?.reasonCode ?? null,
           })
         : null;
       if (isTransient && retryDecision?.allowRetry) {
@@ -9192,10 +9378,12 @@ async function mainLoop(config) {
               continue;
             }
 
-            await appendProgress(
-              config,
-              `[LOOP] Interrupted dispatch checkpoint detected (${dispatchCheckpoint.completedPlans}/${dispatchCheckpoint.totalPlans} complete) — attempting resume source=${resumeState.planSource}`,
-            );
+            const resumeMessage = !dispatchCheckpoint
+              ? `[LOOP] Approved live review pending — dispatching without fresh replanning source=${resumeState.planSource}`
+              : dispatchCheckpoint.status === "complete" && resumeState.planSource === "live_review"
+                ? `[LOOP] Approved live review still has pending work after checkpoint completion — continuing dispatch source=${resumeState.planSource}`
+                : `[LOOP] Interrupted dispatch checkpoint detected (${dispatchCheckpoint.completedPlans}/${dispatchCheckpoint.totalPlans} complete) — attempting resume source=${resumeState.planSource}`;
+            await appendProgress(config, resumeMessage);
             const resumed = await tryResumeDispatchFromCheckpoint(config);
             if (resumed) {
               await sleep(RE_EVAL_SLEEP_MS);
@@ -9241,6 +9429,7 @@ async function mainLoop(config) {
       // All plans done — cleanup, project completion, self-improvement
       await appendProgress(config, `[LOOP] All ${totalPlans} plans complete — running post-completion`);
       await postCompletionCleanup(config);
+      let targetSuccessReportForCompletion: any = null;
 
       if (
         config.platformModeState?.currentMode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY
@@ -9248,10 +9437,12 @@ async function mainLoop(config) {
       ) {
         try {
           const targetSuccessReport = await evaluateTargetSuccessContract(config, config.activeTargetSession);
+          targetSuccessReportForCompletion = targetSuccessReport;
           await persistTargetSuccessContract(config, targetSuccessReport);
+          const targetClosure = (targetSuccessReport as any)?.closure || null;
           await appendProgress(
             config,
-            `[TARGET_SUCCESS] contract=${String(targetSuccessReport?.status || "unknown")} blockers=${Array.isArray(targetSuccessReport?.blockers) && targetSuccessReport.blockers.length > 0 ? targetSuccessReport.blockers.join(",") : "none"}`,
+            `[TARGET_SUCCESS] contract=${String(targetSuccessReport?.status || "unknown")} closure=${String(targetClosure?.decision || "legacy")} reason=${String(targetClosure?.reasonCode || "n/a")} next=${String(targetClosure?.bestNextAction?.id || "none")} blockers=${Array.isArray(targetSuccessReport?.blockers) && targetSuccessReport.blockers.length > 0 ? targetSuccessReport.blockers.join(",") : "none"}`,
           );
 
           if (isTargetSuccessContractTerminal(targetSuccessReport)) {
@@ -9274,21 +9465,60 @@ async function mainLoop(config) {
                 requiredHumanInputs: Array.isArray(targetSuccessReport?.pendingHumanInputs)
                   ? targetSuccessReport.pendingHumanInputs
                   : [],
+                targetDeliveryHandoff: handoff,
               },
             });
             bindRuntimeTargetContext(config, config.platformModeState, transitionedSession);
             await appendProgress(
               config,
-              `[TARGET_SESSION] success staged session=${transitionedSession.sessionId} stage=${transitionedSession.currentStage} reason=${String(transitionedSession.lifecycle?.completionReason || "none")}`,
+              `[TARGET_SESSION] success staged session=${transitionedSession.sessionId} stage=${transitionedSession.currentStage} reason=${String(transitionedSession.lifecycle?.completionReason || "none")} closure=${String(targetClosure?.reasonCode || "n/a")}`,
             );
+          } else {
+            await appendProgress(
+              config,
+              `[TARGET_SUCCESS] project completion deferred - closure=${String(targetClosure?.decision || "legacy")} reason=${String(targetClosure?.reasonCode || "n/a")} next=${String(targetClosure?.bestNextAction?.id || "none")} blockers=${Array.isArray(targetSuccessReport?.blockers) && targetSuccessReport.blockers.length > 0 ? targetSuccessReport.blockers.join(",") : "unknown"}`,
+            );
+            const closureNextAction = String(targetClosure?.bestNextAction?.id || "").trim();
+            if (closureNextAction) {
+              const transitionedSession = await transitionActiveTargetSession(config, {
+                nextStage: config.activeTargetSession.currentStage,
+                actor: "target_success_contract",
+                reason: `target_success_continue:${String(targetClosure?.reasonCode || "unknown")}`,
+                nextAction: closureNextAction,
+                handoff: {
+                  closureNextAction: targetClosure?.bestNextAction || null,
+                  lastClosureReason: String(targetClosure?.reasonCode || "unknown"),
+                  requiredHumanInputs: Array.isArray(targetSuccessReport?.pendingHumanInputs)
+                    ? targetSuccessReport.pendingHumanInputs
+                    : [],
+                },
+              });
+              config.activeTargetSession = transitionedSession;
+              bindRuntimeTargetContext(config, config.platformModeState, transitionedSession);
+              await appendProgress(
+                config,
+                `[TARGET_SESSION] closure next action staged session=${transitionedSession.sessionId} next=${closureNextAction} reason=${String(targetClosure?.reasonCode || "unknown")}`,
+              );
+            }
           }
         } catch (targetSuccessErr) {
           warn(`[orchestrator] target success post-completion failed (non-fatal): ${String((targetSuccessErr as Error)?.message || targetSuccessErr)}`);
         }
+        if (!shouldRunProjectCompletionForCycle(config, targetSuccessReportForCompletion)) {
+          await appendProgress(config, "[LIFECYCLE] Project completion skipped - target success contract is not terminal");
+        }
       }
 
-      const alreadyCompleted = await isProjectAlreadyCompleted(config);
-      if (!alreadyCompleted) {
+      const persistedTargetSuccessReport = config.platformModeState?.currentMode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY
+        ? await readJson(path.join(config.paths?.stateDir || "state", "last_target_project_readiness.json"), null)
+        : null;
+      const targetCompletionAllowed = resolveProjectCompletionEligibility(
+        config,
+        targetSuccessReportForCompletion,
+        persistedTargetSuccessReport,
+      );
+      const alreadyCompleted = targetCompletionAllowed ? await isProjectAlreadyCompleted(config) : true;
+      if (targetCompletionAllowed && !alreadyCompleted) {
         try {
           await runProjectCompletion(config);
           if (
@@ -9306,6 +9536,8 @@ async function mainLoop(config) {
               unresolvedItems: completionStage === TARGET_SESSION_STAGE.COMPLETED_WITH_HANDOFF
                 ? config.activeTargetSession.handoff?.requiredHumanInputs || []
                 : [],
+              presentationHandoff: config.activeTargetSession.handoff?.targetDeliveryHandoff || null,
+              preserveWorkspace: config.activeTargetSession.handoff?.targetDeliveryHandoff?.delivery?.preserveWorkspace === true,
             });
             const refreshedModeState = await loadPlatformModeState(config);
             bindRuntimeTargetContext(config, refreshedModeState, null);

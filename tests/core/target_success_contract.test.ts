@@ -194,12 +194,144 @@ describe("target_success_contract", () => {
 
     const report = await evaluateTargetSuccessContract(config, session);
     assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED);
+    assert.equal(report.closure.decision, "close");
+    assert.equal(report.closure.reasonCode, "contract_fulfilled_no_high_value_action");
     assert.equal(report.pendingHumanInputs.length, 0);
     assert.equal(isTargetSuccessContractTerminal(report), true);
     assert.equal(report.delivery.locationType, "local_path");
     assert.equal(report.delivery.workspacePath, workspacePath);
     assert.equal(report.delivery.autoOpenEligible, true);
     assert.equal(report.delivery.openTarget, path.join(workspacePath, "index.html"));
+  });
+
+  it("accepts runtime release validation evidence when concrete verification commands are present", async () => {
+    const workspacePath = path.join(tempRoot, "runtime-release-evidence-workspace");
+    await fs.mkdir(workspacePath, { recursive: true });
+    await fs.writeFile(path.join(workspacePath, "index.html"), "<html><body>todo</body></html>", "utf8");
+    const session = {
+      ...buildSession(),
+      workspace: { path: workspacePath },
+      repo: {
+        repoUrl: "https://github.com/acme/todo.git",
+        repoFullName: "acme/todo",
+        name: "todo",
+      },
+    };
+    const runtimeDir = path.join(config.paths.stateDir, "projects", session.projectId, session.sessionId, "runtime");
+    await fs.mkdir(runtimeDir, { recursive: true });
+    await fs.writeFile(path.join(runtimeDir, "worker_cycle_artifacts.json"), JSON.stringify({
+      schemaVersion: 1,
+      latestCycleId: "cycle-1",
+      cycles: {
+        "cycle-1": {
+          cycleId: "cycle-1",
+          status: "complete",
+          updatedAt: "2026-05-03T12:00:00.000Z",
+          workerSessions: {
+            "evolution-worker": { status: "idle", lastStatus: "done", updatedAt: "2026-05-03T12:01:00.000Z" },
+            "quality-worker": { status: "idle", lastStatus: "done", updatedAt: "2026-05-03T12:02:00.000Z" },
+          },
+          workerActivity: {
+            "evolution-worker": [{
+              at: "2026-05-03T12:01:00.000Z",
+              status: "done",
+              task: "deliver simple to do list app",
+              pr: "https://github.com/acme/todo/pull/1",
+            }],
+            "quality-worker": [{
+              at: "2026-05-03T12:02:00.000Z",
+              status: "done",
+              task: "verify release checks for simple to do list app",
+              pr: "https://github.com/acme/todo/pull/2",
+            }],
+          },
+        },
+      },
+    }, null, 2), "utf8");
+    await fs.writeFile(path.join(runtimeDir, "dispatch_checkpoint.json"), JSON.stringify({
+      status: "complete",
+      totalPlans: 2,
+      completedPlans: 2,
+      dispatchPlanSnapshot: [
+        {
+          role: "evolution-worker",
+          task: "deliver simple to do list app",
+          verificationCommands: ["npm run build"],
+        },
+        {
+          role: "quality-worker",
+          task: "verify release checks for simple to do list app",
+          verificationCommands: ["Run the existing Vitest and Playwright suites and confirm the release surface passes."],
+        },
+      ],
+    }, null, 2), "utf8");
+
+    const report = await evaluateTargetSuccessContract(config, session);
+
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED);
+    assert.equal(report.dimensions.releaseVerification.status, "satisfied");
+    assert.equal(report.closure.decision, "close");
+    assert.equal(isTargetSuccessContractTerminal(report), true);
+  });
+
+  it("does not accept a release validation sentence without concrete verification commands", async () => {
+    const session = buildSession();
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
+      buildStampedWorkerHeader(session),
+      "BOX_STATUS=done",
+      "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+      "BOX_ACTUAL_OUTCOME=the simple to-do list app was delivered on main",
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(session),
+      "DELIVERED: To-do list app is live on main.",
+      "BOX_STATUS=done",
+      "BOX_ACTUAL_OUTCOME=Release validation evidence is present for the delivered target.",
+    ].join("\n"), "utf8");
+
+    const report = await evaluateTargetSuccessContract(config, session);
+
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.OPEN);
+    assert.equal(report.dimensions.releaseVerification.status, "missing");
+    assert.ok(report.blockers.includes("release_signoff_missing"));
+  });
+
+  it("defers terminal closure when fulfilled evidence exists but dispatch still has runnable batches", async () => {
+    const workspacePath = path.join(tempRoot, "incomplete-dispatch-workspace");
+    await fs.mkdir(workspacePath, { recursive: true });
+    const session = {
+      ...buildSession(),
+      workspace: { path: workspacePath },
+    };
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
+      "BOX_STATUS=done",
+      "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+      "BOX_ACTUAL_OUTCOME=the app was merged on main, current main passes build, lint, and targeted todo app tests",
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
+      "DELIVERED: To-do list app is live on main. Open index.html in any browser.",
+      "BOX_STATUS=done",
+      "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+      "BOX_ACTUAL_OUTCOME=Verified all release checks passed for the to-do list app.",
+      "I ran npm test, npm run lint, and npm run build.",
+    ].join("\n"), "utf8");
+    const runtimeDir = path.join(config.paths.stateDir, "projects", session.projectId, session.sessionId, "runtime");
+    await fs.mkdir(runtimeDir, { recursive: true });
+    await fs.writeFile(path.join(runtimeDir, "dispatch_checkpoint.json"), JSON.stringify({
+      status: "dispatching",
+      totalPlans: 3,
+      completedPlans: 2,
+    }, null, 2), "utf8");
+
+    const report = await evaluateTargetSuccessContract(config, session);
+
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED);
+    assert.equal(report.closure.decision, "continue");
+    assert.equal(report.closure.reasonCode, "dispatch_checkpoint_incomplete");
+    assert.equal(report.closure.bestNextAction.id, "resume_remaining_dispatch_batches");
+    assert.equal(isTargetSuccessContractTerminal(report), false);
   });
 
   it("preserves a terminal report for the same session even if a later evaluation would reopen it", async () => {
@@ -233,6 +365,10 @@ describe("target_success_contract", () => {
         researchSaturation: { status: "not_applicable", evidence: {} },
         projectReadiness: { status: "not_applicable", evidence: {} },
       },
+      closure: {
+        decision: "close",
+        reasonCode: "contract_fulfilled_no_high_value_action",
+      },
     };
 
     await fs.writeFile(
@@ -255,6 +391,159 @@ describe("target_success_contract", () => {
     assert.equal(persisted.stickyTerminal, true);
   });
 
+  it("does not preserve legacy terminal reports without closure when fresh runtime work remains", async () => {
+    const workspacePath = path.join(tempRoot, "legacy-terminal-work-remains");
+    await fs.mkdir(workspacePath, { recursive: true });
+    const session = {
+      ...buildSession(),
+      workspace: { path: workspacePath },
+    };
+    await fs.writeFile(
+      path.join(config.paths.stateDir, "last_target_project_readiness.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        status: TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED,
+        evaluatedAt: "2026-04-20T19:00:00.000Z",
+        projectId: session.projectId,
+        sessionId: session.sessionId,
+        summary: "Legacy terminal report without a closure packet.",
+        blockers: [],
+        pendingHumanInputs: [],
+        ignoredHumanInputs: [],
+        dimensions: {},
+      }, null, 2),
+      "utf8",
+    );
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
+      "BOX_STATUS=done",
+      "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+      "BOX_ACTUAL_OUTCOME=the app was merged on main, current main passes build, lint, and targeted todo app tests",
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(session, workspacePath),
+      "DELIVERED: To-do list app is live on main. Open index.html in any browser.",
+      "BOX_STATUS=done",
+      "BOX_MERGED_SHA=8ac7ee06035bb0273801dcb4baa4c72d090b6460",
+      "BOX_ACTUAL_OUTCOME=Verified all release checks passed for the to-do list app.",
+      "I ran npm test, npm run lint, and npm run build.",
+    ].join("\n"), "utf8");
+    const runtimeDir = path.join(config.paths.stateDir, "projects", session.projectId, session.sessionId, "runtime");
+    await fs.mkdir(runtimeDir, { recursive: true });
+    await fs.writeFile(path.join(runtimeDir, "dispatch_checkpoint.json"), JSON.stringify({
+      status: "dispatching",
+      totalPlans: 4,
+      completedPlans: 3,
+    }, null, 2), "utf8");
+
+    const report = await evaluateTargetSuccessContract(config, session);
+
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED);
+    assert.equal(report.stickyTerminal, undefined);
+    assert.equal(report.closure.decision, "continue");
+    assert.equal(report.closure.reasonCode, "dispatch_checkpoint_incomplete");
+    assert.equal(isTargetSuccessContractTerminal(report), false);
+  });
+
+  it("ignores stale terminal evidence after a session is manually reactivated", async () => {
+    const workspacePath = path.join(tempRoot, "reactivated-session-workspace");
+    await fs.mkdir(workspacePath, { recursive: true });
+    const session = {
+      ...buildSession(),
+      workspace: { path: workspacePath },
+      lifecycle: {
+        reactivatedAt: "2026-05-03T00:00:00.000Z",
+      },
+    };
+    const runtimeDir = path.join(config.paths.stateDir, "projects", session.projectId, session.sessionId, "runtime");
+    await fs.mkdir(runtimeDir, { recursive: true });
+    await fs.writeFile(path.join(runtimeDir, "worker_cycle_artifacts.json"), JSON.stringify({
+      schemaVersion: 1,
+      latestCycleId: "2026-05-02T22:10:00.000Z",
+      cycles: {
+        "2026-05-02T22:10:00.000Z": {
+          cycleId: "2026-05-02T22:10:00.000Z",
+          status: "complete",
+          updatedAt: "2026-05-02T22:16:00.000Z",
+          workerSessions: {
+            "evolution-worker": {
+              status: "idle",
+              updatedAt: "2026-05-02T22:15:00.000Z",
+              lastStatus: "done"
+            },
+            "quality-worker": {
+              status: "idle",
+              updatedAt: "2026-05-02T22:16:00.000Z",
+              lastStatus: "done"
+            }
+          },
+          workerActivity: {
+            "evolution-worker": [
+              {
+                "at": "2026-05-02T22:14:00.000Z",
+                "status": "done",
+                "task": "Delivered the landing page",
+                "taskIds": ["deliver-landing-page"],
+                "pr": "https://github.com/acme/landing/pull/1"
+              }
+            ],
+            "quality-worker": [
+              {
+                "at": "2026-05-02T22:15:30.000Z",
+                "status": "done",
+                "task": "Verified release checks",
+                "taskIds": ["verify-release"],
+                "pr": "https://github.com/acme/landing/pull/2"
+              }
+            ]
+          }
+        }
+      }
+    }, null, 2), "utf8");
+    await fs.writeFile(path.join(runtimeDir, "dispatch_checkpoint.json"), JSON.stringify({
+      status: "complete",
+      totalPlans: 2,
+      completedPlans: 2,
+    }, null, 2), "utf8");
+    await fs.writeFile(
+      path.join(config.paths.stateDir, "last_target_project_readiness.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        status: TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED,
+        evaluatedAt: "2026-05-02T22:20:00.000Z",
+        projectId: session.projectId,
+        sessionId: session.sessionId,
+        summary: "Target success contract satisfied: fulfilled",
+        blockers: [],
+        pendingHumanInputs: [],
+        ignoredHumanInputs: [],
+        delivery: { status: "ready_to_open" },
+        dimensions: {
+          delivery: { status: "satisfied", evidence: {} },
+          releaseVerification: { status: "satisfied", evidence: {} },
+          intentCore: { status: "satisfied", evidence: {} },
+          preferences: { status: "not_applicable", evidence: {} },
+          evidenceAlignment: { status: "satisfied", evidence: {} },
+          researchSaturation: { status: "not_applicable", evidence: {} },
+          projectReadiness: { status: "not_applicable", evidence: {} }
+        },
+        closure: {
+          decision: "close",
+          reasonCode: "contract_fulfilled_no_high_value_action"
+        }
+      }, null, 2),
+      "utf8",
+    );
+
+    const report = await evaluateTargetSuccessContract(config, session);
+
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.OPEN);
+    assert.equal(report.stickyTerminal, undefined);
+    assert.ok(report.blockers.includes("delivery_evidence_missing"));
+    assert.ok(report.blockers.includes("release_signoff_missing"));
+    assert.equal(isTargetSuccessContractTerminal(report), false);
+  });
+
   it("keeps the contract open when final release sign-off evidence is missing", async () => {
     await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_evolution-worker.txt"), [
       "BOX_STATUS=done",
@@ -264,6 +553,8 @@ describe("target_success_contract", () => {
 
     const report = await evaluateTargetSuccessContract(config, buildSession());
     assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.OPEN);
+    assert.equal(report.closure.decision, "continue");
+    assert.equal(report.closure.bestNextAction.id, "run_release_signoff");
     assert.ok(report.blockers.includes("release_signoff_missing"));
     assert.equal(isTargetSuccessContractTerminal(report), false);
   });
@@ -765,6 +1056,223 @@ describe("target_success_contract", () => {
 
     assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED);
     assert.deepEqual(report.dimensions.evidenceAlignment.evidence.alignedRoles, ["session:quality-worker"]);
+  });
+
+  it("fulfills the success contract from session runtime artifacts when debug worker evidence is missing", async () => {
+    const workspacePath = path.join(tempRoot, "emberline-runtime-workspace");
+    await fs.mkdir(path.join(workspacePath, "dist"), { recursive: true });
+    await fs.writeFile(path.join(workspacePath, "index.html"), "<html><body>emberline</body></html>", "utf8");
+    await fs.writeFile(path.join(workspacePath, "dist", "index.html"), "<html><body>emberline dist</body></html>", "utf8");
+
+    const session = {
+      ...buildSession(),
+      projectId: "target_emberline_club",
+      sessionId: "sess_emberline_runtime",
+      objective: {
+        summary: "Create a premium responsive Emberline landing page.",
+        acceptanceCriteria: ["clarified", "planning-ready"],
+      },
+      intent: {
+        summary: "goal=premium Emberline landing page | success=membership tiers schedule preview cinematic motion accessible controls",
+        scopeIn: ["premium emberline landing page", "membership tiers", "schedule preview"],
+        mustHaveFlows: ["premium emberline landing page"],
+        preferredQualityBar: "Strong design polish",
+      },
+      repo: {
+        repoUrl: "https://github.com/CanerDoqdu/emberline-club",
+        repoFullName: "CanerDoqdu/emberline-club",
+        name: "emberline-club",
+      },
+      workspace: { path: workspacePath },
+    };
+
+    const sessionRuntimeDir = path.join(
+      config.paths.stateDir,
+      "projects",
+      session.projectId,
+      session.sessionId,
+      "runtime",
+    );
+    await fs.mkdir(sessionRuntimeDir, { recursive: true });
+    await fs.writeFile(path.join(config.paths.stateDir, "debug_worker_quality-worker.txt"), [
+      buildStampedWorkerHeader(buildSession()),
+      "BOX_STATUS=done",
+      "BOX_MERGED_SHA=c57d721d85217ef03fd5b4b8bffeb59ba43d5b9a",
+      "BOX_ACTUAL_OUTCOME=Stale unrelated global worker evidence.",
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(sessionRuntimeDir, "worker_cycle_artifacts.json"), JSON.stringify({
+      latestCycleId: "cycle-1",
+      cycles: {
+        "cycle-1": {
+          status: "dispatching",
+          workerSessions: {
+            "evolution-worker": { status: "idle", lastStatus: "done" },
+            "quality-worker": { status: "idle", lastStatus: "done" },
+          },
+          workerActivity: {
+            "evolution-worker": [
+              {
+                status: "done",
+                task: "Create the premium responsive Emberline landing page with membership tiers and cinematic motion.",
+                taskIds: ["Create the premium responsive Emberline landing page with membership tiers and cinematic motion."],
+                pr: "https://github.com/CanerDoqdu/emberline-club/pull/1",
+              },
+            ],
+            "quality-worker": [
+              {
+                status: "done",
+                task: "Build membership tiers and schedule preview as semantic HTML components with accessible controls.",
+                taskIds: ["Build membership tiers and schedule preview as semantic HTML components with accessible controls."],
+                pr: null,
+              },
+            ],
+          },
+        },
+      },
+    }, null, 2), "utf8");
+    await fs.writeFile(path.join(sessionRuntimeDir, "dispatch_checkpoint.json"), JSON.stringify({
+      status: "complete",
+      totalPlans: 2,
+      completedPlans: 2,
+      dispatchPlanSnapshot: [
+        {
+          role: "quality-worker",
+          verification_commands: ["npm test && npm run lint && npm run build"],
+        },
+      ],
+    }, null, 2), "utf8");
+
+    const report = await evaluateTargetSuccessContract(config, session);
+
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED);
+    assert.equal(report.dimensions.delivery.status, "satisfied");
+    assert.equal(report.dimensions.releaseVerification.status, "satisfied");
+    assert.equal(report.dimensions.intentCore.status, "satisfied");
+    assert.deepEqual(report.dimensions.evidenceAlignment.evidence.alignedRoles, [
+      "session:evolution-worker",
+      "session:quality-worker",
+    ]);
+  });
+
+  it("does not keep the contract open when best-effort research is incomplete but readiness is not required", async () => {
+    const workspacePath = path.join(tempRoot, "emberline-best-effort-workspace");
+    await fs.mkdir(path.join(workspacePath, "dist"), { recursive: true });
+    await fs.writeFile(path.join(workspacePath, "index.html"), "<html><body>emberline</body></html>", "utf8");
+
+    const session = {
+      ...buildSession(),
+      projectId: "target_emberline_club",
+      sessionId: "sess_emberline_best_effort",
+      objective: {
+        summary: "Create a premium responsive Emberline landing page.",
+        acceptanceCriteria: ["clarified", "planning-ready"],
+      },
+      intent: {
+        summary: "goal=premium Emberline landing page | success=membership tiers cinematic motion",
+        scopeIn: ["premium emberline landing page", "membership tiers"],
+        mustHaveFlows: [],
+        preferredQualityBar: "Strong design polish",
+      },
+      repo: {
+        repoUrl: "https://github.com/CanerDoqdu/emberline-club",
+        repoFullName: "CanerDoqdu/emberline-club",
+        name: "emberline-club",
+      },
+      workspace: { path: workspacePath },
+    };
+
+    const sessionRuntimeDir = path.join(
+      config.paths.stateDir,
+      "projects",
+      session.projectId,
+      session.sessionId,
+      "runtime",
+    );
+    await fs.mkdir(sessionRuntimeDir, { recursive: true });
+    await fs.writeFile(path.join(sessionRuntimeDir, "worker_cycle_artifacts.json"), JSON.stringify({
+      latestCycleId: "cycle-1",
+      cycles: {
+        "cycle-1": {
+          status: "dispatching",
+          workerSessions: {
+            "evolution-worker": { status: "idle", lastStatus: "done" },
+            "quality-worker": { status: "idle", lastStatus: "done" },
+          },
+          workerActivity: {
+            "evolution-worker": [
+              {
+                status: "done",
+                task: "Create a premium responsive Emberline landing page with membership tiers and cinematic motion.",
+                taskIds: ["Create a premium responsive Emberline landing page with membership tiers and cinematic motion."],
+                pr: "https://github.com/CanerDoqdu/emberline-club/pull/1",
+              },
+            ],
+            "quality-worker": [
+              {
+                status: "done",
+                task: "Validate the landing page and sign off the release checks.",
+                taskIds: ["Validate the landing page and sign off the release checks."],
+                pr: null,
+              },
+            ],
+          },
+        },
+      },
+    }, null, 2), "utf8");
+    await fs.writeFile(path.join(sessionRuntimeDir, "dispatch_checkpoint.json"), JSON.stringify({
+      status: "complete",
+      totalPlans: 2,
+      completedPlans: 2,
+      dispatchPlanSnapshot: [
+        {
+          role: "quality-worker",
+          verification_commands: ["npm test && npm run lint"],
+        },
+      ],
+    }, null, 2), "utf8");
+
+    await writeResearchState(config, session, {
+      sourceCount: 8,
+      topicCount: 4,
+      coveragePassed: true,
+      refreshRecommended: false,
+      completedPairs: 0,
+      totalPairs: 57,
+      scoutAt: "2026-05-02T10:00:00.000Z",
+      synthAt: "2026-05-02T10:00:00.000Z",
+    });
+    await seedProjectReadinessLedger(config, session, [
+      {
+        sourceCount: 8,
+        topicCount: 4,
+        coveragePassed: true,
+        refreshRecommended: false,
+        completedPairs: 0,
+        totalPairs: 57,
+        scoutAt: "2026-05-02T09:58:00.000Z",
+        synthAt: "2026-05-02T09:58:00.000Z",
+      },
+      {
+        sourceCount: 8,
+        topicCount: 4,
+        coveragePassed: true,
+        refreshRecommended: false,
+        completedPairs: 0,
+        totalPairs: 57,
+        scoutAt: "2026-05-02T09:59:00.000Z",
+        synthAt: "2026-05-02T09:59:00.000Z",
+      },
+    ]);
+
+    const report = await evaluateTargetSuccessContract(config, session);
+
+    assert.equal(report.status, TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED);
+    assert.deepEqual(report.blockers, []);
+    assert.equal(report.dimensions.delivery.status, "satisfied");
+    assert.equal(report.dimensions.releaseVerification.status, "satisfied");
+    assert.equal(report.dimensions.intentCore.status, "satisfied");
+    assert.equal(report.dimensions.researchSaturation.status, "missing");
+    assert.equal(report.dimensions.projectReadiness.status, "not_applicable");
   });
 
   it("records delivery handoff and uses the presenter-selected local target", async () => {

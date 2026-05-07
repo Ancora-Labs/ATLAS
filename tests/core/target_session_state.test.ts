@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getActiveTargetSessionPath, loadPlatformModeState, PLATFORM_MODE } from "../../src/core/mode_state.js";
+import { listAtlasDesktopSessions } from "../../src/atlas/desktop_sessions.js";
 import {
   archiveTargetSession,
   createTargetSession,
@@ -264,10 +265,12 @@ describe("target_session_state", () => {
     });
     const reloadedSelectedSession = await loadActiveTargetSession(config);
     const openSessions = await listOpenTargetSessions(config);
+    const rawRegistry = JSON.parse(await fs.readFile(getOpenTargetSessionsPath(config.paths.stateDir), "utf8"));
 
     assert.equal(archived.sessionId, secondSession.sessionId);
     assert.equal(reloadedSelectedSession?.sessionId, firstSession.sessionId);
     assert.equal(openSessions.some((session) => session.sessionId === secondSession.sessionId), false);
+    assert.equal(rawRegistry.some((entry: any) => entry.sessionId === secondSession.sessionId), false);
   });
 
   it("normalizes modern intake manifests and rejects non-target modes", async () => {
@@ -429,6 +432,89 @@ describe("target_session_state", () => {
     await assert.rejects(() => fs.access(workspacePath));
   });
 
+  it("removes archived target sessions from the ATLAS desktop live rail", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
+    const config = buildConfig(tempRoot);
+    const session = await createTargetSession(buildManifest(), config);
+    const desktopStorePath = path.join(config.paths.stateDir, "atlas", "desktop_sessions.json");
+
+    await fs.mkdir(path.dirname(desktopStorePath), { recursive: true });
+    await fs.writeFile(desktopStorePath, JSON.stringify({
+      schemaVersion: 2,
+      updatedAt: "2026-05-01T12:00:00.000Z",
+      sessions: [
+        {
+          id: "atlas-desktop-session-1",
+          title: "Bowling web site",
+          objective: "Ship the bowling target",
+          summary: "Ship the bowling target",
+          operatorIntentBrief: "Ship the bowling target",
+          projectId: session.projectId,
+          projectSessionId: session.sessionId,
+          projectWorkspacePath: session.workspace.path,
+          projectName: "Bowling web site",
+          projectDescription: "Bowling target",
+          repoContext: null,
+          status: "ready",
+          openQuestions: [],
+          executionNotes: [],
+          attachments: [],
+          attachmentPlans: [],
+          clarificationAnswers: [],
+          pendingQuestionIndex: null,
+          pendingQuestion: null,
+          messages: [],
+          createdAt: "2026-05-01T12:00:00.000Z",
+          updatedAt: "2026-05-01T12:00:00.000Z",
+        },
+      ],
+    }, null, 2));
+
+    await archiveTargetSession(config, {
+      completionStage: TARGET_SESSION_STAGE.COMPLETED,
+      completionReason: "archive clears ATLAS live rail",
+    });
+
+    const desktopSessions = await listAtlasDesktopSessions(config.paths.stateDir);
+    assert.equal(desktopSessions.length, 0);
+  });
+
+  it("archives presentation handoff details with the completion record", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
+    const config = buildConfig(tempRoot);
+    const session = await createTargetSession(buildManifest(), config);
+
+    await archiveTargetSession(config, {
+      completionStage: TARGET_SESSION_STAGE.COMPLETED,
+      completionReason: "target delivery presented",
+      presentationHandoff: {
+        projectId: session.projectId,
+        sessionId: session.sessionId,
+        summary: "Open the finished site preview.",
+        delivery: {
+          status: "ready",
+          locationType: "local_static_site",
+          openTarget: "http://127.0.0.1:4173",
+          userMessage: "Open the finished site preview.",
+          execution: { mode: "serve_and_open", target: "http://127.0.0.1:4173" },
+        },
+        autoOpen: {
+          attempted: true,
+          opened: false,
+          reason: "auto_open_disabled",
+          execution: { mode: "serve_and_open", finalTarget: "http://127.0.0.1:4173" },
+        },
+      },
+    });
+
+    const completionPath = getTargetCompletionPath(config.paths.stateDir, session.projectId, session.sessionId);
+    const completionRecord = JSON.parse(await fs.readFile(completionPath, "utf8"));
+
+    assert.equal(completionRecord.presentation.openTarget, "http://127.0.0.1:4173");
+    assert.equal(completionRecord.presentation.execution.mode, "serve_and_open");
+    assert.equal(completionRecord.presentationAutoOpen.reason, "auto_open_disabled");
+  });
+
   it("returns cleanly to self_dev after target archive and allows a new target session to open", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-target-session-"));
     const config = buildConfig(tempRoot);
@@ -578,6 +664,9 @@ describe("target_session_state", () => {
         protectedAreas: ["premium monochrome product identity"],
         preferredQualityBar: "Premium, original monochrome desktop workspace",
         designDirection: "Avoid older dashboard resemblance and AI knockoff drift",
+        implementationFlexibility: "Best-fit implementation allowed; framework choice is not operator-constrained.",
+        assetSourcingPolicy: "Real external assets allowed when needed; preserve requested source visuals.",
+        assetRequirements: ["Preserve requested visuals as source requirements."],
         successCriteria: ["UI stays product-owned and non-derivative"],
         updatedAt: "2026-04-24T10:00:00.000Z",
       },
@@ -606,6 +695,9 @@ describe("target_session_state", () => {
         designDirection: null,
         deploymentExpectations: [],
         successCriteria: [],
+        implementationFlexibility: null,
+        assetSourcingPolicy: null,
+        assetRequirements: [],
       },
       assumptions: [],
       openQuestions: [],
@@ -620,6 +712,9 @@ describe("target_session_state", () => {
     assert.deepEqual(reloaded?.intent.protectedAreas, enrichedSession.intent.protectedAreas);
     assert.equal(reloaded?.intent.preferredQualityBar, enrichedSession.intent.preferredQualityBar);
     assert.equal(reloaded?.intent.designDirection, enrichedSession.intent.designDirection);
+    assert.equal(reloaded?.intent.implementationFlexibility, enrichedSession.intent.implementationFlexibility);
+    assert.equal(reloaded?.intent.assetSourcingPolicy, enrichedSession.intent.assetSourcingPolicy);
+    assert.deepEqual(reloaded?.intent.assetRequirements, enrichedSession.intent.assetRequirements);
     assert.deepEqual(reloaded?.intent.successCriteria, enrichedSession.intent.successCriteria);
   });
 

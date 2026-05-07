@@ -320,6 +320,7 @@ function extractCrossTopicConnections(rawText: string): string[] {
 const MAX_SYNTHESIS_TOPICS = 20;
 const MAX_TOPIC_SOURCES = 6;
 const MAX_TOPIC_TEXT = 280;
+const UI_RELATED_SUMMARY_MAX_TEXT = 4_000;
 const MAX_RESEARCH_GAPS = 2000;
 const MAX_CONNECTIONS = 20;
 const MAX_PLANNER_SIGNALS = 12;
@@ -333,6 +334,53 @@ const SYNTHESIS_MIN_ACTIONABLE_DENSITY_PER_TOPIC = 1;
  * Exported so callers and tests can align on the same floor.
  */
 export const SYNTHESIS_ACTIONABLE_SIGNAL_MIN_LENGTH = 5;
+
+const UI_RELATED_RESEARCH_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bui\b/i,
+  /\bux\b/i,
+  /\bvisual\b/i,
+  /\bdesign\b/i,
+  /\blayout\b/i,
+  /\binterface\b/i,
+  /\btypography\b/i,
+  /\bhero\b/i,
+  /\bbrand(?:ed|ing)?\b/i,
+  /\bmoodboard\b/i,
+  /\bcolor\b/i,
+  /\bpalette\b/i,
+  /\bimag(?:e|ery)\b/i,
+  /\bphoto(?:graphy)?\b/i,
+  /\bmedia\b/i,
+  /\blanding\s+page\b/i,
+  /\bsection\s+[123]\b/i,
+  /\beditorial\b/i,
+  /\bluxury\b/i,
+]);
+
+function collectUiResearchSignalText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => collectUiResearchSignalText(entry)).join(" ");
+  }
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>)
+      .map((entry) => collectUiResearchSignalText(entry))
+      .join(" ");
+  }
+  return "";
+}
+
+function hasUiResearchSignal(value: unknown): boolean {
+  const text = collectUiResearchSignalText(value);
+  return UI_RELATED_RESEARCH_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function buildUiResearchSynthesisBehavior(sourceCount: number): string {
+  return `## UI/DESIGN RESEARCH PRESERVATION\nThe scout package contains UI/design-related research (${sourceCount} source(s)).\nTreat this as competing reference intelligence, not generic inspiration.\nFor every UI/design source:\n- preserve the source's distinct visual system, section logic, copy posture, typography cues, media treatment, and trust/CTA behavior in the Prometheus-Ready Summary\n- do NOT collapse multiple distinct references into one generic landing-page schema\n- if two sources imply different art directions, keep that difference explicit instead of averaging them away\n- when summarizing, compress repetition only; do not remove source-specific design identity or section mapping`; 
+}
 
 // ─── Deterministic applicability scoring ──────────────────────────────────────
 //
@@ -843,6 +891,9 @@ export function sanitizeResearchSynthesisForPersistence(payload: {
       .map((source) => {
         const src = (source && typeof source === "object") ? source as Record<string, unknown> : {};
         const confidence = toClampedConfidence(src.confidence);
+        const summaryMaxLen = hasUiResearchSignal({ topic: item.topic, source: src })
+          ? UI_RELATED_SUMMARY_MAX_TEXT
+          : MAX_TOPIC_TEXT;
         return {
           title: toSingleLine(src.title, 160),
           url: toSingleLine(src.url, 260),
@@ -852,9 +903,9 @@ export function sanitizeResearchSynthesisForPersistence(payload: {
           knowledgeType: toSingleLine(src.knowledgeType, 64),
           scoutFindings: toSingleLine(src.scoutFindings, MAX_TOPIC_TEXT),
           synthesizerEnrichment: toSingleLine(src.synthesizerEnrichment, MAX_TOPIC_TEXT),
-          prometheusReadySummary: toSingleLine(src.prometheusReadySummary, MAX_TOPIC_TEXT)
-            || toSingleLine(src.extractedContent, MAX_TOPIC_TEXT)
-            || toSingleLine(src.scoutFindings, MAX_TOPIC_TEXT),
+          prometheusReadySummary: toSingleLine(src.prometheusReadySummary, summaryMaxLen)
+            || toSingleLine(src.extractedContent, summaryMaxLen)
+            || toSingleLine(src.scoutFindings, summaryMaxLen),
         };
       })
       .filter((source) => Object.values(source).some(Boolean));
@@ -986,10 +1037,18 @@ Your job: synthesize this into a structured, topic-organized output that Prometh
 Follow your agent definition's output format exactly.
 Do NOT lose useful information. Compress the format, not the content.
 If sources contradict each other, document the contradiction explicitly.`;
+  const uiResearchBehavior = hasUiResearchSignal({
+    sources: scoutOutput?.sources,
+    coveragePlan: targetCoveragePlan,
+    targetSession,
+  })
+    ? buildUiResearchSynthesisBehavior(sourceCount)
+    : "";
 
   const compiledPrompt = compilePrompt([
     ...synthesizerAssemblySections,
     section("task", taskSectionText),
+    ...(uiResearchBehavior ? [section("ui-research-preservation", uiResearchBehavior)] : []),
     section("scout-output", `## RESEARCH SCOUT RAW OUTPUT
 ${scoutRawText}`),
   ], {
@@ -1107,6 +1166,7 @@ For each repaired topic, include:
 
 Preserve already-adequate evidence unchanged.
 Follow your agent definition's output format exactly.`),
+  ...(uiResearchBehavior ? [section("ui-research-preservation", uiResearchBehavior)] : []),
       section("scout-output", `## RESEARCH SCOUT RAW OUTPUT\n${scoutRawText}`),
     ], {
       tokenBudget: resolveMaxPromptBudget(

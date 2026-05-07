@@ -361,11 +361,11 @@ describe("target-aware worker live log formatting", () => {
     const formatted = formatLiveWorkerLogChunk(config, "integration-worker", "line one\nline two\n");
     const lines = formatted.trim().split("\n");
 
-    assert.equal(stamp, "[mode=target]");
+    assert.equal(stamp, "[mode=target role=integration-worker project=target_portal session=sess_123]");
     assert.ok(lines[0].startsWith("line one"));
     assert.ok(lines[1].startsWith("line two"));
-    assert.ok(lines[0].endsWith("[mode=target]"));
-    assert.ok(lines[1].endsWith("[mode=target]"));
+    assert.ok(lines[0].endsWith(stamp));
+    assert.ok(lines[1].endsWith(stamp));
   });
 
   it("buffers tokenized stream chunks until a readable sentence is available", () => {
@@ -379,6 +379,7 @@ describe("target-aware worker live log formatting", () => {
       },
     };
 
+    const stamp = buildLiveWorkerLogStamp(config, "quality-worker");
     const first = formatLiveWorkerLogStatefulChunk(config, "quality-worker", "The command appears", "");
     const second = formatLiveWorkerLogStatefulChunk(config, "quality-worker", " to be hanging", first.remainder);
     const third = formatLiveWorkerLogStatefulChunk(config, "quality-worker", " after 300 seconds.", second.remainder);
@@ -387,8 +388,9 @@ describe("target-aware worker live log formatting", () => {
     assert.equal(second.formatted, "");
     assert.equal(third.remainder, "");
     assert.ok(third.formatted.includes("The command appears to be hanging after 300 seconds."));
-    assert.ok(third.formatted.includes("[mode=target]"));
-    assert.ok(!third.formatted.includes("quality-worker"));
+    assert.ok(third.formatted.startsWith(`${stamp} `));
+    assert.ok(third.formatted.includes("project=target_portal"));
+    assert.ok(third.formatted.includes("session=sess_123"));
   });
 
   it("does not emit metadata-only lines for blank log chunks", () => {
@@ -419,8 +421,9 @@ describe("target-aware worker live log formatting", () => {
 
     const formatted = formatLiveWorkerLogChunk(config, "quality-worker", "● Run test (shell)\n  │ npm test\n  └ 4 lines...\n");
     const lines = formatted.trim().split("\n");
+    const stamp = buildLiveWorkerLogStamp(config, "quality-worker");
 
-    assert.ok(lines[0].endsWith("[mode=target]"));
+    assert.ok(lines[0].endsWith(stamp));
     assert.equal(lines[1], "  │ npm test");
     assert.equal(lines[2], "  └ 4 lines...");
   });
@@ -886,6 +889,131 @@ describe("tool access + capability guards", () => {
     assert.ok(prompt.includes("reply with `done`"));
     assert.ok(prompt.includes("requiredNow: database_access_credentials"));
     assert.ok(prompt.includes("Reason from repo evidence and feature scope"));
+  });
+
+  it("worker prompt requires explicit visual medium selection for image-led UI tasks", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Implement the premium restaurant landing page UI with a real dining room hero photo.",
+        targetFiles: ["src/app.tsx"],
+        context: "Use real photos for the hero and gallery surfaces.",
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-prompt-test") },
+      },
+      "evolution",
+      {},
+    );
+
+    assert.ok(prompt.includes("## VISUAL MEDIUM DECISION POLICY"));
+    assert.ok(prompt.includes("Choose intentionally between operator-supplied assets, real sourced raster imagery, screenshots, source-required logos, brand marks, textures, or existing branded assets"));
+    assert.ok(prompt.includes("actively source an internet image, logo, brand mark, texture, or other source asset"));
+    assert.ok(prompt.includes("Use the visual source strategy named by the target contract, operator attachments, and preserved mission notes."));
+    assert.ok(prompt.includes("keep the source requirement visible."));
+  });
+
+  it("worker prompt requires lawful internet-sourced imagery for image-led implementation tasks", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Replace the restaurant hero illustration with a real dining room photo.",
+        context: "Use real photos for the hero and gallery surfaces.",
+        taskKind: "implementation",
+        targetFiles: ["src/app.tsx"],
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-image-prompt-test") },
+      },
+      "evolution",
+      {},
+    );
+
+    assert.ok(prompt.includes("## VISUAL MEDIUM DECISION POLICY"));
+    assert.ok(prompt.includes("actively source an internet image, logo, brand mark, texture, or other source asset"));
+  });
+
+  it("worker prompt respects internet-image bans for image-led implementation tasks", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Replace the restaurant hero illustration with a real dining room photo.",
+        context: "Do not use internet images; use only provided local assets.",
+        taskKind: "implementation",
+        targetFiles: ["src/app.tsx"],
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-image-ban-test") },
+      },
+      "evolution",
+      {},
+    );
+
+    assert.ok(prompt.includes("## VISUAL MEDIUM DECISION POLICY"));
+    assert.ok(!prompt.includes("actively source an internet image"));
+    assert.ok(prompt.includes("use only operator-provided or other allowed local/source assets"));
+  });
+
+  it("worker prompt includes a UI adapter verification loop when Athena marks UI work", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Finish the reservation-first landing page UI.",
+        context: "## UI EXECUTION REMINDER\nThis plan includes UI work.",
+        taskKind: "implementation",
+        targetFiles: ["src/App.tsx", "src/styles.css"],
+        uiExecutionReminderRequired: true,
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-ui-adapter-test") },
+      },
+      "integration",
+      {},
+    );
+
+    assert.ok(prompt.includes("## UI ADAPTER VERIFICATION LOOP"));
+    assert.ok(prompt.includes("Before you declare the UI portion finished, open and inspect the actual rendered surface"));
+    assert.ok(prompt.includes("Playwright, browser preview, screenshot tooling"));
+    assert.ok(prompt.includes("Do not validate the UI at a single viewport only"));
+    assert.ok(prompt.includes("mobile, tablet, desktop"));
+    assert.ok(prompt.includes("Treat UI verification as both appearance and runtime behavior"));
+    assert.ok(prompt.includes("scroll, animation, transition, and interaction paths"));
+    assert.ok(prompt.includes("keep iterating until the requested UI is visibly present"));
+    assert.ok(prompt.includes("inspect them strictly one at a time"));
+    assert.ok(prompt.includes("Do not capture multiple screenshots or generate multiple viewport artifacts in one shell command or tool call before inspection"));
+    assert.ok(prompt.includes("Do not batch multiple screenshots, reference captures, source images, or other image artifacts into one visual read"));
+    assert.ok(prompt.includes("Bulk image reads are forbidden because they can overload the server"));
+  });
+
+  it("worker prompt injects sequential image guidance for UI tasks that target image-bearing files", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Repair the existing landing page into a GA Pizza-inspired recreation.",
+        taskKind: "implementation",
+        targetFiles: ["index.html", "src/styles.css", "assets/images", "assets/source/image-credits.txt"],
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-sequential-image-guidance-test") },
+      },
+      "evolution",
+      {},
+    );
+
+    assert.ok(prompt.includes("## VISUAL MEDIUM DECISION POLICY"));
+    assert.ok(prompt.includes("apply one sequential rule to every image"));
+    assert.ok(prompt.includes("each image acquisition step must produce exactly one image artifact"));
+    assert.ok(prompt.includes("Do not capture multiple screenshots or generate multiple viewport artifacts in one shell command or tool call before inspection"));
   });
 
   it("worker prompt adds a final placeholder self-check before done responses", () => {
@@ -1738,6 +1866,7 @@ describe("buildWorkerRunContract", () => {
     assert.equal(contract.maxTurns, 50);
     assert.equal(contract.workflowName, "box-evolution");
     assert.equal(contract.groupId, "box-workers");
+    assert.ok(String(contract.executionCwd || "").length > 0);
     assert.equal(contract.traceIncludeSensitiveData, false);
     assert.equal(contract.sessionInputPolicy, "auto");
     assert.deepEqual(contract.traceMetadata, {});
@@ -1775,6 +1904,31 @@ describe("buildWorkerRunContract", () => {
   it("sessionInputPolicy propagates valid string values", () => {
     const contract = buildWorkerRunContract({ workerRunContract: { sessionInputPolicy: "no_tools" } }, {});
     assert.equal(contract.sessionInputPolicy, "no_tools");
+  });
+
+  it("binds executionCwd to the isolated target workspace during active single-target delivery", () => {
+    const contract = buildWorkerRunContract(
+      {
+        rootDir: "C:/box",
+        platformModeState: { currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY },
+        selfDev: {
+          futureModeFlags: {
+            singleTargetDelivery: true,
+            targetSessionState: true,
+            targetWorkspaceLifecycle: true,
+          },
+        },
+        activeTargetSession: {
+          sessionId: "sess_target_1",
+          workspace: { path: "C:/target-workspace" },
+          currentStage: TARGET_SESSION_STAGE.ACTIVE,
+          gates: { allowActiveExecution: true },
+        },
+      },
+      {},
+    );
+
+    assert.equal(contract.executionCwd, "C:/target-workspace");
   });
 });
 

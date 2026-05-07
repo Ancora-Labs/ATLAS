@@ -63,6 +63,7 @@ import {
 } from "./learning_policy_compiler.js";
 import { buildPromptAssemblyPrompt, resolvePromptTargetRepo } from "./prompt_overlay.js";
 import { PLATFORM_MODE } from "./mode_state.js";
+import { buildStrongestPlausibleFallbackGuidance } from "./target_intent_guidance.js";
 
 // ── CI system-learning debt detection ────────────────────────────────────────
 
@@ -108,6 +109,71 @@ function normalizeDirectiveStringList(value: unknown): string[] {
     return [value.trim()];
   }
   return [];
+}
+
+const OBJECTIVE_REAL_ASSET_NEED_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:real|authentic|premium|stock|external)\s+(?:images?|photos?|photography|imagery|assets?)\b/i,
+  /\b(?:food|product|restaurant|dish|menu|hero|gallery|brand)\b[\s\S]{0,40}\b(?:photos?|photography|images?|imagery)\b/i,
+  /\b(?:use|needs?|want|include|allow)\b[\s\S]{0,40}\b(?:stock\s+(?:images?|photos?)|images?\s+from\s+the\s+internet|external\s+images?|real\s+photos?)\b/i,
+  /\bdo\s+not\b[\s\S]{0,40}\b(?:placeholder(?:s)?|generic\s+illustration)\b/i,
+]);
+
+const OBJECTIVE_EXTERNAL_ASSET_AVOIDANCE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:do\s+not|avoid|no)\b[\s\S]{0,40}\b(?:stock\s+(?:images?|photos?)|external\s+images?|internet\s+images?)\b/i,
+]);
+
+function buildObjectiveBackedTargetPlanningBrief(activeTargetSession: any): { brief: string; source: string; immutableFields: string[] } | null {
+  if (!activeTargetSession || typeof activeTargetSession !== "object") {
+    return null;
+  }
+
+  const objectiveSummary = String(activeTargetSession?.objective?.summary || "").trim();
+  const desiredOutcome = String(activeTargetSession?.objective?.desiredOutcome || "").trim();
+  const acceptanceCriteria = normalizeDirectiveStringList(activeTargetSession?.objective?.acceptanceCriteria);
+  const handoffSummary = String(activeTargetSession?.handoff?.carriedContextSummary || "").trim();
+  const notes = normalizeDirectiveStringList(activeTargetSession?.hints?.notes);
+  const repoUrl = String(activeTargetSession?.repo?.repoUrl || "").trim();
+  const workspacePath = String(activeTargetSession?.workspace?.path || activeTargetSession?.repo?.localPath || "").trim();
+  const evidenceText = [objectiveSummary, desiredOutcome, handoffSummary, ...acceptanceCriteria, ...notes]
+    .filter(Boolean)
+    .join("\n");
+
+  if (!evidenceText) {
+    return null;
+  }
+
+  const preserveVisualFidelity = /\b(hero|gallery|visual|imagery|image|photo|photography|brand|logo|restaurant|food|menu|premium)\b/i.test(evidenceText);
+  const needsRealAssets = OBJECTIVE_REAL_ASSET_NEED_PATTERNS.some((pattern) => pattern.test(evidenceText));
+  const avoidExternalAssets = OBJECTIVE_EXTERNAL_ASSET_AVOIDANCE_PATTERNS.some((pattern) => pattern.test(evidenceText));
+  const allowRealAssetSourcing = needsRealAssets && !avoidExternalAssets;
+
+  return {
+    brief: [
+      "Authoritative planning brief source: ACTIVE TARGET SESSION OBJECTIVE AND MANIFEST NOTES.",
+      "This single-target session is already selected. Do not replace it with generic repo triage, self-improvement work, or a cheaper adjacent outcome.",
+      objectiveSummary ? `Objective summary: ${objectiveSummary}` : null,
+      desiredOutcome && desiredOutcome !== objectiveSummary ? `Desired outcome: ${desiredOutcome}` : null,
+      handoffSummary && handoffSummary !== objectiveSummary ? `Handoff summary: ${handoffSummary}` : null,
+      repoUrl ? `Target repo: ${repoUrl}` : null,
+      workspacePath ? `Locked workspace: ${workspacePath}` : null,
+      acceptanceCriteria.length > 0 ? `Acceptance criteria: ${acceptanceCriteria.join(" | ")}` : null,
+      notes.length > 0 ? `Mission notes: ${notes.join(" | ")}` : null,
+      allowRealAssetSourcing
+        ? "Asset sourcing guardrail: when the mission calls for premium or real imagery, real external assets are allowed when needed; preserve the source requirement and surface blockers before planning."
+        : null,
+      preserveVisualFidelity
+        ? "Visual fidelity guardrail: when the mission calls for premium presentation, hero imagery, menu or food visuals, or brand assets, preserve the requested visual medium and source strategy as planning constraints."
+        : null,
+    ].filter(Boolean).join("\n"),
+    source: "active_target_session_objective",
+    immutableFields: [
+      "objective.summary",
+      "objective.desiredOutcome",
+      "objective.acceptanceCriteria",
+      "handoff.carriedContextSummary",
+      "hints.notes",
+    ],
+  };
 }
 
 function extractKnowledgeMemoryLessons(knowledgeMemory: unknown): unknown[] {
@@ -171,6 +237,122 @@ export function stampDirectiveTargetSession(config: any, directive: any): any {
   }
 
   directive.targetSession = runtimeTargetSession;
+  return directive;
+}
+
+export function buildProtectedTargetPlanningBrief(config: any): { brief: string; source: string; immutableFields: string[] } | null {
+  if (!isSingleTargetLeadershipIsolationActive(config)) {
+    return null;
+  }
+
+  const activeTargetSession = config?.activeTargetSession && typeof config.activeTargetSession === "object"
+    ? config.activeTargetSession
+    : null;
+  if (!activeTargetSession) {
+    return null;
+  }
+
+  const clarificationReady = activeTargetSession?.clarification?.readyForPlanning === true
+    || String(activeTargetSession?.intent?.status || "").trim() === "ready_for_planning";
+  if (!clarificationReady) {
+    return buildObjectiveBackedTargetPlanningBrief(activeTargetSession);
+  }
+
+  const intent = activeTargetSession?.intent && typeof activeTargetSession.intent === "object"
+    ? activeTargetSession.intent
+    : {};
+  const constraints = activeTargetSession?.constraints && typeof activeTargetSession.constraints === "object"
+    ? activeTargetSession.constraints
+    : {};
+  const mustHaveFlows = normalizeDirectiveStringList(intent?.mustHaveFlows);
+  const scopeIn = normalizeDirectiveStringList(intent?.scopeIn);
+  const scopeOut = normalizeDirectiveStringList(intent?.scopeOut);
+  const protectedAreas = normalizeDirectiveStringList(intent?.protectedAreas);
+  const successCriteria = normalizeDirectiveStringList(intent?.successCriteria);
+  const assetRequirements = normalizeDirectiveStringList(intent?.assetRequirements);
+  const operatorIntentEvidence = normalizeDirectiveStringList(intent?.operatorIntentEvidence);
+  const protectedPaths = normalizeDirectiveStringList(constraints?.protectedPaths);
+  const forbiddenActions = normalizeDirectiveStringList(constraints?.forbiddenActions);
+  const objectiveSummary = String(activeTargetSession?.objective?.summary || intent?.productType || intent?.summary || "Target objective pending").trim() || "Target objective pending";
+  const intentSummary = String(intent?.summary || "").trim();
+  const operatorIntentBrief = String(intent?.operatorIntentBrief || "").trim();
+  const preferredQualityBar = String(intent?.preferredQualityBar || "").trim();
+  const designDirection = String(intent?.designDirection || "").trim();
+  const implementationFlexibility = String(intent?.implementationFlexibility || "").trim();
+  const assetSourcingPolicy = String(intent?.assetSourcingPolicy || "").trim();
+  const workspacePath = String(activeTargetSession?.workspace?.path || activeTargetSession?.repo?.localPath || "").trim();
+  const repoUrl = String(activeTargetSession?.repo?.repoUrl || "").trim();
+  const fallbackAmbitionGuidance = buildStrongestPlausibleFallbackGuidance({
+    preferredQualityBar,
+    implementationFlexibility,
+  });
+
+  return {
+    brief: [
+      "Authoritative planning brief source: ACTIVE TARGET SESSION CONTRACT.",
+      "Do not rewrite the requested product, quality bar, or delivery surface into a cheaper adjacent outcome.",
+      `Objective summary: ${objectiveSummary}`,
+      intentSummary ? `Intent summary: ${intentSummary}` : null,
+      operatorIntentBrief ? `Detailed operator intent brief:\n${operatorIntentBrief}` : null,
+      repoUrl ? `Target repo: ${repoUrl}` : null,
+      workspacePath ? `Locked workspace: ${workspacePath}` : null,
+      mustHaveFlows.length > 0 ? `Must-have flows: ${mustHaveFlows.join(" | ")}` : null,
+      scopeIn.length > 0 ? `Scope in: ${scopeIn.join(" | ")}` : null,
+      scopeOut.length > 0 ? `Scope out: ${scopeOut.join(" | ")}` : null,
+      protectedAreas.length > 0 ? `Protected areas: ${protectedAreas.join(" | ")}` : null,
+      preferredQualityBar ? `Preferred quality bar: ${preferredQualityBar}` : null,
+      designDirection ? `Design direction: ${designDirection}` : null,
+      implementationFlexibility ? `Implementation latitude: ${implementationFlexibility}` : null,
+      assetSourcingPolicy ? `Asset sourcing policy: ${assetSourcingPolicy}` : null,
+      operatorIntentEvidence.length > 0 ? `Operator intent evidence: ${operatorIntentEvidence.join(" | ")}` : null,
+      ...fallbackAmbitionGuidance,
+      assetRequirements.length > 0 ? `Asset requirements: ${assetRequirements.join(" | ")}` : null,
+      successCriteria.length > 0 ? `Success criteria: ${successCriteria.join(" | ")}` : null,
+      protectedPaths.length > 0 ? `Protected paths: ${protectedPaths.join(" | ")}` : null,
+      forbiddenActions.length > 0 ? `Forbidden actions: ${forbiddenActions.join(" | ")}` : null,
+    ].filter(Boolean).join("\n"),
+    source: "active_target_session_contract",
+    immutableFields: [
+      "objective.summary",
+      "intent.summary",
+      "intent.operatorIntentBrief",
+      "intent.operatorIntentEvidence",
+      "intent.mustHaveFlows",
+      "intent.scopeIn",
+      "intent.scopeOut",
+      "intent.preferredQualityBar",
+      "intent.designDirection",
+      "intent.implementationFlexibility",
+      "intent.assetSourcingPolicy",
+      "intent.assetRequirements",
+      "intent.successCriteria",
+    ],
+  };
+}
+
+export function applySingleTargetIntentAuthorityToDirective(config: any, directive: any): any {
+  if (!directive || typeof directive !== "object") {
+    return directive;
+  }
+
+  const protectedBrief = buildProtectedTargetPlanningBrief(config);
+  if (!protectedBrief) {
+    if (directive.intentAuthority) {
+      delete directive.intentAuthority;
+    }
+    return directive;
+  }
+
+  directive.briefForPrometheus = protectedBrief.brief;
+  directive.intentAuthority = {
+    source: protectedBrief.source,
+    locked: true,
+    immutableFields: protectedBrief.immutableFields,
+  };
+  directive.priorities = prependDirectivePriority(
+    { priorities: directive.priorities },
+    "Honor the active target session contract exactly; do not substitute cheaper adjacent outcomes.",
+  ).priorities;
   return directive;
 }
 
@@ -1892,7 +2074,7 @@ ${workersList}`;
     await appendProgress(config, `[JESUS] AI call failed — ${(aiResult as any).error || "no JSON"}`);
     chatLog(stateDir, jesusName, `AI failed: ${(aiResult as any).error || "no JSON"}`);
     const needsPrometheus = prometheusAgeHours > 6;
-    return {
+    return applySingleTargetIntentAuthorityToDirective(config, {
       wait: false,
       wakeAthena: true,
       callPrometheus: needsPrometheus,
@@ -1904,7 +2086,7 @@ ${workersList}`;
       briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${effectivePromptTargetRepo}`,
       priorities: [],
       workerSuggestions: []
-    };
+    });
   }
 
   logAgentThinking(stateDir, jesusName, aiResult.thinking);
@@ -1927,7 +2109,7 @@ ${workersList}`;
     } catch { /* non-fatal */ }
     // Degrade to safe fallback directive; never silently pass invalid output
     const needsPrometheus = prometheusAgeHours > 6;
-    return {
+    return applySingleTargetIntentAuthorityToDirective(config, {
       wait: false,
       wakeAthena: true,
       callPrometheus: needsPrometheus,
@@ -1941,7 +2123,7 @@ ${workersList}`;
       workerSuggestions: [],
       _trustBoundaryViolation: true,
       _trustBoundaryErrors: tbErrors
-    };
+    });
   }
   if (trustCheck.errors.length > 0 && tbMode === "warn") {
     const tbErrors = trustCheck.errors.map(e => `${e.payloadPath}: ${e.message}`).join(" | ");
@@ -2051,7 +2233,7 @@ ${workersList}`;
     }, expectedOutcome as unknown as Record<string, unknown>, {
       repo: effectivePromptTargetRepo || null,
     });
-    return {
+    return applySingleTargetIntentAuthorityToDirective(config, {
       wait: false,
       wakeAthena: true,
       callPrometheus: needsPrometheus,
@@ -2066,7 +2248,7 @@ ${workersList}`;
       workerSuggestions: [],
       _directivePayloadGaps: payloadValidation.gaps,
       strategyBrief: fallbackStrategyBrief,
-    };
+    });
   }
 
   const ciFastlaneRequired = hasCiSystemLearningDebt(promptHealthFindings);
@@ -2092,7 +2274,7 @@ ${workersList}`;
   const strategyBrief = buildDirectiveStrategyBrief(d as Record<string, unknown>, expectedOutcome as unknown as Record<string, unknown>, {
     repo: config.env?.targetRepo || null,
   });
-  const directive = stampDirectiveTargetSession(config, {
+  const directive = applySingleTargetIntentAuthorityToDirective(config, stampDirectiveTargetSession(config, {
     ...d,
     briefForPrometheus: sanitizeDirectiveFieldForPersistence(String((d as any).briefForPrometheus || "")),
     thinking: aiResult.thinking,
@@ -2109,7 +2291,7 @@ ${workersList}`;
     expectedOutcome,
     strategyBrief,
     ciFastlaneRequired,
-  });
+  }));
 
   if (ciFastlaneRequired) {
     await appendProgress(config,

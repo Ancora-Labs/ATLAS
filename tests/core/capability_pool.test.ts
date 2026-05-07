@@ -32,17 +32,6 @@ describe("capability_pool", () => {
       assert.equal(inferCapabilityTag({ task: "Update code logic" }), "runtime-refactor");
     });
 
-    it("detects explicit UI contract tasks", () => {
-      assert.equal(
-        inferCapabilityTag({
-          task: "Repair dashboard layout contract",
-          uiContract: { contractId: "ui@v1", schemaVersion: 1, targetSurfaces: ["web-runtime"], fields: {}, requiredFields: [], forbiddenPatterns: [], accessibilityFloor: "WCAG-AA" },
-          uiScenarioMatrix: { matrixId: "ui@v1:matrix", schemaVersion: 1, scenarios: [] },
-        }),
-        "ui-contract",
-      );
-    });
-
     it("does not misclassify generic capability wording as infrastructure", () => {
       assert.equal(
         inferCapabilityTag({
@@ -149,15 +138,15 @@ describe("capability_pool", () => {
       assert.equal(selection.lane, "implementation");
     });
 
-    it("ui contract task keeps implementation lane while tagging capability explicitly", () => {
+    it("frontend implementation task stays in the implementation lane", () => {
       const selection = selectWorkerForPlan({
-        task: "Run UI contract loop against runtime shell",
-        uiContract: { contractId: "ui@v1", schemaVersion: 1, targetSurfaces: ["web-runtime"], fields: {}, requiredFields: [], forbiddenPatterns: [], accessibilityFloor: "WCAG-AA" },
-        uiScenarioMatrix: { matrixId: "ui@v1:matrix", schemaVersion: 1, scenarios: [] },
+        task: "Implement the responsive landing page shell",
+        uiSurface: "web-runtime",
+        targetSurfaces: ["web-runtime"],
       });
       assert.equal(selection.role, "evolution-worker");
       assert.equal(selection.lane, "implementation");
-      assert.equal(selection.capabilityTag, "ui-contract");
+      assert.equal(selection.capabilityTag, "runtime-refactor");
     });
 
     it("negative path: falls back when lane mapping is unknown", () => {

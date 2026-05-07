@@ -80,7 +80,7 @@ import {
   resolveWorkerExecutionCwd,
   resolveTargetExecutionContext,
 } from "./target_execution_guard.js";
-import { TARGET_SESSION_STAGE } from "./target_session_state.js";
+import { TARGET_SESSION_STAGE, ensureScopedStateDir, resolveScopedStatePath } from "./target_session_state.js";
 import { appendEscalation, BLOCKING_REASON_CLASS, NEXT_ACTION, resolveEscalationsForTask } from "./escalation_queue.js";
 import { buildTaskFingerprint, buildLineageId, LINEAGE_ENTRY_STATUS } from "./lineage_graph.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
@@ -94,8 +94,6 @@ import { parseDispatchBlockReasonContract } from "./cycle_analytics.js";
 import { CancelledError } from "./daemon_control.js";
 import type { CancellationToken } from "./daemon_control.js";
 import { buildInteractiveAccessPromptSection, shouldEnableInteractiveAccessResolution } from "./access_interaction.js";
-import { analyzeUiBatchCompatibility } from "./ui_batch_affinity.js";
-import { normalizeUiDispatchPlan, runUiContractDispatchLoop } from "./ui_contract/dispatch.js";
 
 type WorkerRunnerConfig = {
   env?: Record<string, string | undefined>;
@@ -120,16 +118,6 @@ type WorkerRegistryEntry = {
   name?: string;
   model?: string;
   kind?: string;
-  [key: string]: unknown;
-};
-
-type WorkerSessionHistoryEntry = {
-  from: string;
-  content: string;
-  timestamp: string;
-  fullOutput?: string;
-  prUrl?: string | null;
-  status?: string | null;
   [key: string]: unknown;
 };
 
@@ -241,24 +229,6 @@ function shouldNormalizeGlobalLintBacklogPartialToDone(input: {
   return hasBacklogMarker && hasTotalWarningsMarker && hasLintFailureContext;
 }
 
-/**
- * Normalize partial → done when the worker has produced definitive merge evidence
- * (BOX_MERGED_SHA + prUrl) AND verification passed (build=pass, tests=pass).
- *
- * Root cause this addresses: worker self-reports BOX_STATUS=partial because a
- * formatting artifact (missing CLEAN_TREE_STATUS or NPM TEST OUTPUT block) fails
- * its internal mandatory-gate check, even though the PR was merged and all
- * substantive verification signals are green.  The hard-evidence set
- * (explicit merged SHA + build/tests pass + prUrl) is sufficient proof of
- * completion regardless of those optional output markers.
- *
- * Safety constraints — ALL five must hold:
- *   1. status is "partial" (not blocked/error/skipped)
- *   2. prUrl present → work was pushed
- *   3. mergedSha present → BOX_MERGED_SHA=<sha> was emitted, PR is merged
- *   4. build=pass AND tests=pass from the verification report
- *   5. hasBlockedAccess is false → no access issue obscured the outcome
- */
 function shouldNormalizeEvidencedPartialToDone(input: {
   status: string;
   prUrl: string | null;
@@ -276,18 +246,6 @@ function shouldNormalizeEvidencedPartialToDone(input: {
   return buildStatus === "pass" && testsStatus === "pass";
 }
 
-/**
- * Normalize partial → done for inspection-only tasks that produced no PR
- * (the worker ran checks and reported PASS on every item, but correctly did
- * not open a PR because there were no code changes to merge).
- *
- * Safety constraints — ALL must hold:
- *   1. status is "partial"
- *   2. prUrl is absent (no PR was created — by design for inspection work)
- *   3. hasBlockedAccess is false
- *   4. build=pass AND tests=pass in the verification report
- *   5. At least one explicit PASS marker exists in output AND no FAIL marker
- */
 function shouldNormalizeInspectionOnlyPartialToDone(input: {
   status: string;
   prUrl: string | null;
@@ -1547,10 +1505,32 @@ function getLiveLogPath(config, roleName) {
   return path.join(stateDir, `live_worker_${safeRole}.log`);
 }
 
+function getScopedLiveLogPath(config, roleName) {
+  const safeRole = String(roleName || "worker").replace(/[^a-z0-9_-]+/gi, "_");
+  return resolveScopedStatePath(config, `live_worker_${safeRole}.log`);
+}
+
+function getLiveLogPaths(config, roleName) {
+  const globalPath = getLiveLogPath(config, roleName);
+  const scopedPath = getScopedLiveLogPath(config, roleName);
+  if (!scopedPath || scopedPath === globalPath) {
+    return [globalPath];
+  }
+  return [globalPath, scopedPath];
+}
+
 export function buildLiveWorkerLogStamp(config, roleName) {
   const currentMode = String(config?.platformModeState?.currentMode || "self_dev").trim() || "self_dev";
   if (currentMode === "single_target_delivery") {
-    return "[mode=target]";
+    const parts = [
+      "mode=target",
+      `role=${String(roleName || "worker")}`,
+    ];
+    const projectId = String(config?.activeTargetSession?.projectId || "").trim();
+    const sessionId = String(config?.activeTargetSession?.sessionId || "").trim();
+    if (projectId) parts.push(`project=${projectId}`);
+    if (sessionId) parts.push(`session=${sessionId}`);
+    return `[${parts.join(" ")}]`;
   }
   const parts = [
     `mode=${currentMode}`,
@@ -1858,7 +1838,8 @@ async function persistLegacyWorkerSessionArtifacts(
       addSchemaVersion(sessions, STATE_FILE_TYPE.WORKER_SESSIONS),
     );
 
-    const workerPath = path.join(stateDir, roleToWorkerStateFile(roleName));
+    const workerFileName = roleToWorkerStateFile(roleName);
+    const workerPath = path.join(stateDir, workerFileName);
     let workerState: Record<string, any> = {};
     try {
       if (existsSync(workerPath)) {
@@ -1892,7 +1873,7 @@ async function persistLegacyWorkerSessionArtifacts(
           sessionId: activeSessionId || workerState.sessionId || null,
         };
 
-    await writeJson(workerPath, {
+    const nextWorkerState = {
       ...workerState,
       status: input.phase === "start" ? "working" : "idle",
       startedAt: input.phase === "start" ? nowIso : (workerState.startedAt || null),
@@ -1901,13 +1882,30 @@ async function persistLegacyWorkerSessionArtifacts(
       projectId: activeProjectId || workerState.projectId || null,
       sessionId: activeSessionId || workerState.sessionId || null,
       activityLog: [...previousLog, entry].slice(-200),
-    });
+    };
+
+    await writeJson(workerPath, nextWorkerState);
+
+    const scopedWorkerPath = resolveScopedStatePath(config, workerFileName);
+    if (scopedWorkerPath && scopedWorkerPath !== workerPath) {
+      await ensureScopedStateDir(scopedWorkerPath);
+      await writeJson(scopedWorkerPath, nextWorkerState);
+    }
   } catch {
     // Session artifact persistence is observability-only and must never block worker execution.
   }
 }
 
 async function appendLiveWorkerLog(config, logPath, roleName, text) {
+  await appendSingleLiveWorkerLog(config, logPath, roleName, text);
+
+  const extraPaths = getLiveLogPaths(config, roleName).filter((candidate) => candidate !== logPath);
+  for (const candidate of extraPaths) {
+    await appendSingleLiveWorkerLog(config, candidate, roleName, text);
+  }
+}
+
+async function appendSingleLiveWorkerLog(config, logPath, roleName, text) {
   await fs.mkdir(path.dirname(logPath), { recursive: true });
   const incoming = String(text || "").replace(/\r\n/g, "\n");
   const existingRemainder = liveWorkerLogRemainders.get(logPath) || "";
@@ -2228,6 +2226,173 @@ async function resolveModel(
 
 // ── Build conversation-only context (persona is in .agent.md) ───────────────
 
+function shouldInjectUiVisualMediumGuidance(instruction: WorkerInstruction): boolean {
+  return instructionNeedsRealImageGuidance(instruction)
+    || instructionNeedsSequentialImageGuidance(instruction)
+    || instructionNeedsReferenceVisualGuidance(instruction)
+    || instructionTargetsUiSurface(instruction);
+}
+
+function shouldInjectUiAdapterExecutionGuidance(instruction: WorkerInstruction): boolean {
+  if (instruction?.uiExecutionReminderRequired === true) {
+    return true;
+  }
+  const contextText = String(instruction?.context || "");
+  if (contextText.includes("UI EXECUTION REMINDER")) {
+    return true;
+  }
+  return instructionTargetsUiSurface(instruction);
+}
+
+function instructionTargetsUiSurface(instruction: WorkerInstruction): boolean {
+  const signalText = [instruction?.task, instruction?.context, instruction?.verification]
+    .map((value) => String(value || ""))
+    .join("\n");
+  return /\b(ui|ux|frontend|front-end|page|screen|layout|component|hero|gallery|modal|form|landing page|homepage|responsive|breakpoint|design system|visual design)\b/i.test(signalText);
+}
+
+const REAL_IMAGE_NEED_SIGNAL_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:real|authentic|premium|stock|external|internet)\s+(?:images?|photos?|photography|imagery|assets?|visual\s+assets?|logos?|brand\s+marks?|textures?)\b/i,
+  /\b(?:food|product|restaurant|dish|menu|hero|gallery|venue|brand|logo|texture|testimonial)\b[\s\S]{0,40}\b(?:photos?|photography|images?|imagery|logos?|brand\s+marks?|textures?|assets?)\b/i,
+  /\b(?:use|needs?|want|include|ship|replace|required?)\b[\s\S]{0,60}\b(?:hero\s+image|hero\s+photo|gallery\s+images?|product\s+photos?|restaurant\s+photos?|menu\s+photos?|venue\s+photos?|images?|photos?|photography|imagery)\b/i,
+  /\b(?:use|needs?|want|include|ship|replace|source|required?)\b[\s\S]{0,80}\b(?:logos?|brand\s+marks?|brand\s+assets?|wood\s*\/\s*texture\s+assets?|textures?)\b[\s\S]{0,80}\b(?:internet|external|source\s+originals?|royalty-free|commercially\s+licensed|lawfully\s+usable)?\b/i,
+  /\bdo\s+not\b[\s\S]{0,40}\b(?:placeholder(?:s)?|generic\s+illustration)\b/i,
+]);
+
+const EXTERNAL_IMAGE_AVOIDANCE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:do\s+not|avoid|no)\b[\s\S]{0,40}\b(?:stock\s+(?:images?|photos?)|external\s+images?|internet\s+images?)\b/i,
+  /\b(?:internetten|harici|dis\s+kaynak)\b[\s\S]{0,20}\b(?:gorsel\w*|resim\w*|foto\w*)\b[\s\S]{0,20}\b(?:kullanma|istemiyorum|olmasin)\b/i,
+]);
+
+const REFERENCE_VISUAL_AUTHORITY_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:reference\s+site|reference\s+page|reference\s+design|reference\s+layout|named\s+exemplar|visual\s+exemplar)\b/i,
+  /\b(?:inspired\s+by|based\s+on|modeled\s+after|similar\s+to|match|mirror|recreate|replicate|copy)\b[\s\S]{0,80}\b(?:site|page|landing\s+page|homepage|screen|design|layout|hero|ui)\b/i,
+]);
+
+const REFERENCE_URL_PATTERN = /https?:\/\/[^\s)]+/i;
+
+const UI_REFERENCE_TARGET_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:ui|ux|frontend|front-end|page|screen|layout|landing\s+page|homepage|hero|gallery|navbar|cta|section|breakpoint|responsive|design)\b/i,
+]);
+
+const SEQUENTIAL_IMAGE_NEED_SIGNAL_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:screenshots?|reference\s+captures?|viewport|breakpoints?|mobile|tablet|desktop)\b/i,
+  /\b(?:inspect|capture|read|review|compare|verify|check)\b[\s\S]{0,60}\b(?:images?|screenshots?|artifacts?|visuals?)\b/i,
+  /(?:^|[\\/])(?:assets|artifacts)(?:[\\/]|$)/i,
+  /(?:^|[\\/])images?(?:[\\/]|$)/i,
+  /image-credits\.(?:txt|md)$/i,
+  /\.(?:png|jpe?g|webp|gif|svg|avif)$/i,
+]);
+
+function buildUiVisualMediumSignalText(instruction: WorkerInstruction): string {
+  const dynamicInstruction = instruction as Record<string, unknown>;
+  const assetRequirements = Array.isArray(dynamicInstruction?.assetRequirements)
+    ? dynamicInstruction.assetRequirements.map((entry) => String(entry || "")).join("\n")
+    : "";
+  const targetFiles = Array.isArray(dynamicInstruction?.targetFiles)
+    ? dynamicInstruction.targetFiles.map((entry) => String(entry || "")).join("\n")
+    : "";
+
+  return [
+    instruction?.task,
+    instruction?.context,
+    instruction?.verification,
+    String(dynamicInstruction?.assetSourcingPolicy || ""),
+    assetRequirements,
+    targetFiles,
+  ].map((value) => String(value || "")).join("\n");
+}
+
+function instructionNeedsRealImageGuidance(instruction: WorkerInstruction): boolean {
+  const signalText = buildUiVisualMediumSignalText(instruction);
+  return REAL_IMAGE_NEED_SIGNAL_PATTERNS.some((pattern) => pattern.test(signalText));
+}
+
+function instructionForbidsExternalImageSourcing(instruction: WorkerInstruction): boolean {
+  const signalText = buildUiVisualMediumSignalText(instruction);
+  return EXTERNAL_IMAGE_AVOIDANCE_PATTERNS.some((pattern) => pattern.test(signalText));
+}
+
+function instructionNeedsSequentialImageGuidance(instruction: WorkerInstruction): boolean {
+  const signalText = buildUiVisualMediumSignalText(instruction);
+  return SEQUENTIAL_IMAGE_NEED_SIGNAL_PATTERNS.some((pattern) => pattern.test(signalText));
+}
+
+function instructionNeedsReferenceVisualGuidance(instruction: WorkerInstruction): boolean {
+  const signalText = buildUiVisualMediumSignalText(instruction);
+  if (REFERENCE_VISUAL_AUTHORITY_PATTERNS.some((pattern) => pattern.test(signalText))) {
+    return true;
+  }
+  return REFERENCE_URL_PATTERN.test(signalText)
+    && UI_REFERENCE_TARGET_PATTERNS.some((pattern) => pattern.test(signalText));
+}
+
+function buildUiVisualMediumGuidance(instruction: WorkerInstruction): string[] {
+  if (!shouldInjectUiVisualMediumGuidance(instruction)) {
+    return [];
+  }
+
+  const externalImageSourcingForbidden = instructionForbidsExternalImageSourcing(instruction);
+
+  return [
+    "## VISUAL MEDIUM DECISION POLICY",
+    "For credibility-critical UI surfaces, decide the right visual medium before implementing the section.",
+    "Examples include hero media, galleries, product cards, menu or venue sections, screenshots, testimonials, and brand storytelling blocks.",
+    "For reference-driven UI tasks, treat the provided reference site, screenshot, or named exemplar as the primary visual authority; preserve its layout rhythm, section pacing, component shapes, CTA placement, and overall design character unless an explicit blocker prevents a specific detail.",
+    "If the task includes UI work and the operator did not provide a concrete reference, your first concrete implementation step must be to source or open exactly one external visual exemplar from the internet or another approved external source and inspect it before editing product files.",
+    "Do not start a UI task from internal priors, reusable scaffolding, or a house-style concept when no reference was supplied; external exemplar research comes first unless policy or network access blocks it.",
+    "If the task names a reference site or external design target and no usable reference screenshot or visual artifact exists yet, your first concrete implementation step must be to capture or open exactly one reference visual and inspect it before editing product files.",
+    "Reference HTML, headings, DOM extraction, or link lists may help with content mapping, but they are not sufficient substitutes for direct visual inspection of the reference surface.",
+    "Do not collapse a reference site into reusable-component scaffolding, section taxonomies, or generic implementation plans until you have recorded the observed hero composition, spacing rhythm, CTA hierarchy, media treatment, and breakpoint behavior from a real visual inspection.",
+    "If external exemplar research is blocked by policy, rights, or network access, report that blocker explicitly and stop short of inventing a generic safe fallback that was never researched.",
+    "Do not replace the requested direction with a safer, more generic, more basic, or more template-like visual scheme just because the brief is broad or because your default design instincts suggest a different style.",
+    "If the brief is simple but external research is allowed, inspect real external examples first and commit to one concrete sourced direction before designing; do not fall back to your own stock design language when a stronger external reference can be used.",
+    "Choose intentionally between operator-supplied assets, real sourced raster imagery, screenshots, source-required logos, brand marks, textures, or existing branded assets based on what a credible shipped product would use.",
+    "If the task requires image inspection of any kind, apply one sequential rule to every image: screenshots, reference captures, source images, candidate assets, downloaded photos, logos, textures, and shipped page imagery must all be inspected one at a time.",
+    "Required image loop: obtain one image, read/view that one image, write the compact finding or accept/reject decision for that image, then move to the next image.",
+    "Do not batch image capture, screenshot generation, downloads, or file opens into one shell command or tool call for later review; each image acquisition step must produce exactly one image artifact that is inspected before any next image is obtained.",
+    "Do not batch-download or queue multiple candidate/source images for later bulk review, and do not postpone inspection until after a larger set has accumulated.",
+    "Bulk image reads and bulk image comparisons are forbidden unless a later task step explicitly requires re-checking a single already-reviewed image after a concrete UI or asset change.",
+    "If the repo already contains a text summary extracted from prior visual work, such as style tokens, viewport notes, drift findings, or acceptance notes, use that text artifact as the primary implementation input and only open one additional image when a specific unresolved defect cannot be decided from the existing summary.",
+    "On resumed or retried UI work, do not restart the image-inspection ladder from the first unchanged artifact just to rebuild context; continue from the existing text findings and inspect at most one newly necessary image before returning to product edits.",
+    externalImageSourcingForbidden
+      ? "When the brief calls for a real visual asset, use only operator-provided or other allowed local/source assets and report the blocker if those real assets are missing."
+      : "When the brief calls for a real visual asset and no operator asset is supplied, actively source an internet image, logo, brand mark, texture, or other source asset that matches the requested subject, product, venue, brand, or scene instead of fabricating artwork, and do not narrow this to stock-image sourcing by default.",
+    "Use the visual source strategy named by the target contract, operator attachments, and preserved mission notes.",
+    "If asset rights, asset availability, network access, or task scope blocks the strongest real/source asset, say so explicitly and keep the source requirement visible.",
+  ];
+}
+
+function buildUiAdapterExecutionGuidance(instruction: WorkerInstruction): string[] {
+  if (!shouldInjectUiAdapterExecutionGuidance(instruction)) {
+    return [];
+  }
+
+  return [
+    "## UI ADAPTER VERIFICATION LOOP",
+    "This task includes UI work.",
+    "Before you declare the UI portion finished, open and inspect the actual rendered surface with the task-appropriate adapter or viewer available in this environment.",
+    "Use the runtime-specific UI inspection tool that fits the task, for example Playwright, browser preview, screenshot tooling, or the platform-specific viewer.",
+    "When a reference design exists, judge the rendered result against that reference first, not against your own sense of what looks clean, safe, generic, or acceptable.",
+    "If the rendered result drifts into a house-style, generic safe fallback, or template look instead of the requested reference direction, treat that as a failure and continue iterating rather than rationalizing the drift.",
+    "Do not validate the UI at a single viewport only. Inspect every breakpoint and responsive state the task requires, including mobile, tablet, desktop, and any task-specific widths, orientations, expanded panels, menus, dialogs, or overflow states that can change the layout.",
+    "Treat UI verification as both appearance and runtime behavior. Confirm the surface looks correct and that key scroll, animation, transition, and interaction paths do not introduce visible jank, stutter, lag, or other performance regressions in the relevant runtime.",
+    "Do not stop at code-only reasoning for UI tasks. Compare the real rendered result against the requested UI and keep iterating until the requested UI is visibly present.",
+    "Only mark the UI complete when the requested result is correct across all required breakpoints, not just the first viewport that looks acceptable.",
+    "When you inspect screenshots or other visual artifacts, immediately translate each inspection into a compact text finding set that records viewport/artifact, visible defects, and pass/fail decisions.",
+    "After a visual artifact has been inspected and summarized, continue from that text finding set. Do not re-read the same unchanged image or visual artifact again unless the UI changed or the earlier evidence was inconclusive.",
+    "If text findings, style tokens, or other visual notes already exist in the repo from an earlier pass, prefer those summaries over reopening unchanged screenshots or reference captures.",
+    "During retries or resumed runs, do not re-read a current screenshot and its reference counterpart back-to-back unless a new UI change made that exact comparison necessary.",
+    "For UI repair tasks, once you have one concrete current-state mismatch summary for the active surface, make the smallest code edit that addresses it before reading another current-state screenshot.",
+    "Do not inspect multiple current-render screenshots across breakpoints before the first product edit when the repo already contains reference notes or style-token summaries; use the first current mismatch report plus existing reference summaries to start the repair loop.",
+    "If you need multiple images, inspect them strictly one at a time: read one image, analyze it, write the compact finding set, then move to the next image.",
+    "Do not capture multiple screenshots or generate multiple viewport artifacts in one shell command or tool call before inspection; capture one viewport/image, inspect it, record the finding, and only then capture the next viewport/image.",
+    "Do not batch multiple screenshots, reference captures, source images, or other image artifacts into one visual read, and do not ask the model to compare newly captured images together with previously inspected images in one bulk pass unless a later UI change makes a fresh single-image check necessary.",
+    "Bulk image reads are forbidden because they can overload the server; sequential image inspection is mandatory.",
+    "Once the requested UI is visibly correct, continue the rest of the task normally and include the UI viewing evidence you used in your final report.",
+  ];
+}
+
 export function buildConversationContext(history, instruction: WorkerInstruction, sessionState: WorkerSessionState = {}, config: WorkerRunnerConfig = {}, workerKind = null, promptControls: PromptControls = {}) {
   const parts = [];
 
@@ -2429,6 +2594,16 @@ export function buildConversationContext(history, instruction: WorkerInstruction
   parts.push("- Complete your ENTIRE assigned task in one shot — do not leave partial work for a follow-up request.");
   parts.push("- If your task involves multiple files, fix ALL of them before reporting done.");
   parts.push("- Senior production standard: correct logic, proper error handling, edge cases handled, tests where relevant.");
+  const uiVisualMediumGuidance = buildUiVisualMediumGuidance(instruction);
+  if (uiVisualMediumGuidance.length > 0) {
+    parts.push("");
+    parts.push(...uiVisualMediumGuidance);
+  }
+  const uiAdapterExecutionGuidance = buildUiAdapterExecutionGuidance(instruction);
+  if (uiAdapterExecutionGuidance.length > 0) {
+    parts.push("");
+    parts.push(...uiAdapterExecutionGuidance);
+  }
   parts.push("\n## TOOL EXECUTION GOVERNANCE");
   parts.push("Use tools directly when needed to complete the task.");
   parts.push("Runtime policy and hook enforcement are applied automatically by the runner.");
@@ -3173,10 +3348,17 @@ export function buildWorkerRunContract(config: any, instruction: any): import(".
       ? { ...base.traceMetadata as Record<string, unknown> }
       : {};
   const hasModelCallSettings = Object.keys(modelCallSettings).length > 0;
+  const executionCwd = String(
+    instruction?.executionCwd
+    ?? base?.executionCwd
+    ?? resolveWorkerExecutionCwd(config)
+    ?? process.cwd(),
+  ).trim() || String(process.cwd());
   return {
     maxTurns:                 Number(instruction?.maxTurns  ?? modelCallSettings.maxTurns ?? base?.maxTurns  ?? 50),
     workflowName:             String(instruction?.workflowName ?? base?.workflowName ?? "box-evolution"),
     groupId:                  String(instruction?.groupId   ?? base?.groupId   ?? "box-workers"),
+    executionCwd,
     traceMetadata:            hasModelCallSettings
                                 ? { ...traceMetadataBase, modelCallSettings }
                                 : traceMetadataBase,
@@ -3187,6 +3369,13 @@ export function buildWorkerRunContract(config: any, instruction: any): import(".
 
 export function isWorkerAgentResolutionFailure(output: unknown): boolean {
   return /no such agent:/i.test(String(output || ""));
+}
+
+export function isWorkerProviderTransientFailure(output: unknown): boolean {
+  const text = String(output || "");
+  return /response was interrupted due to a server error/i.test(text)
+    || /failed to get response from the ai model/i.test(text)
+    || /last error:\s*unknown error/i.test(text);
 }
 
 export function buildWorkerPersonaFallbackPrompt(agentSlug: unknown, prompt: unknown): string {
@@ -3206,123 +3395,8 @@ function buildRunId(taskId: string | number | null | undefined, attempt: number)
   return createHash("sha256").update(seed).digest("hex").slice(0, 16);
 }
 
-function buildUiContractRepairPrompt(
-  conversationContext: string,
-  task: Record<string, unknown>,
-  verdict: Record<string, unknown>,
-  artifactsRoot: string,
-  attempt: number,
-): string {
-  return [
-    conversationContext,
-    "## UI Contract Repair Loop",
-    `Attempt=${attempt}`,
-    `ArtifactsRoot=${artifactsRoot}`,
-    "Repair only the issues required to satisfy the UI contract loop. After edits, run any task verification that still applies and emit the normal BOX_* markers plus a verification report.",
-    "If the planner-selected surface needs an adapter the runtime does not already ship, create or update a session-local adapter module in the target workspace and point uiRuntimeRecipe.adapterModulePath at it instead of forcing a generic fallback.",
-    `UI_CONTRACT=${JSON.stringify(task.uiContract || {}, null, 2)}`,
-    `UI_SCENARIO_MATRIX=${JSON.stringify(task.uiScenarioMatrix || {}, null, 2)}`,
-    `UI_RUNTIME_RECIPE=${JSON.stringify(task.uiRuntimeRecipe || {}, null, 2)}`,
-    `UI_LATEST_VERDICT=${JSON.stringify(verdict || {}, null, 2)}`,
-  ].join("\n\n");
-}
-
-function buildUiLoopVerificationReport(loopResult: {
-  finalStatus?: unknown;
-  attempts?: Array<{ verdict?: { status?: unknown } }>;
-}): Record<string, string> {
-  const finalStatus = String(loopResult?.finalStatus || "inconclusive").trim().toLowerCase();
-  const passed = finalStatus === "pass";
-  return {
-    build: "n/a",
-    tests: "n/a",
-    responsive: "n/a",
-    edgeCases: passed ? "pass" : finalStatus === "fail" ? "fail" : "n/a",
-  };
-}
-
-function buildUiBatchGuardResponse(
-  instruction: WorkerInstruction,
-  roleName: string,
-  updatedHistory: WorkerSessionHistoryEntry[],
-  workerKind: string | null,
-  tier: string,
-  runtimeLineage: { lineage: InterventionLineageContract | null; lineageJoinKey: string | null },
-  reasonCode: string,
-  summary: string,
-) {
-  updatedHistory.push({
-    from: roleName,
-    content: summary,
-    fullOutput: summary,
-    prUrl: null,
-    timestamp: new Date().toISOString(),
-    status: "blocked",
-  });
-
-  return {
-    status: "blocked",
-    summary,
-    prUrl: null,
-    currentBranch: null,
-    filesTouched: [],
-    updatedHistory,
-    workerKind,
-    tier,
-    verificationReport: null,
-    responsiveMatrix: null,
-    verificationEvidence: null,
-    dispatchContract: {
-      doneWorkerWithVerificationReportEvidence: false,
-      doneWorkerWithCleanTreeStatusEvidence: false,
-      dispatchBlockReason: reasonCode,
-      dispatchBlockReasonContract: parseDispatchBlockReasonContract(reasonCode),
-      closureBoundaryViolation: false,
-      replayClosure: {
-        contractSatisfied: false,
-        canonicalCommands: [],
-        executedCommands: [],
-        rawArtifactEvidenceLinks: [],
-      },
-    },
-    dispatchBlockReason: reasonCode,
-    lineage: runtimeLineage.lineage,
-    lineageJoinKey: runtimeLineage.lineageJoinKey,
-    fullOutput: summary,
-    failureClassification: null,
-    retryDecision: null,
-  };
-}
-
-function buildUiLoopSummary(loopResult: {
-  contractId?: unknown;
-  finalStatus?: unknown;
-  stopReason?: unknown;
-  attempts?: Array<{ verdict?: { scenarios?: Array<{ violations?: unknown[] }> } }>;
-}): string {
-  const attempts = Array.isArray(loopResult?.attempts) ? loopResult.attempts.length : 0;
-  const finalAttempt = Array.isArray(loopResult?.attempts) && loopResult.attempts.length > 0
-    ? loopResult.attempts[loopResult.attempts.length - 1]
-    : null;
-  const violations = Array.isArray(finalAttempt?.verdict?.scenarios)
-    ? finalAttempt.verdict.scenarios
-        .flatMap((scenario) => Array.isArray(scenario?.violations) ? scenario.violations : [])
-        .map((value) => String(value || "").trim())
-        .filter(Boolean)
-    : [];
-  const violationPreview = violations.slice(0, 3).join(", ");
-  return [
-    `UI contract ${String(loopResult?.contractId || "unknown")} finished with ${String(loopResult?.finalStatus || "inconclusive")}`,
-    `after ${attempts} attempt(s)`,
-    `stop=${String(loopResult?.stopReason || "unknown")}`,
-    violationPreview ? `violations=${violationPreview}` : null,
-  ].filter(Boolean).join("; ");
-}
-
-// ── Main Worker Conversation ─────────────────────────────────────────────────
-
 export async function runWorkerConversation(config, roleName, instruction, history = [], sessionState: WorkerSessionState = {}, _token?: CancellationToken | null) {
-  // ── Attempt-scoped execution metadata ────────────────────────────────────
+  // Attempt-scoped execution metadata
   // runId links all failure/retry artifacts for this specific attempt lineage.
   // firstAttemptAt is only set once and carried forward across retries.
   const attempt = Number(instruction?.reworkAttempt ?? 0);
@@ -3954,7 +4028,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       const text = String(chunk);
       streamedStdout += text;
       appendLiveWorkerLog(config, liveLogPath, roleName, text).catch(() => {});
-      if (/transient API error/i.test(text)) {
+      if (/transient API error/i.test(text) || isWorkerProviderTransientFailure(text)) {
         transientErrorCount++;
         if (transientErrorCount >= TRANSIENT_ERROR_THRESHOLD) {
           abortController.abort(
@@ -3970,7 +4044,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       const text = String(chunk);
       streamedStderr += text;
       appendLiveWorkerLog(config, liveLogPath, roleName, `[stderr] ${text}`).catch(() => {});
-      if (/transient API error/i.test(text)) {
+      if (/transient API error/i.test(text) || isWorkerProviderTransientFailure(text)) {
         transientErrorCount++;
         if (transientErrorCount >= TRANSIENT_ERROR_THRESHOLD) {
           abortController.abort(
@@ -4003,274 +4077,6 @@ export async function runWorkerConversation(config, roleName, instruction, histo
       },
     );
   } catch { /* telemetry is non-critical */ }
-
-  const rawBatchPlans = Array.isArray((instruction as Record<string, unknown>)?.batchPlans)
-    ? ((instruction as Record<string, unknown>).batchPlans as unknown[])
-    : [];
-  const uiBatchCompatibility = analyzeUiBatchCompatibility(rawBatchPlans.length > 0 ? rawBatchPlans : [instruction]);
-  const bundledTaskText = String(instruction?.task || "");
-  const looksBundledTaskWrapper = bundledTaskText.startsWith("Execute this bundled work package in a single worker session.");
-  const missingExplicitUiPayload = !instruction?.uiContract && !instruction?.uiScenarioMatrix && !instruction?.uiRuntimeRecipe;
-  if (uiBatchCompatibility.containsUi && rawBatchPlans.length > 0 && !uiBatchCompatibility.isCompatible) {
-    const reasonCode = `ui_contract_batch_incompatible:${uiBatchCompatibility.reasonCode || "unknown"}`;
-    const summary = `UI contract dispatch blocked: incompatible UI batch (${uiBatchCompatibility.reasonCode || "unknown"}).`;
-    await appendProgress(config, `[WORKER:${roleName}] ${summary}`);
-    return buildUiBatchGuardResponse(
-      instruction,
-      String(roleName || "worker"),
-      updatedHistory,
-      workerKind,
-      tier,
-      runtimeLineage,
-      reasonCode,
-      summary,
-    );
-  }
-  if (uiBatchCompatibility.containsUi && looksBundledTaskWrapper && missingExplicitUiPayload) {
-    const reasonCode = "ui_contract_batch_missing_payload";
-    const summary = "UI contract dispatch blocked: bundled UI batch reached worker without canonical UI payload.";
-    await appendProgress(config, `[WORKER:${roleName}] ${summary}`);
-    return buildUiBatchGuardResponse(
-      instruction,
-      String(roleName || "worker"),
-      updatedHistory,
-      workerKind,
-      tier,
-      runtimeLineage,
-      reasonCode,
-      summary,
-    );
-  }
-
-  const normalizedUiInstruction = normalizeUiDispatchPlan(instruction);
-  if (String((normalizedUiInstruction as Record<string, unknown>).capabilityTag || "") === "ui-contract") {
-    const uiInstruction = normalizedUiInstruction as Record<string, unknown>;
-    try {
-      await appendProgress(config, `[WORKER:${roleName}] UI_CONTRACT dispatch path activated`);
-      const uiDispatch = await runUiContractDispatchLoop({
-        task: uiInstruction,
-        stateDir: config.paths?.stateDir,
-        workspacePath: targetExecutionContext?.workspacePath || workerExecutionCwd,
-        repair: async ({ attempt: uiAttempt, verdict, artifacts }) => {
-          const repairPrompt = buildUiContractRepairPrompt(
-            conversationContext,
-            uiInstruction,
-            verdict as unknown as Record<string, unknown>,
-            artifacts.rootDir,
-            uiAttempt,
-          );
-          const repairArgs = buildAgentArgs({
-            agentSlug,
-            prompt: repairPrompt,
-            model,
-            modelCallSettings,
-            allowAll: allowAllTools,
-            allowInteractiveUserInput: interactiveAccessResolutionEnabled,
-            noAskUser: allowAllTools && !interactiveAccessResolutionEnabled,
-            maxContinues: undefined,
-            runContract,
-          });
-          const repairExecution = await executeWorkerModelCall(repairArgs);
-          const repairStdout = String(repairExecution?.stdout || "");
-          const repairStderr = String(repairExecution?.stderr || "");
-          const repairParsed = parseWorkerResponse(repairStdout, repairStderr);
-          const repairStatus = String(repairParsed?.status || "partial");
-          return {
-            ok: Number(repairExecution?.status ?? 1) === 0 && repairStatus !== "blocked" && repairStatus !== "error",
-            stdout: repairStdout,
-            stderr: repairStderr,
-            statusCode: Number(repairExecution?.status ?? 1),
-            parsed: repairParsed,
-          };
-        },
-      });
-      const lastRepair = uiDispatch.repairAttempts.length > 0
-        ? uiDispatch.repairAttempts[uiDispatch.repairAttempts.length - 1]
-        : null;
-      const parsedRepair = (lastRepair?.parsed || null) as ParsedWorkerResponse | null;
-      const status = uiDispatch.loopResult.finalStatus === "pass"
-        ? "done"
-        : String(parsedRepair?.status || "partial") === "blocked"
-          ? "blocked"
-          : String(parsedRepair?.status || "partial") === "error"
-            ? "error"
-            : "partial";
-      const verificationReport = parsedRepair?.verificationReport || buildUiLoopVerificationReport(uiDispatch.loopResult);
-      const verificationEvidence: VerificationEvidence = {
-        profile: "ui-contract-loop",
-        hasReport: Boolean(verificationReport),
-        report: verificationReport,
-        responsiveMatrix: parsedRepair?.responsiveMatrix || null,
-        prUrl: parsedRepair?.prUrl || null,
-        gaps: status === "done" ? [] : [buildUiLoopSummary(uiDispatch.loopResult)],
-        passed: status === "done",
-        attempt,
-        validatedAt: new Date().toISOString(),
-        roleName: String(roleName || "worker"),
-        taskSnippet: truncate(String(instruction?.task || ""), 160),
-        optionalFieldFailures: [],
-      };
-      const summary = buildUiLoopSummary(uiDispatch.loopResult);
-      const replayClosure = buildReplayClosureEvidence(summary);
-      const rawArtifactEvidenceLinks = [
-        uiDispatch.artifacts.contractPath,
-        uiDispatch.artifacts.matrixPath,
-        uiDispatch.artifacts.loopResultPath,
-        uiDispatch.artifacts.runtimeRecipePath,
-        uiDispatch.artifacts.runtimeLogPath,
-      ].filter(Boolean) as string[];
-      const dispatchBlockReason = status === "blocked"
-        ? String(parsedRepair?.dispatchBlockReason || `ui_contract_loop:${uiDispatch.loopResult.stopReason}`)
-        : null;
-      const dispatchContract: DispatchVerificationContract = {
-        doneWorkerWithVerificationReportEvidence: status === "done",
-        doneWorkerWithCleanTreeStatusEvidence: parsedRepair?.cleanTreeStatus === true,
-        dispatchBlockReason,
-        dispatchBlockReasonContract: dispatchBlockReason ? parseDispatchBlockReasonContract(dispatchBlockReason) : null,
-        closureBoundaryViolation: false,
-        replayClosure: {
-          contractSatisfied: replayClosure.contractSatisfied === true,
-          canonicalCommands: Array.isArray(replayClosure.canonicalCommands) ? replayClosure.canonicalCommands : [],
-          executedCommands: Array.isArray(replayClosure.executedCommands) ? replayClosure.executedCommands : [],
-          rawArtifactEvidenceLinks,
-        },
-      };
-      const fullOutput = [
-        `BOX_STATUS=${status}`,
-        `BOX_UI_CONTRACT_ID=${uiDispatch.contract.contractId}`,
-        `BOX_UI_MATRIX_ID=${uiDispatch.matrix.matrixId}`,
-        `BOX_UI_SURFACE=${String((uiDispatch.task as Record<string, unknown>).uiSurface || uiDispatch.contract.targetSurfaces[0] || "")}`,
-        `BOX_UI_STOP_REASON=${uiDispatch.loopResult.stopReason}`,
-        `BOX_UI_ARTIFACT_DIR=${uiDispatch.artifacts.rootDir}`,
-        summary,
-        parsedRepair?.fullOutput ? `===UI_REPAIR_OUTPUT===\n${parsedRepair.fullOutput}\n===END_UI_REPAIR_OUTPUT===` : "",
-      ].filter(Boolean).join("\n");
-      updatedHistory.push({
-        from: roleName,
-        content: summary,
-        fullOutput,
-        prUrl: parsedRepair?.prUrl || null,
-        timestamp: new Date().toISOString(),
-        status,
-      });
-      await appendProgress(config, `[WORKER:${roleName}] ${summary}`);
-      await persistLegacyWorkerSessionArtifacts(config, String(roleName || "worker"), {
-        phase: "complete",
-        task: String(instruction?.task || ""),
-        status,
-        pr: parsedRepair?.prUrl || null,
-        dispatchBlockReason,
-      });
-      try {
-        emitWorkerModelCallHookEvent(
-          WORKER_MODEL_CALL_HOOK.AFTER_MODEL_CALL,
-          String(roleName || "worker"),
-          model,
-          _dispatchLineageId,
-          {
-            taskId: instruction?.taskId ?? null,
-            taskKind: instruction?.taskKind ?? "ui-contract",
-            runId,
-            exitCode: status === "done" ? 0 : 1,
-            timedOut: false,
-          },
-        );
-      } catch { /* telemetry is non-critical */ }
-      try {
-        await realizeRouteROIEntry(config, routingTaskId, status === "done" ? 1 : 0, status);
-      } catch {
-        // non-critical routing telemetry
-      }
-      return {
-        status,
-        summary,
-        prUrl: parsedRepair?.prUrl || null,
-        currentBranch: parsedRepair?.currentBranch || null,
-        filesTouched: Array.isArray(parsedRepair?.filesTouched) ? parsedRepair.filesTouched : [],
-        updatedHistory,
-        workerKind,
-        tier,
-        verificationReport,
-        responsiveMatrix: parsedRepair?.responsiveMatrix || null,
-        verificationEvidence,
-        dispatchContract,
-        lineage: runtimeLineage.lineage,
-        lineageJoinKey: runtimeLineage.lineageJoinKey,
-        fullOutput,
-        failureClassification: null,
-        retryDecision: null,
-      };
-    } catch (uiDispatchError) {
-      const summary = `UI contract dispatch failed: ${String((uiDispatchError as Error)?.message || uiDispatchError)}`;
-      await appendProgress(config, `[WORKER:${roleName}] ${summary}`);
-      await persistLegacyWorkerSessionArtifacts(config, String(roleName || "worker"), {
-        phase: "complete",
-        task: String(instruction?.task || ""),
-        status: "error",
-        pr: null,
-        dispatchBlockReason: "ui_contract_dispatch_error",
-      });
-      try {
-        emitWorkerModelCallHookEvent(
-          WORKER_MODEL_CALL_HOOK.AFTER_MODEL_CALL,
-          String(roleName || "worker"),
-          model,
-          _dispatchLineageId,
-          {
-            taskId: instruction?.taskId ?? null,
-            taskKind: instruction?.taskKind ?? "ui-contract",
-            runId,
-            exitCode: 1,
-            timedOut: false,
-          },
-        );
-      } catch { /* telemetry is non-critical */ }
-      try {
-        await realizeRouteROIEntry(config, routingTaskId, 0, "error");
-      } catch {
-        // non-critical routing telemetry
-      }
-      updatedHistory.push({
-        from: roleName,
-        content: summary,
-        fullOutput: summary,
-        prUrl: null,
-        timestamp: new Date().toISOString(),
-        status: "error",
-      });
-      return {
-        status: "error",
-        summary,
-        prUrl: null,
-        currentBranch: null,
-        filesTouched: [],
-        updatedHistory,
-        workerKind,
-        tier,
-        verificationReport: null,
-        responsiveMatrix: null,
-        verificationEvidence: null,
-        dispatchContract: {
-          doneWorkerWithVerificationReportEvidence: false,
-          doneWorkerWithCleanTreeStatusEvidence: false,
-          dispatchBlockReason: "ui_contract_dispatch_error",
-          dispatchBlockReasonContract: parseDispatchBlockReasonContract("ui_contract_dispatch_error"),
-          closureBoundaryViolation: false,
-          replayClosure: {
-            contractSatisfied: false,
-            canonicalCommands: [],
-            executedCommands: [],
-            rawArtifactEvidenceLinks: [],
-          },
-        },
-        lineage: runtimeLineage.lineage,
-        lineageJoinKey: runtimeLineage.lineageJoinKey,
-        fullOutput: summary,
-        failureClassification: null,
-        retryDecision: null,
-      };
-    }
-  }
 
   let result = await executeWorkerModelCall(args);
   let stdout = String(result?.stdout || "");
@@ -4337,7 +4143,9 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   }
 
   if (effectiveStatusCode !== 0) {
-    const isTransient = result.aborted === true && /transient API error circuit breaker/i.test(effectiveStderr);
+    const providerTransient = isWorkerProviderTransientFailure(`${effectiveStderr}\n${stdout}`);
+    const isTransient = providerTransient
+      || (result.aborted === true && /transient API error circuit breaker/i.test(effectiveStderr));
     const exitCodeInfo = classifyExitCode(effectiveStatusCode);
     const reasonCode = isTransient
       ? "TRANSIENT_API_ERROR"
@@ -5174,7 +4982,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
   let failureClassification = null;
   let retryDecision = null;
   let phaseRetryState = null;
-  if (parsed.status === "error" || parsed.status === "blocked" || parsed.status === "partial") {
+  if (parsed.status === "error" || parsed.status === "blocked" || parsed.status === "partial" || parsed.status === "transient_error") {
     const nonRetryablePolicyBlock = parsed.status === "blocked"
       && isNonRetryablePolicyBlockReason(parsed.dispatchBlockReason);
     phaseRetryState = buildPhaseAwareRetryState({
@@ -5206,7 +5014,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     }
 
     const cfResult = classifyFailure({
-      workerStatus: parsed.status,
+      workerStatus: parsed.status === "transient_error" ? "error" : parsed.status,
       blockingReasonClass: derivedRc,
       errorMessage: parsed.summary,
       failurePhase: phaseRetryState.failedPhase,
@@ -5399,6 +5207,12 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     }, { thread_id: verificationThreadId, checkpoint_ns: CHECKPOINT_NS.VERIFICATION }).catch(() => { /* non-fatal */ });
   }
 
+  const reasonCode = String((parsed as any)?.reasonCode || "").trim()
+    || String((retryDecision as any)?.latestFinishCode || "").trim()
+    || (parsed.status === "transient_error" ? "TRANSIENT_API_ERROR" : deriveWorkerFinishCode(parsed));
+  const retryClass = String((parsed as any)?.retryClass || "").trim()
+    || (parsed.status === "transient_error" ? "cooldown" : "");
+
   return {
     status: parsed.status,
     summary: parsed.summary,
@@ -5415,6 +5229,8 @@ export async function runWorkerConversation(config, roleName, instruction, histo
     lineage: runtimeLineage.lineage,
     lineageJoinKey: runtimeLineage.lineageJoinKey,
     fullOutput: parsed.fullOutput,
+    reasonCode,
+    retryClass: retryClass || null,
     failureClassification,
     retryDecision,
     attemptArtifact,

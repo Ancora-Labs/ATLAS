@@ -39,6 +39,7 @@ export function buildInteractiveAccessPromptSection(input: {
   parts.push("## INTERACTIVE ACCESS RESOLUTION");
   parts.push("If external service access is required, do NOT end this run and do NOT defer to a later call by default.");
   parts.push("Stay inside the current agent call, explain the missing access, tell the operator the exact setup step, wait for the operator to complete it, verify the fix, and then continue in the same call.");
+  parts.push("While doing the task, try to avoid showing anything on the user's screen. If a command would open visibly on the user's screen, prefer an equivalent hidden or non-interactive alternative. If a step would normally require an interactive permission prompt, first try a non-interactive way to achieve the same result, and only ask the operator if no safe alternative works.");
   parts.push("Reason from repo evidence and feature scope, not from a small hardcoded vendor list.");
   parts.push("Inspect any relevant external-system shape, including databases, deployment platforms, auth providers, billing/webhook systems, monitoring systems, storage/caches/queues, private registries, cloud control surfaces, and custom internal services.");
 

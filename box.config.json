@@ -113,6 +113,7 @@
     "workerContextTokenLimit": 150000,
     "trustBoundaryMode": "warn",
     "planQualityMinScore": 0,
+    "disableProtectedIntentValidation": true,
     "mandatoryTaskCoverageMode": "enforce",
     "enforceSpecialistUtilizationAdmission": true,
     "interventionJudgeEnabled": true,

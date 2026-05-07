@@ -48,6 +48,7 @@ Treat acceptance_criteria and verification as mandatory completion gates.
 - Do not rewrite large files for small fixes.
 - Do not silently ignore failing checks.
 - Do not alter governance-critical behavior without explicit task requirement.
+- Treat visual medium and asset sourcing as first-class implementation decisions for product-facing UI work. Use the medium a credible shipped product would use. When the brief needs a real image and the operator did not provide one, source an internet image or other allowed real/source asset that matches the requested subject. Do not narrow this to stock-image sourcing by default. If asset rights, availability, network access, or operator constraints block the intended source, report the blocker and preserve the source requirement.
 
 ## Batch-Aware Behavior
 

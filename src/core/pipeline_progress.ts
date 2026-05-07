@@ -11,6 +11,7 @@
  *   stageLabel:  string  — human-readable label for the stage
  *   percent:     number  — 0–100 inclusive
  *   detail:      string  — current detail text
+ *   loopCount:   number  — number of completed orchestration loops for the active mission/runtime
  *   steps:       Array<{ id: string, label: string, pct: number, status: "done"|"active"|"pending" }>
  *   updatedAt:   string  — ISO 8601 timestamp of last update
  *   startedAt:   string|null — ISO 8601 timestamp when cycle started; null when idle
@@ -119,6 +120,7 @@ export async function updatePipelineProgress(config, stepId, detail, extra) {
     stageLabel: current.label,
     percent: current.pct,
     detail: detail || current.label,
+    loopCount: 0,
     steps,
     updatedAt: new Date().toISOString(),
     ...(extra || {}),
@@ -129,6 +131,7 @@ export async function updatePipelineProgress(config, stepId, detail, extra) {
   if (stepId !== "idle" && stepId !== "cycle_complete") {
     try {
       const prev = await readJson(progressPath(config), {});
+      payload.loopCount = Number.isFinite(Number(prev.loopCount)) ? Math.max(0, Number(prev.loopCount)) : 0;
       payload.startedAt = prev.startedAt || payload.updatedAt;
       // Accumulate SLO-relevant stage timestamps
       const prevTimestamps = (prev.stageTimestamps && typeof prev.stageTimestamps === "object") ? prev.stageTimestamps : {};
@@ -148,6 +151,7 @@ export async function updatePipelineProgress(config, stepId, detail, extra) {
         payload.runSegment = prev.runSegment;
       }
     } catch {
+      payload.loopCount = 0;
       payload.startedAt = payload.updatedAt;
       payload.stageTimestamps = {};
       if (SLO_TIMESTAMP_STAGES.includes(stepId)) {
@@ -161,6 +165,12 @@ export async function updatePipelineProgress(config, stepId, detail, extra) {
         : [];
     }
   } else if (stepId === "idle") {
+    try {
+      const prev = await readJson(progressPath(config), {});
+      payload.loopCount = Number.isFinite(Number(prev.loopCount)) ? Math.max(0, Number(prev.loopCount)) : 0;
+    } catch {
+      payload.loopCount = 0;
+    }
     payload.startedAt = null;
     payload.stageTimestamps = {};
     payload.runSegment = null;
@@ -169,6 +179,8 @@ export async function updatePipelineProgress(config, stepId, detail, extra) {
     // cycle_complete — keep startedAt, accumulate final timestamp
     try {
       const prev = await readJson(progressPath(config), {});
+      const previousLoopCount = Number.isFinite(Number(prev.loopCount)) ? Math.max(0, Number(prev.loopCount)) : 0;
+      payload.loopCount = previousLoopCount + 1;
       payload.startedAt = prev.startedAt || null;
       const prevTimestamps = (prev.stageTimestamps && typeof prev.stageTimestamps === "object") ? prev.stageTimestamps : {};
       payload.stageTimestamps = { ...prevTimestamps, cycle_complete: payload.updatedAt };
@@ -184,6 +196,7 @@ export async function updatePipelineProgress(config, stepId, detail, extra) {
         payload.runSegment = prev.runSegment;
       }
     } catch {
+      payload.loopCount = 1;
       payload.stageTimestamps = { cycle_complete: payload.updatedAt };
       payload.segmentHistory = extraObj.runSegmentRollover && typeof extraObj.runSegmentRollover === "object"
         ? [extraObj.runSegmentRollover]
@@ -215,6 +228,7 @@ export async function readPipelineProgress(config) {
     stageLabel: "Idle",
     percent: 0,
     detail: "System ready",
+    loopCount: 0,
     steps: STEPS.map(s => ({ ...s, status: "pending" })),
     updatedAt: null,
     startedAt: null,
@@ -389,7 +403,7 @@ export async function computeQueueViability(config: object): Promise<{
  * Published for tests and dashboard consumers to validate against.
  */
 export const PIPELINE_PROGRESS_SCHEMA = Object.freeze({
-  required: ["stage", "stageLabel", "percent", "detail", "steps", "updatedAt", "startedAt"],
+  required: ["stage", "stageLabel", "percent", "detail", "loopCount", "steps", "updatedAt", "startedAt"],
   stageEnum: PIPELINE_STAGE_ENUM,
   percentRange: [0, 100],
   stepStatusEnum: Object.freeze(["done", "active", "pending"]),

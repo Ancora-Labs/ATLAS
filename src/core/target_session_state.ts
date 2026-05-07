@@ -8,6 +8,7 @@ import {
   PLATFORM_MODE,
   updatePlatformModeState,
 } from "./mode_state.js";
+import { archiveAtlasDesktopSession } from "../atlas/desktop_sessions.js";
 
 export const TARGET_SESSION_SCHEMA_VERSION = 1;
 export const TARGET_INTENT_STATUS = Object.freeze({
@@ -551,6 +552,7 @@ function buildSessionIntentFromContract(contract: any, session: any, stateDir: s
     repoState: normalizeNullableString(contract?.repoState) || normalizeNullableString(session?.intent?.repoState) || normalizeNullableString(session?.repoProfile?.repoState) || "unknown",
     planningMode: normalizeNullableString(contract?.planningMode) || normalizeNullableString(session?.intent?.planningMode),
     productType: preferNonEmptyString(clarifiedIntent?.productType, session?.intent?.productType),
+    operatorIntentBrief: preferNonEmptyString(clarifiedIntent?.operatorIntentBrief, session?.intent?.operatorIntentBrief),
     targetUsers: preferNonEmptyStringArray(clarifiedIntent?.targetUsers, session?.intent?.targetUsers),
     mustHaveFlows: preferNonEmptyStringArray(clarifiedIntent?.mustHaveFlows, session?.intent?.mustHaveFlows),
     scopeIn: preferNonEmptyStringArray(clarifiedIntent?.scopeIn, session?.intent?.scopeIn),
@@ -560,6 +562,10 @@ function buildSessionIntentFromContract(contract: any, session: any, stateDir: s
     designDirection: preferNonEmptyString(clarifiedIntent?.designDirection, session?.intent?.designDirection),
     deploymentExpectations: preferNonEmptyStringArray(clarifiedIntent?.deploymentExpectations, session?.intent?.deploymentExpectations),
     successCriteria: preferNonEmptyStringArray(clarifiedIntent?.successCriteria, session?.intent?.successCriteria),
+    implementationFlexibility: preferNonEmptyString(clarifiedIntent?.implementationFlexibility, session?.intent?.implementationFlexibility),
+    operatorIntentEvidence: preferNonEmptyStringArray(clarifiedIntent?.operatorIntentEvidence, session?.intent?.operatorIntentEvidence),
+    assetSourcingPolicy: preferNonEmptyString(clarifiedIntent?.assetSourcingPolicy, session?.intent?.assetSourcingPolicy),
+    assetRequirements: preferNonEmptyStringArray(clarifiedIntent?.assetRequirements, session?.intent?.assetRequirements),
     assumptions: preferNonEmptyStringArray(contract?.assumptions, session?.intent?.assumptions),
     openQuestions: unresolvedOpenQuestions.length > 0 ? unresolvedOpenQuestions : normalizeStringArray(session?.intent?.openQuestions),
     sourceIntentContractPath: normalizeNullableString(session?.clarification?.intentContractPath) || getTargetIntentContractPath(stateDir, session.projectId, session.sessionId),
@@ -644,7 +650,9 @@ async function reconcileSessionWithIntentContract(session: any, config: any) {
       : session.gates,
     handoff: {
       ...session.handoff,
-      carriedContextSummary: normalizeNullableString(hydratedIntent.summary) || normalizeNullableString(session?.handoff?.carriedContextSummary),
+      carriedContextSummary: normalizeNullableString(hydratedIntent.operatorIntentBrief)
+        || normalizeNullableString(hydratedIntent.summary)
+        || normalizeNullableString(session?.handoff?.carriedContextSummary),
       requiredHumanInputs: readyForPlanning ? [] : normalizeStringArray(session?.handoff?.requiredHumanInputs),
       nextAction: readyForPlanning ? resolveStageNextAction(nextStage) : normalizeNullableString(session?.handoff?.nextAction) || resolveStageNextAction(session.currentStage),
     },
@@ -668,6 +676,7 @@ function normalizeTargetIntent(rawIntent: any, stateDir: string, projectId: stri
     repoState: normalizeNullableString(rawIntent?.repoState) || "unknown",
     planningMode: normalizeNullableString(rawIntent?.planningMode),
     productType: normalizeNullableString(rawIntent?.productType),
+    operatorIntentBrief: normalizeNullableString(rawIntent?.operatorIntentBrief),
     targetUsers: normalizeStringArray(rawIntent?.targetUsers),
     mustHaveFlows: normalizeStringArray(rawIntent?.mustHaveFlows),
     scopeIn: normalizeStringArray(rawIntent?.scopeIn),
@@ -677,6 +686,10 @@ function normalizeTargetIntent(rawIntent: any, stateDir: string, projectId: stri
     designDirection: normalizeNullableString(rawIntent?.designDirection),
     deploymentExpectations: normalizeStringArray(rawIntent?.deploymentExpectations),
     successCriteria: normalizeStringArray(rawIntent?.successCriteria),
+    implementationFlexibility: normalizeNullableString(rawIntent?.implementationFlexibility),
+    operatorIntentEvidence: normalizeStringArray(rawIntent?.operatorIntentEvidence),
+    assetSourcingPolicy: normalizeNullableString(rawIntent?.assetSourcingPolicy),
+    assetRequirements: normalizeStringArray(rawIntent?.assetRequirements),
     assumptions: normalizeStringArray(rawIntent?.assumptions),
     openQuestions: normalizeStringArray(rawIntent?.openQuestions),
     sourceIntentContractPath: normalizeNullableString(rawIntent?.sourceIntentContractPath) || getTargetIntentContractPath(stateDir, projectId, sessionId),
@@ -702,6 +715,17 @@ function normalizeTargetFeedback(rawFeedback: any) {
       corrections: normalizeStringArray(review?.corrections),
       updatedAt: normalizeNullableString(review?.updatedAt),
     },
+  };
+}
+
+function normalizeTargetHints(rawHints: any) {
+  return {
+    stackHint: normalizeNullableString(rawHints?.stackHint),
+    knownBuildCommand: normalizeNullableString(rawHints?.knownBuildCommand),
+    knownTestCommand: normalizeNullableString(rawHints?.knownTestCommand),
+    knownRisks: normalizeStringArray(rawHints?.knownRisks),
+    expectedSecrets: normalizeStringArray(rawHints?.expectedSecrets),
+    notes: normalizeStringArray(rawHints?.notes),
   };
 }
 
@@ -1018,7 +1042,6 @@ function buildTargetSessionRecord(manifest: any, config: any, opts: { projectId?
   const projectId = opts.projectId || normalizedManifest.projectId;
   const sessionId = opts.sessionId || buildTargetSessionId(opts.now ? new Date(opts.now) : new Date());
   const now = opts.now || new Date().toISOString();
-  const sessionDir = getTargetSessionPath(stateDir, projectId, sessionId);
 
   return {
     schemaVersion: TARGET_SESSION_SCHEMA_VERSION,
@@ -1099,6 +1122,9 @@ function buildTargetSessionRecord(manifest: any, config: any, opts: { projectId?
       designDirection: null,
       deploymentExpectations: [],
       successCriteria: [],
+      implementationFlexibility: null,
+      assetSourcingPolicy: null,
+      assetRequirements: [],
       assumptions: [],
       openQuestions: [],
       sourceIntentContractPath: getTargetIntentContractPath(stateDir, projectId, sessionId),
@@ -1148,6 +1174,7 @@ function buildTargetSessionRecord(manifest: any, config: any, opts: { projectId?
     },
     constraints: normalizedManifest.constraints,
     operator: normalizedManifest.operator,
+    hints: normalizeTargetHints(normalizedManifest.hints),
     warnings: [],
   };
 }
@@ -1176,7 +1203,12 @@ export function normalizeActiveTargetSession(rawSession: any, config: any) {
     normalizeNullableString(rawSession?.lifecycle?.archivedAt)
     || normalizeNullableString(rawSession?.lifecycle?.closedAt)
   );
+  const hasExplicitReactivation = Boolean(normalizeNullableString(rawSession?.lifecycle?.reactivatedAt));
+  const archivedHandoffIntent = normalizeNullableString(rawSession?.handoff?.lastAction) === "session_archived"
+    || normalizeNullableString(rawSession?.handoff?.nextAction) === "await_next_target";
   let currentStage = normalizeStage(rawSession?.currentStage);
+  const hasExplicitOpenStage = !CLOSED_TARGET_SESSION_STAGES.has(currentStage as TargetSessionStage)
+    && currentStage !== TARGET_SESSION_STAGE.QUARANTINED;
   if (rawSession?.currentMode !== PLATFORM_MODE.SINGLE_TARGET_DELIVERY) {
     warnings.push("active target session currentMode was normalized to single_target_delivery");
   }
@@ -1186,7 +1218,10 @@ export function normalizeActiveTargetSession(rawSession: any, config: any) {
   if (CLOSED_TARGET_SESSION_STAGES.has(String(rawLifecycleStatus || "") as TargetSessionStage) && currentStage !== rawLifecycleStatus) {
     currentStage = String(rawLifecycleStatus);
     warnings.push("active target session stage was reconciled from terminal lifecycle status");
-  } else if (hasArchivedLifecycleMarkers && !isClosedTargetSession({ currentStage, lifecycle: { status: rawLifecycleStatus } })) {
+  } else if (hasArchivedLifecycleMarkers && archivedHandoffIntent && !hasExplicitReactivation) {
+    currentStage = TARGET_SESSION_STAGE.COMPLETED;
+    warnings.push("active target session stage was reconciled from archived session handoff intent");
+  } else if (hasArchivedLifecycleMarkers && !hasExplicitOpenStage && !isClosedTargetSession({ currentStage, lifecycle: { status: rawLifecycleStatus } })) {
     currentStage = TARGET_SESSION_STAGE.COMPLETED;
     warnings.push("active target session stage was reconciled from archived lifecycle markers");
   }
@@ -1195,7 +1230,6 @@ export function normalizeActiveTargetSession(rawSession: any, config: any) {
   }
 
   const updatedAt = normalizeNullableString(rawSession?.lifecycle?.updatedAt) || new Date().toISOString();
-  const sessionDir = getTargetSessionPath(stateDir, projectId, sessionId);
   const session = {
     schemaVersion: TARGET_SESSION_SCHEMA_VERSION,
     currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
@@ -1296,15 +1330,16 @@ export function normalizeActiveTargetSession(rawSession: any, config: any) {
     },
     lifecycle: {
       openedAt: normalizeNullableString(rawSession?.lifecycle?.openedAt) || updatedAt,
+      reactivatedAt: hasExplicitOpenStage ? normalizeNullableString(rawSession?.lifecycle?.reactivatedAt) : null,
       updatedAt,
-      closedAt: normalizeNullableString(rawSession?.lifecycle?.closedAt),
-      archivedAt: normalizeNullableString(rawSession?.lifecycle?.archivedAt),
+      closedAt: hasExplicitOpenStage ? null : normalizeNullableString(rawSession?.lifecycle?.closedAt),
+      archivedAt: hasExplicitOpenStage ? null : normalizeNullableString(rawSession?.lifecycle?.archivedAt),
       status: CLOSED_TARGET_SESSION_STAGES.has(currentStage as TargetSessionStage)
         ? currentStage
         : currentStage === TARGET_SESSION_STAGE.QUARANTINED
           ? "quarantined"
           : "open",
-      completionReason: normalizeNullableString(rawSession?.lifecycle?.completionReason),
+      completionReason: hasExplicitOpenStage ? null : normalizeNullableString(rawSession?.lifecycle?.completionReason),
     },
     handoff: {
       carriedContextSummary: normalizeNullableString(rawSession?.handoff?.carriedContextSummary),
@@ -1320,6 +1355,7 @@ export function normalizeActiveTargetSession(rawSession: any, config: any) {
       requestedBy: normalizeNullableString(rawSession?.operator?.requestedBy) || "user",
       approvalMode: normalizeNullableString(rawSession?.operator?.approvalMode) || "human_required_for_high_risk",
     },
+    hints: normalizeTargetHints(rawSession?.hints),
     warnings,
   };
 
@@ -1327,7 +1363,6 @@ export function normalizeActiveTargetSession(rawSession: any, config: any) {
 }
 
 export async function persistTargetSessionSnapshot(session: any, config: any) {
-  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
   await persistTargetSessionArtifacts(session, config, { selectAsActive: true });
 }
 
@@ -1337,10 +1372,15 @@ function isClosedTargetSession(session: any): boolean {
 }
 
 function buildOpenTargetSessionSummary(session: any, stateDir: string) {
+  const atlasDesktopSessionId = Array.isArray(session?.hints?.notes)
+    ? session.hints.notes.map((note: unknown) => String(note || "").trim()).find((note: string) => /^ATLAS desktop session id:\s*.+$/i.test(note))?.replace(/^ATLAS desktop session id:\s*/i, "").trim() || null
+    : null;
+
   return {
     projectId: String(session?.projectId || "").trim() || null,
     sessionId: String(session?.sessionId || "").trim() || null,
     currentStage: String(session?.currentStage || TARGET_SESSION_STAGE.ONBOARDING).trim(),
+    atlasDesktopSessionId,
     repoUrl: normalizeNullableString(session?.repo?.repoUrl),
     objectiveSummary: normalizeNullableString(session?.objective?.summary),
     workspacePath: normalizeNullableString(session?.workspace?.path),
@@ -1397,6 +1437,21 @@ async function upsertOpenTargetSession(config: any, session: any) {
 }
 
 async function removeOpenTargetSession(config: any, session: any) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const registryPath = getOpenTargetSessionsPath(stateDir);
+  const rawRegistry = await readJson(registryPath, []);
+  const registryEntries = Array.isArray(rawRegistry) ? rawRegistry : [];
+  const retainedRegistry = registryEntries.filter((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return true;
+    }
+    return !(
+      String((entry as any).projectId || "") === String(session?.projectId || "")
+      && String((entry as any).sessionId || "") === String(session?.sessionId || "")
+    );
+  });
+  await writeJson(registryPath, retainedRegistry);
+
   const existingSessions = await listOpenTargetSessions(config);
   const retained = existingSessions.filter((entry) => !(entry.projectId === session?.projectId && entry.sessionId === session?.sessionId));
   await writeOpenTargetSessions(config, retained);
@@ -1575,6 +1630,7 @@ export async function transitionActiveTargetSession(config: any, input: {
 
   const nextStage = normalizeStage(input?.nextStage);
   const now = new Date().toISOString();
+  const isTerminalStage = CLOSED_TARGET_SESSION_STAGES.has(nextStage as TargetSessionStage);
   const stageDefaultGates = buildDefaultStageGates(nextStage);
   const mergedPrerequisites = {
     ...activeSession.prerequisites,
@@ -1616,14 +1672,21 @@ export async function transitionActiveTargetSession(config: any, input: {
     lifecycle: {
       ...activeSession.lifecycle,
       updatedAt: now,
-      status: CLOSED_TARGET_SESSION_STAGES.has(nextStage as TargetSessionStage)
+      reactivatedAt: isTerminalStage
+        ? null
+        : CLOSED_TARGET_SESSION_STAGES.has(String(activeSession?.currentStage || "") as TargetSessionStage)
+          ? now
+          : normalizeNullableString(activeSession.lifecycle?.reactivatedAt),
+      status: isTerminalStage
         ? nextStage
         : nextStage === TARGET_SESSION_STAGE.QUARANTINED
           ? "quarantined"
           : "open",
-      completionReason: CLOSED_TARGET_SESSION_STAGES.has(nextStage as TargetSessionStage)
+      completionReason: isTerminalStage
         ? normalizeNullableString(input?.reason) || activeSession.lifecycle?.completionReason || null
-        : activeSession.lifecycle?.completionReason || null,
+        : null,
+      closedAt: isTerminalStage ? normalizeNullableString(activeSession.lifecycle?.closedAt) || now : null,
+      archivedAt: isTerminalStage ? normalizeNullableString(activeSession.lifecycle?.archivedAt) : null,
     },
     handoff: {
       ...activeSession.handoff,
@@ -1670,7 +1733,7 @@ function resolveArchiveLogPath(stateDir: string, stage: string): string {
   return path.join(getArchiveRootPath(stateDir), "completed_sessions.jsonl");
 }
 
-export async function archiveTargetSession(config: any, input: { completionStage?: string; completionReason?: string | null; completionSummary?: string | null; unresolvedItems?: string[]; preserveWorkspace?: boolean } = {}) {
+export async function archiveTargetSession(config: any, input: { completionStage?: string; completionReason?: string | null; completionSummary?: string | null; unresolvedItems?: string[]; preserveWorkspace?: boolean; presentationHandoff?: any } = {}) {
   const activeSession = await loadActiveTargetSessionIncludingClosed(config);
   if (!activeSession) {
     throw new Error("No active target session to archive");
@@ -1684,6 +1747,9 @@ export async function archiveTargetSession(config: any, input: { completionStage
     ? String(input.completionStage)
     : TARGET_SESSION_STAGE.COMPLETED;
   const archivedAt = new Date().toISOString();
+  const inputPresentationHandoff = input.presentationHandoff && typeof input.presentationHandoff === "object"
+    ? input.presentationHandoff
+    : null;
   const archivedSession = {
     ...activeSession,
     currentStage: completionStage,
@@ -1697,10 +1763,32 @@ export async function archiveTargetSession(config: any, input: { completionStage
     },
     handoff: {
       ...activeSession.handoff,
+      ...(inputPresentationHandoff ? { targetDeliveryHandoff: inputPresentationHandoff } : {}),
       lastAction: "session_archived",
       nextAction: "await_next_target",
     },
   };
+
+  let presentationHandoff = inputPresentationHandoff
+    || (archivedSession.handoff?.targetDeliveryHandoff && typeof archivedSession.handoff.targetDeliveryHandoff === "object"
+      ? archivedSession.handoff.targetDeliveryHandoff
+      : null);
+  if (!presentationHandoff) {
+    const persistedHandoff = await readJson(path.join(stateDir, "last_target_delivery_handoff.json"), null).catch(() => null);
+    if (
+      persistedHandoff
+      && persistedHandoff.projectId === archivedSession.projectId
+      && persistedHandoff.sessionId === archivedSession.sessionId
+    ) {
+      presentationHandoff = persistedHandoff;
+    }
+  }
+  const presentationDelivery = presentationHandoff?.delivery && typeof presentationHandoff.delivery === "object"
+    ? presentationHandoff.delivery
+    : null;
+  const presentationAutoOpen = presentationHandoff?.autoOpen && typeof presentationHandoff.autoOpen === "object"
+    ? presentationHandoff.autoOpen
+    : null;
 
   const completionRecord = {
     projectId: archivedSession.projectId,
@@ -1722,9 +1810,25 @@ export async function archiveTargetSession(config: any, input: { completionStage
           ...normalizeStringArray(archivedSession.prerequisites?.requiredNow),
           ...normalizeStringArray(archivedSession.handoff?.requiredHumanInputs),
         ],
+    presentation: presentationDelivery,
+    presentationAutoOpen,
   };
   const archiveLogPath = resolveArchiveLogPath(stateDir, archivedSession.currentStage);
-  const preserveWorkspace = input.preserveWorkspace === true;
+  const archivedAtlasDesktopSessionId = Array.isArray(archivedSession?.hints?.notes)
+    ? archivedSession.hints.notes
+      .map((note: unknown) => String(note || "").trim())
+      .find((note: string) => /^ATLAS desktop session id:\s*.+$/i.test(note))
+      ?.replace(/^ATLAS desktop session id:\s*/i, "")
+      .trim() || null
+    : null;
+  const preserveWorkspace = input.preserveWorkspace === true
+    || (
+      Boolean(archivedAtlasDesktopSessionId)
+      && (
+        archivedSession.currentStage === TARGET_SESSION_STAGE.COMPLETED
+        || archivedSession.currentStage === TARGET_SESSION_STAGE.COMPLETED_WITH_HANDOFF
+      )
+    );
 
   await fs.mkdir(path.dirname(archiveLogPath), { recursive: true });
   await Promise.all([
@@ -1733,8 +1837,13 @@ export async function archiveTargetSession(config: any, input: { completionStage
     writeJson(getLastArchivedTargetSessionPath(stateDir), archivedSession),
     fs.appendFile(archiveLogPath, `${JSON.stringify(completionRecord)}\n`, "utf8"),
   ]);
-
   await removeOpenTargetSession(config, archivedSession);
+  await archiveAtlasDesktopSession({
+    stateDir,
+    projectId: archivedSession.projectId,
+    projectSessionId: archivedSession.sessionId,
+    atlasDesktopSessionId: archivedAtlasDesktopSessionId,
+  });
 
   const archivedWasSelected = isSameTargetSession(archivedSession, selectedSession);
   if (!selectorBound || archivedWasSelected) {

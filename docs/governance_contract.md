@@ -15,6 +15,23 @@ All enforcement is runtime-deterministic and machine-verifiable via `npm test`.
 
 ---
 
+## Dispatch Admission Notes
+
+The pre-dispatch governance gate is the runtime admission layer that runs
+immediately before worker dispatch. It can hard-block a cycle when a blocking
+signal is active, such as budget exhaustion, force-checkpoint validation,
+governance freeze, or the autonomy execution gate.
+
+For `single_target_delivery`, the autonomy execution gate is now scoped by the
+target session's explicit execution admission. When the session is already in an
+executable stage and its gate is open (`allowShadowExecution` or
+`allowActiveExecution`), BOX records the autonomy signal in
+`state/governance_gate_audit.jsonl` as advisory telemetry instead of
+hard-blocking target delivery. Outside those admitted single-target execution
+paths, the autonomy execution gate remains a blocking safeguard.
+
+---
+
 ## Runtime Enforcement Mapping (AC5/T-031)
 
 The table below maps each acceptance criterion to the exact runtime function that enforces it.

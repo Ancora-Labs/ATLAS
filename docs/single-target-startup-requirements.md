@@ -5,7 +5,7 @@ BOX fails closed before single-target startup when the required GitHub credentia
 Required environment variables:
 
 - `GITHUB_TOKEN`: Used for target repository GitHub API operations and repository-scoped automation.
-- `COPILOT_GITHUB_TOKEN`: Used for Copilot-powered target delivery and agent execution. Legacy aliases such as `GITHUB_FINEGRADED` are still accepted through config normalization.
+- `GITHUB_FINEGRADED`: Used for Copilot-powered target delivery and agent execution when `GITHUB_TOKEN` itself is not already Copilot-compatible. `COPILOT_GITHUB_TOKEN` is still accepted as a legacy compatibility alias.
 
 Why BOX blocks startup:
 

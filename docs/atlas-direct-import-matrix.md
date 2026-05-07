@@ -263,6 +263,13 @@ Reason:
 
 Atlas should not carry BOX self-dev protection boundaries. Atlas needs only target execution boundaries.
 
+Confirmed by the 2026-04-30 governance fix: BOX can regress its global autonomy
+execution gate because of self-dev readiness debt, but explicitly admitted
+`single_target_delivery` execution must treat that signal as advisory and audit
+it instead of blocking dispatch. Atlas should therefore keep only explicit
+target execution admission and avoid importing self-dev autonomy blocks into its
+public runtime.
+
 ### extraction note
 
 `worker_runner.ts` is the most important runtime file after `orchestrator.ts`. Atlas should preserve its target execution behavior and remove self-dev branch protection behavior.

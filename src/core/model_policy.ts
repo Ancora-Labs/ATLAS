@@ -1762,6 +1762,14 @@ export function assessRetryExpectedROI(input: {
   const benchmarkSignal = integrity.sampleCount > 0
     ? clamp01(rawBenchmarkSignal * integrity.penaltyApplied - Math.min(0.15, integrity.contradictionCount * 0.03))
     : rawBenchmarkSignal;
+  const isProviderTransientFailure = (
+    failureClass === FAILURE_CLASS.MODEL
+    || failureClass === FAILURE_CLASS.EXTERNAL_API
+    || /rate|quota|429|503|timeout|provider|transient_api_error/.test(finishCode)
+  );
+  const effectiveBenchmarkSignal = isProviderTransientFailure && attempt === 1
+    ? Math.max(benchmarkSignal, 0.6)
+    : benchmarkSignal;
   const attemptDecay = 1 / attempt;
   const cacheBonus = (
     (promptCacheHitRate >= 0.55 ? 0.05 : promptCacheHitRate >= 0.30 ? 0.02 : 0)
@@ -1778,13 +1786,13 @@ export function assessRetryExpectedROI(input: {
           : failureClass === FAILURE_CLASS.ENVIRONMENT
             ? 0.04
             : 0.02;
-  const expectedGain = Math.round(clamp01((successSignal * benchmarkSignal * attemptDecay) + cacheBonus - lineagePenalty - failurePenalty) * 1000) / 1000;
+    const expectedGain = Math.round(clamp01((successSignal * effectiveBenchmarkSignal * attemptDecay) + cacheBonus - lineagePenalty - failurePenalty) * 1000) / 1000;
   const allowRetry = expectedGain >= threshold;
   return {
     allowRetry,
     expectedGain,
     threshold,
-    reason: `retry-roi(taskKind=${taskKind}, outcome=${successSignal.toFixed(2)}, precision=${(outcome.precisionOnAttempted ?? outcome.successRate).toFixed(2)}, attempt_rate=${(outcome.attemptRate ?? 0).toFixed(2)}, benchmark=${benchmarkSignal.toFixed(2)}, cache_bonus=${cacheBonus.toFixed(2)}, lineage_penalty=${lineagePenalty.toFixed(2)}, failure_penalty=${failurePenalty.toFixed(2)}, attempt=${attempt})`,
+      reason: `retry-roi(taskKind=${taskKind}, outcome=${successSignal.toFixed(2)}, precision=${(outcome.precisionOnAttempted ?? outcome.successRate).toFixed(2)}, attempt_rate=${(outcome.attemptRate ?? 0).toFixed(2)}, benchmark=${effectiveBenchmarkSignal.toFixed(2)}, cache_bonus=${cacheBonus.toFixed(2)}, lineage_penalty=${lineagePenalty.toFixed(2)}, failure_penalty=${failurePenalty.toFixed(2)}, attempt=${attempt})`,
     attempt,
   };
 }

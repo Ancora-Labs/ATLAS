@@ -17,9 +17,7 @@
     "failingChecks": 0,
     "passingChecks": 1,
     "pendingChecks": 0,
-    "checkNames": [
-      "Lint & Test (Node 20)"
-    ]
+    "checkNames": "Lint & Test (Node 20)"
   },
   "diff": {
     "filesChanged": [

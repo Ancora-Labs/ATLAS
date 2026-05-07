@@ -36,8 +36,8 @@ describe("single target startup guard", () => {
 
     assert.equal(result.singleTargetRequired, true);
     assert.equal(result.ok, false);
-    assert.deepEqual(result.missing, ["COPILOT_GITHUB_TOKEN"]);
-    assert.match(buildSingleTargetStartupGuardMessage(result), /Missing: COPILOT_GITHUB_TOKEN/);
+    assert.deepEqual(result.missing, ["GITHUB_FINEGRADED"]);
+    assert.match(buildSingleTargetStartupGuardMessage(result), /Missing: GITHUB_FINEGRADED/);
   });
 
   it("blocks active single-target runtime when both tokens are missing", async () => {
@@ -57,7 +57,7 @@ describe("single target startup guard", () => {
     });
 
     assert.equal(result.ok, false);
-    assert.deepEqual(result.missing, ["GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN"]);
+    assert.deepEqual(result.missing, ["GITHUB_TOKEN", "GITHUB_FINEGRADED"]);
     assert.match(buildSingleTargetStartupGuardMessage(result), /BOX will not auto-create or auto-fetch GitHub tokens/);
   });
 });

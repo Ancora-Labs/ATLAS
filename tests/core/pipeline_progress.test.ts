@@ -349,7 +349,7 @@ describe("PIPELINE_PROGRESS_SCHEMA", () => {
   it("declares all required fields including startedAt", () => {
     const required = PIPELINE_PROGRESS_SCHEMA.required;
     assert.ok(Array.isArray(required));
-    for (const field of ["stage", "stageLabel", "percent", "detail", "steps", "updatedAt", "startedAt"]) {
+    for (const field of ["stage", "stageLabel", "percent", "detail", "loopCount", "steps", "updatedAt", "startedAt"]) {
       assert.ok(required.includes(field), `schema must require '${field}'`);
     }
   });
@@ -458,6 +458,7 @@ describe("updatePipelineProgress state transitions", () => {
     assert.equal(data.stageLabel, "Jesus Awakening");
     assert.equal(data.percent, 5);
     assert.equal(data.detail, "Starting up");
+    assert.equal(data.loopCount, 0);
     assert.ok(typeof data.updatedAt === "string");
     assert.ok(Array.isArray(data.steps));
   });
@@ -526,6 +527,29 @@ describe("updatePipelineProgress state transitions", () => {
     await updatePipelineProgress(config, "cycle_complete");
     const data = await readPipelineProgress(config);
     assert.equal(data.startedAt, startedAt, "cycle_complete must preserve startedAt");
+  });
+
+  it("increments loopCount to 1 after the first completed loop and keeps incrementing each loop", async () => {
+    await updatePipelineProgress(config, "jesus_awakening");
+    await updatePipelineProgress(config, "cycle_complete", "first loop done");
+    let data = await readPipelineProgress(config);
+    assert.equal(data.loopCount, 1, "first completed loop must set loopCount=1");
+
+    await updatePipelineProgress(config, "idle", "waiting for next loop");
+    await updatePipelineProgress(config, "jesus_awakening");
+    await updatePipelineProgress(config, "cycle_complete", "second loop done");
+    data = await readPipelineProgress(config);
+    assert.equal(data.loopCount, 2, "second completed loop must increment loopCount to 2");
+  });
+
+  it("[NEGATIVE] preserves loopCount across idle resets instead of clearing completed loop history", async () => {
+    await updatePipelineProgress(config, "jesus_awakening");
+    await updatePipelineProgress(config, "cycle_complete", "done");
+    await updatePipelineProgress(config, "idle", "waiting");
+    const data = await readPipelineProgress(config);
+
+    assert.equal(data.stage, "idle");
+    assert.equal(data.loopCount, 1, "idle must not reset completed loop count");
   });
 
   // AC5: monotonic stage progression for normal flow

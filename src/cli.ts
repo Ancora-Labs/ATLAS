@@ -10,6 +10,7 @@ import { runDoctor } from "./core/doctor.js";
 import { loadPlatformModeState, PLATFORM_MODE, summarizePlatformModeState, updatePlatformModeState } from "./core/mode_state.js";
 import { readSiControl, writeSiControl, isSelfImprovementActive, readSiLiveLog, siLogAsync } from "./core/si_control.js";
 import { archiveActiveSessionForFreshActivation } from "./core/activation_flow.js";
+import { resolveCliTargetSessionSelection } from "./core/target_session_cli_selection.js";
 import {
   archiveTargetSession,
   createTargetSession,
@@ -370,9 +371,16 @@ async function handleActivationCommand(config: Config): Promise<void> {
   const selectedOptions = getArgValue("--options");
   const interactiveEnabled = !process.argv.includes("--no-interactive");
   const deleteRepoOnRestart = hasArgFlag("--delete-repo");
+  const keepActive = hasArgFlag("--keep-active");
   const replaceActive = hasArgFlag("--replace-active");
-  const selectNewSession = replaceActive || hasArgFlag("--select");
   const existingSelectedSession = await loadActiveTargetSession(config);
+  const selectNewSession = resolveCliTargetSessionSelection({
+    existingSelectedSession,
+    keepActiveRequested: keepActive,
+    replaceActiveRequested: replaceActive,
+    selectRequested: hasArgFlag("--select"),
+    context: "activate",
+  });
 
   if (hasArgFlag("--restart") && (answerText || selectedOptions || manifestPath)) {
     throw new Error("--restart cannot be combined with --manifest, --answer, or --options");
@@ -963,7 +971,12 @@ async function main(): Promise<void> {
       const resolvedManifestPath = path.resolve(manifestPath);
       const manifest = JSON.parse(readFileSync(resolvedManifestPath, "utf8"));
       const existingSelectedSession = await loadActiveTargetSession(config);
-      const shouldSelectStartedSession = hasArgFlag("--select") || !existingSelectedSession;
+      const shouldSelectStartedSession = resolveCliTargetSessionSelection({
+        existingSelectedSession,
+        keepActiveRequested: hasArgFlag("--keep-active"),
+        selectRequested: hasArgFlag("--select"),
+        context: "target start",
+      });
       const session = await createTargetSession(manifest, config, { selectAsActive: shouldSelectStartedSession });
       const shouldRunDetached = hasArgFlag("--run");
       printTargetStatus(

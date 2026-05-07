@@ -32,6 +32,7 @@ const SINGLE_TARGET_AGENT_OVERLAYS = Object.freeze({
   "research-synthesizer": Object.freeze([
     "Condense research toward the active target repo's objective, risks, and implementation choices.",
     "Preserve target-relevant contradictions and recommended patterns for downstream planning.",
+    "Preserve source-required logos, textures, and imagery according to the active target asset sourcing policy.",
   ]),
   jesus: Object.freeze([
     "Choose priorities for the active target session rather than BOX itself.",
@@ -40,6 +41,8 @@ const SINGLE_TARGET_AGENT_OVERLAYS = Object.freeze({
   prometheus: Object.freeze([
     "Plan for the active target repo using session gates, objective, and carried context.",
     "Respect target stage and do not produce full delivery plans before gates allow them.",
+    "Keep source-required logos, textures, and imagery aligned with the active target asset policy when plans materialize product surfaces.",
+    "If planning requires inspecting screenshots, image attachments, or other visual artifacts, inspect them strictly one at a time and never batch multiple visual reads into one pass because bulk visual inspection can overload the server.",
   ]),
   athena: Object.freeze([
     "Review target-repo plans for stage safety, risk, and handoff correctness.",
@@ -48,6 +51,8 @@ const SINGLE_TARGET_AGENT_OVERLAYS = Object.freeze({
   worker: Object.freeze([
     "Operate inside the active target workspace, not the BOX workspace.",
     "Obey target scope, protected paths, and forbidden actions from session truth.",
+    "If the assigned packet touches UI, UX, landing pages, heroes, visual polish, design systems, or other design-led surfaces, always inspect carried scout/synthesis evidence and then inspect a narrow set of high-quality current internet design references before implementation.",
+    "When the packet already includes design references, treat them as the baseline and still inspect additional current references yourself so you form a concrete visual target before building.",
   ]),
 });
 
@@ -82,6 +87,7 @@ const AGENT_SESSION_DIRECTIVES = Object.freeze({
   "research-synthesizer": Object.freeze([
     "Preserve target-specific contradictions, readiness blockers, and recommended implementation paths for planning handoff.",
     "Organize synthesis around the active target objective, not BOX self-improvement themes, when delivery mode is active.",
+    "Rank active target asset policy above generic external best practices when preserving requested sourced logos, textures, or imagery.",
   ]),
   jesus: Object.freeze([
     "Use target objective, readiness state, and required human inputs to choose the next priority for the active session.",
@@ -90,6 +96,7 @@ const AGENT_SESSION_DIRECTIVES = Object.freeze({
   prometheus: Object.freeze([
     "If allowPlanning=false, produce only prerequisite-clearing or onboarding follow-up plans and avoid normal delivery packets.",
     "If allowPlanning=true but allowActiveExecution=false, keep plans shadow-safe, verification-heavy, and low risk.",
+    "When planning UI/design work with screenshots, image attachments, or other visual artifacts, read one artifact, analyze it, write the planning finding, then move to the next artifact instead of doing bulk visual comparison in a single pass.",
   ]),
   athena: Object.freeze([
     "Review the proposed work against the target stage, readiness score, and quarantine conditions before approving progression.",
@@ -98,6 +105,8 @@ const AGENT_SESSION_DIRECTIVES = Object.freeze({
   worker: Object.freeze([
     "Do not widen execution beyond the active target session's gates, stage, and protected-path contract.",
     "Treat required human inputs and quarantine reasons as hard stop conditions, not soft warnings.",
+    "For UI/design execution, always inspect any provided design references plus carried repo/scout evidence, then inspect current high-quality internet design references before implementation so you form a concrete visual target.",
+    "Do not skip that design-reference pass because the packet already has a direction, and do not fall back to a generic scheme when the brief asks for stronger design quality.",
   ]),
 });
 
@@ -225,6 +234,7 @@ export function buildPromptAssemblySections(input: {
         `clarificationReadyForPlanning: ${activeTargetSession.clarification?.readyForPlanning === true}`,
         `intentStatus: ${String(activeTargetSession.intent?.status || "pending")}`,
         `intentSummary: ${String(activeTargetSession.intent?.summary || "none")}`,
+        `intentOperatorIntentBrief: ${String(activeTargetSession.intent?.operatorIntentBrief || "none")}`,
         `intentPlanningMode: ${String(activeTargetSession.intent?.planningMode || "none")}`,
         `intentProductType: ${String(activeTargetSession.intent?.productType || "none")}`,
         `intentTargetUsers: ${(Array.isArray(activeTargetSession.intent?.targetUsers) ? activeTargetSession.intent.targetUsers : []).join(", ") || "none"}`,
@@ -234,6 +244,10 @@ export function buildPromptAssemblySections(input: {
         `intentProtectedAreas: ${(Array.isArray(activeTargetSession.intent?.protectedAreas) ? activeTargetSession.intent.protectedAreas : []).join(", ") || "none"}`,
         `intentPreferredQualityBar: ${String(activeTargetSession.intent?.preferredQualityBar || "none")}`,
         `intentDesignDirection: ${String(activeTargetSession.intent?.designDirection || "none")}`,
+        `intentImplementationFlexibility: ${String(activeTargetSession.intent?.implementationFlexibility || "none")}`,
+        `intentOperatorIntentEvidence: ${(Array.isArray(activeTargetSession.intent?.operatorIntentEvidence) ? activeTargetSession.intent.operatorIntentEvidence : []).join(", ") || "none"}`,
+        `intentAssetSourcingPolicy: ${String(activeTargetSession.intent?.assetSourcingPolicy || "none")}`,
+        `intentAssetRequirements: ${(Array.isArray(activeTargetSession.intent?.assetRequirements) ? activeTargetSession.intent.assetRequirements : []).join(", ") || "none"}`,
         `intentSuccessCriteria: ${(Array.isArray(activeTargetSession.intent?.successCriteria) ? activeTargetSession.intent.successCriteria : []).join(", ") || "none"}`,
         `intentAssumptions: ${(Array.isArray(activeTargetSession.intent?.assumptions) ? activeTargetSession.intent.assumptions : []).join(", ") || "none"}`,
         `intentOpenQuestions: ${(Array.isArray(activeTargetSession.intent?.openQuestions) ? activeTargetSession.intent.openQuestions : []).join(", ") || "none"}`,

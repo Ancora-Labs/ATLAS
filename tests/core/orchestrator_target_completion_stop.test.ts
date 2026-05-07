@@ -3,8 +3,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { prepareTargetSessionForCycle } from "../../src/core/orchestrator.js";
+import {
+  prepareTargetSessionForCycle,
+  resolveProjectCompletionEligibility,
+  shouldRunProjectCompletionForCycle,
+} from "../../src/core/orchestrator.js";
 import { loadPlatformModeState, PLATFORM_MODE, updatePlatformModeState } from "../../src/core/mode_state.js";
+import { TARGET_SUCCESS_CONTRACT_STATUS } from "../../src/core/target_success_contract.js";
 import {
   archiveTargetSession,
   createTargetSession,
@@ -55,6 +60,60 @@ function buildManifest() {
 }
 
 describe("orchestrator target completion stop", () => {
+  it("does not finalize a single-target project while the success contract is open", () => {
+    const config = {
+      platformModeState: { currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY },
+      activeTargetSession: { projectId: "target_current", sessionId: "sess_open" },
+    };
+
+    assert.equal(shouldRunProjectCompletionForCycle(config, {
+      status: TARGET_SUCCESS_CONTRACT_STATUS.OPEN,
+      blockers: ["intent_alignment_unverified"],
+    }), false);
+    assert.equal(shouldRunProjectCompletionForCycle(config, {
+      status: TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED,
+      blockers: [],
+    }), true);
+    assert.equal(shouldRunProjectCompletionForCycle(config, {
+      projectId: "target_previous",
+      sessionId: "sess_previous",
+      status: TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED,
+      blockers: [],
+    }), false);
+
+    assert.equal(resolveProjectCompletionEligibility(
+      config,
+      {
+        projectId: "target_current",
+        sessionId: "sess_open",
+        status: TARGET_SUCCESS_CONTRACT_STATUS.OPEN,
+        blockers: ["intent_alignment_unverified"],
+      },
+      {
+        projectId: "target_current",
+        sessionId: "sess_open",
+        status: TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED,
+        blockers: [],
+      },
+    ), false);
+
+    assert.equal(resolveProjectCompletionEligibility(
+      config,
+      {
+        projectId: "target_current",
+        sessionId: "sess_open",
+        status: TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED,
+        blockers: [],
+      },
+      {
+        projectId: "target_current",
+        sessionId: "sess_open",
+        status: TARGET_SUCCESS_CONTRACT_STATUS.OPEN,
+        blockers: ["intent_alignment_unverified"],
+      },
+    ), true);
+  });
+
   it("archives a completed target session and tells the daemon loop to stop", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-orch-target-stop-"));
     const config = buildConfig(tempRoot);

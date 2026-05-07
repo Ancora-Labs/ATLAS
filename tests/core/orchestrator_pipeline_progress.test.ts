@@ -147,6 +147,28 @@ describe("orchestrator pipeline progress — resilience", () => {
     assert.ok(!progressLog.includes("[CYCLE] ── Step 1: Jesus analyzing system state ──"), "idle mode must not wake leadership agents");
   });
 
+  it("blocks premium agent calls when Copilot CLI is installed but Copilot auth is unavailable", async () => {
+    config.env.copilotCliCommand = "node";
+    config.env.githubToken = "github_pat_test_token";
+
+    await runOnce(config);
+
+    const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
+    assert.ok(
+      progressLog.includes("[CYCLE][PREFLIGHT] Capability checks failed: copilotAuth."),
+      "preflight must record the missing Copilot auth failure"
+    );
+    assert.ok(
+      progressLog.includes("[CYCLE][PREFLIGHT] Blocking premium agent calls until Copilot auth is restored"),
+      "cycle must stop before premium agent execution when auth is unavailable"
+    );
+    assert.ok(!progressLog.includes("[PREMIUM_USAGE]"), "blocked Copilot auth must prevent premium request spending");
+    assert.ok(
+      !progressLog.includes("[CYCLE] ── Step 1: Jesus analyzing system state ──"),
+      "blocked Copilot auth must prevent the Jesus step from starting"
+    );
+  });
+
   it("persists composite cycle_health contract without overwriting runtime health channel", async () => {
     const cycleHealthPath = path.join(tmpDir, "cycle_health.json");
     await fs.writeFile(
@@ -716,6 +738,65 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
     assert.equal(workerSessionsExists, true, "worker sessions should be created because lane diversity no longer blocks dispatch");
   });
 
+  it("accepts checkpoint resume governance evaluation when admitted topology already satisfies min lanes", async () => {
+    const patchedPlans = [
+      {
+        id: "T1",
+        task: "task one",
+        role: "evolution-worker",
+        dependsOn: [],
+        filesInScope: [],
+        targetFiles: ["src/core/orchestrator.ts"],
+        scope: "implementation",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["tests pass"],
+      },
+      {
+        id: "T2",
+        task: "task two",
+        role: "quality-worker",
+        dependsOn: [],
+        filesInScope: [],
+        targetFiles: ["tests/core/orchestrator_pipeline_progress.test.ts"],
+        scope: "test",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["tests pass"],
+      },
+    ];
+
+    const checkpointConfig = {
+      ...config,
+      systemGuardian: { enabled: false },
+      workerPool: { minLanes: 2 },
+    };
+
+    await assert.doesNotReject(
+      () => evaluatePreDispatchGovernanceGate(
+        checkpointConfig,
+        patchedPlans,
+        "checkpoint-lane-diversity-bypass",
+        null,
+        {
+          resumeSource: "checkpoint_snapshot",
+          admittedWorkerTopology: { laneCount: 2 } as any,
+        },
+      ),
+      "checkpoint resume governance evaluation must not throw when admitted topology already satisfies min lanes",
+    );
+
+    const gateDecision = await evaluatePreDispatchGovernanceGate(
+      checkpointConfig,
+      patchedPlans,
+      "checkpoint-lane-diversity-bypass",
+      null,
+      {
+        resumeSource: "checkpoint_snapshot",
+        admittedWorkerTopology: { laneCount: 2 } as any,
+      },
+    );
+    assert.equal(gateDecision.blocked, false);
+  });
+
   it("persists Athena-reviewed live plans back into prometheus_analysis during resume", async () => {
     const patchedPlans = [
       {
@@ -965,6 +1046,51 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
     assert.equal(readiness.interrupted, true);
     assert.equal(readiness.ready, false);
     assert.equal(readiness.reason, "missing_live_plan_source");
+    assert.equal(readiness.planSource, "none");
+  });
+
+  it("does not keep failed checkpoints on the interrupted-resume path", async () => {
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify({
+        status: "failed_closed",
+        createdAt: "2026-04-11T07:31:14.738Z",
+        updatedAt: "2026-04-11T07:58:39.727Z",
+        totalPlans: 1,
+        planCount: 1,
+        completedPlans: 0,
+        planSetSignature: "resume-failed-closed",
+      }, null, 2),
+      "utf8",
+    );
+
+    await fs.writeFile(
+      path.join(tmpDir, "athena_plan_review.json"),
+      JSON.stringify({
+        approved: true,
+        reviewedAt: "2026-04-11T08:03:00.000Z",
+        patchedPlans: [
+          {
+            id: "T1",
+            task_id: "T1",
+            task: "Continue the already-approved desktop shell implementation",
+            role: "evolution-worker",
+            wave: 1,
+            target_files: ["src/app.ts"],
+            scope: "feature delivery",
+            verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+            verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+            acceptance_criteria: ["tests pass"],
+          },
+        ],
+      }, null, 2),
+      "utf8",
+    );
+
+    const readiness = await evaluateDispatchResumeReadiness(config);
+    assert.equal(readiness.interrupted, false);
+    assert.equal(readiness.ready, false);
+    assert.equal(readiness.reason, "checkpoint_not_resumable");
     assert.equal(readiness.planSource, "none");
   });
 
@@ -1403,10 +1529,141 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
     const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
     assert.match(progressLog, /already complete — closing stale checkpoint without redispatch/);
   });
+
+  it("continues an approved live review after a completed checkpoint when pending batches remain", async () => {
+    config.platformModeState = { currentMode: "single_target_delivery" };
+    config.activeTargetSession = {
+      projectId: "portal",
+      sessionId: "sess_active",
+      currentStage: "active",
+      repo: { repoUrl: "https://github.com/acme/portal" },
+    };
+
+    const livePlans = [
+      {
+        id: "T1",
+        task_id: "T1",
+        task: "Continue the shell implementation wave 1",
+        role: "evolution-worker",
+        wave: 1,
+        target_files: ["src/app.ts"],
+        scope: "feature delivery",
+        verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+        verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+        acceptance_criteria: ["tests pass"],
+      },
+      {
+        id: "T2",
+        task_id: "T2",
+        task: "Continue the shell implementation wave 2",
+        role: "integration-worker",
+        wave: 2,
+        target_files: ["src/routes.ts"],
+        scope: "feature delivery",
+        verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+        verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+        acceptance_criteria: ["tests pass"],
+      },
+      {
+        id: "T3",
+        task_id: "T3",
+        task: "Continue the shell implementation wave 3",
+        role: "quality-worker",
+        wave: 3,
+        target_files: ["src/layout.ts"],
+        scope: "feature delivery",
+        verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+        verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+        acceptance_criteria: ["tests pass"],
+      },
+    ];
+
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify({
+        status: "complete",
+        createdAt: "2026-04-25T12:17:39.948Z",
+        updatedAt: "2026-04-25T12:17:39.949Z",
+        totalPlans: 2,
+        planCount: 3,
+        completedPlans: 2,
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_active",
+          currentStage: "active",
+          repoUrl: "https://github.com/acme/portal",
+        },
+        dispatchPlanSnapshot: [livePlans[0], livePlans[1]],
+        workerBatchesSnapshot: [
+          { role: "evolution-worker", wave: 1, plans: [livePlans[0]] },
+          { role: "integration-worker", wave: 2, plans: [livePlans[1]] },
+        ],
+      }, null, 2),
+      "utf8",
+    );
+
+    const runtimeDir = path.join(tmpDir, "projects", "portal", "sess_active", "runtime");
+    await fs.mkdir(runtimeDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(runtimeDir, "worker_cycle_artifacts.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        updatedAt: "2026-04-25T12:17:39.987Z",
+        latestCycleId: "2026-04-25T12:17:39.948Z",
+        cycles: {
+          "2026-04-25T12:17:39.948Z": {
+            cycleId: "2026-04-25T12:17:39.948Z",
+            status: "dispatching",
+            updatedAt: "2026-04-25T12:17:39.987Z",
+            completedTaskIds: ["T1", "T2"],
+          },
+        },
+      }, null, 2),
+      "utf8",
+    );
+
+    await fs.writeFile(
+      path.join(tmpDir, "athena_plan_review.json"),
+      JSON.stringify({
+        approved: true,
+        reviewedAt: "2026-04-25T12:17:39.900Z",
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_active",
+          currentStage: "active",
+          repoUrl: "https://github.com/acme/portal",
+        },
+        patchedPlans: livePlans,
+      }, null, 2),
+      "utf8",
+    );
+
+    const readiness = await evaluateDispatchResumeReadiness(config);
+    assert.equal(readiness.interrupted, true);
+    assert.equal(readiness.ready, true);
+    assert.equal(readiness.reason, "live_review_ready");
+    assert.equal(readiness.planSource, "live_review");
+
+    await assert.doesNotReject(
+      () => runResumeDispatch(config),
+      "runResumeDispatch must continue the approved live review after a completed admitted subset checkpoint",
+    );
+
+    const updatedCheckpoint = JSON.parse(await fs.readFile(path.join(runtimeDir, "dispatch_checkpoint.json"), "utf8"));
+    assert.match(String(updatedCheckpoint.status || ""), /dispatching|complete/);
+    assert.equal(updatedCheckpoint.planCount, 3);
+    assert.ok(Number(updatedCheckpoint.completedPlans) >= 2, "continuation must preserve the two already completed batches");
+    assert.ok(updatedCheckpoint.totalPlans >= 1, "resumed continuation must persist at least one dispatched batch");
+
+    const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
+    assert.match(progressLog, /Force-resuming dispatch checkpoint: batch 3\/3 after 2 completed batch\(es\)/);
+    assert.match(progressLog, /Source=live_review checkpointStatus=dispatching/);
+  });
 });
 
 describe("resolveCheckpointPlanCompletion", () => {
-  it("treats a completed admitted subset as terminal for the approved plan set", () => {
+  it("marks only the admitted subset complete when a checkpoint closes early", () => {
     const approvedPlans = [
       { id: "p1", task_id: "p1" },
       { id: "p2", task_id: "p2" },
@@ -1425,8 +1682,13 @@ describe("resolveCheckpointPlanCompletion", () => {
 
     const result = resolveCheckpointPlanCompletion(checkpoint, approvedPlans, "2026-04-22T00:00:00.000Z");
     assert.ok(result, "completed admitted subset should resolve checkpoint completion");
-    assert.equal(result?.pending.length, 0, "non-admitted plans must not be treated as pending dispatch work");
-    assert.equal(result?.completed.length, approvedPlans.length, "completion should be terminal for the approved plan set");
+    assert.equal(result?.completed.length, 4, "admitted plans must be recognized as finished");
+    assert.equal(result?.pending.length, 2, "non-admitted plans must remain pending");
+    assert.deepEqual(
+      result?.completed.map((entry) => entry.plan.task_id),
+      ["p1", "p2", "p3", "p4"],
+      "only admitted task ids should be marked complete",
+    );
   });
 
   it("does not treat an unrelated dispatch snapshot as terminal", () => {

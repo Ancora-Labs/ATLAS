@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2025-01-01T00:00:00.000Z",
+  "generatedAt": "2025-01-01T00:00:00Z",
   "description": "Executable replay-closure contract for carry-forward verification debt items #1-#5. Debt closes only when canonical replay commands are evidenced, raw artifact evidence links are recorded, and the verification gate contract remains satisfied.",
   "replayClosureWorkflow": {
     "schemaVersion": 1,
@@ -23,11 +23,11 @@
       "status": "closed_via_replay_contract",
       "closureEvidence": "ARTIFACT_GAP.MISSING_SHA constant emitted by collectArtifactGaps() when checkPostMergeArtifact().hasSha is false. validateWorkerContract() blocks done status with this gap for all roles with required evidence fields.",
       "closedBy": "src/core/verification_gate.ts — collectArtifactGaps, ARTIFACT_GAP.MISSING_SHA",
-      "closedAt": "2025-01-01T00:00:00.000Z",
+      "closedAt": "2025-01-01T00:00:00Z",
       "source": "carry_forward_ledger",
       "debtId": "debt-1-0",
       "resolutionEvidence": "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/33a762234d117e329528efa19a3087459d62db09, inline://clean-tree-status, inline://npm-test-output-block]",
-      "reconciledAt": "2026-04-25T10:11:45.541Z"
+      "reconciledAt": "2026-05-06T14:49:45.582Z"
     },
     {
       "id": "CF-002",
@@ -35,11 +35,11 @@
       "status": "closed_via_replay_contract",
       "closureEvidence": "ARTIFACT_GAP.MISSING_TEST_OUTPUT constant emitted by collectArtifactGaps() when checkPostMergeArtifact().hasTestOutput is false. NPM_TEST_BLOCK_PATTERN regex requires both START and END markers with content.",
       "closedBy": "src/core/verification_gate.ts — collectArtifactGaps, ARTIFACT_GAP.MISSING_TEST_OUTPUT",
-      "closedAt": "2025-01-01T00:00:00.000Z",
+      "closedAt": "2025-01-01T00:00:00Z",
       "source": "carry_forward_ledger",
       "debtId": "debt-1-0",
       "resolutionEvidence": "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/33a762234d117e329528efa19a3087459d62db09, inline://clean-tree-status, inline://npm-test-output-block]",
-      "reconciledAt": "2026-04-25T10:11:45.541Z"
+      "reconciledAt": "2026-05-06T14:49:45.582Z"
     },
     {
       "id": "CF-003",
@@ -47,11 +47,11 @@
       "status": "closed_via_replay_contract",
       "closureEvidence": "FORBIDDEN_VERIFICATION_PATTERNS entry matches /node\\s+--test\\s+tests\\/\\*\\*/ and similar glob patterns. checkForbiddenCommands() returns forbidden:true for these inputs. Dispatch validation rejects before execution.",
       "closedBy": "src/core/verification_command_registry.ts — FORBIDDEN_VERIFICATION_PATTERNS, checkForbiddenCommands",
-      "closedAt": "2025-01-01T00:00:00.000Z",
+      "closedAt": "2025-01-01T00:00:00Z",
       "source": "carry_forward_ledger",
       "debtId": "debt-1-0",
       "resolutionEvidence": "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/33a762234d117e329528efa19a3087459d62db09, inline://clean-tree-status, inline://npm-test-output-block]",
-      "reconciledAt": "2026-04-25T10:11:45.541Z"
+      "reconciledAt": "2026-05-06T14:49:45.582Z"
     },
     {
       "id": "CF-004",
@@ -59,11 +59,11 @@
       "status": "closed_via_replay_contract",
       "closureEvidence": "FORBIDDEN_VERIFICATION_PATTERNS entry matches /\\bbash\\b/ and /\\bsh\\s+scripts/ patterns. checkForbiddenCommands() returns forbidden:true. VERIFICATION_CMD_REWRITE_RULES canonicalizes to npm equivalents where possible.",
       "closedBy": "src/core/verification_command_registry.ts — FORBIDDEN_VERIFICATION_PATTERNS, checkForbiddenCommands",
-      "closedAt": "2025-01-01T00:00:00.000Z",
+      "closedAt": "2025-01-01T00:00:00Z",
       "source": "carry_forward_ledger",
       "debtId": "debt-1-0",
       "resolutionEvidence": "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/33a762234d117e329528efa19a3087459d62db09, inline://clean-tree-status, inline://npm-test-output-block]",
-      "reconciledAt": "2026-04-25T10:11:45.541Z"
+      "reconciledAt": "2026-05-06T14:49:45.582Z"
     },
     {
       "id": "CF-005",
@@ -71,12 +71,12 @@
       "status": "closed_via_replay_contract",
       "closureEvidence": "ALL_POST_MERGE_PLACEHOLDERS set checked by checkPostMergeArtifact(). hasUnfilledPlaceholder=true triggers ARTIFACT_GAP.UNFILLED_PLACEHOLDER via collectArtifactGaps(). validateWorkerContract() rejects done output containing any placeholder string.",
       "closedBy": "src/core/verification_gate.ts — ALL_POST_MERGE_PLACEHOLDERS, checkPostMergeArtifact, ARTIFACT_GAP.UNFILLED_PLACEHOLDER",
-      "closedAt": "2025-01-01T00:00:00.000Z",
+      "closedAt": "2025-01-01T00:00:00Z",
       "source": "carry_forward_ledger",
       "debtId": "debt-1-0",
       "resolutionEvidence": "replay-closure:v1 commands=[git rev-parse HEAD, git status --porcelain, npm test] links=[inline://post-merge-sha/33a762234d117e329528efa19a3087459d62db09, inline://clean-tree-status, inline://npm-test-output-block]",
-      "reconciledAt": "2026-04-25T10:11:45.541Z"
+      "reconciledAt": "2026-05-06T14:49:45.582Z"
     }
   ],
-  "updatedAt": "2026-04-25T10:11:45.541Z"
+  "updatedAt": "2026-05-06T14:49:45.582Z"
 }

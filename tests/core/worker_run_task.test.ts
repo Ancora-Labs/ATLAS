@@ -13,7 +13,6 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseContractHealth, isContractHealthy, formatContractHealth, parseStartupContractAnchor, formatStartupContractAnchor, STARTUP_CONTRACT_ANCHOR_KEY } from "../../src/workers/contract_health.js";
-import { requiredUiWorkerCapabilities } from "../../src/workers/ui_capabilities.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENTRY = path.resolve(__dirname, "../../src/workers/run_task.ts");
@@ -198,12 +197,13 @@ describe("run_task.js — WORKER_CONTRACT_HEALTH runtime gate", () => {
   });
 });
 
-describe("run_task.js — UI worker capability gate", () => {
-  it("emits ui_caps:fail and exits 1 when a UI task lacks explicit worker capabilities", () => {
+describe("run_task.js — UI task startup", () => {
+  it("does not require special worker capabilities for UI tasks", () => {
     const task = JSON.stringify({
-      id: "ui-missing",
-      kind: "ui-contract",
-      uiContract: { contractId: "contract-1" },
+      id: "ui-start",
+      kind: "ui",
+      uiSurface: "web-runtime",
+      task: "Implement the landing page hero",
     });
     const result = run({
       WORKER_ROLE: "integration-worker",
@@ -211,35 +211,13 @@ describe("run_task.js — UI worker capability gate", () => {
       TARGET_REPO: "owner/repo",
       GITHUB_TOKEN: "ghp_fake",
     });
-    assert.equal(result.status, 1, "UI tasks must fail closed when worker capabilities were not granted");
-    assert.match(result.stderr, /UI task requires explicit worker capabilities/);
-    assert.match(result.stderr, /Missing UI capabilities:/);
-    const health = parseContractHealth(result.stderr);
-    assert.ok(health !== null, "UI capability failures must still emit WORKER_CONTRACT_HEALTH");
+    assert.equal(result.status, 0, `UI tasks must start without special worker capability grants; stderr: ${result.stderr}`);
+    const health = parseContractHealth(result.stdout);
+    assert.ok(health !== null, "successful UI startups must emit WORKER_CONTRACT_HEALTH");
     assert.equal(health!.env_vars, "pass");
     assert.equal(health!.payload, "pass");
     assert.equal(health!.role, "pass");
-    assert.equal(health!.ui_caps, "fail");
-  });
-
-  it("emits ui_caps:pass and exits 0 when a UI task has the required worker capabilities", () => {
-    const task = JSON.stringify({
-      id: "ui-pass",
-      kind: "ui-contract",
-      uiContract: { contractId: "contract-1" },
-    });
-    const result = run({
-      WORKER_ROLE: "integration-worker",
-      TASK_PAYLOAD: task,
-      TARGET_REPO: "owner/repo",
-      GITHUB_TOKEN: "ghp_fake",
-      WORKER_GRANTED_CAPABILITIES: requiredUiWorkerCapabilities().join(","),
-    });
-    assert.equal(result.status, 0, `UI tasks must start when all required capabilities are granted; stderr: ${result.stderr}`);
-    assert.match(result.stdout, /UI capability gate passed/);
-    const health = parseContractHealth(result.stdout);
-    assert.ok(health !== null, "successful UI startups must emit WORKER_CONTRACT_HEALTH");
-    assert.equal(health!.ui_caps, "pass");
+    assert.equal(health!.ui_caps, "n/a");
   });
 });
 

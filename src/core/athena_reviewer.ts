@@ -73,8 +73,6 @@ import {
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
 import { buildPromptAssemblyPrompt, resolvePromptTargetRepo } from "./prompt_overlay.js";
 import { normalizeLeverageRank, validatePlanContract } from "./plan_contract_validator.js";
-import { analyzeUiBatchCompatibility } from "./ui_batch_affinity.js";
-import { normalizeUiDispatchPlan } from "./ui_contract/dispatch.js";
 import { splitTargetStagePlans } from "./target_stage_contract.js";
 
 // ── Span contract emitter ─────────────────────────────────────────────────────
@@ -1851,8 +1849,9 @@ export function normalizePatchedPlansForDispatch(
     const sourceImplementationEvidence = Array.isArray(sourcePlan?.implementationEvidence)
       ? sourcePlan.implementationEvidence.map((entry) => String(entry || "").trim()).filter(Boolean)
       : [];
+    const uiExecutionContext = buildUiExecutionReminderContext(p, sourcePlan);
 
-    return normalizeUiDispatchPlan({
+    return {
       ...p,
       // Normalise target_files alias so dispatch always finds the canonical field.
       target_files: Array.isArray(p.target_files) ? p.target_files
@@ -1873,9 +1872,92 @@ export function normalizePatchedPlansForDispatch(
       implementationEvidence: implementationEvidence.length > 0
         ? implementationEvidence
         : sourceImplementationEvidence,
+      ...(uiExecutionContext
+        ? {
+            context: uiExecutionContext,
+            uiExecutionReminderRequired: true,
+          }
+        : {}),
       ...(dispatchPrerequisite ? { dispatchPrerequisite } : {}),
-    });
+    };
   });
+}
+
+const UI_EXECUTION_REMINDER_MARKER = "UI EXECUTION REMINDER";
+
+const UI_EXECUTION_SIGNAL_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bui\b/i,
+  /\bux\b/i,
+  /\b(frontend|front-end|client-side)\b/i,
+  /\b(page|screen|view|layout|component|hero|gallery|form|modal|landing\s+page|dashboard|navigation)\b/i,
+  /\b(html|css|scss|sass|tailwind|tsx|jsx|react|vue|svelte|next\.js|vite)\b/i,
+]);
+
+function buildUiExecutionSignalText(plan: Record<string, unknown>, sourcePlan?: Record<string, unknown> | null): string {
+  const acceptanceCriteria = Array.isArray(plan?.acceptance_criteria)
+    ? plan.acceptance_criteria
+    : Array.isArray(sourcePlan?.acceptance_criteria)
+      ? sourcePlan?.acceptance_criteria
+      : [];
+  const targetFiles = Array.isArray(plan?.target_files)
+    ? plan.target_files
+    : Array.isArray(plan?.targetFiles)
+      ? plan.targetFiles
+      : Array.isArray(sourcePlan?.target_files)
+        ? sourcePlan?.target_files
+        : Array.isArray(sourcePlan?.targetFiles)
+          ? sourcePlan?.targetFiles
+          : [];
+
+  return [
+    plan?.task,
+    plan?.title,
+    plan?.context,
+    plan?.scope,
+    plan?.verification,
+    sourcePlan?.task,
+    sourcePlan?.title,
+    sourcePlan?.context,
+    sourcePlan?.scope,
+    sourcePlan?.verification,
+    ...acceptanceCriteria,
+    ...targetFiles,
+  ].map((value) => String(value || "")).join("\n");
+}
+
+function planNeedsUiExecutionReminder(plan: Record<string, unknown>, sourcePlan?: Record<string, unknown> | null): boolean {
+  const signalText = buildUiExecutionSignalText(plan, sourcePlan);
+  return UI_EXECUTION_SIGNAL_PATTERNS.some((pattern) => pattern.test(signalText));
+}
+
+function buildUiExecutionReminderContext(plan: Record<string, unknown>, sourcePlan?: Record<string, unknown> | null): string {
+  const existingContext = String(plan?.context || sourcePlan?.context || "").trim();
+  if (existingContext.includes(UI_EXECUTION_REMINDER_MARKER)) {
+    return existingContext;
+  }
+  if (!planNeedsUiExecutionReminder(plan, sourcePlan)) {
+    return existingContext;
+  }
+
+  const reminder = [
+    `## ${UI_EXECUTION_REMINDER_MARKER}`,
+    "This plan includes UI work.",
+    "For UI work, approve plans that split the work into 3 or 4 logical parts in sequence instead of one oversized UI plan.",
+    "If the operator did not supply a concrete reference, require the implementation to source and inspect at least one external visual exemplar before product-file edits begin.",
+    "If the operator did supply a concrete reference, require direct visual inspection of that reference before the task is reduced into components, sections, or scaffolding language.",
+    "Treat HTML scraping, headings, navigation labels, DOM summaries, and component decomposition as supporting evidence only; they are not sufficient substitutes for direct visual inspection.",
+    "Require visual/image work to follow a sequential inspection loop: obtain one screenshot or source image, inspect it, record the finding, and only then move to the next image.",
+    "If policy, rights, or network access block external exemplar sourcing or reference capture, keep that blocker explicit and reject any plan that silently falls back to generic safe UI work.",
+    "Reject plans that jump straight from a UI brief to generic layout scaffolding, reusable component taxonomies, or house-style design choices without researched visual evidence.",
+    "Before you declare the UI portion finished, open and inspect the actual surface with the task-appropriate viewing adapter or UI tool (for example Playwright, browser preview, screenshot tooling, or the runtime-specific viewer available in this environment).",
+    "Do not validate the UI at a single viewport only. Check every breakpoint and responsive state required by the task, including mobile, tablet, desktop, and any task-specific layout states that can change the rendered result.",
+    "Treat UI verification as both appearance and runtime behavior. Confirm the surface looks correct and that key scroll, animation, transition, and interaction paths do not introduce visible jank, stutter, lag, or other performance regressions in the relevant runtime.",
+    "Do not stop at code-only reasoning for UI tasks. Re-check the real rendered result, compare it against the requested UI, and keep iterating until the requested UI is actually present.",
+    "Only consider the UI verified when the requested result holds across all required breakpoints, not just one convenient resolution.",
+    "Once the requested UI is visibly correct, continue the rest of the task normally and report the UI verification evidence you used.",
+  ].join("\n");
+
+  return existingContext ? `${existingContext}\n\n${reminder}` : reminder;
 }
 
 /**
@@ -2050,36 +2132,6 @@ export function validateAiProvidedBatchMetadata(
   return { valid: violations.length === 0, violations };
 }
 
-export function validateUiBatchContract(
-  plans: Record<string, unknown>[]
-): { valid: boolean; violations: string[] } {
-  if (!Array.isArray(plans) || plans.length === 0) {
-    return { valid: true, violations: [] };
-  }
-
-  const plansByBatchIndex = new Map<number, Record<string, unknown>[]>();
-  for (const plan of plans) {
-    const batchIndex = Number((plan as any)?._batchIndex);
-    if (!Number.isFinite(batchIndex) || batchIndex <= 0 || !Number.isInteger(batchIndex)) {
-      continue;
-    }
-    if (!plansByBatchIndex.has(batchIndex)) plansByBatchIndex.set(batchIndex, []);
-    plansByBatchIndex.get(batchIndex)!.push(plan);
-  }
-
-  const violations: string[] = [];
-  for (const [batchIndex, batchPlans] of plansByBatchIndex.entries()) {
-    const compatibility = analyzeUiBatchCompatibility(batchPlans);
-    if (compatibility.containsUi && compatibility.isCompatible === false) {
-      violations.push(
-        `batch ${batchIndex}: incompatible UI batch (${String(compatibility.reasonCode || "unknown")})`
-      );
-    }
-  }
-
-  return { valid: violations.length === 0, violations };
-}
-
 /**
  * Run deterministic contract re-validation on normalized patched plans.
  *
@@ -2170,17 +2222,13 @@ export function revalidatePatchedPlansAfterNormalization(
 
     const contractValidation = validatePlanContract(p, {
       activeTargetSession: opts.activeTargetSession,
+      disableIntentDowngradeValidation: true,
     });
     if (!contractValidation.valid) {
       allViolations.push(
         `plan[${i}] "${label}": ${contractValidation.violations.map((entry) => entry.message).join("; ")}`
       );
     }
-  }
-
-  const uiBatchContract = validateUiBatchContract(plans);
-  if (!uiBatchContract.valid) {
-    allViolations.push(...uiBatchContract.violations);
   }
 
   const valid = allViolations.length === 0;
@@ -3731,31 +3779,6 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
         ...result,
         approved: false,
         corrections: [...corrections, ...aiBatchCheck.violations],
-        reason: blockReason,
-        blocker,
-      }, plans, gateRisk);
-    }
-
-    const uiBatchContract = validateUiBatchContract(handoff.plans);
-    if (!uiBatchContract.valid) {
-      const blockReason = {
-        code: ATHENA_PLAN_REVIEW_REASON_CODE.UI_BATCH_CONTRACT_VIOLATION,
-        message: `Athena patchedPlans violate UI batch contract: ${uiBatchContract.violations.join(" | ")}`
-      };
-      const blocker = buildPlanReviewBlocker(blockReason.code);
-      await appendProgress(config, `[ATHENA] UI batch contract FAILED — ${blockReason.message}`);
-      await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
-      chatLog(stateDir, athenaName, `UI batch contract failed: ${uiBatchContract.violations.join(" | ")}`);
-      await appendAlert(config, {
-        severity: ALERT_SEVERITY.CRITICAL,
-        source: "athena_reviewer",
-        title: "Patched plans violate UI batch contract",
-        message: `code=${blockReason.code} violations=${uiBatchContract.violations.slice(0, 3).join(" | ")}`
-      });
-      return attachReviewArtifact({
-        ...result,
-        approved: false,
-        corrections: [...corrections, ...uiBatchContract.violations],
         reason: blockReason,
         blocker,
       }, plans, gateRisk);

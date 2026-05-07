@@ -56,10 +56,26 @@ export function nameToSlug(name) {
   return String(name || "").trim().toLowerCase().replace(/\s+/g, "-");
 }
 
+function getAgentFileCandidates(slug) {
+  const normalizedSlug = String(slug || "").trim();
+  if (!normalizedSlug) return [];
+
+  const candidates = [
+    path.join(AGENTS_DIR, `${normalizedSlug}.agent.md`),
+    path.join(process.cwd(), ".github", "agents", `${normalizedSlug}.agent.md`),
+  ];
+
+  return candidates.filter((candidate, index, allCandidates) => allCandidates.indexOf(candidate) === index);
+}
+
+function resolveAgentFilePath(slug) {
+  return getAgentFileCandidates(slug).find((candidate) => existsSync(candidate)) || getAgentFileCandidates(slug)[0] || path.join(AGENTS_DIR, `${String(slug || "").trim()}.agent.md`);
+}
+
 // ÔöÇÔöÇ Check if .agent.md file exists for a slug ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 export function agentFileExists(slug) {
-  return existsSync(path.join(AGENTS_DIR, `${slug}.agent.md`));
+  return Boolean(resolveAgentFilePath(slug) && existsSync(resolveAgentFilePath(slug)));
 }
 
 function ensureAgentFileAvailableForExecution(slug, executionCwd) {
@@ -69,7 +85,7 @@ function ensureAgentFileAvailableForExecution(slug, executionCwd) {
   if (!normalizedCwd) return agentFileExists(normalizedSlug);
   if (!existsSync(normalizedCwd)) return false;
 
-  const repoAgentPath = path.join(AGENTS_DIR, `${normalizedSlug}.agent.md`);
+  const repoAgentPath = resolveAgentFilePath(normalizedSlug);
   const executionAgentPath = path.join(normalizedCwd, ".github", "agents", `${normalizedSlug}.agent.md`);
   if (existsSync(executionAgentPath)) return true;
   if (!existsSync(repoAgentPath)) return false;
@@ -92,7 +108,7 @@ export function agentFileExistsForExecution(slug, executionCwd) {
 }
 
 function readAgentFrontmatterSnapshot(slug: string): AgentFrontmatterSnapshot {
-  const filePath = path.join(AGENTS_DIR, `${slug}.agent.md`);
+  const filePath = resolveAgentFilePath(slug);
   if (!existsSync(filePath)) {
     return { filePath, raw: null, frontmatter: null };
   }

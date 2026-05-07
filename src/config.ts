@@ -2,8 +2,13 @@
 import path from "node:path";
 import type { Config } from "./types/index.js";
 import { bootstrapEnvironment } from "./env_bootstrap.js";
-
-bootstrapEnvironment();
+import { readAtlasBuildRequest } from "./atlas/build_request_state.js";
+import {
+  applyCopilotPlanProfile,
+  applyRoleRegistryModelOverride,
+  fetchCopilotAccountProfile,
+  type CopilotResolvedModelSelection,
+} from "./core/copilot_plan_profile.js";
 
 function must(value: string | undefined, _key: string): string | null {
   if (!value || !value.trim()) {
@@ -12,8 +17,9 @@ function must(value: string | undefined, _key: string): string | null {
   return value.trim();
 }
 
-export async function loadConfig(): Promise<Config> {
-  const rootDir = process.cwd();
+export async function loadConfig(options: { repoRoot?: string } = {}): Promise<Config> {
+  const rootDir = path.resolve(options.repoRoot || process.cwd());
+  bootstrapEnvironment({ repoRoot: rootDir });
   const configPath = path.join(rootDir, "box.config.json");
   const raw = await fs.readFile(configPath, "utf8");
   const fileConfig = JSON.parse(raw);
@@ -24,12 +30,12 @@ export async function loadConfig(): Promise<Config> {
       || process.env.GH_TOKEN,
       "GITHUB_TOKEN"
     ),
-    // Copilot CLI needs a fine-grained PAT (github_pat_) with Copilot permissions.
-    // Legacy local variable names are canonicalized by bootstrapEnvironment().
+    // Copilot execution needs a fine-grained PAT (github_pat_) with Copilot permissions.
+    // COPILOT_GITHUB_TOKEN remains a legacy compatibility alias.
     copilotGithubToken: must(
-      process.env.COPILOT_GITHUB_TOKEN
-      || process.env.GITHUB_FINEGRADED,
-      "COPILOT_GITHUB_TOKEN"
+      process.env.GITHUB_FINEGRADED
+      || process.env.COPILOT_GITHUB_TOKEN,
+      "GITHUB_FINEGRADED"
     ),
     targetRepo: must(process.env.TARGET_REPO, "TARGET_REPO"),
     targetBaseBranch: process.env.TARGET_BASE_BRANCH?.trim() || "main",
@@ -313,6 +319,34 @@ export async function loadConfig(): Promise<Config> {
     }
   };
 
+  const copilotPlanToken = String(
+    process.env.BOX_GITHUB_BILLING_TOKEN
+    || env.copilotGithubToken
+    || env.githubToken
+    || ""
+  ).trim();
+  const atlasBuildRequest = await readAtlasBuildRequest(path.join(rootDir, "state"));
+  const copilotAccountProfile = await fetchCopilotAccountProfile(copilotPlanToken);
+  const resolvedCopilot = applyCopilotPlanProfile(
+    copilotWithRolePolicy,
+    copilotAccountProfile,
+    atlasBuildRequest?.selectedModel || null,
+  );
+  const activeModelSelection = (resolvedCopilot.activeModelSelection || null) as CopilotResolvedModelSelection | null;
+  const resolvedRoleRegistry = activeModelSelection?.mode === "single"
+    ? applyRoleRegistryModelOverride(fileConfig.roleRegistry, activeModelSelection.model)
+    : fileConfig.roleRegistry;
+  if (copilotAccountProfile) {
+    const envMetadata = env as Record<string, unknown>;
+    envMetadata.copilotPlanTier = copilotAccountProfile.planTier;
+    envMetadata.copilotPlanLabel = copilotAccountProfile.planLabel;
+    envMetadata.copilotModelAccess = copilotAccountProfile.modelAccess;
+    envMetadata.copilotRequestedModel = atlasBuildRequest?.selectedModel || null;
+    envMetadata.copilotEffectiveModel = activeModelSelection?.model || null;
+    envMetadata.copilotModelSelectionMode = activeModelSelection?.mode || "schema";
+    envMetadata.copilotModelSelectionSource = activeModelSelection?.source || "plan_schema";
+  }
+
   const planner = {
     ...(fileConfig.planner ?? {}),
     useReviewerForPlanning: runtime.reviewerProvider === "copilot"
@@ -450,7 +484,8 @@ export async function loadConfig(): Promise<Config> {
   return {
     rootDir,
     ...fileConfig,
-    copilot: copilotWithRolePolicy,
+    roleRegistry: resolvedRoleRegistry,
+    copilot: resolvedCopilot,
     planner,
     selfImprovement,
     selfDev,

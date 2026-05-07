@@ -25,7 +25,6 @@ import {
   ATHENA_PLAN_REVIEW_REASON_CODE,
   isAthenaReviewAlignedToTargetSession,
   evaluateStaleArtifactClosureFastpath,
-  validateUiBatchContract,
 } from "../../src/core/athena_reviewer.js";
 import { evaluatePreDispatchGovernanceGate, BLOCK_REASON } from "../../src/core/orchestrator.js";
 import fs from "node:fs/promises";
@@ -559,34 +558,25 @@ describe("normalizePatchedPlansForDispatch", () => {
     assert.deepEqual(result[0].implementationEvidence, ["src/atlas/state_bridge.ts is the concrete implementation surface"]);
   });
 
-  it("stamps explicit UI dispatch metadata for UI contract plans", () => {
+  it("adds a UI execution reminder to UI-facing plans before worker handoff", () => {
     const result = normalizePatchedPlansForDispatch([
       {
-        task: "Repair runtime shell against UI contract",
-        role: "evolution-worker",
+        task: "Build the marketing landing page hero and reservation form UI",
+        role: "integration-worker",
         wave: 1,
-        uiContract: {
-          contractId: "shell@v1",
-          schemaVersion: 1,
-          targetSurfaces: ["web-runtime"],
-          fields: { layoutModel: "shell" },
-          requiredFields: ["layoutModel"],
-          forbiddenPatterns: ["modal_inside_modal"],
-          accessibilityFloor: "WCAG-AA",
-        },
-        uiHtml: "<main><nav></nav></main>",
-        target_files: ["src/ui/shell.tsx"],
-        scope: "src/ui",
-        acceptance_criteria: ["Shell conforms to contract"],
-      },
+        target_files: ["src/App.tsx", "src/styles.css"],
+        scope: "Landing page hero and reservation experience",
+        acceptance_criteria: ["Hero and reservation form match the requested UI"],
+      }
     ]);
 
-    assert.equal(result[0].capabilityTag, "ui-contract");
-    assert.equal(result[0].taskKind, "ui-contract");
-    assert.equal(result[0].kind, "ui-contract");
-    assert.equal(result[0].uiSurface, "web-runtime");
-    assert.deepEqual(result[0].targetSurfaces, ["web-runtime"]);
-    assert.equal((result[0].uiScenarioMatrix as any).scenarios[0].surface, "web-runtime");
+    assert.equal(result[0].uiExecutionReminderRequired, true);
+    assert.match(String(result[0].context || ""), /## UI EXECUTION REMINDER/);
+    assert.match(String(result[0].context || ""), /Playwright, browser preview, screenshot tooling/i);
+    assert.match(String(result[0].context || ""), /Do not validate the UI at a single viewport only/i);
+    assert.match(String(result[0].context || ""), /mobile, tablet, desktop/i);
+    assert.match(String(result[0].context || ""), /Treat UI verification as both appearance and runtime behavior/i);
+    assert.match(String(result[0].context || ""), /scroll, animation, transition, and interaction paths/i);
   });
 
   it("keeps matched patched plans reviewable during revalidation when Athena omits source metadata", () => {
@@ -945,76 +935,6 @@ describe("revalidatePatchedPlansAfterNormalization (Task 3)", () => {
     assert.equal(result.valid, true, "absent verification field must not cause a violation");
   });
 
-  it("fails when Athena assigns a ui-contract plan and a non-ui plan to the same batch", () => {
-    const result = revalidatePatchedPlansAfterNormalization([
-      {
-        task: "Repair shell visual contract",
-        role: "integration-worker",
-        wave: 1,
-        _batchIndex: 1,
-        _batchTotal: 1,
-        _batchWave: 1,
-        _batchWorkerRole: "integration-worker",
-        taskKind: "ui-contract",
-        capabilityTag: "ui-contract",
-        uiSurface: "web-runtime",
-        targetSurfaces: ["web-runtime"],
-        continuationFamilyKey: "atlas:shell",
-        uiContract: {
-          contractId: "atlas-shell@v1",
-          schemaVersion: 1,
-          targetSurfaces: ["web-runtime"],
-          fields: {},
-          requiredFields: [],
-          forbiddenPatterns: [],
-          accessibilityFloor: "WCAG-AA",
-        },
-        target_files: ["src/ui/shell.tsx"],
-        scope: "src/ui/",
-        acceptance_criteria: ["UI contract passes"],
-      },
-      {
-        task: "Wire shell session state",
-        role: "integration-worker",
-        wave: 1,
-        _batchIndex: 1,
-        _batchTotal: 1,
-        _batchWave: 1,
-        _batchWorkerRole: "integration-worker",
-        taskKind: "integration",
-        target_files: ["src/state/session.ts"],
-        scope: "src/state/",
-        acceptance_criteria: ["State wiring passes"],
-      },
-    ]);
-
-    assert.equal(result.valid, false);
-    assert.ok(result.violations.some((entry) => /incompatible UI batch/i.test(entry)));
-  });
-});
-
-describe("validateUiBatchContract", () => {
-  it("rejects mixed UI and non-UI patched batches", () => {
-    const result = validateUiBatchContract([
-      {
-        _batchIndex: 1,
-        taskKind: "ui-contract",
-        capabilityTag: "ui-contract",
-        uiSurface: "web-runtime",
-        targetSurfaces: ["web-runtime"],
-        continuationFamilyKey: "atlas:shell",
-      },
-      {
-        _batchIndex: 1,
-        taskKind: "integration",
-        task: "Update session store",
-      },
-    ] as any[]);
-
-    assert.equal(result.valid, false);
-    assert.ok(result.violations.some((entry) => /batch 1: incompatible UI batch/i.test(entry)));
-    assert.equal(ATHENA_PLAN_REVIEW_REASON_CODE.UI_BATCH_CONTRACT_VIOLATION, "UI_BATCH_CONTRACT_VIOLATION");
-  });
 });
 
 // ── correctBoundedPacketDefects ───────────────────────────────────────────────

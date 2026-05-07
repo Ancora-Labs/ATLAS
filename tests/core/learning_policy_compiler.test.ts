@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   compileLessonsToPolicies,
   validatePlanAgainstPolicies,
@@ -22,6 +25,7 @@ import {
   LOW_YIELD_IMPACT_THRESHOLD,
   LOW_YIELD_MIN_EVIDENCE_RECORDS,
   buildPromptTruthMaintenanceSnapshot,
+  collectPromptTruthSignals,
   resolveStructuredTruthRetirement,
 } from "../../src/core/learning_policy_compiler.js";
 
@@ -352,6 +356,31 @@ describe("learning_policy_compiler", () => {
   });
 
   describe("truth reconciliation", () => {
+    it("returns a neutral truth snapshot without ENOENT noise when the workspace is not the BOX core repo", async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-truth-neutral-"));
+
+      const snapshot = await collectPromptTruthSignals(tempRoot, {
+        latestMainCiConclusion: "success",
+      });
+
+      assert.deepEqual(snapshot.errors, []);
+      assert.equal(snapshot.signals.latestMainCiHealthy, true);
+      assert.equal(snapshot.signals.athenaTrackedFieldsDeepEquality, false);
+      assert.equal(snapshot.signals.preDispatchGovernanceGate, false);
+      assert.equal(snapshot.signals.preDispatchLaneDiversityGate, false);
+    });
+
+    it("negative: still reports a targeted error when only one BOX truth source is missing", async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-truth-partial-"));
+      await fs.mkdir(path.join(tempRoot, "src", "core"), { recursive: true });
+      await fs.writeFile(path.join(tempRoot, "src", "core", "athena_reviewer.ts"), "", "utf8");
+
+      const snapshot = await collectPromptTruthSignals(tempRoot);
+
+      assert.equal(snapshot.errors.length, 1);
+      assert.match(snapshot.errors[0], /orchestrator:missing truth source/i);
+    });
+
     it("retires explicitly closed historical items even when the text still sounds active", () => {
       const retirement = resolveStructuredTruthRetirement(
         {

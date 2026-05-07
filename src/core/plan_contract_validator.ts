@@ -827,6 +827,7 @@ const PROTECTED_INTENT_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
   /\btrust(?:-building|\s+signals?)\b/i,
   /\breal(?:-time)?\b/i,
   /\breal\s+(?:api|integration|payment|auth|data|photo(?:s|graphy)?)\b/i,
+  /\b(?:stock\s+(?:image|images|photo|photos)|external\s+(?:image|images|imagery|assets)|authentic\s+(?:imagery|images)|food\s+photography|product\s+photography)\b/i,
   /\bfull\s+(?:integration|experience|flow)\b/i,
   /\b(?:native\s+desktop\s+window|desktop\s+gui|desktop-first|browser\s+route|dashboard\s+page|terminal\s+wrapper)\b/i,
   /\b(?:launcher\s+script|root\s+resources\s+executable|direct\s+(?:executable|app\s+launch))\b/i,
@@ -846,6 +847,9 @@ const DOWNGRADE_SUBSTITUTE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
   /\bminimal\s+version\b/i,
   /\bstand-?ins?\b/i,
   /\bhardcoded\s+(?:sample|samples|data)\b/i,
+  /\blow-?fidelity\s+(?:visuals?|imagery|gallery|cards?)\b/i,
+  /\bfiller\s+(?:visuals?|imagery|gallery|cards?)\b/i,
+  /\bgeneric\s+filler\s+(?:visuals?|imagery|gallery|cards?)\b/i,
   /\bgeneric\s+(?:illustration|illustrations|content|imagery)\b/i,
 ]);
 
@@ -864,6 +868,21 @@ const EXPLICIT_FALLBACK_DISCLOSURE_PATTERNS: ReadonlyArray<RegExp> = Object.free
   /\bdocumented\s+fallback\b/i,
 ]);
 
+const OPERATOR_AUTHORIZED_PLACEHOLDER_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bplaceholder\s+functionality\s+only\b/i,
+  /\bplaceholder\s+(?:reservation|booking)\s+(?:interaction|flow|module|functionality|ui)\b[\s\S]{0,120}\b(?:confirmed|operator|approved|direction|intent)\b/i,
+  /\b(?:confirmed|operator|approved|direction|intent)\b[\s\S]{0,120}\bplaceholder\s+(?:reservation|booking|functionality)\b/i,
+  /\b(?:realistic\s+)?mvp\s+placeholders?\b[\s\S]{0,160}\b(?:explicitly\s+inventoried|inventoried\s+as\s+such|menu|contact(?:\s+info)?|hours|venue\s+notes?|business\s+data)\b/i,
+  /\b(?:menu|contact(?:\s+info)?|hours|venue\s+notes?|business\s+data)\b[\s\S]{0,160}\b(?:realistic\s+)?mvp\s+placeholders?\b/i,
+]);
+
+const OPERATOR_AUTHORIZED_PLACEHOLDER_STRIP_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bplaceholder\s+functionality\s+only\b/gi,
+  /\bplaceholder\s+(?:reservation|booking)\s+(?:interaction|flow|module|functionality|ui)\b/gi,
+  /\b(?:realistic\s+)?mvp\s+placeholders?\b/gi,
+  /\b(?:menu|contact(?:\s+info)?|hours|venue\s+notes?|business\s+data)\b[\s\S]{0,80}\bplaceholders?\b/gi,
+]);
+
 const NEGATED_LAUNCHER_SCRIPT_REFERENCE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
   /\bdoes\s+not\s+require\b[\s\S]{0,120}\.(?:bat|cmd|ps1)\b/gi,
   /\bwithout\b[\s\S]{0,80}\.(?:bat|cmd|ps1)\b/gi,
@@ -874,6 +893,15 @@ const NEGATED_DOWNGRADE_REFERENCE_PATTERNS: ReadonlyArray<RegExp> = Object.freez
   /\bwithout\b[\s\S]{0,80}\b(?:placeholder(?:s)?|mock(?:ed|ing|s|up)?|stub(?:bed|s)?|demo(?:-only)?|fake|dummy|simplif(?:y|ied)|stand-?ins?)\b/gi,
   /\b(?:no|avoid|avoidance\s+of|ban(?:ned)?|forbid(?:den)?|prevent|exclude)\b[\s\S]{0,80}\b(?:placeholder(?:s)?|mock(?:ed|ing|s|up)?|stub(?:bed|s)?|demo(?:-only)?|fake|dummy|simplif(?:y|ied)|stand-?ins?)\b/gi,
   /\bdo\s+not\s+(?:use|ship|add|introduce|render|show)\b[\s\S]{0,80}\b(?:placeholder(?:s)?|mock(?:ed|ing|s|up)?|stub(?:bed|s)?|demo(?:-only)?|fake|dummy|simplif(?:y|ied)|stand-?ins?)\b/gi,
+]);
+
+const DESIGN_REFERENCE_MOCKUP_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:desktop|mobile|responsive)(?:\s*\/\s*(?:desktop|mobile|responsive))?\s+mockup\s+references?\b/gi,
+  /\bmockup\s+references?\b/gi,
+  /\breference\s+comps?\b/gi,
+  /\bdesign\s+reference\s+artifacts?\b/gi,
+  /\bhigh-?fidelity\s+reference\s+(?:surfaces|artifacts|comps?)\b/gi,
+  /\bin-?repo\s+(?:design\s+)?reference\s+(?:surfaces|artifacts|comps?)\b/gi,
 ]);
 
 function stripNegatedLauncherScriptReferences(text: string): string {
@@ -887,6 +915,26 @@ function stripNegatedLauncherScriptReferences(text: string): string {
 function stripNegatedDowngradeReferences(text: string): string {
   let sanitized = text;
   for (const pattern of NEGATED_DOWNGRADE_REFERENCE_PATTERNS) {
+    sanitized = sanitized.replace(pattern, " ");
+  }
+  return sanitized;
+}
+
+function stripDesignReferenceMockupReferences(text: string): string {
+  let sanitized = text;
+  for (const pattern of DESIGN_REFERENCE_MOCKUP_PATTERNS) {
+    sanitized = sanitized.replace(pattern, " ");
+  }
+  return sanitized;
+}
+
+function stripOperatorAuthorizedPlaceholderReferences(text: string, protectedIntentText: string): string {
+  const corpus = [protectedIntentText, text].filter(Boolean).join("\n");
+  const hasOperatorAuthorizedPlaceholder = OPERATOR_AUTHORIZED_PLACEHOLDER_PATTERNS.some((pattern) => pattern.test(corpus));
+  if (!hasOperatorAuthorizedPlaceholder) return text;
+
+  let sanitized = text;
+  for (const pattern of OPERATOR_AUTHORIZED_PLACEHOLDER_STRIP_PATTERNS) {
     sanitized = sanitized.replace(pattern, " ");
   }
   return sanitized;
@@ -914,6 +962,8 @@ function extractPlanIntentText(plan: any): string {
 
 export interface PlanValidationOptions {
   activeTargetSession?: any;
+  disableProtectedIntentValidation?: boolean;
+  disableIntentDowngradeValidation?: boolean;
 }
 
 type ProtectedIntentContext = {
@@ -950,10 +1000,15 @@ function extractProtectedIntentContext(activeTargetSession: any): ProtectedInten
     objective?.summary,
     objective?.desiredOutcome,
     intent?.summary,
+    intent?.operatorIntentBrief,
+    intent?.implementationFlexibility,
+    intent?.assetSourcingPolicy,
+    ...(normalizeIntentStringArray(intent?.operatorIntentEvidence)),
     ...(normalizeIntentStringArray(intent?.mustHaveFlows)),
     ...(normalizeIntentStringArray(intent?.scopeIn)),
     ...(normalizeIntentStringArray(intent?.scopeOut)),
     ...(normalizeIntentStringArray(intent?.successCriteria)),
+    ...(normalizeIntentStringArray(intent?.assetRequirements)),
     ...(normalizeIntentStringArray(activeTargetSession?.assumptions)),
     ...(normalizeIntentStringArray(constraints?.forbiddenActions)),
   ].map((value) => String(value || "").trim()).filter(Boolean).join("\n");
@@ -1004,8 +1059,13 @@ function isLauncherScriptSoftening(plan: any, opts?: PlanValidationOptions): boo
 
 function isSilentIntentDowngrade(plan: any, opts?: PlanValidationOptions): boolean {
   const context = extractProtectedIntentContext(opts?.activeTargetSession);
-  const text = stripNegatedDowngradeReferences(
-    stripNegatedLauncherScriptReferences(extractPlanIntentText(plan))
+  const text = stripOperatorAuthorizedPlaceholderReferences(
+    stripDesignReferenceMockupReferences(
+      stripNegatedDowngradeReferences(
+        stripNegatedLauncherScriptReferences(extractPlanIntentText(plan))
+      )
+    ),
+    context.protectedIntentText,
   );
   if (!text) return false;
 
@@ -1318,7 +1378,7 @@ export function validatePlanContract(plan, opts: PlanValidationOptions = {}): { 
     }
   }
 
-  if (isSilentIntentDowngrade(plan, opts)) {
+  if (opts.disableProtectedIntentValidation !== true && opts.disableIntentDowngradeValidation !== true && isSilentIntentDowngrade(plan, opts)) {
     violations.push({
       field: "protectedIntent",
       message: "Plan silently downgrades an explicit operator requirement or quality bar into a cheaper substitute. Temporary fallbacks are allowed only when they are clearly disclosed with the blocker reason and preserve the promised outcome class.",
@@ -1327,13 +1387,15 @@ export function validatePlanContract(plan, opts: PlanValidationOptions = {}): { 
     });
   }
 
-  if (isLauncherScriptSoftening(plan, opts)) {
-    violations.push({
-      field: "protectedIntent",
-      message: "Target intent requires a direct user-facing executable launch path from the root resources surface. Replacing that contract with a .bat/.cmd/.ps1 launcher is a silent downgrade and is not dispatchable.",
-      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
-      code: PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED,
-    });
+  if (opts.disableProtectedIntentValidation !== true) {
+    if (isLauncherScriptSoftening(plan, opts)) {
+      violations.push({
+        field: "protectedIntent",
+        message: "Target intent requires a direct user-facing executable launch path from the root resources surface. Replacing that contract with a .bat/.cmd/.ps1 launcher is a silent downgrade and is not dispatchable.",
+        severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+        code: PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED,
+      });
+    }
   }
 
   // Decomposition cap: files-in-scope ceiling.

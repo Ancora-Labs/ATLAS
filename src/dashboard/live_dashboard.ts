@@ -9,6 +9,7 @@ import { bootstrapEnvironment } from "../env_bootstrap.js";
 import { readPipelineProgress, SYSTEM_STATUS_REASON_CODE } from "../core/pipeline_progress.js";
 import { parseTypedEvent } from "../core/event_schema.js";
 import { readCycleAnalytics } from "../core/cycle_analytics.js";
+import { extractCopilotAccountProfile } from "../core/copilot_plan_profile.js";
 import { collectHypothesisScorecard } from "../core/hypothesis_scorecard.js";
 import { normalizePlatformModeState, PLATFORM_MODE } from "../core/mode_state.js";
 import { getTargetSessionProgressLogPath, listOpenTargetSessions, normalizeActiveTargetSession } from "../core/target_session_state.js";
@@ -116,6 +117,34 @@ export function isTypedEventForDomain(raw: unknown, domain?: string): boolean {
  */
 export const DASHBOARD_PAYLOAD_MAX_BYTES = 51200; // 50 KB
 
+const PIPELINE_STAGE_STALE_MS = 10 * 60 * 1000;
+
+const LEADERSHIP_ENTITY_BY_STAGE = Object.freeze({
+  jesus_awakening: "jesus",
+  jesus_reading: "jesus",
+  jesus_thinking: "jesus",
+  jesus_decided: "jesus",
+  prometheus_starting: "prometheus",
+  prometheus_reading_repo: "prometheus",
+  prometheus_analyzing: "prometheus",
+  prometheus_audit: "prometheus",
+  prometheus_done: "prometheus",
+  athena_reviewing: "Athena",
+  athena_approved: "Athena",
+  workers_dispatching: "workers",
+  workers_running: "workers",
+  workers_finishing: "workers",
+});
+
+interface LeadershipPipelineState {
+  stage: string;
+  stageLabel: string | null;
+  updatedAt: string | null;
+  authoritative: boolean;
+  activeEntity: string | null;
+  workingWorkers: string[];
+}
+
 // ── System status derivation ──────────────────────────────────────────────────
 
 /**
@@ -198,7 +227,6 @@ export function deriveSystemStatus(
 
   // ── Event-driven path: active pipeline stages ─────────────────────────────
   // pipeline_progress.stage is authoritative when it is fresh (< 10 min old).
-  const PIPELINE_STALE_MS = 10 * 60 * 1000;
   const ACTIVE_STAGES = new Set([
     "jesus_awakening", "jesus_reading", "jesus_thinking", "jesus_decided",
     "prometheus_starting", "prometheus_reading_repo", "prometheus_analyzing",
@@ -209,7 +237,7 @@ export function deriveSystemStatus(
 
   if (ACTIVE_STAGES.has(pipelineStage) && pipelineFreshnessAt) {
     const staleness = Date.now() - new Date(pipelineFreshnessAt).getTime();
-    if (staleness < PIPELINE_STALE_MS) {
+    if (staleness < PIPELINE_STAGE_STALE_MS) {
       return {
         systemStatus: "working",
         systemStatusText: "Workers Active",
@@ -272,6 +300,33 @@ export function deriveSystemStatus(
     statusSource: "fallback-heuristic",
     statusFreshnessAt: pipelineFreshnessAt,
     degradedReason: SYSTEM_STATUS_REASON_CODE.FALLBACK_HEURISTIC,
+  };
+}
+
+export function deriveLeadershipPipelineState(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  pipelineProgress: Record<string, any>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  workerActivity: Record<string, any>
+): LeadershipPipelineState {
+  const stage = String(pipelineProgress?.stage || "idle").trim() || "idle";
+  const stageLabelRaw = String(pipelineProgress?.stageLabel || "").trim();
+  const updatedAt = typeof pipelineProgress?.updatedAt === "string" ? pipelineProgress.updatedAt : null;
+  const workingWorkers = Object.keys(workerActivity || {}).filter((name) => String(workerActivity?.[name]?.status || "").toLowerCase() === "working");
+  const authoritative = Boolean(updatedAt)
+    && Number.isFinite(new Date(updatedAt as string).getTime())
+    && (Date.now() - new Date(updatedAt as string).getTime()) < PIPELINE_STAGE_STALE_MS;
+  const stageEntity = Object.prototype.hasOwnProperty.call(LEADERSHIP_ENTITY_BY_STAGE, stage)
+    ? LEADERSHIP_ENTITY_BY_STAGE[stage as keyof typeof LEADERSHIP_ENTITY_BY_STAGE]
+    : null;
+
+  return {
+    stage,
+    stageLabel: stageLabelRaw || null,
+    updatedAt,
+    authoritative,
+    activeEntity: authoritative ? stageEntity : (workingWorkers.length > 0 ? "workers" : null),
+    workingWorkers,
   };
 }
 
@@ -697,14 +752,19 @@ async function fetchCopilotInternalQuota() {
       }
     });
     if (!r.ok) return null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const j: any = await r.json();
-    const snap = j?.quota_snapshots?.premium_interactions;
-    if (!snap || typeof snap.entitlement !== "number") return null;
-    const entitlement = snap.entitlement;
-    const remaining = Number(snap.quota_remaining ?? snap.remaining ?? 0);
-    const used = entitlement - remaining;
-    return { entitlement, used, remaining, percentRemaining: snap.percent_remaining ?? null };
+    const profile = extractCopilotAccountProfile(await r.json());
+    if (!profile) return null;
+    return {
+      entitlement: profile.entitlement,
+      used: profile.usedRequests,
+      remaining: profile.remainingRequests,
+      percentRemaining: profile.percentRemaining,
+      planTier: profile.planTier,
+      planLabel: profile.planLabel,
+      modelAccess: profile.modelAccess,
+      planDetectedBy: profile.planDetectedBy,
+      source: profile.source,
+    };
   } catch {
     return null;
   }
@@ -785,6 +845,16 @@ async function fetchOneTimeCopilotUsage() {
     // Prefer copilot_internal/user quota snapshot for accurate premium request tracking.
     // The billing API grossQuantity differs from actual premium interaction units.
     const internalQuota = await fetchCopilotInternalQuota();
+    const fallbackProfile = extractCopilotAccountProfile({
+      quota_snapshots: {
+        premium_interactions: {
+          entitlement: parsed.quota,
+          quota_remaining: parsed.remaining,
+          used: parsed.used,
+        },
+      },
+    }, "github-billing-usage-summary");
+    const resolvedProfile = internalQuota || fallbackProfile;
     const usedRequests = internalQuota ? internalQuota.used : parsed.used;
     const quotaRequests = internalQuota ? internalQuota.entitlement : parsed.quota;
     const remainingRequests = internalQuota ? internalQuota.remaining : parsed.remaining;
@@ -794,6 +864,10 @@ async function fetchOneTimeCopilotUsage() {
       usedRequests,
       remainingRequests,
       byModel: parsed.byModel || null,
+      planTier: resolvedProfile?.planTier || null,
+      planLabel: resolvedProfile?.planLabel || "Copilot plan unknown",
+      modelAccess: resolvedProfile?.modelAccess || "current",
+      planDetectedBy: resolvedProfile?.planDetectedBy || "unknown",
       source: internalQuota ? "copilot-internal-quota" : "github-billing-usage-summary",
       fetchedAt: new Date().toISOString(),
       lastError: null
@@ -1591,6 +1665,34 @@ async function collectDashboardData() {
 
   const decisionQualityTrend = await getDecisionQualityTrend(STATE_DIR);
 
+  const cleanedWorkerActivity = (function() {
+    const sessions = workerSessions || {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cleaned: Record<string, any> = {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const [role, s] of Object.entries(sessions) as any[]) {
+      // Cross-check: if status is "working" but last non-orchestrator history says "done",
+      // the worker actually finished — session file is stale
+      let effectiveStatus = s.status || "idle";
+      if (effectiveStatus === "working" && Array.isArray(s.history) && s.history.length > 0) {
+        const lastEntry = s.history.filter(h => h && h.role !== "Athena").pop();
+        if (lastEntry && ["done", "partial", "blocked"].includes(String(lastEntry.status || "").toLowerCase())) {
+          effectiveStatus = "idle";
+        }
+      }
+      cleaned[role] = {
+        role,
+        status: effectiveStatus,
+        lastTask: s.lastTask || "",
+        lastActiveAt: s.lastActiveAt || null,
+        historyLength: Array.isArray(s.history) ? s.history.length : 0,
+        lastThinking: thinkingMap[role] || ""
+      };
+    }
+    return cleaned;
+  })();
+  const leadershipPipeline = deriveLeadershipPipelineState(pipelineProgress, cleanedWorkerActivity);
+
   // Self-Improvement control state and live log
   const siControlRaw = await readJsonSafe(path.join(STATE_DIR, "self_improvement_control.json"), { enabled: true, reason: "", updatedAt: null, updatedBy: "" });
   let siLiveLogTail = [];
@@ -1665,10 +1767,15 @@ async function collectDashboardData() {
           autoFallbacks: 0,
           byModel: {},
           quota: Number(copilotQuota),
+          usedRequests: Number(copilotUsedRequests),
           remainingRequests: copilotRemainingRequests,
           usedPercent: Number(copilotUsedPercent.toFixed(2)),
           refreshInSec: Number(copilotApiUsage?.refreshInSec || 0),
           sourceAccount: COPILOT_SOURCE_ACCOUNT,
+          planTier: String(copilotApiUsage?.planTier || ""),
+          planLabel: String(copilotApiUsage?.planLabel || "Copilot plan unknown"),
+          modelAccess: String(copilotApiUsage?.modelAccess || "current"),
+          planDetectedBy: String(copilotApiUsage?.planDetectedBy || "unknown"),
           source: copilotApiUsage?.source || "github-billing-api"
         },
         recent: []
@@ -1706,32 +1813,8 @@ async function collectDashboardData() {
       daemonRunning: daemonStatus.running
     },
     premiumUsageByWorker: derivePremiumUsageByWorker(premiumUsageLog),
-    workerActivity: (function() {
-      const sessions = workerSessions || {};
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const cleaned: Record<string, any> = {};
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      for (const [role, s] of Object.entries(sessions) as any[]) {
-        // Cross-check: if status is "working" but last non-orchestrator history says "done",
-        // the worker actually finished — session file is stale
-        let effectiveStatus = s.status || "idle";
-        if (effectiveStatus === "working" && Array.isArray(s.history) && s.history.length > 0) {
-          const lastEntry = s.history.filter(h => h && h.role !== "Athena").pop();
-          if (lastEntry && ["done", "partial", "blocked"].includes(String(lastEntry.status || "").toLowerCase())) {
-            effectiveStatus = "idle";
-          }
-        }
-        cleaned[role] = {
-          role,
-          status: effectiveStatus,
-          lastTask: s.lastTask || "",
-          lastActiveAt: s.lastActiveAt || null,
-          historyLength: Array.isArray(s.history) ? s.history.length : 0,
-          lastThinking: thinkingMap[role] || ""
-        };
-      }
-      return cleaned;
-    })(),
+    workerActivity: cleanedWorkerActivity,
+    leadershipPipeline,
     leadership: {
       athena: athenaState,
       jesus: jesusDirective,
@@ -2691,9 +2774,9 @@ function renderHtml() {
       </div>
     </section>
 
-    <!-- Leadership Chain (advanced detail) -->
+    <!-- Leadership diagnostics (advanced detail) -->
     <details class="panel details-panel" style="margin-bottom:12px">
-      <summary>Advanced: Leadership Chain Detail</summary>
+      <summary>Advanced: Leadership Diagnostics</summary>
       <section class="chain" style="padding:8px">
         <article class="chain-box user">
           <h2 class="chain-title">User (You)</h2>
@@ -3342,8 +3425,12 @@ function renderHtml() {
       var prometheus = (data && data.leadership && data.leadership.prometheus) || {};
       var Athena = (data && data.leadership && data.leadership.athena) || {};
       var wa = data && data.workerActivity ? data.workerActivity : {};
+      var leadershipPipeline = data && data.leadershipPipeline ? data.leadershipPipeline : {};
+      var activeEntity = leadershipPipeline && leadershipPipeline.activeEntity ? String(leadershipPipeline.activeEntity) : '';
+      var authoritativePipeline = leadershipPipeline && leadershipPipeline.authoritative === true;
+      var stageLabel = leadershipPipeline && leadershipPipeline.stageLabel ? String(leadershipPipeline.stageLabel) : '';
+      var workingNames = Object.keys(wa).filter(function(n) { return String((wa[n] || {}).status || '').toLowerCase() === 'working'; });
 
-      // Progress ring
       var tasks = data && data.tasks ? data.tasks : {};
       var total = Math.max(1, Number(tasks.total || 0));
       var passed = Number((tasks.totals || {}).passed || 0);
@@ -3365,10 +3452,12 @@ function renderHtml() {
       var health = String(jesus.systemHealth || 'unknown');
       var healthIcon = health === 'healthy' ? '🟢' : health === 'critical' ? '🔴' : '🟡';
       var jesusStatusEl = document.getElementById('lp-jesus-status');
-      if (jesusStatusEl) jesusStatusEl.textContent = healthIcon + ' ' + String(jesus.decision || 'waiting');
+      if (jesusStatusEl) jesusStatusEl.textContent = activeEntity === 'jesus' && authoritativePipeline
+        ? (stageLabel || (healthIcon + ' active'))
+        : (healthIcon + ' ' + String(jesus.decision || 'waiting'));
       var jesusNode = document.getElementById('lp-node-jesus');
       if (jesusNode) {
-        jesusNode.classList.toggle('active', !!jesus.decidedAt);
+        jesusNode.classList.toggle('active', activeEntity ? activeEntity === 'jesus' : !!jesus.decidedAt);
         if (changes.jesusNew) { jesusNode.classList.remove('flash'); void jesusNode.offsetWidth; jesusNode.classList.add('flash'); }
       }
 
@@ -3381,10 +3470,12 @@ function renderHtml() {
       // Prometheus node
       var prometheusStatusEl = document.getElementById('lp-prometheus-status');
       var planCount = Array.isArray(prometheus.plans) ? prometheus.plans.length : 0;
-      if (prometheusStatusEl) prometheusStatusEl.textContent = planCount > 0 ? (planCount + ' plans | ' + String(prometheus.projectHealth || '?')) : 'waiting';
+      if (prometheusStatusEl) prometheusStatusEl.textContent = activeEntity === 'prometheus' && authoritativePipeline
+        ? (stageLabel || 'active')
+        : (planCount > 0 ? (planCount + ' plans | ' + String(prometheus.projectHealth || '?')) : 'waiting');
       var prometheusNode = document.getElementById('lp-node-prometheus');
       if (prometheusNode) {
-        prometheusNode.classList.toggle('active', planCount > 0);
+        prometheusNode.classList.toggle('active', activeEntity ? activeEntity === 'prometheus' : planCount > 0);
         if (changes.prometheusNew) { prometheusNode.classList.remove('flash'); void prometheusNode.offsetWidth; prometheusNode.classList.add('flash'); }
       }
 
@@ -3398,10 +3489,12 @@ function renderHtml() {
       var AthenaStatusEl = document.getElementById('lp-Athena-status');
       var activeSessions = Number(Athena.activeSessions || 0);
       var completedCount = Array.isArray(Athena.completedTasks) ? Athena.completedTasks.length : 0;
-      if (AthenaStatusEl) AthenaStatusEl.textContent = activeSessions + ' active | ' + completedCount + ' done';
+      if (AthenaStatusEl) AthenaStatusEl.textContent = activeEntity === 'Athena' && authoritativePipeline
+        ? (stageLabel || 'active')
+        : (activeSessions + ' active | ' + completedCount + ' done');
       var AthenaNode = document.getElementById('lp-node-Athena');
       if (AthenaNode) {
-        AthenaNode.classList.toggle('active', !!Athena.coordinatedAt);
+        AthenaNode.classList.toggle('active', activeEntity ? activeEntity === 'Athena' : !!Athena.coordinatedAt);
         if (changes.AthenaNew) { AthenaNode.classList.remove('flash'); void AthenaNode.offsetWidth; AthenaNode.classList.add('flash'); }
       }
 
@@ -3412,12 +3505,13 @@ function renderHtml() {
       if (arrowMWLabel) arrowMWLabel.textContent = activeSessions > 0 ? ('dispatch ' + activeSessions) : '—';
 
       // Workers node
-      var workingNames = Object.keys(wa).filter(function(n) { return String((wa[n] || {}).status || '').toLowerCase() === 'working'; });
       var workersStatusEl = document.getElementById('lp-workers-status');
-      if (workersStatusEl) workersStatusEl.textContent = workingNames.length > 0 ? (workingNames.length + ' working') : 'idle';
+      if (workersStatusEl) workersStatusEl.textContent = activeEntity === 'workers' && authoritativePipeline
+        ? (stageLabel || 'workers active')
+        : (workingNames.length > 0 ? (workingNames.length + ' working') : 'idle');
       var workersNode = document.getElementById('lp-node-workers');
       if (workersNode) {
-        workersNode.classList.toggle('active', workingNames.length > 0);
+        workersNode.classList.toggle('active', activeEntity ? activeEntity === 'workers' : workingNames.length > 0);
         if (changes.newWorkers.length > 0) { workersNode.classList.remove('flash'); void workersNode.offsetWidth; workersNode.classList.add('flash'); }
       }
 

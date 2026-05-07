@@ -3,9 +3,10 @@ import fs from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { readJson, spawnAsync, writeJson } from "./fs_utils.js";
-import { agentFileExists, appendAgentLiveLog, appendAgentLiveLogDetail, buildAgentArgs, parseAgentOutput, writeAgentDebugFile } from "./agent_loader.js";
+import { agentFileExistsForExecution, appendAgentLiveLog, appendAgentLiveLogDetail, buildAgentArgs, parseAgentOutput, writeAgentDebugFile } from "./agent_loader.js";
 import { appendProgress } from "./state_tracker.js";
 import { getTargetCompletionPath, getTargetSessionPath, loadActiveTargetSession } from "./target_session_state.js";
+import { evaluateTargetClosure, isTargetClosureDecisionTerminal } from "./target_closure_engine.js";
 
 export const TARGET_SUCCESS_CONTRACT_STATUS = Object.freeze({
   OPEN: "open",
@@ -84,12 +85,38 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
+function parseTimestampOrZero(value: unknown): number {
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function laterTimestamp(left: string | null, right: string | null): string | null {
+  return parseTimestampOrZero(right) > parseTimestampOrZero(left) ? right : left;
+}
+
+function getSessionReactivatedAt(session: any): number {
+  return parseTimestampOrZero(session?.lifecycle?.reactivatedAt);
+}
+
+function isEvidenceCurrentForSession(session: any, evidenceAt: string | null): boolean {
+  const reactivatedAt = getSessionReactivatedAt(session);
+  if (reactivatedAt <= 0) {
+    return true;
+  }
+  return parseTimestampOrZero(evidenceAt) >= reactivatedAt;
+}
+
 function normalizeText(value: unknown): string {
   return String(value || "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeOptionalString(value: unknown): string | null {
+  const normalized = String(value || "").trim();
+  return normalized ? normalized : null;
 }
 
 function tokenizeMeaningfulWords(value: unknown): string[] {
@@ -102,6 +129,7 @@ function parseWorkerEvidence(rawText: string) {
   const text = String(rawText || "");
   const status = (text.match(/BOX_STATUS=([^\n\r]+)/i)?.[1] || "").trim().toLowerCase() || null;
   const skipReason = (text.match(/BOX_SKIP_REASON=([^\n\r]+)/i)?.[1] || "").trim().toLowerCase() || null;
+  const prUrl = (text.match(/BOX_PR_URL=(https?:\/\/\S+)/i)?.[1] || "").trim() || null;
   const mergedSha = (text.match(/BOX_MERGED_SHA=([0-9a-f]{7,40})/i)?.[1] || "").trim() || null;
   const expectedOutcome = (text.match(/BOX_EXPECTED_OUTCOME=([^\n\r]+)/i)?.[1] || "").trim() || null;
   const actualOutcome = (text.match(/BOX_ACTUAL_OUTCOME=([^\n\r]+)/i)?.[1] || "").trim() || null;
@@ -109,12 +137,248 @@ function parseWorkerEvidence(rawText: string) {
   return {
     status,
     skipReason,
+    prUrl,
     mergedSha,
     expectedOutcome,
     actualOutcome,
     deliveredSentence,
     rawText: text,
   };
+}
+
+function buildStampedWorkerHeader(session: any): string {
+  return [
+    `TARGET_PROJECT_ID: ${String(session?.projectId || "")}`,
+    `TARGET_SESSION_ID: ${String(session?.sessionId || "")}`,
+    `TARGET_REPO_URL: ${String(session?.repo?.repoUrl || "")}`,
+    `TARGET_REPO_FULL_NAME: ${String(session?.repo?.repoFullName || "")}`,
+    `TARGET_WORKSPACE_PATH: ${String(session?.workspace?.path || "")}`,
+  ].join("\n");
+}
+
+function collectRoleVerificationCommands(dispatchCheckpoint: any, roleName: string): string[] {
+  const plans = Array.isArray(dispatchCheckpoint?.dispatchPlanSnapshot)
+    ? dispatchCheckpoint.dispatchPlanSnapshot
+    : [];
+  const normalizedRoleName = String(roleName || "").trim().toLowerCase();
+  const commands: string[] = plans.flatMap((plan: any) => {
+    const planRoles = [
+      plan?.role,
+      plan?.owner,
+      plan?.worker,
+      plan?._originalRole,
+      plan?._originalSpecialistRole,
+      plan?.planArtifact?.role,
+    ]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean);
+    if (!planRoles.includes(normalizedRoleName)) {
+      return [] as string[];
+    }
+    const candidates = [
+      ...(Array.isArray(plan?.verification_commands) ? plan.verification_commands : []),
+      ...(Array.isArray(plan?.verificationCommands) ? plan.verificationCommands : []),
+      ...(Array.isArray(plan?.planArtifact?.verificationCommands) ? plan.planArtifact.verificationCommands : []),
+      plan?.verification,
+    ];
+    return candidates
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean);
+  });
+  return Array.from(new Set(commands));
+}
+
+function buildRuntimeArtifactEvidenceText(
+  session: any,
+  roleName: string,
+  completedTasks: string[],
+  verificationCommands: string[],
+  prUrl: string | null,
+): string {
+  const lines = [buildStampedWorkerHeader(session), "BOX_STATUS=done"];
+  const objectiveSummary = String(session?.objective?.summary || "").trim();
+  const intentSummary = String(session?.intent?.summary || "").trim();
+  const acceptanceCriteria = Array.isArray(session?.objective?.acceptanceCriteria)
+    ? session.objective.acceptanceCriteria.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
+    : [];
+  const scopeIn = Array.isArray(session?.intent?.scopeIn)
+    ? session.intent.scopeIn.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
+    : [];
+  if (prUrl) {
+    lines.push(`BOX_PR_URL=${prUrl}`);
+  }
+
+  if (objectiveSummary) {
+    lines.push(`BOX_OBJECTIVE_SUMMARY=${objectiveSummary}`);
+  }
+  if (intentSummary) {
+    lines.push(`BOX_INTENT_SUMMARY=${intentSummary}`);
+  }
+  if (scopeIn.length > 0) {
+    lines.push(`BOX_SCOPE_IN=${scopeIn.join(" | ")}`);
+  }
+  if (acceptanceCriteria.length > 0) {
+    lines.push(`BOX_ACCEPTANCE_CRITERIA=${acceptanceCriteria.join(" | ")}`);
+  }
+
+  if (completedTasks.length > 0) {
+    lines.push(`BOX_EXPECTED_OUTCOME=${completedTasks.join(" | ")}`);
+  }
+
+  const actualOutcomeParts: string[] = [];
+  if (completedTasks.length > 0) {
+    actualOutcomeParts.push(`Completed session work: ${completedTasks.join(" | ")}.`);
+  }
+  if (prUrl) {
+    actualOutcomeParts.push(`Delivered target changes through ${prUrl}.`);
+  }
+  if (verificationCommands.length > 0) {
+    actualOutcomeParts.push(`Verification commands for this delivered session: ${verificationCommands.join(" ; ")}.`);
+  }
+  if (roleName === "quality-worker" && verificationCommands.length > 0) {
+    actualOutcomeParts.push("Release validation evidence is present for the delivered target.");
+  }
+  if (actualOutcomeParts.length > 0) {
+    lines.push(`BOX_ACTUAL_OUTCOME=${actualOutcomeParts.join(" ")}`);
+  }
+
+  if (session?.repo?.repoUrl && (roleName === "quality-worker" || prUrl)) {
+    lines.push(`DELIVERED: Product delivered to ${String(session.repo.repoUrl)}.`);
+  }
+
+  for (const command of verificationCommands) {
+    lines.push(command);
+  }
+
+  return lines.join("\n");
+}
+
+async function loadSessionRuntimeArtifactEvidenceEntries(stateDir: string, session: any) {
+  const projectId = String(session?.projectId || "").trim();
+  const sessionId = String(session?.sessionId || "").trim();
+  if (!projectId || !sessionId) {
+    return [];
+  }
+
+  const sessionDir = getTargetSessionPath(stateDir, projectId, sessionId);
+  const runtimeDir = path.join(sessionDir, "runtime");
+  const [workerCycleArtifacts, dispatchCheckpoint] = await Promise.all([
+    readJson(path.join(runtimeDir, "worker_cycle_artifacts.json"), null),
+    readJson(path.join(runtimeDir, "dispatch_checkpoint.json"), null),
+  ]);
+
+  const cycles = workerCycleArtifacts && typeof workerCycleArtifacts === "object" && workerCycleArtifacts.cycles && typeof workerCycleArtifacts.cycles === "object"
+    ? Object.values(workerCycleArtifacts.cycles as Record<string, any>)
+    : [];
+  const roleMap = new Map<string, {
+    tasks: Set<string>;
+    verificationCommands: Set<string>;
+    prUrl: string | null;
+    done: boolean;
+    evidenceAt: string | null;
+  }>();
+
+  for (const rawCycle of cycles) {
+    if (!rawCycle || typeof rawCycle !== "object") {
+      continue;
+    }
+    const workerSessions = rawCycle.workerSessions && typeof rawCycle.workerSessions === "object"
+      ? rawCycle.workerSessions as Record<string, any>
+      : {};
+    const workerActivity = rawCycle.workerActivity && typeof rawCycle.workerActivity === "object"
+      ? rawCycle.workerActivity as Record<string, any>
+      : {};
+
+    for (const [roleName, rawSession] of Object.entries(workerSessions)) {
+      const state = roleMap.get(roleName) || {
+        tasks: new Set<string>(),
+        verificationCommands: new Set<string>(),
+        prUrl: null,
+        done: false,
+        evidenceAt: null,
+      };
+      const lastStatus = String((rawSession as any)?.lastStatus || (rawSession as any)?.status || "").trim().toLowerCase();
+      if (lastStatus === "done") {
+        state.done = true;
+        state.evidenceAt = laterTimestamp(
+          state.evidenceAt,
+          normalizeOptionalString((rawSession as any)?.updatedAt) || normalizeOptionalString((rawCycle as any)?.updatedAt),
+        );
+      }
+      for (const command of collectRoleVerificationCommands(dispatchCheckpoint, roleName)) {
+        state.verificationCommands.add(command);
+      }
+      roleMap.set(roleName, state);
+    }
+
+    for (const [roleName, rawEntries] of Object.entries(workerActivity)) {
+      const state = roleMap.get(roleName) || {
+        tasks: new Set<string>(),
+        verificationCommands: new Set<string>(),
+        prUrl: null,
+        done: false,
+        evidenceAt: null,
+      };
+      for (const command of collectRoleVerificationCommands(dispatchCheckpoint, roleName)) {
+        state.verificationCommands.add(command);
+      }
+      if (Array.isArray(rawEntries)) {
+        for (const rawEntry of rawEntries) {
+          if (!rawEntry || typeof rawEntry !== "object") {
+            continue;
+          }
+          const status = String((rawEntry as any).status || "").trim().toLowerCase();
+          if (status === "done") {
+            state.done = true;
+            state.evidenceAt = laterTimestamp(
+              state.evidenceAt,
+              normalizeOptionalString((rawEntry as any).at) || normalizeOptionalString((rawEntry as any).updatedAt),
+            );
+            const prUrl = String((rawEntry as any).pr || "").trim();
+            if (prUrl) {
+              state.prUrl = prUrl;
+            }
+            const taskIds = Array.isArray((rawEntry as any).taskIds)
+              ? (rawEntry as any).taskIds
+              : [];
+            for (const taskId of taskIds) {
+              const normalizedTask = String(taskId || "").trim();
+              if (normalizedTask) {
+                state.tasks.add(normalizedTask);
+              }
+            }
+            const taskText = String((rawEntry as any).task || "").trim();
+            if (taskText) {
+              state.tasks.add(taskText);
+            }
+          }
+        }
+      }
+      roleMap.set(roleName, state);
+    }
+  }
+
+  return [...roleMap.entries()]
+    .filter(([, state]) => state.done)
+    .map(([roleName, state]) => {
+      const text = buildRuntimeArtifactEvidenceText(
+        session,
+        roleName,
+        [...state.tasks],
+        [...state.verificationCommands],
+        state.prUrl,
+      );
+      return {
+        filePath: path.join(runtimeDir, `synthetic_worker_${roleName}.txt`),
+        roleName,
+        scope: "session",
+        text,
+        aligned: true,
+        evidenceAt: state.evidenceAt,
+        evidence: parseWorkerEvidence(text),
+      };
+    })
+    .filter((entry) => entry.text.trim());
 }
 
 function getTargetSessionWorkerEvidenceDir(stateDir: string, projectId: string, sessionId: string): string {
@@ -126,6 +390,7 @@ function extractWorkerRoleFromEvidencePath(filePath: string): string {
 }
 
 async function loadAlignedWorkerEvidenceEntries(stateDir: string, session: any) {
+  const reactivatedAt = getSessionReactivatedAt(session);
   const candidatePaths = new Set<string>();
   const sessionEvidenceDir = session?.projectId && session?.sessionId
     ? getTargetSessionWorkerEvidenceDir(stateDir, String(session.projectId), String(session.sessionId))
@@ -150,17 +415,24 @@ async function loadAlignedWorkerEvidenceEntries(stateDir: string, session: any) 
   const entries = await Promise.all([...candidatePaths].map(async (filePath) => {
     const text = await readTextIfExists(filePath);
     const aligned = isWorkerEvidenceAlignedToSession(text, session);
+    const stat = await fs.stat(filePath).catch(() => null);
     return {
       filePath,
       roleName: extractWorkerRoleFromEvidencePath(filePath),
       scope: sessionEvidenceDir && filePath.startsWith(sessionEvidenceDir) ? "session" : "global",
       text,
       aligned,
+      evidenceAt: stat && Number.isFinite(stat.mtimeMs) ? new Date(stat.mtimeMs).toISOString() : null,
       evidence: parseWorkerEvidence(aligned ? text : ""),
     };
   }));
 
-  return entries.filter((entry) => entry.aligned && entry.text.trim());
+  const runtimeArtifactEntries = await loadSessionRuntimeArtifactEvidenceEntries(stateDir, session);
+
+  return [
+    ...entries.filter((entry) => entry.aligned && entry.text.trim() && (reactivatedAt <= 0 || isEvidenceCurrentForSession(session, entry.evidenceAt))),
+    ...runtimeArtifactEntries.filter((entry) => reactivatedAt <= 0 || isEvidenceCurrentForSession(session, entry.evidenceAt)),
+  ];
 }
 
 function scoreDeliveryEntry(session: any, entry: any): number {
@@ -171,9 +443,10 @@ function scoreDeliveryEntry(session: any, entry: any): number {
   const scopeBoost = entry?.scope === "session" ? 1000 : 0;
   const roleBoost = DELIVERY_ROLE_PRIORITY[String(entry?.roleName || "").toLowerCase()] || 100;
   const mergedBoost = evidence.mergedSha ? 60 : 0;
+  const prBoost = evidence.prUrl ? 45 : 0;
   const outcomeBoost = evidence.actualOutcome ? 30 : 0;
   const deliveredBoost = evidence.deliveredSentence ? 20 : 0;
-  return (statusEligible ? 5000 : 0) + scopeBoost + roleBoost + mergedBoost + outcomeBoost + deliveredBoost;
+  return (statusEligible ? 5000 : 0) + scopeBoost + roleBoost + mergedBoost + prBoost + outcomeBoost + deliveredBoost;
 }
 
 function scoreReleaseEntry(entry: any): number {
@@ -183,9 +456,10 @@ function scoreReleaseEntry(entry: any): number {
   const scopeBoost = entry?.scope === "session" ? 1000 : 0;
   const roleBoost = RELEASE_ROLE_PRIORITY[String(entry?.roleName || "").toLowerCase()] || 100;
   const mergedBoost = evidence.mergedSha ? 50 : 0;
+  const prBoost = evidence.prUrl ? 30 : 0;
   const outcomeBoost = evidence.actualOutcome ? 30 : 0;
   const deliveredBoost = evidence.deliveredSentence ? 20 : 0;
-  return (statusEligible ? 5000 : 0) + scopeBoost + roleBoost + mergedBoost + outcomeBoost + deliveredBoost;
+  return (statusEligible ? 5000 : 0) + scopeBoost + roleBoost + mergedBoost + prBoost + outcomeBoost + deliveredBoost;
 }
 
 function selectBestDeliveryEvidence(session: any, entries: any[]) {
@@ -243,8 +517,13 @@ function getBlockingAcceptanceCriteria(session: any): string[] {
 
 function requiresProjectReadiness(session: any): boolean {
   const blockingCriteria = getBlockingAcceptanceCriteria(session);
-  return blockingCriteria.some((entry) => PROJECT_READINESS_ACCEPTANCE_CRITERIA.has(entry))
-    || session?.feedback?.pendingResearchRefresh === true;
+  if (blockingCriteria.some((entry) => PROJECT_READINESS_ACCEPTANCE_CRITERIA.has(entry))) return true;
+  if (session?.feedback?.pendingResearchRefresh === true) return true;
+  // Default: any non-trivial delivery target session must clear project readiness
+  // before closure. Sessions that only carry clarification/planning markers are
+  // treated as opt-out (handled by NON_BLOCKING_ACCEPTANCE_CRITERIA upstream).
+  if (blockingCriteria.length > 0) return true;
+  return false;
 }
 
 function resolveProjectReadinessMode(session: any): string {
@@ -474,6 +753,19 @@ function evaluateProjectReadinessDimension(
   const coreSatisfied = delivery?.status === "satisfied"
     && releaseVerification?.status === "satisfied"
     && intentCore?.status === "satisfied";
+  if (!required && coreSatisfied) {
+    return {
+      status: "not_applicable",
+      evidence: {
+        required,
+        coreSatisfied,
+        deliveryStatus: delivery?.status || "missing",
+        releaseStatus: releaseVerification?.status || "missing",
+        intentStatus: intentCore?.status || "missing",
+        researchStatus: researchSaturation?.status || "missing",
+      },
+    };
+  }
   const satisfied = coreSatisfied
     && (researchSaturation?.status === "satisfied" || (!required && researchSaturation?.status === "not_applicable"));
 
@@ -506,19 +798,48 @@ function evaluateDeliveryDimension(
   const statusEligible = repoRequiresFreshWork
     ? evolutionEvidence.status === "done"
     : evolutionEvidence.status === "done" || evolutionEvidence.status === "skipped";
-  const mergedOrDelivered = /already merged on main|already present on main|delivered in the target repository|live repo passes|live at https?:\/\/|preview is available at https?:\/\/|deployed at https?:\/\//i.test(text);
-  const mergedDeliveryEvidence = /merged\s+(?:\*\*)?pr\s*#\d+|left main clean|delivered |bulk selection|reorder controls|power-user hint|keyboard-safe/i.test(text);
-  const satisfied = statusEligible
-    && Boolean(evolutionEvidence.mergedSha)
-    && (mergedOrDelivered || mergedDeliveryEvidence || Boolean(evolutionEvidence.actualOutcome));
+  const hasDeliveryMarker = Boolean(evolutionEvidence.mergedSha || evolutionEvidence.prUrl);
+  const hasMergedShaProof = Boolean(evolutionEvidence.mergedSha);
+  const hasLiveDeploymentProof = /live at https?:\/\/|preview is available at https?:\/\/|deployed at https?:\/\//i.test(text);
+  const hasMergedOrPresentMarker = /already merged on main|already present on main|delivered in the target repository|live repo passes|merged\s+(?:\*\*)?pr\s*#\d+|left main clean/i.test(text);
+  const hasRuntimeArtifactProof = /verification commands for this delivered session:/i.test(text)
+    && /\b(test|vitest|playwright|lint|build|check)\b/i.test(text);
+  // Tightened gate: textual PR/actualOutcome alone is insufficient. Require at
+  // least one concrete artifact/runtime proof signal alongside the delivery
+  // marker before treating the dimension as satisfied.
+  const hasConcreteProof = hasMergedShaProof
+    || hasLiveDeploymentProof
+    || hasMergedOrPresentMarker
+    || hasRuntimeArtifactProof;
+  const satisfied = statusEligible && hasDeliveryMarker && hasConcreteProof;
+  let proofStrength: "strong" | "moderate" | "weak" | "missing" = "missing";
+  if (satisfied) {
+    const strongSignalCount = [hasMergedShaProof, hasLiveDeploymentProof, hasRuntimeArtifactProof, hasMergedOrPresentMarker]
+      .filter(Boolean).length;
+    if (hasMergedShaProof && strongSignalCount >= 2) {
+      proofStrength = "strong";
+    } else if (hasMergedShaProof || hasLiveDeploymentProof || hasRuntimeArtifactProof) {
+      proofStrength = "moderate";
+    } else {
+      proofStrength = "weak";
+    }
+  } else if (hasDeliveryMarker || evolutionEvidence.actualOutcome) {
+    proofStrength = "weak";
+  }
   return {
     status: satisfied ? "satisfied" : "missing",
     evidence: {
       status: evolutionEvidence.status,
       skipReason: evolutionEvidence.skipReason,
+      prUrl: evolutionEvidence.prUrl,
       mergedSha: evolutionEvidence.mergedSha,
       actualOutcome: evolutionEvidence.actualOutcome,
       repoRequiresFreshWork,
+      proofStrength,
+      hasMergedShaProof,
+      hasLiveDeploymentProof,
+      hasMergedOrPresentMarker,
+      hasRuntimeArtifactProof,
     },
   };
 }
@@ -527,9 +848,24 @@ function evaluateReleaseDimension(qualityEvidence: ReturnType<typeof parseWorker
   const text = `${qualityEvidence.rawText}\n${qualityEvidence.actualOutcome || ""}`;
   const statusEligible = qualityEvidence.status === "done" || qualityEvidence.status === "skipped";
   const hasReleaseChecks = /all six release checks passed|release checks passed|verified live main already contains/i.test(text);
-  const hasLocalTrustGate = /npm test[\s\S]*npm run lint[\s\S]*npm run build|40 passing tests|left main clean/i.test(text);
-  const releaseMarkerPresent = Boolean(qualityEvidence.deliveredSentence) || Boolean(qualityEvidence.mergedSha) || Boolean(qualityEvidence.actualOutcome);
-  const satisfied = statusEligible && releaseMarkerPresent && (hasReleaseChecks || hasLocalTrustGate);
+  const hasLocalTrustGate = /npm test[\s\S]*npm run lint(?:[\s\S]*npm run build)?|40 passing tests|left main clean/i.test(text);
+  const hasRuntimeReleaseValidation = /release validation evidence is present for the delivered target/i.test(text)
+    && /verification commands for this delivered session:/i.test(text)
+    && /\b(test|vitest|playwright|lint|build|check)\b/i.test(text);
+  const releaseMarkerPresent = Boolean(qualityEvidence.deliveredSentence) || Boolean(qualityEvidence.mergedSha) || Boolean(qualityEvidence.prUrl) || Boolean(qualityEvidence.actualOutcome);
+  const satisfied = statusEligible && releaseMarkerPresent && (hasReleaseChecks || hasLocalTrustGate || hasRuntimeReleaseValidation);
+  let proofStrength: "strong" | "moderate" | "weak" | "missing" = "missing";
+  if (satisfied) {
+    if (hasLocalTrustGate || (hasRuntimeReleaseValidation && Boolean(qualityEvidence.mergedSha))) {
+      proofStrength = "strong";
+    } else if (hasReleaseChecks || hasRuntimeReleaseValidation) {
+      proofStrength = "moderate";
+    } else {
+      proofStrength = "weak";
+    }
+  } else if (releaseMarkerPresent) {
+    proofStrength = "weak";
+  }
   return {
     status: satisfied ? "satisfied" : "missing",
     evidence: {
@@ -537,7 +873,12 @@ function evaluateReleaseDimension(qualityEvidence: ReturnType<typeof parseWorker
       skipReason: qualityEvidence.skipReason,
       deliveredSentence: qualityEvidence.deliveredSentence,
       actualOutcome: qualityEvidence.actualOutcome,
+      prUrl: qualityEvidence.prUrl,
       mergedSha: qualityEvidence.mergedSha,
+      proofStrength,
+      hasReleaseChecks,
+      hasLocalTrustGate,
+      hasRuntimeReleaseValidation,
     },
   };
 }
@@ -551,6 +892,9 @@ function evaluateIntentDimension(session: any, evidenceText: string, deliverySat
   const evidenceTokens = new Set(tokenizeMeaningfulWords(evidenceText));
   const matchedObjectiveTokens = objectiveTokens.filter((token) => evidenceTokens.has(token));
   const matchedScopeTokens = [...new Set(scopeTokens)].filter((token) => evidenceTokens.has(token));
+  const objectiveMatchRatio = objectiveTokens.length === 0
+    ? 1
+    : matchedObjectiveTokens.length / objectiveTokens.length;
   const objectiveSatisfied = objectiveTokens.length === 0
     ? true
     : matchedObjectiveTokens.length >= Math.min(2, objectiveTokens.length);
@@ -565,9 +909,25 @@ function evaluateIntentDimension(session: any, evidenceText: string, deliverySat
   });
   const blockingAcceptanceCriteria = getBlockingAcceptanceCriteria(session)
     .filter((entry: string) => !PROJECT_READINESS_ACCEPTANCE_CRITERIA.has(entry));
-  const acceptanceCriteriaSatisfied = blockingAcceptanceCriteria.every((criteria: string) => normalizeText(evidenceText).includes(normalizeText(criteria)));
+  const acceptanceCriteriaSatisfied = blockingAcceptanceCriteria.every((criteria: string) => {
+    const criteriaTokens = tokenizeMeaningfulWords(criteria);
+    if (criteriaTokens.length === 0) {
+      return true;
+    }
+    const matchedCriteriaTokens = criteriaTokens.filter((token) => evidenceTokens.has(token));
+    const minRequired = Math.min(criteriaTokens.length, Math.max(2, Math.ceil(criteriaTokens.length * 0.35)));
+    return matchedCriteriaTokens.length >= minRequired;
+  });
   const satisfied = objectiveSatisfied && mustHaveFlowSatisfied && acceptanceCriteriaSatisfied;
 
+  let matchStrength: "strong" | "moderate" | "weak" = "weak";
+  if (objectiveTokens.length === 0) {
+    matchStrength = "strong";
+  } else if (objectiveMatchRatio >= 0.6) {
+    matchStrength = "strong";
+  } else if (objectiveMatchRatio >= 0.35) {
+    matchStrength = "moderate";
+  }
   return {
     status: satisfied ? "satisfied" : "missing",
     evidence: {
@@ -575,31 +935,18 @@ function evaluateIntentDimension(session: any, evidenceText: string, deliverySat
       matchedObjectiveTokens,
       matchedScopeTokens,
       blockingAcceptanceCriteria,
+      objectiveMatchRatio: Number(objectiveMatchRatio.toFixed(3)),
+      matchStrength,
     },
   };
 }
 
 function evaluatePreferenceDimension(session: any, evidenceText: string) {
-  const preferredQualityBar = String(session?.intent?.preferredQualityBar || "").trim();
-  if (!preferredQualityBar) {
-    return {
-      status: "not_applicable",
-      evidence: { preferredQualityBar: null, matchedSignals: [] },
-    };
-  }
-
-  const matchedSignals: string[] = [];
-  const normalizedEvidence = normalizeText(evidenceText);
-  if (/fast mvp/i.test(preferredQualityBar) && /no build step|browser openable|live on main/.test(normalizedEvidence)) {
-    matchedSignals.push("fast_mvp_delivery_shape");
-  }
-  if (/complete delete task flow/i.test(preferredQualityBar) && /complete toggles|delete removes|release checks passed/.test(normalizedEvidence)) {
-    matchedSignals.push("core_todo_flows_verified");
-  }
-
+  void session;
+  void evidenceText;
   return {
-    status: matchedSignals.length > 0 ? "satisfied" : "unverified",
-    evidence: { preferredQualityBar, matchedSignals },
+    status: "not_applicable",
+    evidence: { preferredQualityBar: null, matchedSignals: [] },
   };
 }
 
@@ -1262,7 +1609,11 @@ async function resolvePresentationDelivery(
   }
 
   const command = config?.env?.copilotCliCommand || "copilot";
-  if (!agentFileExists(PRODUCT_PRESENTER_AGENT_SLUG)) {
+  const executionCwd = String(fallback?.workspacePath || "").trim();
+  const presenterExecutionCwd = executionCwd && await pathExists(executionCwd)
+    ? executionCwd
+    : process.cwd();
+  if (!agentFileExistsForExecution(PRODUCT_PRESENTER_AGENT_SLUG, presenterExecutionCwd)) {
     await appendProgress(config, `[TARGET_PRESENTATION] presenter=skipped reason=agent_missing repoKind=${workspaceContext.repoKind} fallback=${fallback.locationType}:${String(fallback.openTarget || fallback.primaryLocation || "none")}`);
     return fallback;
   }
@@ -1334,6 +1685,9 @@ ${JSON.stringify(requestPayload, null, 2)}
     noAskUser: true,
     autopilot: false,
     silent: false,
+    runContract: {
+      executionCwd: presenterExecutionCwd,
+    },
   });
   appendAgentLiveLog(config, {
     agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
@@ -1366,6 +1720,7 @@ ${JSON.stringify(requestPayload, null, 2)}
   );
   const result: any = await spawnAsync(command, args, {
     env: process.env,
+    cwd: presenterExecutionCwd,
     timeoutMs: 120000,
     onStdout: (chunk: Buffer | string) => {
       stdoutStreamLogger.push(chunk);
@@ -1810,10 +2165,208 @@ export async function performTargetDeliveryHandoff(
   return handoff;
 }
 
+export async function rerunCompletedTargetPresentation(
+  config: any,
+  input: {
+    projectId?: string | null;
+    sessionId?: string | null;
+    status?: string | null;
+    summary?: string | null;
+    repoUrl?: string | null;
+    workspacePath?: string | null;
+    objectiveSummary?: string | null;
+    delivery?: Record<string, unknown> | null;
+  },
+  opts: {
+    openTarget?: (target: string) => Promise<any>;
+    resolvePresentation?: (input: any) => Promise<any>;
+  } = {},
+) {
+  const stateDir = config?.paths?.stateDir || "state";
+  const projectId = normalizeOptionalString(input?.projectId);
+  const sessionId = normalizeOptionalString(input?.sessionId);
+  if (!projectId || !sessionId) {
+    throw new Error("Project id and session id are required to rerun completed target presentation.");
+  }
+
+  const rawDelivery = input?.delivery && typeof input.delivery === "object"
+    ? input.delivery
+    : null;
+  const persistedSession = await readJson(getTargetSessionPath(stateDir, projectId, sessionId), null);
+  const handoffSession = persistedSession && typeof persistedSession === "object" && !Array.isArray(persistedSession)
+    ? persistedSession
+    : {
+        projectId,
+        sessionId,
+        repo: {
+          repoUrl: normalizeOptionalString((rawDelivery as any)?.repoWebUrl) || normalizeOptionalString(input?.repoUrl),
+          repoFullName: normalizeRepoMarker((rawDelivery as any)?.repoWebUrl) || normalizeRepoMarker(input?.repoUrl),
+          name: null,
+        },
+        workspace: { path: normalizeOptionalString((rawDelivery as any)?.workspacePath) || normalizeOptionalString(input?.workspacePath) },
+        objective: { summary: normalizeOptionalString(input?.objectiveSummary) || normalizeOptionalString(input?.summary) },
+      };
+
+  await appendProgress(
+    config,
+    `[TARGET_PRESENTATION] refresh=starting project=${projectId} session=${sessionId}`,
+  );
+
+  const alignedEntries = await loadAlignedWorkerEvidenceEntries(stateDir, handoffSession);
+  const releaseEntry = selectBestReleaseEvidence(alignedEntries);
+  const qualityEvidence = releaseEntry?.evidence || parseWorkerEvidence("");
+  const delivery = await resolvePresentationDelivery(
+    config,
+    {
+      projectId,
+      sessionId,
+      status: normalizeOptionalString(input?.status),
+      summary: normalizeOptionalString(input?.summary),
+      objectiveSummary: normalizeOptionalString(input?.objectiveSummary),
+      delivery: {
+        ...(rawDelivery || {}),
+        repoWebUrl: normalizeOptionalString((rawDelivery as any)?.repoWebUrl)
+          || normalizeOptionalString(input?.repoUrl)
+          || normalizeOptionalString((handoffSession as any)?.repo?.repoUrl),
+        workspacePath: normalizeOptionalString((rawDelivery as any)?.workspacePath)
+          || normalizeOptionalString(input?.workspacePath)
+          || normalizeOptionalString((handoffSession as any)?.workspace?.path),
+      },
+    },
+    handoffSession,
+    qualityEvidence,
+    { resolvePresentation: opts.resolvePresentation },
+  );
+
+  appendAgentLiveLogDetail(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    session: handoffSession,
+    contextLabel: "target_presentation_refresh",
+    stage: "execution_plan",
+    title: "Refresh Execution Plan",
+    content: JSON.stringify(delivery?.execution || null, null, 2),
+  });
+
+  const openTargetFn = typeof opts.openTarget === "function" ? opts.openTarget : openDeliveryTarget;
+  const hasOpenableSurface = delivery?.autoOpenEligible || ["serve_and_open", "open_direct", "open_url"].includes(String(delivery?.execution?.mode || ""));
+  const autoOpen = hasOpenableSurface
+    ? await executePresentationAction(delivery, openTargetFn)
+    : {
+        attempted: false,
+        opened: false,
+        reason: delivery?.primaryLocation ? "auto_open_not_supported_for_surface" : "no_openable_target",
+        execution: delivery?.execution || null,
+      };
+
+  appendAgentLiveLogDetail(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    session: handoffSession,
+    contextLabel: "target_presentation_refresh",
+    stage: "execution_result",
+    title: "Refresh Execution Result",
+    content: JSON.stringify(autoOpen, null, 2),
+  });
+
+  const handoff = {
+    recordedAt: new Date().toISOString(),
+    projectId,
+    sessionId,
+    status: normalizeOptionalString(input?.status) || delivery?.status || null,
+    summary: delivery?.userMessage || normalizeOptionalString(input?.summary),
+    delivery,
+    autoOpen,
+  };
+
+  await appendProgress(
+    config,
+    `[TARGET_PRESENTATION] refresh=resolved status=${String(delivery?.status || "unknown")} action=${String(delivery?.execution?.mode || "none")} target=${String(autoOpen?.execution?.finalTarget || delivery?.openTarget || delivery?.primaryLocation || "none")} opened=${autoOpen.opened === true ? "true" : "false"}`,
+  );
+  await writeJson(path.join(stateDir, "last_target_delivery_handoff.json"), handoff);
+  return handoff;
+}
+
+export async function replayStoredTargetPresentation(
+  config: any,
+  input: {
+    projectId?: string | null;
+    sessionId?: string | null;
+    status?: string | null;
+    summary?: string | null;
+    repoUrl?: string | null;
+    workspacePath?: string | null;
+    objectiveSummary?: string | null;
+    delivery?: Record<string, unknown> | null;
+  },
+  opts: {
+    openTarget?: (target: string) => Promise<any>;
+  } = {},
+) {
+  const stateDir = config?.paths?.stateDir || "state";
+  const delivery = input?.delivery && typeof input.delivery === "object"
+    ? input.delivery
+    : null;
+  if (!delivery) {
+    throw new Error("No archived presentation delivery is available for replay.");
+  }
+
+  const replaySession = {
+    projectId: input?.projectId || null,
+    sessionId: input?.sessionId || null,
+    repo: {
+      repoUrl: normalizeOptionalString((delivery as any)?.repoWebUrl) || normalizeOptionalString(input?.repoUrl),
+      repoFullName: normalizeRepoMarker((delivery as any)?.repoWebUrl) || normalizeRepoMarker(input?.repoUrl),
+      name: null,
+    },
+    workspace: { path: normalizeOptionalString((delivery as any)?.workspacePath) || normalizeOptionalString(input?.workspacePath) },
+    objective: { summary: normalizeOptionalString(input?.objectiveSummary) || normalizeOptionalString(input?.summary) },
+  };
+
+  await appendProgress(
+    config,
+    `[TARGET_PRESENTATION] replay=starting project=${String(input?.projectId || "unknown")} session=${String(input?.sessionId || "unknown")}`,
+  );
+
+  appendAgentLiveLogDetail(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    session: replaySession,
+    contextLabel: "target_presentation_replay",
+    stage: "execution_plan",
+    title: "Replay Execution Plan",
+    content: JSON.stringify((delivery as any)?.execution || null, null, 2),
+  });
+
+  const openTargetFn = typeof opts.openTarget === "function" ? opts.openTarget : openDeliveryTarget;
+  const autoOpen = await executePresentationAction(delivery, openTargetFn);
+
+  appendAgentLiveLogDetail(config, {
+    agentSlug: PRODUCT_PRESENTER_AGENT_SLUG,
+    session: replaySession,
+    contextLabel: "target_presentation_replay",
+    stage: "execution_result",
+    title: "Replay Execution Result",
+    content: JSON.stringify(autoOpen, null, 2),
+  });
+
+  const handoff = {
+    recordedAt: new Date().toISOString(),
+    projectId: input?.projectId || null,
+    sessionId: input?.sessionId || null,
+    status: input?.status || (delivery as any)?.status || null,
+    summary: normalizeOptionalString((delivery as any)?.userMessage) || normalizeOptionalString(input?.summary),
+    delivery,
+    autoOpen,
+  };
+
+  await appendProgress(
+    config,
+    `[TARGET_PRESENTATION] replay=resolved status=${String((delivery as any)?.status || "unknown")} target=${String((autoOpen as any)?.execution?.finalTarget || (delivery as any)?.openTarget || (delivery as any)?.primaryLocation || "none")} opened=${(autoOpen as any)?.opened === true ? "true" : "false"}`,
+  );
+  await writeJson(path.join(stateDir, "last_target_delivery_handoff.json"), handoff);
+  return handoff;
+}
+
 export function isTargetSuccessContractTerminal(report: any): boolean {
-  const status = String(report?.status || "").trim().toLowerCase();
-  return status === TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED
-    || status === TARGET_SUCCESS_CONTRACT_STATUS.FULFILLED_WITH_HANDOFF;
+  return isTargetClosureDecisionTerminal(report);
 }
 
 export async function evaluateTargetSuccessContract(config: any, providedSession: any = null) {
@@ -1913,16 +2466,26 @@ export async function evaluateTargetSuccessContract(config: any, providedSession
     },
   };
 
-  let effectiveResult = result;
+  const resultWithClosure = {
+    ...result,
+    closure: await evaluateTargetClosure(config, session, result),
+  };
+
+  let effectiveResult = resultWithClosure;
   try {
     const persistedReport = await readJson(path.join(stateDir, "last_target_project_readiness.json"), null);
     const sameSession = persistedReport
       && persistedReport.projectId === session.projectId
       && persistedReport.sessionId === session.sessionId;
+    const persistedHasClosureDecision = Boolean(String(persistedReport?.closure?.decision || "").trim());
+    const freshReportIsTerminal = isTargetSuccessContractTerminal(resultWithClosure);
+    const reopenedAfterPersistedTerminal = getSessionReactivatedAt(session) > parseTimestampOrZero(persistedReport?.evaluatedAt);
     if (
       sameSession
       && isTargetSuccessContractTerminal(persistedReport)
-      && !isTargetSuccessContractTerminal(result)
+      && !freshReportIsTerminal
+      && persistedHasClosureDecision
+      && !reopenedAfterPersistedTerminal
     ) {
       effectiveResult = {
         ...persistedReport,

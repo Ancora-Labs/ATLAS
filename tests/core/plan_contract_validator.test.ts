@@ -342,6 +342,55 @@ describe("plan_contract_validator", () => {
       assert.equal(result.valid, false);
       assert.ok(result.violations.some(v => v.field === "verification_commands[0]" && v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL));
     });
+
+    it("accepts operator-authorized placeholder reservation behavior in target delivery plans", () => {
+      const plan = {
+        task: "Repair the OAK and STRIKE reservation module in place",
+        role: "evolution-worker",
+        wave: 1,
+        verification: "tests/core/site.test.ts — test: reservation module matches the target brief",
+        dependencies: [],
+        acceptance_criteria: [
+          "The reservation module remains a realistic custom UI flow with placeholder functionality only, matching the confirmed operator direction",
+        ],
+        before_state: "The page has a placeholder reservation interaction that needs clearer copy and grouping.",
+        after_state: "The repaired page keeps the operator-approved placeholder reservation functionality and documents it clearly.",
+        capacityDelta: 0.1,
+        requestROI: 1.5,
+      };
+      const activeTargetSession = {
+        intent: {
+          operatorIntentBrief: "Build a premium lodge landing page where the reservation UI may remain placeholder functionality only for the MVP.",
+          successCriteria: ["Reservation controls are explicit about placeholder functionality only."],
+        },
+      };
+      const result = validatePlanContract(plan, { activeTargetSession });
+      assert.equal(result.valid, true);
+      assert.ok(!result.violations.some(v => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED));
+    });
+
+    it("rejects visual downgrades when the target requires real imagery", () => {
+      const plan = {
+        task: "Replace the premium hero imagery with low-fidelity filler visuals",
+        role: "evolution-worker",
+        wave: 1,
+        verification: "tests/core/site.test.ts — test: hero imagery remains governed",
+        dependencies: [],
+        acceptance_criteria: ["Hero visuals can ship as generic filler imagery while the rest of the page is polished"],
+        capacityDelta: 0.1,
+        requestROI: 1.5,
+      };
+      const activeTargetSession = {
+        intent: {
+          operatorIntentBrief: "Build a premium restaurant conversion surface with authentic food photography and preserve requested source visuals.",
+          assetSourcingPolicy: "Real external assets allowed when needed; preserve requested source visuals.",
+          assetRequirements: ["Preserve requested visuals as source requirements."],
+        },
+      };
+      const result = validatePlanContract(plan, { activeTargetSession });
+      assert.equal(result.valid, false);
+      assert.ok(result.violations.some(v => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED));
+    });
   });
 
   describe("validatePlanContract — capacityDelta and requestROI (measurable packet scoring)", () => {
@@ -1512,6 +1561,114 @@ describe("validatePlanContract — protected intent preservation", () => {
     assert.ok(v, "silent downgrade must emit INTENT_REQUIREMENT_SOFTENED");
     assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.CRITICAL);
     assert.equal(result.valid, false, "silent downgrade must make the plan invalid");
+  });
+
+  it("allows the same downgrade shape when protected intent validation is explicitly disabled", () => {
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Build a premium onboarding flow with real GitHub integration and polished UX",
+      after_state: "Delivers a demo-only mock flow with placeholder data and simplified screens instead of the promised production experience",
+      acceptance_criteria: [
+        "A mocked demo looks acceptable for now",
+        "Placeholder content is enough to simulate the idea",
+      ],
+    }), {
+      disableProtectedIntentValidation: true,
+    });
+
+    assert.equal(
+      result.violations.find(v => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED),
+      undefined,
+      "protected intent violations should be skipped when the guard is disabled",
+    );
+    assert.equal(result.valid, true, "the downgrade shape should no longer fail-close when the guard is disabled");
+  });
+
+  it("allows greenfield UI contract reference artifacts without treating them as mock downgrades", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Ship a polished premium landing page with a cinematic hero and authentic editorial feel.",
+      },
+      intent: {
+        operatorIntentBrief: "Build a premium browser landing experience with real sourced imagery and preserved final visual quality.",
+      },
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Create the greenfield browser runtime and store desktop/mobile mockup references in-repo because the workspace has no existing landing implementation to repair.",
+      after_state: "The repo contains a runnable browser app scaffold and in-repo design reference artifacts that lock hero motion, tier hierarchy, and CTA placement for engineering.",
+      acceptance_criteria: [
+        "A runnable browser app shell exists for the premium landing experience with at least one targeted test case",
+        "Desktop and mobile reference comps preserve the intended premium editorial layout for engineering",
+      ],
+    }), {
+      activeTargetSession,
+    });
+
+    assert.equal(
+      result.violations.find(v => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED),
+      undefined,
+      "design reference artifacts must not be treated as silent placeholder/mock downgrades",
+    );
+  });
+
+  it("treats explicit real-asset guardrails in target intent as protected anti-placeholder requirements", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Ship a polished restaurant site with authentic food photography and premium trust signals.",
+      },
+      intent: {
+        assetSourcingPolicy: "Real external assets allowed when needed; preserve requested source visuals.",
+        assetRequirements: [
+          "Preserve requested visuals as source requirements.",
+        ],
+      },
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Deliver the restaurant landing experience",
+      after_state: "Ships placeholder dish art, mocked gallery cards, and generic illustration stand-ins instead of authentic imagery.",
+      acceptance_criteria: [
+        "Placeholder gallery is enough for now",
+        "Generic placeholder food art communicates the concept",
+      ],
+    }), {
+      activeTargetSession,
+    });
+
+    const violation = result.violations.find((entry) => entry.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED);
+    assert.ok(violation, "asset downgrade must emit INTENT_REQUIREMENT_SOFTENED");
+    assert.equal(violation!.severity, PLAN_VIOLATION_SEVERITY.CRITICAL);
+    assert.equal(result.valid, false, "asset downgrade must make the plan invalid");
+  });
+
+  it("treats operatorIntentBrief as protected anti-placeholder context even when that brief carries the strongest wording", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Ship a premium outdoor storefront.",
+      },
+      intent: {
+        operatorIntentBrief: "Build a premium outdoor storefront with authentic product photography and preserve requested source visuals.",
+        operatorIntentEvidence: [
+          "Authentic product photography is part of the requested quality bar.",
+        ],
+      },
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Deliver the outdoor storefront experience",
+      after_state: "Ships low-fidelity gallery cards and unsupported filler visuals instead of authentic product photography.",
+      acceptance_criteria: [
+        "Low-fidelity filler visuals are acceptable for the first pass",
+        "Generic illustration cards communicate the idea well enough",
+      ],
+    }), {
+      activeTargetSession,
+    });
+
+    const violation = result.violations.find((entry) => entry.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED);
+    assert.ok(violation, "operatorIntentBrief downgrade must emit INTENT_REQUIREMENT_SOFTENED");
+    assert.equal(violation!.severity, PLAN_VIOLATION_SEVERITY.CRITICAL);
+    assert.equal(result.valid, false, "operatorIntentBrief downgrade must make the plan invalid");
   });
 
   it("negative path: allows an explicitly temporary fallback when the limitation is disclosed and the contract is preserved", () => {

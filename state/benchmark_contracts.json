@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "updatedAt": "2026-04-09T17:28:29.310Z",
+  "updatedAt": "2026-04-09T17:28:29.31Z",
   "contracts": [
     {
       "name": "SWE-bench",
@@ -15,9 +15,9 @@
         "elapsedMs",
         "evaluatedAt"
       ],
-      "dateFields": ["evaluatedAt"],
-      "stepBudgetFields": [],
-      "verifiedSuiteStatuses": ["success"],
+      "dateFields": "evaluatedAt",
+      "stepBudgetFields": null,
+      "verifiedSuiteStatuses": "success",
       "statusEnum": [
         "success",
         "partial",
@@ -38,9 +38,12 @@
         "evaluatedAt",
         "stepBudget"
       ],
-      "dateFields": ["evaluatedAt", "verifiedAt"],
-      "stepBudgetFields": ["stepBudget"],
-      "verifiedSuiteStatuses": ["success"],
+      "dateFields": [
+        "evaluatedAt",
+        "verifiedAt"
+      ],
+      "stepBudgetFields": "stepBudget",
+      "verifiedSuiteStatuses": "success",
       "statusEnum": [
         "success",
         "partial",

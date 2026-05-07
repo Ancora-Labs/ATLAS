@@ -50,6 +50,7 @@ import { compileAcceptanceCriteria, enrichPlansWithAC } from "./ac_compiler.js";
 import { buildPromptAssemblyPrompt } from "./prompt_overlay.js";
 import { PLATFORM_MODE } from "./mode_state.js";
 import { buildInteractiveAccessPromptSection, shouldEnableInteractiveAccessResolution } from "./access_interaction.js";
+import { buildStrongestPlausibleFallbackGuidance } from "./target_intent_guidance.js";
 import {
   getTargetIntentContractPath,
   mirrorJsonArtifactToTargetSession,
@@ -1301,9 +1302,53 @@ function normalizeResearchTopic(value: unknown): string {
   return text;
 }
 
-function extractResearchTopics(synthesis: unknown, scout: unknown): string[] {
+const UI_RELATED_RESEARCH_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bui\b/i,
+  /\bux\b/i,
+  /\bvisual\b/i,
+  /\bdesign\b/i,
+  /\blayout\b/i,
+  /\binterface\b/i,
+  /\btypography\b/i,
+  /\bhero\b/i,
+  /\bbrand(?:ed|ing)?\b/i,
+  /\bmoodboard\b/i,
+  /\bpalette\b/i,
+  /\bcolor\b/i,
+  /\bimag(?:e|ery)\b/i,
+  /\bphoto(?:graphy)?\b/i,
+  /\bmedia\b/i,
+  /\bsection\s+[123]\b/i,
+  /\beditorial\b/i,
+  /\blanding\s+page\b/i,
+  /\bluxury\b/i,
+]);
+
+function collectUiResearchSignalText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => collectUiResearchSignalText(entry)).join(" ");
+  }
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>)
+      .map((entry) => collectUiResearchSignalText(entry))
+      .join(" ");
+  }
+  return "";
+}
+
+function hasUiResearchSignal(value: unknown): boolean {
+  const text = collectUiResearchSignalText(value);
+  return UI_RELATED_RESEARCH_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function extractResearchTopics(synthesis: unknown, scout: unknown, opts: { includeScoutExpansion?: boolean } = {}): string[] {
   const topics: string[] = [];
   const seen = new Set<string>();
+  const includeScoutExpansion = opts.includeScoutExpansion !== false;
   const synthesisObj = (synthesis && typeof synthesis === "object") ? synthesis as Record<string, unknown> : {};
   const scoutObj = (scout && typeof scout === "object") ? scout as Record<string, unknown> : {};
 
@@ -1322,12 +1367,14 @@ function extractResearchTopics(synthesis: unknown, scout: unknown): string[] {
     pushTopic(topicObj.topic);
   }
 
-  const scoutSources = Array.isArray(scoutObj.sources) ? scoutObj.sources : [];
-  for (const source of scoutSources) {
-    const sourceObj = (source && typeof source === "object") ? source as Record<string, unknown> : {};
-    const tags = Array.isArray(sourceObj.topicTags) ? sourceObj.topicTags : [];
-    for (const tag of tags) pushTopic(tag);
-    pushTopic(sourceObj.title);
+  if (includeScoutExpansion) {
+    const scoutSources = Array.isArray(scoutObj.sources) ? scoutObj.sources : [];
+    for (const source of scoutSources) {
+      const sourceObj = (source && typeof source === "object") ? source as Record<string, unknown> : {};
+      const tags = Array.isArray(sourceObj.topicTags) ? sourceObj.topicTags : [];
+      for (const tag of tags) pushTopic(tag);
+      pushTopic(sourceObj.title);
+    }
   }
 
   return topics;
@@ -1352,7 +1399,7 @@ export function isSingleTargetPromptIsolationActive(config: any): boolean {
     && Boolean(config?.activeTargetSession?.sessionId);
 }
 
-function buildResearchPromptSection(
+export function buildResearchPromptSection(
   synthesis: unknown,
   scout: unknown,
   planningPolicy: { maxTasks?: number } | Record<string, unknown>,
@@ -1394,7 +1441,9 @@ function buildResearchPromptSection(
   const excludedCount = rawSynthesisTopics.length - applicableTopics.length;
   const filteredSynthesisObj = { ...synthesisObj, topics: applicableTopics };
 
-  const topics = extractResearchTopics(filteredSynthesisObj, scout);
+  const topics = extractResearchTopics(filteredSynthesisObj, scout, {
+    includeScoutExpansion: !targetModeActive,
+  });
   const topicCount = topics.length;
   const sourceCount = Number.isFinite(Number(synthesisObj.scoutSourceCount))
     ? Number(synthesisObj.scoutSourceCount)
@@ -1438,6 +1487,22 @@ function buildResearchPromptSection(
   const plannerSignals = (synthesisObj.plannerSignals && typeof synthesisObj.plannerSignals === "object")
     ? synthesisObj.plannerSignals as Record<string, unknown>
     : {};
+  const uiRelatedTopics = applicableTopics.filter((topic) => hasUiResearchSignal(topic));
+  const uiTopicLines = boundStructuredList(
+    uiRelatedTopics.map((topic) => String(topic?.topic || "")).filter(Boolean),
+    { maxItems: 12, maxItemChars: 220 }
+  )
+    .map((topic, i) => `${i + 1}. ${sanitizePromptLine(topic, 220)}`)
+    .join("\n");
+  const uiSourceLines = boundStructuredList(
+    uiRelatedTopics.flatMap((topic) => {
+      const sources = Array.isArray(topic?.sources) ? topic.sources as Array<Record<string, unknown>> : [];
+      return sources.map((source) => String(source?.title || "")).filter(Boolean);
+    }),
+    { maxItems: 12, maxItemChars: 220 }
+  )
+    .map((title, i) => `${i + 1}. ${sanitizePromptLine(title, 220)}`)
+    .join("\n");
   const priorityActionLines = boundStructuredList(
     Array.isArray(plannerSignals.priorityActions) ? plannerSignals.priorityActions : [],
     { maxItems: 12, maxItemChars: 360 }
@@ -1458,8 +1523,11 @@ function buildResearchPromptSection(
   const excludedNote = excludedCount > 0 && !targetModeActive
     ? `\n⚠️  ${excludedCount} topic(s) excluded as not_applicable to BOX platform (non-BOX runtime detected — Temporal, Kubernetes, Go, JVM, etc.). Do NOT generate plans for excluded topics.`
     : "";
+  const uiResearchNote = hasUiResearchSignal({ topics: uiRelatedTopics, plannerSignals, scout: scoutObj })
+    ? `\n\nUI/design research is present in this cycle. Before finalizing any UI-facing packet, you MUST read the full source-level entries in state/research_synthesis.json for every UI/design topic below. Do NOT collapse distinct references into one generic schema. If multiple sources imply different visual systems or page structures, preserve them as competing references and either choose explicitly with evidence or plan a concept-selection packet first.${uiTopicLines ? `\n\nUI/design topics requiring full read:\n${uiTopicLines}` : ""}${uiSourceLines ? `\n\nUI/design source references requiring full read:\n${uiSourceLines}` : ""}`
+    : "";
 
-  const sectionText = `\n\n## EXTERNAL RESEARCH INTELLIGENCE${stalenessNote}${excludedNote}\nResearch signal available for this cycle: ${topicCount} topic(s), ${sourceCount} source(s).\n\nResearch coverage target: ${coverageTarget > 0 ? coverageTarget : "AUTO"} research-backed packet(s) when materially applicable.\nDo NOT ignore this section. For each high-confidence unresolved topic, either:\n1) produce an actionable packet with concrete target_files and verification, or\n2) state that it is already implemented and cite exact file evidence in before_state/after_state.\n\nAll research topics:\n${topicLines || "(none)"}${crossTopicLines ? `\n\nCross-topic implementation dependencies (act on these together — these are your highest-priority planning inputs):\n${crossTopicLines}` : ""}${priorityActionLines ? `\n\nPlanner-ready priority actions (distilled):\n${priorityActionLines}` : ""}${riskFlagLines ? `\n\nPlanner risk flags:\n${riskFlagLines}` : ""}${sourceSignals ? `\n\nSource signals:\n${sourceSignals}` : ""}${gapsPreview ? `\n\nResearch gaps to address next (areas the Scout did NOT cover — generate packets for these):\n${gapsPreview}` : ""}`;
+  const sectionText = `\n\n## EXTERNAL RESEARCH INTELLIGENCE${stalenessNote}${excludedNote}\nResearch signal available for this cycle: ${topicCount} topic(s), ${sourceCount} source(s).\n\nResearch coverage target: ${coverageTarget > 0 ? coverageTarget : "AUTO"} research-backed packet(s) when materially applicable.\nDo NOT ignore this section. For each high-confidence unresolved topic, either:\n1) produce an actionable packet with concrete target_files and verification, or\n2) state that it is already implemented and cite exact file evidence in before_state/after_state.${uiResearchNote}\n\nAll research topics:\n${topicLines || "(none)"}${crossTopicLines ? `\n\nCross-topic implementation dependencies (act on these together — these are your highest-priority planning inputs):\n${crossTopicLines}` : ""}${priorityActionLines ? `\n\nPlanner-ready priority actions (distilled):\n${priorityActionLines}` : ""}${riskFlagLines ? `\n\nPlanner risk flags:\n${riskFlagLines}` : ""}${sourceSignals ? `\n\nSource signals:\n${sourceSignals}` : ""}${gapsPreview ? `\n\nResearch gaps to address next (areas the Scout did NOT cover — generate packets for these):\n${gapsPreview}` : ""}`;
 
   return { sectionText, topicCount, sourceCount, coverageTarget };
 }
@@ -1596,6 +1664,43 @@ export function computeDiagnosticsFreshnessAdmission(
     allFresh: staleSources.length === 0,
     staleSources,
     freshnessReasons,
+  };
+}
+export function resolvePlanningDiagnosticsFreshnessContext(
+  config: any,
+  input: {
+    sectionText?: unknown;
+    admission?: DiagnosticsFreshnessAdmission | null;
+  } = {},
+): {
+  sectionText: string;
+  admission: DiagnosticsFreshnessAdmission;
+  suppressed: boolean;
+} {
+  const safeAdmission = input.admission && typeof input.admission === "object"
+    ? {
+      allFresh: input.admission.allFresh === true,
+      staleSources: Array.isArray(input.admission.staleSources)
+        ? input.admission.staleSources.map((source) => String(source || "").trim()).filter(Boolean)
+        : [],
+      freshnessReasons: Array.isArray(input.admission.freshnessReasons)
+        ? input.admission.freshnessReasons.map((reason) => String(reason || "").trim()).filter(Boolean)
+        : [],
+    }
+    : { allFresh: true, staleSources: [], freshnessReasons: [] };
+
+  if (isSingleTargetPromptIsolationActive(config)) {
+    return {
+      sectionText: "",
+      admission: { allFresh: true, staleSources: [], freshnessReasons: [] },
+      suppressed: true,
+    };
+  }
+
+  return {
+    sectionText: String(input.sectionText || ""),
+    admission: safeAdmission,
+    suppressed: false,
   };
 }
 
@@ -2655,12 +2760,13 @@ export function checkHighRiskPacketConfidence(rawPlan: any): { requiresRejection
  * @param rawPlan - raw plan object as emitted by the AI, before any normalization
  * @returns {{ recoverable: boolean, reasons: string[] }}
  */
-export function checkPacketCompleteness(rawPlan: any): { recoverable: boolean; reasons: string[] } {
+export function checkPacketCompleteness(rawPlan: any, opts: { targetDeliveryMode?: boolean } = {}): { recoverable: boolean; reasons: string[] } {
   if (!rawPlan || typeof rawPlan !== "object") {
     return { recoverable: false, reasons: [PACKET_VIOLATION_CODE.NO_TASK_IDENTITY] };
   }
 
   const reasons: string[] = [];
+  const targetDeliveryMode = opts.targetDeliveryMode === true;
 
   // 1. Task identity: at least one of task/title/task_id/id must be a non-empty string.
   const taskText = String(rawPlan.task || rawPlan.title || rawPlan.task_id || rawPlan.id || "").trim();
@@ -2669,7 +2775,9 @@ export function checkPacketCompleteness(rawPlan: any): { recoverable: boolean; r
   }
 
   if (!("capacityDelta" in rawPlan)) {
-    reasons.push(PACKET_VIOLATION_CODE.MISSING_CAPACITY_DELTA);
+    if (!targetDeliveryMode) {
+      reasons.push(PACKET_VIOLATION_CODE.MISSING_CAPACITY_DELTA);
+    }
   } else {
     const capacityDelta = normalizeScalarContractField(rawPlan.capacityDelta, "capacityDelta").value;
     if (!Number.isFinite(capacityDelta) || capacityDelta < -1 || capacityDelta > 1) {
@@ -2678,7 +2786,9 @@ export function checkPacketCompleteness(rawPlan: any): { recoverable: boolean; r
   }
 
   if (!("requestROI" in rawPlan)) {
-    reasons.push(PACKET_VIOLATION_CODE.MISSING_REQUEST_ROI);
+    if (!targetDeliveryMode) {
+      reasons.push(PACKET_VIOLATION_CODE.MISSING_REQUEST_ROI);
+    }
   } else {
     const requestROI = normalizeScalarContractField(rawPlan.requestROI, "requestROI").value;
     if (!Number.isFinite(requestROI) || requestROI <= 0) {
@@ -2733,6 +2843,39 @@ export function stabilizeRawPacketEconomics(rawPlan: any): any {
       next.requestROI = 1.0;
     }
   }
+  return next;
+}
+
+export function stabilizeTargetDeliveryRawPacketEconomics(rawPlan: any): any {
+  if (!rawPlan || typeof rawPlan !== "object") return rawPlan;
+
+  const taskText = String(rawPlan.task || rawPlan.title || rawPlan.task_id || rawPlan.id || rawPlan.goal || rawPlan.implementation || "").trim();
+  const verificationCommands = Array.isArray(rawPlan.verification_commands)
+    ? rawPlan.verification_commands.filter((command: unknown) => typeof command === "string" && command.trim().length > 0)
+    : [];
+  const hasVerificationSignal = verificationCommands.length > 0
+    || (typeof rawPlan.verification === "string" && rawPlan.verification.trim().length > 0)
+    || (Array.isArray(rawPlan.verification) && rawPlan.verification.some((command: unknown) => typeof command === "string" && command.trim().length > 0));
+
+  if (!taskText || !hasVerificationSignal) {
+    return rawPlan;
+  }
+
+  const next = { ...rawPlan };
+  if (!String(next.task || next.title || next.task_id || next.id || "").trim()) {
+    next.task = taskText;
+  }
+
+  const normalizedCapacityDelta = normalizeScalarContractField(next.capacityDelta, "capacityDelta").value;
+  if (!Number.isFinite(normalizedCapacityDelta) || normalizedCapacityDelta < -1 || normalizedCapacityDelta > 1) {
+    next.capacityDelta = 0.1;
+  }
+
+  const normalizedRequestROI = normalizeScalarContractField(next.requestROI, "requestROI").value;
+  if (!Number.isFinite(normalizedRequestROI) || normalizedRequestROI <= 0) {
+    next.requestROI = 1.0;
+  }
+
   return next;
 }
 
@@ -3211,24 +3354,12 @@ function slugifyTaskToFileStem(taskText) {
 
 function inferTaskKindFromText(taskText) {
   const lower = String(taskText || "").toLowerCase();
-  if (/\b(ui[\s-_]?contract|visual[\s-_]?contract|design[\s-_]?contract|render[\s-_]judge|render[\s-_]repair|design verification|storybook snapshot|electron capture|screen capture)\b/.test(lower)) return "ui-contract";
+  if (/\b(ui[\s-_]?contract|visual[\s-_]?contract|render[\s-_]judge|render[\s-_]repair|storybook snapshot|electron capture|screen capture)\b/.test(lower)) return "implementation";
   if (/\b(test|tests|assertion|coverage|replay corpus|regression)\b/.test(lower)) return "test";
   if (/\b(readme|docs|documentation)\b/.test(lower)) return "documentation";
   if (/\b(fix|bug|failure|error|reject)\b/.test(lower)) return "bugfix";
   if (/\b(refactor|consolidat|cleanup|deduplicat)\b/.test(lower)) return "refactor";
   return "implementation";
-}
-
-function hasUiPlanningFields(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return Boolean(
-    record.uiContract
-    || record.uiScenarioMatrix
-    || record.uiRuntimeRecipe
-    || record.uiSurface
-    || (Array.isArray(record.targetSurfaces) && record.targetSurfaces.length > 0)
-  );
 }
 
 function inferTargetFilesFromTask(taskText) {
@@ -3292,9 +3423,13 @@ function inferPlanningCapabilityTag(taskText, taskKind, targetFiles = [], extraT
     .join(" ");
   const signals = `${lowerTask} ${filesText} ${String(extraText || "").toLowerCase()}`;
 
-  if (normalizedTaskKind === "ui-contract"
-    || /\b(ui[\s-_]?contract|visual[\s-_]?contract|design[\s-_]?contract|render[\s-_]judge|render[\s-_]repair|storybook|electron capture|screen capture|accessibility tree|design verification)\b/.test(signals)) {
-    return "ui-contract";
+  if (/^ui(?:-|$)/.test(normalizedTaskKind)
+    || /\b(ui[\s-_]?contract|visual[\s-_]?contract|render[\s-_]?judge|render[\s-_]?repair|storybook|electron capture|screen capture|accessibility tree)\b/.test(signals)) {
+    return "runtime-refactor";
+  }
+
+  if (/\b(?:electron-runtime|web-runtime|desktop-runtime|mobile-runtime|ui\s+surface|target\s+surface)\b/.test(signals)) {
+    return "runtime-refactor";
   }
 
   if (/\b(governance|policy|freeze|canary|dispatch(?:blockreason| block)?|pre-dispatch|lane diversity|autonomy_execution_gate_not_ready)\b/.test(signals)
@@ -3322,223 +3457,11 @@ function inferPlanningCapabilityTag(taskText, taskKind, targetFiles = [], extraT
   return "runtime-refactor";
 }
 
-/**
- * Planner-side materializer for ui-contract packets.
- *
- * The dispatch loop requires `uiContract` + `uiScenarioMatrix` payloads, and
- * adapter selection downstream relies on a planner-supplied
- * `uiRuntimeRecipe` (or at least a `uiSurface`). Earlier revisions left this
- * to the LLM, which meant capability heuristics could tag a task
- * `ui-contract` while the emitted plan still lacked any of those structures
- * — producing the production failure
- * "UI contract dispatch failed: UI dispatch task missing uiContract payload".
- *
- * This helper produces deterministic, schema-valid payloads from the plan
- * fields the planner already owns (task text, target files, declared
- * surfaces, acceptance criteria). It only fills in fields the planner
- * omitted; explicit planner-supplied values pass through untouched. AI
- * intent is preserved — the helper never overwrites a non-empty contract.
- */
-export function materializePlannerUiPayload(input: {
-  taskText: string;
-  taskId?: string;
-  contractIdSeed?: string;
-  targetFiles?: ReadonlyArray<string>;
-  acceptanceCriteria?: ReadonlyArray<string>;
-  uiSurface?: string;
-  targetSurfaces?: ReadonlyArray<string>;
-  uiRuntimeRecipe?: Record<string, unknown> | null;
-  uiContract?: Record<string, unknown> | null;
-  uiScenarioMatrix?: Record<string, unknown> | null;
-}): {
-  uiSurface: string;
-  targetSurfaces: string[];
-  uiRuntimeRecipe: Record<string, unknown>;
-  uiContract: Record<string, unknown>;
-  uiScenarioMatrix: Record<string, unknown>;
-} {
-  const taskText = String(input.taskText || "").trim();
-  const declaredSurfaces = Array.isArray(input.targetSurfaces)
-    ? [...new Set(input.targetSurfaces.map((value) => String(value || "").trim()).filter(Boolean))]
-    : [];
-  const recipe = input.uiRuntimeRecipe && typeof input.uiRuntimeRecipe === "object" && !Array.isArray(input.uiRuntimeRecipe)
-    ? { ...input.uiRuntimeRecipe }
-    : null;
-  const contract = input.uiContract && typeof input.uiContract === "object" && !Array.isArray(input.uiContract)
-    ? { ...input.uiContract }
-    : null;
-  const matrix = input.uiScenarioMatrix && typeof input.uiScenarioMatrix === "object" && !Array.isArray(input.uiScenarioMatrix)
-    ? { ...input.uiScenarioMatrix }
-    : null;
-
-  const inferredSurface = inferUiSurfaceFromPlan(
-    taskText,
-    Array.isArray(input.targetFiles) ? input.targetFiles : [],
-    String(recipe?.primarySurface || ""),
-    declaredSurfaces,
-  );
-  const uiSurface = String(input.uiSurface || "").trim()
-    || String(recipe?.primarySurface || "").trim()
-    || declaredSurfaces[0]
-    || inferredSurface;
-
-  const candidateFromRecipe = Array.isArray(recipe?.candidateSurfaces)
-    ? (recipe!.candidateSurfaces as unknown[]).map((value) => String(value || "").trim()).filter(Boolean)
-    : [];
-  const targetSurfaces = [...new Set([
-    uiSurface,
-    ...declaredSurfaces,
-    ...candidateFromRecipe,
-  ].filter(Boolean))];
-
-  const adapterIdHint = inferAdapterIdForSurface(uiSurface);
-  const explicitAdapterId = typeof recipe?.adapterId === "string" && (recipe!.adapterId as string).trim()
-    ? (recipe!.adapterId as string).trim()
-    : "";
-  const materializedRecipe: Record<string, unknown> = {
-    ...(recipe || {}),
-    primarySurface: uiSurface,
-    candidateSurfaces: targetSurfaces,
-    adapterId: explicitAdapterId || adapterIdHint,
-  };
-
-  const contractIdSeed = String(
-    input.contractIdSeed
-    || (contract && typeof contract.contractId === "string" ? contract.contractId : "")
-    || input.taskId
-    || taskText
-    || "ui-contract",
-  );
-  const contractId = sanitizeContractId(contractIdSeed);
-
-  const acceptanceCriteria = Array.isArray(input.acceptanceCriteria)
-    ? input.acceptanceCriteria.map((value) => String(value || "").trim()).filter(Boolean)
-    : [];
-
-  const baseFields: Record<string, unknown> = {
-    intent: taskText || "ui-contract task",
-    surface: uiSurface,
-    ...(acceptanceCriteria.length > 0 ? { acceptanceCriteria } : {}),
-  };
-  const fields = contract && contract.fields && typeof contract.fields === "object" && !Array.isArray(contract.fields)
-    ? { ...baseFields, ...(contract.fields as Record<string, unknown>) }
-    : baseFields;
-  const requiredFields = Array.isArray(contract?.requiredFields) && (contract!.requiredFields as unknown[]).length > 0
-    ? (contract!.requiredFields as unknown[]).map((value) => String(value || "").trim()).filter(Boolean)
-    : ["intent"];
-  const forbiddenPatterns = Array.isArray(contract?.forbiddenPatterns)
-    ? (contract!.forbiddenPatterns as unknown[]).map((value) => String(value || "").trim()).filter(Boolean)
-    : [];
-  const accessibilityFloor = typeof contract?.accessibilityFloor === "string" && (contract!.accessibilityFloor as string).trim()
-    ? (contract!.accessibilityFloor as string).trim()
-    : "WCAG-AA";
-
-  const materializedContract: Record<string, unknown> = {
-    contractId,
-    schemaVersion: 1,
-    targetSurfaces,
-    fields,
-    requiredFields,
-    forbiddenPatterns,
-    accessibilityFloor,
-  };
-
-  let materializedMatrix: Record<string, unknown>;
-  if (matrix && Array.isArray(matrix.scenarios) && (matrix.scenarios as unknown[]).length > 0) {
-    materializedMatrix = {
-      matrixId: typeof matrix.matrixId === "string" && (matrix.matrixId as string).trim()
-        ? (matrix.matrixId as string).trim()
-        : `${contractId}:default-matrix`,
-      schemaVersion: 1,
-      scenarios: (matrix.scenarios as unknown[]).map((scenario, index) => {
-        if (!scenario || typeof scenario !== "object" || Array.isArray(scenario)) {
-          return defaultUiScenario(contractId, uiSurface, taskText, index);
-        }
-        const record = scenario as Record<string, unknown>;
-        return {
-          scenarioId: typeof record.scenarioId === "string" && (record.scenarioId as string).trim()
-            ? (record.scenarioId as string).trim()
-            : `${contractId}:scenario-${index + 1}`,
-          kind: typeof record.kind === "string" && (record.kind as string).trim()
-            ? (record.kind as string).trim()
-            : "default",
-          description: typeof record.description === "string" && (record.description as string).trim()
-            ? (record.description as string).trim()
-            : taskText || `UI contract scenario ${index + 1}`,
-          surface: typeof record.surface === "string" && (record.surface as string).trim()
-            ? (record.surface as string).trim()
-            : uiSurface,
-          state: record.state && typeof record.state === "object" && !Array.isArray(record.state)
-            ? { ...(record.state as Record<string, unknown>) }
-            : {},
-        };
-      }),
-    };
-  } else {
-    materializedMatrix = {
-      matrixId: `${contractId}:default-matrix`,
-      schemaVersion: 1,
-      scenarios: [defaultUiScenario(contractId, uiSurface, taskText, 0)],
-    };
-  }
-
-  return {
-    uiSurface,
-    targetSurfaces,
-    uiRuntimeRecipe: materializedRecipe,
-    uiContract: materializedContract,
-    uiScenarioMatrix: materializedMatrix,
-  };
-}
-
-function defaultUiScenario(contractId: string, surface: string, taskText: string, index: number): Record<string, unknown> {
-  return {
-    scenarioId: `${contractId}:default${index === 0 ? "" : `-${index + 1}`}`,
-    kind: "default",
-    description: taskText || "Default UI contract scenario",
-    surface,
-    state: {},
-  };
-}
-
-function inferUiSurfaceFromPlan(
-  taskText: string,
-  targetFiles: ReadonlyArray<string>,
-  recipePrimarySurface: string,
-  declaredSurfaces: ReadonlyArray<string>,
-): string {
-  if (recipePrimarySurface) return recipePrimarySurface;
-  if (declaredSurfaces.length > 0) return declaredSurfaces[0];
-  const haystack = [taskText, ...(targetFiles || [])].join(" ").toLowerCase();
-  if (/\belectron|browserwindow|main\.electron|capturepage\b/.test(haystack)) return "electron-app";
-  if (/\bstorybook\b/.test(haystack)) return "storybook-runtime";
-  if (/\bplaywright|e2e|cypress|web[\s-_]?runtime\b/.test(haystack)) return "web-runtime";
-  if (/\b\.html\b|static[\s-_]?dom|fixture\.html/.test(haystack)) return "static-dom";
-  if (/\bdesktop|tauri|winui|wpf\b/.test(haystack)) return "desktop-app";
-  return "ui";
-}
-
-function inferAdapterIdForSurface(surface: string): string {
-  const normalized = String(surface || "").trim().toLowerCase();
-  if (normalized === "electron-app" || /\belectron\b/.test(normalized)) return "electron-capture";
-  if (normalized === "static-dom") return "static-dom";
-  if (normalized === "storybook-runtime" || normalized === "web-runtime") return "headless-browser-dom";
-  return "headless-browser-dom";
-}
-
-function sanitizeContractId(seed: string): string {
-  const trimmed = String(seed || "").trim();
-  if (!trimmed) return "ui-contract";
-  const sanitized = trimmed.replace(/[^a-zA-Z0-9._:@-]+/g, "-").replace(/^-+|-+$/g, "");
-  return (sanitized || "ui-contract").slice(0, 96);
-}
-
 function capabilityTagToLane(capabilityTag) {
   switch (String(capabilityTag || "").trim().toLowerCase()) {
-    case "ui-contract":
     case "test-infra":
     case "planner-improvement":
-      return capabilityTag === "ui-contract" ? "implementation" : "quality";
+      return "quality";
     case "state-governance":
       return "governance";
     case "integration":
@@ -3550,6 +3473,115 @@ function capabilityTagToLane(capabilityTag) {
     default:
       return "implementation";
   }
+}
+
+function hasExplicitPlanningField(src, ...keys) {
+  if (!src || typeof src !== "object") return false;
+  return keys.some((key) => String(src[key] || "").trim().length > 0);
+}
+
+function isTargetDeliveryPacketShape(src) {
+  if (!src || typeof src !== "object") return false;
+  return Boolean(
+    src.taskId
+    || src.goal
+    || src.root_cause
+    || src.implementation
+    || src.before_state
+    || src.after_state
+    || (Array.isArray(src.evidence) && src.evidence.length > 0)
+  );
+}
+
+const TARGET_DELIVERY_SCOPE_DRIFT_PATTERNS: ReadonlyArray<{ code: string; pattern: RegExp; }> = Object.freeze([
+  { code: "box_agents", pattern: /\b(prometheus|athena|jesus)\b/i },
+  { code: "box_self_evolution", pattern: /\b(master[_\s-]?evolution|self[-\s]?evolution|self[-\s]?improvement|meta[-\s]?improver)\b/i },
+  { code: "box_planner_internals", pattern: /\b(worker topology|worker structure|prompt layer|mandatory self-critique|equal dimension set|prompt cache|lineage|parser baseline|capacity scoreboard|cycle analytics|evolution_progress)\b/i },
+  { code: "box_state_files", pattern: /state[\\/](?:evolution_progress|prompt_cache_usage|cycle_analytics|capacity_scoreboard|worker_cycle_artifacts|intervention_optimizer_log)\.(?:json|jsonl)/i },
+  { code: "box_agent_files", pattern: /\.github[\\/]agents[\\/](?:prometheus|target-prometheus|jesus|athena)\.agent\.md/i },
+]);
+
+function collectTargetDeliveryScopeDriftText(plan: any): string {
+  if (!plan || typeof plan !== "object") return "";
+  const targetFiles = Array.isArray(plan.target_files) ? plan.target_files : [];
+  const implementationEvidence = Array.isArray(plan.implementationEvidence) ? plan.implementationEvidence : [];
+  return [
+    plan.title,
+    plan.task,
+    plan.owner,
+    plan.scope,
+    plan.before_state,
+    plan.after_state,
+    plan.verification,
+    ...targetFiles,
+    ...implementationEvidence,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function detectTargetDeliveryScopeDrift(plans: unknown): {
+  driftedPlanCount: number;
+  driftedPlanIndices: number[];
+  driftedPlanTitles: string[];
+  reasons: string[];
+} {
+  if (!Array.isArray(plans) || plans.length === 0) {
+    return {
+      driftedPlanCount: 0,
+      driftedPlanIndices: [],
+      driftedPlanTitles: [],
+      reasons: [],
+    };
+  }
+
+  const driftedPlanIndices: number[] = [];
+  const driftedPlanTitles: string[] = [];
+  const reasons = new Set<string>();
+
+  plans.forEach((plan, index) => {
+    const haystack = collectTargetDeliveryScopeDriftText(plan);
+    const matchedCodes = TARGET_DELIVERY_SCOPE_DRIFT_PATTERNS
+      .filter(({ pattern }) => pattern.test(haystack))
+      .map(({ code }) => code);
+    if (matchedCodes.length === 0) return;
+    driftedPlanIndices.push(index);
+    driftedPlanTitles.push(String((plan as any)?.title || `plan-${index + 1}`).trim() || `plan-${index + 1}`);
+    matchedCodes.forEach((code) => reasons.add(code));
+  });
+
+  return {
+    driftedPlanCount: driftedPlanIndices.length,
+    driftedPlanIndices,
+    driftedPlanTitles,
+    reasons: [...reasons],
+  };
+}
+
+function inferTargetDeliveryCapabilityTag(taskText, taskKind, targetFiles = [], extraText = "") {
+  const normalizedTaskKind = String(taskKind || "").trim().toLowerCase();
+  const filesText = (Array.isArray(targetFiles) ? targetFiles : [])
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+  const signals = `${String(taskText || "").toLowerCase()} ${filesText} ${String(extraText || "").toLowerCase()}`;
+
+  if (normalizedTaskKind === "test" || /\b(test|tests|coverage|regression|contrast|accessibility|a11y|handoff|verification)\b/.test(signals)) {
+    return "test-infra";
+  }
+  if (/\b(api|route|email|reservation|booking|form|submit|notification|integration|connect|wire|server|client)\b/.test(signals)) {
+    return "integration";
+  }
+  if (/\b(package\.json|tailwind|tsconfig|vite|next|deploy|env|\.env|runtime|bootstrap|stack)\b/.test(signals)) {
+    return "infrastructure";
+  }
+  if (/\b(metrics|analytics|monitor|logging|observability|telemetry)\b/.test(signals)) {
+    return "observation";
+  }
+  if (/\b(policy|legal|license|licensing|governance|compliance)\b/.test(signals)) {
+    return "state-governance";
+  }
+  return inferPlanningCapabilityTag(taskText, taskKind, targetFiles, extraText);
 }
 
 function normalizePlannerRoleForLane(role, lane) {
@@ -4210,10 +4242,9 @@ export function normalizeScalarContractField(
 
 function normalizePlanFromTask(task, index, fallbackWave = 1) {
   const src = (task && typeof task === "object") ? task : {};
-  const taskText = String(src.task || src.title || src.task_id || src.id || `Task-${index + 1}`).trim();
-  const explicitUiTask = hasUiPlanningFields(src);
+  const taskText = String(src.task || src.title || src.taskId || src.task_id || src.id || `Task-${index + 1}`).trim();
   const inferredTaskKind = inferTaskKindFromText(taskText);
-  const taskKind = String(src.taskKind || src.kind || (explicitUiTask ? "ui-contract" : inferredTaskKind)).trim().toLowerCase();
+  const taskKind = String(src.taskKind || src.kind || inferredTaskKind).trim().toLowerCase();
   const wave = normalizeWaveValue(src.wave, fallbackWave);
   const explicitAcceptanceCriteria = Array.isArray(src.acceptance_criteria)
     ? src.acceptance_criteria.map(v => String(v || "").trim()).filter(Boolean)
@@ -4245,39 +4276,43 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
     ? src.targetSurfaces.map((value: unknown) => String(value || "").trim()).filter(Boolean)
     : [];
   const normalizedUiSurface = String(src.uiSurface || "").trim();
-  const normalizedUiRuntimeRecipe = src.uiRuntimeRecipe && typeof src.uiRuntimeRecipe === "object" && !Array.isArray(src.uiRuntimeRecipe)
-    ? src.uiRuntimeRecipe
-    : null;
-  const normalizedUiContract = src.uiContract && typeof src.uiContract === "object" && !Array.isArray(src.uiContract)
-    ? {
-        ...src.uiContract,
-        ...(normalizedTargetSurfaces.length > 0 ? { targetSurfaces: normalizedTargetSurfaces } : {}),
-      }
-    : null;
-  const normalizedUiScenarioMatrix = src.uiScenarioMatrix && typeof src.uiScenarioMatrix === "object" && !Array.isArray(src.uiScenarioMatrix)
-    ? src.uiScenarioMatrix
-    : null;
+  const targetDeliveryPacketShape = isTargetDeliveryPacketShape(src);
+  const explicitScopeSignal = String(src.scope || "").trim();
+  const capabilitySignals = [
+    scope,
+    src.description,
+    src.goal,
+    src.root_cause,
+    src.implementation,
+    src.before_state,
+    src.after_state,
+    ...(Array.isArray(src.evidence) ? src.evidence : []),
+    ...(Array.isArray(src.acceptance_criteria) ? src.acceptance_criteria : []),
+    ...(Array.isArray(src.verification_commands) ? src.verification_commands : []),
+    src.verification,
+    normalizedUiSurface,
+    normalizedTargetSurfaces.join(" "),
+  ].join(" ");
+  const targetDeliveryCapabilitySignals = [
+    explicitScopeSignal,
+    src.description,
+    src.goal,
+    src.root_cause,
+    src.implementation,
+    src.before_state,
+    src.after_state,
+    ...(Array.isArray(src.evidence) ? src.evidence : []),
+    normalizedUiSurface,
+    normalizedTargetSurfaces.join(" "),
+  ].join(" ");
+  const inferredCapabilityTag = targetDeliveryPacketShape
+    ? inferTargetDeliveryCapabilityTag(taskText, taskKind, baseTargetFiles, targetDeliveryCapabilitySignals)
+    : inferPlanningCapabilityTag(taskText, taskKind, targetFiles, capabilitySignals);
   const planningCapabilityTag = String(
     src.capabilityTag
     || src.capability_tag
     || src._capabilityTag
-    || inferPlanningCapabilityTag(
-      taskText,
-      taskKind,
-      targetFiles,
-      [
-        scope,
-        src.description,
-        src.before_state,
-        src.after_state,
-        ...(Array.isArray(src.acceptance_criteria) ? src.acceptance_criteria : []),
-        ...(Array.isArray(src.verification_commands) ? src.verification_commands : []),
-        src.verification,
-        normalizedUiSurface,
-        normalizedTargetSurfaces.join(" "),
-        normalizedUiRuntimeRecipe ? JSON.stringify(normalizedUiRuntimeRecipe) : "",
-      ].join(" "),
-    )
+    || inferredCapabilityTag
   ).trim().toLowerCase();
   const planningLane = String(
     src.capabilityLane
@@ -4287,40 +4322,10 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
   ).trim().toLowerCase() || "implementation";
   const normalizedRole = normalizePlannerRoleForLane(requestedRole, planningLane);
 
-  // Planner-side ui-contract materialization. When capability heuristics tag a
-  // task `ui-contract`, the planner becomes the source of truth for the
-  // `uiContract` / `uiScenarioMatrix` / `uiRuntimeRecipe` payloads dispatch
-  // requires. Explicit planner-supplied values pass through; missing pieces
-  // are filled deterministically here so workers never reach dispatch with an
-  // incomplete UI packet.
   let resolvedUiSurface = normalizedUiSurface;
   let resolvedTargetSurfaces = normalizedTargetSurfaces;
-  let resolvedUiRuntimeRecipe = normalizedUiRuntimeRecipe;
-  let resolvedUiContract = normalizedUiContract;
-  let resolvedUiScenarioMatrix = normalizedUiScenarioMatrix;
-  if (planningCapabilityTag === "ui-contract") {
-    const materialized = materializePlannerUiPayload({
-      taskText,
-      taskId: String(src.task_id || src.id || "").trim(),
-      contractIdSeed: typeof normalizedUiContract?.contractId === "string"
-        ? String(normalizedUiContract.contractId)
-        : taskText,
-      targetFiles,
-      acceptanceCriteria: normalizedAcceptanceCriteria,
-      uiSurface: normalizedUiSurface,
-      targetSurfaces: normalizedTargetSurfaces,
-      uiRuntimeRecipe: normalizedUiRuntimeRecipe,
-      uiContract: normalizedUiContract,
-      uiScenarioMatrix: normalizedUiScenarioMatrix,
-    });
-    resolvedUiSurface = materialized.uiSurface;
-    resolvedTargetSurfaces = materialized.targetSurfaces;
-    resolvedUiRuntimeRecipe = materialized.uiRuntimeRecipe;
-    resolvedUiContract = materialized.uiContract;
-    resolvedUiScenarioMatrix = materialized.uiScenarioMatrix;
-  }
   const interventionId = String(
-    src.intervention_id || src.interventionId || src.task_id || src.id || `${normalizedRole}:${taskText}`
+    src.intervention_id || src.interventionId || src.taskId || src.task_id || src.id || `${normalizedRole}:${taskText}`
   ).trim() || `${normalizedRole}:${taskText}`;
   const estimatedExecutionTokens = Number.isFinite(Number(src.estimatedExecutionTokens)) && Number(src.estimatedExecutionTokens) > 0
     ? Math.floor(Number(src.estimatedExecutionTokens))
@@ -4411,9 +4416,6 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
     target_files: targetFiles,
     ...(resolvedTargetSurfaces.length > 0 ? { targetSurfaces: resolvedTargetSurfaces } : {}),
     ...(resolvedUiSurface ? { uiSurface: resolvedUiSurface } : {}),
-    ...(resolvedUiRuntimeRecipe ? { uiRuntimeRecipe: resolvedUiRuntimeRecipe } : {}),
-    ...(resolvedUiContract ? { uiContract: resolvedUiContract } : {}),
-    ...(resolvedUiScenarioMatrix ? { uiScenarioMatrix: resolvedUiScenarioMatrix } : {}),
     beforeState: beforeAfter.beforeState,
     before_state: beforeAfter.beforeState,
     afterState: beforeAfter.afterState,
@@ -5755,6 +5757,60 @@ function buildNarrativeFallbackParsed(aiResult) {
   };
 }
 
+export const TARGET_PLANNER_DECISION_JSON_FAIL_REASON = "target_planner_missing_decision_json";
+
+function parseMarkedDecisionJson(raw: string): any | null {
+  const text = String(raw || "");
+  const decisionIdx = text.lastIndexOf("===DECISION===");
+  if (decisionIdx < 0) return null;
+  const afterDecision = text.slice(decisionIdx + "===DECISION===".length);
+  const endIdx = afterDecision.indexOf("===END===");
+  if (endIdx < 0) return null;
+  const jsonText = afterDecision.slice(0, endIdx).trim();
+  try {
+    return JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+}
+
+export function hasTargetDecisionPlansCompanion(raw: string): boolean {
+  const parsed = parseMarkedDecisionJson(raw);
+  return Boolean(parsed && typeof parsed === "object" && Array.isArray(parsed.plans));
+}
+
+function hasTargetPacketExecutableContent(plan: any): boolean {
+  if (!plan || typeof plan !== "object") return false;
+  const taskText = String(plan.task || plan.goal || plan.implementation || "").trim();
+  const acceptanceCriteria = Array.isArray(plan.acceptance_criteria)
+    ? plan.acceptance_criteria.filter((item: unknown) => String(item || "").trim().length > 0)
+    : [];
+  const verificationSignals = [
+    ...(Array.isArray(plan.verification_commands) ? plan.verification_commands : []),
+    ...(Array.isArray(plan.verification) ? plan.verification : [plan.verification]),
+  ].filter((item: unknown) => String(item || "").trim().length > 0);
+
+  return taskText.length >= 20
+    && acceptanceCriteria.length > 0
+    && verificationSignals.length > 0;
+}
+
+export function evaluateTargetPlannerStrictDecisionGate(raw: string, parsed: any): { ok: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  if (!hasTargetDecisionPlansCompanion(raw)) {
+    reasons.push("missing_top_level_plans_decision_json");
+  }
+
+  const plans = Array.isArray(parsed?.plans) ? parsed.plans : [];
+  if (plans.length === 0) {
+    reasons.push("empty_or_missing_plans_array");
+  } else if (plans.every((plan: any) => !hasTargetPacketExecutableContent(plan))) {
+    reasons.push("prose_only_wave_shells");
+  }
+
+  return { ok: reasons.length === 0, reasons };
+}
+
 // ── Main Prometheus Analysis (simplified) ────────────────────────────────────
 
 /**
@@ -5957,12 +6013,21 @@ export const TARGET_PROMETHEUS_STATIC_SECTIONS = Object.freeze({
 You are planning only for the active target session.
 Do NOT propose work for BOX internals, BOX src/core, prompt authority, lineage taxonomy, retry economics, or any other BOX self-improvement surface.
 Treat the active target repo objective, target session gates, and isolated workspace as the only planning scope.
-The BOX repository is orchestration infrastructure for this cycle, not the delivery target.`),
+The BOX repository is orchestration infrastructure for this cycle, not the delivery target.
+For greenfield UI delivery, the wave-1 scaffold packet is foundation work, not a fallback. Do not describe foundation design artifacts as mock, demo, placeholder, or substitute output; call them reference artifacts/comps only when they preserve the final requested outcome and keep downstream dependencies attached to that root packet.`),
 
   targetOutputFormat: ivs("target-output-format", `## TARGET DELIVERY OUTPUT FORMAT
 Produce a target-repo delivery plan only.
 Respect the operator objective's locked stack, file boundary, stage gates, and workspace path.
 Emit only concrete target-session packets and the required JSON companion block for the active target session.
+The JSON companion MUST contain a top-level "plans" array; prose-only wave lists are invalid.
+Every plans[] entry MUST be a concrete target-repo work packet with: title, task or goal, role, wave, scope, target_files, before_state, after_state, riskLevel, dependencies, acceptance_criteria, verification, capabilityLane, and capabilityTag.
+If self-improvement economics do not naturally apply to target work, set neutral compatibility values capacityDelta=0.1 and requestROI=1.0 rather than omitting them.
+Wrap the companion exactly as:
+
+===DECISION===
+{"plans":[...]}
+===END===
 Do NOT include BOX-wide self-critique, BOX master-evolution analysis, or self-improvement packets unless the operator objective explicitly asks for them.`),
 });
 
@@ -6020,6 +6085,28 @@ export function buildPrometheusPersonaFallbackPrompt(agentSlug: unknown, prompt:
   return persona ? `## YOUR ROLE\n${persona}\n\n${promptText}` : promptText;
 }
 
+function compactTargetObjectiveList(values: unknown, opts: { maxItems?: number; maxItemChars?: number } = {}): string[] {
+  if (!Array.isArray(values)) return [];
+  const maxItems = Math.max(1, Number(opts.maxItems || 6));
+  const maxItemChars = Math.max(40, Number(opts.maxItemChars || 180));
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = sanitizePromptLine(value, maxItemChars);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+    if (result.length >= maxItems) break;
+  }
+  const omitted = values.length - result.length;
+  if (omitted > 0) {
+    result.push(`... ${omitted} duplicate/extra item(s) omitted for prompt budget`);
+  }
+  return result;
+}
+
 export function buildCanonicalTargetOperatorObjective(config: any, fallbackPrompt?: unknown, canonicalIntentContract?: any): string {
   const activeTargetSession = config?.activeTargetSession && typeof config.activeTargetSession === "object"
     ? config.activeTargetSession
@@ -6042,49 +6129,90 @@ export function buildCanonicalTargetOperatorObjective(config: any, fallbackPromp
     return advisoryPrompt || "Full repository self-evolution analysis";
   }
 
-  const objectiveSummary = String(
+  const objectiveSummary = sanitizePromptLine(
     canonicalContract?.objectiveSummary
     || activeTargetSession?.objective?.summary
     || "Target objective pending",
-  ).trim() || "Target objective pending";
-  const desiredOutcome = String(canonicalContract?.desiredOutcome || activeTargetSession?.objective?.desiredOutcome || "").trim();
+    260,
+  ) || "Target objective pending";
+  const desiredOutcome = sanitizePromptLine(canonicalContract?.desiredOutcome || activeTargetSession?.objective?.desiredOutcome || "", 260);
   const objectiveAcceptanceCriteria = Array.isArray(activeTargetSession?.objective?.acceptanceCriteria)
-    ? activeTargetSession.objective.acceptanceCriteria.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+    ? compactTargetObjectiveList(activeTargetSession.objective.acceptanceCriteria, { maxItems: 6, maxItemChars: 180 })
     : [];
   const intentMustHaveFlows = Array.isArray(canonicalClarifiedIntent?.mustHaveFlows)
-    ? canonicalClarifiedIntent.mustHaveFlows.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+    ? compactTargetObjectiveList(canonicalClarifiedIntent.mustHaveFlows, { maxItems: 6, maxItemChars: 180 })
     : Array.isArray(activeTargetSession?.intent?.mustHaveFlows)
-      ? activeTargetSession.intent.mustHaveFlows.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+      ? compactTargetObjectiveList(activeTargetSession.intent.mustHaveFlows, { maxItems: 6, maxItemChars: 180 })
     : [];
   const intentScopeIn = Array.isArray(canonicalClarifiedIntent?.scopeIn)
-    ? canonicalClarifiedIntent.scopeIn.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+    ? compactTargetObjectiveList(canonicalClarifiedIntent.scopeIn, { maxItems: 6, maxItemChars: 180 })
     : Array.isArray(activeTargetSession?.intent?.scopeIn)
-      ? activeTargetSession.intent.scopeIn.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+      ? compactTargetObjectiveList(activeTargetSession.intent.scopeIn, { maxItems: 6, maxItemChars: 180 })
     : [];
   const intentScopeOut = Array.isArray(canonicalClarifiedIntent?.scopeOut)
-    ? canonicalClarifiedIntent.scopeOut.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+    ? compactTargetObjectiveList(canonicalClarifiedIntent.scopeOut, { maxItems: 6, maxItemChars: 180 })
     : Array.isArray(activeTargetSession?.intent?.scopeOut)
-      ? activeTargetSession.intent.scopeOut.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+      ? compactTargetObjectiveList(activeTargetSession.intent.scopeOut, { maxItems: 6, maxItemChars: 180 })
     : [];
   const intentSuccessCriteria = Array.isArray(canonicalClarifiedIntent?.successCriteria)
-    ? canonicalClarifiedIntent.successCriteria.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+    ? compactTargetObjectiveList(canonicalClarifiedIntent.successCriteria, { maxItems: 6, maxItemChars: 180 })
     : Array.isArray(activeTargetSession?.intent?.successCriteria)
-      ? activeTargetSession.intent.successCriteria.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+      ? compactTargetObjectiveList(activeTargetSession.intent.successCriteria, { maxItems: 6, maxItemChars: 180 })
     : [];
-  const canonicalSummary = String(canonicalContract?.summary || "").trim();
+  const intentPreferredQualityBar = sanitizePromptLine(
+    canonicalClarifiedIntent?.preferredQualityBar
+    || activeTargetSession?.intent?.preferredQualityBar
+    || "",
+    220,
+  );
+  const intentDesignDirection = sanitizePromptLine(
+    canonicalClarifiedIntent?.designDirection
+    || activeTargetSession?.intent?.designDirection
+    || "",
+    360,
+  );
+  const intentImplementationFlexibility = sanitizePromptLine(
+    canonicalClarifiedIntent?.implementationFlexibility
+    || activeTargetSession?.intent?.implementationFlexibility
+    || "",
+    260,
+  );
+  const intentOperatorIntentBrief = sanitizePromptLine(
+    canonicalClarifiedIntent?.operatorIntentBrief
+    || activeTargetSession?.intent?.operatorIntentBrief
+    || "",
+    700,
+  );
+  const intentOperatorIntentEvidence = Array.isArray(canonicalClarifiedIntent?.operatorIntentEvidence)
+    ? compactTargetObjectiveList(canonicalClarifiedIntent.operatorIntentEvidence, { maxItems: 4, maxItemChars: 220 })
+    : Array.isArray(activeTargetSession?.intent?.operatorIntentEvidence)
+      ? compactTargetObjectiveList(activeTargetSession.intent.operatorIntentEvidence, { maxItems: 4, maxItemChars: 220 })
+      : [];
+  const intentAssetSourcingPolicy = sanitizePromptLine(
+    canonicalClarifiedIntent?.assetSourcingPolicy
+    || activeTargetSession?.intent?.assetSourcingPolicy
+    || "",
+    300,
+  );
+  const intentAssetRequirements = Array.isArray(canonicalClarifiedIntent?.assetRequirements)
+    ? compactTargetObjectiveList(canonicalClarifiedIntent.assetRequirements, { maxItems: 4, maxItemChars: 220 })
+    : Array.isArray(activeTargetSession?.intent?.assetRequirements)
+      ? compactTargetObjectiveList(activeTargetSession.intent.assetRequirements, { maxItems: 4, maxItemChars: 220 })
+    : [];
+  const canonicalSummary = sanitizePromptLine(canonicalContract?.summary || "", 360);
   const canonicalStatus = String(canonicalContract?.status || "").trim();
   const canonicalPlanningMode = String(canonicalContract?.planningMode || "").trim();
   const protectedPaths = Array.isArray(activeTargetSession?.constraints?.protectedPaths)
-    ? activeTargetSession.constraints.protectedPaths.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+    ? compactTargetObjectiveList(activeTargetSession.constraints.protectedPaths, { maxItems: 6, maxItemChars: 160 })
     : [];
   const forbiddenActions = Array.isArray(activeTargetSession?.constraints?.forbiddenActions)
-    ? activeTargetSession.constraints.forbiddenActions.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+    ? compactTargetObjectiveList(activeTargetSession.constraints.forbiddenActions, { maxItems: 6, maxItemChars: 160 })
     : [];
   const requiredHumanInputs = Array.isArray(activeTargetSession?.handoff?.requiredHumanInputs)
-    ? activeTargetSession.handoff.requiredHumanInputs.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+    ? compactTargetObjectiveList(activeTargetSession.handoff.requiredHumanInputs, { maxItems: 4, maxItemChars: 180 })
     : [];
   const operatorNotes = Array.isArray(activeTargetSession?.hints?.notes)
-    ? activeTargetSession.hints.notes.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+    ? compactTargetObjectiveList(activeTargetSession.hints.notes, { maxItems: 4, maxItemChars: 180 })
     : [];
   const workspacePath = String(
     activeTargetSession?.workspace?.path
@@ -6101,6 +6229,10 @@ export function buildCanonicalTargetOperatorObjective(config: any, fallbackPromp
     `allowActiveExecution=${activeTargetSession?.gates?.allowActiveExecution === true}`,
     `quarantine=${activeTargetSession?.gates?.quarantine === true}`,
   ].join(" | ");
+  const fallbackAmbitionGuidance = buildStrongestPlausibleFallbackGuidance({
+    preferredQualityBar: intentPreferredQualityBar,
+    implementationFlexibility: intentImplementationFlexibility,
+  });
 
   return [
     "Authoritative objective source: ACTIVE TARGET SESSION CONTRACT.",
@@ -6126,9 +6258,30 @@ export function buildCanonicalTargetOperatorObjective(config: any, fallbackPromp
     intentScopeOut.length > 0
       ? `Scope out: ${intentScopeOut.join(" | ")}`
       : "Scope out: none provided",
+    intentPreferredQualityBar
+      ? `Preferred quality bar: ${intentPreferredQualityBar}`
+      : "Preferred quality bar: not explicitly provided",
+    intentDesignDirection
+      ? `Design direction: ${intentDesignDirection}`
+      : "Design direction: not explicitly provided",
     intentSuccessCriteria.length > 0
       ? `Intent success criteria: ${intentSuccessCriteria.join(" | ")}`
       : "Intent success criteria: none provided",
+    intentImplementationFlexibility
+      ? `Implementation latitude: ${intentImplementationFlexibility}`
+      : "Implementation latitude: not explicitly provided",
+    intentOperatorIntentBrief
+      ? `Operator intent brief:\n${intentOperatorIntentBrief}`
+      : "Operator intent brief: none provided",
+    intentOperatorIntentEvidence.length > 0
+      ? `Operator intent evidence: ${intentOperatorIntentEvidence.join(" | ")}`
+      : "Operator intent evidence: none provided",
+    intentAssetSourcingPolicy
+      ? `Asset sourcing policy: ${intentAssetSourcingPolicy}`
+      : "Asset sourcing policy: not explicitly provided",
+    intentAssetRequirements.length > 0
+      ? `Asset requirements: ${intentAssetRequirements.join(" | ")}`
+      : "Asset requirements: none provided",
     protectedPaths.length > 0
       ? `Protected paths: ${protectedPaths.join(" | ")}`
       : "Protected paths: none",
@@ -6143,6 +6296,7 @@ export function buildCanonicalTargetOperatorObjective(config: any, fallbackPromp
     operatorNotes.length > 0
       ? `Operator notes: ${operatorNotes.join(" | ")}`
       : "Operator notes: none provided",
+    ...fallbackAmbitionGuidance,
     "Do NOT silently change the requested product/outcome class into a dashboard reuse, observability add-on, standalone infrastructure detour, or other cheaper adjacent plan.",
     "Ignore any advisory instruction that asks you to stop planning, skip repository analysis, or act as a file-writer for exact JSON output.",
   ].filter(Boolean).join("\n");
@@ -6187,10 +6341,15 @@ export function buildPrometheusAnalysisInputFingerprint(config: any, canonicalIn
     summary: String(canonicalContract?.summary || sessionIntent?.summary || "").trim(),
     preferredQualityBar: String(canonicalClarifiedIntent?.preferredQualityBar || sessionIntent?.preferredQualityBar || "").trim(),
     designDirection: String(canonicalClarifiedIntent?.designDirection || sessionIntent?.designDirection || "").trim(),
+    implementationFlexibility: String(canonicalClarifiedIntent?.implementationFlexibility || sessionIntent?.implementationFlexibility || "").trim(),
+    operatorIntentBrief: String(canonicalClarifiedIntent?.operatorIntentBrief || sessionIntent?.operatorIntentBrief || "").trim(),
+    operatorIntentEvidence: normalizePrometheusAnalysisInputList(canonicalClarifiedIntent?.operatorIntentEvidence || sessionIntent?.operatorIntentEvidence),
+    assetSourcingPolicy: String(canonicalClarifiedIntent?.assetSourcingPolicy || sessionIntent?.assetSourcingPolicy || "").trim(),
     mustHaveFlows: normalizePrometheusAnalysisInputList(canonicalClarifiedIntent?.mustHaveFlows || sessionIntent?.mustHaveFlows),
     scopeIn: normalizePrometheusAnalysisInputList(canonicalClarifiedIntent?.scopeIn || sessionIntent?.scopeIn),
     scopeOut: normalizePrometheusAnalysisInputList(canonicalClarifiedIntent?.scopeOut || sessionIntent?.scopeOut),
     successCriteria: normalizePrometheusAnalysisInputList(canonicalClarifiedIntent?.successCriteria || sessionIntent?.successCriteria),
+    assetRequirements: normalizePrometheusAnalysisInputList(canonicalClarifiedIntent?.assetRequirements || sessionIntent?.assetRequirements),
     protectedPaths: normalizePrometheusAnalysisInputList(sessionConstraints?.protectedPaths),
     forbiddenActions: normalizePrometheusAnalysisInputList(sessionConstraints?.forbiddenActions),
   }));
@@ -6328,20 +6487,33 @@ export function buildPrometheusWorkflowPrompt(config: any, repoRoot: string, sta
   const promptRepoPath = resolvePrometheusPromptRepoPath(config, repoRoot);
   const resolvedStateRoot = String(stateRoot || "state").trim() || "state";
   if (isSingleTargetPromptIsolationActive(config)) {
+    const projectId = String(config?.activeTargetSession?.projectId || "").trim();
+    const sessionId = String(config?.activeTargetSession?.sessionId || "").trim();
+    const targetSessionArtifactPaths = projectId && sessionId
+      ? [
+          path.join(resolvedStateRoot, "projects", projectId, sessionId, "target_session.json"),
+          path.join(resolvedStateRoot, "projects", projectId, sessionId, "target_intent_contract.json"),
+          path.join(resolvedStateRoot, "projects", projectId, sessionId, "clarification_packet.json"),
+          path.join(resolvedStateRoot, "projects", projectId, sessionId, "project_readiness_report.json"),
+          path.join(resolvedStateRoot, "projects", projectId, sessionId, "session_progress.log"),
+        ]
+      : [];
     const uiRepairDirective = buildTargetUiRepairWorkflowDirective(config);
+    const sequentialVisualInspectionDirective = buildTargetSequentialVisualInspectionDirective(config);
+    const closureFocusDirective = buildTargetClosureFocusDirective(config);
     return `## YOUR WORKFLOW
 You have full read and write access to the state directory and the isolated target workspace.
 ACTIVE TARGET WORKSPACE: ${promptRepoPath}
 STATE DIRECTORY: ${resolvedStateRoot}
 1. Read ${path.join(resolvedStateRoot, "research_synthesis.json")} for the latest research intelligence (extracted content from internet sources).
-2. Read key state files to understand target-session health: ${PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES.map((filePath) => path.join(resolvedStateRoot, path.basename(filePath))).join(", ")}
-   - state/worker_cycle_artifacts.json is the canonical cycle snapshot (schemaVersion=1, fields: latestCycleId, cycles{}, updatedAt). Check the updatedAt field for freshness — records older than 6 hours are historical context only, not live planning truth.
-   - Use diagnostics freshness metadata (freshness.staleAfterMs + timestamp fields) and do NOT treat stale diagnostics entries as live planning truth.
-3. Inspect the isolated target workspace and target-session artifacts needed to plan delivery. Do NOT browse BOX src/core or propose BOX-internal work while single-target delivery mode is active.
+2. Read the active target-session artifacts that define delivery truth: ${targetSessionArtifactPaths.length > 0 ? targetSessionArtifactPaths.join(", ") : "the active target_session.json, target_intent_contract.json, clarification_packet.json, project_readiness_report.json, and session_progress.log artifacts for the selected project/session."}
+3. Inspect the isolated target workspace and target-session artifacts needed to plan delivery. Do NOT browse BOX src/core, BOX state backlogs, or BOX self-improvement prompts while single-target delivery mode is active.
 4. Produce a delivery plan only for the active target session following the operator objective and session gates.
    - Do NOT silently downgrade explicit user intent into placeholders, mocks, demo-only flows, or reduced-quality substitutes.
-   - If a temporary fallback is unavoidable, say so explicitly, include the blocker reason, and preserve the final intended outcome class in the plan.
-${uiRepairDirective ? `5. ${uiRepairDirective}
+  - If a temporary fallback is unavoidable, say so explicitly, include the blocker reason, and preserve the final intended outcome class in the plan.
+${sequentialVisualInspectionDirective ? `   - ${sequentialVisualInspectionDirective}
+` : ""}${closureFocusDirective ? `5. ${closureFocusDirective}
+` : ""}${uiRepairDirective ? `5. ${uiRepairDirective}
 ` : ""}5. Your plan MUST end with a JSON companion block wrapped in ===DECISION=== / ===END=== markers containing a plans array.`;
   }
 
@@ -6354,6 +6526,21 @@ You have full read and write access to the repository and state directory.
 3. Read source files you need to understand for planning — browse src/core/, src/workers/, src/types/ as needed.
 4. Produce your self-evolution master plan following your agent definition's output format.
 5. Your plan MUST end with a JSON companion block wrapped in ===DECISION=== / ===END=== markers containing a plans array.`;
+}
+
+function buildTargetClosureFocusDirective(config: any): string {
+  const nextAction = String(config?.activeTargetSession?.handoff?.nextAction || "").trim();
+  if (nextAction === "run_release_signoff") {
+    return [
+      "Closure focus: the target success contract is open only because release sign-off is missing.",
+      "Plan only a release verification/sign-off task; do not create new feature, design, research, or broad quality-expansion work.",
+      "The worker must run the target repo's available release checks such as npm test, npm run lint, npm run build, Astro check, Vitest, or Playwright as applicable, verify the pushed main SHA or PR merge state when possible, and emit machine-readable sign-off evidence with BOX_STATUS=done plus either BOX_MERGED_SHA or an explicit release-checks-passed statement.",
+    ].join("\n");
+  }
+  if (nextAction) {
+    return `Closure focus: honor activeTargetSession.handoff.nextAction=${nextAction} before planning any broader delivery work.`;
+  }
+  return "";
 }
 
 function buildTargetUiRepairWorkflowDirective(config: any): string {
@@ -6382,9 +6569,39 @@ function buildTargetUiRepairWorkflowDirective(config: any): string {
   return [
     "If the active target session is UI/shell-oriented and the target workspace already contains a current GUI/runtime implementation, you MUST plan repair-first rather than proposing a greenfield rebuild.",
     "Do NOT discard the current GUI. Treat the existing runtime and current screens as the subject under repair.",
-    "Reuse the original target-session design intent as planning authority, but convert it into machine-readable uiContract, uiScenarioMatrix, and uiRuntimeRecipe fields.",
-    "Your first UI packet should be a ui-contract repair packet that launches the current GUI, evaluates the current surface against the contract, and patches the existing UI in place.",
+    "Reuse the original target-session design intent as planning authority and keep the repair packet grounded in the existing runtime, screens, and user flow.",
+    "Your first UI packet should repair the current GUI in place instead of inventing a separate execution protocol around it.",
     "Only propose a net-new UI surface if the current runtime is missing, cannot launch, or is fundamentally unrecoverable, and state that blocker explicitly.",
+  ].join(" ");
+}
+
+function buildTargetSequentialVisualInspectionDirective(config: any): string {
+  const activeTargetSession = config?.activeTargetSession && typeof config.activeTargetSession === "object"
+    ? config.activeTargetSession
+    : null;
+  if (!activeTargetSession) return "";
+
+  const visualSignals = [
+    activeTargetSession?.objective?.summary,
+    activeTargetSession?.objective?.desiredOutcome,
+    ...(Array.isArray(activeTargetSession?.objective?.acceptanceCriteria) ? activeTargetSession.objective.acceptanceCriteria : []),
+    ...(Array.isArray(activeTargetSession?.intent?.mustHaveFlows) ? activeTargetSession.intent.mustHaveFlows : []),
+    ...(Array.isArray(activeTargetSession?.intent?.scopeIn) ? activeTargetSession.intent.scopeIn : []),
+    ...(Array.isArray(activeTargetSession?.intent?.successCriteria) ? activeTargetSession.intent.successCriteria : []),
+    ...(Array.isArray(activeTargetSession?.hints?.notes) ? activeTargetSession.hints.notes : []),
+  ]
+    .map((value: unknown) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" ");
+
+  if (!/\b(ui|ux|design|hero|gallery|image|images|photo|photos|photography|imagery|screenshot|screenshots|visual|brand|logo|landing page|marketing site|desktop|frontend|interface)\b/i.test(visualSignals)) {
+    return "";
+  }
+
+  return [
+    "If planning requires screenshots, image attachments, or other visual artifacts, inspect them strictly one at a time: read one artifact, analyze it, write the compact planning finding set, then move to the next artifact.",
+    "Do not batch multiple screenshots or images into a single visual read, and do not compare newly read visuals together with previously inspected visuals in one bulk pass.",
+    "Bulk visual inspection is forbidden because it can overload the server.",
   ].join(" ");
 }
 
@@ -6627,6 +6844,8 @@ function applyCandidateSelectionGates(
   const freshness = applyDiagnosticsFreshnessTruthToPlanning(parsed, diagnosticsFreshnessAdmission);
   const contractResult = validateAllPlans(parsed.plans, {
     activeTargetSession: config?.activeTargetSession,
+    disableProtectedIntentValidation: config?.runtime?.disableProtectedIntentValidation === true,
+    disableIntentDowngradeValidation: true,
   });
   const contractGateOutcome = analyzePlanContractGateOutcome(contractResult);
 
@@ -7578,16 +7797,22 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   // These signal which lanes have historically been harder (lower completion rate)
   // so the density gate can be stricter for those lanes.
   const laneDifficultyPriors = computeHistoricalLaneDifficultyPriors(prevAnalyticsRecords);
+  const targetModePlanningActive = isSingleTargetPromptIsolationActive(config);
 
   let planningPolicy = buildPrometheusPlanningPolicy(config, prevLaneTelemetry, {
     taskKindTelemetry: extractTaskKindPacketTelemetry(prevAnalyticsSnapshot),
   });
-  const diagnosticsFreshnessSection = await buildDiagnosticsFreshnessPromptSection(stateDir);
+  const diagnosticsFreshnessSectionRaw = await buildDiagnosticsFreshnessPromptSection(stateDir);
   // Build machine-readable freshness records for the live admission gate.
   // These are computed in parallel with the prompt section so the same file I/O
   // serves both the human-readable section and the deterministic admission gate.
   const _diagnosticsFreshnessRecords = await buildDiagnosticsFreshnessRecords(stateDir);
-  const diagnosticsFreshnessAdmission = computeDiagnosticsFreshnessAdmission(_diagnosticsFreshnessRecords);
+  const diagnosticsFreshnessContext = resolvePlanningDiagnosticsFreshnessContext(config, {
+    sectionText: diagnosticsFreshnessSectionRaw,
+    admission: computeDiagnosticsFreshnessAdmission(_diagnosticsFreshnessRecords),
+  });
+  const diagnosticsFreshnessSection = diagnosticsFreshnessContext.sectionText;
+  const diagnosticsFreshnessAdmission = diagnosticsFreshnessContext.admission;
 
   let researchSectionText = "";
   let researchTopicCount = 0;
@@ -7601,7 +7826,6 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
   let benchmarkSection = "";
   let routingOutcomeSection = "";
   let truthMaintenanceSection = "";
-  const targetModePlanningActive = isSingleTargetPromptIsolationActive(config);
   let truthSignals = null as Awaited<ReturnType<typeof collectPromptTruthSignals>> | null;
   let latestMainCiConclusionForTruth: string | null = null;
   let preloadedHealthAuditPayload: unknown;
@@ -7634,6 +7858,12 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
       config,
       "[PROMETHEUS][TARGET_MODE] Suppressing BOX self-dev planning context for active target session planning",
     );
+    if (diagnosticsFreshnessContext.suppressed) {
+      await appendProgress(
+        config,
+        "[PROMETHEUS][TARGET_MODE] Suppressing BOX diagnostics freshness gate for active target session planning",
+      );
+    }
   }
   try {
     const [researchSynthesis, researchScout, knowledgeMemory, jesusDirective, loadedBenchmarkData] = await Promise.all([
@@ -7655,7 +7885,9 @@ export async function runPrometheusAnalysis(config, options: any = {}) {
     researchSynthesisData = researchSynthesis;
     const researchArtifactsAligned = !targetModePlanningActive
       || isResearchArtifactAlignedToTargetSession(researchSynthesis as Record<string, unknown>, config?.activeTargetSession);
-    researchTopicsList = researchArtifactsAligned ? extractResearchTopics(researchSynthesis, researchScout) : [];
+    researchTopicsList = researchArtifactsAligned
+      ? extractResearchTopics(researchSynthesis, researchScout, { includeScoutExpansion: !targetModePlanningActive })
+      : [];
     const researchArtifactUpdatedAtMs = await getLatestResearchArtifactUpdatedAtMs(stateDir);
     memoryShortlist = buildTrustedMemoryShortlist(knowledgeMemory, {
       requestedBy,
@@ -8252,19 +8484,8 @@ RULE: Every packet MUST contain enough work to justify a full AI context call. T
     if (laneTelemetrySection) cycleDeltaParts.push(laneTelemetrySection);
   }
 
-  // Research intelligence summary (topics only — Prometheus reads full synthesis file itself)
-  if (researchTopicsList.length > 0) {
-    const topicLines = researchTopicsList.map((topic, i) => `${i + 1}. ${topic}`).join("\n");
-    cycleDeltaParts.push(`## RESEARCH INTELLIGENCE AVAILABLE
-${researchTopicsList.length} topic(s) from ${researchSourceCount} source(s) available.
-Research coverage target: ${researchCoverageTarget > 0 ? researchCoverageTarget : "AUTO"} research-backed packet(s).
-
-Topics identified:
-${topicLines}
-
-IMPORTANT: Read state/research_synthesis.json for full extracted content from each source.
-The synthesis contains real technical details — algorithm names, benchmark numbers, code examples, architecture patterns.
-Use this data to produce evidence-backed plans, not vague strategic recommendations.`);
+  if (researchSectionText) {
+    cycleDeltaParts.push(researchSectionText);
   }
 
   // Topic memory (compact)
@@ -8386,6 +8607,9 @@ Use this data to produce evidence-backed plans, not vague strategic recommendati
     : "";
 
   const promptLineageMarker = promptLineage ? `${buildPromptLineageMarker(promptLineage)}\n` : "";
+  const requiredPlanSchemaLine = resolvedStaticSections === TARGET_PROMETHEUS_STATIC_SECTIONS
+    ? "Each target plan in plans[] must have: title, task or goal, owner, role, wave, scope, target_files, before_state, after_state, riskLevel, dependencies, acceptance_criteria, verification, capabilityLane, capabilityTag. Include capacityDelta=0.1 and requestROI=1.0 only as neutral compatibility fields when they are not meaningful to target delivery."
+    : "Each plan in the array must have: title, task, owner, role, wave, scope, target_files, before_state, after_state, riskLevel, dependencies, acceptance_criteria, verification, premortem (if medium/high risk), capacityDelta, requestROI, capabilityLane, capabilityTag.";
   const promptRepoName = config?.activeTargetSession?.repo?.repoFullName
     || config?.activeTargetSession?.repo?.name
     || config.env?.targetRepo
@@ -8405,13 +8629,12 @@ ${accessInteractionSection}
 
 The JSON plans array is MANDATORY in normal mode — the orchestrator reads it to dispatch workers.
 When bounded multi-candidate mode is enabled, candidateSets[*].plans is the primary dispatch payload and top-level plans may be omitted.
-Each plan in the array must have: title, task, owner, role, wave, scope, target_files, before_state, after_state, riskLevel, dependencies, acceptance_criteria, verification, premortem (if medium/high risk), capacityDelta, requestROI, capabilityLane, capabilityTag.
+${requiredPlanSchemaLine}
 
-If the operator objective or EXTERNAL RESEARCH INTELLIGENCE indicates UI/design/surface work, Prometheus must decide the initial UI runtime strategy in the SAME response before any worker runs.
-For those UI plans, include machine-readable fields whenever they are knowable from the repo or research: uiContract, uiScenarioMatrix, targetSurfaces, uiSurface, uiRuntimeRecipe.
-uiRuntimeRecipe should describe the primary surface, candidate surfaces, launchUrl or launchCommand, readinessProbe, install/bootstrap steps when needed, and fallback order.
-If no built-in adapter fits the chosen surface, specify a session-local adapter by setting uiRuntimeRecipe.adapterId to a stable custom name and uiRuntimeRecipe.adapterModulePath to a module path inside the target workspace that the worker can author or update during the same session.
-Do not leave adapter or viewer selection fully implicit when Prometheus already has enough repo/research evidence to choose an initial runtime path.
+If the operator objective or EXTERNAL RESEARCH INTELLIGENCE indicates UI/design/surface work, keep the plan concrete in the SAME response before any worker runs: name the target surface, target files, acceptance criteria, and verification path explicitly.
+If the operator objective includes UI/design/surface work, do not produce one oversized UI plan. Split the UI work into 3 or 4 logical parts in sequence.
+If the operator objective includes UI/design/surface work and no concrete reference was supplied, the plan must include an explicit first implementation step that sources and inspects at least one external visual exemplar before product-file edits begin.
+If a concrete reference was supplied, the plan must preserve a direct visual capture or screenshot inspection step before reducing the work into components, sections, or scaffolding.
 
 Role/lane assignment is dispatch-critical.
 - Use the best-fit worker role, not generic evolution-worker by default.
@@ -8434,9 +8657,24 @@ ${compiledCycleDelta}`;
   // allowAll: true gives read + write + list_dir + search so Prometheus can
   // explore the repo, read research synthesis, read state files, and write its plan.
   const prometheusAgentAvailableForExecution = agentFileExistsForExecution(prometheusAgentSlug, promptRepoPath);
-  const executionPrompt = prometheusAgentAvailableForExecution
-    ? contextPrompt
-    : buildPrometheusPersonaFallbackPrompt(prometheusAgentSlug, contextPrompt);
+  let useEmbeddedPrometheusPersona = !prometheusAgentAvailableForExecution;
+  const prometheusRunContract = {
+    ...(promptLineage ? { promptLineage } : {}),
+    executionCwd: promptRepoPath,
+  };
+
+  const buildPrometheusExecutionArgs = (promptText: string) => buildAgentArgs({
+    ...(useEmbeddedPrometheusPersona ? {} : { agentSlug: prometheusAgentSlug }),
+    prompt: useEmbeddedPrometheusPersona
+      ? buildPrometheusPersonaFallbackPrompt(prometheusAgentSlug, promptText)
+      : promptText,
+    model: prometheusModel,
+    allowAll: true,
+    allowInteractiveUserInput: interactiveAccessResolutionEnabled,
+    noAskUser: !interactiveAccessResolutionEnabled,
+    maxContinues: undefined,
+    runContract: prometheusRunContract,
+  });
 
   if (!prometheusAgentAvailableForExecution) {
     await appendProgress(
@@ -8445,19 +8683,7 @@ ${compiledCycleDelta}`;
     );
   }
 
-  const args = buildAgentArgs({
-    agentSlug: prometheusAgentSlug,
-    prompt: executionPrompt,
-    model: prometheusModel,
-    allowAll: true,
-    allowInteractiveUserInput: interactiveAccessResolutionEnabled,
-    noAskUser: !interactiveAccessResolutionEnabled,
-    maxContinues: undefined,
-    runContract: {
-      ...(promptLineage ? { promptLineage } : {}),
-      executionCwd: promptRepoPath,
-    },
-  });
+  const args = buildPrometheusExecutionArgs(contextPrompt);
 
   appendLiveLogSync(stateDir, `\n[copilot_stream_start] ${ts()}\n`);
 
@@ -8518,18 +8744,8 @@ ${compiledCycleDelta}`;
         `[${ts()}] ${prometheusName.padEnd(20)} Agent slug ${prometheusAgentSlug} unavailable — retrying without --agent using embedded persona`
       );
 
-      const fallbackArgs = buildAgentArgs({
-        prompt: buildPrometheusPersonaFallbackPrompt(prometheusAgentSlug, contextPrompt),
-        model: prometheusModel,
-        allowAll: true,
-        allowInteractiveUserInput: interactiveAccessResolutionEnabled,
-        noAskUser: !interactiveAccessResolutionEnabled,
-        maxContinues: undefined,
-        runContract: {
-          ...(promptLineage ? { promptLineage } : {}),
-          executionCwd: promptRepoPath,
-        },
-      });
+      useEmbeddedPrometheusPersona = true;
+      const fallbackArgs = buildPrometheusExecutionArgs(contextPrompt);
 
       streamedStdout = "";
       streamedStderr = "";
@@ -8559,7 +8775,7 @@ ${compiledCycleDelta}`;
   const stdout = String((result as any)?.stdout || "");
   const stderr = String((result as any)?.stderr || "");
   const combinedRaw = resolveCapturedAgentRawOutput(stdout, stderr, streamedStdout, streamedStderr);
-  const raw = combinedRaw;
+  let raw = combinedRaw;
 
   // ── Check for model fallback ──────────────────────────────────────────────
   const fallback = detectModelFallback(combinedRaw);
@@ -8630,21 +8846,13 @@ Mandatory parser fields:
 - Keep the rest of the plan deterministic and unchanged unless required by these fixes.`;
 
         try {
-          const retryArgs = buildAgentArgs({
-            agentSlug: "prometheus",
-            prompt: retryPrompt,
-            model: prometheusModel,
-            allowAll: true,
-            allowInteractiveUserInput: interactiveAccessResolutionEnabled,
-            noAskUser: !interactiveAccessResolutionEnabled,
-            maxContinues: undefined,
-            runContract: promptLineage ? { promptLineage } : undefined,
-          });
+          const retryArgs = buildPrometheusExecutionArgs(retryPrompt);
           appendLiveLogSync(stateDir, `\n[copilot_stream_retry_start] ${ts()}\n`);
           let retryStreamStdout = "";
           let retryStreamStderr = "";
           const retryResult = await spawnAsync(command, retryArgs, {
             env: process.env,
+            cwd: promptRepoPath,
             timeoutMs: prometheusTimeoutMs,
             earlyExitMarker: "===END===",
             onStdout(chunk) {
@@ -8720,21 +8928,13 @@ Your previous response contained process-thought markers (<think>, <reasoning>, 
 in the following fields: ${fidelityContaminated.join(", ")}.
 These internal reasoning tokens must NOT appear in the JSON output or plan fields.
 Regenerate the full response ensuring all strategic fields (analysis, strategicNarrative, keyFindings, plans[].task, plans[].context) contain ONLY final actionable content — no thinking fragments.`;
-        const fidelityRetryArgs = buildAgentArgs({
-          agentSlug: "prometheus",
-          prompt: fidelityRetryPrompt,
-          model: prometheusModel,
-          allowAll: true,
-          allowInteractiveUserInput: interactiveAccessResolutionEnabled,
-          noAskUser: !interactiveAccessResolutionEnabled,
-          maxContinues: undefined,
-          runContract: promptLineage ? { promptLineage } : undefined,
-        });
+        const fidelityRetryArgs = buildPrometheusExecutionArgs(fidelityRetryPrompt);
         appendLiveLogSync(stateDir, `\n[fidelity_retry_start] ${ts()}\n`);
         let fidelityRetryStreamStdout = "";
         let fidelityRetryStreamStderr = "";
         const fidelityRetryResult = await spawnAsync(command, fidelityRetryArgs, {
           env: process.env,
+          cwd: promptRepoPath,
           timeoutMs: prometheusTimeoutMs,
           earlyExitMarker: "===END===",
           onStdout(chunk) {
@@ -8790,6 +8990,214 @@ Regenerate the full response ensuring all strategic fields (analysis, strategicN
     );
   }
 
+  if (isSingleTargetPromptIsolationActive(config)) {
+    const targetDecisionGate = evaluateTargetPlannerStrictDecisionGate(raw, rawParsedInput);
+    if (!targetDecisionGate.ok) {
+      await appendProgress(
+        config,
+        `[PROMETHEUS][TARGET_DECISION_JSON] Target planner emitted non-dispatchable output — retrying once: ${targetDecisionGate.reasons.join(",")}`,
+      );
+
+      let targetDecisionRetryRaw = "";
+      let targetDecisionRetryParsed: any = null;
+      let targetDecisionRetryAi: any = null;
+      try {
+        const targetDecisionRetryPrompt = `${contextPrompt}
+
+## TARGET_DECISION_JSON_RETRY
+The previous target-prometheus response was not dispatchable by the orchestrator.
+
+Failure reasons:
+- ${targetDecisionGate.reasons.join("\n- ")}
+
+Regenerate the full target-repo delivery plan. You MUST end with exactly one machine-readable companion block:
+
+===DECISION===
+{"plans":[{"title":"...","task":"...","role":"evolution-worker","wave":1,"scope":"target repo surface","target_files":["..."],"before_state":"...","after_state":"...","riskLevel":"medium","dependencies":[],"acceptance_criteria":["..."],"verification":"...","capacityDelta":0.1,"requestROI":1.0,"capabilityLane":"implementation","capabilityTag":"..."}],"secretsRequired":[]}
+===END===
+
+Hard requirements:
+- The top-level JSON object MUST contain a non-empty plans array.
+- Prose-only numbered waves are invalid.
+- Every plans[] entry must include task or goal text, acceptance_criteria, verification, target_files, capacityDelta, requestROI, capabilityLane, and capabilityTag.
+- Do not include BOX self-improvement work.`;
+
+        const retryArgs = buildPrometheusExecutionArgs(targetDecisionRetryPrompt);
+        appendLiveLogSync(stateDir, `\n[target_decision_json_retry_start] ${ts()}\n`);
+        let retryStreamStdout = "";
+        let retryStreamStderr = "";
+        const retryResult = await spawnAsync(command, retryArgs, {
+          env: process.env,
+          cwd: promptRepoPath,
+          timeoutMs: prometheusTimeoutMs,
+          earlyExitMarker: "===END===",
+          onStdout(chunk) {
+            const text = chunk.toString("utf8");
+            retryStreamStdout += text;
+            appendLiveLogSync(stateDir, text);
+          },
+          onStderr(chunk) {
+            const text = chunk.toString("utf8");
+            retryStreamStderr += text;
+            appendLiveLogSync(stateDir, text);
+          },
+        }) as { status?: number; stdout?: string; stderr?: string };
+        appendLiveLogSync(stateDir, `\n[target_decision_json_retry_end] ${ts()} exit=${retryResult.status}\n`);
+        if (retryResult.status === 0) {
+          targetDecisionRetryRaw = resolveCapturedAgentRawOutput(
+            retryResult.stdout,
+            retryResult.stderr,
+            retryStreamStdout,
+            retryStreamStderr,
+          );
+          targetDecisionRetryAi = parseAgentOutput(targetDecisionRetryRaw);
+          targetDecisionRetryParsed = targetDecisionRetryAi?.parsed || buildNarrativeFallbackParsed({ ...targetDecisionRetryAi, raw: targetDecisionRetryRaw });
+        } else {
+          await appendProgress(
+            config,
+            `[PROMETHEUS][TARGET_DECISION_JSON][WARN] Retry process failed — exited ${retryResult.status}`,
+          );
+        }
+      } catch (retryError) {
+        const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+        await appendProgress(config, `[PROMETHEUS][TARGET_DECISION_JSON][WARN] Retry execution error: ${retryMessage}`);
+      }
+
+      const retryGate = evaluateTargetPlannerStrictDecisionGate(targetDecisionRetryRaw, targetDecisionRetryParsed);
+      if (targetDecisionRetryParsed && retryGate.ok) {
+        raw = targetDecisionRetryRaw;
+        aiResult = targetDecisionRetryAi;
+        rawParsedInput = {
+          ...targetDecisionRetryParsed,
+          _targetDecisionJsonGate: {
+            ok: true,
+            initialReasons: targetDecisionGate.reasons,
+            _retryAttempted: true,
+          },
+        };
+        await appendProgress(config, "[PROMETHEUS][TARGET_DECISION_JSON] Retry succeeded — target plans are machine-readable");
+      } else {
+        rawParsedInput = {
+          ...(rawParsedInput as object),
+          plans: [],
+          failReason: TARGET_PLANNER_DECISION_JSON_FAIL_REASON,
+          _targetDecisionJsonGate: {
+            ok: false,
+            initialReasons: targetDecisionGate.reasons,
+            retryReasons: retryGate.reasons,
+            _retryAttempted: true,
+          },
+        };
+        await appendProgress(
+          config,
+          `[PROMETHEUS][TARGET_DECISION_JSON][${TARGET_PLANNER_DECISION_JSON_FAIL_REASON}] Retry did not produce dispatchable target plans — fail-close plans=[]`,
+        );
+      }
+
+      await recordCapabilityExecution(
+        config,
+        "target-planner-decision-json-gate",
+        `retried=true ok=${Boolean(targetDecisionRetryParsed && retryGate.ok)} reasons=${targetDecisionGate.reasons.join(",")}`,
+      );
+    } else {
+      await recordCapabilityExecution(
+        config,
+        "target-planner-decision-json-gate",
+        "retried=false ok=true reasons=none",
+      );
+    }
+  }
+
+  if (isSingleTargetPromptIsolationActive(config) && Array.isArray(rawParsedInput?.plans) && rawParsedInput.plans.length > 0) {
+    const targetScopeDrift = detectTargetDeliveryScopeDrift(rawParsedInput.plans);
+    if (targetScopeDrift.driftedPlanCount > 0) {
+      await appendProgress(
+        config,
+        `[PROMETHEUS][TARGET_SCOPE] BOX-internal drift detected — retrying once: plans=${targetScopeDrift.driftedPlanCount}/${rawParsedInput.plans.length} titles=${targetScopeDrift.driftedPlanTitles.join(" | ")} reasons=${targetScopeDrift.reasons.join(",")}`,
+      );
+      try {
+        const targetScopeRetryPrompt = `${contextPrompt}
+
+## TARGET_SCOPE_RETRY
+The previous response drifted into BOX self-improvement instead of target-repo delivery.
+
+Drift evidence:
+- Drifted plan count: ${targetScopeDrift.driftedPlanCount}
+- Drifted plan titles: ${targetScopeDrift.driftedPlanTitles.join(" | ")}
+- Drift reasons: ${targetScopeDrift.reasons.join(", ")}
+
+Hard scope contract:
+- Plan ONLY the active target repo outcome.
+- Do NOT mention BOX strategist agents, BOX state backlogs, prompt cache, lineage, parser-baseline work, worker-topology redesign, or self-improvement surfaces.
+- If the real target work only supports one lane, emit fewer packets instead of BOX-internal filler.
+- Keep parser-contract fields valid: projectHealth, requestBudget.estimatedPremiumRequestsTotal, generatedAt, keyFindings, strategicNarrative.
+
+Regenerate the full response.`;
+        const targetScopeRetryArgs = buildPrometheusExecutionArgs(targetScopeRetryPrompt);
+        appendLiveLogSync(stateDir, `\n[target_scope_retry_start] ${ts()}\n`);
+        let targetScopeRetryStreamStdout = "";
+        let targetScopeRetryStreamStderr = "";
+        const targetScopeRetryResult = await spawnAsync(command, targetScopeRetryArgs, {
+          env: process.env,
+          cwd: promptRepoPath,
+          timeoutMs: prometheusTimeoutMs,
+          earlyExitMarker: "===END===",
+          onStdout(chunk) {
+            const text = chunk.toString("utf8");
+            targetScopeRetryStreamStdout += text;
+            appendLiveLogSync(stateDir, text);
+          },
+          onStderr(chunk) {
+            const text = chunk.toString("utf8");
+            targetScopeRetryStreamStderr += text;
+            appendLiveLogSync(stateDir, text);
+          },
+        }) as { status?: number; stdout?: string; stderr?: string };
+        appendLiveLogSync(stateDir, `\n[target_scope_retry_end] ${ts()} exit=${targetScopeRetryResult.status}\n`);
+        if (targetScopeRetryResult.status === 0) {
+          const targetScopeRetryRaw = resolveCapturedAgentRawOutput(
+            targetScopeRetryResult.stdout,
+            targetScopeRetryResult.stderr,
+            targetScopeRetryStreamStdout,
+            targetScopeRetryStreamStderr,
+          );
+          const targetScopeRetryAi = parseAgentOutput(targetScopeRetryRaw);
+          rawParsedInput = repairParserContractCandidate(
+            targetScopeRetryAi?.parsed || buildNarrativeFallbackParsed({ ...targetScopeRetryAi, raw: targetScopeRetryRaw }),
+            targetScopeRetryRaw,
+          );
+          await appendProgress(config, "[PROMETHEUS][TARGET_SCOPE] Retry completed");
+        }
+      } catch (targetScopeErr) {
+        await appendProgress(
+          config,
+          `[PROMETHEUS][TARGET_SCOPE] Retry failed: ${String((targetScopeErr as any)?.message || targetScopeErr)}`,
+        );
+      }
+
+      const targetScopeRetryDrift = detectTargetDeliveryScopeDrift(rawParsedInput?.plans);
+      if (targetScopeRetryDrift.driftedPlanCount > 0) {
+        const emptyExecutionStrategy = buildExecutionStrategyFromPlans([], { planningMode });
+        rawParsedInput = {
+          ...(rawParsedInput && typeof rawParsedInput === "object" ? rawParsedInput : {}),
+          plans: [],
+          executionStrategy: emptyExecutionStrategy,
+          requestBudget: {
+            ...buildDeterministicRequestBudget([], emptyExecutionStrategy),
+            _fallback: false,
+          },
+          failReason: "target-scope-drift",
+          _targetScopeDriftFailed: true,
+          _targetScopeDriftReasons: targetScopeRetryDrift.reasons,
+        };
+        await appendProgress(
+          config,
+          `[PROMETHEUS][TARGET_SCOPE][FAIL_CLOSED] Repeated BOX-internal drift after retry — plans=[] reasons=${targetScopeRetryDrift.reasons.join(",")}`,
+        );
+      }
+    }
+  }
+
   const topologyMinLanes = resolvePrometheusTopologyMinLanes(config?.workerPool?.minLanes);
   let candidateSetsBeforeSelection = candidatePlanningPolicy.enabled
     ? extractPrometheusCandidatePlanSets(rawParsedInput)
@@ -8820,21 +9228,13 @@ Dispatch contract:
 - Keep parser-contract fields valid: projectHealth, requestBudget.estimatedPremiumRequestsTotal, generatedAt, keyFindings, strategicNarrative.
 
 Regenerate the full response.`;
-        const topologyRetryArgs = buildAgentArgs({
-          agentSlug: "prometheus",
-          prompt: topologyRetryPrompt,
-          model: prometheusModel,
-          allowAll: true,
-          allowInteractiveUserInput: interactiveAccessResolutionEnabled,
-          noAskUser: !interactiveAccessResolutionEnabled,
-          maxContinues: undefined,
-          runContract: promptLineage ? { promptLineage } : undefined,
-        });
+        const topologyRetryArgs = buildPrometheusExecutionArgs(topologyRetryPrompt);
         appendLiveLogSync(stateDir, `\n[topology_retry_start] ${ts()}\n`);
         let topologyRetryStreamStdout = "";
         let topologyRetryStreamStderr = "";
         const topologyRetryResult = await spawnAsync(command, topologyRetryArgs, {
           env: process.env,
+          cwd: promptRepoPath,
           timeoutMs: prometheusTimeoutMs,
           earlyExitMarker: "===END===",
           onStdout(chunk) {
@@ -9037,21 +9437,13 @@ Mandatory requirements:
 
       let retryRawParsedInput: unknown = null;
       try {
-        const retryArgs = buildAgentArgs({
-          agentSlug: "prometheus",
-          prompt: retryPrompt,
-          model: prometheusModel,
-          allowAll: true,
-          allowInteractiveUserInput: interactiveAccessResolutionEnabled,
-          noAskUser: !interactiveAccessResolutionEnabled,
-          maxContinues: undefined,
-          runContract: promptLineage ? { promptLineage } : undefined,
-        });
+        const retryArgs = buildPrometheusExecutionArgs(retryPrompt);
         appendLiveLogSync(stateDir, `\n[copilot_stream_retry_start] ${ts()}\n`);
         let retryStreamStdout = "";
         let retryStreamStderr = "";
         const retryResult = await spawnAsync(command, retryArgs, {
           env: process.env,
+          cwd: promptRepoPath,
           timeoutMs: prometheusTimeoutMs,
           earlyExitMarker: "===END===",
           onStdout(chunk) {
@@ -9184,21 +9576,13 @@ Mandatory requirements:
 - Keep role names deterministic and consistent between executionStrategy and plans[].
 - Do not remove existing valid plans unless required to repair invalid role coverage.`;
 
-        const retryArgs = buildAgentArgs({
-          agentSlug: "prometheus",
-          prompt: retryPrompt,
-          model: prometheusModel,
-          allowAll: true,
-          allowInteractiveUserInput: interactiveAccessResolutionEnabled,
-          noAskUser: !interactiveAccessResolutionEnabled,
-          maxContinues: undefined,
-          runContract: promptLineage ? { promptLineage } : undefined,
-        });
+        const retryArgs = buildPrometheusExecutionArgs(retryPrompt);
         appendLiveLogSync(stateDir, `\n[copilot_stream_retry_start] ${ts()}\n`);
         let retryStreamStdout = "";
         let retryStreamStderr = "";
         const retryResult = await spawnAsync(command, retryArgs, {
           env: process.env,
+          cwd: promptRepoPath,
           timeoutMs: prometheusTimeoutMs,
           earlyExitMarker: "===END===",
           onStdout(chunk) {
@@ -9316,6 +9700,7 @@ Mandatory requirements:
   }
 
   if (Array.isArray(rawParsedInput.plans) && rawParsedInput.plans.length > 0) {
+    const fullPlanAdmissionBypassExpected = isSingleTargetFullPlanAdmissionBypassExpected(config);
     const densification = _analyzePacketDensification(rawParsedInput.plans, PROMETHEUS_PROMPT_DENSITY_MIN);
     rawParsedInput._packetDensification = densification;
     if (densification.thinCount > 0) {
@@ -9355,6 +9740,18 @@ Mandatory requirements:
     const postBundleDensity = _analyzePacketDensification(rawParsedInput.plans, PROMETHEUS_PROMPT_DENSITY_MIN);
     rawParsedInput._packetDensificationPostBundle = postBundleDensity;
     if (postBundleDensity.thinCount > 0) {
+      if (fullPlanAdmissionBypassExpected) {
+        rawParsedInput._targetDeliveryThinPacketBypass = true;
+        await appendProgress(
+          config,
+          `[PROMETHEUS][DENSITY][BYPASS] Retaining ${postBundleDensity.thinCount} thin target-delivery packet(s) for active single-target delivery`
+        );
+        await recordCapabilityExecution(
+          config,
+          "prometheus-token-budget-floor",
+          `bypassed=1 thinCount=${postBundleDensity.thinCount} remaining=${rawParsedInput.plans.length}`,
+        );
+      } else {
       const rejectedThinPackets: Array<{ index: number; reason: string }> = [];
       const strictness = planningPriors.strictnessMultiplier;
       rawParsedInput.plans = rawParsedInput.plans.filter((plan: any, i: number) => {
@@ -9438,6 +9835,7 @@ Mandatory requirements:
         "prometheus-token-budget-floor",
         `rejected=${rejectedThinPackets.length} remaining=${rawParsedInput.plans.length}`,
       );
+      }
     }
 
     // ── Decomposition cap gate ────────────────────────────────────────────
@@ -9459,11 +9857,14 @@ Mandatory requirements:
 
     const incompletePackets: Array<{ index: number; reasons: string[] }> = [];
     rawParsedInput.plans = rawParsedInput.plans.filter((plan: any, i: number) => {
-      const stabilizedPlan = stabilizeRawPacketEconomics(plan);
+      const economicallyStabilizedPlan = stabilizeRawPacketEconomics(plan);
+      const stabilizedPlan = fullPlanAdmissionBypassExpected
+        ? stabilizeTargetDeliveryRawPacketEconomics(economicallyStabilizedPlan)
+        : economicallyStabilizedPlan;
       if (stabilizedPlan && stabilizedPlan !== plan) {
         rawParsedInput.plans[i] = stabilizedPlan;
       }
-      const check = checkPacketCompleteness(stabilizedPlan);
+      const check = checkPacketCompleteness(stabilizedPlan, { targetDeliveryMode: fullPlanAdmissionBypassExpected });
       if (!check.recoverable) {
         incompletePackets.push({ index: i, reasons: check.reasons });
         return false;
@@ -9718,6 +10119,8 @@ Mandatory requirements:
   if (Array.isArray(parsed.plans) && parsed.plans.length > 0) {
     const contractResult = validateAllPlans(parsed.plans, {
       activeTargetSession: config?.activeTargetSession,
+      disableProtectedIntentValidation: config?.runtime?.disableProtectedIntentValidation === true,
+      disableIntentDowngradeValidation: true,
     });
     if (contractResult.invalidCount > 0) {
       await appendProgress(config,

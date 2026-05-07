@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ATLAS Desktop Onboarding</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a1017;
+      --panel: rgba(11, 18, 26, 0.94);
+      --line: rgba(132, 187, 255, 0.18);
+      --text: #f3f7fb;
+      --muted: #a5b5c8;
+      --accent: #88baff;
+      --danger: #ff9a9a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: "Segoe UI", Inter, sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(74, 143, 255, 0.16), transparent 24%),
+        radial-gradient(circle at top right, rgba(141, 225, 177, 0.10), transparent 20%),
+        linear-gradient(180deg, #0a1017 0%, #101925 100%);
+    }
+    main {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .panel {
+      width: min(1120px, 100%);
+      display: grid;
+      gap: 24px;
+      padding: 28px;
+      border-radius: 24px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: 0 26px 72px rgba(0, 0, 0, 0.28);
+    }
+    body[data-layout="split"] .panel {
+      grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+      align-items: start;
+    }
+    .eyebrow {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 12px;
+    }
+    h1, h2, p { margin: 0; }
+    p { line-height: 1.55; color: #d6e1ee; }
+    .stack, form {
+      display: grid;
+      gap: 16px;
+    }
+    .card {
+      padding: 18px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(8, 14, 21, 0.52);
+    }
+    label span, .meta {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    textarea {
+      width: 100%;
+      min-height: 180px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(8, 14, 21, 0.82);
+      color: var(--text);
+      font: inherit;
+      resize: vertical;
+    }
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      color: #08111d;
+      background: var(--accent);
+    }
+    button[disabled] {
+      cursor: wait;
+      opacity: 0.75;
+    }
+    code {
+      display: inline-block;
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(8, 14, 21, 0.62);
+      color: var(--text);
+      font-family: Consolas, "Cascadia Code", monospace;
+      word-break: break-word;
+    }
+    .error {
+      color: var(--danger);
+      min-height: 1.4em;
+    }
+    @media (max-width: 959px) {
+      .panel {
+        padding: 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel" aria-label="ATLAS desktop onboarding">
+      <div class="stack">
+        <div>
+          <div class="eyebrow">Native desktop shell</div>
+          <h1>Clarify the work before ATLAS starts planning</h1>
+        </div>
+        <div class="card">
+          <div class="meta">Target repo</div>
+          <strong data-role="repo">Loading target repository...</strong>
+        </div>
+        <div class="card">
+          <div class="meta">Desktop session</div>
+          <code data-role="session">Generating session...</code>
+        </div>
+        <div class="card">
+          <div class="meta">Launcher</div>
+          <code data-role="shell">.\\ATLAS.cmd</code>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div>
+          <div class="eyebrow">One real clarification pass</div>
+          <h2>Describe the outcome you want in English</h2>
+          <p data-role="status">Planning remains locked until this desktop session stores one clarification packet.</p>
+        </div>
+
+        <form data-role="form">
+          <label>
+            <span>Objective</span>
+            <textarea
+              data-role="objective"
+              name="objective"
+              required
+              placeholder="Explain the feature, bug fix, or delivery outcome you want ATLAS to drive."></textarea>
+          </label>
+          <button type="submit">Run clarification and open ATLAS</button>
+        </form>
+
+        <p class="error" data-role="error"></p>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

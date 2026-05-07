@@ -1,4 +1,4 @@
-# BOX DOWN — gracefully stops daemon, then kills dashboard
+# BOX DOWN — gracefully stops daemon
 # Usage: pwsh -NoProfile -File scripts/box-down.ps1
 
 $Root = (Get-Item $PSScriptRoot).Parent.FullName
@@ -27,23 +27,6 @@ if (Test-Path $daemonPidFile) {
         Write-Host "[box-down] daemon stopped cleanly"
     }
     Remove-Item $daemonPidFile -ErrorAction SilentlyContinue
-}
-
-# --- 2. Stop dashboard ---
-# Try by saved PID first
-$dashPidFile = "state/dashboard.pid"
-if (Test-Path $dashPidFile) {
-    $dashPid = [int](Get-Content $dashPidFile -Raw).Trim()
-    Stop-Process -Id $dashPid -Force -ErrorAction SilentlyContinue
-    Remove-Item $dashPidFile -ErrorAction SilentlyContinue
-    Write-Host "[box-down] dashboard stopped (pid=$dashPid)"
-}
-
-# Also kill by port 8787 as fallback
-$c = Get-NetTCPConnection -LocalPort 8787 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($c) {
-    Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
-    Write-Host "[box-down] dashboard killed by port 8787"
 }
 
 Write-Host ""

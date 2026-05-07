@@ -31,9 +31,16 @@ function normalizeNullableString(value) {
 }
 
 function resolveConfiguredTargetSessionSelector(config) {
+  const daemonControlScope = config?.daemonControlScope && typeof config.daemonControlScope === "object"
+    ? config.daemonControlScope
+    : null;
   return {
-    projectId: normalizeNullableString(config?.targetSessionSelector?.projectId || process.env.BOX_TARGET_PROJECT_ID),
-    sessionId: normalizeNullableString(config?.targetSessionSelector?.sessionId || process.env.BOX_TARGET_SESSION_ID),
+    projectId: daemonControlScope
+      ? normalizeNullableString(daemonControlScope.projectId)
+      : normalizeNullableString(config?.targetSessionSelector?.projectId || process.env.BOX_TARGET_PROJECT_ID),
+    sessionId: daemonControlScope
+      ? normalizeNullableString(daemonControlScope.sessionId)
+      : normalizeNullableString(config?.targetSessionSelector?.sessionId || process.env.BOX_TARGET_SESSION_ID),
   };
 }
 
@@ -391,7 +398,7 @@ export function killAllDaemonProcesses(excludePid?: number): number[] {
   try {
     let pids: number[];
     if (process.platform === "win32") {
-      const cmd = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'src[\\\\/]cli\\.[jt]s\\s+start' } | Select-Object -ExpandProperty ProcessId`;
+      const cmd = `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'src[\\\\/]cli\\.[jt]s\\s+start' } | Select-Object -ExpandProperty ProcessId`;
       const output = execSync(`powershell -NoProfile -Command "${cmd}"`, {
         stdio: ["ignore", "pipe", "ignore"],
         encoding: "utf8",

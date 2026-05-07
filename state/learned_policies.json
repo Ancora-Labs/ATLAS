@@ -26,7 +26,7 @@
     "_inactiveCycles": 1,
     "_impactImprovementRate": 0.143,
     "_lastDelta": 0,
-    "_lastMeasuredAt": "2026-04-15T14:59:12.020Z",
+    "_lastMeasuredAt": "2026-04-15T14:59:12.02Z",
     "_halfLifeWeight": 0.794,
     "_decayedEffectiveness": 0.114,
     "_impactAttribution": {
@@ -44,7 +44,7 @@
       "reactivationThreshold": 0.55,
       "reactivationEvidenceWindow": 2,
       "reactivationSatisfied": false,
-      "lineageJoinKeys": []
+      "lineageJoinKeys": null
     },
     "_retirementStrategy": "lineage_verified_window"
   },
@@ -75,7 +75,7 @@
     "_inactiveCycles": 1,
     "_impactImprovementRate": 0.143,
     "_lastDelta": 0,
-    "_lastMeasuredAt": "2026-04-15T14:59:12.020Z",
+    "_lastMeasuredAt": "2026-04-15T14:59:12.02Z",
     "_halfLifeWeight": 0.794,
     "_decayedEffectiveness": 0.114,
     "_impactAttribution": {
@@ -93,7 +93,7 @@
       "reactivationThreshold": 0.55,
       "reactivationEvidenceWindow": 2,
       "reactivationSatisfied": false,
-      "lineageJoinKeys": []
+      "lineageJoinKeys": null
     },
     "_retirementStrategy": "lineage_verified_window"
   },
@@ -124,7 +124,7 @@
     "_inactiveCycles": 1,
     "_impactImprovementRate": 0.143,
     "_lastDelta": 0,
-    "_lastMeasuredAt": "2026-04-15T14:59:12.020Z",
+    "_lastMeasuredAt": "2026-04-15T14:59:12.02Z",
     "_halfLifeWeight": 0.794,
     "_decayedEffectiveness": 0.114,
     "_impactAttribution": {
@@ -142,7 +142,7 @@
       "reactivationThreshold": 0.55,
       "reactivationEvidenceWindow": 2,
       "reactivationSatisfied": false,
-      "lineageJoinKeys": []
+      "lineageJoinKeys": null
     },
     "_retirementStrategy": "lineage_verified_window"
   },
@@ -173,7 +173,7 @@
     "_inactiveCycles": 1,
     "_impactImprovementRate": 0.143,
     "_lastDelta": 0,
-    "_lastMeasuredAt": "2026-04-15T14:59:12.020Z",
+    "_lastMeasuredAt": "2026-04-15T14:59:12.02Z",
     "_halfLifeWeight": 0.794,
     "_decayedEffectiveness": 0.114,
     "_impactAttribution": {
@@ -191,7 +191,7 @@
       "reactivationThreshold": 0.55,
       "reactivationEvidenceWindow": 2,
       "reactivationSatisfied": false,
-      "lineageJoinKeys": []
+      "lineageJoinKeys": null
     },
     "_retirementStrategy": "lineage_verified_window"
   },
@@ -222,7 +222,7 @@
     "_inactiveCycles": 1,
     "_impactImprovementRate": 0.143,
     "_lastDelta": 0,
-    "_lastMeasuredAt": "2026-04-15T14:59:12.020Z",
+    "_lastMeasuredAt": "2026-04-15T14:59:12.02Z",
     "_halfLifeWeight": 0.794,
     "_decayedEffectiveness": 0.114,
     "_impactAttribution": {
@@ -240,7 +240,7 @@
       "reactivationThreshold": 0.55,
       "reactivationEvidenceWindow": 2,
       "reactivationSatisfied": false,
-      "lineageJoinKeys": []
+      "lineageJoinKeys": null
     },
     "_retirementStrategy": "lineage_verified_window"
   }

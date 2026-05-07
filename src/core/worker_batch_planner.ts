@@ -35,7 +35,6 @@ import {
   PACKET_OVERSIZE_REASON,
   resolvePacketSizePolicy,
 } from "./plan_contract_validator.js";
-import { NON_UI_BATCH_AFFINITY_KEY, resolveUiBatchIdentity } from "./ui_batch_affinity.js";
 
 const CHARS_PER_TOKEN = 4;
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 100000;
@@ -962,11 +961,7 @@ function splitRolePlansByUiBatchAffinity(rolePlans: any[] = [], roleName = "work
   const orderedKeys: string[] = [];
   for (let index = 0; index < rolePlans.length; index += 1) {
     const plan = rolePlans[index];
-    const identity = resolveUiBatchIdentity(
-      plan,
-      `${String(roleName || "worker")}:${String((plan as any)?.task_id || (plan as any)?.task || index + 1)}`,
-    );
-    const key = identity.isUiTask ? identity.affinityKey : NON_UI_BATCH_AFFINITY_KEY;
+    const key = String(roleName || "worker").trim().toLowerCase() || "worker";
     if (!groups.has(key)) {
       groups.set(key, []);
       orderedKeys.push(key);

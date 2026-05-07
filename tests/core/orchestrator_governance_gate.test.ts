@@ -159,6 +159,50 @@ describe("orchestrator governance gate dry-run parity", () => {
     }
   });
 
+  it("treats the autonomy execution gate as advisory during admitted active single-target delivery", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-gate-autonomy-single-target-"));
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "autonomy_band_status.json"),
+        JSON.stringify({
+          currentBand: "regressed",
+          executionGate: {
+            exploitationReady: false,
+            reason: "band_not_reached",
+          },
+        }),
+        "utf8",
+      );
+      const config = {
+        paths: { stateDir },
+        env: { targetRepo: "CanerDoqdu/Box" },
+        platformModeState: { currentMode: "single_target_delivery" },
+        activeTargetSession: {
+          projectId: "target_box",
+          sessionId: "sess_active_autonomy_advisory",
+          currentStage: "active",
+          gates: {
+            allowShadowExecution: false,
+            allowActiveExecution: true,
+          },
+          repo: { repoUrl: "https://github.com/Ancora-Labs/Box" },
+        },
+        canary: { enabled: false },
+        systemGuardian: { enabled: false },
+        governanceFreeze: { enabled: false, manualOverrideActive: false },
+      };
+      const result = await evaluatePreDispatchGovernanceGate(config, [], "autonomy-single-target-advisory");
+      assert.equal(result.blocked, false);
+      assert.equal(result.reason, null);
+
+      const auditLog = await fs.readFile(path.join(stateDir, "governance_gate_audit.jsonl"), "utf8");
+      assert.ok(auditLog.includes("\"kind\":\"autonomy_execution_single_target_advisory\""));
+      assert.ok(auditLog.includes("\"reason\":\"autonomy_execution_gate_not_ready:band_not_reached\""));
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not block lane diversity in single-target shadow execution mode", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-gate-shadow-lane-bypass-"));
     try {

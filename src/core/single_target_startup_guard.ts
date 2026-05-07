@@ -18,7 +18,7 @@ export async function evaluateSingleTargetStartupRequirements(config: any, optio
     missing.push("GITHUB_TOKEN");
   }
   if (singleTargetRequired && !githubFineGrainedTokenPresent) {
-    missing.push("COPILOT_GITHUB_TOKEN");
+    missing.push("GITHUB_FINEGRADED");
   }
 
   return {
@@ -45,10 +45,11 @@ export function buildSingleTargetStartupGuardMessage(result: {
     `Missing: ${result.missing.join(", ")}`,
     "Why this is required:",
     "- GITHUB_TOKEN is used for target-repo GitHub API operations and repository-scoped automation.",
-    "- COPILOT_GITHUB_TOKEN is used for Copilot-powered target delivery and agent execution.",
+    "- GITHUB_FINEGRADED is used for Copilot-powered target delivery and agent execution when GITHUB_TOKEN itself is not already Copilot-compatible.",
     "How to fix:",
-    "- Set GITHUB_TOKEN to your GitHub classic/repo-capable token.",
-    "- Set COPILOT_GITHUB_TOKEN to your fine-grained/Copilot-capable GitHub token.",
+    "- Set GITHUB_TOKEN to your GitHub repo-capable token.",
+    "- If GITHUB_TOKEN is a classic ghp_ token, also set GITHUB_FINEGRADED to a Copilot-compatible github_pat_, gho_, or ghu_ token.",
+    "- COPILOT_GITHUB_TOKEN is still accepted as a legacy compatibility alias, but it should not be the variable you maintain in .env.",
     "- Prefer exporting them in your shell or storing them in a repo-external BOX_SECRETS_FILE (for example %USERPROFILE%\\.box\\secrets.env).",
     "- Then restart BOX after the environment variables are available.",
     "BOX will not auto-create or auto-fetch GitHub tokens, API keys, database credentials, or paid service secrets on your behalf.",

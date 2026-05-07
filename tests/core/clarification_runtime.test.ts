@@ -80,9 +80,159 @@ describe("clarification_runtime", () => {
     assert.equal(finalResult.session.gates.allowPlanning, true);
     assert.equal(finalResult.session.gates.allowShadowExecution, false);
     assert.equal(finalResult.session.gates.allowActiveExecution, true);
+    assert.equal(finalResult.intentContract.clarifiedIntent.designDirection, "Clean and professional with strong food photography and a polished booking-first feel.");
+    assert.match(String(finalResult.intentContract.clarifiedIntent.implementationFlexibility || ""), /Best-fit implementation is allowed/i);
+    assert.match(String(finalResult.intentContract.clarifiedIntent.assetSourcingPolicy || ""), /Real external assets allowed when needed/i);
+    assert.ok((finalResult.intentContract.clarifiedIntent.assetRequirements || []).some((entry: string) => /Preserve requested visual assets as source requirements/i.test(entry)));
+    assert.equal(finalResult.session.intent.designDirection, "Clean and professional with strong food photography and a polished booking-first feel.");
+    assert.match(String(finalResult.session.intent.implementationFlexibility || ""), /Best-fit implementation is allowed/i);
+    assert.match(String(finalResult.session.intent.assetSourcingPolicy || ""), /Real external assets allowed when needed/i);
     assert.match(String(finalResult.session.intent.summary || ""), /fish restaurant/i);
+    assert.match(String(finalResult.session.intent.summary || ""), /design=Clean and professional with strong food photography and a polished booking-first feel\./i);
+    assert.match(String(finalResult.session.intent.summary || ""), /assets=Real external assets allowed when needed/i);
     assert.ok(Array.isArray(finalResult.transcript.turns));
     assert.ok(finalResult.transcript.turns.length >= 8);
+  });
+
+  it("derives a strongest-plausible quality bar for broad empty-repo briefs instead of blocking on a generic handoff", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-clarification-strong-default-"));
+    const localRepo = path.join(tempRoot, "empty-strong-default-repo");
+    await fs.mkdir(path.join(localRepo, ".git"), { recursive: true });
+    await fs.writeFile(path.join(localRepo, "README.md"), "# Empty target\n");
+
+    const config = buildConfig(tempRoot, {
+      githubToken: "token",
+      mockTargetOnboardingClarificationPacket: JSON.stringify({
+        openingPrompt: "Describe the product to build.",
+        understanding: {
+          likelyIntent: "A broad website ask should still converge on a strong first release.",
+        },
+        questions: [
+          {
+            id: "product_goal",
+            semanticSlot: "product_goal",
+            title: "What should BOX build?",
+            prompt: "Describe the product in one sentence.",
+            answerMode: "hybrid",
+          },
+          {
+            id: "target_users",
+            semanticSlot: "target_users",
+            title: "Who is it for?",
+            prompt: "Who will use it first?",
+            answerMode: "hybrid",
+            options: ["Customers", "Operators", "Other"],
+          },
+          {
+            id: "must_have_flows",
+            semanticSlot: "must_have_flows",
+            title: "What must exist in v1?",
+            prompt: "List the minimum flows that must ship in the first version.",
+            answerMode: "hybrid",
+            options: ["Homepage", "Contact flow", "Lead capture"],
+          },
+        ],
+      }),
+    });
+    const session = await createTargetSession(buildManifest({ localPath: localRepo }), config);
+    await runTargetOnboarding(config, session);
+
+    const initialRuntime = await getTargetClarificationRuntimeState(config, { persistPrompt: true });
+    assert.equal(initialRuntime.currentQuestion.id, "product_goal");
+
+    await submitTargetClarificationAnswer(config, {
+      questionId: "product_goal",
+      answerText: "Website for a new consulting brand.",
+    });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "target_users",
+      answerText: "Prospective clients evaluating the brand.",
+      selectedOptions: ["Customers"],
+    });
+    const finalResult = await submitTargetClarificationAnswer(config, {
+      questionId: "must_have_flows",
+      answerText: "Homepage and contact flow are enough for the first release.",
+      selectedOptions: ["Homepage", "Contact flow"],
+    });
+
+    assert.equal(finalResult.readyForPlanning, true);
+    assert.equal(finalResult.session.currentStage, TARGET_SESSION_STAGE.ACTIVE);
+    assert.match(String(finalResult.intentContract.clarifiedIntent.preferredQualityBar || ""), /strongest credible first release/i);
+    assert.match(String(finalResult.intentContract.clarifiedIntent.implementationFlexibility || ""), /strongest plausible product direction/i);
+    assert.doesNotMatch(String(finalResult.session.intent.summary || ""), /safe planning handoff/i);
+    assert.match(String(finalResult.session.intent.summary || ""), /strongest credible outcome/i);
+  });
+
+  it("keeps the quality gate active when the intake packet explicitly asks for a quality signal", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-clarification-quality-gate-"));
+    const localRepo = path.join(tempRoot, "empty-quality-gate-repo");
+    await fs.mkdir(path.join(localRepo, ".git"), { recursive: true });
+    await fs.writeFile(path.join(localRepo, "README.md"), "# Empty target\n");
+
+    const config = buildConfig(tempRoot, {
+      githubToken: "token",
+      mockTargetOnboardingClarificationPacket: JSON.stringify({
+        openingPrompt: "Describe the product to build.",
+        understanding: {
+          likelyIntent: "A strong default should not bypass an explicitly requested quality question.",
+        },
+        questions: [
+          {
+            id: "product_goal",
+            semanticSlot: "product_goal",
+            title: "What should BOX build?",
+            prompt: "Describe the product in one sentence.",
+            answerMode: "hybrid",
+          },
+          {
+            id: "target_users",
+            semanticSlot: "target_users",
+            title: "Who is it for?",
+            prompt: "Who will use it first?",
+            answerMode: "hybrid",
+            options: ["Customers", "Operators", "Other"],
+          },
+          {
+            id: "must_have_flows",
+            semanticSlot: "must_have_flows",
+            title: "What must exist in v1?",
+            prompt: "List the minimum flows that must ship in the first version.",
+            answerMode: "hybrid",
+            options: ["Homepage", "Contact flow", "Lead capture"],
+          },
+          {
+            id: "quality_bar",
+            semanticSlot: "quality_bar",
+            title: "What quality bar should v1 hit?",
+            prompt: "Describe the intended quality level for the first release.",
+            answerMode: "hybrid",
+            options: ["Premium", "Fast prototype"],
+          },
+        ],
+      }),
+    });
+    const session = await createTargetSession(buildManifest({ localPath: localRepo }), config);
+    await runTargetOnboarding(config, session);
+
+    await getTargetClarificationRuntimeState(config, { persistPrompt: true });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "product_goal",
+      answerText: "Website for a new consulting brand.",
+    });
+    await submitTargetClarificationAnswer(config, {
+      questionId: "target_users",
+      answerText: "Prospective clients evaluating the brand.",
+      selectedOptions: ["Customers"],
+    });
+    const result = await submitTargetClarificationAnswer(config, {
+      questionId: "must_have_flows",
+      answerText: "Homepage and contact flow are enough for the first release.",
+      selectedOptions: ["Homepage", "Contact flow"],
+    });
+
+    assert.equal(result.readyForPlanning, false);
+    assert.equal(result.session.currentStage, TARGET_SESSION_STAGE.AWAITING_INTENT_CLARIFICATION);
+    assert.equal(result.currentQuestion?.id, "quality_bar");
   });
 
   it("asks an immediate follow-up when a clarification answer is too vague", async () => {
