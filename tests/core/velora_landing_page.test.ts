@@ -9,39 +9,26 @@ const stylesPath = path.join(rootDir, "styles.css");
 const scriptPath = path.join(rootDir, "script.js");
 
 describe("velora landing page", () => {
-  it("ships the hero with the required brand language and conversion actions", async () => {
-    const indexHtml = await fs.readFile(indexPath, "utf8");
-
-    assert.match(indexHtml, /<h1[^>]*>VELORA<\/h1>/i);
-    assert.match(indexHtml, /Warm light, bold plates, and a table worth arriving early for\./i);
-    assert.match(indexHtml, /VELORA brings fire-kissed cooking, candlelit hospitality, and distinctive plating/i);
-    assert.match(indexHtml, /Explore the tasting menu/i);
-    assert.match(indexHtml, /Reserve a table/i);
-    assert.match(indexHtml, /Order for tonight/i);
-  });
-
-  it("keeps the hero warm and food-led instead of generic or off-brief", async () => {
-    const [indexHtml, stylesCss] = await Promise.all([
-      fs.readFile(indexPath, "utf8"),
-      fs.readFile(stylesPath, "utf8"),
+  it("does not ship the retired root landing page files anymore", async () => {
+    const fileChecks = await Promise.allSettled([
+      fs.access(indexPath),
+      fs.access(stylesPath),
+      fs.access(scriptPath),
     ]);
 
-    assert.match(indexHtml, /Signature presentation/i);
-    assert.match(indexHtml, /Ember ribeye, saffron carrots, and citrus smoke\./i);
-    assert.match(stylesCss, /--glow-amber:/i);
-    assert.match(stylesCss, /\.plate-stage/i);
-    assert.doesNotMatch(indexHtml, /ATLAS Desktop Onboarding|desktop-native software delivery shell/i);
+    for (const result of fileChecks) {
+      assert.equal(result.status, "rejected");
+    }
   });
 
-  it("includes responsive styling and a small interactive service toggle", async () => {
-    const [stylesCss, scriptJs] = await Promise.all([
-      fs.readFile(stylesPath, "utf8"),
-      fs.readFile(scriptPath, "utf8"),
-    ]);
+  it("keeps the desktop shell as the primary shipped surface instead of the retired static site", async () => {
+    const packageJson = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8")) as {
+      scripts?: Record<string, string>;
+    };
 
-    assert.match(stylesCss, /@media \(max-width: 980px\)/i);
-    assert.match(stylesCss, /@media \(max-width: 720px\)/i);
-    assert.match(scriptJs, /setActiveService/i);
-    assert.match(scriptJs, /Reservations are leading the first impression right now\./i);
+    assert.equal(
+      packageJson.scripts?.["atlas:desktop:package"],
+      "npm run atlas:desktop:build && node --import tsx scripts/package_atlas_desktop_folder.ts",
+    );
   });
 });

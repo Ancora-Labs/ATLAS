@@ -6,13 +6,14 @@ import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, it } from "node:test";
 
-import { handleAtlasWorkspaceSessionBriefRequest } from "../../src/atlas/routes/onboarding.ts";
+import { handleAtlasOnboardingRequest } from "../../src/atlas/routes/onboarding.ts";
 import {
   renderAtlasHomeHtml,
   renderAtlasSessionsHtml,
   type AtlasPageData,
 } from "../../src/atlas/renderer.ts";
 import { createAtlasDesktopPackageLayout } from "../../scripts/atlas_desktop_package.ts";
+import { resolveAtlasDesktopShellCommand } from "../../electron/resource_paths.js";
 import type { AtlasSessionDto } from "../../src/atlas/state_bridge.ts";
 
 interface ResponseCapture {
@@ -78,11 +79,15 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
   return {
     title: "ATLAS Workspace",
     repoLabel: "Ancora-Labs/ATLAS",
+    repoContext: {
+      provider: "github",
+      targetRepo: "Ancora-Labs/ATLAS",
+      targetBaseBranch: "main",
+      repoMode: "existing",
+      repoCreatedByAtlas: false,
+    },
     hostLabel: "Windows host",
     shellCommand: ".\\ATLAS.cmd",
-    pipelineStageLabel: "Workers Running",
-    pipelineDetail: "Delivering the ATLAS desktop shell",
-    pipelinePercent: 87,
     updatedAt: "2026-04-25T00:00:00.000Z",
     buildSessionId: "desktop-session-9",
     buildTimestamp: "2026-04-25T00:05:00.000Z",
@@ -94,8 +99,33 @@ function buildPageData(overrides: Partial<AtlasPageData> = {}): AtlasPageData {
     sessionStartUpdatedAt: "2026-04-25T00:04:00.000Z",
     continuityStatusLabel: "Live detail verified",
     continuityStatusDetail: "Every visible session has a verified live update within the current freshness policy window.",
-    focusedSessionRole: "quality-worker",
+    mainPaneMode: "selected-session",
+    focusedSessionId: "quality-worker",
     missingFocusedSnapshot: false,
+    runtimeSnapshot: null,
+    githubAuth: {
+      accountLogin: "dogducaner66-byte",
+      githubTokenConfigured: true,
+      copilotTokenConfigured: true,
+      authRequired: false,
+      source: "env",
+    },
+    copilotUsage: {
+      planTier: "pro",
+      planLabel: "Copilot Pro",
+      modelAccess: "current",
+      planDetectedBy: "field",
+      source: "test-fixture",
+      rawPlan: "pro",
+      entitlement: null,
+      usedRequests: 269,
+      remainingRequests: 731,
+      percentRemaining: 73.1,
+    },
+    authRequired: false,
+    maxTrackedSessions: 3,
+    activeSessionCount: 1,
+    completedSessionCount: 0,
     sessions: [buildSession()],
     ...overrides,
   };
@@ -167,42 +197,48 @@ describe("update the existing atlas test suite so it stops protecting the old sh
     const sessionsMarkup = sessionsHtml.split("<script>")[0] || sessionsHtml;
 
     for (const html of [homeMarkup, sessionsMarkup]) {
-      assert.match(html, /aria-label="ATLAS desktop surface"/);
-      assert.match(html, /aria-label="ATLAS work canvas"/);
-      assert.match(html, /data-role="session-rail"/);
-      assert.doesNotMatch(html, /dashboard-card|hero-panel|metric-card|window-controls|traffic-light/i);
+      assert.match(html, /Tracked session/i);
+      assert.match(html, /data-role="chat-form"|data-role="project-context-row-host"/);
     }
 
-    assert.match(homeMarkup, /data-role="selected-session-view"/);
     assert.match(homeMarkup, /premium shell regression locked/);
-    assert.match(homeHtml, /bridge\?\.refreshSnapshot/);
-    assert.match(homeHtml, /ATLAS snapshot refresh requires the Electron desktop bridge\./);
-    assert.match(sessionsMarkup, /Pause lane/);
-    assert.match(sessionsMarkup, /data-role="selected-session-status-light"/);
+    assert.match(homeMarkup, /data-role="chat-form"/);
+    assert.match(homeMarkup, /Workspace settings/);
+    assert.match(sessionsMarkup, /data-role="chat-form"|Tracked session/);
   });
 
   it("keeps sparse-state rendering and portable packaging guarantees deterministic", async () => {
     const homeHtml = renderAtlasHomeHtml(buildPageData({
       sessions: [],
-      focusedSessionRole: null,
+      focusedSessionId: null,
       homeReadinessHeading: "Ready to start",
       homeReadinessDetail: "Write one outcome in the blank start screen composer to start the next session from the main workspace.",
       homePrimaryActionLabel: "New Session",
+      mainPaneMode: "new-session",
     }));
     const homeMarkup = homeHtml.split("<script>")[0] || homeHtml;
     const layout = createAtlasDesktopPackageLayout(path.join("C:", "ATLAS Release Root"));
-    const atlasCmd = fs.readFileSync(path.join(process.cwd(), "ATLAS.cmd"), "utf8");
     const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8")) as {
       scripts?: Record<string, string>;
     };
 
     assert.match(homeMarkup, /No live rows yet\./);
     assert.match(homeMarkup, /What do you want Atlas to deliver today\?/);
-    assert.match(homeMarkup, /data-has-live-sessions="false"/);
+    assert.match(homeMarkup, /data-role="chat-form"/);
     assert.equal(layout.portableRoot, path.join("C:", "ATLAS Release Root", "dist", "ATLAS"));
     assert.equal(layout.portableExePath, path.join("C:", "ATLAS Release Root", "dist", "ATLAS", "ATLAS.exe"));
-    assert.equal(packageJson.scripts?.["atlas:desktop:package"], "node --import tsx scripts/atlas_desktop_package.ts");
-    assert.match(atlasCmd, /Packaging the portable Windows desktop folder/i);
+    assert.equal(
+      packageJson.scripts?.["atlas:desktop:package"],
+      "npm run atlas:desktop:build && node --import tsx scripts/package_atlas_desktop_folder.ts",
+    );
+    assert.equal(fs.existsSync(path.join(process.cwd(), "ATLAS.cmd")), false);
+    assert.equal(
+      resolveAtlasDesktopShellCommand({
+        isPackaged: true,
+        exePath: layout.portableExePath,
+      }),
+      path.join(".", "ATLAS.exe"),
+    );
   });
 
   it("[NEGATIVE] reports workspace session brief failures without minting a desktop session or fake shell state", async () => {
@@ -214,19 +250,20 @@ describe("update the existing atlas test suite so it stops protecting the old sh
       }));
       const missingSessionResponse = createResponseCapture();
 
-      await handleAtlasWorkspaceSessionBriefRequest(missingSessionRequest, missingSessionResponse, {
+      await handleAtlasOnboardingRequest(missingSessionRequest, missingSessionResponse, {
         stateDir: path.join(tempRoot, "state"),
+        sessionId: "desktop-session-negative",
       });
 
-      assert.equal(missingSessionResponse.statusCode, 409);
-      assert.match(missingSessionResponse.body, /"code":"desktop_session_missing"/);
+      assert.equal(missingSessionResponse.statusCode, 400);
+      assert.match(missingSessionResponse.body, /"code":"missing_repo_context"/);
 
       const failedRunnerRequest = createJsonRequest(JSON.stringify({
         objective: "   ",
       }));
       const failedRunnerResponse = createResponseCapture();
 
-      await handleAtlasWorkspaceSessionBriefRequest(failedRunnerRequest, failedRunnerResponse, {
+      await handleAtlasOnboardingRequest(failedRunnerRequest, failedRunnerResponse, {
         stateDir: path.join(tempRoot, "state"),
         sessionId: "desktop-session-negative",
         targetRepo: "Ancora-Labs/ATLAS",

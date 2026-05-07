@@ -11,15 +11,12 @@ import {
   getAtlasClarificationPacketPath,
 } from "../../src/atlas/clarification.ts";
 import {
-  buildAtlasDesktopLocationPath,
-  createAtlasDesktopWorkspaceHandoffState,
-  parseAtlasDesktopLocationFromUrl,
   readAtlasDesktopState,
   resolveAtlasDesktopStatePath,
   resolveAtlasDesktopStateRoot,
   writeAtlasDesktopState,
 } from "../../src/atlas/desktop_state.ts";
-import { resolveAtlasDesktopResourcePaths } from "../../electron/resource_paths.ts";
+import { resolveAtlasDesktopResourcePaths } from "../../electron/resource_paths.js";
 import { restoreAndFocusAtlasWindow } from "../../electron/single_instance.ts";
 import { decideAtlasPopupHandling } from "../../electron/window_policy.ts";
 
@@ -40,6 +37,7 @@ describe("atlas desktop regression checks", () => {
         objective: "Launch ATLAS in a native desktop shell and collect one clarification pass first.",
         runner: async () => JSON.stringify({
           summary: "ATLAS should clarify the operator goal before opening the session surface.",
+          operatorIntentBrief: "Launch the desktop shell, capture the operator goal, and keep the first session aligned to that goal.",
           openQuestions: ["Which delivery outcome should ATLAS optimize for first?"],
           executionNotes: ["Store one clarification packet and then load the native session surface."],
         }),
@@ -56,7 +54,7 @@ describe("atlas desktop regression checks", () => {
     }
   });
 
-  it("persists portable desktop state beside the packaged app and restores the last session, draft, and window bounds", async () => {
+  it("persists portable desktop state beside the packaged app and restores the last session, onboarding draft, and window bounds", async () => {
     const tempRoot = await createTempRoot();
     const portableRoot = path.join(tempRoot, "ATLAS-portable");
     const stateRoot = resolveAtlasDesktopStateRoot({
@@ -69,27 +67,35 @@ describe("atlas desktop regression checks", () => {
     try {
       const storedState = await writeAtlasDesktopState(statePath, {
         sessionId: "desktop-session-restore",
-        workspaceDraft: "Restore the product-side composer draft after a relaunch.",
-        workspaceComposerFocused: true,
-        lastWorkspaceSurface: "workspace",
-        focusedSessionRole: "quality-worker",
+        onboardingDraft: "Restore the saved onboarding objective after a relaunch.",
         windowBounds: {
           x: 120,
           y: 84,
           width: 1420,
           height: 940,
         },
+        repoContext: {
+          provider: "github",
+          targetRepo: "Ancora-Labs/ATLAS",
+          targetBaseBranch: "main",
+          repoMode: "existing",
+          repoCreatedByAtlas: false,
+        },
         updatedAt: null,
       });
       const restoredState = await readAtlasDesktopState(statePath);
 
-      assert.equal(stateRoot, portableRoot);
-      assert.equal(statePath, path.join(portableRoot, "state", "atlas", "desktop_state.json"));
+      assert.equal(stateRoot, tempRoot);
+      assert.equal(statePath, path.join(tempRoot, "state", "atlas", "desktop_state.json"));
       assert.equal(restoredState.sessionId, "desktop-session-restore");
-      assert.equal(restoredState.workspaceDraft, "Restore the product-side composer draft after a relaunch.");
-      assert.equal(restoredState.workspaceComposerFocused, true);
-      assert.equal(restoredState.lastWorkspaceSurface, "workspace");
-      assert.equal(restoredState.focusedSessionRole, "quality-worker");
+      assert.equal(restoredState.onboardingDraft, "Restore the saved onboarding objective after a relaunch.");
+      assert.deepEqual(restoredState.repoContext, {
+        provider: "github",
+        targetRepo: "Ancora-Labs/ATLAS",
+        targetBaseBranch: "main",
+        repoMode: "existing",
+        repoCreatedByAtlas: false,
+      });
       assert.deepEqual(restoredState.windowBounds, {
         x: 120,
         y: 84,
@@ -103,27 +109,24 @@ describe("atlas desktop regression checks", () => {
     }
   });
 
-  it("keeps the product-side draft and composer focus ready after clarification handoff", () => {
-    assert.deepEqual(
-      createAtlasDesktopWorkspaceHandoffState("  Keep the reopened shell focused on the saved draft.  "),
-      {
-        workspaceDraft: "Keep the reopened shell focused on the saved draft.",
-        workspaceComposerFocused: true,
-      },
-    );
-    assert.deepEqual(
-      createAtlasDesktopWorkspaceHandoffState("   "),
-      {
-        workspaceDraft: "",
-        workspaceComposerFocused: false,
-      },
-    );
+  it("falls back to a fresh desktop state when no persisted desktop state exists yet", async () => {
+    const tempRoot = await createTempRoot();
+
+    try {
+      const restoredState = await readAtlasDesktopState(path.join(tempRoot, "state", "atlas", "desktop_state.json"));
+      assert.equal(restoredState.sessionId, null);
+      assert.equal(restoredState.onboardingDraft, "");
+      assert.equal(restoredState.repoContext, null);
+      assert.equal(restoredState.windowBounds, null);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("resolves packaged preload and renderer handoff assets from the bundled desktop entrypoint instead of process.cwd()", async () => {
     const tempRoot = await createTempRoot();
     const originalCwd = process.cwd();
-    const packagedAppRoot = path.join(tempRoot, "ATLAS", "resources", "app");
+    const packagedAppRoot = path.join(tempRoot, "ATLAS", "resources", "app.asar");
     const bundledMainPath = path.join(packagedAppRoot, ".electron-build", "electron", "main.js");
     const unrelatedWorkingDirectory = path.join(tempRoot, "unrelated-working-directory");
 
@@ -138,12 +141,6 @@ describe("atlas desktop regression checks", () => {
       assert.equal(resourcePaths.rendererScriptPath, path.join(packagedAppRoot, "electron", "renderer", "app.js"));
       assert.equal(resourcePaths.rendererLayoutPath, path.join(packagedAppRoot, "electron", "renderer", "layout.js"));
       assert.notEqual(resourcePaths.rendererHtmlPath, path.join(process.cwd(), "electron", "renderer", "index.html"));
-      assert.equal(buildAtlasDesktopLocationPath({ surface: "workspace" }), "/");
-      assert.equal(
-        buildAtlasDesktopLocationPath({ surface: "workspace", focusedSessionRole: "quality-worker" }),
-        "/?focusRole=quality-worker",
-      );
-      assert.equal(parseAtlasDesktopLocationFromUrl("http://127.0.0.1/sessions?focusRole=quality-worker"), null);
     } finally {
       process.chdir(originalCwd);
       await fs.rm(tempRoot, { recursive: true, force: true });
@@ -201,8 +198,7 @@ describe("atlas desktop regression checks", () => {
       await fs.writeFile(statePath, JSON.stringify({
         sessionId: 42,
         onboardingDraft: ["invalid"],
-        productDraft: { nope: true },
-        productComposerFocused: "yes",
+        repoContext: { nope: true },
         windowBounds: {
           width: -1,
           height: "tall",
@@ -211,8 +207,8 @@ describe("atlas desktop regression checks", () => {
 
       const restoredState = await readAtlasDesktopState(statePath);
       assert.equal(restoredState.sessionId, null);
-      assert.equal(restoredState.workspaceDraft, "");
-      assert.equal(restoredState.workspaceComposerFocused, false);
+      assert.equal(restoredState.onboardingDraft, "");
+      assert.equal(restoredState.repoContext, null);
       assert.equal(restoredState.windowBounds, null);
       assert.equal(restoredState.updatedAt, null);
     } finally {

@@ -1,7 +1,11 @@
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { app } from "electron";
 import { resolvePackagedWorkingDirectory, resolveWindowIconPath } from "./packaged_runtime_paths.js";
+
+const require = createRequire(import.meta.url);
+const electron = require("electron") as typeof import("electron");
+const app = electron?.app;
 
 export { resolvePackagedWorkingDirectory } from "./packaged_runtime_paths.js";
 
@@ -34,18 +38,21 @@ function resolveAppRoot(mainModuleDir: string): string {
 function resolveResourcePathOptions(
   options: string | AtlasDesktopResourcePathOptions | undefined,
 ): Required<AtlasDesktopResourcePathOptions> {
+  const isPackaged = app?.isPackaged === true;
+  const exePath = isPackaged ? (app?.getPath?.("exe") || "") : "";
+
   if (typeof options === "string") {
     return {
       mainModuleUrl: options,
-      isPackaged: app.isPackaged,
-      exePath: app.isPackaged ? app.getPath("exe") : "",
+      isPackaged,
+      exePath,
     };
   }
 
   return {
     mainModuleUrl: options?.mainModuleUrl || import.meta.url,
-    isPackaged: typeof options?.isPackaged === "boolean" ? options.isPackaged : app.isPackaged,
-    exePath: options?.exePath || (app.isPackaged ? app.getPath("exe") : ""),
+    isPackaged: typeof options?.isPackaged === "boolean" ? options.isPackaged : isPackaged,
+    exePath: options?.exePath || exePath,
   };
 }
 

@@ -178,6 +178,12 @@ async function resolveRootBoxCliLaunchSpec(stateDir: string): Promise<RootBoxCli
   const runtimeStateDir = await resolveAtlasRuntimeStateDir(stateDir);
   const rootDir = path.dirname(runtimeStateDir);
   const compiledCliPath = path.join(rootDir, "src", "cli.js");
+  const packagedAppRoot = typeof process.resourcesPath === "string" && process.resourcesPath.trim()
+    ? path.join(process.resourcesPath, "app.asar")
+    : null;
+  const packagedCompiledCliPath = packagedAppRoot
+    ? path.join(packagedAppRoot, "src", "cli.js")
+    : null;
   const env = { ...process.env };
 
   if (typeof process.versions.electron === "string" && !env.ELECTRON_RUN_AS_NODE) {
@@ -194,11 +200,34 @@ async function resolveRootBoxCliLaunchSpec(stateDir: string): Promise<RootBoxCli
     };
   }
 
+  if (packagedCompiledCliPath && await pathExists(packagedCompiledCliPath)) {
+    return {
+      command: process.execPath,
+      args: [packagedCompiledCliPath],
+      env,
+      cwd: rootDir,
+      runtimeStateDir,
+    };
+  }
+
   const sourceCliPath = path.join(rootDir, "src", "cli.ts");
   if (await pathExists(sourceCliPath)) {
     return {
       command: process.execPath,
       args: ["--import", "tsx", sourceCliPath],
+      env,
+      cwd: rootDir,
+      runtimeStateDir,
+    };
+  }
+
+  const packagedSourceCliPath = packagedAppRoot
+    ? path.join(packagedAppRoot, "src", "cli.ts")
+    : null;
+  if (packagedSourceCliPath && await pathExists(packagedSourceCliPath)) {
+    return {
+      command: process.execPath,
+      args: ["--import", "tsx", packagedSourceCliPath],
       env,
       cwd: rootDir,
       runtimeStateDir,
