@@ -175,20 +175,47 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
-function uniquePaths(paths: Array<string | null>): string[] {
-  return [...new Set(paths.filter((entry): entry is string => Boolean(entry && entry.trim())))];
+interface PackagedAppRootCandidate {
+  appRoot: string;
+  trusted: boolean;
 }
 
-function resolvePackagedAppRootCandidates(rootDir: string): string[] {
-  const resourcesAppRoot = typeof process.resourcesPath === "string" && process.resourcesPath.trim()
-    ? path.join(process.resourcesPath, "app.asar")
-    : null;
-  const executableAppRoot = process.execPath
-    ? path.join(path.dirname(process.execPath), "resources", "app.asar")
-    : null;
-  const extractedAppRoot = path.join(rootDir, "resources", "app.asar");
+function resolvePackagedAppRootCandidates(rootDir: string): PackagedAppRootCandidate[] {
+  const candidates: PackagedAppRootCandidate[] = [];
+  const seen = new Set<string>();
 
-  return uniquePaths([resourcesAppRoot, executableAppRoot, extractedAppRoot]);
+  const push = (appRoot: string | null, trusted: boolean): void => {
+    if (!appRoot || !appRoot.trim() || seen.has(appRoot)) {
+      return;
+    }
+    seen.add(appRoot);
+    candidates.push({ appRoot, trusted });
+  };
+
+  // Authoritative override (set by Electron main when running packaged).
+  const envHint = typeof process.env.BOX_PACKAGED_APP_ROOT === "string"
+    ? process.env.BOX_PACKAGED_APP_ROOT.trim()
+    : "";
+  if (envHint) {
+    push(envHint, true);
+  }
+
+  // process.resourcesPath is reliable when running inside Electron main.
+  if (typeof process.resourcesPath === "string" && process.resourcesPath.trim()) {
+    push(path.join(process.resourcesPath, "app.asar"), true);
+    push(path.join(process.resourcesPath, "app"), false);
+  }
+
+  if (process.execPath) {
+    const execDir = path.dirname(process.execPath);
+    push(path.join(execDir, "resources", "app.asar"), false);
+    push(path.join(execDir, "resources", "app"), false);
+  }
+
+  push(path.join(rootDir, "resources", "app.asar"), false);
+  push(path.join(rootDir, "resources", "app"), false);
+
+  return candidates;
 }
 
 async function resolvePackagedRootBoxCliLaunchSpec(
@@ -196,11 +223,15 @@ async function resolvePackagedRootBoxCliLaunchSpec(
   runtimeStateDir: string,
   env: NodeJS.ProcessEnv,
 ): Promise<RootBoxCliLaunchSpec | null> {
-  for (const packagedAppRoot of resolvePackagedAppRootCandidates(rootDir)) {
-    if (!await pathExists(packagedAppRoot)) {
+  for (const candidate of resolvePackagedAppRootCandidates(rootDir)) {
+    // For trusted candidates (process.resourcesPath / explicit env hint) we skip
+    // the on-disk existence probe because Electron's asar shim can confuse
+    // fs.access on the asar archive path itself.
+    if (!candidate.trusted && !(await pathExists(candidate.appRoot))) {
       continue;
     }
 
+    const packagedAppRoot = candidate.appRoot;
     const packagedCompiledCliPath = path.join(packagedAppRoot, "src", "cli.js");
     if (await pathExists(packagedCompiledCliPath)) {
       return {
@@ -262,7 +293,10 @@ export async function resolveRootBoxCliLaunchSpec(stateDir: string): Promise<Roo
     };
   }
 
-  throw new Error(`ATLAS could not resolve the root BOX CLI in ${rootDir}.`);
+  throw new Error(
+    `ATLAS could not resolve the root BOX CLI in ${rootDir}.`
+    + ` Tried packaged candidates: ${resolvePackagedAppRootCandidates(rootDir).map((c) => c.appRoot).join(" | ") || "(none)"}.`,
+  );
 }
 
 export function buildAtlasDaemonStartArgs(

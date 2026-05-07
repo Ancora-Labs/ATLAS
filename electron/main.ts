@@ -248,6 +248,13 @@ function alignPackagedWorkingDirectory(): void {
     return;
   }
 
+  // Pin the packaged app root so the BOX CLI resolver can launch the bundled
+  // runtime even when fs.access on the asar archive misbehaves under Electron.
+  if (!process.env.BOX_PACKAGED_APP_ROOT && typeof process.resourcesPath === "string" && process.resourcesPath.trim()) {
+    process.env.BOX_PACKAGED_APP_ROOT = path.join(process.resourcesPath, "app.asar");
+    appendBootstrapTrace(`packaged app root pinned: ${process.env.BOX_PACKAGED_APP_ROOT}`);
+  }
+
   const workingDirectory = resolvePackagedWorkingDirectory(app.getPath("exe"));
   try {
     process.chdir(workingDirectory);
