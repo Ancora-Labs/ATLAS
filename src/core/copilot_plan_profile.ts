@@ -181,7 +181,7 @@ function pinPreferenceMapToModel(value: unknown, modelName: string): Record<stri
   return resolved;
 }
 
-function normalizeAllowedModels(value: unknown, fallbackModels: readonly string[]): string[] {
+function _normalizeAllowedModels(value: unknown, fallbackModels: readonly string[]): string[] {
   if (!Array.isArray(value)) {
     return [...fallbackModels];
   }

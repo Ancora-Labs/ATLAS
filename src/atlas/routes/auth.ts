@@ -31,7 +31,7 @@ async function readAuthPayload(req: IncomingMessage): Promise<SaveAtlasGitHubAut
   try {
     return JSON.parse(rawBody) as SaveAtlasGitHubAuthPayload;
   } catch (error) {
-    throw new Error(`Auth payload is not valid JSON: ${String((error as Error)?.message || error)}`);
+    throw new Error(`Auth payload is not valid JSON: ${String((error as Error)?.message || error)}`, { cause: error });
   }
 }
 

@@ -1,11 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { loadConfig } from "../config.js";
 import { isDaemonProcess, isProcessAlive, readDaemonPid, requestDaemonReload } from "../core/daemon_control.js";
-import { writeJson } from "../core/fs_utils.js";
 import { readPipelineProgress } from "../core/pipeline_progress.js";
 import { normalizeWorkerName } from "../core/role_registry.js";
 import {
@@ -370,7 +368,7 @@ function buildProjectSessionStateDir(runtimeStateDir: string, binding: AtlasReso
   return path.join(runtimeStateDir, "projects", binding.projectId, binding.projectSessionId);
 }
 
-async function bindingPointsToTargetSession(runtimeStateDir: string, binding: AtlasResolvedProjectBinding): Promise<boolean> {
+async function _bindingPointsToTargetSession(runtimeStateDir: string, binding: AtlasResolvedProjectBinding): Promise<boolean> {
   return pathExists(path.join(buildProjectSessionStateDir(runtimeStateDir, binding), "target_session.json"));
 }
 
@@ -969,6 +967,7 @@ async function ensureAtlasProjectSession(
 
 function sanitizeLogLine(line: string): string {
   return String(line || "")
+    // eslint-disable-next-line no-control-regex -- strip ANSI escape sequences
     .replace(/\u001B\[[0-9;]*m/g, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -2162,7 +2161,7 @@ function derivePipelineFromMissionArtifacts(
       }
     : pipeline;
   const loopCount = basePipeline.loopCount;
-  let candidate: AtlasRuntimePipelineSnapshot | null = null;
+  let candidate: AtlasRuntimePipelineSnapshot | null;
 
   if (missionArtifacts.completionStage === "completed" || missionArtifacts.completionFinalStatus === "completed") {
     candidate = createArtifactPipelineCandidate(

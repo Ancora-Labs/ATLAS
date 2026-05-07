@@ -35,7 +35,7 @@ function parsePayload(body: string): AtlasSessionPresentationPayload {
   try {
     return JSON.parse(body || "{}") as AtlasSessionPresentationPayload;
   } catch (error) {
-    throw new Error(`Presentation refresh payload is not valid JSON: ${String((error as Error)?.message || error)}`);
+    throw new Error(`Presentation refresh payload is not valid JSON: ${String((error as Error)?.message || error)}`, { cause: error });
   }
 }
 

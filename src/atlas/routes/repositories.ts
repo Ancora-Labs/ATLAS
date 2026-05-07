@@ -41,7 +41,7 @@ async function readSelectionPayload(req: IncomingMessage): Promise<AtlasReposito
   try {
     return JSON.parse(rawBody) as AtlasRepositorySelectionPayload;
   } catch (error) {
-    throw new Error(`Repository payload is not valid JSON: ${String((error as Error)?.message || error)}`);
+    throw new Error(`Repository payload is not valid JSON: ${String((error as Error)?.message || error)}`, { cause: error });
   }
 }
 

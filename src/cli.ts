@@ -19,7 +19,6 @@ import {
   loadActiveTargetSession,
   loadTargetSession,
   purgeAllTargetSessionArtifacts,
-  saveActiveTargetSession,
   selectActiveTargetSession,
   summarizeActiveTargetSession,
   TARGET_SESSION_STAGE,

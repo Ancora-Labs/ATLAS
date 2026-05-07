@@ -352,7 +352,7 @@ export function applySingleTargetIntentAuthorityToDirective(config: any, directi
   return directive;
 }
 
-function isPrometheusAnalysisAlignedToTargetSession(config: any, analysis: any): boolean {
+function _isPrometheusAnalysisAlignedToTargetSession(config: any, analysis: any): boolean {
   const runtimeTargetSession = resolveDirectiveTargetSessionStamp(config);
   const analysisTargetSession = analysis?.targetSession && typeof analysis.targetSession === "object"
     ? analysis.targetSession

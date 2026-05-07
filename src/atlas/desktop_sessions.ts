@@ -732,7 +732,7 @@ async function stopRuntimeControlScope(config: any, reason: string): Promise<num
   if (!(await waitForProcessExit(pid, 1200))) {
     try {
       process.kill(pid, "SIGKILL");
-    } catch {}
+    } catch { /* already exited */ }
     await waitForProcessExit(pid, 300);
   }
 
@@ -770,7 +770,7 @@ async function stopAtlasSessionRuntime(
     if (runnerPid > 0 && isProcessAlive(runnerPid)) {
       try {
         process.kill(runnerPid, "SIGKILL");
-      } catch {}
+      } catch { /* already exited */ }
     }
   }
 }

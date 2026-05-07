@@ -466,7 +466,7 @@ async function loadTopicSiteStateForConfig(config: any, stateDir: string): Promi
   return readTargetSessionArtifactJson(config, SCOUT_TOPIC_SITE_STATUS_FILE, { updatedAt: null, entries: [] });
 }
 
-async function saveSeenScoutUrls(stateDir: string, seenUrls: Set<string>): Promise<void> {
+async function _saveSeenScoutUrls(stateDir: string, seenUrls: Set<string>): Promise<void> {
   const cap = 5000;
   const urls = Array.from(seenUrls).slice(-cap);
   await writeJson(path.join(stateDir, SCOUT_SEEN_URLS_FILE), {
@@ -552,7 +552,7 @@ async function loadTopicSiteState(stateDir: string): Promise<TopicSiteState> {
   };
 }
 
-async function saveTopicSiteState(stateDir: string, map: Map<string, TopicSiteEntry>): Promise<void> {
+async function _saveTopicSiteState(stateDir: string, map: Map<string, TopicSiteEntry>): Promise<void> {
   const entries = Array.from(map.values())
     .sort((a, b) => (a.site + a.topic).localeCompare(b.site + b.topic));
   await writeJson(path.join(stateDir, SCOUT_TOPIC_SITE_STATUS_FILE), {

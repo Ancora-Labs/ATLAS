@@ -925,7 +925,7 @@ function normalizeAgentDeliveryModeDecision(rawDecision: any, selectedAgentSlug:
   };
 }
 
-async function requestClarificationDeliveryModeDecision(config: any, session: any, packet: any, transcript: any, intentContract: any) {
+async function _requestClarificationDeliveryModeDecision(config: any, session: any, packet: any, transcript: any, intentContract: any) {
   const selectedAgentSlug = normalizeNullableString(session?.clarification?.selectedAgentSlug)
     || normalizeNullableString(packet?.selectedAgentSlug)
     || normalizeNullableString(intentContract?.selectedAgentSlug);
@@ -950,7 +950,7 @@ You already own this clarification session.
 
 Task:
 - Read the repo context, clarified intent, and transcript.
-- Decide whether BOX should open in \"active\" or \"shadow\" immediately after clarification.
+- Decide whether BOX should open in "active" or "shadow" immediately after clarification.
 
 Rules:
 - Use the actual user request complexity and operational risk.
@@ -1095,7 +1095,7 @@ ${JSON.stringify({
   return normalizedDecision;
 }
 
-async function requestClarificationTurnDecision(config: any, session: any, packet: any, transcript: any, intentContract: any, input: {
+async function _requestClarificationTurnDecision(config: any, session: any, packet: any, transcript: any, intentContract: any, input: {
   answeredQuestion: any;
   answerText: string;
   selectedOptions: string[];

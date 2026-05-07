@@ -558,7 +558,7 @@ function detectProvider(repoUrl: string | null) {
   return "unknown";
 }
 
-function hasConfiguredSecret(config: any, names: string[]) {
+function _hasConfiguredSecret(config: any, names: string[]) {
   return names.some((name) => {
     const configValue = config?.env?.[name];
     const processValue = process.env[name];
@@ -1018,7 +1018,7 @@ async function requestClarificationPacketFromAgent(config: any, preparedSession:
     try {
       parsedMockPacket = JSON.parse(mockPacketText);
     } catch (error: any) {
-      throw new Error(`Invalid mock onboarding clarification packet JSON: ${String(error?.message || error)}`);
+      throw new Error(`Invalid mock onboarding clarification packet JSON: ${String(error?.message || error)}`, { cause: error });
     }
     await appendProgress(
       config,

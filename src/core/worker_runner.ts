@@ -4215,6 +4215,7 @@ export async function runWorkerConversation(config, roleName, instruction, histo
 
     // Resolve adaptive retry decision for error path
     let errorRetryDecision = null;
+    // eslint-disable-next-line no-useless-assignment -- assigned within try block before use
     let errorRetryROI = null;
     try {
       const exitClassification = classifyFailure({

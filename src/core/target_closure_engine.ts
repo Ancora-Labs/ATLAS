@@ -417,6 +417,7 @@ export async function evaluateTargetClosure(config: any, session: any, report: a
   const hasHighValueAction = Boolean(bestAction && Number(bestAction.expectedValue || 0) >= threshold);
 
   let decision: string = TARGET_CLOSURE_DECISION.CONTINUE;
+  // eslint-disable-next-line no-useless-assignment -- default reason overwritten by every branch
   let reasonCode = "high_value_next_action_available";
   if (!terminalContract && blockedActions.length > 0 && actionableNextActions.length === 0) {
     decision = TARGET_CLOSURE_DECISION.BLOCKED;

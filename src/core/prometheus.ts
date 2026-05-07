@@ -3475,7 +3475,7 @@ function capabilityTagToLane(capabilityTag) {
   }
 }
 
-function hasExplicitPlanningField(src, ...keys) {
+function _hasExplicitPlanningField(src, ...keys) {
   if (!src || typeof src !== "object") return false;
   return keys.some((key) => String(src[key] || "").trim().length > 0);
 }
@@ -4322,8 +4322,8 @@ function normalizePlanFromTask(task, index, fallbackWave = 1) {
   ).trim().toLowerCase() || "implementation";
   const normalizedRole = normalizePlannerRoleForLane(requestedRole, planningLane);
 
-  let resolvedUiSurface = normalizedUiSurface;
-  let resolvedTargetSurfaces = normalizedTargetSurfaces;
+  const resolvedUiSurface = normalizedUiSurface;
+  const resolvedTargetSurfaces = normalizedTargetSurfaces;
   const interventionId = String(
     src.intervention_id || src.interventionId || src.taskId || src.task_id || src.id || `${normalizedRole}:${taskText}`
   ).trim() || `${normalizedRole}:${taskText}`;
@@ -6112,7 +6112,7 @@ export function buildCanonicalTargetOperatorObjective(config: any, fallbackPromp
     ? config.activeTargetSession
     : null;
   const advisoryPrompt = String(fallbackPrompt || "").trim();
-  const safeAdvisoryPrompt = advisoryPrompt
+  const _safeAdvisoryPrompt = advisoryPrompt
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)

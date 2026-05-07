@@ -327,7 +327,7 @@ function normalizeVerificationCommands(commands = []) {
   return normalized;
 }
 
-function replaceGenericTestCommandsWithPlaceholder(commands: string[]): string[] {
+function _replaceGenericTestCommandsWithPlaceholder(commands: string[]): string[] {
   if (!Array.isArray(commands) || commands.length === 0) return [];
   return normalizeCommandBatch(
     commands.map((cmd) => {

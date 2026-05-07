@@ -691,6 +691,7 @@ function runAtlasClarificationCommandOnce(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    // eslint-disable-next-line prefer-const -- assigned later inside setTimeout closure
     let timeout: NodeJS.Timeout | undefined;
     let jsonIdleTimeout: NodeJS.Timeout | undefined;
 

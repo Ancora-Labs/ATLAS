@@ -62,6 +62,7 @@ function shouldUseHeuristicProjectLogMatch(requestedSessionId: string | null, fo
 }
 
 function trimRawLogContent(raw: string): string {
+  // eslint-disable-next-line no-control-regex -- intentionally strip NUL bytes from raw log payloads
   const lines = raw.replace(/\u0000/g, "").split(/\r?\n/);
   return lines.slice(-ATLAS_RAW_LOG_LINE_LIMIT).join("\n").trim();
 }

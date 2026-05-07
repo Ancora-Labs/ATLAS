@@ -330,7 +330,7 @@ export async function resolveAtlasGitHubBootstrap(stateDir: string): Promise<Atl
   applyAtlasGitHubAuthToEnv(authState);
 
   let accountLogin = authState.accountLogin;
-  let copilotUsage: AtlasResolvedCopilotUsage | null = null;
+  let copilotUsage: AtlasResolvedCopilotUsage | null;
 
   if (authState.copilotGithubToken || authState.githubToken) {
     try {
@@ -412,7 +412,7 @@ export async function saveAtlasGitHubAuth(stateDir: string, payload: SaveAtlasGi
   }
   applyAtlasGitHubAuthToEnv(persistedState);
 
-  let copilotUsage: AtlasResolvedCopilotUsage | null = null;
+  let copilotUsage: AtlasResolvedCopilotUsage | null;
   try {
     copilotUsage = await enrichCopilotUsageSnapshot(
       await fetchCopilotAccountProfile(resolveSupportedCopilotToken(persistedState.copilotGithubToken, persistedState.githubToken)),

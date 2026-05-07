@@ -99,7 +99,7 @@ function getControlScopeFiles(config) {
   };
 }
 
-async function readControlJson(filePath) {
+async function _readControlJson(filePath) {
   return readJson(filePath, null);
 }
 

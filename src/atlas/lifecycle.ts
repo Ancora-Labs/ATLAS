@@ -96,7 +96,7 @@ async function requestStopForControlScope(config: any, reason: string): Promise<
     if (!(await waitForProcessExit(pid, 1200))) {
       try {
         process.kill(pid, "SIGKILL");
-      } catch {}
+      } catch { /* already exited */ }
       await waitForProcessExit(pid, 300);
     }
     if (!isProcessAlive(pid)) {

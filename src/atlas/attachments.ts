@@ -95,6 +95,7 @@ function extractTextPreview(buffer: Buffer, kind: AtlasSessionAttachmentKind): s
     return null;
   }
 
+  // eslint-disable-next-line no-control-regex -- intentionally strip NUL bytes from binary previews
   const preview = buffer.toString("utf8").replace(/\u0000/g, "").trim();
   if (!preview) {
     return null;
