@@ -23,7 +23,7 @@ import { resolveAtlasRuntimeStateDir } from "../src/atlas/runtime_state_root.js"
 import {
   resolveAtlasDesktopResourcePaths,
   resolvePackagedWorkingDirectory,
-} from "./resource_paths.ts";
+} from "./resource_paths.js";
 import {
   ATLAS_APP_NAME,
   ATLAS_WINDOWS_APP_ID,
@@ -34,8 +34,8 @@ import {
   restoreAndFocusAtlasWindow,
   shouldRepairAtlasShortcut,
   shouldRenameAtlasShortcut,
-} from "./single_instance.ts";
-import { decideAtlasPopupHandling, isContainedAuthUrl } from "./window_policy.ts";
+} from "./single_instance.js";
+import { decideAtlasPopupHandling, isContainedAuthUrl } from "./window_policy.js";
 import { appendBootstrapTrace } from "./bootstrap_trace.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

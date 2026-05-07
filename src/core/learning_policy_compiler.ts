@@ -18,8 +18,13 @@ import {
   summarizeImpactAttributionWindow,
 } from "./lesson_halflife.js";
 import { EQUAL_DIMENSION_SET } from "./plan_contract_validator.js";
-import { OPTIMIZATION_INTERVENTION_KIND } from "./model_policy.js";
 import { isResolvedBenchmarkRecommendation } from "./cycle_analytics.js";
+
+const OPTIMIZATION_INTERVENTION_KIND = Object.freeze({
+  PROMPT_DELTA: "prompt-delta",
+  ROUTING_DELTA: "routing-delta",
+  POLICY_DELTA: "policy-delta",
+});
 
 const ATHENA_TRACKED_FIELDS_EMPTY_CHECK_PATTERN = /if\s*\(\s*!legacyValue\s*\|\|\s*legacyValue\.length\s*===\s*0\s*\)/;
 const ATHENA_TRACKED_FIELDS_DEEP_EQUALITY_PATTERN = /areTrackedFieldValuesEqual\s*\(\s*origVal\s*,\s*patchedVal\s*\)/;

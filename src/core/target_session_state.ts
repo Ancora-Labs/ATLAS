@@ -2,12 +2,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { readJson, spawnAsync, writeJson } from "./fs_utils.js";
+import {
+  WORKER_CYCLE_ARTIFACTS_FILE,
+  extractSessionsFromCycleRecord,
+  filterStaleWorkerSessions,
+  migrateWorkerCycleArtifacts,
+  selectWorkerCycleRecord,
+} from "./cycle_analytics.js";
 import { requestDaemonReload } from "./daemon_control.js";
 import {
   getActiveTargetSessionPath,
   PLATFORM_MODE,
   updatePlatformModeState,
 } from "./mode_state.js";
+import { readPipelineProgress } from "./pipeline_progress.js";
 import { archiveAtlasDesktopSession } from "../atlas/desktop_sessions.js";
 
 export const TARGET_SESSION_SCHEMA_VERSION = 1;
@@ -1487,6 +1495,67 @@ export async function listOpenTargetSessions(config: any) {
     const rightTime = Date.parse(String(right?.lifecycle?.updatedAt || right?.updatedAt || 0));
     return rightTime - leftTime;
   });
+}
+
+export async function readOpenTargetSessionState(options: { stateDir: string }) {
+  const stateDir = String(options?.stateDir || "").trim() || path.join(process.cwd(), "state");
+  const artifactsPath = path.join(stateDir, WORKER_CYCLE_ARTIFACTS_FILE);
+  const legacyPath = path.join(stateDir, "worker_sessions.json");
+  const [artifactData, legacyData, progress] = await Promise.all([
+    readJson(artifactsPath, null),
+    readJson(legacyPath, null),
+    readPipelineProgress({ paths: { stateDir } }),
+  ]);
+
+  const legacySessions = legacyData && typeof legacyData === "object" && !Array.isArray(legacyData)
+    ? legacyData as Record<string, unknown>
+    : {};
+  const legacySessionsAvailable = Object.keys(legacySessions).length > 0;
+
+  const migrated = migrateWorkerCycleArtifacts(artifactData);
+  if (migrated.ok && migrated.data) {
+    const preferredCycleId = String(progress?.startedAt || "").trim() || undefined;
+    const selected = selectWorkerCycleRecord(migrated.data, preferredCycleId);
+    const canonicalSessions = extractSessionsFromCycleRecord(selected.record);
+    if (canonicalSessions && Object.keys(canonicalSessions).length > 0) {
+      const canonicalActive = Object.values(canonicalSessions).filter(
+        (session) => session && typeof session === "object" && (session as Record<string, unknown>).status === "working",
+      ).length;
+      const legacyActive = Object.values(legacySessions).filter(
+        (session) => session && typeof session === "object" && (session as Record<string, unknown>).status === "working",
+      ).length;
+      const workerSessionSourceConflict = legacySessionsAvailable && canonicalActive !== legacyActive;
+      return {
+        sessions: canonicalSessions,
+        source: "canonical" as const,
+        cycleId: selected.cycleId,
+        canonicalSessionsAvailable: true,
+        legacySessionsAvailable,
+        workerSessionSourceConflict,
+        conflictReason: workerSessionSourceConflict
+          ? `canonical_active=${canonicalActive} vs legacy_active=${legacyActive}`
+          : null,
+        staleSessionsFiltered: 0,
+        filteredStaleRoles: [],
+      };
+    }
+  }
+
+  const filteredLegacy = filterStaleWorkerSessions(
+    legacySessions,
+    String(progress?.startedAt || "").trim() || null,
+  );
+  return {
+    sessions: filteredLegacy.sessions,
+    source: legacySessionsAvailable ? "legacy" as const : "empty" as const,
+    cycleId: null,
+    canonicalSessionsAvailable: Boolean(migrated.ok),
+    legacySessionsAvailable,
+    workerSessionSourceConflict: false,
+    conflictReason: null,
+    staleSessionsFiltered: filteredLegacy.staleRoles.length,
+    filteredStaleRoles: filteredLegacy.staleRoles,
+  };
 }
 
 export async function loadTargetSession(config: any, input: { sessionId?: string | null; projectId?: string | null }) {
