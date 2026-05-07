@@ -27,9 +27,9 @@
  *   as a first-class runtime gate: downstream systems can inspect the line to
  *   verify all contract slots before allowing the worker to proceed.
  *
- *   Format:  WORKER_CONTRACT_HEALTH=env_vars:<pass|fail|n/a>;payload:<pass|fail|n/a>;role:<pass|fail|n/a>
- *   Success: WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass
- *   Failure: WORKER_CONTRACT_HEALTH=env_vars:fail;payload:n/a;role:n/a  (emitted to stderr)
+ *   Format:  WORKER_CONTRACT_HEALTH=env_vars:<pass|fail|n/a>;payload:<pass|fail|n/a>;role:<pass|fail|n/a>;ui_caps:<pass|fail|n/a>
+ *   Success: WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass;ui_caps:n/a
+ *   Failure: WORKER_CONTRACT_HEALTH=env_vars:fail;payload:n/a;role:n/a;ui_caps:n/a  (emitted to stderr)
  *
  * Exports: see src/workers/contract_health.ts for types and parsers.
  */
@@ -48,7 +48,7 @@ function main(): void {
       `[run_task] Set these variables and re-run the container.\n`
     );
     // Emit contract health evidence to stderr so the runtime gate can observe it
-    process.stderr.write(formatContractHealth({ env_vars: "fail", payload: "n/a", role: "n/a" }) + "\n");
+    process.stderr.write(formatContractHealth({ env_vars: "fail", payload: "n/a", role: "n/a", ui_caps: "n/a" }) + "\n");
     process.exit(1);
   }
 
@@ -68,7 +68,7 @@ function main(): void {
       "[run_task] ERROR: TASK_PAYLOAD is not valid JSON.\n"
     );
     // Emit partial health: env_vars passed, payload failed
-    process.stderr.write(formatContractHealth({ env_vars: "pass", payload: "fail", role: "n/a" }) + "\n");
+    process.stderr.write(formatContractHealth({ env_vars: "pass", payload: "fail", role: "n/a", ui_caps: "n/a" }) + "\n");
     process.exit(1);
   }
 
@@ -79,7 +79,7 @@ function main(): void {
   // ── Step 3: role presence contract ──────────────────────────────────────
   // WORKER_ROLE was already confirmed non-empty by REQUIRED_VARS check.
   // Emit the full-pass health line to stdout as a first-class runtime gate signal.
-  process.stdout.write(formatContractHealth({ env_vars: "pass", payload: "pass", role: "pass" }) + "\n");
+  process.stdout.write(formatContractHealth({ env_vars: "pass", payload: "pass", role: "pass", ui_caps: "n/a" }) + "\n");
   // Emit the named startup-contract verification anchor immediately after the
   // health line.  This anchor unambiguously marks that all contract checks
   // completed in THIS startup cycle — downstream gates use it to distinguish

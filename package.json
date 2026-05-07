@@ -3,7 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": ".electron-build/electron/main.js",
+  "main": "electron/main.mjs",
+  "author": "Ancora Labs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ancora-Labs/ATLAS.git"
+  },
   "description": "Repo-agnostic autonomous engineering orchestrator starter",
   "scripts": {
     "build": "npm run typecheck",
@@ -19,38 +24,16 @@
     "box:rebase": "node --import tsx src/cli.ts rebase",
     "box:park": "node --import tsx scripts/box_park.ts",
     "box:once": "node --import tsx src/cli.ts once",
-    "box:dashboard": "node --import tsx src/dashboard/live_dashboard.ts",
-    "atlas:start": "node --import tsx src/atlas/server.ts",
-    "atlas:ctl": "node --import tsx src/atlas/lifecycle.ts",
-    "atlas:desktop:build": "tsc -p tsconfig.electron.json",
-    "atlas:desktop": "npm run atlas:desktop:build && electron .electron-build\\electron\\main.js",
-    "atlas:desktop:package": "node --import tsx scripts/atlas_desktop_package.ts",
-    "atlas:open": "npm run atlas:desktop",
+    "box:log": "pwsh -NoProfile -File scripts/watch-live-log.ps1",
     "prometheus:watch": "node --import tsx scripts/watch_prometheus_live.ts",
     "worker:run": "node --import tsx src/workers/run_task.ts",
-    "doctor": "node --import tsx src/cli.ts doctor"
+    "doctor": "node --import tsx src/cli.ts doctor",
+    "atlas:desktop": "npm run atlas:desktop:package",
+    "atlas:desktop:build": "node --import tsx scripts/prepare_atlas_icon_assets.ts && electron-builder --dir && node --import tsx scripts/patch_atlas_exe_icons.ts",
+    "atlas:desktop:package": "npm run atlas:desktop:build && node --import tsx scripts/package_atlas_desktop_folder.ts"
   },
   "engines": {
     "node": ">=20.0.0"
-  },
-  "build": {
-    "appId": "com.ancoralabs.atlas",
-    "productName": "ATLAS",
-    "files": [
-      "package.json",
-      ".electron-build/**/*",
-      "electron/renderer/**/*"
-    ],
-    "extraFiles": [
-      "box.config.json"
-    ],
-    "win": {
-      "target": [
-        "dir"
-      ],
-      "executableName": "ATLAS",
-      "signAndEditExecutable": false
-    }
   },
   "dependencies": {
     "dotenv": "^16.4.5",
@@ -59,12 +42,39 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.5.0",
-    "electron": "^36.3.2",
-    "electron-builder": "^26.0.12",
+    "electron": "^36.9.5",
     "eslint": "^10.0.3",
     "globals": "^17.4.0",
     "jiti": "^2.6.1",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.57.2"
+    "typescript-eslint": "^8.57.2",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.ancora.atlas",
+    "productName": "ATLAS",
+    "asarUnpack": [
+      "node_modules/esbuild/**/*",
+      "node_modules/@esbuild/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**",
+      "electron/**",
+      ".github/agents/**",
+      "node_modules/**",
+      "atlas.ico",
+      "atlasimage.png",
+      "atlas.png",
+      "atlaslogoii.png",
+      "Frame 5.png"
+    ],
+    "win": {
+      "target": "portable",
+      "signAndEditExecutable": false,
+      "icon": "atlas.ico"
+    }
   }
 }

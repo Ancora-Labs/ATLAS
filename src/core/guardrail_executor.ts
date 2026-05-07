@@ -849,3 +849,81 @@ export async function autoRevertSloGuardrailIfResolved(config, isSloCurrentlyBre
     return { reverted: false, reason: `INTERNAL_ERROR: ${String((err as any)?.message || err)}` };
   }
 }
+
+/**
+ * Determine whether the recorded SLO history still provides fresh evidence
+ * supporting an active FORCE_CHECKPOINT_VALIDATION guardrail triggered by
+ * SLO_CASCADING_BREACH.  When dispatch has been blocked since the guardrail
+ * fired, no new SLO cycle data can be produced — leaving the guardrail latched
+ * forever even though the breach can no longer be observed.  Fresh evidence
+ * means: the most recent SLO cycle completed strictly after the guardrail was
+ * applied AND that cycle still contains at least one breach record.  All other
+ * cases are treated as stale evidence.
+ */
+export function hasFreshSloBreachEvidenceForForceCheckpoint(forceCheckpointState: any, sloMetricsState: any): boolean {
+  if (!forceCheckpointState || forceCheckpointState.enabled !== true || forceCheckpointState.revertedAt !== null) {
+    return false;
+  }
+  const appliedAtMs = Date.parse(String(forceCheckpointState?.appliedAt || ""));
+  if (!Number.isFinite(appliedAtMs)) {
+    return false;
+  }
+  const lastCycle = sloMetricsState?.lastCycle;
+  if (!lastCycle || typeof lastCycle !== "object") {
+    return false;
+  }
+  const completedAtMs = Date.parse(String(lastCycle?.completedAt || ""));
+  if (!Number.isFinite(completedAtMs) || completedAtMs <= appliedAtMs) {
+    return false;
+  }
+  const breaches = Array.isArray(lastCycle?.sloBreaches) ? lastCycle.sloBreaches : [];
+  return breaches.length > 0;
+}
+
+/**
+ * Auto-revert a stale FORCE_CHECKPOINT_VALIDATION guardrail whose triggering
+ * SLO_CASCADING_BREACH no longer has fresh supporting evidence.  Designed to
+ * be called from the orchestrator main loop so the system can self-heal even
+ * when dispatch has been blocked long enough that no new SLO cycle data is
+ * being recorded.  Strict counterpart to autoRevertSloGuardrailIfResolved,
+ * which depends on an in-cycle catastrophe detection result and therefore
+ * never fires while dispatch returns early.
+ */
+export async function autoRevertStaleSloGuardrail(config): Promise<{ reverted: boolean; reason?: string }> {
+  try {
+    const contract = await readForceCheckpointValidationContract(config);
+    if (!contract.active) {
+      return { reverted: false };
+    }
+    if (!isSloCascadingBreachScenario(contract.scenarioId)) {
+      return { reverted: false };
+    }
+
+    const { readSloMetrics } = await import("./slo_checker.js");
+    const sloState = await readSloMetrics(config);
+    if (hasFreshSloBreachEvidenceForForceCheckpoint(contract.state, sloState)) {
+      return { reverted: false, reason: "fresh_slo_breach_evidence_present" };
+    }
+
+    const revertResult = await _revertActionStateFile(config, GUARDRAIL_ACTION.FORCE_CHECKPOINT_VALIDATION, false);
+
+    const actionId = contract.state?.actionId ?? null;
+    await _appendAuditEntry(config, {
+      id:             newId("auto-revert-stale"),
+      type:           GUARDRAIL_AUDIT_ENTRY_TYPE.REVERTED,
+      action:         GUARDRAIL_ACTION.FORCE_CHECKPOINT_VALIDATION,
+      scenarioId:     CATASTROPHE_SCENARIO.SLO_CASCADING_BREACH,
+      reasonCode:     GUARDRAIL_REASON_CODE.AUTO_REVERTED,
+      operatorId:     "system",
+      operatorReason: "FORCE_CHECKPOINT_VALIDATION auto-reverted: no fresh SLO_CASCADING_BREACH evidence recorded since guardrail was applied (dispatch was unable to produce new SLO cycle data).",
+      timestamp:      new Date().toISOString(),
+      dryRun:         false,
+      stateFile:      revertResult.stateFile,
+      ...(actionId ? { revertedActionId: actionId } : {}),
+    });
+
+    return { reverted: revertResult.ok, ...(revertResult.ok ? {} : { reason: revertResult.reason }) };
+  } catch (err) {
+    return { reverted: false, reason: `INTERNAL_ERROR: ${String((err as any)?.message || err)}` };
+  }
+}

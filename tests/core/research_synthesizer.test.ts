@@ -2,12 +2,15 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   stripExecutionTranscriptNoise,
+  resolveSynthesizerOutputText,
   sanitizeResearchSynthesisForPersistence,
   computeSynthesisActionableDensity,
   quarantineLowDensityTopics,
   topicHasActionableArtifact,
   buildQualityGateRecoverySignal,
   SYNTHESIS_ACTIONABLE_SIGNAL_MIN_LENGTH,
+  assessTargetCoverageObligations,
+  buildTargetModeSynthesisTaskSection,
 } from "../../src/core/research_synthesizer.js";
 
 // ── Task 1 invariant: partial quarantine must not trigger degraded mode ────────
@@ -112,6 +115,26 @@ describe("research_synthesizer persistence hardening", () => {
     assert.equal(output.topicCount, 0);
     assert.deepEqual(output.topics, []);
   });
+
+  it("prefers the stream that actually contains synthesized topic output", () => {
+    const stdout = [
+      "I am gathering evidence now.",
+      "tool_call: read file",
+      "Search complete.",
+    ].join("\n");
+    const stderr = [
+      "## Research Synthesis Header",
+      "- Date: 2026-04-24",
+      "## Topic: Status visibility and operator trust signals",
+      "**Topic Metadata:**",
+      "- Source Count: 1",
+    ].join("\n");
+
+    const resolved = resolveSynthesizerOutputText(stdout, stderr);
+
+    assert.equal(resolved, stderr);
+    assert.ok(resolved.includes("## Topic: Status visibility and operator trust signals"));
+  });
 });
 
 // ── computeSynthesisActionableDensity (quality gate) ─────────────────────────
@@ -205,6 +228,32 @@ describe("computeSynthesisActionableDensity", () => {
     });
     assert.equal((output as any).qualityGate, undefined);
   });
+
+  it("sanitizeResearchSynthesisForPersistence preserves target-session metadata", () => {
+    const output = sanitizeResearchSynthesisForPersistence({
+      success: true,
+      topicCount: 1,
+      topics: [{ topic: "T", netFindings: ["f1"], sources: [] }] as any,
+      crossTopicConnections: [],
+      researchGaps: "",
+      synthesizedAt: "2026-01-01T00:00:00.000Z",
+      scoutSourceCount: 0,
+      model: "gpt-5.3-codex",
+      targetSession: {
+        projectId: "target_restaurant",
+        sessionId: "sess_123",
+        repoState: "empty",
+        researchMode: "empty_repo_discovery",
+      },
+    });
+
+    assert.deepEqual((output as any).targetSession, {
+      projectId: "target_restaurant",
+      sessionId: "sess_123",
+      repoState: "empty",
+      researchMode: "empty_repo_discovery",
+    });
+  });
 });
 
 // ── quarantineLowDensityTopics ─────────────────────────────────────────────────
@@ -284,6 +333,76 @@ describe("quarantineLowDensityTopics", () => {
 });
 
 // ── Task 3: Actionable-signal invariants + SYNTHESIS_ACTIONABLE_SIGNAL_MIN_LENGTH ────
+
+describe("target-aware synthesis coverage", () => {
+  it("passes generic obligation coverage for a visual product target", () => {
+    const coverage = assessTargetCoverageObligations(
+      [
+        {
+          topic: "Visual hierarchy and premium hero layout",
+          netFindings: ["Use strong hero imagery and premium visual hierarchy for landing pages."],
+          sources: [{ scoutFindings: "High-quality food photography and branded hero composition improve perceived quality." }],
+        },
+        {
+          topic: "Responsive image handling and mobile breakpoints",
+          netFindings: ["Use responsive images and mobile-first breakpoints to preserve layout quality."],
+          sources: [{ prometheusReadySummary: "Implement responsive image delivery and breakpoint-safe sections." }],
+        },
+        {
+          topic: "Reservation CTA trust and conversion",
+          netFindings: ["Show testimonials, ratings, and a clear reservation CTA above the fold."],
+          sources: [{ scoutFindings: "Trust signals and CTA placement materially affect conversion." }],
+        },
+      ],
+      {
+        obligations: ["visual_design", "media_surfaces", "responsive_experience", "trust_signals"],
+        targetSourceCount: 12,
+      } as any,
+    );
+
+    assert.equal(coverage.passed, true);
+    assert.deepEqual(coverage.missingObligations, []);
+    assert.ok(coverage.coveredObligations.includes("visual_design"));
+    assert.ok(coverage.coveredObligations.includes("media_surfaces"));
+  });
+
+  it("negative path: flags missing obligations when synthesis stays stack-only", () => {
+    const coverage = assessTargetCoverageObligations(
+      [
+        {
+          topic: "Next.js and Tailwind setup",
+          netFindings: ["Use Next.js app router and Tailwind for rapid implementation."],
+          sources: [{ prometheusReadySummary: "Set up the repo foundation and deployment baseline." }],
+        },
+      ],
+      {
+        obligations: ["visual_design", "media_surfaces", "responsive_experience"],
+        targetSourceCount: 10,
+      } as any,
+    );
+
+    assert.equal(coverage.passed, false);
+    assert.ok(coverage.missingObligations.includes("visual_design"));
+    assert.ok(coverage.missingObligations.includes("media_surfaces"));
+  });
+
+  it("builds a target-mode task section that points at the target repo instead of BOX self-improvement", () => {
+    const sectionText = buildTargetModeSynthesisTaskSection({
+      intent: {
+        productType: "premium food landing page",
+        mustHaveFlows: ["reservation CTA"],
+        successCriteria: ["premium visual delivery"],
+      },
+    }, {
+      obligations: ["visual_design", "media_surfaces", "responsive_experience"],
+      targetSourceCount: 12,
+    } as any);
+
+    assert.ok(sectionText.includes("TARGET-REPO SYNTHESIS TASK"));
+    assert.ok(sectionText.includes("Do NOT reframe this as BOX self-improvement"));
+    assert.ok(sectionText.includes("visual_design"));
+  });
+});
 
 describe("SYNTHESIS_ACTIONABLE_SIGNAL_MIN_LENGTH invariant", () => {
   it("rejects strings shorter than the minimum as non-actionable", () => {

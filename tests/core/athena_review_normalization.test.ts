@@ -7,6 +7,7 @@ import {
   PREMORTEM_RISK_LEVEL,
   validatePatchedPlan,
   normalizePatchedPlansForDispatch,
+  preparePatchedPlansForDispatch,
   revalidatePatchedPlansAfterNormalization,
   PATCHED_PLAN_REVALIDATION_REASON,
   correctBoundedPacketDefects,
@@ -21,6 +22,8 @@ import {
   buildPatchedPlanCorrectionTracking,
   PATCHED_PLAN_MUTATION_KIND,
   ATHENA_FAST_PATH_REASON,
+  ATHENA_PLAN_REVIEW_REASON_CODE,
+  isAthenaReviewAlignedToTargetSession,
   evaluateStaleArtifactClosureFastpath,
 } from "../../src/core/athena_reviewer.js";
 import { evaluatePreDispatchGovernanceGate, BLOCK_REASON } from "../../src/core/orchestrator.js";
@@ -243,6 +246,50 @@ describe("computeGateBlockRiskFromSignals", () => {
     assert.equal(result.gateBlockRisk, GATE_BLOCK_RISK.LOW);
     assert.equal(result.requiresCorrection, false);
     assert.equal(result.activeGateSignals.length, 0);
+  });
+});
+
+describe("athena_reviewer — single-target review alignment", () => {
+  const singleTargetConfig = {
+    platformModeState: { currentMode: "single_target_delivery" },
+    activeTargetSession: {
+      projectId: "portal",
+      sessionId: "sess_active",
+    },
+  };
+
+  it("accepts aligned review artifacts in single-target mode", () => {
+    assert.equal(
+      isAthenaReviewAlignedToTargetSession(singleTargetConfig, {
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_active",
+        },
+      }),
+      true,
+    );
+  });
+
+  it("rejects cached reviews from a different target session in single-target mode", () => {
+    assert.equal(
+      isAthenaReviewAlignedToTargetSession(singleTargetConfig, {
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_old",
+        },
+      }),
+      false,
+    );
+  });
+
+  it("accepts legacy reviews without targetSession outside single-target mode", () => {
+    assert.equal(
+      isAthenaReviewAlignedToTargetSession(
+        { platformModeState: { currentMode: "self_dev" }, activeTargetSession: null },
+        { approved: true },
+      ),
+      true,
+    );
   });
 });
 
@@ -488,6 +535,94 @@ describe("normalizePatchedPlansForDispatch", () => {
       assert.ok(Array.isArray(result));
     });
   });
+
+  it("restores leverage_rank and implementationEvidence from matching source plans", () => {
+    const result = normalizePatchedPlansForDispatch([
+      {
+        task: "Use the richer session/history data already available in the ATLAS state bridge",
+        role: "integration-worker",
+        wave: 3,
+        target_files: ["src/atlas/state_bridge.ts"],
+        scope: "Sessions read-model wiring and focused workspace rendering",
+        acceptance_criteria: ["Focused-session context uses richer state-bridge data"],
+      }
+    ], {
+      sourcePlans: [
+        {
+          task: "Use the richer session/history data already available in the ATLAS state bridge",
+          leverage_rank: ["architecture", "worker-specialization"],
+          implementationEvidence: ["src/atlas/state_bridge.ts is the concrete implementation surface"],
+        }
+      ],
+    });
+
+    assert.deepEqual(result[0].leverage_rank, ["architecture", "worker-specialization"]);
+    assert.deepEqual(result[0].implementationEvidence, ["src/atlas/state_bridge.ts is the concrete implementation surface"]);
+  });
+
+  it("adds a UI execution reminder to UI-facing plans before worker handoff", () => {
+    const result = normalizePatchedPlansForDispatch([
+      {
+        task: "Build the marketing landing page hero and reservation form UI",
+        role: "integration-worker",
+        wave: 1,
+        target_files: ["src/App.tsx", "src/styles.css"],
+        scope: "Landing page hero and reservation experience",
+        acceptance_criteria: ["Hero and reservation form match the requested UI"],
+      }
+    ]);
+
+    assert.equal(result[0].uiExecutionReminderRequired, true);
+    assert.match(String(result[0].context || ""), /## UI EXECUTION REMINDER/);
+    assert.match(String(result[0].context || ""), /Playwright, browser preview, screenshot tooling/i);
+    assert.match(String(result[0].context || ""), /Do not validate the UI at a single viewport only/i);
+    assert.match(String(result[0].context || ""), /mobile, tablet, desktop/i);
+    assert.match(String(result[0].context || ""), /Treat UI verification as both appearance and runtime behavior/i);
+    assert.match(String(result[0].context || ""), /scroll, animation, transition, and interaction paths/i);
+  });
+
+  it("keeps matched patched plans reviewable during revalidation when Athena omits source metadata", () => {
+    const result = preparePatchedPlansForDispatch([
+      {
+        task: "Use the richer session/history data already available in the ATLAS state bridge to replace the current card list with a focused ledger-detail workspace.",
+        role: "integration-worker",
+        wave: 3,
+        target_files: ["src/atlas/state_bridge.ts", "src/atlas/routes/sessions.ts"],
+        scope: "Sessions read-model wiring and focused workspace rendering",
+        acceptance_criteria: [
+          "Focused-session context uses richer state-bridge data instead of only shallow card metadata with >= 1 deterministic assertion"
+        ],
+        verification: "npm test -- tests/core/sessions.test.ts",
+      }
+    ], {
+      sourcePlans: [
+        {
+          task: "Use the richer session/history data already available in the ATLAS state bridge to replace the current card list with a focused ledger-detail workspace.",
+          role: "integration-worker",
+          wave: 3,
+          leverage_rank: ["architecture", "task-quality", "worker-specialization"],
+          implementationEvidence: [
+            "src/atlas/state_bridge.ts is the concrete implementation surface",
+            "src/atlas/routes/sessions.ts is the concrete implementation surface"
+          ],
+          target_files: ["src/atlas/state_bridge.ts", "src/atlas/routes/sessions.ts"],
+          scope: "Sessions read-model wiring and focused workspace rendering",
+          acceptance_criteria: [
+            "Focused-session context uses richer state-bridge data instead of only shallow card metadata with >= 1 deterministic assertion"
+          ],
+          verification: "npm test -- tests/core/sessions.test.ts",
+          capacityDelta: 0.1,
+          requestROI: 1,
+        }
+      ],
+    });
+
+    assert.equal(result.valid, true);
+    assert.deepEqual((result.plans[0] as any).implementationEvidence, [
+      "src/atlas/state_bridge.ts is the concrete implementation surface",
+      "src/atlas/routes/sessions.ts is the concrete implementation surface"
+    ]);
+  });
 });
 
 describe("evaluatePreDispatchGovernanceGate — cross-cycle prerequisite token gate", () => {
@@ -616,13 +751,45 @@ describe("revalidatePatchedPlansAfterNormalization (Task 3)", () => {
         target_files: ["src/core/orchestrator.ts"],
         scope: "src/core/",
         acceptance_criteria: ["Verification passes"],
-        verification: "npm test",
+        verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+        verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
         dependencies: [],
+        capacityDelta: 0.1,
+        requestROI: 1.2,
       }
     ]);
     assert.equal(result.valid, true);
     assert.equal(result.code, PATCHED_PLAN_REVALIDATION_REASON.OK);
     assert.deepEqual(result.violations, []);
+  });
+
+  it("fails when a patched plan softens protected direct executable intent into a launcher script", () => {
+    const result = revalidatePatchedPlansAfterNormalization([
+      {
+        task: "Configure electron-builder packaging and create resources/Launch ATLAS.bat launcher",
+        role: "infrastructure-worker",
+        wave: 1,
+        target_files: ["resources/Launch ATLAS.bat", "package.json"],
+        scope: "Windows packaging and launcher flow",
+        acceptance_criteria: ["A launcher in resources opens ATLAS"],
+        verification: "npm test -- tests/core/windows_packaging.test.ts",
+      }
+    ], {
+      activeTargetSession: {
+        objective: {
+          summary: "Build ATLAS as a Windows-first Electron desktop application with a root resources executable that opens the app directly.",
+          desiredOutcome: "Direct app launch from a clickable executable in the root resources folder",
+        },
+        intent: {
+          summary: "ATLAS must launch directly from a clickable executable in the root resources folder.",
+          mustHaveFlows: ["Direct app launch from a clickable executable in the root resources folder"],
+          scopeIn: ["Root resources executable that opens the GUI directly"],
+          successCriteria: ["The app launches directly from a clickable executable in the root resources folder"],
+        },
+      },
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.violations.some((entry) => /direct user-facing executable launch path|silent downgrade/i.test(entry)));
   });
 
   it("fails when task is missing or too short", () => {
@@ -762,11 +929,14 @@ describe("revalidatePatchedPlansAfterNormalization (Task 3)", () => {
         scope: "src/core/",
         acceptance_criteria: ["Dispatch succeeds"],
         dependencies: ["T-001"],
+        capacityDelta: 0.1,
+        requestROI: 1.1,
         // verification is intentionally absent
       }
     ]);
     assert.equal(result.valid, true, "absent verification field must not cause a violation");
   });
+
 });
 
 // ── correctBoundedPacketDefects ───────────────────────────────────────────────
@@ -1187,6 +1357,9 @@ describe("evaluateStaleArtifactClosureFastpath — eligibility contract", () => 
         { applyState: "applied", appliedAt: "2026-04-11T17:10:00.000Z" },
       ],
       mainCiGreen: true,
+      currentPlans: [
+        { task: "Close stale PR debt after automated triage settles" },
+      ],
       nowMs: Date.parse("2026-04-11T17:15:00.000Z"),
       recencyWindowMs: 60 * 60 * 1000,
     });
@@ -1208,6 +1381,22 @@ describe("evaluateStaleArtifactClosureFastpath — eligibility contract", () => 
     assert.equal(result.reason, "archival_terminal_stale_pr_records");
   });
 
+  it("returns eligible=false when current plans are unrelated fresh work", () => {
+    const result = evaluateStaleArtifactClosureFastpath({
+      staleTriageRecords: [
+        { applyState: "superseded", triageTimestamp: "2026-04-11T17:00:00.000Z" },
+      ],
+      mainCiGreen: true,
+      currentPlans: [
+        { task: "Propagate lineage join keys through analytics and routing" },
+      ],
+      nowMs: Date.parse("2026-04-11T17:15:00.000Z"),
+      recencyWindowMs: 60 * 60 * 1000,
+    });
+    assert.equal(result.eligible, false);
+    assert.equal(result.reason, "current_plans_not_stale_artifact_closure");
+  });
+
   it("returns eligible=false when there are no triage records", () => {
     const result = evaluateStaleArtifactClosureFastpath({
       staleTriageRecords: [],
@@ -1221,6 +1410,7 @@ describe("evaluateStaleArtifactClosureFastpath — eligibility contract", () => 
     const result = evaluateStaleArtifactClosureFastpath({
       staleTriageRecords: [{ applyState: "superseded", triageTimestamp: "2026-04-11T17:00:00.000Z" }],
       mainCiGreen: false,
+      currentPlans: [{ task: "Close stale PR debt" }],
       nowMs: Date.parse("2026-04-11T17:15:00.000Z"),
       recencyWindowMs: 60 * 60 * 1000,
     });
@@ -1261,6 +1451,7 @@ describe("evaluateStaleArtifactClosureFastpath — eligibility contract", () => 
     const result = evaluateStaleArtifactClosureFastpath({
       staleTriageRecords: [{ applyState: "superseded", triageTimestamp: "2026-04-11T17:00:00.000Z" }],
       mainCiGreen: true,
+      currentPlans: [{ title: "Archive superseded artifacts after stale PR closure" }],
       nowMs: Date.parse("2026-04-11T17:15:00.000Z"),
       recencyWindowMs: 60 * 60 * 1000,
     });
@@ -1275,6 +1466,10 @@ describe("evaluateStaleArtifactClosureFastpath — eligibility contract", () => 
         { applyState: "applied", appliedAt: "2026-04-11T17:03:00.000Z" },
       ],
       mainCiGreen: true,
+      currentPlans: [
+        { task: "Close stale PR debt" },
+        { title: "Archive superseded artifacts" },
+      ],
       nowMs: Date.parse("2026-04-11T17:15:00.000Z"),
       recencyWindowMs: 60 * 60 * 1000,
     });

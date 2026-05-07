@@ -385,6 +385,7 @@ const ENVELOPE_PLACEHOLDER_RESIDUES: readonly string[] = Object.freeze([
   "POST_MERGE_TEST_OUTPUT",
   "<paste git rev-parse HEAD here>",
   "<paste full raw npm test stdout here>",
+  "<paste full raw targeted test stdout here>",
 ]);
 
 /**

@@ -1,7 +1,8 @@
 ---
 name: medic
 description: BOX Medic Agent. Self-healing runtime repair agent that diagnoses critical system failures (plans=0, agent crashes, parser breakdowns), produces targeted patches, verifies fixes, and resumes or halts the system. Operates only on error signals — no timeouts, no speculative triggers.
-tools: [read, edit, execute, search, fetch]
+model: gpt-5.4
+tools: [read, edit, execute, search, web/fetch]
 user-invocable: false
 ---
 

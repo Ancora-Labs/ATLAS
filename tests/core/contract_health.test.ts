@@ -6,7 +6,7 @@
  * isolated: no child processes, no file I/O, no shared mutable state.
  *
  * Authoritative format:
- *   WORKER_CONTRACT_HEALTH=env_vars:<pass|fail|n/a>;payload:<pass|fail|n/a>;role:<pass|fail|n/a>
+ *   WORKER_CONTRACT_HEALTH=env_vars:<pass|fail|n/a>;payload:<pass|fail|n/a>;role:<pass|fail|n/a>;ui_caps:<pass|fail|n/a>
  *   WORKER_STARTUP_CONTRACT_ANCHOR=verified
  */
 
@@ -43,66 +43,74 @@ describe("contract_health — STARTUP_CONTRACT_ANCHOR_KEY", () => {
 
 describe("contract_health — formatContractHealth", () => {
   it("produces canonical WORKER_CONTRACT_HEALTH= prefix", () => {
-    const line = formatContractHealth({ env_vars: "pass", payload: "pass", role: "pass" });
+    const line = formatContractHealth({ env_vars: "pass", payload: "pass", role: "pass", ui_caps: "n/a" });
     assert.ok(line.startsWith("WORKER_CONTRACT_HEALTH="),
       "output must begin with 'WORKER_CONTRACT_HEALTH=' for machine-parseable gate consumption"
     );
   });
 
-  it("formats all-pass as 'WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass'", () => {
+  it("formats non-UI success as 'WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass;ui_caps:n/a'", () => {
     assert.equal(
-      formatContractHealth({ env_vars: "pass", payload: "pass", role: "pass" }),
-      "WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass"
+      formatContractHealth({ env_vars: "pass", payload: "pass", role: "pass", ui_caps: "n/a" }),
+      "WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass;ui_caps:n/a"
+    );
+  });
+
+  it("formats UI-capable success with ui_caps:pass", () => {
+    assert.equal(
+      formatContractHealth({ env_vars: "pass", payload: "pass", role: "pass", ui_caps: "pass" }),
+      "WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass;ui_caps:pass"
     );
   });
 
   it("formats env_vars:fail correctly (partial failure — env check stopped early)", () => {
     assert.equal(
-      formatContractHealth({ env_vars: "fail", payload: "n/a", role: "n/a" }),
-      "WORKER_CONTRACT_HEALTH=env_vars:fail;payload:n/a;role:n/a"
+      formatContractHealth({ env_vars: "fail", payload: "n/a", role: "n/a", ui_caps: "n/a" }),
+      "WORKER_CONTRACT_HEALTH=env_vars:fail;payload:n/a;role:n/a;ui_caps:n/a"
     );
   });
 
   it("formats payload:fail correctly (env passed, payload JSON invalid)", () => {
     assert.equal(
-      formatContractHealth({ env_vars: "pass", payload: "fail", role: "n/a" }),
-      "WORKER_CONTRACT_HEALTH=env_vars:pass;payload:fail;role:n/a"
+      formatContractHealth({ env_vars: "pass", payload: "fail", role: "n/a", ui_caps: "n/a" }),
+      "WORKER_CONTRACT_HEALTH=env_vars:pass;payload:fail;role:n/a;ui_caps:n/a"
     );
   });
 
   it("is deterministic: identical input always produces identical output", () => {
-    const health = { env_vars: "pass" as ContractSlot, payload: "fail" as ContractSlot, role: "n/a" as ContractSlot };
+    const health = { env_vars: "pass" as ContractSlot, payload: "fail" as ContractSlot, role: "n/a" as ContractSlot, ui_caps: "n/a" as ContractSlot };
     const first = formatContractHealth(health);
     const second = formatContractHealth(health);
     assert.equal(first, second, "formatContractHealth must be a pure function with no randomness");
   });
 
   it("uses semicolons as field separators", () => {
-    const line = formatContractHealth({ env_vars: "pass", payload: "pass", role: "pass" });
+    const line = formatContractHealth({ env_vars: "pass", payload: "pass", role: "pass", ui_caps: "n/a" });
     const payload = line.slice("WORKER_CONTRACT_HEALTH=".length);
     const parts = payload.split(";");
-    assert.equal(parts.length, 3, "exactly 3 fields must be separated by semicolons");
+    assert.equal(parts.length, 4, "exactly 4 fields must be separated by semicolons");
   });
 
   it("uses colons as key-value separators within each field", () => {
-    const line = formatContractHealth({ env_vars: "pass", payload: "fail", role: "n/a" });
+    const line = formatContractHealth({ env_vars: "pass", payload: "fail", role: "n/a", ui_caps: "n/a" });
     const payload = line.slice("WORKER_CONTRACT_HEALTH=".length);
     for (const part of payload.split(";")) {
       assert.ok(part.includes(":"), `field '${part}' must use ':' as key-value separator`);
     }
   });
 
-  it("field order is env_vars, payload, role", () => {
-    const line = formatContractHealth({ env_vars: "pass", payload: "fail", role: "n/a" });
+  it("field order is env_vars, payload, role, ui_caps", () => {
+    const line = formatContractHealth({ env_vars: "pass", payload: "fail", role: "n/a", ui_caps: "n/a" });
     const payload = line.slice("WORKER_CONTRACT_HEALTH=".length);
-    const [f1, f2, f3] = payload.split(";");
+    const [f1, f2, f3, f4] = payload.split(";");
     assert.ok(f1.startsWith("env_vars:"), "first field must be env_vars");
     assert.ok(f2.startsWith("payload:"), "second field must be payload");
     assert.ok(f3.startsWith("role:"), "third field must be role");
+    assert.ok(f4.startsWith("ui_caps:"), "fourth field must be ui_caps");
   });
 
   it("negative: does not produce extra whitespace or newlines in the output line", () => {
-    const line = formatContractHealth({ env_vars: "pass", payload: "pass", role: "pass" });
+    const line = formatContractHealth({ env_vars: "pass", payload: "pass", role: "pass", ui_caps: "n/a" });
     assert.ok(!line.includes(" "), "line must contain no spaces");
     assert.ok(!line.includes("\n"), "line must contain no newlines");
     assert.ok(!line.includes("\r"), "line must contain no carriage returns");
@@ -124,38 +132,45 @@ describe("contract_health — parseContractHealth", () => {
   });
 
   it("round-trips with formatContractHealth for all-pass", () => {
-    const health = { env_vars: "pass" as ContractSlot, payload: "pass" as ContractSlot, role: "pass" as ContractSlot };
+    const health = { env_vars: "pass" as ContractSlot, payload: "pass" as ContractSlot, role: "pass" as ContractSlot, ui_caps: "n/a" as ContractSlot };
     assert.deepEqual(parseContractHealth(formatContractHealth(health)), health,
       "parse(format(x)) must equal x for the all-pass case"
     );
   });
 
   it("round-trips with formatContractHealth for env_vars:fail", () => {
-    const health = { env_vars: "fail" as ContractSlot, payload: "n/a" as ContractSlot, role: "n/a" as ContractSlot };
+    const health = { env_vars: "fail" as ContractSlot, payload: "n/a" as ContractSlot, role: "n/a" as ContractSlot, ui_caps: "n/a" as ContractSlot };
     assert.deepEqual(parseContractHealth(formatContractHealth(health)), health);
   });
 
   it("round-trips with formatContractHealth for payload:fail", () => {
-    const health = { env_vars: "pass" as ContractSlot, payload: "fail" as ContractSlot, role: "n/a" as ContractSlot };
+    const health = { env_vars: "pass" as ContractSlot, payload: "fail" as ContractSlot, role: "n/a" as ContractSlot, ui_caps: "n/a" as ContractSlot };
     assert.deepEqual(parseContractHealth(formatContractHealth(health)), health);
   });
 
-  it("parses a health line embedded in surrounding text (log-line extraction)", () => {
+  it("round-trips with formatContractHealth for ui_caps:pass", () => {
+    const health = { env_vars: "pass" as ContractSlot, payload: "pass" as ContractSlot, role: "pass" as ContractSlot, ui_caps: "pass" as ContractSlot };
+    assert.deepEqual(parseContractHealth(formatContractHealth(health)), health);
+  });
+
+  it("parses a legacy three-slot health line embedded in surrounding text (log-line extraction)", () => {
     const embedded = "2026-03-29T22:00:00Z [stdout] WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass OK";
     const result = parseContractHealth(embedded);
     assert.ok(result !== null, "must extract the health marker when embedded in surrounding log text");
     assert.equal(result!.env_vars, "pass");
     assert.equal(result!.payload, "pass");
     assert.equal(result!.role, "pass");
+    assert.equal(result!.ui_caps, "n/a");
   });
 
   it("correctly parses n/a slot values", () => {
-    const line = "WORKER_CONTRACT_HEALTH=env_vars:fail;payload:n/a;role:n/a";
+    const line = "WORKER_CONTRACT_HEALTH=env_vars:fail;payload:n/a;role:n/a;ui_caps:n/a";
     const result = parseContractHealth(line);
     assert.ok(result !== null);
     assert.equal(result!.env_vars, "fail");
     assert.equal(result!.payload, "n/a");
     assert.equal(result!.role, "n/a");
+    assert.equal(result!.ui_caps, "n/a");
   });
 
   it("negative: returns null when role slot is missing (only 2 slots present)", () => {
@@ -179,6 +194,13 @@ describe("contract_health — parseContractHealth", () => {
     );
   });
 
+  it("negative: returns null when ui_caps has an unrecognized value", () => {
+    const line = "WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass;ui_caps:skip";
+    assert.equal(parseContractHealth(line), null,
+      "ui_caps must also be restricted to pass/fail/n/a"
+    );
+  });
+
   it("negative: returns null when health marker key is misspelled", () => {
     assert.equal(parseContractHealth("WORKER_HEALTH=env_vars:pass;payload:pass;role:pass"), null);
     assert.equal(parseContractHealth("CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass"), null);
@@ -188,40 +210,48 @@ describe("contract_health — parseContractHealth", () => {
 // ── isContractHealthy ─────────────────────────────────────────────────────────
 
 describe("contract_health — isContractHealthy", () => {
-  it("returns true only when all three slots are 'pass'", () => {
-    assert.equal(isContractHealthy({ env_vars: "pass", payload: "pass", role: "pass" }), true);
+  it("returns true when env_vars, payload, role pass and ui_caps is n/a", () => {
+    assert.equal(isContractHealthy({ env_vars: "pass", payload: "pass", role: "pass", ui_caps: "n/a" }), true);
+  });
+
+  it("returns true when env_vars, payload, role pass and ui_caps is pass", () => {
+    assert.equal(isContractHealthy({ env_vars: "pass", payload: "pass", role: "pass", ui_caps: "pass" }), true);
   });
 
   it("returns false when env_vars is 'fail'", () => {
-    assert.equal(isContractHealthy({ env_vars: "fail", payload: "pass", role: "pass" }), false);
+    assert.equal(isContractHealthy({ env_vars: "fail", payload: "pass", role: "pass", ui_caps: "n/a" }), false);
   });
 
   it("returns false when env_vars is 'n/a'", () => {
-    assert.equal(isContractHealthy({ env_vars: "n/a", payload: "pass", role: "pass" }), false);
+    assert.equal(isContractHealthy({ env_vars: "n/a", payload: "pass", role: "pass", ui_caps: "n/a" }), false);
   });
 
   it("returns false when payload is 'fail'", () => {
-    assert.equal(isContractHealthy({ env_vars: "pass", payload: "fail", role: "pass" }), false);
+    assert.equal(isContractHealthy({ env_vars: "pass", payload: "fail", role: "pass", ui_caps: "n/a" }), false);
   });
 
   it("returns false when payload is 'n/a'", () => {
-    assert.equal(isContractHealthy({ env_vars: "pass", payload: "n/a", role: "pass" }), false);
+    assert.equal(isContractHealthy({ env_vars: "pass", payload: "n/a", role: "pass", ui_caps: "n/a" }), false);
   });
 
   it("returns false when role is 'fail'", () => {
-    assert.equal(isContractHealthy({ env_vars: "pass", payload: "pass", role: "fail" }), false);
+    assert.equal(isContractHealthy({ env_vars: "pass", payload: "pass", role: "fail", ui_caps: "n/a" }), false);
   });
 
   it("returns false when role is 'n/a'", () => {
-    assert.equal(isContractHealthy({ env_vars: "pass", payload: "pass", role: "n/a" }), false);
+    assert.equal(isContractHealthy({ env_vars: "pass", payload: "pass", role: "n/a", ui_caps: "n/a" }), false);
+  });
+
+  it("returns false when ui_caps is 'fail'", () => {
+    assert.equal(isContractHealthy({ env_vars: "pass", payload: "pass", role: "pass", ui_caps: "fail" }), false);
   });
 
   it("returns false when all slots are 'fail'", () => {
-    assert.equal(isContractHealthy({ env_vars: "fail", payload: "fail", role: "fail" }), false);
+    assert.equal(isContractHealthy({ env_vars: "fail", payload: "fail", role: "fail", ui_caps: "fail" }), false);
   });
 
   it("returns false when all slots are 'n/a'", () => {
-    assert.equal(isContractHealthy({ env_vars: "n/a", payload: "n/a", role: "n/a" }), false);
+    assert.equal(isContractHealthy({ env_vars: "n/a", payload: "n/a", role: "n/a", ui_caps: "n/a" }), false);
   });
 });
 
@@ -282,7 +312,7 @@ describe("contract_health — parseStartupContractAnchor", () => {
 
   it("negative: returns false for WORKER_CONTRACT_HEALTH= line (not the anchor)", () => {
     assert.equal(
-      parseStartupContractAnchor("WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass"),
+      parseStartupContractAnchor("WORKER_CONTRACT_HEALTH=env_vars:pass;payload:pass;role:pass;ui_caps:n/a"),
       false
     );
   });

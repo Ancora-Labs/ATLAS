@@ -11,11 +11,12 @@
  * Edit an agent's behavior by editing their .agent.md file ÔÇö no code changes needed.
  */
 
-import { existsSync, readFileSync, appendFileSync, writeFileSync, readdirSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, appendFileSync, writeFileSync, readdirSync, unlinkSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { isModelBanned } from "./model_policy.js";
 import type { ModelCallSettingsOverlay } from "./model_policy.js";
+import { getTargetSessionPath } from "./target_session_state.js";
 import {
   buildPromptLineagePreamble,
   extractPromptLineageContractFromText,
@@ -55,14 +56,59 @@ export function nameToSlug(name) {
   return String(name || "").trim().toLowerCase().replace(/\s+/g, "-");
 }
 
+function getAgentFileCandidates(slug) {
+  const normalizedSlug = String(slug || "").trim();
+  if (!normalizedSlug) return [];
+
+  const candidates = [
+    path.join(AGENTS_DIR, `${normalizedSlug}.agent.md`),
+    path.join(process.cwd(), ".github", "agents", `${normalizedSlug}.agent.md`),
+  ];
+
+  return candidates.filter((candidate, index, allCandidates) => allCandidates.indexOf(candidate) === index);
+}
+
+function resolveAgentFilePath(slug) {
+  return getAgentFileCandidates(slug).find((candidate) => existsSync(candidate)) || getAgentFileCandidates(slug)[0] || path.join(AGENTS_DIR, `${String(slug || "").trim()}.agent.md`);
+}
+
 // ÔöÇÔöÇ Check if .agent.md file exists for a slug ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 export function agentFileExists(slug) {
-  return existsSync(path.join(AGENTS_DIR, `${slug}.agent.md`));
+  return Boolean(resolveAgentFilePath(slug) && existsSync(resolveAgentFilePath(slug)));
+}
+
+function ensureAgentFileAvailableForExecution(slug, executionCwd) {
+  const normalizedSlug = String(slug || "").trim();
+  if (!normalizedSlug) return false;
+  const normalizedCwd = String(executionCwd || "").trim();
+  if (!normalizedCwd) return agentFileExists(normalizedSlug);
+  if (!existsSync(normalizedCwd)) return false;
+
+  const repoAgentPath = resolveAgentFilePath(normalizedSlug);
+  const executionAgentPath = path.join(normalizedCwd, ".github", "agents", `${normalizedSlug}.agent.md`);
+  if (existsSync(executionAgentPath)) return true;
+  if (!existsSync(repoAgentPath)) return false;
+
+  try {
+    mkdirSync(path.dirname(executionAgentPath), { recursive: true });
+    writeFileSync(executionAgentPath, readFileSync(repoAgentPath, "utf8"), "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function agentFileExistsForExecution(slug, executionCwd) {
+  const normalizedSlug = String(slug || "").trim();
+  if (!normalizedSlug) return false;
+  const normalizedCwd = String(executionCwd || "").trim();
+  if (!normalizedCwd) return agentFileExists(normalizedSlug);
+  return ensureAgentFileAvailableForExecution(normalizedSlug, normalizedCwd);
 }
 
 function readAgentFrontmatterSnapshot(slug: string): AgentFrontmatterSnapshot {
-  const filePath = path.join(AGENTS_DIR, `${slug}.agent.md`);
+  const filePath = resolveAgentFilePath(slug);
   if (!existsSync(filePath)) {
     return { filePath, raw: null, frontmatter: null };
   }
@@ -136,6 +182,11 @@ function deriveHookCoverageModeFromTools(tools: string[]): AgentHookCoverageMode
 // ÔöÇÔöÇ Map model name to Copilot CLI model slug ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 export function toCopilotModelSlug(name) {
+  const key = String(name || "").trim().toLowerCase();
+  if (!key || key === "auto" || key === "default" || key === "system") {
+    return "";
+  }
+
   const map = {
     "claude sonnet 4.6": "claude-sonnet-4.6",
     "claude sonnet 4.5": "claude-sonnet-4.5",
@@ -160,7 +211,6 @@ export function toCopilotModelSlug(name) {
     "gpt 5 mini": "gpt-5-mini",
     "gpt 4.1": "gpt-4.1"
   };
-  const key = String(name || "").trim().toLowerCase();
   if (map[key]) return map[key];
   return key
     .replace(/[^a-z0-9.\s-]/g, "")
@@ -184,11 +234,194 @@ export function toCopilotModelSlug(name) {
 const PROMPT_FILE_THRESHOLD = 25_000;
 const STATE_DIR = path.join(__dirname, "..", "..", "state");
 
+function resolvePromptArtifactDirectory(executionCwd: unknown): string {
+  const normalizedCwd = String(executionCwd || "").trim();
+  if (normalizedCwd) {
+    return path.join(normalizedCwd, ".box", "prompts");
+  }
+  return STATE_DIR;
+}
+
+function writePromptArtifact(slug: string, promptText: string, executionCwd: unknown): string {
+  const promptDir = resolvePromptArtifactDirectory(executionCwd);
+  mkdirSync(promptDir, { recursive: true });
+  const promptFile = path.join(promptDir, `prompt_${slug}_${Date.now()}.md`);
+  writeFileSync(promptFile, promptText, "utf8");
+  pruneOldPromptFiles(slug, promptDir);
+  return promptFile;
+}
+
+function normalizeAgentDebugSlug(value: unknown): string {
+  return String(value || "agent")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "agent";
+}
+
+export function writeAgentDebugFile(config: any, input: {
+  agentSlug: string;
+  prompt?: unknown;
+  result?: any;
+  parsed?: any;
+  session?: any;
+  contextLabel?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  try {
+    const stateDir = config?.paths?.stateDir || STATE_DIR;
+    const agentSlug = normalizeAgentDebugSlug(input?.agentSlug);
+    const fileName = `debug_agent_${agentSlug}.txt`;
+    const session = input?.session || null;
+    const metadata = input?.metadata && typeof input.metadata === "object" ? input.metadata : {};
+    const result = input?.result || {};
+    const parsed = input?.parsed;
+    const promptText = String(input?.prompt || "");
+    const stdout = String(result?.stdout || "");
+    const stderr = String(result?.stderr || "");
+    const status = String(result?.status ?? "unknown");
+    const contextLabel = String(input?.contextLabel || "agent_call").trim() || "agent_call";
+    const targetHeader = session
+      ? [
+          `TARGET_PROJECT_ID: ${String(session?.projectId || "").trim()}`,
+          `TARGET_SESSION_ID: ${String(session?.sessionId || "").trim()}`,
+          `TARGET_REPO_URL: ${String(session?.repo?.repoUrl || "").trim()}`,
+          `TARGET_REPO_FULL_NAME: ${String(session?.repo?.repoFullName || "").trim()}`,
+          `TARGET_WORKSPACE_PATH: ${String(session?.workspace?.path || "").trim()}`,
+        ].filter((line) => !/:\s*$/.test(line)).join("\n")
+      : "";
+    const metadataLines = Object.entries(metadata)
+      .map(([key, value]) => `${String(key).toUpperCase()}: ${typeof value === "string" ? value : JSON.stringify(value)}`);
+    const content = [
+      `AGENT: ${agentSlug}`,
+      `CONTEXT: ${contextLabel}`,
+      `RECORDED_AT: ${new Date().toISOString()}`,
+      `STATUS: ${status}`,
+      ...metadataLines,
+      targetHeader,
+      "",
+      "PROMPT:",
+      promptText,
+      "",
+      "STDOUT:",
+      stdout,
+      "",
+      "STDERR:",
+      stderr,
+      "",
+      "PARSED:",
+      parsed == null ? "null" : JSON.stringify(parsed, null, 2),
+      "",
+    ].join("\n");
+
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(path.join(stateDir, fileName), content, "utf8");
+
+    if (session?.projectId && session?.sessionId) {
+      const evidenceDir = path.join(
+        getTargetSessionPath(stateDir, String(session.projectId), String(session.sessionId)),
+        "agent_evidence",
+      );
+      mkdirSync(evidenceDir, { recursive: true });
+      writeFileSync(path.join(evidenceDir, fileName), content, "utf8");
+    }
+  } catch {
+    /* non-critical */
+  }
+}
+
+function resolveAgentLiveModeLabel(config: any, session: any) {
+  const fromConfig = String(config?.platformModeState?.currentMode || "").trim();
+  if (fromConfig === "single_target_delivery") return "target";
+  if (fromConfig === "self_dev") return "self";
+  if (session?.projectId && session?.sessionId) return "target";
+  return "self";
+}
+
+export function appendAgentLiveLog(config: any, input: {
+  agentSlug: string;
+  session?: any;
+  contextLabel?: string;
+  status?: unknown;
+  message: unknown;
+}) {
+  try {
+    const stateDir = config?.paths?.stateDir || STATE_DIR;
+    const agentSlug = normalizeAgentDebugSlug(input?.agentSlug);
+    const session = input?.session || null;
+    const message = String(input?.message || "").trimEnd();
+    if (!message.trim()) return;
+    const mode = resolveAgentLiveModeLabel(config, session);
+    const line = `${message} [mode=${mode}]\n`;
+
+    mkdirSync(stateDir, { recursive: true });
+    appendFileSync(path.join(stateDir, `live_agent_${agentSlug}.log`), line, "utf8");
+    appendFileSync(path.join(stateDir, "live_agents.log"), `[${agentSlug}] ${message} [mode=${mode}]\n`, "utf8");
+
+    if (session?.projectId && session?.sessionId) {
+      const evidenceDir = path.join(
+        getTargetSessionPath(stateDir, String(session.projectId), String(session.sessionId)),
+        "agent_evidence",
+      );
+      mkdirSync(evidenceDir, { recursive: true });
+      appendFileSync(path.join(evidenceDir, `live_agent_${agentSlug}.log`), line, "utf8");
+    }
+  } catch {
+    /* non-critical */
+  }
+}
+
+export function appendAgentLiveLogDetail(config: any, input: {
+  agentSlug: string;
+  session?: any;
+  contextLabel?: string;
+  stage?: unknown;
+  title?: unknown;
+  content?: unknown;
+}) {
+  try {
+    const stateDir = config?.paths?.stateDir || STATE_DIR;
+    const agentSlug = normalizeAgentDebugSlug(input?.agentSlug);
+    const session = input?.session || null;
+    const stage = String(input?.stage || "detail").trim() || "detail";
+    const title = String(input?.title || stage).trim() || stage;
+    const content = String(input?.content || "");
+    if (!content.trim()) return;
+    const mode = resolveAgentLiveModeLabel(config, session);
+
+    const header = [
+      "",
+      `${"=".repeat(72)}`,
+      `${title} [mode=${mode}]`,
+      `${"=".repeat(72)}`,
+      content.endsWith("\n") ? content.slice(0, -1) : content,
+      "",
+    ].join("\n");
+
+    mkdirSync(stateDir, { recursive: true });
+    appendFileSync(path.join(stateDir, `live_agent_${agentSlug}.log`), `${header}\n`, "utf8");
+    appendFileSync(path.join(stateDir, "live_agents.log"), `[${agentSlug}] ${header}\n`, "utf8");
+
+    if (session?.projectId && session?.sessionId) {
+      const evidenceDir = path.join(
+        getTargetSessionPath(stateDir, String(session.projectId), String(session.sessionId)),
+        "agent_evidence",
+      );
+      mkdirSync(evidenceDir, { recursive: true });
+      appendFileSync(path.join(evidenceDir, `live_agent_${agentSlug}.log`), `${header}\n`, "utf8");
+    }
+  } catch {
+    /* non-critical */
+  }
+}
+
 export function buildAgentArgs({
   agentSlug,
   prompt,
   model,
   allowAll = false,
+  allowInteractiveUserInput = false,
   autopilot = false,
   noAskUser = false,
   silent = false,
@@ -199,6 +432,10 @@ export function buildAgentArgs({
   const args = [];
   const normalizedModelCallSettings: ModelCallSettingsOverlay =
     modelCallSettings && typeof modelCallSettings === "object" ? modelCallSettings : {};
+  const executionCwd = String(runContract?.executionCwd || "").trim();
+  const agentAvailableForExecution = agentSlug
+    ? agentFileExistsForExecution(agentSlug, executionCwd)
+    : false;
   const agentProfile = agentSlug && agentFileExists(agentSlug)
     ? resolveAgentExecutionProfile(agentSlug)
     : null;
@@ -208,6 +445,7 @@ export function buildAgentArgs({
   );
   const allowAllRequested = allowAll || effectiveSessionInputPolicy === "allow_all";
   const effectiveNoAskUser = noAskUser || normalizedModelCallSettings.noAskUser === true;
+  const effectiveAllowInteractiveUserInput = allowInteractiveUserInput || normalizedModelCallSettings.allowInteractiveUserInput === true;
   const effectiveSilent = silent || normalizedModelCallSettings.silent === true;
   const effectiveModel = normalizedModelCallSettings.model || model;
 
@@ -226,7 +464,7 @@ export function buildAgentArgs({
   };
 
   if (effectiveSessionInputPolicy === "allow_all") args.push("--allow-all");
-  if (effectiveNoAskUser || allowAllRequested) args.push("--no-ask-user");
+  if (effectiveNoAskUser || (allowAllRequested && !effectiveAllowInteractiveUserInput)) args.push("--no-ask-user");
   if (autopilot) {
     args.push("--autopilot");
     // runContract.maxTurns takes precedence over the legacy maxContinues arg.
@@ -235,7 +473,7 @@ export function buildAgentArgs({
   }
   if (effectiveSilent) args.push("--silent");
 
-  if (agentSlug && agentFileExists(agentSlug)) {
+  if (agentSlug && agentAvailableForExecution) {
     args.push("--agent", agentSlug);
     // Force explicit model even with custom agent to avoid default-model fallback.
     pushResolvedModelArg(effectiveModel);
@@ -261,9 +499,7 @@ export function buildAgentArgs({
   }
   if (promptText.length > PROMPT_FILE_THRESHOLD) {
     const slug = agentSlug || "agent";
-    const promptFile = path.join(STATE_DIR, `prompt_${slug}_${Date.now()}.md`);
-    writeFileSync(promptFile, promptText, "utf8");
-    pruneOldPromptFiles(slug);
+    const promptFile = writePromptArtifact(slug, promptText, executionCwd);
     promptText = `${lineagePreamble ? `${lineagePreamble}\n\n` : ""}Your full instructions are in the file: ${promptFile}\nRead that file NOW with your read_file / view tool, then follow every instruction in it.`;
   }
   args.push("-p", promptText);
@@ -287,7 +523,7 @@ export function readAgentPersona(slug) {
 // No --agent, no --autopilot, no --allow-all, no tool calls.
 // The worker must output everything in a single response.
 
-export function buildWorkerPromptArgs({ agentSlug, prompt, model }) {
+export function buildWorkerPromptArgs({ agentSlug, prompt, model, executionCwd = null }) {
   const args = [];
 
   // Resolve model
@@ -309,9 +545,7 @@ export function buildWorkerPromptArgs({ agentSlug, prompt, model }) {
 
   if (fullPrompt.length > PROMPT_FILE_THRESHOLD) {
     const slug = agentSlug || "worker";
-    const promptFile = path.join(STATE_DIR, `prompt_${slug}_${Date.now()}.md`);
-    writeFileSync(promptFile, fullPrompt, "utf8");
-    pruneOldPromptFiles(slug);
+    const promptFile = writePromptArtifact(slug, fullPrompt, executionCwd);
     fullPrompt = `Your full instructions are in the file: ${promptFile}\nRead that file NOW, then follow every instruction in it.`;
   }
   args.push("-p", fullPrompt);
@@ -320,15 +554,15 @@ export function buildWorkerPromptArgs({ agentSlug, prompt, model }) {
 
 // pruneOldPromptFiles — keep only the last `maxKeep` prompt files for a slug.
 // Called immediately after writing each new prompt file so state/ stays clean.
-function pruneOldPromptFiles(slug: string, maxKeep = 3): void {
+function pruneOldPromptFiles(slug: string, promptDir = STATE_DIR, maxKeep = 3): void {
   try {
     const prefix = `prompt_${slug}_`;
-    const files = readdirSync(STATE_DIR)
+    const files = readdirSync(promptDir)
       .filter(f => f.startsWith(prefix) && f.endsWith(".md"))
       .sort(); // timestamps embedded in name → lexicographic = chronological
     const toDelete = files.slice(0, Math.max(0, files.length - maxKeep));
     for (const f of toDelete) {
-      try { unlinkSync(path.join(STATE_DIR, f)); } catch { /* best-effort */ }
+      try { unlinkSync(path.join(promptDir, f)); } catch { /* best-effort */ }
     }
   } catch { /* non-fatal */ }
 }
@@ -624,6 +858,21 @@ export function validateAllAgentContracts(): {
   return { allValid: violations.length === 0, results, violations };
 }
 
+export function validateRequiredAgentContracts(slugs: string[]): {
+  allValid: boolean;
+  results: AgentContractValidation[];
+  violations: AgentContractValidation[];
+} {
+  const normalizedSlugs = Array.from(new Set(
+    (Array.isArray(slugs) ? slugs : [])
+      .map((slug) => String(slug || "").trim())
+      .filter(Boolean),
+  ));
+  const results = normalizedSlugs.map(validateAgentContract);
+  const violations = results.filter((result) => !result.valid);
+  return { allValid: violations.length === 0, results, violations };
+}
+
 /**
  * Validate only the agents critical to the planning dispatch pipeline.
  * Prometheus and Athena are the minimum required; if either is invalid,
@@ -634,10 +883,8 @@ export function validateCriticalAgentContracts(): {
   results: AgentContractValidation[];
   violations: AgentContractValidation[];
 } {
-  const criticalSlugs = ["prometheus", "athena"];
-  const results = criticalSlugs.map(validateAgentContract);
-  const violations = results.filter(r => !r.valid);
-  return { allValid: violations.length === 0, results, violations };
+  const criticalSlugs = ["prometheus", "target-prometheus", "athena"];
+  return validateRequiredAgentContracts(criticalSlugs);
 }
 
 // ─── Log agent thinking to a visible file ─────────────────────────────────────

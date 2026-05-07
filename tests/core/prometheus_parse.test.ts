@@ -23,6 +23,7 @@ import {
   buildDriftDebtTasks,
   checkPacketCompleteness,
   stabilizeRawPacketEconomics,
+  stabilizeTargetDeliveryRawPacketEconomics,
   UNRECOVERABLE_PACKET_REASONS,
   PLANNER_HEALTH_ALIASES,
   normalizeProjectHealthAlias,
@@ -94,8 +95,26 @@ import {
   MANDATORY_FINDINGS_PREFLIGHT_STATUS,
   PROMETHEUS_CANONICAL_WORKFLOW_STATE_FILES,
   applyPlanLifecycleAdmissionFilter,
+  TARGET_PROMETHEUS_STATIC_SECTIONS,
+  TARGET_PROMETHEUS_AGENT_SLUG,
+  isPrometheusAgentResolutionFailure,
+  buildPrometheusPersonaFallbackPrompt,
+  buildCanonicalTargetOperatorObjective,
+  buildPrometheusAnalysisInputFingerprint,
+  evaluatePrometheusFreshAnalysisCache,
+  resolvePrometheusPromptFamilyLabel,
+  resolvePrometheusPromptRepoPath,
+  resolvePrometheusAgentSlug,
+  resolvePrometheusStaticSections,
+  buildPrometheusWorkflowPrompt,
+  buildResearchPromptSection,
+  isSingleTargetFullPlanAdmissionBypassExpected,
+  evaluateTargetPlannerStrictDecisionGate,
+  hasTargetDecisionPlansCompanion,
+  TARGET_PLANNER_DECISION_JSON_FAIL_REASON,
 } from "../../src/core/prometheus.js";
 import { compilePrompt, markCacheableSegments, CANDIDATE_GENERATION_SECTION, buildCandidateGenerationSection } from "../../src/core/prompt_compiler.js";
+import { PLATFORM_MODE } from "../../src/core/mode_state.js";
 import {
   scoreCandidateSet,
   selectBestCandidateSet,
@@ -244,6 +263,60 @@ describe("normalizePrometheusParsedOutput", () => {
     assert.match(normalized.plans[0].verification, /test:/i);
     assert.equal(normalized.plans[0].priority, 1);
     assert.ok(normalized.plans[0]._planningRubric, "planning rubric metadata should be attached");
+  });
+
+  it("keeps generic UI surface hints without upgrading task routing", () => {
+    const parsed = {
+      analysis: "UI delivery requires a concrete implementation surface",
+      projectHealth: "needs-work",
+      executionStrategy: { waves: [] },
+      plans: [
+        {
+          task: "Implement the desktop session shell",
+          role: "evolution-worker",
+          wave: 1,
+          scope: "src/atlas",
+          target_files: ["src/atlas/app.tsx"],
+          acceptance_criteria: ["Desktop shell renders correctly"],
+          verification: "npm run atlas:desktop",
+          targetSurfaces: ["electron-runtime", "web-runtime"],
+          uiSurface: "electron-runtime",
+        },
+      ],
+    };
+
+    const normalized = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    assert.equal(normalized.plans[0].taskKind, "implementation");
+    assert.equal(normalized.plans[0].capabilityTag, "runtime-refactor");
+    assert.equal(normalized.plans[0].capabilityLane, "implementation");
+    assert.deepEqual(normalized.plans[0].targetSurfaces, ["electron-runtime", "web-runtime"]);
+    assert.equal(normalized.plans[0].uiSurface, "electron-runtime");
+  });
+
+  it("keeps product-facing website implementation tasks in standard implementation routing", () => {
+    const parsed = {
+      plans: [
+        {
+          task: "Create the initial responsive landing-page shell for the target repo",
+          role: "evolution-worker",
+          wave: 1,
+          scope: "target repo UI",
+          target_files: ["index.html", "styles.css"],
+          before_state: "No landing page exists",
+          after_state: "Landing page shell exists",
+          riskLevel: "medium",
+          dependencies: [],
+          acceptance_criteria: ["The page renders at mobile and desktop widths"],
+          verification: "Open index.html and inspect responsive layout",
+        },
+      ],
+    };
+
+    const normalized = normalizePrometheusParsedOutput(parsed, { raw: "" });
+
+    assert.equal(normalized.plans[0].taskKind, "implementation");
+    assert.equal(normalized.plans[0].capabilityTag, "runtime-refactor");
   });
 
   it("upgrades generic governance-heavy plans to governance-worker with lane hints", () => {
@@ -745,6 +818,62 @@ Wave 2
   });
 });
 
+describe("isSingleTargetFullPlanAdmissionBypassExpected", () => {
+  it("returns true for active single-target sessions", () => {
+    assert.equal(
+      isSingleTargetFullPlanAdmissionBypassExpected({
+        platformModeState: { currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY },
+        activeTargetSession: { sessionId: "sess_123" },
+      }),
+      true,
+    );
+  });
+
+  it("returns false when single-target admission bypass is not active", () => {
+    assert.equal(
+      isSingleTargetFullPlanAdmissionBypassExpected({
+        platformModeState: { currentMode: "self_dev" },
+        activeTargetSession: { sessionId: "sess_123" },
+      }),
+      false,
+    );
+    assert.equal(
+      isSingleTargetFullPlanAdmissionBypassExpected({
+        platformModeState: { currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY },
+        activeTargetSession: null,
+      }),
+      false,
+    );
+  });
+});
+
+describe("target planner strict decision JSON gate", () => {
+  it("rejects prose-only target waves before they become thin packets", () => {
+    const raw = "1. Wave 1 — design foundation artifacts\n2. Wave 2 — accessible responsive landing prototype";
+    const parsed = {
+      plans: [
+        { title: "Wave 1 — design foundation artifacts", target_files: ["index.html"], acceptance_criteria: [] },
+        { title: "Wave 2 — accessible responsive landing prototype", target_files: ["styles.css"], acceptance_criteria: [] },
+      ],
+    };
+
+    const result = evaluateTargetPlannerStrictDecisionGate(raw, parsed);
+
+    assert.equal(result.ok, false);
+    assert.ok(result.reasons.includes("missing_top_level_plans_decision_json"));
+    assert.ok(result.reasons.includes("prose_only_wave_shells"));
+    assert.equal(TARGET_PLANNER_DECISION_JSON_FAIL_REASON, "target_planner_missing_decision_json");
+  });
+
+  it("accepts a marked target companion with executable packet fields", () => {
+    const raw = `Target plan\n===DECISION===\n{"plans":[{"title":"Build landing shell","task":"Create the initial responsive landing-page shell for the target repo","role":"evolution-worker","wave":1,"scope":"target repo UI","target_files":["index.html","styles.css"],"before_state":"No landing page exists","after_state":"Landing page shell exists","riskLevel":"medium","dependencies":[],"acceptance_criteria":["The page renders at mobile and desktop widths"],"verification":"Open index.html and inspect responsive layout","capacityDelta":0.1,"requestROI":1,"capabilityLane":"implementation","capabilityTag":"target-ui"}]}\n===END===`;
+    const parsed = JSON.parse(raw.split("===DECISION===")[1].split("===END===")[0]);
+
+    assert.equal(hasTargetDecisionPlansCompanion(raw), true);
+    assert.deepEqual(evaluateTargetPlannerStrictDecisionGate(raw, parsed), { ok: true, reasons: [] });
+  });
+});
+
 describe("resolveCapturedAgentRawOutput", () => {
   it("prefers streamed output when early-exit truncates returned buffers", () => {
     const resultRaw = '{"plans":[]}';
@@ -860,6 +989,7 @@ describe("buildTrustedMemoryShortlist", () => {
     assert.equal((reconciled.promptHints[0] as any).id, "hint-open");
     assert.equal(reconciled.retiredPromptHints.length, 1);
   });
+
 });
 
 describe("buildPromptTruthMaintenanceSnapshot", () => {
@@ -1819,6 +1949,60 @@ describe("applyPlanLifecycleAdmissionFilter", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("suppresses duplicate plans when worker_cycle_artifacts records an already-completed skipped task", async () => {
+    const stateDir = await makeStateDir("lifecycle-filter-");
+
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "worker_cycle_artifacts.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          updatedAt: "2026-04-16T17:27:47.331Z",
+          latestCycleId: "cycle-1",
+          cycles: {
+            "cycle-1": {
+              cycleId: "cycle-1",
+              status: "dispatching",
+              updatedAt: "2026-04-16T17:27:47.331Z",
+              workerSessions: {},
+              workerActivity: {
+                "evolution-worker": [
+                  {
+                    at: "2026-04-16T17:27:47.331Z",
+                    status: "skipped",
+                    task: "If wave 1 passes, merge PR #2 to main and verify the target app still passes lint, build, and focused tests",
+                    taskIds: ["plan-1"],
+                    skipReason: "already-merged",
+                    dispatchBlockReason: "already_done:already-merged",
+                    wave: 1,
+                  },
+                ],
+              },
+              completedTaskIds: ["plan-1"],
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      const result = await applyPlanLifecycleAdmissionFilter(stateDir, [
+        {
+          task: "If wave 1 passes, merge PR #2 to main and verify the target app still passes lint, build, and focused tests",
+          scope: "target repo main",
+          target_files: ["src/app.tsx"],
+          implementationStatus: "not_implemented",
+          implementationEvidence: [],
+        },
+      ]);
+
+      assert.equal(result.actionablePlans.length, 0);
+      assert.equal(result.skippedPlans.length, 1);
+      assert.match(result.skippedPlans[0].reason, /already (closed|completed)/i);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
   it("handles empty pendingEntries gracefully", () => {
     const result = filterResolvedCarryForwardItems([], [{ id: "d1", lesson: "anything", closedAt: "2025-01-01", closureEvidence: "done" }], []);
@@ -1858,6 +2042,277 @@ describe("PROMETHEUS_STATIC_SECTIONS", () => {
     assert.ok(content.includes("===DECISION==="), "should contain JSON output markers");
     assert.ok(content.includes("\"projectHealth\": \"<good|healthy|needs-work|degraded|critical>\""));
     assert.ok(content.includes("\"estimatedPremiumRequestsTotal\": 6"));
+  });
+});
+
+describe("single-target prompt isolation helpers", () => {
+  const targetConfig = {
+    selfDev: {
+      futureModeFlags: {
+        singleTargetDelivery: true,
+      },
+    },
+    platformModeState: {
+      currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+    },
+    activeTargetSession: {
+      projectId: "target_atlas",
+      sessionId: "sess_target_1",
+      currentStage: "active",
+      workspace: {
+        path: "C:\\isolated\\target-workspace",
+      },
+      repo: {
+        localPath: "C:\\isolated\\target-workspace",
+      },
+      objective: {
+        summary: "Ship ATLAS as a dedicated product surface without dashboard downgrade",
+        desiredOutcome: "Dedicated ATLAS product shell in the target workspace",
+        acceptanceCriteria: ["ATLAS launches directly", "Dashboard remains untouched"],
+      },
+      constraints: {
+        protectedPaths: ["src/dashboard/**"],
+        forbiddenActions: ["route-based downgrade"],
+      },
+      gates: {
+        allowPlanning: true,
+        allowShadowExecution: true,
+        allowActiveExecution: true,
+        quarantine: false,
+      },
+      hints: {
+        stackHint: "Node.js + TypeScript",
+        knownBuildCommand: "npm run build",
+        knownTestCommand: "npm test",
+        notes: ["Do not add ATLAS into existing dashboard shell"],
+      },
+      intent: {
+        mustHaveFlows: ["launch atlas", "open dedicated shell"],
+        scopeIn: ["src/atlas/**", "scripts/atlas-launcher.ts"],
+        scopeOut: ["src/dashboard/**"],
+        successCriteria: ["ATLAS runs independently"],
+      },
+    },
+  };
+
+  it("selects target-only static sections for single-target planning", () => {
+    const sections = resolvePrometheusStaticSections(targetConfig);
+
+    assert.equal(sections, TARGET_PROMETHEUS_STATIC_SECTIONS);
+    const combined = Object.values(sections).map((entry: any) => String(entry.content || "")).join("\n");
+    assert.match(combined, /Do NOT propose work for BOX internals/i);
+    assert.doesNotMatch(combined, /META-IMPROVER/i);
+  });
+
+  it("uses a single-target prompt family label and workspace path in target mode", () => {
+    assert.equal(resolvePrometheusAgentSlug(targetConfig), TARGET_PROMETHEUS_AGENT_SLUG);
+    assert.equal(resolvePrometheusPromptFamilyLabel(targetConfig), "target-prometheus-single_target_delivery");
+    assert.equal(
+      resolvePrometheusPromptRepoPath(targetConfig, "C:\\Users\\caner\\Desktop\\Box"),
+      "C:\\isolated\\target-workspace",
+    );
+  });
+
+  it("detects missing target agent slugs and can fall back to an embedded persona prompt", () => {
+    assert.equal(
+      isPrometheusAgentResolutionFailure("Analysis failed — exited 1: No such agent: target-prometheus"),
+      true,
+    );
+
+    const fallbackPrompt = buildPrometheusPersonaFallbackPrompt(TARGET_PROMETHEUS_AGENT_SLUG, "Plan the target delivery work");
+    assert.match(fallbackPrompt, /## YOUR ROLE/);
+    assert.match(fallbackPrompt, /TARGET PROMETHEUS/i);
+    assert.match(fallbackPrompt, /Treat visual medium selection as part of intent preservation/i);
+    assert.match(fallbackPrompt, /Plan the target delivery work/);
+  });
+
+  it("builds the operator objective from the active target session contract instead of relying on Jesus summary text", () => {
+    const objective = buildCanonicalTargetOperatorObjective(targetConfig, "Build the safest next packet");
+
+    assert.match(objective, /Authoritative objective source: ACTIVE TARGET SESSION CONTRACT/i);
+    assert.match(objective, /Ship ATLAS as a dedicated product surface without dashboard downgrade/);
+    assert.match(objective, /Desired outcome class: Dedicated ATLAS product shell in the target workspace/);
+    assert.match(objective, /Preferred quality bar: not explicitly provided/i);
+    assert.match(objective, /Design direction: not explicitly provided/i);
+    assert.match(objective, /Protected paths: src\/dashboard\/\*\*/i);
+    assert.doesNotMatch(objective, /Secondary advisory brief from Jesus \(non-authoritative\):/);
+    assert.match(objective, /Treat this contract as higher priority than Jesus summary text/i);
+    assert.match(objective, /Fallback ambition policy:/i);
+    assert.match(objective, /Visual medium policy:/i);
+  });
+
+  it("prefers the canonical target intent contract over the softened active session summary when present", () => {
+    const objective = buildCanonicalTargetOperatorObjective(
+      {
+        ...targetConfig,
+        activeTargetSession: {
+          ...targetConfig.activeTargetSession,
+          objective: {
+            ...targetConfig.activeTargetSession.objective,
+            summary: "Generic ATLAS surface",
+          },
+          intent: {
+            ...targetConfig.activeTargetSession.intent,
+            scopeIn: ["generic scope"],
+            successCriteria: ["generic success"],
+          },
+        },
+      },
+      "Keep the target aligned",
+      {
+        status: "ready_for_planning",
+        summary: "Launch ATLAS as a non-dashboard desktop-style control surface",
+        objectiveSummary: "Launch ATLAS as a non-dashboard desktop-style control surface",
+        desiredOutcome: "Desktop-style ATLAS shell outside browser-tab downgrade paths",
+        planningMode: "active",
+        clarifiedIntent: {
+          mustHaveFlows: ["open dedicated control surface"],
+          scopeIn: ["desktop shell", "native-feeling session control"],
+          scopeOut: ["browser-tab delivery"],
+          preferredQualityBar: "Premium dedicated ATLAS shell without dashboard downgrade.",
+          designDirection: "Native-feeling desktop shell with a focused session surface.",
+          implementationFlexibility: "Best-fit implementation allowed; framework choice is not operator-constrained.",
+          assetSourcingPolicy: "Real external assets allowed when needed; preserve requested source visuals.",
+          assetRequirements: ["Preserve requested visuals as source requirements."],
+          successCriteria: ["ATLAS does not ship as a browser tab"],
+        },
+      },
+    );
+
+    assert.match(objective, /Canonical intent contract status: ready_for_planning/i);
+    assert.match(objective, /Canonical planning mode: active/i);
+    assert.match(objective, /Launch ATLAS as a non-dashboard desktop-style control surface/i);
+    assert.match(objective, /Scope in: desktop shell \| native-feeling session control/i);
+    assert.match(objective, /Scope out: browser-tab delivery/i);
+    assert.match(objective, /Preferred quality bar: Premium dedicated ATLAS shell without dashboard downgrade\./i);
+    assert.match(objective, /Design direction: Native-feeling desktop shell with a focused session surface\./i);
+    assert.match(objective, /Intent success criteria: ATLAS does not ship as a browser tab/i);
+    assert.match(objective, /Implementation latitude: Best-fit implementation allowed; framework choice is not operator-constrained\./i);
+    assert.match(objective, /Asset sourcing policy: Real external assets allowed when needed; preserve requested source visuals\./i);
+    assert.match(objective, /Asset requirements: Preserve requested visuals as source requirements\./i);
+    assert.doesNotMatch(objective, /generic scope/i);
+    assert.doesNotMatch(objective, /Fallback ambition policy:/i);
+  });
+
+  it("changes the planning fingerprint when the canonical target intent contract changes", () => {
+    const firstFingerprint = buildPrometheusAnalysisInputFingerprint(targetConfig, {
+      status: "ready_for_planning",
+      summary: "ChatGPT-style ATLAS shell with sessions replacing old chats",
+      objectiveSummary: "Ship a ChatGPT-style ATLAS shell with sessions replacing old chats",
+      desiredOutcome: "Blank new-session canvas plus live session detail drill-down",
+      clarifiedIntent: {
+        designDirection: "ChatGPT mechanics with sessions replacing old chats",
+        scopeIn: ["left sessions rail", "blank new session state"],
+        successCriteria: ["Selecting a session opens live details"],
+      },
+    });
+    const secondFingerprint = buildPrometheusAnalysisInputFingerprint(targetConfig, {
+      status: "ready_for_planning",
+      summary: "Dashboard-adjacent ATLAS shell",
+      objectiveSummary: "Ship ATLAS inside the existing dashboard shell",
+      desiredOutcome: "Route-based workspace shell",
+      clarifiedIntent: {
+        designDirection: "dashboard reuse",
+        scopeIn: ["route mode switch"],
+        successCriteria: ["Dashboard shell remains primary"],
+      },
+    });
+
+    assert.notEqual(firstFingerprint, secondFingerprint);
+  });
+
+  it("changes the planning fingerprint when only the detailed operator intent brief changes", () => {
+    const firstFingerprint = buildPrometheusAnalysisInputFingerprint(targetConfig, {
+      status: "ready_for_planning",
+      summary: "Premium storefront",
+      objectiveSummary: "Premium storefront",
+      clarifiedIntent: {
+        operatorIntentBrief: "Use authentic product photography and keep the premium retail atmosphere intact.",
+        scopeIn: ["hero", "gallery"],
+      },
+    });
+    const secondFingerprint = buildPrometheusAnalysisInputFingerprint(targetConfig, {
+      status: "ready_for_planning",
+      summary: "Premium storefront",
+      objectiveSummary: "Premium storefront",
+      clarifiedIntent: {
+        operatorIntentBrief: "Use abstract gradient cards instead of authentic product photography.",
+        scopeIn: ["hero", "gallery"],
+      },
+    });
+
+    assert.notEqual(firstFingerprint, secondFingerprint);
+  });
+
+  it("rejects a fresh cached analysis when the target planning fingerprint changed", () => {
+    const currentInputFingerprint = buildPrometheusAnalysisInputFingerprint(targetConfig, {
+      objectiveSummary: "Ship a ChatGPT-style ATLAS shell with sessions replacing old chats",
+      desiredOutcome: "Blank new-session canvas plus live session detail drill-down",
+      clarifiedIntent: {
+        designDirection: "ChatGPT mechanics with sessions replacing old chats",
+        scopeIn: ["left sessions rail", "blank new session state"],
+        successCriteria: ["Selecting a session opens live details"],
+      },
+    });
+
+    const decision = evaluatePrometheusFreshAnalysisCache(
+      {
+        analyzedAt: "2026-04-25T15:30:00.000Z",
+        analysisInputFingerprint: "old-fingerprint",
+      },
+      {
+        freshnessMinutes: 60,
+        latestResearchArtifactUpdatedAtMs: new Date("2026-04-25T15:00:00.000Z").getTime(),
+        currentInputFingerprint,
+        nowMs: new Date("2026-04-25T15:45:00.000Z").getTime(),
+      },
+    );
+
+    assert.equal(decision.reusable, false);
+    assert.equal(decision.reason, "analysis_input_changed");
+  });
+
+  it("rejects legacy target caches that predate planning fingerprint persistence", () => {
+    const currentInputFingerprint = buildPrometheusAnalysisInputFingerprint(targetConfig, {
+      objectiveSummary: "Ship a ChatGPT-style ATLAS shell with sessions replacing old chats",
+      clarifiedIntent: {
+        designDirection: "ChatGPT mechanics with sessions replacing old chats",
+      },
+    });
+
+    const decision = evaluatePrometheusFreshAnalysisCache(
+      {
+        analyzedAt: "2026-04-25T15:30:00.000Z",
+      },
+      {
+        freshnessMinutes: 60,
+        latestResearchArtifactUpdatedAtMs: new Date("2026-04-25T15:00:00.000Z").getTime(),
+        currentInputFingerprint,
+        nowMs: new Date("2026-04-25T15:45:00.000Z").getTime(),
+      },
+    );
+
+    assert.equal(decision.reusable, false);
+    assert.equal(decision.reason, "legacy_cache_missing_input_fingerprint");
+  });
+
+  it("builds a target-only workflow that avoids BOX src/core browsing", () => {
+    const workflow = buildPrometheusWorkflowPrompt(targetConfig, "C:\\Users\\caner\\Desktop\\Box");
+
+    assert.match(workflow, /isolated target workspace/i);
+    assert.match(workflow, /ACTIVE TARGET WORKSPACE: C:\\isolated\\target-workspace/);
+    assert.match(workflow, /Do NOT browse BOX src\/core/i);
+    assert.match(workflow, /Do NOT silently downgrade explicit user intent/i);
+    assert.match(workflow, /placeholders, mocks, demo-only flows/i);
+    assert.doesNotMatch(workflow, /browse src\/core\/, src\/workers\/, src\/types\//i);
+  });
+
+  it("adds a repair-first UI contract directive when the active target session is already GUI-oriented", () => {
+    const workflow = buildPrometheusWorkflowPrompt(targetConfig, "C:\\Users\\caner\\Desktop\\Box");
+
+    assert.match(workflow, /plan repair-first rather than proposing a greenfield rebuild/i);
+    assert.match(workflow, /Do NOT discard the current GUI/i);
+    assert.match(workflow, /repair the current GUI in place/i);
   });
 });
 
@@ -2450,6 +2905,17 @@ describe("buildDriftDebtTasks — quality gate contract compliance", () => {
     }
   });
 
+  it("drift debt tasks keep targeted verification_commands after Prometheus contract hardening", () => {
+    const report = {
+      staleReferences: [{ docPath: "docs/arch.md", referencedPath: "src/core/x.ts", line: 1 }],
+      deprecatedTokenRefs: [{ docPath: "docs/arch.md", token: "resume_dispatch", hint: "use runResumeDispatch", line: 5 }],
+    };
+    const tasks = buildDriftDebtTasks(report);
+    for (const task of tasks) {
+      assert.deepEqual(task.verification_commands, ["npm test -- tests/core/architecture_drift.test.ts"]);
+    }
+  });
+
   it("negative path: bare 'npm test' alone is non-specific and would be rejected by contract (validates the fix rationale)", () => {
     // This test documents WHY we changed the verification field — to prove that
     // the old value would have been rejected by the quality gate.
@@ -2813,6 +3279,19 @@ describe("checkPacketCompleteness — generation-boundary gate", () => {
     assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_REQUEST_ROI));
   });
 
+  it("allows target delivery packets to omit self-dev economics while keeping verification mandatory", () => {
+    const plan = {
+      task: "Implement the bowling site reservation flow and responsive hero polish.",
+      target_files: ["index.html", "styles.css", "script.js"],
+      acceptance_criteria: ["Reservation flow and mobile layout are visibly complete."],
+      verification: "Open index.html and verify the reservation flow plus responsive layout.",
+    };
+
+    const result = checkPacketCompleteness(plan, { targetDeliveryMode: true });
+    assert.equal(result.recoverable, true);
+    assert.deepEqual(result.reasons, []);
+  });
+
   it("returns recoverable=false when requestROI is zero", () => {
     const result = checkPacketCompleteness(validRawPlan({ requestROI: 0 }));
     assert.equal(result.recoverable, false);
@@ -2909,6 +3388,38 @@ describe("checkPacketCompleteness — generation-boundary gate", () => {
     const result = checkPacketCompleteness(repaired);
     assert.equal(result.recoverable, false);
     assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.INVALID_REQUEST_ROI));
+  });
+
+  it("stabilizeTargetDeliveryRawPacketEconomics makes actionable target packets recoverable without self-dev economics", () => {
+    const repaired = stabilizeTargetDeliveryRawPacketEconomics({
+      taskId: "oak-strike-hero",
+      goal: "Build the OAK & STRIKE hero, experience, ambience, menu, and reservation sections.",
+      role: "evolution-worker",
+      wave: 1,
+      target_files: ["index.html", "styles.css", "script.js"],
+      acceptance_criteria: ["The landing page renders the requested warm modern-rustic bowling lodge experience."],
+      verification: "Open index.html and verify responsive layout manually.",
+    });
+
+    assert.equal(repaired.capacityDelta, 0.1);
+    assert.equal(repaired.requestROI, 1.0);
+    assert.equal(repaired.task, "Build the OAK & STRIKE hero, experience, ambience, menu, and reservation sections.");
+    const result = checkPacketCompleteness(repaired);
+    assert.equal(result.recoverable, true);
+    assert.deepEqual(result.reasons, []);
+  });
+
+  it("stabilizeTargetDeliveryRawPacketEconomics does not rescue target packets without verification", () => {
+    const repaired = stabilizeTargetDeliveryRawPacketEconomics({
+      goal: "Build the target landing page.",
+      target_files: ["index.html"],
+    });
+
+    assert.equal("capacityDelta" in repaired, false);
+    assert.equal("requestROI" in repaired, false);
+    const result = checkPacketCompleteness(repaired);
+    assert.equal(result.recoverable, false);
+    assert.ok(result.reasons.includes(UNRECOVERABLE_PACKET_REASONS.MISSING_VERIFICATION_COUPLING));
   });
 
   // ── Raw packet stage: verification coupling is mandatory ─────────────────
@@ -4801,7 +5312,8 @@ describe("seedDiscoveryGapPackets", () => {
     for (const seed of result) {
       assert.equal(seed._discoveryGapSeed, true);
       assert.ok(typeof seed.task === "string" && seed.task.length > 0);
-      assert.equal(seed.verification, "npm test");
+      assert.equal(seed.verification, "npm test -- tests/core/<module>.test.ts");
+      assert.deepEqual(seed.verification_commands, ["npm test -- tests/core/<module>.test.ts"]);
       assert.ok(Array.isArray(seed.leverage_rank) && seed.leverage_rank.length > 0);
     }
   });
@@ -5786,6 +6298,7 @@ import {
   computeDiagnosticsFreshnessAdmission,
   tagStaleDiagnosticsBackedPlans,
   buildDiagnosticsFreshnessRecords,
+  resolvePlanningDiagnosticsFreshnessContext,
 } from "../../src/core/prometheus.js";
 
 describe("computeDiagnosticsFreshnessAdmission", () => {
@@ -5841,6 +6354,51 @@ describe("computeDiagnosticsFreshnessAdmission", () => {
 });
 
 describe("applyDiagnosticsFreshnessTruthToPlanning", () => {
+  it("suppresses BOX diagnostics freshness context during active single-target planning", () => {
+    const context = resolvePlanningDiagnosticsFreshnessContext(
+      {
+        platformModeState: { currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY },
+        activeTargetSession: { sessionId: "sess_target_1" },
+      },
+      {
+        sectionText: "## DIAGNOSTICS FRESHNESS CONTRACT\n- dependency_graph: stale",
+        admission: {
+          allFresh: false,
+          staleSources: ["dependency_graph"],
+          freshnessReasons: ["missing_diagnostics:dependency_graph"],
+        },
+      },
+    );
+
+    assert.equal(context.suppressed, true);
+    assert.equal(context.sectionText, "");
+    assert.equal(context.admission.allFresh, true);
+    assert.deepEqual(context.admission.staleSources, []);
+    assert.deepEqual(context.admission.freshnessReasons, []);
+  });
+
+  it("negative: preserves stale diagnostics context outside single-target planning", () => {
+    const context = resolvePlanningDiagnosticsFreshnessContext(
+      {
+        platformModeState: { currentMode: PLATFORM_MODE.BOX_SELF_DEV },
+        activeTargetSession: null,
+      },
+      {
+        sectionText: "diag-section",
+        admission: {
+          allFresh: false,
+          staleSources: ["dependency_graph"],
+          freshnessReasons: ["missing_diagnostics:dependency_graph"],
+        },
+      },
+    );
+
+    assert.equal(context.suppressed, false);
+    assert.equal(context.sectionText, "diag-section");
+    assert.equal(context.admission.allFresh, false);
+    assert.deepEqual(context.admission.staleSources, ["dependency_graph"]);
+  });
+
   it("keeps planningTruthStatus=live and no confidence penalty when all diagnostics are fresh", () => {
     const parsed = {
       parserCoreConfidence: 1.0,
@@ -6469,6 +7027,39 @@ describe("analyzePlanContractGateOutcome", () => {
     assert.deepEqual(outcome.blockedViolationCodes, [
       PACKET_VIOLATION_CODE.MISSING_IMPLEMENTATION_EVIDENCE,
     ]);
+  });
+
+  it("keeps Athena reachable when every remaining issue is warn-only capacity-first weakness", () => {
+    const outcome = analyzePlanContractGateOutcome({
+      totalPlans: 2,
+      results: [
+        {
+          planIndex: 0,
+          valid: true,
+          violations: [
+            {
+              code: PACKET_VIOLATION_CODE.MISSING_CAPACITY_FIRST_JUSTIFICATION,
+              severity: PLAN_VIOLATION_SEVERITY.WARNING,
+            },
+          ],
+        },
+        {
+          planIndex: 1,
+          valid: true,
+          violations: [
+            {
+              code: PACKET_VIOLATION_CODE.MISSING_CAPACITY_FIRST_JUSTIFICATION,
+              severity: PLAN_VIOLATION_SEVERITY.WARNING,
+            },
+          ],
+        },
+      ],
+    });
+
+    assert.equal(outcome.criticalInvalidCount, 0);
+    assert.equal(outcome.allPlansBlocked, false);
+    assert.deepEqual(outcome.blockedPlanIndices, []);
+    assert.deepEqual(outcome.blockedViolationCodes, []);
   });
 });
 
@@ -7293,6 +7884,43 @@ describe("isResearchDegradedModeActive", () => {
   it("returns false when quarantined list is empty and passed is also empty", () => {
     // No quarantines happened — cannot be degraded by quarantine.
     assert.equal(isResearchDegradedModeActive([], []), false);
+  });
+});
+
+describe("buildResearchPromptSection — target-mode topic budget", () => {
+  it("uses synthesized topics instead of expanding every scout tag and title", () => {
+    const config = {
+      platformModeState: { currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY },
+      selfDev: { futureModeFlags: { singleTargetDelivery: true } },
+      activeTargetSession: { projectId: "target_bowling", sessionId: "sess_target" },
+    };
+    const targetSession = { projectId: "target_bowling", sessionId: "sess_target" };
+    const synthesis = {
+      targetSession,
+      scoutSourceCount: 9,
+      topics: [
+        { topic: "Hero, ambience, and reservation interaction plan" },
+        { topic: "Responsive bowling venue content structure" },
+      ],
+    };
+    const scout = {
+      targetSession,
+      sourceCount: 9,
+      sources: Array.from({ length: 9 }, (_, index) => ({
+        title: `Scout source ${index + 1}`,
+        topicTags: ["implementation", "visual", "responsive", "trust", `tag-${index}`],
+        whyImportant: "Useful source context that should stay a source signal, not become a separate Prometheus topic.",
+      })),
+    };
+
+    const result = buildResearchPromptSection(synthesis, scout, { maxTasks: 6 }, undefined, config);
+
+    assert.equal(result.topicCount, 2);
+    assert.match(result.sectionText, /Research signal available for this cycle: 2 topic\(s\), 9 source\(s\)/);
+    assert.match(result.sectionText, /Hero, ambience, and reservation interaction plan/);
+    const topicBlock = result.sectionText.split("All research topics:")[1]?.split("Source signals:")[0] || "";
+    assert.doesNotMatch(topicBlock, /tag-8/);
+    assert.doesNotMatch(topicBlock, /Scout source 9/);
   });
 });
 

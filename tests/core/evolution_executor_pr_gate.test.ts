@@ -13,6 +13,7 @@ import {
   validateVerificationPortability,
   BLOCKED_VERIFICATION_CMDS,
 } from "../../src/core/evolution_executor.js";
+import { REPO_WIDE_TEST_COMMAND, TARGETED_TEST_COMMAND_PLACEHOLDER } from "../../src/core/verification_command_registry.js";
 
 describe("assessStatusCheckRollup", () => {
   it("passes when all checks are successful", () => {
@@ -85,7 +86,7 @@ describe("Athena pre-review hardening", () => {
     assert.ok(hardened.acceptance_criteria.length > task.acceptance_criteria.length);
     assert.ok(hardened.acceptance_criteria.some(c => c.includes("deterministic pass/fail evidence")));
     assert.ok(hardened.scope.includes("Athena hardening notes"));
-    assert.deepEqual(hardened.verification_commands, ["node --import tsx src/cli.ts once", "npm test", "npm run lint"]);
+    assert.deepEqual(hardened.verification_commands, ["node --import tsx src/cli.ts once", REPO_WIDE_TEST_COMMAND, "npm run lint"]);
   });
 });
 
@@ -116,7 +117,7 @@ describe("Prometheus task repair", () => {
     assert.equal(repaired.title, "T-777");
     assert.ok(repaired.scope.length > 0);
     assert.ok(repaired.acceptance_criteria.length >= 3);
-    assert.ok(repaired.verification_commands.length > 0);
+    assert.deepEqual(repaired.verification_commands, [REPO_WIDE_TEST_COMMAND]);
   });
 
   it("normalizes non-string entries and keeps commands runnable", () => {
@@ -130,7 +131,7 @@ describe("Prometheus task repair", () => {
 
     assert.ok(repaired.acceptance_criteria.includes("criterion"));
     assert.ok(repaired.acceptance_criteria.includes("42"));
-    assert.deepEqual(repaired.verification_commands, ["npm test"]);
+    assert.deepEqual(repaired.verification_commands, [REPO_WIDE_TEST_COMMAND]);
   });
 });
 
@@ -345,14 +346,14 @@ describe("inferVerificationFromFilesHint", () => {
     assert.deepEqual(result, []);
   });
 
-  it("returns node --test commands for test files in files_hint", () => {
+  it("returns targeted npm test commands for test files in files_hint", () => {
     const result = inferVerificationFromFilesHint([
       "src/core/foo.ts",
       "tests/core/foo.test.ts",
       "tests/core/bar.test.ts",
     ]);
     assert.equal(result.length, 2);
-    assert.ok(result[0].startsWith("node --test"));
+    assert.ok(result[0].startsWith("npm test --"));
     assert.ok(result[0].includes("foo.test.ts"));
     assert.ok(result[1].includes("bar.test.ts"));
   });
@@ -393,7 +394,7 @@ describe("repairPrometheusTask — specific verification inference", () => {
       task_id: "T-002",
       title: "Add validation",
       files_hint: ["src/core/validator.ts", "tests/core/validator.test.ts"],
-      verification_commands: ["node --test tests/core/validator.test.ts"],
+      verification_commands: ["npm test -- tests/core/validator.test.ts"],
     };
     const repaired = repairPrometheusTask(task);
     // Should contain the specific command (not duplicated)
@@ -401,6 +402,19 @@ describe("repairPrometheusTask — specific verification inference", () => {
       /validator\.test\.ts/.test(cmd)
     ).length;
     assert.ok(specificCount >= 1, "specific command should be preserved");
+  });
+
+  it("drops generic repo-wide test runners when a specific target already exists", () => {
+    const task = {
+      task_id: "T-003",
+      title: "Keep verification scoped",
+      files_hint: ["src/core/validator.ts", "tests/core/validator.test.ts"],
+      verification_commands: ["npm test", "npm test -- tests/core/validator.test.ts", "npm run lint"],
+    };
+    const repaired = repairPrometheusTask(task);
+    assert.ok(repaired.verification_commands.includes("npm test -- tests/core/validator.test.ts"));
+    assert.ok(repaired.verification_commands.includes("npm run lint"));
+    assert.ok(!repaired.verification_commands.includes("npm test"));
   });
 });
 

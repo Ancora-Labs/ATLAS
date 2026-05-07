@@ -1,9 +1,14 @@
-import fs from "node:fs/promises";
+﻿import fs from "node:fs/promises";
 import path from "node:path";
-import dotenv from "dotenv";
-import type { Config, WorkerRoleConfig } from "./types/index.js";
-
-dotenv.config();
+import type { Config } from "./types/index.js";
+import { bootstrapEnvironment } from "./env_bootstrap.js";
+import { readAtlasBuildRequest } from "./atlas/build_request_state.js";
+import {
+  applyCopilotPlanProfile,
+  applyRoleRegistryModelOverride,
+  fetchCopilotAccountProfile,
+  type CopilotResolvedModelSelection,
+} from "./core/copilot_plan_profile.js";
 
 function must(value: string | undefined, _key: string): string | null {
   if (!value || !value.trim()) {
@@ -12,23 +17,25 @@ function must(value: string | undefined, _key: string): string | null {
   return value.trim();
 }
 
-export async function loadConfig(): Promise<Config> {
-  const rootDir = process.cwd();
+export async function loadConfig(options: { repoRoot?: string } = {}): Promise<Config> {
+  const rootDir = path.resolve(options.repoRoot || process.cwd());
+  bootstrapEnvironment({ repoRoot: rootDir });
   const configPath = path.join(rootDir, "box.config.json");
   const raw = await fs.readFile(configPath, "utf8");
   const fileConfig = JSON.parse(raw);
 
   const env = {
-    githubToken: must(process.env.GITHUB_TOKEN, "GITHUB_TOKEN"),
-    // Copilot CLI needs a fine-grained PAT (github_pat_) with Copilot permissions.
-    // Classic PATs (ghp_) are NOT supported by Copilot CLI.
-    // Support legacy/local variable names used in older .env files.
+    githubToken: must(
+      process.env.GITHUB_TOKEN
+      || process.env.GH_TOKEN,
+      "GITHUB_TOKEN"
+    ),
+    // Copilot execution needs a fine-grained PAT (github_pat_) with Copilot permissions.
+    // COPILOT_GITHUB_TOKEN remains a legacy compatibility alias.
     copilotGithubToken: must(
-      process.env.COPILOT_GITHUB_TOKEN
-      || process.env.CanerdoqduFINEGRADEDGENERALANDTRUMP
-        || process.env.GITHUB_FINEGRADED
-      || process.env.GITHUBFINEGRADEDPERSONALINTEL,
-      "COPILOT_GITHUB_TOKEN"
+      process.env.GITHUB_FINEGRADED
+      || process.env.COPILOT_GITHUB_TOKEN,
+      "GITHUB_FINEGRADED"
     ),
     targetRepo: must(process.env.TARGET_REPO, "TARGET_REPO"),
     targetBaseBranch: process.env.TARGET_BASE_BRANCH?.trim() || "main",
@@ -101,7 +108,10 @@ export async function loadConfig(): Promise<Config> {
     cloudAssignmentIssue: process.env.BOX_CLOUD_ASSIGNMENT_ISSUE?.trim() || null,
     cloudAssignmentPr: process.env.BOX_CLOUD_ASSIGNMENT_PR?.trim() || null,
     cloudAssignmentPollIntervalMs: process.env.BOX_CLOUD_ASSIGNMENT_POLL_INTERVAL_MS?.trim() || null,
-    cloudAssignmentMaxWaitMs: process.env.BOX_CLOUD_ASSIGNMENT_MAX_WAIT_MS?.trim() || null
+    cloudAssignmentMaxWaitMs: process.env.BOX_CLOUD_ASSIGNMENT_MAX_WAIT_MS?.trim() || null,
+    mockTargetOnboardingClarificationPacket: process.env.BOX_MOCK_TARGET_ONBOARDING_CLARIFICATION_PACKET?.trim() || null,
+    targetOnboardingRequireSingleCallCompletion: process.env.BOX_TARGET_ONBOARDING_REQUIRE_SINGLE_CALL_COMPLETION?.trim() || null,
+    targetOnboardingUseCurrentTerminal: process.env.BOX_TARGET_ONBOARDING_USE_CURRENT_TERMINAL?.trim() || null,
   };
 
   const parsedAllowedModels = env.copilotAllowedModels
@@ -282,14 +292,9 @@ export async function loadConfig(): Promise<Config> {
   };
 
   const derivedRoleModelMap = (() => {
-    const roleRegistry = (
-      fileConfig?.roleRegistry && typeof fileConfig.roleRegistry === "object"
-        ? fileConfig.roleRegistry as { workers?: Record<string, WorkerRoleConfig>; leadWorker?: WorkerRoleConfig }
-        : {}
-    );
-    const map: Record<string, string> = {};
-    const workers = roleRegistry.workers ?? {};
-    for (const worker of Object.values(workers)) {
+    const map: Record<string, any> = {};
+    const workers = fileConfig?.roleRegistry?.workers || {};
+    for (const worker of Object.values(workers) as any[]) {
       const roleName = String(worker?.name || "").trim();
       const model = String(worker?.model || "").trim();
       if (roleName && model) {
@@ -297,8 +302,8 @@ export async function loadConfig(): Promise<Config> {
       }
     }
 
-    const leadName = String(roleRegistry.leadWorker?.name || "").trim();
-    const leadModel = String(roleRegistry.leadWorker?.model || "").trim();
+    const leadName = String(fileConfig?.roleRegistry?.leadWorker?.name || "").trim();
+    const leadModel = String(fileConfig?.roleRegistry?.leadWorker?.model || "").trim();
     if (leadName && leadModel) {
       map[leadName] = leadModel;
     }
@@ -313,6 +318,34 @@ export async function loadConfig(): Promise<Config> {
       ...(copilot.preferredModelsByRole || {})
     }
   };
+
+  const copilotPlanToken = String(
+    process.env.BOX_GITHUB_BILLING_TOKEN
+    || env.copilotGithubToken
+    || env.githubToken
+    || ""
+  ).trim();
+  const atlasBuildRequest = await readAtlasBuildRequest(path.join(rootDir, "state"));
+  const copilotAccountProfile = await fetchCopilotAccountProfile(copilotPlanToken);
+  const resolvedCopilot = applyCopilotPlanProfile(
+    copilotWithRolePolicy,
+    copilotAccountProfile,
+    atlasBuildRequest?.selectedModel || null,
+  );
+  const activeModelSelection = (resolvedCopilot.activeModelSelection || null) as CopilotResolvedModelSelection | null;
+  const resolvedRoleRegistry = activeModelSelection?.mode === "single"
+    ? applyRoleRegistryModelOverride(fileConfig.roleRegistry, activeModelSelection.model)
+    : fileConfig.roleRegistry;
+  if (copilotAccountProfile) {
+    const envMetadata = env as Record<string, unknown>;
+    envMetadata.copilotPlanTier = copilotAccountProfile.planTier;
+    envMetadata.copilotPlanLabel = copilotAccountProfile.planLabel;
+    envMetadata.copilotModelAccess = copilotAccountProfile.modelAccess;
+    envMetadata.copilotRequestedModel = atlasBuildRequest?.selectedModel || null;
+    envMetadata.copilotEffectiveModel = activeModelSelection?.model || null;
+    envMetadata.copilotModelSelectionMode = activeModelSelection?.mode || "schema";
+    envMetadata.copilotModelSelectionSource = activeModelSelection?.source || "plan_schema";
+  }
 
   const planner = {
     ...(fileConfig.planner ?? {}),
@@ -351,9 +384,43 @@ export async function loadConfig(): Promise<Config> {
     recoveryTag: String(fileConfig?.selfDev?.recoveryTag || "box/recovery-v0.1.0-pre-selfdev"),
     maxFilesPerPr: Number(fileConfig?.selfDev?.maxFilesPerPr || 8),
     mandatoryGates: Array.isArray(fileConfig?.selfDev?.mandatoryGates)
-      ? fileConfig.selfDev.mandatoryGates
+      ? fileConfig.selfDev.mandatoryGates.map((item) => String(item)).filter(Boolean)
       : ["lint", "test"],
+    forbiddenBranchTargets: Array.isArray(fileConfig?.selfDev?.forbiddenBranchTargets)
+      ? fileConfig.selfDev.forbiddenBranchTargets.map((item) => String(item)).filter(Boolean)
+      : ["main", "master"],
     branchPrefix: String(fileConfig?.selfDev?.branchPrefix || "box/selfdev-"),
+    criticalFiles: Array.isArray(fileConfig?.selfDev?.criticalFiles)
+      ? fileConfig.selfDev.criticalFiles.map((item) => String(item)).filter(Boolean)
+      : [
+          "src/core/orchestrator.ts",
+          "src/core/self_dev_guard.ts",
+          "src/core/daemon_control.ts",
+          "src/core/policy_engine.ts",
+          "src/cli.ts",
+          ".env",
+          ".env.sandbox",
+          "policy.json"
+        ],
+    cautionFiles: Array.isArray(fileConfig?.selfDev?.cautionFiles)
+      ? fileConfig.selfDev.cautionFiles.map((item) => String(item)).filter(Boolean)
+      : [
+          "src/core/self_improvement.ts",
+          "src/core/athena_reviewer.ts",
+          "src/core/jesus_supervisor.ts",
+          "src/core/prometheus.ts",
+          "box.config.json",
+          "package.json"
+        ],
+    protectedPrefixes: Array.isArray(fileConfig?.selfDev?.protectedPrefixes)
+      ? fileConfig.selfDev.protectedPrefixes.map((item) => String(item)).filter(Boolean)
+      : ["state/", ".git/", "node_modules/", ".next/"],
+    futureModeFlags: {
+      singleTargetDelivery: Boolean(fileConfig?.selfDev?.futureModeFlags?.singleTargetDelivery ?? false),
+      targetSessionState: Boolean(fileConfig?.selfDev?.futureModeFlags?.targetSessionState ?? false),
+      targetPromptOverlay: Boolean(fileConfig?.selfDev?.futureModeFlags?.targetPromptOverlay ?? false),
+      targetWorkspaceLifecycle: Boolean(fileConfig?.selfDev?.futureModeFlags?.targetWorkspaceLifecycle ?? false),
+    },
   };
 
   const systemGuardian = {
@@ -402,15 +469,23 @@ export async function loadConfig(): Promise<Config> {
       : Number(fileConfig?.cloudAssignment?.maxWaitMs ?? 3600000),
   };
 
-  // Propagate resolved token into process.env so CopilotReviewer child processes inherit it
-  if (env.copilotGithubToken && !process.env.COPILOT_GITHUB_TOKEN) {
+  // Propagate resolved canonical tokens into process.env so child processes use
+  // one consistent env surface regardless of where the backing secret came from.
+  if (env.githubToken) {
+    process.env.GITHUB_TOKEN = env.githubToken;
+    process.env.GH_TOKEN = env.githubToken;
+  }
+
+  if (env.copilotGithubToken) {
     process.env.COPILOT_GITHUB_TOKEN = env.copilotGithubToken;
+    process.env.GITHUB_FINEGRADED = env.copilotGithubToken;
   }
 
   return {
     rootDir,
     ...fileConfig,
-    copilot: copilotWithRolePolicy,
+    roleRegistry: resolvedRoleRegistry,
+    copilot: resolvedCopilot,
     planner,
     selfImprovement,
     selfDev,

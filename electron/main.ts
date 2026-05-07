@@ -1,90 +1,231 @@
 import fs from "node:fs/promises";
 import http from "node:http";
-import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
-import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, shell } from "electron";
 
 import { loadConfig } from "../src/config.js";
+import { bootstrapEnvironment } from "../src/env_bootstrap.js";
+import { applyAtlasRepoContextToEnv } from "../src/atlas/repository_context.js";
 import {
-  AtlasClarificationError,
-  createAtlasSessionStartPacket,
-  getAtlasClarificationAttachmentDirectory,
-  type AtlasClarificationPacket,
-} from "../src/atlas/clarification.js";
-import {
-  buildAtlasDesktopLocationPath,
-  createAtlasDesktopSessionStartHandoffState,
-  createDefaultAtlasDesktopState,
-  parseAtlasDesktopLocationFromUrl,
   readAtlasDesktopState,
   resolveAtlasDesktopStatePath,
   resolveAtlasDesktopStateRoot,
-  type AtlasDesktopAttachment,
   type AtlasDesktopBootstrap,
-  type AtlasDesktopLocation,
   type AtlasDesktopState,
   type AtlasDesktopWindowBounds,
   writeAtlasDesktopState,
 } from "../src/atlas/desktop_state.js";
-import {
-  ATLAS_SNAPSHOT_PATH,
-  type AtlasSnapshotRequestPayload,
-  type AtlasSnapshotResponse,
-  ATLAS_SNAPSHOT_TOKEN_HEADER,
-} from "../src/atlas/routes/home.js";
 import { startAtlasServer } from "../src/atlas/server.js";
+import { resolveAtlasRuntimeStateDir } from "../src/atlas/runtime_state_root.js";
 import {
   resolveAtlasDesktopResourcePaths,
-  resolveAtlasDesktopShellCommand,
   resolvePackagedWorkingDirectory,
-} from "./resource_paths.js";
+} from "./resource_paths.ts";
 import {
+  ATLAS_APP_NAME,
   ATLAS_WINDOWS_APP_ID,
+  ATLAS_PINNED_SHORTCUT_NAME,
+  buildAtlasWindowsAppDetails,
+  buildRepairedAtlasShortcutDetails,
+  resolveAtlasShortcutExecutableTarget,
   restoreAndFocusAtlasWindow,
-} from "./single_instance.js";
-import {
-  createAtlasAuthPopupOptions,
-  createAtlasDesktopWindowChromeOptions,
-  decideAtlasPopupHandling,
-  isContainedAuthUrl,
-} from "./window_policy.js";
+  shouldRepairAtlasShortcut,
+  shouldRenameAtlasShortcut,
+} from "./single_instance.ts";
+import { decideAtlasPopupHandling, isContainedAuthUrl } from "./window_policy.ts";
+import { appendBootstrapTrace } from "./bootstrap_trace.mjs";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DAEMON_STOP_GRACE_MS = 6000;
+
+type DaemonControlConfig = {
+  paths: {
+    stateDir: string;
+  };
+  targetSessionSelector?: {
+    projectId?: string | null;
+    sessionId?: string | null;
+  };
+};
 
 interface AtlasDesktopRuntime {
   server: http.Server;
   serverUrl: string;
 }
 
-interface AtlasDesktopClarificationSuccess {
-  ok: true;
-  ready: true;
-  packet: AtlasClarificationPacket;
-}
-
-interface AtlasDesktopClarificationFailure {
-  ok: false;
-  error: string;
-  code: string;
-}
-
-type AtlasDesktopClarificationResult = AtlasDesktopClarificationSuccess | AtlasDesktopClarificationFailure;
-
 let atlasRuntime: AtlasDesktopRuntime | null = null;
 let atlasBootstrap: AtlasDesktopBootstrap | null = null;
 let mainWindow: BrowserWindow | null = null;
 let atlasDesktopState: AtlasDesktopState | null = null;
+let atlasDesktopRoot = "";
 let atlasDesktopStatePath = "";
-const atlasDesktopSnapshotToken = randomUUID();
-const atlasDesktopResources = resolveAtlasDesktopResourcePaths({
-  mainModuleUrl: import.meta.url,
-  isPackaged: app.isPackaged,
-  exePath: app.getPath("exe"),
-});
-const atlasDesktopShellCommand = resolveAtlasDesktopShellCommand({
-  isPackaged: app.isPackaged,
-  exePath: app.getPath("exe"),
-});
+let shutdownInFlight = false;
+
+const atlasDesktopResources = resolveAtlasDesktopResourcePaths(import.meta.url);
 const atlasOwnsSingleInstanceLock = wireSingleInstanceLifecycle();
+
+appendBootstrapTrace("main.ts module loaded");
+wireProcessTerminationLifecycle();
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForProcessExit(pid: number, isProcessAlive: (pid: number) => boolean): Promise<void> {
+  const deadline = Date.now() + DAEMON_STOP_GRACE_MS;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await delay(100);
+  }
+}
+
+async function buildDaemonControlConfigs(): Promise<DaemonControlConfig[]> {
+  const candidateStateDirs = [
+    atlasDesktopRoot ? path.join(atlasDesktopRoot, "state") : null,
+    path.join(process.cwd(), "state"),
+    path.resolve(__dirname, "..", "state"),
+    path.join(path.dirname(app.getPath("exe")), "state"),
+  ];
+  const resolvedStateDirs: string[] = [];
+  for (const dirPath of candidateStateDirs.filter((entry): entry is string => Boolean(entry))) {
+    const normalizedDir = path.resolve(dirPath);
+    resolvedStateDirs.push(normalizedDir);
+    const runtimeStateDir = await resolveAtlasRuntimeStateDir(normalizedDir).catch(() => null);
+    if (runtimeStateDir) {
+      resolvedStateDirs.push(path.resolve(runtimeStateDir));
+    }
+  }
+  const uniqueStateDirs = [...new Set(resolvedStateDirs)];
+  return uniqueStateDirs.map((stateDir) => ({ paths: { stateDir } }));
+}
+
+async function stopBoxBackgroundRuntime(): Promise<void> {
+  const daemonControl = await import("../src/core/daemon_control.js");
+  const buildRequestState = await import("../src/atlas/build_request_state.js");
+  const {
+    clearStopRequest,
+    readDaemonPid,
+    requestDaemonStop,
+    clearDaemonPid,
+    listTargetSessionRunnerStates,
+    isProcessAlive,
+    killAllDaemonProcesses,
+  } = daemonControl;
+  const { readAtlasBuildRequest, writeAtlasBuildRequest } = buildRequestState;
+
+  const markAtlasBuildStopped = async (stateDir: string): Promise<void> => {
+    const buildRequest = await readAtlasBuildRequest(stateDir).catch(() => null);
+    if (!buildRequest || buildRequest.triggerState === "completed" || buildRequest.triggerState === "error") {
+      return;
+    }
+    await writeAtlasBuildRequest(stateDir, {
+      ...buildRequest,
+      updatedAt: new Date().toISOString(),
+      triggerState: "paused",
+      triggerLabel: "ATLAS stopped this build mission when the desktop app closed.",
+      runnerPid: null,
+    }).catch(() => {});
+  };
+
+  const stopRuntimeScope = async (config: DaemonControlConfig, pid: number, reason: string): Promise<void> => {
+    if (!pid) {
+      await clearDaemonPid(config).catch(() => {});
+      await clearStopRequest(config).catch(() => {});
+      return;
+    }
+
+    await requestDaemonStop(config, reason).catch(() => {});
+    await waitForProcessExit(pid, isProcessAlive);
+
+    if (isProcessAlive(pid)) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Best effort only. killAllDaemonProcesses below handles orphan sweeps.
+      }
+    }
+
+    await clearDaemonPid(config).catch(() => {});
+    await clearStopRequest(config).catch(() => {});
+  };
+
+  for (const config of await buildDaemonControlConfigs()) {
+    const runnerStates = await listTargetSessionRunnerStates(config).catch(() => []);
+    for (const runnerState of runnerStates) {
+      const runnerPid = Number(runnerState?.pid || 0);
+      const scopedConfig: DaemonControlConfig = {
+        ...config,
+        targetSessionSelector: {
+          projectId: String(runnerState?.projectId || "") || null,
+          sessionId: String(runnerState?.sessionId || "") || null,
+        },
+      };
+      await stopRuntimeScope(scopedConfig, runnerPid, "electron-window-closed");
+    }
+
+    const daemonState = await readDaemonPid(config).catch(() => null);
+    const daemonPid = Number(daemonState?.pid || 0);
+    await stopRuntimeScope(config, daemonPid, "electron-window-closed");
+    await markAtlasBuildStopped(config.paths.stateDir);
+  }
+
+  killAllDaemonProcesses();
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function copyAtlasStateEntryIfMissing(sourcePath: string, targetPath: string): Promise<void> {
+  if (!await pathExists(sourcePath) || await pathExists(targetPath)) {
+    return;
+  }
+
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  const sourceStats = await fs.stat(sourcePath);
+  if (sourceStats.isDirectory()) {
+    await fs.cp(sourcePath, targetPath, { recursive: true });
+    return;
+  }
+
+  await fs.copyFile(sourcePath, targetPath);
+}
+
+async function migrateLegacyPackagedAtlasState(legacyDesktopRoot: string, persistentDesktopRoot: string): Promise<void> {
+  if (!app.isPackaged || legacyDesktopRoot === persistentDesktopRoot) {
+    return;
+  }
+
+  const legacyAtlasStateDir = path.join(legacyDesktopRoot, "state", "atlas");
+  if (!await pathExists(legacyAtlasStateDir)) {
+    return;
+  }
+
+  const persistentAtlasStateDir = path.join(persistentDesktopRoot, "state", "atlas");
+  for (const entryName of [
+    "desktop_state.json",
+    "desktop_sessions.json",
+    "active_build.json",
+    "github_auth.json",
+    "desktop_sessions",
+    "manifests",
+  ]) {
+    await copyAtlasStateEntryIfMissing(
+      path.join(legacyAtlasStateDir, entryName),
+      path.join(persistentAtlasStateDir, entryName),
+    );
+  }
+}
 
 async function assertDesktopResourcePath(resourcePath: string, label: string): Promise<void> {
   try {
@@ -98,9 +239,8 @@ async function assertDesktopResourcePath(resourcePath: string, label: string): P
 
 async function validateDesktopResources(): Promise<void> {
   await assertDesktopResourcePath(atlasDesktopResources.preloadPath, "preload script");
-  await assertDesktopResourcePath(atlasDesktopResources.rendererHtmlPath, "desktop renderer shell");
-  await assertDesktopResourcePath(atlasDesktopResources.rendererScriptPath, "desktop renderer bootstrap");
-  await assertDesktopResourcePath(atlasDesktopResources.rendererLayoutPath, "desktop renderer layout helper");
+  await assertDesktopResourcePath(atlasDesktopResources.onboardingHtmlPath, "onboarding shell");
+  appendBootstrapTrace("desktop resources validated");
 }
 
 function alignPackagedWorkingDirectory(): void {
@@ -111,182 +251,104 @@ function alignPackagedWorkingDirectory(): void {
   const workingDirectory = resolvePackagedWorkingDirectory(app.getPath("exe"));
   try {
     process.chdir(workingDirectory);
+    appendBootstrapTrace(`packaged working directory aligned: ${workingDirectory}`);
   } catch (error) {
+    appendBootstrapTrace(`packaged working directory alignment failed: ${workingDirectory}`, error);
     throw new Error(
       `[atlas] failed to align the packaged working directory to ${workingDirectory}: ${String((error as Error)?.message || error)}`,
     );
   }
 }
 
+async function repairPinnedAtlasTaskbarShortcuts(): Promise<void> {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const taskbarPinnedDir = path.join(app.getPath("appData"), "Microsoft", "Internet Explorer", "Quick Launch", "User Pinned", "TaskBar");
+  const executableCandidate = typeof process.env.PORTABLE_EXECUTABLE_FILE === "string" && process.env.PORTABLE_EXECUTABLE_FILE.trim()
+    ? process.env.PORTABLE_EXECUTABLE_FILE.trim()
+    : app.getPath("exe");
+  const currentExecutablePath = resolveAtlasShortcutExecutableTarget(executableCandidate, app.isPackaged);
+  if (!currentExecutablePath) {
+    appendBootstrapTrace(`taskbar shortcut repair skipped: non-packaged or non-ATLAS executable (${executableCandidate})`);
+    return;
+  }
+
+  let entries: string[];
+  try {
+    entries = await fs.readdir(taskbarPinnedDir);
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!entry.toLowerCase().endsWith(".lnk")) {
+      continue;
+    }
+
+    const shortcutPath = path.join(taskbarPinnedDir, entry);
+    try {
+      const details = shell.readShortcutLink(shortcutPath);
+      const shouldRepairDetails = shouldRepairAtlasShortcut(details, currentExecutablePath);
+      const shouldRenameShortcut = shouldRenameAtlasShortcut(shortcutPath, details);
+      if (!shouldRepairDetails && !shouldRenameShortcut) {
+        continue;
+      }
+      const repairedDetails = buildRepairedAtlasShortcutDetails(details, currentExecutablePath);
+      shell.writeShortcutLink(shortcutPath, "update", repairedDetails);
+
+      if (shouldRenameShortcut) {
+        const repairedShortcutPath = path.join(taskbarPinnedDir, ATLAS_PINNED_SHORTCUT_NAME);
+        if (path.resolve(shortcutPath).toLowerCase() !== path.resolve(repairedShortcutPath).toLowerCase()) {
+          await fs.rm(repairedShortcutPath, { force: true }).catch(() => {});
+          await fs.rename(shortcutPath, repairedShortcutPath);
+          appendBootstrapTrace(`taskbar shortcut renamed: ${shortcutPath} -> ${repairedShortcutPath}`);
+          continue;
+        }
+      }
+
+      appendBootstrapTrace(`taskbar shortcut repaired: ${shortcutPath}`);
+    } catch (error) {
+      appendBootstrapTrace(`taskbar shortcut repair skipped: ${shortcutPath}`, error);
+    }
+  }
+}
+
 async function initializeDesktopState(): Promise<void> {
-  atlasDesktopStatePath = resolveAtlasDesktopStatePath(resolveAtlasDesktopStateRoot({
+  const legacyDesktopRoot = path.dirname(app.getPath("exe"));
+  atlasDesktopRoot = resolveAtlasDesktopStateRoot({
     isPackaged: app.isPackaged,
     exePath: app.getPath("exe"),
     cwd: process.cwd(),
-  }));
+  });
+  await migrateLegacyPackagedAtlasState(legacyDesktopRoot, atlasDesktopRoot);
+  atlasDesktopStatePath = resolveAtlasDesktopStatePath(atlasDesktopRoot);
   atlasDesktopState = await readAtlasDesktopState(atlasDesktopStatePath);
+  appendBootstrapTrace(`desktop state initialized: ${atlasDesktopStatePath}`);
 }
 
 async function updateDesktopState(
-  patch: Partial<Pick<AtlasDesktopState, "sessionId" | "workspaceDraft" | "workspaceAttachments" | "workspaceComposerFocused" | "windowBounds" | "focusedSessionRole">>,
+  patch: Partial<Pick<AtlasDesktopState, "sessionId" | "onboardingDraft" | "windowBounds" | "repoContext">>,
 ): Promise<void> {
   if (!atlasDesktopStatePath) {
     throw new Error("ATLAS desktop state path is not initialized.");
   }
 
   atlasDesktopState = await writeAtlasDesktopState(atlasDesktopStatePath, {
-    ...(atlasDesktopState || createDefaultAtlasDesktopState()),
+    ...(atlasDesktopState || {
+      sessionId: null,
+      onboardingDraft: "",
+      windowBounds: null,
+      repoContext: null,
+      updatedAt: null,
+    }),
     ...patch,
   });
 }
 
-async function updateWorkspaceDraft(draft: string): Promise<void> {
-  const normalizedDraft = String(draft || "");
-  await updateDesktopState({ workspaceDraft: normalizedDraft });
-  if (atlasBootstrap) {
-    atlasBootstrap = {
-      ...atlasBootstrap,
-      workspaceDraft: normalizedDraft,
-    };
-  }
-}
-
-async function updateWorkspaceComposerFocus(focused: boolean): Promise<void> {
-  await updateDesktopState({ workspaceComposerFocused: focused === true });
-}
-
-async function updateWorkspaceAttachments(attachments: AtlasDesktopAttachment[]): Promise<AtlasDesktopAttachment[]> {
-  await updateDesktopState({ workspaceAttachments: attachments });
-  return atlasDesktopState?.workspaceAttachments || attachments;
-}
-
-async function completeWorkspaceSessionStart(objective: string): Promise<void> {
-  await updateDesktopState(createAtlasDesktopSessionStartHandoffState(objective));
-}
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function sanitizeAttachmentFileName(value: string): string {
-  const normalized = String(value || "").trim().replace(/[<>:"/\\|?*\u0000-\u001F]+/g, "-");
-  return normalized || "attachment";
-}
-
-async function resolveUniqueAttachmentPath(directoryPath: string, fileName: string): Promise<string> {
-  const extension = path.extname(fileName);
-  const baseName = path.basename(fileName, extension) || "attachment";
-  let candidatePath = path.join(directoryPath, fileName);
-  let suffix = 1;
-  while (await pathExists(candidatePath)) {
-    candidatePath = path.join(directoryPath, `${baseName}-${String(suffix)}${extension}`);
-    suffix += 1;
-  }
-  return candidatePath;
-}
-
-async function pickWorkspaceAttachments(requestWindow: BrowserWindow | null): Promise<AtlasDesktopAttachment[]> {
-  if (!atlasBootstrap) {
-    throw new Error("ATLAS desktop bootstrap is not available.");
-  }
-
-  const hostWindow = requestWindow && !requestWindow.isDestroyed()
-    ? requestWindow
-    : mainWindow;
-  if (!hostWindow || hostWindow.isDestroyed()) {
-    throw new Error("ATLAS desktop attachment picker requires an active window.");
-  }
-
-  const fileSelection = await dialog.showOpenDialog(hostWindow, {
-    title: "Add files to the next Atlas session",
-    buttonLabel: "Attach files",
-    properties: ["openFile", "multiSelections"],
-  });
-  if (fileSelection.canceled || fileSelection.filePaths.length === 0) {
-    return atlasDesktopState?.workspaceAttachments || [];
-  }
-
-  const config = await loadConfig();
-  const stateDir = String(config.paths?.stateDir || "state");
-  const attachmentDirectory = getAtlasClarificationAttachmentDirectory(stateDir, atlasBootstrap.sessionId);
-  await fs.mkdir(attachmentDirectory, { recursive: true });
-
-  const existingAttachments = atlasDesktopState?.workspaceAttachments || [];
-  const existingSourcePaths = new Set(existingAttachments.map((attachment) => path.normalize(attachment.sourcePath).toLowerCase()));
-  const nextAttachments = [...existingAttachments];
-
-  for (const sourcePath of fileSelection.filePaths) {
-    const normalizedSourcePath = path.normalize(String(sourcePath || "").trim());
-    if (!normalizedSourcePath || existingSourcePaths.has(normalizedSourcePath.toLowerCase())) {
-      continue;
-    }
-
-    const stats = await fs.stat(normalizedSourcePath);
-    if (!stats.isFile()) {
-      continue;
-    }
-
-    const safeFileName = sanitizeAttachmentFileName(path.basename(normalizedSourcePath));
-    const storedPath = await resolveUniqueAttachmentPath(attachmentDirectory, safeFileName);
-    await fs.copyFile(normalizedSourcePath, storedPath);
-    nextAttachments.push({
-      id: randomUUID(),
-      name: path.basename(storedPath),
-      sourcePath: normalizedSourcePath,
-      storedPath,
-      sizeBytes: stats.size,
-      addedAt: new Date().toISOString(),
-    });
-    existingSourcePaths.add(normalizedSourcePath.toLowerCase());
-  }
-
-  return updateWorkspaceAttachments(nextAttachments);
-}
-
-async function removeWorkspaceAttachment(attachmentId: string): Promise<AtlasDesktopAttachment[]> {
-  const normalizedAttachmentId = String(attachmentId || "").trim();
-  const existingAttachments = atlasDesktopState?.workspaceAttachments || [];
-  if (!normalizedAttachmentId) {
-    return existingAttachments;
-  }
-
-  const attachmentToRemove = existingAttachments.find((attachment) => attachment.id === normalizedAttachmentId) || null;
-  if (attachmentToRemove?.storedPath) {
-    try {
-      await fs.rm(attachmentToRemove.storedPath, { force: true });
-    } catch (error) {
-      console.error(`[atlas] failed to remove the stored attachment ${attachmentToRemove.storedPath}: ${String((error as Error)?.message || error)}`);
-    }
-  }
-
-  return updateWorkspaceAttachments(existingAttachments.filter((attachment) => attachment.id !== normalizedAttachmentId));
-}
-
 function getPersistedWindowBounds(): AtlasDesktopWindowBounds | null {
   return atlasDesktopState?.windowBounds || null;
-}
-
-function getPersistedProductLocation(): AtlasDesktopLocation {
-  return {
-    surface: "workspace",
-    focusedSessionRole: atlasDesktopState?.focusedSessionRole || null,
-  };
-}
-
-async function persistProductLocation(currentUrl: string): Promise<void> {
-  const location = parseAtlasDesktopLocationFromUrl(currentUrl);
-  if (!location) {
-    return;
-  }
-
-  await updateDesktopState({
-    focusedSessionRole: location.focusedSessionRole,
-  });
 }
 
 async function persistWindowBounds(window: BrowserWindow): Promise<void> {
@@ -339,35 +401,25 @@ function attachWindowStatePersistence(window: BrowserWindow): void {
   });
 }
 
-function attachProductLocationPersistence(window: BrowserWindow): void {
-  const persistCurrentUrl = (currentUrl: string) => {
-    persistProductLocation(currentUrl).catch((error) => {
-      console.error(`[atlas] failed to persist product location: ${String((error as Error)?.message || error)}`);
-    });
-  };
-
-  window.webContents.on("did-navigate", (_event, currentUrl) => {
-    persistCurrentUrl(currentUrl);
-  });
-  window.webContents.on("did-navigate-in-page", (_event, currentUrl) => {
-    persistCurrentUrl(currentUrl);
-  });
-}
-
 async function startDesktopRuntime(): Promise<AtlasDesktopRuntime> {
-  const config = await loadConfig();
+  appendBootstrapTrace("desktop runtime bootstrap start");
+  bootstrapEnvironment({ repoRoot: atlasDesktopRoot || process.cwd() });
+  const config = await loadConfig({ repoRoot: atlasDesktopRoot || process.cwd() });
   const sessionId = atlasDesktopState?.sessionId || randomUUID();
-  const targetRepo = String(config.targetRepo || process.env.TARGET_REPO || "").trim();
-  const stateDir = String(config.paths?.stateDir || "state");
+  const repoContext = atlasDesktopState?.repoContext || null;
+  if (repoContext) {
+    applyAtlasRepoContextToEnv(repoContext);
+  }
+  const targetRepo = String(repoContext?.targetRepo || config.env.targetRepo || process.env.TARGET_REPO || "").trim();
+  const stateDir = path.join(atlasDesktopRoot || process.cwd(), "state");
 
   const server = await startAtlasServer({
     port: 0,
     stateDir,
     targetRepo,
     hostLabel: "ATLAS Desktop",
-    shellCommand: atlasDesktopShellCommand,
+    shellCommand: ".\\ATLAS.cmd",
     desktopSessionId: sessionId,
-    desktopSnapshotToken: atlasDesktopSnapshotToken,
   });
   const address = server.address();
   const port = address && typeof address === "object" ? address.port : 0;
@@ -376,9 +428,11 @@ async function startDesktopRuntime(): Promise<AtlasDesktopRuntime> {
     sessionId,
     serverUrl,
     targetRepo,
-    workspaceDraft: atlasDesktopState?.workspaceDraft || "",
+    onboardingDraft: atlasDesktopState?.onboardingDraft || "",
+    repoContext,
   };
   await updateDesktopState({ sessionId });
+  appendBootstrapTrace(`desktop runtime listening: ${serverUrl}`);
   return {
     server,
     serverUrl,
@@ -390,85 +444,25 @@ async function loadInitialSurface(window: BrowserWindow): Promise<void> {
     throw new Error("ATLAS desktop runtime is not initialized.");
   }
 
-  await window.loadURL(new URL(buildAtlasDesktopLocationPath(getPersistedProductLocation()), atlasBootstrap.serverUrl).toString());
-}
-
-function assertTrustedAtlasSnapshotSender(event: IpcMainInvokeEvent): void {
-  if (!atlasBootstrap) {
-    throw new Error("ATLAS desktop bootstrap is not available.");
-  }
-
-  const requestWindow = BrowserWindow.fromWebContents(event.sender);
-  if (!requestWindow || requestWindow !== mainWindow) {
-    throw new Error("ATLAS desktop snapshot bridge rejected an untrusted window.");
-  }
-
-  const senderUrl = String(event.sender.getURL() || "").trim();
-  if (!senderUrl) {
-    throw new Error("ATLAS desktop snapshot bridge requires a loaded ATLAS surface.");
-  }
-
-  const senderOrigin = new URL(senderUrl).origin;
-  const atlasOrigin = new URL(atlasBootstrap.serverUrl).origin;
-  if (senderOrigin !== atlasOrigin) {
-    throw new Error("ATLAS desktop snapshot bridge rejected a non-ATLAS origin.");
-  }
-}
-
-function buildAtlasSnapshotUrl(request: AtlasSnapshotRequestPayload = {}): URL {
-  if (!atlasBootstrap) {
-    throw new Error("ATLAS desktop bootstrap is not available.");
-  }
-
-  const snapshotUrl = new URL(ATLAS_SNAPSHOT_PATH, atlasBootstrap.serverUrl);
-  const focusRole = String(request.focusRole || "").trim();
-  if (focusRole) {
-    snapshotUrl.searchParams.set("focusRole", focusRole);
-  }
-  return snapshotUrl;
-}
-
-async function fetchAtlasDesktopSnapshot(
-  request: AtlasSnapshotRequestPayload = {},
-): Promise<AtlasSnapshotResponse> {
-  const snapshotUrl = buildAtlasSnapshotUrl(request);
-
-  try {
-    const response = await fetch(snapshotUrl, {
-      headers: {
-        accept: "application/json",
-        [ATLAS_SNAPSHOT_TOKEN_HEADER]: atlasDesktopSnapshotToken,
-      },
-      cache: "no-store",
-    });
-    if (!response.ok) {
-      throw new Error(`ATLAS snapshot request failed with status ${response.status}.`);
-    }
-
-    const payload = await response.json() as Partial<AtlasSnapshotResponse> & { ok?: boolean; };
-    if (payload.ok !== true || !payload.pageData || typeof payload.snapshotAt !== "string") {
-      throw new Error("ATLAS snapshot response was not valid JSON state.");
-    }
-    return payload as AtlasSnapshotResponse;
-  } catch (error) {
-    console.error(`[atlas] desktop snapshot refresh failed: ${String((error as Error)?.message || error)}`);
-    throw error;
-  }
-}
-
-function notifyRendererWindowVisible(window: BrowserWindow): void {
-  try {
-    if (window.isDestroyed()) {
-      return;
-    }
-    window.webContents.send("atlas-desktop:window-visible");
-  } catch (error) {
-    console.error(`[atlas] failed to notify the renderer about desktop visibility: ${String((error as Error)?.message || error)}`);
-  }
+  await window.loadURL(new URL("/", atlasBootstrap.serverUrl).toString());
 }
 
 function createAuthPopup(parentWindow: BrowserWindow, targetUrl: string): void {
-  const popup = new BrowserWindow(createAtlasAuthPopupOptions(parentWindow));
+  const popup = new BrowserWindow({
+    width: 540,
+    height: 720,
+    parent: parentWindow,
+    modal: true,
+    autoHideMenuBar: true,
+    title: "ATLAS authentication",
+    ...(atlasDesktopResources.windowIconPath ? { icon: atlasDesktopResources.windowIconPath } : {}),
+    webPreferences: {
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  });
+  popup.removeMenu();
   popup.loadURL(targetUrl).catch((error) => {
     console.error(`[atlas] auth popup load failed: ${String((error as Error)?.message || error)}`);
   });
@@ -507,55 +501,6 @@ function attachWindowPolicies(window: BrowserWindow, atlasOrigin: string): void 
   });
 }
 
-async function startDesktopSession(
-  objective: string,
-  requestWindow: BrowserWindow | null,
-): Promise<AtlasDesktopClarificationResult> {
-  try {
-    if (!atlasBootstrap) {
-      throw new Error("ATLAS desktop bootstrap is not available.");
-    }
-
-    const normalizedObjective = String(objective || "").trim();
-    await updateWorkspaceDraft(normalizedObjective);
-
-    const config = await loadConfig();
-    const stateDir = String(config.paths?.stateDir || "state");
-    const packet = await createAtlasSessionStartPacket({
-      stateDir,
-      sessionId: atlasBootstrap.sessionId,
-      targetRepo: atlasBootstrap.targetRepo,
-      objective: normalizedObjective,
-      attachments: atlasDesktopState?.workspaceAttachments || [],
-    });
-
-    await completeWorkspaceSessionStart(normalizedObjective);
-    if (requestWindow && !requestWindow.isDestroyed()) {
-      await loadInitialSurface(requestWindow);
-    }
-
-    return {
-      ok: true,
-      ready: true,
-      packet,
-    };
-  } catch (error) {
-    console.error(`[atlas] desktop session start failed: ${String((error as Error)?.message || error)}`);
-    const clarificationError = error instanceof AtlasClarificationError
-      ? error
-      : new AtlasClarificationError(
-        String((error as Error)?.message || error),
-        500,
-        "workspace_session_brief_failed",
-      );
-    return {
-      ok: false,
-      error: clarificationError.message,
-      code: clarificationError.code,
-    };
-  }
-}
-
 async function createMainWindow(): Promise<BrowserWindow> {
   if (!atlasBootstrap) {
     throw new Error("ATLAS desktop bootstrap is not ready.");
@@ -563,8 +508,16 @@ async function createMainWindow(): Promise<BrowserWindow> {
 
   const persistedBounds = getPersistedWindowBounds();
   const window = new BrowserWindow({
-    ...createAtlasDesktopWindowChromeOptions(persistedBounds),
-    icon: atlasDesktopResources.appIconPath,
+    width: persistedBounds?.width || 1440,
+    height: persistedBounds?.height || 980,
+    ...(persistedBounds && typeof persistedBounds.x === "number" ? { x: persistedBounds.x } : {}),
+    ...(persistedBounds && typeof persistedBounds.y === "number" ? { y: persistedBounds.y } : {}),
+    minWidth: 980,
+    minHeight: 680,
+    autoHideMenuBar: true,
+    backgroundColor: "#f6f1e8",
+    title: ATLAS_APP_NAME,
+    ...(atlasDesktopResources.windowIconPath ? { icon: atlasDesktopResources.windowIconPath } : {}),
     webPreferences: {
       preload: atlasDesktopResources.preloadPath,
       contextIsolation: true,
@@ -574,30 +527,22 @@ async function createMainWindow(): Promise<BrowserWindow> {
   });
   window.removeMenu();
 
-  window.once("ready-to-show", () => {
-    if (!window.isDestroyed()) {
-      window.show();
-      notifyRendererWindowVisible(window);
-    }
-  });
+  if (process.platform === "win32") {
+    window.setAppDetails(buildAtlasWindowsAppDetails(
+      app.getPath("exe"),
+      atlasDesktopResources.windowIconPath || null,
+    ));
+  }
+
   attachWindowStatePersistence(window);
-  attachProductLocationPersistence(window);
   attachWindowPolicies(window, atlasBootstrap.serverUrl);
-  window.on("show", () => {
-    notifyRendererWindowVisible(window);
-  });
-  window.on("restore", () => {
-    notifyRendererWindowVisible(window);
-  });
-  window.on("focus", () => {
-    notifyRendererWindowVisible(window);
-  });
-  window.on("closed", () => {
-    if (mainWindow === window) {
-      mainWindow = null;
-    }
-  });
   await loadInitialSurface(window);
+  appendBootstrapTrace("main window initial surface loaded");
+
+  if (!app.isPackaged) {
+    window.webContents.openDevTools({ mode: "detach" });
+  }
+
   return window;
 }
 
@@ -625,19 +570,95 @@ function wireSingleInstanceLifecycle(): boolean {
   return true;
 }
 
+function wireProcessTerminationLifecycle(): void {
+  const requestProcessShutdown = (reason: string, exitCode = 0, error?: unknown) => {
+    if (error instanceof Error) {
+      appendBootstrapTrace(`process shutdown requested: ${reason}`, error);
+    } else {
+      appendBootstrapTrace(`process shutdown requested: ${reason}`);
+    }
+
+    if (shutdownInFlight) {
+      return;
+    }
+
+    void shutdownAtlasApp(exitCode);
+  };
+
+  process.once("SIGINT", () => {
+    requestProcessShutdown("sigint", 0);
+  });
+
+  process.once("SIGTERM", () => {
+    requestProcessShutdown("sigterm", 0);
+  });
+
+  process.once("SIGHUP", () => {
+    requestProcessShutdown("sighup", 0);
+  });
+
+  process.once("uncaughtException", (error) => {
+    console.error(`[atlas] uncaught exception: ${String((error as Error)?.message || error)}`);
+    requestProcessShutdown("uncaught-exception", 1, error);
+  });
+
+  process.once("unhandledRejection", (reason) => {
+    const rejectionError = reason instanceof Error ? reason : new Error(String(reason));
+    console.error(`[atlas] unhandled rejection: ${String(rejectionError.message || rejectionError)}`);
+    requestProcessShutdown("unhandled-rejection", 1, rejectionError);
+  });
+}
+
 async function bootstrapDesktopApp(): Promise<void> {
+  appendBootstrapTrace("desktop app bootstrap start");
   alignPackagedWorkingDirectory();
   await validateDesktopResources();
-
   await initializeDesktopState();
+  await stopBoxBackgroundRuntime();
   atlasRuntime = await startDesktopRuntime();
   mainWindow = await createMainWindow();
+  appendBootstrapTrace("desktop app bootstrap complete");
+  setTimeout(() => {
+    void repairPinnedAtlasTaskbarShortcuts();
+  }, 1000);
+}
+
+async function shutdownAtlasApp(exitCode = 0): Promise<void> {
+  if (shutdownInFlight) {
+    return;
+  }
+  shutdownInFlight = true;
+
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      await persistWindowBounds(mainWindow);
+    }
+    if (atlasRuntime?.server.listening) {
+      await new Promise<void>((resolve) => {
+        atlasRuntime?.server.close(() => resolve());
+      });
+    }
+    await stopBoxBackgroundRuntime();
+  } catch (error) {
+    console.error(`[atlas] desktop shutdown failed: ${String((error as Error)?.message || error)}`);
+  } finally {
+    if (app.isReady()) {
+      app.exit(exitCode);
+    } else {
+      process.exit(exitCode);
+    }
+  }
 }
 
 app.whenReady().then(() => {
   if (!atlasOwnsSingleInstanceLock) {
+    appendBootstrapTrace("single instance lock unavailable; skipping bootstrap");
     return Promise.resolve();
   }
+
+  Menu.setApplicationMenu(null);
+  appendBootstrapTrace("app.whenReady resolved");
+  app.setName(ATLAS_APP_NAME);
 
   if (process.platform === "win32") {
     app.setAppUserModelId(ATLAS_WINDOWS_APP_ID);
@@ -649,94 +670,32 @@ app.whenReady().then(() => {
     }
     return atlasBootstrap;
   });
-  ipcMain.handle("atlas-desktop:get-workspace-state", async () => {
-    return atlasDesktopState || createDefaultAtlasDesktopState();
-  });
-  ipcMain.handle("atlas-desktop:get-snapshot", async (event, payload: AtlasSnapshotRequestPayload = {}) => {
-    try {
-      assertTrustedAtlasSnapshotSender(event);
-      return await fetchAtlasDesktopSnapshot(payload);
-    } catch (error) {
-      console.error(`[atlas] desktop snapshot IPC failed: ${String((error as Error)?.message || error)}`);
-      throw error;
-    }
-  });
-  ipcMain.handle("atlas-desktop:refresh-snapshot", async (event, payload: AtlasSnapshotRequestPayload = {}) => {
-    try {
-      assertTrustedAtlasSnapshotSender(event);
-      return await fetchAtlasDesktopSnapshot(payload);
-    } catch (error) {
-      console.error(`[atlas] desktop snapshot refresh IPC failed: ${String((error as Error)?.message || error)}`);
-      throw error;
-    }
-  });
-  ipcMain.handle("atlas-desktop:set-workspace-draft", async (_event, payload: { draft?: string } = {}) => {
-    try {
-      await updateWorkspaceDraft(String(payload.draft || ""));
-      return { ok: true };
-    } catch (error) {
-      console.error(`[atlas] workspace draft update failed: ${String((error as Error)?.message || error)}`);
-      throw error;
-    }
-  });
-  ipcMain.handle("atlas-desktop:set-workspace-composer-focus", async (_event, payload: { focused?: boolean } = {}) => {
-    try {
-      await updateWorkspaceComposerFocus(payload.focused === true);
-      return { ok: true };
-    } catch (error) {
-      console.error(`[atlas] workspace composer focus update failed: ${String((error as Error)?.message || error)}`);
-      throw error;
-    }
-  });
-  ipcMain.handle("atlas-desktop:pick-workspace-attachments", async (event) => {
-    try {
-      const requestWindow = BrowserWindow.fromWebContents(event.sender);
-      const attachments = await pickWorkspaceAttachments(requestWindow);
-      return { ok: true, attachments };
-    } catch (error) {
-      console.error(`[atlas] workspace attachment picker failed: ${String((error as Error)?.message || error)}`);
-      throw error;
-    }
-  });
-  ipcMain.handle("atlas-desktop:remove-workspace-attachment", async (_event, payload: { attachmentId?: string } = {}) => {
-    try {
-      const attachments = await removeWorkspaceAttachment(String(payload.attachmentId || ""));
-      return { ok: true, attachments };
-    } catch (error) {
-      console.error(`[atlas] workspace attachment removal failed: ${String((error as Error)?.message || error)}`);
-      throw error;
-    }
-  });
-  ipcMain.handle("atlas-desktop:start-session", async (event, payload: { objective?: string } = {}) => {
-    try {
-      const requestWindow = BrowserWindow.fromWebContents(event.sender);
-      return await startDesktopSession(String(payload.objective || ""), requestWindow);
-    } catch (error) {
-      console.error(`[atlas] desktop start session IPC failed: ${String((error as Error)?.message || error)}`);
-      throw error;
-    }
-  });
 
   return bootstrapDesktopApp();
 }).catch((error) => {
+  appendBootstrapTrace("desktop bootstrap failed", error);
   console.error(`[atlas] desktop bootstrap failed: ${String((error as Error)?.message || error)}`);
   app.exit(1);
+});
+
+app.on("before-quit", (event) => {
+  if (shutdownInFlight) {
+    return;
+  }
+  event.preventDefault();
+  void shutdownAtlasApp();
 });
 
 app.on("window-all-closed", () => {
   app.quit();
 });
 
-app.on("before-quit", async () => {
-  try {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      await persistWindowBounds(mainWindow);
-    }
-    if (!atlasRuntime?.server.listening) return;
-    await new Promise<void>((resolve) => {
-      atlasRuntime?.server.close(() => resolve());
+app.on("activate", () => {
+  if (BrowserWindow.getAllWindows().length === 0 && atlasOwnsSingleInstanceLock) {
+    createMainWindow().then((window) => {
+      mainWindow = window;
+    }).catch((error) => {
+      console.error(`[atlas] failed to recreate the desktop window: ${String((error as Error)?.message || error)}`);
     });
-  } catch (error) {
-    console.error(`[atlas] desktop shutdown failed: ${String((error as Error)?.message || error)}`);
   }
 });

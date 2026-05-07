@@ -3,28 +3,22 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { type AtlasClarificationRunner } from "./clarification.js";
-import {
-  ATLAS_LEGACY_SNAPSHOT_PATH,
-  ATLAS_SNAPSHOT_PATH,
-  handleAtlasHomeRequest,
-  handleAtlasSnapshotRequest,
-  type AtlasHomeRouteOptions,
-} from "./routes/home.js";
+import { handleAtlasAuthRequest } from "./routes/auth.js";
+import { handleAtlasChatRequest } from "./routes/chat.js";
+import { handleAtlasCompletedSessionFilesDeleteRequest } from "./routes/completed_session_files_delete.js";
+import { handleAtlasHomeRequest, type AtlasHomeRouteOptions } from "./routes/home.js";
 import { handleAtlasLifecycleRequest } from "./routes/lifecycle.js";
-import { handleAtlasWorkspaceSessionBriefRequest } from "./routes/onboarding.js";
-
-const ATLAS_WORKSPACE_SESSION_BRIEF_PATH = "/api/workspace/session-brief";
-const ATLAS_LEGACY_ONBOARDING_STATUS_PATH = "/api/onboarding/status";
-const ATLAS_LEGACY_ONBOARDING_SUBMIT_PATH = "/api/onboarding/clarify";
-
-function writeTemporaryRedirect(res: ServerResponse, location: string): void {
-  res.writeHead(307, {
-    location,
-    "cache-control": "no-store",
-    "content-type": "text/plain; charset=utf-8",
-  });
-  res.end(`Temporary Redirect: ${location}`);
-}
+import { handleAtlasRuntimeLogsRequest } from "./routes/runtime_logs.js";
+import { handleAtlasOnboardingRequest } from "./routes/onboarding.js";
+import {
+  handleAtlasRepositoryClearRequest,
+  handleAtlasRepositoryListRequest,
+  handleAtlasRepositorySelectRequest,
+} from "./routes/repositories.js";
+import { handleAtlasRuntimeStatusRequest } from "./routes/runtime_status.js";
+import { handleAtlasSessionDeleteRequest } from "./routes/session_delete.js";
+import { handleAtlasSessionPresentationRequest } from "./routes/session_presentation.js";
+import { handleAtlasSessionsRequest } from "./routes/sessions.js";
 
 export const ATLAS_DEFAULT_PORT = 8788;
 
@@ -54,7 +48,6 @@ function resolveAtlasServerOptions(options: AtlasServerOptions = {}): ResolvedAt
     hostLabel: String(options.hostLabel || process.env.BOX_ATLAS_HOST_LABEL || "Windows host"),
     shellCommand: String(options.shellCommand || process.env.BOX_ATLAS_SHELL_COMMAND || ".\\ATLAS.cmd"),
     desktopSessionId: String(options.desktopSessionId || "").trim(),
-    desktopSnapshotToken: String(options.desktopSnapshotToken || "").trim(),
     clarificationCommand: String(options.clarificationCommand || "").trim(),
     clarificationRunner: options.clarificationRunner,
   };
@@ -68,24 +61,95 @@ async function routeAtlasRequest(
   const url = new URL(req.url || "/", "http://127.0.0.1");
 
   try {
-    if (url.pathname === ATLAS_LEGACY_ONBOARDING_STATUS_PATH || url.pathname === ATLAS_LEGACY_ONBOARDING_SUBMIT_PATH) {
-      const canonicalMethod = url.pathname === ATLAS_LEGACY_ONBOARDING_STATUS_PATH ? "GET" : "POST";
-      const pathname = ATLAS_WORKSPACE_SESSION_BRIEF_PATH;
-      const redirectUrl = new URL(pathname, "http://127.0.0.1");
-      if (canonicalMethod === "GET") {
-        redirectUrl.search = url.search;
-      }
-      writeTemporaryRedirect(res, redirectUrl.pathname + redirectUrl.search);
+    if (url.pathname === "/api/auth/session") {
+      await handleAtlasAuthRequest(req, res, {
+        stateDir: options.stateDir,
+      });
       return;
     }
 
-    if (url.pathname === ATLAS_WORKSPACE_SESSION_BRIEF_PATH) {
-      await handleAtlasWorkspaceSessionBriefRequest(req, res, {
+    if (url.pathname === "/api/onboarding/status" || url.pathname === "/api/onboarding/clarify") {
+      if (!options.desktopSessionId) {
+        res.writeHead(409, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({
+          ok: false,
+          error: "ATLAS onboarding is not bound to a desktop session.",
+          code: "desktop_session_missing",
+        }));
+        return;
+      }
+      await handleAtlasOnboardingRequest(req, res, {
         stateDir: options.stateDir,
-        sessionId: options.desktopSessionId || undefined,
-        targetRepo: options.targetRepo,
+        sessionId: options.desktopSessionId,
+        targetRepo: String(process.env.TARGET_REPO || options.targetRepo || "").trim(),
         clarificationCommand: options.clarificationCommand,
         clarificationRunner: options.clarificationRunner,
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/chat/session") {
+      await handleAtlasChatRequest(req, res, {
+        stateDir: options.stateDir,
+        targetRepo: String(process.env.TARGET_REPO || options.targetRepo || "").trim(),
+        clarificationCommand: options.clarificationCommand,
+        clarificationRunner: options.clarificationRunner,
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/repositories") {
+      await handleAtlasRepositoryListRequest(req, res, {
+        stateDir: options.stateDir,
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/repositories/select") {
+      await handleAtlasRepositorySelectRequest(req, res, {
+        stateDir: options.stateDir,
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/repositories/clear") {
+      await handleAtlasRepositoryClearRequest(req, res, {
+        stateDir: options.stateDir,
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/runtime/status") {
+      await handleAtlasRuntimeStatusRequest(req, res, {
+        stateDir: options.stateDir,
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/session/delete") {
+      await handleAtlasSessionDeleteRequest(req, res, {
+        stateDir: options.stateDir,
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/session/completed/files/delete") {
+      await handleAtlasCompletedSessionFilesDeleteRequest(req, res, {
+        stateDir: options.stateDir,
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/session/presentation/refresh") {
+      await handleAtlasSessionPresentationRequest(req, res, {
+        stateDir: options.stateDir,
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/runtime/logs") {
+      await handleAtlasRuntimeLogsRequest(req, res, {
+        stateDir: options.stateDir,
       });
       return;
     }
@@ -95,20 +159,8 @@ async function routeAtlasRequest(
       return;
     }
 
-    if (url.pathname === ATLAS_SNAPSHOT_PATH || url.pathname === ATLAS_LEGACY_SNAPSHOT_PATH) {
-      await handleAtlasSnapshotRequest(req, res, options);
-      return;
-    }
-
-    if (url.pathname === "/sessions") {
-      if (String(req.method || "GET").toUpperCase() !== "GET") {
-        res.writeHead(405, { "content-type": "text/html; charset=utf-8" });
-        res.end("<!doctype html><html><body><h1>Method Not Allowed</h1></body></html>");
-        return;
-      }
-      const redirectUrl = new URL("/", "http://127.0.0.1");
-      redirectUrl.search = url.search;
-      writeTemporaryRedirect(res, redirectUrl.pathname + redirectUrl.search);
+    if (url.pathname === "/sessions" || url.pathname === "/sessions/view") {
+      await handleAtlasSessionsRequest(req, res, options);
       return;
     }
 

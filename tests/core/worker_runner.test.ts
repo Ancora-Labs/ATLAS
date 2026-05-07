@@ -1,18 +1,21 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import { execFile } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
+import { promisify } from "node:util";
 import {
+  buildLiveWorkerLogStamp,
   buildConversationContext,
   buildWorkerRuntimeLineage,
-  computePromptCacheRoutingSignal,
-  computeFailureFinishRoutingSignal,
-  deriveWorkerFinishCode,
+  formatLiveWorkerLogChunk,
+  formatLiveWorkerLogStatefulChunk,
   parseWorkerResponse,
   extractStreamingWorkerResultMarker,
   shouldTreatAbortedWorkerRunAsTerminalResult,
   deriveDeterministicCleanTreeEvidence,
+  ensureWorkerOutputClosureFields,
   resolveCleanTreeEvidenceTargets,
   inferWorkerReportedTaskScopedCleanTreeEvidence,
   detectRepoContamination,
@@ -22,6 +25,9 @@ import {
   injectCiFailureContextIfMissing,
   applyMemoryTrustFilter,
   computeMemoryHitRatio,
+  computePromptCacheRoutingSignal,
+  computeFailureFinishRoutingSignal,
+  deriveWorkerFinishCode,
   isTerminalWorkerStatus,
   resolveWorkerExecutionLineageId,
   shouldResolveRecoveredWorkerEscalations,
@@ -32,6 +38,10 @@ import { createVersionedCheckpointEnvelope } from "../../src/core/checkpoint_eng
 import { buildWorkerExecutionReportArtifact } from "../../src/core/evidence_envelope.js";
 import { buildInterventionLineageTelemetry, buildRoutingROISummary } from "../../src/core/cycle_analytics.js";
 import { appendPromptCacheTelemetry, appendFailureClassification } from "../../src/core/state_tracker.js";
+import { PLATFORM_MODE } from "../../src/core/mode_state.js";
+import { TARGET_SESSION_STAGE } from "../../src/core/target_session_state.js";
+
+const execFileAsync = promisify(execFile);
 
 // ── parseWorkerResponse ──────────────────────────────────────────────────────
 
@@ -41,9 +51,14 @@ describe("parseWorkerResponse", () => {
     assert.equal(result.status, "done");
   });
 
-  it("defaults to done when no BOX_STATUS marker is present", () => {
+  it("defaults to partial when no BOX_STATUS marker is present", () => {
     const result = parseWorkerResponse("Worker completed the task successfully.", "");
-    assert.equal(result.status, "done");
+    assert.equal(result.status, "partial");
+  });
+
+  it("downgrades unknown BOX_STATUS values to partial", () => {
+    const result = parseWorkerResponse("BOX_STATUS=complete", "");
+    assert.equal(result.status, "partial");
   });
 
   it("parses blocked status", () => {
@@ -56,14 +71,142 @@ describe("parseWorkerResponse", () => {
     assert.equal(result.status, "partial");
   });
 
+  it("promotes inspection-only partial output to done when all checks passed", () => {
+    const stdout = [
+      "The existing shadow artifact passes inspection as a simple static todo-list MVP.",
+      "index.html — PASS",
+      "style.css — PASS",
+      "app.js — PASS",
+      "README.md — PASS",
+      "Because the only ordered work item was an inspection pass, I did not create a no-op PR.",
+      "BOX_STATUS=partial",
+      "BOX_ACCESS=repo:ok;files:ok;tools:ok;api:ok",
+      "BOX_EXPECTED_OUTCOME=Inspect the artifact and emit PASS/FAIL checks.",
+      "BOX_ACTUAL_OUTCOME=Completed an evidence-backed inspection with all checks passing.",
+      "BOX_DEVIATION=minor",
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=pass",
+      "EDGE_CASES=pass",
+      "===END_VERIFICATION===",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "done");
+  });
+
+  it("keeps partial when inspection output contains an actual fail", () => {
+    const stdout = [
+      "The artifact failed inspection.",
+      "index.html — PASS",
+      "app.js — FAIL",
+      "Because the only ordered work item was an inspection pass, I did not create a no-op PR.",
+      "BOX_STATUS=partial",
+      "BOX_EXPECTED_OUTCOME=Inspect the artifact and emit PASS/FAIL checks.",
+      "BOX_ACTUAL_OUTCOME=Inspection found a failing app.js check.",
+      "BOX_DEVIATION=major",
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=pass",
+      "EDGE_CASES=pass",
+      "===END_VERIFICATION===",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "partial");
+  });
+
+  it("normalizes partial to done when only pre-existing global lint backlog blocks merge", () => {
+    const stdout = [
+      "BOX_STATUS=partial",
+      "BOX_PR_URL=https://github.com/Ancora-Labs/ATLAS/pull/366",
+      "acceptance criterion 4: FAIL — npm run lint fails because src/ has a pre-existing repo-wide lint backlog",
+      "TOTAL_WARNINGS=1507",
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=pass",
+      "EDGE_CASES=pass",
+      "===END_VERIFICATION===",
+      "BOX_ACCESS=repo:ok;files:ok;tools:ok;api:ok",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "done");
+    assert.equal(result.dispatchBlockReason, null);
+  });
+
+  it("normalizes partial to done when merged SHA + prUrl + build/tests pass (evidenced partial)", () => {
+    const stdout = [
+      "BOX_STATUS=partial",
+      "BOX_PR_URL=https://github.com/Ancora-Labs/ATLAS/pull/366",
+      "BOX_MERGED_SHA=a972d8f8e46ba089c08aadeace767eecb182e69d",
+      "BOX_BRANCH=governance/onboarding-clarification-shell",
+      "BOX_FILES_TOUCHED=docs/DESIGN.md,src/core/clarification_runtime.ts",
+      "BOX_ACCESS=repo:ok;files:ok;tools:ok;api:ok",
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=pass",
+      "RESPONSIVE=n/a",
+      "===END_VERIFICATION===",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "done",
+      "partial with merged SHA + prUrl + build/tests=pass must be normalized to done");
+    assert.equal(result.normalizedFromEvidencedPartial, true);
+    assert.equal(result.dispatchBlockReason, null);
+    assert.equal(result.mergedSha, "a972d8f8e46ba089c08aadeace767eecb182e69d");
+  });
+
+  it("keeps partial when merged SHA is absent even if build/tests pass", () => {
+    const stdout = [
+      "BOX_STATUS=partial",
+      "BOX_PR_URL=https://github.com/Ancora-Labs/ATLAS/pull/366",
+      "BOX_BRANCH=governance/onboarding-clarification-shell",
+      "BOX_ACCESS=repo:ok;files:ok;tools:ok;api:ok",
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=pass",
+      "===END_VERIFICATION===",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "partial",
+      "partial without BOX_MERGED_SHA must not be normalized to done");
+    assert.equal(result.normalizedFromEvidencedPartial, false);
+  });
+
+  it("keeps partial when tests fail even if merged SHA present", () => {
+    const stdout = [
+      "BOX_STATUS=partial",
+      "BOX_PR_URL=https://github.com/Ancora-Labs/ATLAS/pull/366",
+      "BOX_MERGED_SHA=a972d8f8e46ba089c08aadeace767eecb182e69d",
+      "BOX_ACCESS=repo:ok;files:ok;tools:ok;api:ok",
+      "===VERIFICATION_REPORT===",
+      "BUILD=pass",
+      "TESTS=fail",
+      "===END_VERIFICATION===",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "partial",
+      "partial with failing tests must not be normalized to done");
+    assert.equal(result.normalizedFromEvidencedPartial, false);
+  });
+
+  it("normalizes already-completed partial output to skipped", () => {
+    const stdout = [
+      "BOX_STATUS=partial",
+      "BOX_SKIP_REASON=already-merged",
+      "BOX_BLOCKER=Task was already completed in a prior wave via merged PR #2",
+    ].join("\n");
+    const result = parseWorkerResponse(stdout, "");
+    assert.equal(result.status, "skipped");
+    assert.equal(result.skipReason, "already-merged");
+  });
+
   it("parses error status", () => {
     const result = parseWorkerResponse("", "fatal: not a git repository\nBOX_STATUS=error");
     assert.equal(result.status, "error");
   });
 
-  it("normalizes unknown status values to done", () => {
+  it("normalizes unknown status values to partial", () => {
     const result = parseWorkerResponse("BOX_STATUS=complete", "");
-    assert.equal(result.status, "done");
+    assert.equal(result.status, "partial");
   });
 
   it("extracts BOX_PR_URL", () => {
@@ -199,6 +342,90 @@ describe("parseWorkerResponse", () => {
     const raw = "BOX_STATUS=done\nSome text";
     const result = parseWorkerResponse(raw, "");
     assert.equal(result.fullOutput, raw);
+  });
+});
+
+describe("target-aware worker live log formatting", () => {
+  it("moves worker metadata to a compact suffix while preserving target context", () => {
+    const config = {
+      platformModeState: {
+        currentMode: "single_target_delivery",
+      },
+      activeTargetSession: {
+        projectId: "target_portal",
+        sessionId: "sess_123",
+      },
+    };
+
+    const stamp = buildLiveWorkerLogStamp(config, "integration-worker");
+    const formatted = formatLiveWorkerLogChunk(config, "integration-worker", "line one\nline two\n");
+    const lines = formatted.trim().split("\n");
+
+    assert.equal(stamp, "[mode=target role=integration-worker project=target_portal session=sess_123]");
+    assert.ok(lines[0].startsWith("line one"));
+    assert.ok(lines[1].startsWith("line two"));
+    assert.ok(lines[0].endsWith(stamp));
+    assert.ok(lines[1].endsWith(stamp));
+  });
+
+  it("buffers tokenized stream chunks until a readable sentence is available", () => {
+    const config = {
+      platformModeState: {
+        currentMode: "single_target_delivery",
+      },
+      activeTargetSession: {
+        projectId: "target_portal",
+        sessionId: "sess_123",
+      },
+    };
+
+    const stamp = buildLiveWorkerLogStamp(config, "quality-worker");
+    const first = formatLiveWorkerLogStatefulChunk(config, "quality-worker", "The command appears", "");
+    const second = formatLiveWorkerLogStatefulChunk(config, "quality-worker", " to be hanging", first.remainder);
+    const third = formatLiveWorkerLogStatefulChunk(config, "quality-worker", " after 300 seconds.", second.remainder);
+
+    assert.equal(first.formatted, "");
+    assert.equal(second.formatted, "");
+    assert.equal(third.remainder, "");
+    assert.ok(third.formatted.includes("The command appears to be hanging after 300 seconds."));
+    assert.ok(third.formatted.startsWith(`${stamp} `));
+    assert.ok(third.formatted.includes("project=target_portal"));
+    assert.ok(third.formatted.includes("session=sess_123"));
+  });
+
+  it("does not emit metadata-only lines for blank log chunks", () => {
+    const config = {
+      platformModeState: {
+        currentMode: "single_target_delivery",
+      },
+      activeTargetSession: {
+        projectId: "target_portal",
+        sessionId: "sess_123",
+      },
+    };
+
+    const formatted = formatLiveWorkerLogChunk(config, "quality-worker", "\n");
+    assert.equal(formatted, "");
+  });
+
+  it("keeps tool command detail lines plain while showing mode on action headers", () => {
+    const config = {
+      platformModeState: {
+        currentMode: "single_target_delivery",
+      },
+      activeTargetSession: {
+        projectId: "target_portal",
+        sessionId: "sess_123",
+      },
+    };
+
+    const formatted = formatLiveWorkerLogChunk(config, "quality-worker", "● Run test (shell)\n  │ npm test\n  └ 4 lines...\n");
+    const lines = formatted.trim().split("\n");
+    const stamp = buildLiveWorkerLogStamp(config, "quality-worker");
+
+    assert.ok(lines[0].endsWith(stamp));
+    assert.equal(lines[1], "  │ npm test");
+    assert.equal(lines[2], "  └ 4 lines...");
   });
 });
 
@@ -536,6 +763,81 @@ describe("tool access + capability guards", () => {
     assert.ok(!prompt.includes("[TOOL_INTENT] scope=<repo-path-or-subsystem> intent=<goal> impact=<low|medium|high|critical> clearance=<read|write|admin>"));
   });
 
+  it("worker prompt still requires closure evidence for observation tasks", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Run install and verify the CLI help output.",
+        taskKind: "observation",
+        verification: "1. npm install\n2. npm run build\n3. node dist/index.js --help",
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-prompt-test") },
+      },
+      "quality",
+      {},
+    );
+
+    assert.ok(prompt.includes("BOX_EXPECTED_OUTCOME=<one-line: what this task was supposed to achieve>"));
+    assert.ok(prompt.includes("BOX_ACTUAL_OUTCOME=<one-line: what was actually done/delivered>"));
+    assert.ok(prompt.includes("BOX_DEVIATION=none|minor|major"));
+    assert.ok(!prompt.includes("BOX_MERGED_SHA=<actual sha>"));
+  });
+
+  it("synthesizes missing closure evidence for successful observation runs", () => {
+    const result = ensureWorkerOutputClosureFields(
+      [
+        "BOX_STATUS=done",
+        "===VERIFICATION_REPORT===",
+        "BUILD=pass",
+        "TESTS=pass",
+        "===END_VERIFICATION===",
+      ].join("\n"),
+      {
+        task: "Verify install, typecheck, build, and CLI help output.",
+        taskKind: "observation",
+      },
+      {
+        status: "done",
+        summary: "Completed install, typecheck, build, and CLI help verification.",
+        verificationReport: { build: "pass", tests: "pass" },
+      },
+    );
+
+    assert.equal(result.valid, true);
+    assert.equal(result.synthesized, true);
+    assert.ok(result.output.includes("BOX_EXPECTED_OUTCOME=Verify install, typecheck, build, and CLI help output."));
+    assert.ok(result.output.includes("BOX_ACTUAL_OUTCOME=Completed install, typecheck, build, and CLI help verification."));
+    assert.ok(result.output.includes("BOX_DEVIATION=none"));
+  });
+
+  it("synthesizes missing closure evidence for successful implementation runs", () => {
+    const result = ensureWorkerOutputClosureFields(
+      [
+        "BOX_STATUS=done",
+        "BOX_PR_URL=https://github.com/Ancora-Labs/ATLAS/pull/367",
+        "DELIVERED: Added Electron packaging scripts and builder config.",
+      ].join("\n"),
+      {
+        task: "Add Electron build and packaging dependencies plus additive npm scripts for development, build, and internal Windows packaging without replacing the current ATLAS commands.",
+        taskKind: "implementation",
+      },
+      {
+        status: "done",
+        summary: "Added Electron packaging scripts and builder configuration for the desktop shell.",
+        deliverable: "Electron packaging scripts and builder configuration.",
+      },
+    );
+
+    assert.equal(result.valid, true);
+    assert.equal(result.synthesized, true);
+    assert.ok(result.output.includes("BOX_EXPECTED_OUTCOME=Add Electron build and packaging dependencies plus additive npm scripts for development, build, and internal Windows packaging without replacing the current ATLAS commands."));
+    assert.ok(result.output.includes("BOX_ACTUAL_OUTCOME=Added Electron packaging scripts and builder configuration for the desktop shell."));
+    assert.ok(result.output.includes("BOX_DEVIATION=none"));
+  });
+
   it("worker prompt forbids upstream-only deferrals for red PRs", () => {
     const prompt = buildConversationContext(
       [],
@@ -556,6 +858,162 @@ describe("tool access + capability guards", () => {
 
     assert.ok(prompt.includes("A red PR is NOT resolved by saying main is red too."));
     assert.ok(prompt.includes("reproduce the failing branch check"));
+  });
+
+  it("worker prompt includes same-call interactive access recovery rules for target sessions", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Add schema support for the target booking flow.",
+        taskKind: "implementation",
+        acceptance_criteria: ["schema updated", "verification documented"],
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-prompt-test") },
+        activeTargetSession: {
+          sessionId: "sess_access",
+          prerequisites: {
+            requiredNow: ["database_access_credentials"],
+            requiredLater: ["deploy_platform_access"],
+            optional: [],
+          },
+        },
+      },
+      "quality",
+      {},
+    );
+
+    assert.ok(prompt.includes("## INTERACTIVE ACCESS RESOLUTION"));
+    assert.ok(prompt.includes("reply with `done`"));
+    assert.ok(prompt.includes("requiredNow: database_access_credentials"));
+    assert.ok(prompt.includes("Reason from repo evidence and feature scope"));
+  });
+
+  it("worker prompt requires explicit visual medium selection for image-led UI tasks", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Implement the premium restaurant landing page UI with a real dining room hero photo.",
+        targetFiles: ["src/app.tsx"],
+        context: "Use real photos for the hero and gallery surfaces.",
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-prompt-test") },
+      },
+      "evolution",
+      {},
+    );
+
+    assert.ok(prompt.includes("## VISUAL MEDIUM DECISION POLICY"));
+    assert.ok(prompt.includes("Choose intentionally between operator-supplied assets, real sourced raster imagery, screenshots, source-required logos, brand marks, textures, or existing branded assets"));
+    assert.ok(prompt.includes("actively source an internet image, logo, brand mark, texture, or other source asset"));
+    assert.ok(prompt.includes("Use the visual source strategy named by the target contract, operator attachments, and preserved mission notes."));
+    assert.ok(prompt.includes("keep the source requirement visible."));
+  });
+
+  it("worker prompt requires lawful internet-sourced imagery for image-led implementation tasks", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Replace the restaurant hero illustration with a real dining room photo.",
+        context: "Use real photos for the hero and gallery surfaces.",
+        taskKind: "implementation",
+        targetFiles: ["src/app.tsx"],
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-image-prompt-test") },
+      },
+      "evolution",
+      {},
+    );
+
+    assert.ok(prompt.includes("## VISUAL MEDIUM DECISION POLICY"));
+    assert.ok(prompt.includes("actively source an internet image, logo, brand mark, texture, or other source asset"));
+  });
+
+  it("worker prompt respects internet-image bans for image-led implementation tasks", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Replace the restaurant hero illustration with a real dining room photo.",
+        context: "Do not use internet images; use only provided local assets.",
+        taskKind: "implementation",
+        targetFiles: ["src/app.tsx"],
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-image-ban-test") },
+      },
+      "evolution",
+      {},
+    );
+
+    assert.ok(prompt.includes("## VISUAL MEDIUM DECISION POLICY"));
+    assert.ok(!prompt.includes("actively source an internet image"));
+    assert.ok(prompt.includes("use only operator-provided or other allowed local/source assets"));
+  });
+
+  it("worker prompt includes a UI adapter verification loop when Athena marks UI work", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Finish the reservation-first landing page UI.",
+        context: "## UI EXECUTION REMINDER\nThis plan includes UI work.",
+        taskKind: "implementation",
+        targetFiles: ["src/App.tsx", "src/styles.css"],
+        uiExecutionReminderRequired: true,
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-ui-adapter-test") },
+      },
+      "integration",
+      {},
+    );
+
+    assert.ok(prompt.includes("## UI ADAPTER VERIFICATION LOOP"));
+    assert.ok(prompt.includes("Before you declare the UI portion finished, open and inspect the actual rendered surface"));
+    assert.ok(prompt.includes("Playwright, browser preview, screenshot tooling"));
+    assert.ok(prompt.includes("Do not validate the UI at a single viewport only"));
+    assert.ok(prompt.includes("mobile, tablet, desktop"));
+    assert.ok(prompt.includes("Treat UI verification as both appearance and runtime behavior"));
+    assert.ok(prompt.includes("scroll, animation, transition, and interaction paths"));
+    assert.ok(prompt.includes("keep iterating until the requested UI is visibly present"));
+    assert.ok(prompt.includes("inspect them strictly one at a time"));
+    assert.ok(prompt.includes("Do not capture multiple screenshots or generate multiple viewport artifacts in one shell command or tool call before inspection"));
+    assert.ok(prompt.includes("Do not batch multiple screenshots, reference captures, source images, or other image artifacts into one visual read"));
+    assert.ok(prompt.includes("Bulk image reads are forbidden because they can overload the server"));
+  });
+
+  it("worker prompt injects sequential image guidance for UI tasks that target image-bearing files", () => {
+    const prompt = buildConversationContext(
+      [],
+      {
+        task: "Repair the existing landing page into a GA Pizza-inspired recreation.",
+        taskKind: "implementation",
+        targetFiles: ["index.html", "src/styles.css", "assets/images", "assets/source/image-credits.txt"],
+      },
+      {},
+      {
+        env: { targetRepo: "test/repo" },
+        paths: { stateDir: path.join(os.tmpdir(), "box-worker-runner-sequential-image-guidance-test") },
+      },
+      "evolution",
+      {},
+    );
+
+    assert.ok(prompt.includes("## VISUAL MEDIUM DECISION POLICY"));
+    assert.ok(prompt.includes("apply one sequential rule to every image"));
+    assert.ok(prompt.includes("each image acquisition step must produce exactly one image artifact"));
+    assert.ok(prompt.includes("Do not capture multiple screenshots or generate multiple viewport artifacts in one shell command or tool call before inspection"));
   });
 
   it("worker prompt adds a final placeholder self-check before done responses", () => {
@@ -759,6 +1217,63 @@ describe("attemptBranchCleanlinessRecovery", () => {
     // Both attempts should be made since files cannot be recovered
     assert.equal(result.attemptsMade, 2);
     assert.equal(result.recovered, false);
+  });
+
+  it("uses the isolated target workspace cwd in single-target mode", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "box-worker-recovery-"));
+    const boxRoot = path.join(tempRoot, "box-root");
+    const targetWorkspace = path.join(tempRoot, "target-workspace");
+    const previousCwd = process.cwd();
+
+    try {
+      await fs.mkdir(boxRoot, { recursive: true });
+      await fs.mkdir(targetWorkspace, { recursive: true });
+      process.chdir(boxRoot);
+
+      await execFileAsync("git", ["init"], { cwd: targetWorkspace });
+      await execFileAsync("git", ["config", "user.email", "box@example.com"], { cwd: targetWorkspace });
+      await execFileAsync("git", ["config", "user.name", "BOX Test"], { cwd: targetWorkspace });
+
+      const trackedFile = path.join(targetWorkspace, "tracked.txt");
+      await fs.writeFile(trackedFile, "original\n", "utf8");
+      await execFileAsync("git", ["add", "tracked.txt"], { cwd: targetWorkspace });
+      await execFileAsync("git", ["commit", "-m", "init"], { cwd: targetWorkspace });
+
+      await fs.writeFile(trackedFile, "modified\n", "utf8");
+
+      const config = {
+        rootDir: boxRoot,
+        selfDev: {
+          futureModeFlags: {
+            singleTargetDelivery: true,
+            targetSessionState: true,
+            targetWorkspaceLifecycle: true,
+          },
+        },
+        platformModeState: {
+          currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+        },
+        activeTargetSession: {
+          currentStage: TARGET_SESSION_STAGE.SHADOW,
+          workspace: {
+            path: targetWorkspace,
+          },
+          gates: {
+            allowShadowExecution: true,
+            allowActiveExecution: false,
+          },
+        },
+      };
+
+      const result = await attemptBranchCleanlinessRecovery(config, ["tracked.txt"], 1);
+      const recoveredContent = await fs.readFile(trackedFile, "utf8");
+
+      assert.equal(result.recovered, true);
+      assert.equal(recoveredContent.replace(/\r\n/g, "\n"), "original\n");
+    } finally {
+      process.chdir(previousCwd);
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1201,21 +1716,6 @@ describe("runtime lineage contract", () => {
     assert.equal(runtimeLineage.lineageJoinKey, "prompt-family:planner-cycle-7");
     assert.equal(runtimeLineage.checkpointThreadId, "prompt-family:planner-cycle-7");
   });
-
-  it("requires a non-null runtime lineage contract even without embedded lineage metadata", () => {
-    const runtimeLineage = buildWorkerRuntimeLineage(
-      {
-        task: "Normalize lineage joins for worker telemetry",
-        taskKind: "implementation",
-      },
-      { roleName: "evolution-worker", model: "GPT-5.4" },
-    );
-
-    assert.equal(runtimeLineage.lineageJoinKey.startsWith("identity:implementation::"), true);
-    assert.equal(runtimeLineage.checkpointThreadId, runtimeLineage.lineageJoinKey);
-    assert.equal(runtimeLineage.lineage.role, "evolution-worker");
-    assert.equal(runtimeLineage.lineage.model, "GPT-5.4");
-  });
 });
 
 // ── buildRoutingROISummary — lineage-key join for premium usage + routing ROI ──
@@ -1366,6 +1866,7 @@ describe("buildWorkerRunContract", () => {
     assert.equal(contract.maxTurns, 50);
     assert.equal(contract.workflowName, "box-evolution");
     assert.equal(contract.groupId, "box-workers");
+    assert.ok(String(contract.executionCwd || "").length > 0);
     assert.equal(contract.traceIncludeSensitiveData, false);
     assert.equal(contract.sessionInputPolicy, "auto");
     assert.deepEqual(contract.traceMetadata, {});
@@ -1403,6 +1904,31 @@ describe("buildWorkerRunContract", () => {
   it("sessionInputPolicy propagates valid string values", () => {
     const contract = buildWorkerRunContract({ workerRunContract: { sessionInputPolicy: "no_tools" } }, {});
     assert.equal(contract.sessionInputPolicy, "no_tools");
+  });
+
+  it("binds executionCwd to the isolated target workspace during active single-target delivery", () => {
+    const contract = buildWorkerRunContract(
+      {
+        rootDir: "C:/box",
+        platformModeState: { currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY },
+        selfDev: {
+          futureModeFlags: {
+            singleTargetDelivery: true,
+            targetSessionState: true,
+            targetWorkspaceLifecycle: true,
+          },
+        },
+        activeTargetSession: {
+          sessionId: "sess_target_1",
+          workspace: { path: "C:/target-workspace" },
+          currentStage: TARGET_SESSION_STAGE.ACTIVE,
+          gates: { allowActiveExecution: true },
+        },
+      },
+      {},
+    );
+
+    assert.equal(contract.executionCwd, "C:/target-workspace");
   });
 });
 

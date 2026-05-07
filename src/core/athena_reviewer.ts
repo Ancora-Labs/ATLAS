@@ -41,7 +41,7 @@ import {
   LEADERSHIP_CONTRACT_TYPE,
   TRUST_BOUNDARY_ERROR,
 } from "./trust_boundary.js";
-import { checkForbiddenCommands, normalizeCommandBatch } from "./verification_command_registry.js";
+import { checkForbiddenCommands, normalizeCommandBatch, VERIFICATION_DEFAULTS } from "./verification_command_registry.js";
 import { buildWorkerExecutionReportArtifact, validateEvidenceEnvelope } from "./evidence_envelope.js";
 import type { DispatchContractSnapshot, EvidenceEnvelope } from "./evidence_envelope.js";
 import { isEnvelopeUnambiguous } from "./evidence_envelope.js";
@@ -72,6 +72,9 @@ import {
   getUsableModelContextTokens as _getUsableModelContextTokens,
 } from "./worker_batch_planner.js";
 import { buildSpanEvent, EVENTS, EVENT_DOMAIN, SPAN_CONTRACT } from "./event_schema.js";
+import { buildPromptAssemblyPrompt, resolvePromptTargetRepo } from "./prompt_overlay.js";
+import { normalizeLeverageRank, validatePlanContract } from "./plan_contract_validator.js";
+import { splitTargetStagePlans } from "./target_stage_contract.js";
 
 // ── Span contract emitter ─────────────────────────────────────────────────────
 
@@ -112,6 +115,46 @@ export const ATHENA_FAST_PATH_REASON = Object.freeze({
    */
   STALE_SUPERSEDED_CI_GREEN: "STALE_SUPERSEDED_CI_GREEN",
 } as const);
+
+function stampAthenaArtifactTargetSession(config: any, artifact: any): any {
+  if (!artifact || typeof artifact !== "object") return artifact;
+
+  if (
+    config?.platformModeState?.currentMode !== "single_target_delivery"
+    || !config?.activeTargetSession?.sessionId
+  ) {
+    if (artifact.targetSession) {
+      delete artifact.targetSession;
+    }
+    return artifact;
+  }
+
+  artifact.targetSession = {
+    projectId: config.activeTargetSession.projectId,
+    sessionId: config.activeTargetSession.sessionId,
+    currentStage: config.activeTargetSession.currentStage,
+    repoUrl: config.activeTargetSession.repo?.repoUrl || null,
+  };
+  return artifact;
+}
+
+export function isAthenaReviewAlignedToTargetSession(config: any, review: any): boolean {
+  const runtimeSingleTarget = config?.platformModeState?.currentMode === "single_target_delivery"
+    && Boolean(config?.activeTargetSession?.sessionId);
+  const reviewTargetSession = review?.targetSession && typeof review.targetSession === "object"
+    ? review.targetSession
+    : null;
+
+  if (!runtimeSingleTarget) {
+    return !reviewTargetSession;
+  }
+  if (!reviewTargetSession) {
+    return false;
+  }
+
+  return String(reviewTargetSession.projectId || "") === String(config?.activeTargetSession?.projectId || "")
+    && String(reviewTargetSession.sessionId || "") === String(config?.activeTargetSession?.sessionId || "");
+}
 
 // ── Deterministic plan-batch fingerprinting ───────────────────────────────────
 
@@ -275,8 +318,10 @@ export const ATHENA_PLAN_REVIEW_REASON_CODE = Object.freeze({
   TRUST_BOUNDARY_VIOLATION: "TRUST_BOUNDARY_VIOLATION",
   PATCHED_PLAN_VALIDATION_FAILED: "PATCHED_PLAN_VALIDATION_FAILED",
   ATHENA_BATCH_METADATA_MISSING: "ATHENA_BATCH_METADATA_MISSING",
+  UI_BATCH_CONTRACT_VIOLATION: "UI_BATCH_CONTRACT_VIOLATION",
   REVIEW_EXCEPTION: "REVIEW_EXCEPTION",
   ACTIVE_GOVERNANCE_GATE_INFEASIBLE: "ACTIVE_GOVERNANCE_GATE_INFEASIBLE",
+  TARGET_STAGE_CONTRACT_VIOLATION: "TARGET_STAGE_CONTRACT_VIOLATION",
   /** One or more mandatory health-audit findings (critical/important) are not covered by the plan. */
   MANDATORY_COVERAGE_INCOMPLETE: "MANDATORY_COVERAGE_INCOMPLETE",
   /** One or more patchedPlan dependencies carry an unresolved cross-cycle pre-condition. */
@@ -599,11 +644,10 @@ export const DEGRADED_POSTMORTEM_REVIEW_REASON = Object.freeze({
 } as const);
 
 const REPLAY_OR_MANUAL_COMPLETION_FOLLOW_UP =
-  "Run canonical main-branch replay commands (git rev-parse HEAD, git status --porcelain, npm test) and complete expectedOutcome/actualOutcome manually.";
+  "Run canonical main-branch replay commands (git rev-parse HEAD, git status --porcelain) plus the task-scoped verification command on merged state, then complete expectedOutcome/actualOutcome manually.";
 const REQUIRED_MAIN_BRANCH_REPLAY_COMMANDS = Object.freeze([
   "git rev-parse HEAD",
   "git status --porcelain",
-  "npm test",
 ]);
 
 /**
@@ -1694,6 +1738,35 @@ export function validatePatchedPlan(plan: unknown): { valid: boolean; issues: st
 
 // ── Patched-plan normalization at handoff (Task 2) ───────────────────────────
 
+function resolvePatchedPlanSource(
+  plan: Record<string, unknown>,
+  sourcePlans: unknown[],
+  index: number,
+): Record<string, unknown> | null {
+  const candidates = Array.isArray(sourcePlans) ? sourcePlans : [];
+  const keys = new Set(
+    [plan.task_id, plan.task, plan.title]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  );
+
+  if (keys.size > 0) {
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== "object") continue;
+      const source = candidate as Record<string, unknown>;
+      const matches = [source.task_id, source.task, source.title]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+      if (matches.some((value) => keys.has(value))) {
+        return source;
+      }
+    }
+  }
+
+  const fallback = candidates[index];
+  return fallback && typeof fallback === "object" ? fallback as Record<string, unknown> : null;
+}
+
 const CROSS_CYCLE_DEPENDENCY_PATTERN = /^(.+?)\s*\[cross-cycle pre-condition([^\]]*)\]/i;
 const CROSS_CYCLE_CONFIRMATION_TOKEN_PATTERN = /(?:confirmation\s+token|token)\s*[:=]\s*([A-Za-z0-9._:-]+)/i;
 
@@ -1752,15 +1825,32 @@ function normalizeDispatchPrerequisiteMetadata(
  * Idempotent: applying twice produces an identical result.
  *
  * @param plans - validated patchedPlans array from Athena
+ * @param opts.sourcePlans - original Prometheus plans used to backfill semantic metadata when
+ *   Athena returns a partial patch that omits leverage/evidence fields.
  * @returns new array with each plan carrying all dispatch-required fields
  */
-export function normalizePatchedPlansForDispatch(plans: unknown[]): Record<string, unknown>[] {
+export function normalizePatchedPlansForDispatch(
+  plans: unknown[],
+  opts: { sourcePlans?: unknown[] } = {},
+): Record<string, unknown>[] {
   if (!Array.isArray(plans)) return [];
-  return plans.map((plan) => {
+  const sourcePlans = Array.isArray(opts.sourcePlans) ? opts.sourcePlans : [];
+  return plans.map((plan, index) => {
     if (!plan || typeof plan !== "object") return plan as Record<string, unknown>;
     const p = plan as Record<string, unknown>;
+    const sourcePlan = resolvePatchedPlanSource(p, sourcePlans, index);
     const dependencies = Array.isArray(p.dependencies) ? p.dependencies : [];
     const dispatchPrerequisite = normalizeDispatchPrerequisiteMetadata(p.dispatchPrerequisite, dependencies);
+    const leverageRank = Array.isArray(p.leverage_rank) && p.leverage_rank.length > 0
+      ? normalizeLeverageRank(p.leverage_rank)
+      : normalizeLeverageRank(sourcePlan?.leverage_rank);
+    const implementationEvidence = Array.isArray(p.implementationEvidence)
+      ? p.implementationEvidence.map((entry) => String(entry || "").trim()).filter(Boolean)
+      : [];
+    const sourceImplementationEvidence = Array.isArray(sourcePlan?.implementationEvidence)
+      ? sourcePlan.implementationEvidence.map((entry) => String(entry || "").trim()).filter(Boolean)
+      : [];
+    const uiExecutionContext = buildUiExecutionReminderContext(p, sourcePlan);
 
     return {
       ...p,
@@ -1779,9 +1869,96 @@ export function normalizePatchedPlansForDispatch(plans: unknown[]): Record<strin
       // requestROI must be a positive finite number; Athena may omit it.
       requestROI: Number.isFinite(Number(p.requestROI)) && Number(p.requestROI) > 0
         ? Number(p.requestROI) : 1.0,
+      ...(leverageRank.length > 0 ? { leverage_rank: leverageRank } : {}),
+      implementationEvidence: implementationEvidence.length > 0
+        ? implementationEvidence
+        : sourceImplementationEvidence,
+      ...(uiExecutionContext
+        ? {
+            context: uiExecutionContext,
+            uiExecutionReminderRequired: true,
+          }
+        : {}),
       ...(dispatchPrerequisite ? { dispatchPrerequisite } : {}),
     };
   });
+}
+
+const UI_EXECUTION_REMINDER_MARKER = "UI EXECUTION REMINDER";
+
+const UI_EXECUTION_SIGNAL_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bui\b/i,
+  /\bux\b/i,
+  /\b(frontend|front-end|client-side)\b/i,
+  /\b(page|screen|view|layout|component|hero|gallery|form|modal|landing\s+page|dashboard|navigation)\b/i,
+  /\b(html|css|scss|sass|tailwind|tsx|jsx|react|vue|svelte|next\.js|vite)\b/i,
+]);
+
+function buildUiExecutionSignalText(plan: Record<string, unknown>, sourcePlan?: Record<string, unknown> | null): string {
+  const acceptanceCriteria = Array.isArray(plan?.acceptance_criteria)
+    ? plan.acceptance_criteria
+    : Array.isArray(sourcePlan?.acceptance_criteria)
+      ? sourcePlan?.acceptance_criteria
+      : [];
+  const targetFiles = Array.isArray(plan?.target_files)
+    ? plan.target_files
+    : Array.isArray(plan?.targetFiles)
+      ? plan.targetFiles
+      : Array.isArray(sourcePlan?.target_files)
+        ? sourcePlan?.target_files
+        : Array.isArray(sourcePlan?.targetFiles)
+          ? sourcePlan?.targetFiles
+          : [];
+
+  return [
+    plan?.task,
+    plan?.title,
+    plan?.context,
+    plan?.scope,
+    plan?.verification,
+    sourcePlan?.task,
+    sourcePlan?.title,
+    sourcePlan?.context,
+    sourcePlan?.scope,
+    sourcePlan?.verification,
+    ...acceptanceCriteria,
+    ...targetFiles,
+  ].map((value) => String(value || "")).join("\n");
+}
+
+function planNeedsUiExecutionReminder(plan: Record<string, unknown>, sourcePlan?: Record<string, unknown> | null): boolean {
+  const signalText = buildUiExecutionSignalText(plan, sourcePlan);
+  return UI_EXECUTION_SIGNAL_PATTERNS.some((pattern) => pattern.test(signalText));
+}
+
+function buildUiExecutionReminderContext(plan: Record<string, unknown>, sourcePlan?: Record<string, unknown> | null): string {
+  const existingContext = String(plan?.context || sourcePlan?.context || "").trim();
+  if (existingContext.includes(UI_EXECUTION_REMINDER_MARKER)) {
+    return existingContext;
+  }
+  if (!planNeedsUiExecutionReminder(plan, sourcePlan)) {
+    return existingContext;
+  }
+
+  const reminder = [
+    `## ${UI_EXECUTION_REMINDER_MARKER}`,
+    "This plan includes UI work.",
+    "For UI work, approve plans that split the work into 3 or 4 logical parts in sequence instead of one oversized UI plan.",
+    "If the operator did not supply a concrete reference, require the implementation to source and inspect at least one external visual exemplar before product-file edits begin.",
+    "If the operator did supply a concrete reference, require direct visual inspection of that reference before the task is reduced into components, sections, or scaffolding language.",
+    "Treat HTML scraping, headings, navigation labels, DOM summaries, and component decomposition as supporting evidence only; they are not sufficient substitutes for direct visual inspection.",
+    "Require visual/image work to follow a sequential inspection loop: obtain one screenshot or source image, inspect it, record the finding, and only then move to the next image.",
+    "If policy, rights, or network access block external exemplar sourcing or reference capture, keep that blocker explicit and reject any plan that silently falls back to generic safe UI work.",
+    "Reject plans that jump straight from a UI brief to generic layout scaffolding, reusable component taxonomies, or house-style design choices without researched visual evidence.",
+    "Before you declare the UI portion finished, open and inspect the actual surface with the task-appropriate viewing adapter or UI tool (for example Playwright, browser preview, screenshot tooling, or the runtime-specific viewer available in this environment).",
+    "Do not validate the UI at a single viewport only. Check every breakpoint and responsive state required by the task, including mobile, tablet, desktop, and any task-specific layout states that can change the rendered result.",
+    "Treat UI verification as both appearance and runtime behavior. Confirm the surface looks correct and that key scroll, animation, transition, and interaction paths do not introduce visible jank, stutter, lag, or other performance regressions in the relevant runtime.",
+    "Do not stop at code-only reasoning for UI tasks. Re-check the real rendered result, compare it against the requested UI, and keep iterating until the requested UI is actually present.",
+    "Only consider the UI verified when the requested result holds across all required breakpoints, not just one convenient resolution.",
+    "Once the requested UI is visibly correct, continue the rest of the task normally and report the UI verification evidence you used.",
+  ].join("\n");
+
+  return existingContext ? `${existingContext}\n\n${reminder}` : reminder;
 }
 
 /**
@@ -1830,10 +2007,10 @@ export function sanitizePatchedPlanVerificationCommands(
     const fallbackRaw = String(plan.verification || "").trim();
     const rawBatch = verificationCommands.length > 0
       ? verificationCommands
-      : (fallbackRaw ? [fallbackRaw] : ["npm test"]);
+      : (fallbackRaw ? [fallbackRaw] : [VERIFICATION_DEFAULTS.test]);
 
     const sanitizedBatch = normalizeCommandBatch(rawBatch);
-    const fallbackCommand = sanitizedBatch[0] || "npm test";
+    const fallbackCommand = sanitizedBatch[0] || VERIFICATION_DEFAULTS.test;
 
     return {
       ...plan,
@@ -1869,15 +2046,20 @@ export const PATCHED_PLAN_REVALIDATION_REASON = Object.freeze({
  * @param plans - patchedPlans array from Athena (may be empty — empty returns valid=true)
  * @returns {{ plans, valid, violations, code }}
  */
-export function preparePatchedPlansForDispatch(plans: unknown[]): {
+export function preparePatchedPlansForDispatch(
+  plans: unknown[],
+  opts: { activeTargetSession?: any; sourcePlans?: unknown[] } = {},
+): {
   plans: Record<string, unknown>[];
   valid: boolean;
   violations: string[];
   code: string;
 } {
-  const normalized = normalizePatchedPlansForDispatch(Array.isArray(plans) ? plans : []);
+  const normalized = normalizePatchedPlansForDispatch(Array.isArray(plans) ? plans : [], {
+    sourcePlans: opts.sourcePlans,
+  });
   const sanitized = sanitizePatchedPlanVerificationCommands(normalized);
-  const check = revalidatePatchedPlansAfterNormalization(sanitized);
+  const check = revalidatePatchedPlansAfterNormalization(sanitized, opts);
   return {
     plans: sanitized,
     valid: check.valid,
@@ -1972,7 +2154,8 @@ export function validateAiProvidedBatchMetadata(
  * @returns { valid, violations, code }
  */
 export function revalidatePatchedPlansAfterNormalization(
-  plans: Record<string, unknown>[]
+  plans: Record<string, unknown>[],
+  opts: { activeTargetSession?: any } = {}
 ): { valid: boolean; violations: string[]; code: string } {
   if (!Array.isArray(plans) || plans.length === 0) {
     return { valid: true, violations: [], code: PATCHED_PLAN_REVALIDATION_REASON.OK };
@@ -2032,9 +2215,20 @@ export function revalidatePatchedPlansAfterNormalization(
       }
     }
 
+    const label = String(p.task || `plan ${i}`).slice(0, 60);
     if (planViolations.length > 0) {
-      const label = String(p.task || `plan ${i}`).slice(0, 60);
       allViolations.push(`plan[${i}] "${label}": ${planViolations.join("; ")}`);
+      continue;
+    }
+
+    const contractValidation = validatePlanContract(p, {
+      activeTargetSession: opts.activeTargetSession,
+      disableIntentDowngradeValidation: true,
+    });
+    if (!contractValidation.valid) {
+      allViolations.push(
+        `plan[${i}] "${label}": ${contractValidation.violations.map((entry) => entry.message).join("; ")}`
+      );
     }
   }
 
@@ -2803,9 +2997,42 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
     return attachReviewArtifact({ approved: false, reason, blocker, corrections: [] }, [], null);
   }
 
-  const plans = Array.isArray(prometheusAnalysis.plans) ? prometheusAnalysis.plans : [];
+  let plans = Array.isArray(prometheusAnalysis.plans) ? prometheusAnalysis.plans : [];
   const gateRisk = await assessGovernanceGateBlockRisk(config);
   const gateRiskLine = `Current governance gate feasibility risk: gateBlockRisk=${gateRisk.gateBlockRisk}; signals=${gateRisk.activeGateSignals.join("|") || "none"}; requiresCorrection=${gateRisk.requiresCorrection}`;
+  const targetStageSplit = splitTargetStagePlans(plans, config);
+  const targetStageCorrections = targetStageSplit.rejectedPlans.flatMap(({ violations }) =>
+    violations.map((violation) => {
+      const indexLabel = violation.planIndex === null ? "plan[unknown]" : `plan[${violation.planIndex}]`;
+      return `${indexLabel}: ${violation.message}`;
+    })
+  );
+
+  if (targetStageSplit.active && targetStageSplit.rejectedPlans.length > 0) {
+    if (targetStageSplit.admittedPlans.length === 0) {
+      const message = `Target stage contract rejected ${targetStageCorrections.length} plan issue(s) — ${targetStageSplit.summary || "stage contract violation"}`;
+      const reason = {
+        code: ATHENA_PLAN_REVIEW_REASON_CODE.TARGET_STAGE_CONTRACT_VIOLATION,
+        message,
+      };
+      const blocker = buildPlanReviewBlocker(reason.code);
+      await appendProgress(config, `[ATHENA] Target stage contract FAILED — ${message}`);
+      await appendProgress(config, `[ATHENA][BLOCKER] code=${blocker.code} stage=${blocker.stage} retryable=${String(blocker.retryable)}`);
+      chatLog(stateDir, athenaName, `Target stage contract failed: ${message}`);
+      return attachReviewArtifact({
+        approved: false,
+        reason,
+        blocker,
+        corrections: targetStageCorrections,
+      }, plans, gateRisk);
+    }
+
+    plans = [...targetStageSplit.admittedPlans];
+    await appendProgress(
+      config,
+      `[ATHENA] Target stage contract salvaged ${plans.length}/${Array.isArray(prometheusAnalysis.plans) ? prometheusAnalysis.plans.length : plans.length} plan(s) for review — ${targetStageSplit.summary}`,
+    );
+  }
 
   // ── Deterministic plan quality pre-gate ────────────────────────────────────
   const qualityMinScore = typeof config?.runtime?.planQualityMinScore === "number"
@@ -2907,10 +3134,13 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
     const batchFingerprint = computePlanBatchFingerprint(plans);
     let cachedReviewExists = false;
     try {
-      const lastReview = await readJson(
+      const lastReviewRaw = await readJson(
         path.join(stateDir, "athena_plan_review.json"),
         null
       );
+      const lastReview = isAthenaReviewAlignedToTargetSession(config, lastReviewRaw)
+        ? lastReviewRaw
+        : null;
       if (lastReview !== null) {
         cachedReviewExists = true;
       }
@@ -2982,7 +3212,7 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
           overallScore: adaptiveHighQualityThreshold,
           summary: `All ${plans.length} plan(s) are low-risk and scored at or above the high-quality threshold (${adaptiveHighQualityThreshold})`,
           planReviews: plans.map((p, i) => buildFallbackPlanReview(p, i)),
-          corrections: [],
+          corrections: [...targetStageCorrections],
           appliedFixes: [],
           unresolvedIssues: [],
           autoApproved: true,
@@ -3026,7 +3256,7 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
           overallScore: deltaThreshold,
           summary: `All ${plans.length} plan(s) are low-risk with changed fingerprint and scored at or above the delta-review threshold (${deltaThreshold})`,
           planReviews: plans.map((p, i) => buildFallbackPlanReview(p, i)),
-          corrections: [],
+          corrections: [...targetStageCorrections],
           appliedFixes: [],
           unresolvedIssues: [],
           autoApproved: true,
@@ -3100,8 +3330,13 @@ export async function runAthenaPlanReview(config, prometheusAnalysis) {
        verification="${truncatePromptText(p.verification || "NONE", 120)}"`;
   }).join("\n");
 
-  const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
+  const athenaLayerPrompt = buildPromptAssemblyPrompt({ agentName: "athena", config });
+  const effectivePromptTargetRepo = resolvePromptTargetRepo(config);
+
+  const contextPrompt = `TARGET REPO: ${effectivePromptTargetRepo}
 ${similarityWarning}
+${athenaLayerPrompt}
+
 ## YOUR MISSION — PLAN QUALITY REVIEW & IN-PLACE REPAIR
 
 You are Athena — BOX Quality Gate & Plan Editor.
@@ -3114,7 +3349,7 @@ Prometheus has produced a plan. Your job is to validate it AND FIX any issues yo
 4. List what you fixed in "appliedFixes" and anything you could NOT fix in "unresolvedIssues".
 5. Batch-packaging directive (MANDATORY): read all tasks and regroup them into execution packets that maximize useful model context usage without overloading the model; prefer fewer dense packets, merge strongly related tasks, and keep strict sequential order where dependencies exist.
 6. CI fix packets MUST carry concrete CI failure evidence in githubCiContext.failedCiRuns so dispatch can inject deterministic failure context.
-7. Merge-oriented packets MUST require clean-tree raw verification artifacts in completion evidence: BOX_MERGED_SHA, plus either CLEAN_TREE_STATUS=clean from git status --porcelain or the shared-worktree-safe trio CLEAN_TREE_STATUS=dirty-other-tasks-only + TASK_SCOPED_CLEAN_STATUS=clean + TASK_SCOPED_CLEAN_TARGETS=<files>, plus explicit ===NPM TEST OUTPUT START===...===NPM TEST OUTPUT END=== block.
+7. Merge-oriented packets MUST require clean-tree raw verification artifacts in completion evidence: BOX_MERGED_SHA, plus either CLEAN_TREE_STATUS=clean from git status --porcelain or the shared-worktree-safe trio CLEAN_TREE_STATUS=dirty-other-tasks-only + TASK_SCOPED_CLEAN_STATUS=clean + TASK_SCOPED_CLEAN_TARGETS=<files>, plus explicit ===NPM TEST OUTPUT START===...===NPM TEST OUTPUT END=== block containing task-scoped test output, not full-suite output.
 
 **Quality criteria for each plan item:**
 1. Is the goal measurable? (not vague like "improve" or "refactor")
@@ -3381,7 +3616,10 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
 
   const d = normalizedReview.payload;
   const approved = d.approved !== false;
-  const corrections = Array.isArray(d.corrections) ? d.corrections : [];
+  const corrections = [
+    ...targetStageCorrections,
+    ...(Array.isArray(d.corrections) ? d.corrections : []),
+  ];
 
   const result = {
     approved,
@@ -3472,7 +3710,10 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
   // re-validates the contract — fails closed on any violation so dispatch never receives
   // plans that bypass the normalization pipeline.
   if (Array.isArray(result.patchedPlans)) {
-    const handoff = preparePatchedPlansForDispatch(result.patchedPlans);
+    const handoff = preparePatchedPlansForDispatch(result.patchedPlans, {
+      activeTargetSession: config?.activeTargetSession,
+      sourcePlans: plans,
+    });
     if (!handoff.valid) {
       const blockReason = {
         code: handoff.code,
@@ -3588,11 +3829,17 @@ IMPORTANT: Every patched plan MUST include AI-assigned batch metadata fields: _b
   }
 
   const enrichedResult = attachReviewArtifact(result, plans, gateRisk);
-  await writeJson(path.join(stateDir, "athena_plan_review.json"), {
+  const persistedReview = stampAthenaArtifactTargetSession(config, {
     ...enrichedResult,
     summary: sanitizeAthenaReviewFieldForPersistence(String(enrichedResult.summary || "")),
     planBatchFingerprint: computePlanBatchFingerprint(plans),
   });
+  await writeJson(path.join(stateDir, "athena_plan_review.json"), persistedReview);
+  if (persistedReview.targetSession) {
+    (enrichedResult as any).targetSession = persistedReview.targetSession;
+  } else if ((enrichedResult as any).targetSession) {
+    delete (enrichedResult as any).targetSession;
+  }
 
   if (enrichedResult.approved) {
     const fixCount = enrichedResult.appliedFixes.length;
@@ -4098,7 +4345,7 @@ export async function runAthenaPostmortem(
     return enrichedDupPm;
   }
 
-  const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
+  const contextPrompt = `TARGET REPO: ${resolvePromptTargetRepo(config)}
 
 ## YOUR MISSION — POSTMORTEM REVIEW
 
@@ -4855,14 +5102,51 @@ export function computeRecurrenceQualityScore(postmortems: unknown[]): {
 export function evaluateStaleArtifactClosureFastpath(opts: {
   staleTriageRecords: Array<Record<string, unknown>>;
   mainCiGreen: boolean;
+  currentPlans?: Array<Record<string, unknown>>;
   nowMs?: number;
   recencyWindowMs?: number;
 }): { eligible: boolean; reason: string } {
   const records = Array.isArray(opts.staleTriageRecords) ? opts.staleTriageRecords : [];
+  const currentPlans = Array.isArray(opts.currentPlans) ? opts.currentPlans : [];
   const nowMs = Number.isFinite(Number(opts.nowMs)) ? Number(opts.nowMs) : Date.now();
   const recencyWindowMs = Number.isFinite(Number(opts.recencyWindowMs))
     ? Math.max(0, Number(opts.recencyWindowMs))
     : 60 * 60 * 1000;
+
+  const normalizeFastpathText = (value: unknown): string => String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+  const planLooksLikeStaleArtifactClosure = (plan: Record<string, unknown>): boolean => {
+    const text = [
+      plan.task,
+      plan.title,
+      plan.scope,
+      plan.context,
+      plan.verification,
+      plan.capabilityTag,
+      plan.capability_tag,
+      plan.continuationFamilyKey,
+      ...(Array.isArray(plan.acceptance_criteria) ? plan.acceptance_criteria : []),
+      ...(Array.isArray(plan.acceptanceCriteria) ? plan.acceptanceCriteria : []),
+    ]
+      .map(normalizeFastpathText)
+      .filter(Boolean)
+      .join(" ");
+
+    return [
+      /stale pr/,
+      /stale artifact/,
+      /artifact closure/,
+      /automated pr debt/,
+      /superseded pr/,
+      /superseded artifact/,
+      /close stale/,
+      /archive superseded/,
+      /stale pr guard/,
+    ].some((pattern) => pattern.test(text));
+  };
 
   const extractRecordTimestampMs = (record: Record<string, unknown>): number | null => {
     const candidates = [
@@ -4900,6 +5184,12 @@ export function evaluateStaleArtifactClosureFastpath(opts: {
   });
   if (!hasRecentTerminalRecord) {
     return { eligible: false, reason: "archival_terminal_stale_pr_records" };
+  }
+
+  const plansAreStaleClosureWork = currentPlans.length > 0
+    && currentPlans.every((plan) => planLooksLikeStaleArtifactClosure(plan));
+  if (!plansAreStaleClosureWork) {
+    return { eligible: false, reason: "current_plans_not_stale_artifact_closure" };
   }
 
   // Main CI must be green.

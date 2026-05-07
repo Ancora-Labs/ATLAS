@@ -240,6 +240,7 @@ describe("worker_batch_planner", () => {
     assert.ok(batches.every((batch) => batch.plans.length <= 3), "fragile task kinds must stay within adaptive cap");
     assert.ok(batches.every((batch: any) => typeof batch.adaptivePacketCap === "number" && batch.adaptivePacketCap <= 3));
   });
+
 });
 
 // ── Task 3: dependency graph wave and conflict integration ────────────────────
@@ -1251,16 +1252,24 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
   });
 
   it("keeps specialist batch when fill threshold is met", () => {
-    // Default threshold is 100%, so set an explicit lower threshold for this test.
+    // Use a small context window so the threshold behavior is exercised without
+    // forcing the Node test worker through a huge synthetic payload.
     const thresholdConfig = {
       ...config,
+      paths: { stateDir: "__missing_state_for_test__" },
+      copilot: {
+        ...config.copilot,
+        modelContextWindows: { "Claude Sonnet 4.6": 1000 },
+      },
       planner: { specialistFillThreshold: 0.35 },
+      workerPool: {
+        specializationTargets: { fitScoreThreshold: 0.99, minSpecializedShare: 0 },
+      },
     };
-    // Create a specialist with enough work to exceed 35% threshold.
-    const bigTask = "x".repeat(250000);
+    const thresholdFillingTask = "x".repeat(400);
     const plans = [
       makePlan("evolution-worker", "evo task"),
-      makePlan("governance-worker", bigTask),
+      makePlan("governance-worker", thresholdFillingTask),
     ];
 
     const batches = buildTokenFirstBatches(plans, thresholdConfig);
@@ -1600,6 +1609,7 @@ describe("buildTokenFirstBatches — specialist threshold routing", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
 });
 
 // ── buildTokenFirstBatches: calibration coefficient ────────────────────────────

@@ -266,16 +266,9 @@ function extractLessonRetirementQualification(
       /(?:associated[-_ ]?main[-_ ]?ci|main[-_ ]?ci)[-_ ]?(?:head[-_ ]?sha|sha)\s*[:=]\s*([0-9a-f]{7,40})/i,
     ]),
   ));
-  const hasAssociatedCiLink = rawArtifactEvidenceLinks.some((link) =>
-    /^inline:\/\/(?:associated-)?main-ci(?:-run)?(?:\/success)?$/i.test(link)
-    || /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+/i.test(link),
-  );
-  const mainCiQualified = associatedMainCiConclusion === "success" && (
-    Boolean(associatedMainCiRunUrl)
-    || Boolean(associatedMainCiHeadSha)
-    || hasAssociatedCiLink
-    || MAIN_BRANCH_NAMES.has(String(associatedMainCiBranch || "").toLowerCase())
-  );
+  const mainCiQualified = associatedMainCiConclusion === "success"
+    && Boolean(associatedMainCiRunUrl)
+    && MAIN_BRANCH_NAMES.has(String(associatedMainCiBranch || "").toLowerCase());
 
   return {
     lessonClass,

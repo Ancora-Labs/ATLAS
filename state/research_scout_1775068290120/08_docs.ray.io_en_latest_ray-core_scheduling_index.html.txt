@@ -1,3 +1,0 @@
-URL: https://docs.ray.io/en/latest/ray-core/scheduling/index.html
-
-ERR: Response status code does not indicate success: 429 (Too Many Requests).

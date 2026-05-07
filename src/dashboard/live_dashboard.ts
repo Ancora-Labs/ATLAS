@@ -5,15 +5,16 @@ import crypto from "node:crypto";
 import { execSync, spawn } from "node:child_process";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import dotenv from "dotenv";
-import { bridgeBoxTargetSessionState } from "../atlas/state_bridge.js";
+import { bootstrapEnvironment } from "../env_bootstrap.js";
 import { readPipelineProgress, SYSTEM_STATUS_REASON_CODE } from "../core/pipeline_progress.js";
 import { parseTypedEvent } from "../core/event_schema.js";
 import { readCycleAnalytics } from "../core/cycle_analytics.js";
+import { extractCopilotAccountProfile } from "../core/copilot_plan_profile.js";
 import { collectHypothesisScorecard } from "../core/hypothesis_scorecard.js";
-import { renderAtlasHtml, type AtlasSessionSummary } from "./atlas_render.js";
+import { normalizePlatformModeState, PLATFORM_MODE } from "../core/mode_state.js";
+import { getTargetSessionProgressLogPath, listOpenTargetSessions, normalizeActiveTargetSession } from "../core/target_session_state.js";
 
-dotenv.config();
+bootstrapEnvironment();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,8 +32,8 @@ const CLAUDE_RATE_LIMIT_BACKOFF_MS = Number(process.env.BOX_CLAUDE_RATE_LIMIT_BA
 const CLAUDE_COST_WINDOW_DAYS = Math.max(1, Number(process.env.BOX_CLAUDE_COST_WINDOW_DAYS || "30"));
 const CLAUDE_COST_START_AT = String(process.env.BOX_CLAUDE_COST_START_AT || "").trim();
 const CLAUDE_COST_END_AT = String(process.env.BOX_CLAUDE_COST_END_AT || "").trim();
-const GITHUB_TOKEN = process.env.GITHUB_FINEGRADED || process.env.GITHUBFINEGRADEDPERSONALINTEL || process.env.GITHUB_TOKEN || process.env.GITHUB_TOKENPERSONAL || "";
-const GITHUB_BILLING_TOKEN = process.env.GITHUBFINEGRADEDPERSONALINTEL || process.env.GITHUB_FINEGRADED || GITHUB_TOKEN;
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "";
+const GITHUB_BILLING_TOKEN = process.env.BOX_GITHUB_BILLING_TOKEN || process.env.COPILOT_GITHUB_TOKEN || GITHUB_TOKEN;
 const GITHUB_BILLING_SUMMARY_URL = process.env.BOX_GITHUB_BILLING_SUMMARY_URL
   || `https://api.github.com/users/${COPILOT_SOURCE_ACCOUNT}/settings/billing/premium_request/usage`;
 const GITHUB_API_VERSION = process.env.BOX_GITHUB_API_VERSION || "2022-11-28";
@@ -116,6 +117,34 @@ export function isTypedEventForDomain(raw: unknown, domain?: string): boolean {
  */
 export const DASHBOARD_PAYLOAD_MAX_BYTES = 51200; // 50 KB
 
+const PIPELINE_STAGE_STALE_MS = 10 * 60 * 1000;
+
+const LEADERSHIP_ENTITY_BY_STAGE = Object.freeze({
+  jesus_awakening: "jesus",
+  jesus_reading: "jesus",
+  jesus_thinking: "jesus",
+  jesus_decided: "jesus",
+  prometheus_starting: "prometheus",
+  prometheus_reading_repo: "prometheus",
+  prometheus_analyzing: "prometheus",
+  prometheus_audit: "prometheus",
+  prometheus_done: "prometheus",
+  athena_reviewing: "Athena",
+  athena_approved: "Athena",
+  workers_dispatching: "workers",
+  workers_running: "workers",
+  workers_finishing: "workers",
+});
+
+interface LeadershipPipelineState {
+  stage: string;
+  stageLabel: string | null;
+  updatedAt: string | null;
+  authoritative: boolean;
+  activeEntity: string | null;
+  workingWorkers: string[];
+}
+
 // ── System status derivation ──────────────────────────────────────────────────
 
 /**
@@ -198,7 +227,6 @@ export function deriveSystemStatus(
 
   // ── Event-driven path: active pipeline stages ─────────────────────────────
   // pipeline_progress.stage is authoritative when it is fresh (< 10 min old).
-  const PIPELINE_STALE_MS = 10 * 60 * 1000;
   const ACTIVE_STAGES = new Set([
     "jesus_awakening", "jesus_reading", "jesus_thinking", "jesus_decided",
     "prometheus_starting", "prometheus_reading_repo", "prometheus_analyzing",
@@ -209,7 +237,7 @@ export function deriveSystemStatus(
 
   if (ACTIVE_STAGES.has(pipelineStage) && pipelineFreshnessAt) {
     const staleness = Date.now() - new Date(pipelineFreshnessAt).getTime();
-    if (staleness < PIPELINE_STALE_MS) {
+    if (staleness < PIPELINE_STAGE_STALE_MS) {
       return {
         systemStatus: "working",
         systemStatusText: "Workers Active",
@@ -272,6 +300,33 @@ export function deriveSystemStatus(
     statusSource: "fallback-heuristic",
     statusFreshnessAt: pipelineFreshnessAt,
     degradedReason: SYSTEM_STATUS_REASON_CODE.FALLBACK_HEURISTIC,
+  };
+}
+
+export function deriveLeadershipPipelineState(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  pipelineProgress: Record<string, any>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  workerActivity: Record<string, any>
+): LeadershipPipelineState {
+  const stage = String(pipelineProgress?.stage || "idle").trim() || "idle";
+  const stageLabelRaw = String(pipelineProgress?.stageLabel || "").trim();
+  const updatedAt = typeof pipelineProgress?.updatedAt === "string" ? pipelineProgress.updatedAt : null;
+  const workingWorkers = Object.keys(workerActivity || {}).filter((name) => String(workerActivity?.[name]?.status || "").toLowerCase() === "working");
+  const authoritative = Boolean(updatedAt)
+    && Number.isFinite(new Date(updatedAt as string).getTime())
+    && (Date.now() - new Date(updatedAt as string).getTime()) < PIPELINE_STAGE_STALE_MS;
+  const stageEntity = Object.prototype.hasOwnProperty.call(LEADERSHIP_ENTITY_BY_STAGE, stage)
+    ? LEADERSHIP_ENTITY_BY_STAGE[stage as keyof typeof LEADERSHIP_ENTITY_BY_STAGE]
+    : null;
+
+  return {
+    stage,
+    stageLabel: stageLabelRaw || null,
+    updatedAt,
+    authoritative,
+    activeEntity: authoritative ? stageEntity : (workingWorkers.length > 0 ? "workers" : null),
+    workingWorkers,
   };
 }
 
@@ -697,14 +752,19 @@ async function fetchCopilotInternalQuota() {
       }
     });
     if (!r.ok) return null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const j: any = await r.json();
-    const snap = j?.quota_snapshots?.premium_interactions;
-    if (!snap || typeof snap.entitlement !== "number") return null;
-    const entitlement = snap.entitlement;
-    const remaining = Number(snap.quota_remaining ?? snap.remaining ?? 0);
-    const used = entitlement - remaining;
-    return { entitlement, used, remaining, percentRemaining: snap.percent_remaining ?? null };
+    const profile = extractCopilotAccountProfile(await r.json());
+    if (!profile) return null;
+    return {
+      entitlement: profile.entitlement,
+      used: profile.usedRequests,
+      remaining: profile.remainingRequests,
+      percentRemaining: profile.percentRemaining,
+      planTier: profile.planTier,
+      planLabel: profile.planLabel,
+      modelAccess: profile.modelAccess,
+      planDetectedBy: profile.planDetectedBy,
+      source: profile.source,
+    };
   } catch {
     return null;
   }
@@ -785,6 +845,16 @@ async function fetchOneTimeCopilotUsage() {
     // Prefer copilot_internal/user quota snapshot for accurate premium request tracking.
     // The billing API grossQuantity differs from actual premium interaction units.
     const internalQuota = await fetchCopilotInternalQuota();
+    const fallbackProfile = extractCopilotAccountProfile({
+      quota_snapshots: {
+        premium_interactions: {
+          entitlement: parsed.quota,
+          quota_remaining: parsed.remaining,
+          used: parsed.used,
+        },
+      },
+    }, "github-billing-usage-summary");
+    const resolvedProfile = internalQuota || fallbackProfile;
     const usedRequests = internalQuota ? internalQuota.used : parsed.used;
     const quotaRequests = internalQuota ? internalQuota.entitlement : parsed.quota;
     const remainingRequests = internalQuota ? internalQuota.remaining : parsed.remaining;
@@ -794,6 +864,10 @@ async function fetchOneTimeCopilotUsage() {
       usedRequests,
       remainingRequests,
       byModel: parsed.byModel || null,
+      planTier: resolvedProfile?.planTier || null,
+      planLabel: resolvedProfile?.planLabel || "Copilot plan unknown",
+      modelAccess: resolvedProfile?.modelAccess || "current",
+      planDetectedBy: resolvedProfile?.planDetectedBy || "unknown",
       source: internalQuota ? "copilot-internal-quota" : "github-billing-usage-summary",
       fetchedAt: new Date().toISOString(),
       lastError: null
@@ -1191,6 +1265,138 @@ function deriveProjectLabel(targetRepo: string, packageName: string | null): str
   return String(packageName || "unknown");
 }
 
+function normalizeStringList(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  return values.map((value) => String(value || "").trim()).filter(Boolean);
+}
+
+export function deriveTargetRuntimeView(input: {
+  platformModeState?: Record<string, any> | null;
+  activeTargetSession?: Record<string, any> | null;
+  allTargetSessions?: Array<Record<string, any>> | null;
+  targetRepo?: string | null;
+  rootDir?: string | null;
+}) {
+  const platformModeState = input?.platformModeState && typeof input.platformModeState === "object"
+    ? input.platformModeState
+    : {};
+  const activeTargetSession = input?.activeTargetSession && typeof input.activeTargetSession === "object"
+    ? input.activeTargetSession
+    : null;
+  const allTargetSessions = Array.isArray(input?.allTargetSessions)
+    ? input.allTargetSessions.filter((entry) => entry && typeof entry === "object")
+    : [];
+  const currentMode = String(platformModeState.currentMode || PLATFORM_MODE.SELF_DEV);
+  const targetRepo = String(activeTargetSession?.repo?.repoUrl || input?.targetRepo || "").trim();
+  const projectLabel = deriveProjectLabel(targetRepo, String(activeTargetSession?.repo?.name || "").trim() || null);
+  const stage = activeTargetSession ? String(activeTargetSession.currentStage || "unknown") : null;
+  const objectiveSummary = String(activeTargetSession?.objective?.summary || "").trim() || null;
+  const missing = normalizeStringList(activeTargetSession?.prerequisites?.missing);
+  const requiredNow = normalizeStringList(activeTargetSession?.prerequisites?.requiredNow);
+  const requiredHumanInputs = normalizeStringList(activeTargetSession?.handoff?.requiredHumanInputs);
+  const warnings = normalizeStringList(activeTargetSession?.warnings);
+  const repoState = String(activeTargetSession?.repoProfile?.repoState || "").trim() || null;
+  const repoStateReason = String(activeTargetSession?.repoProfile?.repoStateReason || "").trim() || null;
+  const selectedOnboardingAgent = String(activeTargetSession?.repoProfile?.selectedOnboardingAgent || "").trim() || null;
+  const clarificationStatus = String(activeTargetSession?.clarification?.status || "").trim() || null;
+  const clarificationMode = String(activeTargetSession?.clarification?.mode || "").trim() || null;
+  const clarificationAgent = String(activeTargetSession?.clarification?.selectedAgentSlug || "").trim() || null;
+  const clarificationPendingQuestions = normalizeStringList(activeTargetSession?.clarification?.pendingQuestions);
+  const clarificationPacketPath = String(activeTargetSession?.clarification?.packetPath || "").trim() || null;
+  const clarificationTranscriptPath = String(activeTargetSession?.clarification?.transcriptPath || "").trim() || null;
+  const intentContractPath = String(activeTargetSession?.clarification?.intentContractPath || "").trim() || null;
+  const blockers = [
+    String(activeTargetSession?.prerequisites?.blockedReason || "").trim(),
+    String(activeTargetSession?.gates?.quarantineReason || "").trim(),
+    ...missing,
+    ...requiredHumanInputs,
+    ...warnings,
+  ].filter(Boolean);
+
+  let waitingReason = "none";
+  if (currentMode === PLATFORM_MODE.SELF_DEV) {
+    waitingReason = "BOX is operating in self_dev mode.";
+  } else if (currentMode === PLATFORM_MODE.IDLE) {
+    waitingReason = "BOX is idle and waiting for the next target intake.";
+  } else if (!activeTargetSession) {
+    waitingReason = "single_target_delivery is active but no active target session is loaded.";
+  } else if (stage === "awaiting_credentials") {
+    waitingReason = blockers[0] || requiredNow[0] || "Waiting for credentials before planning or execution can continue.";
+  } else if (stage === "awaiting_manual_step") {
+    waitingReason = requiredHumanInputs[0] || blockers[0] || "Waiting for a required manual step before resuming the target session.";
+  } else if (stage === "awaiting_intent_clarification") {
+    waitingReason = requiredHumanInputs[0]
+      || String(activeTargetSession?.handoff?.nextAction || "").trim()
+      || "Waiting for the target onboarding clarification session to finish before planning can begin.";
+  } else if (stage === "quarantined") {
+    waitingReason = blockers[0] || "Target session is quarantined pending human review.";
+  } else if (stage === "onboarding") {
+    waitingReason = "Onboarding is evaluating readiness, prerequisites, and risk.";
+  } else if (stage === "shadow") {
+    waitingReason = String(activeTargetSession?.handoff?.nextAction || "Running shadow validation before active delivery opens.").trim();
+  } else if (stage === "active") {
+    waitingReason = String(activeTargetSession?.handoff?.nextAction || "Target delivery is active.").trim();
+  }
+
+  const targetWorkspacePath = String(activeTargetSession?.workspace?.path || "").trim() || null;
+  const boxWorkspacePath = String(input?.rootDir || ROOT).trim() || ROOT;
+  const executionWorkspacePath = currentMode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY && targetWorkspacePath
+    ? targetWorkspacePath
+    : boxWorkspacePath;
+  const bootstrap = activeTargetSession?.workspace?.bootstrap && typeof activeTargetSession.workspace.bootstrap === "object"
+    ? activeTargetSession.workspace.bootstrap
+    : {};
+  const openTargetSessions = allTargetSessions.map((session) => ({
+    projectId: String(session?.projectId || "").trim() || null,
+    sessionId: String(session?.sessionId || "").trim() || null,
+    repoUrl: String(session?.repo?.repoUrl || "").trim() || null,
+    stage: String(session?.currentStage || "unknown").trim() || null,
+    objectiveSummary: String(session?.objective?.summary || "").trim() || null,
+    workspacePath: String(session?.workspace?.path || "").trim() || null,
+    updatedAt: String(session?.lifecycle?.updatedAt || "").trim() || null,
+  }));
+
+  return {
+    currentMode,
+    fallbackModeAfterCompletion: String(platformModeState.fallbackModeAfterCompletion || PLATFORM_MODE.SELF_DEV),
+    projectLabel,
+    targetRepo,
+    activeProjectId: String(activeTargetSession?.projectId || "").trim() || null,
+    sessionId: String(activeTargetSession?.sessionId || "").trim() || null,
+    stage,
+    objectiveSummary,
+    readiness: String(activeTargetSession?.onboarding?.readiness || "").trim() || null,
+    readinessScore: Number(activeTargetSession?.onboarding?.readinessScore ?? 0),
+    blockers,
+    waitingReason,
+    requiredHumanInputs,
+    repoState,
+    repoStateReason,
+    selectedOnboardingAgent,
+    clarificationStatus,
+    clarificationMode,
+    clarificationAgent,
+    clarificationPendingQuestions,
+    clarificationPacketPath,
+    clarificationTranscriptPath,
+    intentContractPath,
+    boxWorkspacePath,
+    targetWorkspacePath,
+    executionWorkspacePath,
+    bootstrapStatus: String(bootstrap.status || "pending").trim() || null,
+    bootstrapStrategy: String(bootstrap.strategy || "pending").trim() || null,
+    bootstrapLastError: String(bootstrap.lastError || "").trim() || null,
+    hasActiveTargetSession: activeTargetSession != null,
+    canOpenNewSession: true,
+    multiSessionSupported: true,
+    openSessionCount: openTargetSessions.length,
+    otherOpenSessionsCount: activeTargetSession != null
+      ? openTargetSessions.filter((session) => session.sessionId !== String(activeTargetSession?.sessionId || "")).length
+      : openTargetSessions.length,
+    openTargetSessions,
+  };
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function deriveTasks(prometheusAnalysis: Record<string, any>, workerSessions: Record<string, any>): Record<string, any> {
   const allPlans = Array.isArray(prometheusAnalysis?.plans) ? prometheusAnalysis.plans : [];
@@ -1297,43 +1503,14 @@ function derivePremiumEstimate(prometheusAnalysisRef: Record<string, any>, usedR
   };
 }
 
-function listActiveWorkers(workerSessions: Record<string, unknown>): Array<{ name: string; task: string; since: string | null }> {
-  return Object.entries(workerSessions || {})
-    .filter(([, session]) => session && typeof session === "object" && (session as Record<string, unknown>).status === "working")
-    .map(([name, session]) => {
-      const workerSession = session as Record<string, unknown>;
-      return {
-        name,
-        task: String(workerSession.lastTask || "").slice(0, 80),
-        since: typeof workerSession.lastActiveAt === "string" ? workerSession.lastActiveAt : null,
-      };
-    });
-}
-
-function normalizeWorkerActivity(
-  workerSessions: Record<string, unknown>,
-  thinkingMap: Record<string, string> = {}
-): Record<string, {
-  role: string;
-  name: string;
-  status: string;
-  statusLabel: string;
-  readiness: string;
-  readinessLabel: string;
-  lastTask: string;
-  lastActiveAt: string | null;
-  historyLength: number;
-  lastThinking: string;
-}> {
-  return bridgeBoxTargetSessionState(workerSessions, thinkingMap);
-}
-
 async function collectDashboardData() {
   const [
     boxConfig,
     progressTail,
     oneTimeCost,
     copilotApiUsage,
+    rawPlatformModeState,
+    rawActiveTargetSession,
     workerSessions,
     athenaState,
     jesusDirective,
@@ -1348,6 +1525,8 @@ async function collectDashboardData() {
     readTailLines(path.join(STATE_DIR, "progress.txt"), 80),
     getHourlyClaudeCost(),
     getHourlyCopilotUsage(),
+    readJsonSafe(path.join(STATE_DIR, "platform", "mode_state.json"), null),
+    readJsonSafe(path.join(STATE_DIR, "active_target_session.json"), null),
     readJsonSafe(path.join(STATE_DIR, "worker_sessions.json"), {}),
     readJsonSafe(path.join(STATE_DIR, "athena_plan_review.json"), {}),
     readJsonSafe(path.join(STATE_DIR, "jesus_directive.json"), {}),
@@ -1380,6 +1559,54 @@ async function collectDashboardData() {
   ]);
 
   const [daemonStatus, prDeltaResult, gitActivity] = await Promise.all([getDaemonStatus(), getHourlyPrDeltaStats(), Promise.resolve(getGitActivity())]);
+  const normalizedConfig = {
+    ...boxConfig,
+    paths: {
+      ...(boxConfig?.paths && typeof boxConfig.paths === "object" ? boxConfig.paths : {}),
+      stateDir: STATE_DIR,
+      workspaceDir: String(boxConfig?.paths?.workspaceDir || path.join(ROOT, ".box-work")),
+    },
+    rootDir: ROOT,
+  };
+  const normalizedActiveTargetSessionResult = normalizeActiveTargetSession(rawActiveTargetSession, normalizedConfig);
+  const normalizedActiveTargetSession = normalizedActiveTargetSessionResult.session;
+  const openTargetSessions = await listOpenTargetSessions(normalizedConfig);
+  const normalizedPlatformModeState = normalizePlatformModeState(rawPlatformModeState, normalizedActiveTargetSession, normalizedConfig);
+  const targetRuntime = deriveTargetRuntimeView({
+    platformModeState: normalizedPlatformModeState,
+    activeTargetSession: normalizedActiveTargetSession,
+    allTargetSessions: openTargetSessions,
+    targetRepo: TARGET_REPO,
+    rootDir: ROOT,
+  });
+  const targetSessionProgressPath = normalizedActiveTargetSession?.projectId && normalizedActiveTargetSession?.sessionId
+    ? getTargetSessionProgressLogPath(STATE_DIR, normalizedActiveTargetSession.projectId, normalizedActiveTargetSession.sessionId)
+    : null;
+  const targetSessionLogTail = targetSessionProgressPath
+    ? await readTailLines(targetSessionProgressPath, 80).catch(() => [])
+    : [];
+  const openTargetSessionEntries = await Promise.all(
+    openTargetSessions.map(async (session) => {
+      const progressLogPath = session?.projectId && session?.sessionId
+        ? getTargetSessionProgressLogPath(STATE_DIR, session.projectId, session.sessionId)
+        : null;
+      const progressLogTail = progressLogPath
+        ? await readTailLines(progressLogPath, 20).catch(() => [])
+        : [];
+      return {
+        projectId: String(session?.projectId || "").trim() || null,
+        sessionId: String(session?.sessionId || "").trim() || null,
+        repoUrl: String(session?.repo?.repoUrl || "").trim() || null,
+        stage: String(session?.currentStage || "unknown").trim() || null,
+        objectiveSummary: String(session?.objective?.summary || "").trim() || null,
+        workspacePath: String(session?.workspace?.path || "").trim() || null,
+        updatedAt: String(session?.lifecycle?.updatedAt || "").trim() || null,
+        sessionProgressLogPath: progressLogPath,
+        sessionProgressTail: progressLogTail,
+        isSelectedActiveSession: String(session?.sessionId || "") === String(normalizedActiveTargetSession?.sessionId || ""),
+      };
+    })
+  );
 
   // Read last thinking snippet from each worker's debug file
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1438,6 +1665,34 @@ async function collectDashboardData() {
 
   const decisionQualityTrend = await getDecisionQualityTrend(STATE_DIR);
 
+  const cleanedWorkerActivity = (function() {
+    const sessions = workerSessions || {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cleaned: Record<string, any> = {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const [role, s] of Object.entries(sessions) as any[]) {
+      // Cross-check: if status is "working" but last non-orchestrator history says "done",
+      // the worker actually finished — session file is stale
+      let effectiveStatus = s.status || "idle";
+      if (effectiveStatus === "working" && Array.isArray(s.history) && s.history.length > 0) {
+        const lastEntry = s.history.filter(h => h && h.role !== "Athena").pop();
+        if (lastEntry && ["done", "partial", "blocked"].includes(String(lastEntry.status || "").toLowerCase())) {
+          effectiveStatus = "idle";
+        }
+      }
+      cleaned[role] = {
+        role,
+        status: effectiveStatus,
+        lastTask: s.lastTask || "",
+        lastActiveAt: s.lastActiveAt || null,
+        historyLength: Array.isArray(s.history) ? s.history.length : 0,
+        lastThinking: thinkingMap[role] || ""
+      };
+    }
+    return cleaned;
+  })();
+  const leadershipPipeline = deriveLeadershipPipelineState(pipelineProgress, cleanedWorkerActivity);
+
   // Self-Improvement control state and live log
   const siControlRaw = await readJsonSafe(path.join(STATE_DIR, "self_improvement_control.json"), { enabled: true, reason: "", updatedAt: null, updatedBy: "" });
   let siLiveLogTail = [];
@@ -1450,10 +1705,17 @@ async function collectDashboardData() {
     generatedAt: new Date().toISOString(),
     monthKey: currentMonth,
     runtime: {
-      targetRepo: TARGET_REPO,
-      projectLabel: deriveProjectLabel(TARGET_REPO, ""),
+      targetRepo: targetRuntime.targetRepo || TARGET_REPO,
+      projectLabel: targetRuntime.projectLabel,
       systemStatus,
       systemStatusText,
+      currentMode: targetRuntime.currentMode,
+      fallbackModeAfterCompletion: targetRuntime.fallbackModeAfterCompletion,
+      activeTarget: {
+        ...targetRuntime,
+        sessionProgressLogPath: targetSessionProgressPath,
+        openTargetSessions: openTargetSessionEntries,
+      },
       /** Source freshness timestamp from the authoritative event-driven state file. */
       statusFreshnessAt: statusResult.statusFreshnessAt,
       /** "event-driven" when status came from pipeline_progress/orchestrator_health; "fallback-heuristic" otherwise. */
@@ -1505,10 +1767,15 @@ async function collectDashboardData() {
           autoFallbacks: 0,
           byModel: {},
           quota: Number(copilotQuota),
+          usedRequests: Number(copilotUsedRequests),
           remainingRequests: copilotRemainingRequests,
           usedPercent: Number(copilotUsedPercent.toFixed(2)),
           refreshInSec: Number(copilotApiUsage?.refreshInSec || 0),
           sourceAccount: COPILOT_SOURCE_ACCOUNT,
+          planTier: String(copilotApiUsage?.planTier || ""),
+          planLabel: String(copilotApiUsage?.planLabel || "Copilot plan unknown"),
+          modelAccess: String(copilotApiUsage?.modelAccess || "current"),
+          planDetectedBy: String(copilotApiUsage?.planDetectedBy || "unknown"),
           source: copilotApiUsage?.source || "github-billing-api"
         },
         recent: []
@@ -1536,12 +1803,18 @@ async function collectDashboardData() {
           ? copilotApiUsage.byModel.map(m => ({ model: m.model, qty: m.grossQuantity }))
           : []
       },
-      workersActive: listActiveWorkers(workerSessions),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      workersActive: Object.entries(workerSessions || {}).filter(([, s]: any) => s?.status === "working").map(([name, s]: any) => ({
+        name,
+        task: String(s.lastTask || "").slice(0, 80),
+        since: s.lastActiveAt || null
+      })),
       daemonPid: daemonStatus.pid,
       daemonRunning: daemonStatus.running
     },
     premiumUsageByWorker: derivePremiumUsageByWorker(premiumUsageLog),
-    workerActivity: normalizeWorkerActivity(workerSessions, thinkingMap),
+    workerActivity: cleanedWorkerActivity,
+    leadershipPipeline,
     leadership: {
       athena: athenaState,
       jesus: jesusDirective,
@@ -1561,6 +1834,7 @@ async function collectDashboardData() {
     },
     decisionQualityTrend,
     logs: progressTail,
+    targetSessionLogs: targetSessionLogTail,
     projectCompleted: completedEntry ? {
       repo: completedEntry.repo,
       completionTag: completedEntry.completionTag || null,
@@ -1584,29 +1858,6 @@ async function collectDashboardData() {
       updatedBy: String(siControlRaw.updatedBy || ""),
       liveLog: siLiveLogTail,
     },
-  };
-}
-
-function toAtlasSessionSummary(data: Awaited<ReturnType<typeof collectDashboardData>>): AtlasSessionSummary {
-  return {
-    projectLabel: String(data?.runtime?.projectLabel || "ATLAS"),
-    targetRepo: String(data?.runtime?.targetRepo || TARGET_REPO || "Target repo not configured"),
-    systemStatus: String(data?.runtime?.systemStatus || "idle"),
-    systemStatusText: String(data?.runtime?.systemStatusText || "System ready"),
-    degradedReason: typeof data?.runtime?.degradedReason === "string" ? data.runtime.degradedReason : null,
-    statusFreshnessAt: typeof data?.runtime?.statusFreshnessAt === "string" ? data.runtime.statusFreshnessAt : null,
-    pipelineStageLabel: String(data?.pipeline?.stageLabel || data?.pipeline?.stage || "Idle"),
-    pipelineDetail: String(data?.pipeline?.detail || "Waiting for the next cycle update"),
-    pipelinePercent: Number(data?.pipeline?.percent || 0),
-    sessions: Object.values(data?.workerActivity || {}).map((session) => ({
-      name: String(session?.role || "Session"),
-      status: String(session?.status || "idle"),
-      statusLabel: String(session?.statusLabel || ""),
-      readiness: String(session?.readiness || ""),
-      readinessLabel: String(session?.readinessLabel || ""),
-      lastTask: String(session?.lastTask || ""),
-      lastActiveAt: typeof session?.lastActiveAt === "string" ? session.lastActiveAt : null,
-    })),
   };
 }
 
@@ -2401,6 +2652,8 @@ function renderHtml() {
 
     <section class="grid">
       <article class="card"><div class="k">Project</div><div class="v" id="m-project">-</div><div class="sub" id="m-role-head">CEO: - | Lead: -</div></article>
+      <article class="card"><div class="k">Mode / Stage</div><div class="v" id="m-mode">-</div><div class="sub" id="m-mode-sub">stage: -</div></article>
+      <article class="card"><div class="k">Active Target</div><div class="v" id="m-target">-</div><div class="sub" id="m-target-sub">waiting: -</div></article>
       <article class="card"><div class="k">Tasks Total</div><div class="v" id="m-tasks">0</div><div class="sub" id="m-tasks-sub">queued: 0 | running: 0</div></article>
       <article class="card"><div class="k">Workers Active</div><div class="v" id="m-qr">0 / 0</div><div class="sub" id="m-qr-sub">working / total</div></article>
       <article class="card"><div class="k">Passed / Failed</div><div class="v" id="m-pf">0 / 0</div></article>
@@ -2521,9 +2774,9 @@ function renderHtml() {
       </div>
     </section>
 
-    <!-- Leadership Chain (advanced detail) -->
+    <!-- Leadership diagnostics (advanced detail) -->
     <details class="panel details-panel" style="margin-bottom:12px">
-      <summary>Advanced: Leadership Chain Detail</summary>
+      <summary>Advanced: Leadership Diagnostics</summary>
       <section class="chain" style="padding:8px">
         <article class="chain-box user">
           <h2 class="chain-title">User (You)</h2>
@@ -2671,6 +2924,10 @@ function renderHtml() {
         <div class="panel" style="box-shadow:none">
           <h2>Live Runtime Log (state/progress.txt tail)</h2>
           <pre id="log-view">Waiting for log stream...</pre>
+        </div>
+        <div class="panel" style="box-shadow:none">
+          <h2>Active Target Session Log</h2>
+          <pre id="target-log-view">No active target session log.</pre>
         </div>
       </section>
     </details>
@@ -3168,8 +3425,12 @@ function renderHtml() {
       var prometheus = (data && data.leadership && data.leadership.prometheus) || {};
       var Athena = (data && data.leadership && data.leadership.athena) || {};
       var wa = data && data.workerActivity ? data.workerActivity : {};
+      var leadershipPipeline = data && data.leadershipPipeline ? data.leadershipPipeline : {};
+      var activeEntity = leadershipPipeline && leadershipPipeline.activeEntity ? String(leadershipPipeline.activeEntity) : '';
+      var authoritativePipeline = leadershipPipeline && leadershipPipeline.authoritative === true;
+      var stageLabel = leadershipPipeline && leadershipPipeline.stageLabel ? String(leadershipPipeline.stageLabel) : '';
+      var workingNames = Object.keys(wa).filter(function(n) { return String((wa[n] || {}).status || '').toLowerCase() === 'working'; });
 
-      // Progress ring
       var tasks = data && data.tasks ? data.tasks : {};
       var total = Math.max(1, Number(tasks.total || 0));
       var passed = Number((tasks.totals || {}).passed || 0);
@@ -3191,10 +3452,12 @@ function renderHtml() {
       var health = String(jesus.systemHealth || 'unknown');
       var healthIcon = health === 'healthy' ? '🟢' : health === 'critical' ? '🔴' : '🟡';
       var jesusStatusEl = document.getElementById('lp-jesus-status');
-      if (jesusStatusEl) jesusStatusEl.textContent = healthIcon + ' ' + String(jesus.decision || 'waiting');
+      if (jesusStatusEl) jesusStatusEl.textContent = activeEntity === 'jesus' && authoritativePipeline
+        ? (stageLabel || (healthIcon + ' active'))
+        : (healthIcon + ' ' + String(jesus.decision || 'waiting'));
       var jesusNode = document.getElementById('lp-node-jesus');
       if (jesusNode) {
-        jesusNode.classList.toggle('active', !!jesus.decidedAt);
+        jesusNode.classList.toggle('active', activeEntity ? activeEntity === 'jesus' : !!jesus.decidedAt);
         if (changes.jesusNew) { jesusNode.classList.remove('flash'); void jesusNode.offsetWidth; jesusNode.classList.add('flash'); }
       }
 
@@ -3207,10 +3470,12 @@ function renderHtml() {
       // Prometheus node
       var prometheusStatusEl = document.getElementById('lp-prometheus-status');
       var planCount = Array.isArray(prometheus.plans) ? prometheus.plans.length : 0;
-      if (prometheusStatusEl) prometheusStatusEl.textContent = planCount > 0 ? (planCount + ' plans | ' + String(prometheus.projectHealth || '?')) : 'waiting';
+      if (prometheusStatusEl) prometheusStatusEl.textContent = activeEntity === 'prometheus' && authoritativePipeline
+        ? (stageLabel || 'active')
+        : (planCount > 0 ? (planCount + ' plans | ' + String(prometheus.projectHealth || '?')) : 'waiting');
       var prometheusNode = document.getElementById('lp-node-prometheus');
       if (prometheusNode) {
-        prometheusNode.classList.toggle('active', planCount > 0);
+        prometheusNode.classList.toggle('active', activeEntity ? activeEntity === 'prometheus' : planCount > 0);
         if (changes.prometheusNew) { prometheusNode.classList.remove('flash'); void prometheusNode.offsetWidth; prometheusNode.classList.add('flash'); }
       }
 
@@ -3224,10 +3489,12 @@ function renderHtml() {
       var AthenaStatusEl = document.getElementById('lp-Athena-status');
       var activeSessions = Number(Athena.activeSessions || 0);
       var completedCount = Array.isArray(Athena.completedTasks) ? Athena.completedTasks.length : 0;
-      if (AthenaStatusEl) AthenaStatusEl.textContent = activeSessions + ' active | ' + completedCount + ' done';
+      if (AthenaStatusEl) AthenaStatusEl.textContent = activeEntity === 'Athena' && authoritativePipeline
+        ? (stageLabel || 'active')
+        : (activeSessions + ' active | ' + completedCount + ' done');
       var AthenaNode = document.getElementById('lp-node-Athena');
       if (AthenaNode) {
-        AthenaNode.classList.toggle('active', !!Athena.coordinatedAt);
+        AthenaNode.classList.toggle('active', activeEntity ? activeEntity === 'Athena' : !!Athena.coordinatedAt);
         if (changes.AthenaNew) { AthenaNode.classList.remove('flash'); void AthenaNode.offsetWidth; AthenaNode.classList.add('flash'); }
       }
 
@@ -3238,12 +3505,13 @@ function renderHtml() {
       if (arrowMWLabel) arrowMWLabel.textContent = activeSessions > 0 ? ('dispatch ' + activeSessions) : '—';
 
       // Workers node
-      var workingNames = Object.keys(wa).filter(function(n) { return String((wa[n] || {}).status || '').toLowerCase() === 'working'; });
       var workersStatusEl = document.getElementById('lp-workers-status');
-      if (workersStatusEl) workersStatusEl.textContent = workingNames.length > 0 ? (workingNames.length + ' working') : 'idle';
+      if (workersStatusEl) workersStatusEl.textContent = activeEntity === 'workers' && authoritativePipeline
+        ? (stageLabel || 'workers active')
+        : (workingNames.length > 0 ? (workingNames.length + ' working') : 'idle');
       var workersNode = document.getElementById('lp-node-workers');
       if (workersNode) {
-        workersNode.classList.toggle('active', workingNames.length > 0);
+        workersNode.classList.toggle('active', activeEntity ? activeEntity === 'workers' : workingNames.length > 0);
         if (changes.newWorkers.length > 0) { workersNode.classList.remove('flash'); void workersNode.offsetWidth; workersNode.classList.add('flash'); }
       }
 
@@ -3945,10 +4213,42 @@ function renderHtml() {
         dStatusSpan.textContent = daemonRunning ? "PID " + data.runtime.daemonPid : "";
       }
 
-      document.getElementById("m-project").textContent = data.runtime.projectLabel || data.runtime.targetRepo || "unknown";
+      var activeTarget = (data.runtime && data.runtime.activeTarget) ? data.runtime.activeTarget : {};
+      var modeLabel = String((activeTarget.currentMode || data.runtime.currentMode || "self_dev") || "self_dev").replace(/_/g, ' ');
+      var stageLabel = String(activeTarget.stage || (modeLabel === 'self dev' ? 'self_dev_home' : 'none')).replace(/_/g, ' ');
+      var blockers = Array.isArray(activeTarget.blockers) ? activeTarget.blockers.filter(Boolean) : [];
+      var waitingReason = String(activeTarget.waitingReason || 'none');
+      var executionWorkspace = String(activeTarget.executionWorkspacePath || '').trim();
+      var repoState = String(activeTarget.repoState || '').trim();
+      var clarificationAgent = String(activeTarget.clarificationAgent || activeTarget.selectedOnboardingAgent || '').trim();
+      var clarificationStatus = String(activeTarget.clarificationStatus || '').trim();
+      var targetLabel = activeTarget.hasActiveTargetSession
+        ? (activeTarget.projectLabel || activeTarget.targetRepo || activeTarget.activeProjectId || 'active target')
+        : 'No active target';
+      var targetSub = '';
+      if (blockers.length > 0) {
+        targetSub = 'blocked: ' + String(blockers[0]).slice(0, 96);
+      } else if (clarificationAgent) {
+        targetSub = 'onboarding: ' + clarificationAgent
+          + (repoState ? (' | repo: ' + repoState) : '')
+          + (clarificationStatus ? (' | status: ' + clarificationStatus) : '');
+      } else if (repoState) {
+        targetSub = 'repo: ' + repoState
+          + (waitingReason && waitingReason !== 'none' ? (' | waiting: ' + waitingReason.slice(0, 48)) : '');
+      } else if (waitingReason && waitingReason !== 'none') {
+        targetSub = 'waiting: ' + waitingReason.slice(0, 96);
+      } else {
+        targetSub = 'workspace: ' + (executionWorkspace || 'n/a');
+      }
+
+      document.getElementById("m-project").textContent = activeTarget.projectLabel || data.runtime.projectLabel || data.runtime.targetRepo || "unknown";
       var roleRegistry = (data.runtime && data.runtime.roleRegistry) ? data.runtime.roleRegistry : {};
       var roleLayerMap = buildRoleLayerMap(roleRegistry);
       document.getElementById("m-role-head").textContent = 'CEO: ' + String(roleRegistry.ceo || '-') + ' | Lead: ' + String(roleRegistry.lead || '-');
+      document.getElementById("m-mode").textContent = modeLabel;
+      document.getElementById("m-mode-sub").textContent = 'stage: ' + stageLabel + ' | fallback: ' + String(activeTarget.fallbackModeAfterCompletion || 'self_dev').replace(/_/g, ' ') + (activeTarget.bootstrapStatus ? ' | bootstrap: ' + String(activeTarget.bootstrapStatus).replace(/_/g, ' ') : '');
+      document.getElementById("m-target").textContent = targetLabel;
+      document.getElementById("m-target-sub").textContent = targetSub;
       document.getElementById("m-tasks").textContent = String(data.tasks.total || 0);
       document.getElementById("m-tasks-sub").textContent = 'queued: ' + queued + ' | running: ' + running;
 
@@ -4158,6 +4458,15 @@ function renderHtml() {
           return '<span style="' + style + '">' + text + '</span>';
         }).join('\\n');
       })(data.logs || []);
+
+      document.getElementById("target-log-view").textContent = (function(lines, activeTarget) {
+        if (!Array.isArray(lines) || lines.length === 0) {
+          return activeTarget && activeTarget.hasActiveTargetSession
+            ? 'Active target session has no dedicated log lines yet.'
+            : 'No active target session log.';
+        }
+        return lines.join('\\n');
+      })(data.targetSessionLogs || [], activeTarget);
     }
 
     async function triggerForceRebase() {
@@ -4365,6 +4674,9 @@ async function serve(req: http.IncomingMessage, res: http.ServerResponse): Promi
       if (Array.isArray(data.logs)) {
         data.logs = data.logs.slice(-20);
       }
+      if (Array.isArray(data.targetSessionLogs)) {
+        data.targetSessionLogs = data.targetSessionLogs.slice(-20);
+      }
       if (data.premiumUsageByWorker?.byWorker) {
         for (const w of Object.keys(data.premiumUsageByWorker.byWorker)) {
           const entry = data.premiumUsageByWorker.byWorker[w];
@@ -4528,19 +4840,6 @@ async function serve(req: http.IncomingMessage, res: http.ServerResponse): Promi
     } catch (err) {
       res.writeHead(500, { "content-type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ ok: false, error: String(err?.message || err) }));
-    }
-    return;
-  }
-
-  if (url.pathname === "/atlas") {
-    try {
-      const atlasSummary = toAtlasSessionSummary(await collectDashboardData());
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(renderAtlasHtml(atlasSummary));
-    } catch (error) {
-      console.error(`[box] atlas route failed: ${String((error as Error)?.message || error)}`);
-      res.writeHead(500, { "content-type": "text/html; charset=utf-8" });
-      res.end("<!doctype html><html><body><h1>ATLAS Home unavailable</h1><p>Check dashboard logs for details.</p></body></html>");
     }
     return;
   }

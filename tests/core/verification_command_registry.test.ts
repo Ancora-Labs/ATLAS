@@ -1,13 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { getVerificationCommands, getTestCommand, VERIFICATION_DEFAULTS, checkForbiddenCommands, FORBIDDEN_VERIFICATION_PATTERNS, rewriteVerificationCommand, VERIFICATION_CMD_REWRITE_RULES, normalizeCommandBatch, validateDispatchCommands, NON_SPECIFIC_VERIFICATION_PATTERNS, isNonSpecificVerificationCommand } from "../../src/core/verification_command_registry.js";
+import { getVerificationCommands, getTestCommand, VERIFICATION_DEFAULTS, checkForbiddenCommands, FORBIDDEN_VERIFICATION_PATTERNS, rewriteVerificationCommand, VERIFICATION_CMD_REWRITE_RULES, normalizeCommandBatch, validateDispatchCommands, NON_SPECIFIC_VERIFICATION_PATTERNS, isNonSpecificVerificationCommand, TARGETED_TEST_COMMAND_PLACEHOLDER, REPO_WIDE_TEST_COMMAND, isPlaceholderVerificationCommand } from "../../src/core/verification_command_registry.js";
 import { applyDispatchCommandGate } from "../../src/core/verification_gate.js";
 
 describe("verification_command_registry", () => {
   describe("getVerificationCommands", () => {
     it("returns defaults with no config", () => {
       const cmds = getVerificationCommands();
-      assert.equal(cmds.test, "npm test");
+      assert.equal(cmds.test, TARGETED_TEST_COMMAND_PLACEHOLDER);
       assert.equal(cmds.lint, "npm run lint");
       assert.equal(cmds.build, "npm run build");
     });
@@ -34,7 +34,7 @@ describe("verification_command_registry", () => {
 
   describe("getTestCommand", () => {
     it("returns test command", () => {
-      assert.equal(getTestCommand(), "npm test");
+      assert.equal(getTestCommand(), TARGETED_TEST_COMMAND_PLACEHOLDER);
     });
 
     it("returns override when specified", () => {
@@ -81,32 +81,32 @@ describe("verification_command_registry", () => {
   });
 
   describe("rewriteVerificationCommand", () => {
-    it("rewrites shell-glob node --test to npm test", () => {
-      assert.equal(rewriteVerificationCommand("node --test tests/**/*.test.js"), "npm test");
-      assert.equal(rewriteVerificationCommand("node --test tests/**/*.test.ts"), "npm test");
+    it("rewrites shell-glob node --test to targeted placeholder test", () => {
+      assert.equal(rewriteVerificationCommand("node --test tests/**/*.test.js"), TARGETED_TEST_COMMAND_PLACEHOLDER);
+      assert.equal(rewriteVerificationCommand("node --test tests/**/*.test.ts"), TARGETED_TEST_COMMAND_PLACEHOLDER);
     });
 
-    it("rewrites bash script invocations to npm test", () => {
-      assert.equal(rewriteVerificationCommand("bash scripts/run_tests.sh"), "npm test");
+    it("rewrites bash script invocations to targeted placeholder test", () => {
+      assert.equal(rewriteVerificationCommand("bash scripts/run_tests.sh"), TARGETED_TEST_COMMAND_PLACEHOLDER);
     });
 
-    it("rewrites sh script invocations to npm test", () => {
-      assert.equal(rewriteVerificationCommand("sh run.sh"), "npm test");
+    it("rewrites sh script invocations to targeted placeholder test", () => {
+      assert.equal(rewriteVerificationCommand("sh run.sh"), TARGETED_TEST_COMMAND_PLACEHOLDER);
     });
 
-    it("rewrites BOX daemon commands to npm test", () => {
-      assert.equal(rewriteVerificationCommand("node src/cli.js once"), "npm test");
-      assert.equal(rewriteVerificationCommand("npm run box:once"), "npm test");
-      assert.equal(rewriteVerificationCommand("node src/cli.js start"), "npm test");
-      assert.equal(rewriteVerificationCommand("node src/cli.js doctor"), "npm test");
+    it("rewrites BOX daemon commands to targeted placeholder test", () => {
+      assert.equal(rewriteVerificationCommand("node src/cli.js once"), TARGETED_TEST_COMMAND_PLACEHOLDER);
+      assert.equal(rewriteVerificationCommand("npm run box:once"), TARGETED_TEST_COMMAND_PLACEHOLDER);
+      assert.equal(rewriteVerificationCommand("node src/cli.js start"), TARGETED_TEST_COMMAND_PLACEHOLDER);
+      assert.equal(rewriteVerificationCommand("node src/cli.js doctor"), TARGETED_TEST_COMMAND_PLACEHOLDER);
     });
 
-  it("rewrites dashboard daemon to node --test", () => {
-      assert.equal(rewriteVerificationCommand("node src/dashboard/live_dashboard.js"), "npm test");
+  it("rewrites dashboard daemon to targeted placeholder test", () => {
+      assert.equal(rewriteVerificationCommand("node src/dashboard/live_dashboard.js"), TARGETED_TEST_COMMAND_PLACEHOLDER);
   });
 
     it("passes through canonical npm test unchanged", () => {
-      assert.equal(rewriteVerificationCommand("npm test"), "npm test");
+      assert.equal(rewriteVerificationCommand("npm test"), REPO_WIDE_TEST_COMMAND);
       assert.equal(rewriteVerificationCommand("npm run lint"), "npm run lint");
       assert.equal(rewriteVerificationCommand("npm run build"), "npm run build");
     });
@@ -151,9 +151,7 @@ describe("normalizeCommandBatch — end-to-end batch normalization", () => {
   it("rewrites each command in the batch using rewrite rules", () => {
     const raw = ["node --test tests/**/*.test.ts", "npm test", "npm run lint"];
     const result = normalizeCommandBatch(raw);
-    // The glob-based command must be rewritten to npm test
-    // Deduplication means "npm test" appears only once
-    assert.ok(result.includes("npm test"));
+    assert.ok(result.includes(TARGETED_TEST_COMMAND_PLACEHOLDER));
     assert.ok(result.includes("npm run lint"));
     assert.ok(!result.some(cmd => cmd.includes("*")), "no glob patterns should remain after normalization");
   });
@@ -161,16 +159,15 @@ describe("normalizeCommandBatch — end-to-end batch normalization", () => {
   it("deduplicates commands that rewrite to the same canonical form", () => {
     const raw = ["node --test tests/**/*.ts", "bash run.sh", "npm test"];
     const result = normalizeCommandBatch(raw);
-    // All three rewrite to "npm test" — only one should remain
-    const npmTestCount = result.filter(c => c === "npm test").length;
-    assert.equal(npmTestCount, 1, "deduplication must collapse identical rewrites");
+    const targetedCount = result.filter(c => c === TARGETED_TEST_COMMAND_PLACEHOLDER).length;
+    assert.equal(targetedCount, 1, "deduplication must collapse identical rewrites to one targeted placeholder command");
   });
 
   it("filters out empty strings after normalization", () => {
     const raw = ["", "  ", "npm test"];
     const result = normalizeCommandBatch(raw);
     assert.equal(result.length, 1);
-    assert.equal(result[0], "npm test");
+    assert.equal(result[0], REPO_WIDE_TEST_COMMAND);
   });
 
   it("returns empty array for non-array input", () => {
@@ -184,7 +181,7 @@ describe("normalizeCommandBatch — end-to-end batch normalization", () => {
   });
 
   it("preserves canonical commands unchanged", () => {
-    const canonical = ["npm test", "npm run lint", "npm run build"];
+    const canonical = [REPO_WIDE_TEST_COMMAND, "npm run lint", "npm run build"];
     const result = normalizeCommandBatch(canonical);
     assert.deepEqual(result, canonical);
   });
@@ -251,12 +248,17 @@ describe("Windows-safe conformance — AI-generated glob patterns (Task 2)", () 
   });
 
   it("rewrites npx tsx glob to npm test", () => {
-    assert.equal(rewriteVerificationCommand("npx tsx tests/**/*.test.ts"), "npm test");
-    assert.equal(rewriteVerificationCommand("npx tsx src/**/*.spec.ts"), "npm test");
+    assert.equal(rewriteVerificationCommand("npx tsx tests/**/*.test.ts"), TARGETED_TEST_COMMAND_PLACEHOLDER);
+    assert.equal(rewriteVerificationCommand("npx tsx src/**/*.spec.ts"), TARGETED_TEST_COMMAND_PLACEHOLDER);
   });
 
   it("rewrites ts-node glob to npm test", () => {
-    assert.equal(rewriteVerificationCommand("ts-node tests/**/*.test.ts"), "npm test");
+    assert.equal(rewriteVerificationCommand("ts-node tests/**/*.test.ts"), TARGETED_TEST_COMMAND_PLACEHOLDER);
+  });
+
+  it("marks placeholder test command as non-executable placeholder", () => {
+    assert.equal(isPlaceholderVerificationCommand(TARGETED_TEST_COMMAND_PLACEHOLDER), true);
+    assert.equal(isPlaceholderVerificationCommand(REPO_WIDE_TEST_COMMAND), false);
   });
 
   it("passes npx tsx without glob through unchanged (registry-conformant)", () => {
@@ -307,9 +309,9 @@ describe("Windows-safe conformance — AI-generated glob patterns (Task 2)", () 
     );
     assert.ok(result.includes("npm test"), "npm test must be in the result");
     assert.ok(result.includes("npm run lint"), "npm run lint must be in the result");
-    // npx tsx glob, ts-node glob, node --test glob all rewrite to npm test — deduplicated to 1
-    const npmTestCount = result.filter(c => c === "npm test").length;
-    assert.equal(npmTestCount, 1, "all glob rewrites collapse to a single 'npm test' after deduplication");
+    // npx tsx glob, ts-node glob, node --test glob all rewrite to the targeted placeholder — deduplicated to 1
+    const targetedCount = result.filter(c => c === TARGETED_TEST_COMMAND_PLACEHOLDER).length;
+    assert.equal(targetedCount, 1, "all glob rewrites collapse to a single targeted placeholder after deduplication");
   });
 });
 
@@ -328,14 +330,14 @@ describe("validateDispatchCommands — dispatch-time gate (Task 3)", () => {
     assert.equal(result.safe, false);
     assert.ok(result.rewrites.length > 0);
     assert.ok(result.rewrites[0].original === "node --test tests/**/*.test.ts");
-    assert.equal(result.rewrites[0].rewritten, "npm test");
+    assert.equal(result.rewrites[0].rewritten, TARGETED_TEST_COMMAND_PLACEHOLDER);
     assert.ok(result.rewrites[0].reason.length > 0);
   });
 
   it("sanitizedCommands contains only the rewritten (canonical) commands", () => {
     const result = validateDispatchCommands(["bash run.sh", "npm run lint"]);
     assert.ok(!result.sanitizedCommands.some(cmd => cmd.startsWith("bash")));
-    assert.ok(result.sanitizedCommands.includes("npm test"));
+    assert.ok(result.sanitizedCommands.includes(TARGETED_TEST_COMMAND_PLACEHOLDER));
     assert.ok(result.sanitizedCommands.includes("npm run lint"));
   });
 
@@ -345,9 +347,8 @@ describe("validateDispatchCommands — dispatch-time gate (Task 3)", () => {
       "bash scripts/test.sh",
       "npm test",
     ]);
-    // All three collapse to "npm test" — only one should appear
-    const count = result.sanitizedCommands.filter(c => c === "npm test").length;
-    assert.equal(count, 1, "deduplication must collapse identical rewrites to one entry");
+    const targetedCount = result.sanitizedCommands.filter(c => c === TARGETED_TEST_COMMAND_PLACEHOLDER).length;
+    assert.equal(targetedCount, 1, "deduplication must collapse identical rewrites to one targeted placeholder command");
   });
 
   it("returns safe=true and empty arrays for empty input", () => {
@@ -383,7 +384,7 @@ describe("validateDispatchCommands — dispatch-time gate (Task 3)", () => {
     const result = validateDispatchCommands(["npm run box:once"]);
     assert.equal(result.safe, false);
     assert.equal(result.rewrites[0].original, "npm run box:once");
-    assert.equal(result.rewrites[0].rewritten, "npm test");
+    assert.equal(result.rewrites[0].rewritten, TARGETED_TEST_COMMAND_PLACEHOLDER);
   });
 
   it("negative path: canonical npm commands are not flagged as unsafe (no false positives)", () => {
@@ -415,7 +416,7 @@ describe("applyDispatchCommandGate — dispatch-time integration (Task 3)", () =
     const { task: result, gate } = applyDispatchCommandGate(task);
     assert.equal(gate.safe, false);
     assert.ok(!(result.verification_commands as string[]).some(cmd => cmd.includes("*")));
-    assert.ok((result.verification_commands as string[]).includes("npm test"));
+    assert.ok((result.verification_commands as string[]).includes(TARGETED_TEST_COMMAND_PLACEHOLDER));
     assert.ok((result.verification_commands as string[]).includes("npm run lint"));
   });
 
@@ -488,10 +489,10 @@ describe("checkForbiddenCommands — trimmed input hardening (Task 3)", () => {
 
   it("rewriteVerificationCommand with leading whitespace produces canonical output", () => {
     // Ensure rewrite is consistent with detection after trimming
-    assert.equal(rewriteVerificationCommand("  bash scripts/test.sh"), "npm test",
-      "leading-whitespace bash must be rewritten to npm test");
-    assert.equal(rewriteVerificationCommand("  node --test tests/**"), "npm test",
-      "leading-whitespace node --test glob must be rewritten to npm test");
+    assert.equal(rewriteVerificationCommand("  bash scripts/test.sh"), TARGETED_TEST_COMMAND_PLACEHOLDER,
+      "leading-whitespace bash must be rewritten to targeted placeholder test");
+    assert.equal(rewriteVerificationCommand("  node --test tests/**"), TARGETED_TEST_COMMAND_PLACEHOLDER,
+      "leading-whitespace node --test glob must be rewritten to targeted placeholder test");
   });
 
   it("normalizeCommandBatch strips leading whitespace before detection and rewriting", () => {
@@ -500,9 +501,9 @@ describe("checkForbiddenCommands — trimmed input hardening (Task 3)", () => {
     assert.ok(!result.some(cmd => cmd.includes("bash") || cmd.includes("*")),
       "normalizeCommandBatch must strip and rewrite all leading-whitespace forbidden commands"
     );
-    const npmTestCount = result.filter(c => c === "npm test").length;
-    assert.equal(npmTestCount, 1,
-      "all three rewrites collapse to a single 'npm test' after deduplication"
+    const repoWideCount = result.filter(c => c === REPO_WIDE_TEST_COMMAND).length;
+    assert.equal(repoWideCount, 1,
+      "all forbidden rewrites collapse to a single repo-wide command after deduplication"
     );
   });
 });

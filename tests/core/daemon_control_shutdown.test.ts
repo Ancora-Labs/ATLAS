@@ -19,9 +19,12 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  MAX_CONCURRENT_TARGET_SESSION_RUNNERS,
+  countRunningTargetSessionRunners,
   writeDaemonPid,
   clearDaemonPid,
   readDaemonPid,
+  findDaemonStartConflict,
   requestDaemonStop,
   readStopRequest,
   clearStopRequest,
@@ -76,6 +79,43 @@ describe("writeDaemonPid — stale PID overwrite", () => {
     assert.equal(stored?.pid, process.pid, "overwritten PID must equal the current process PID");
     await clearDaemonPid(config);
   });
+
+  it("keeps daemon pid scope stable when the runtime later binds a target session selector", async () => {
+    const config = {
+      paths: { stateDir: tmpDir },
+      daemonControlScope: {
+        projectId: null,
+        sessionId: null,
+      },
+      targetSessionSelector: {
+        projectId: "target_atlas",
+        sessionId: "sess_bound_later",
+      },
+    };
+
+    await writeDaemonPid(config);
+
+    const globalPidState = await readDaemonPid({ paths: { stateDir: tmpDir } });
+    assert.equal(globalPidState?.pid, process.pid);
+
+    let scopedPidExists = true;
+    try {
+      await fs.access(path.join(tmpDir, "session_runners", "target_atlas_sess_bound_later.pid.json"));
+    } catch {
+      scopedPidExists = false;
+    }
+    assert.equal(scopedPidExists, false, "global daemon pid writes must not drift into a scoped session runner file");
+
+    await clearDaemonPid(config);
+
+    let globalPidExists = true;
+    try {
+      await fs.access(path.join(tmpDir, "daemon.pid.json"));
+    } catch {
+      globalPidExists = false;
+    }
+    assert.equal(globalPidExists, false, "stable daemon scope must clear the original global pid file");
+  });
 });
 
 // ── writeDaemonPid — forced termination block ────────────────────────────────
@@ -108,6 +148,177 @@ describe("writeDaemonPid — forced termination: rejects when daemon is alive", 
         return true;
       }
     );
+  });
+});
+
+describe("writeDaemonPid — target session runner limit", () => {
+  let tmpDir: string;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-daemon-session-limit-"));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("enforces the max concurrent target-session runner count", async () => {
+    const configs = Array.from({ length: MAX_CONCURRENT_TARGET_SESSION_RUNNERS + 1 }, (_, index) => ({
+      paths: { stateDir: tmpDir },
+      targetSessionSelector: {
+        projectId: `project_${index + 1}`,
+        sessionId: `session_${index + 1}`,
+      },
+    }));
+
+    for (const config of configs.slice(0, MAX_CONCURRENT_TARGET_SESSION_RUNNERS)) {
+      await writeDaemonPid(config);
+    }
+
+    const runningCount = await countRunningTargetSessionRunners(configs[0]);
+    assert.equal(runningCount, MAX_CONCURRENT_TARGET_SESSION_RUNNERS);
+
+    await assert.rejects(
+      () => writeDaemonPid(configs[MAX_CONCURRENT_TARGET_SESSION_RUNNERS]),
+      /target session runner limit reached/i,
+    );
+
+    for (const config of configs.slice(0, MAX_CONCURRENT_TARGET_SESSION_RUNNERS)) {
+      await clearDaemonPid(config);
+    }
+  });
+});
+
+describe("findDaemonStartConflict", () => {
+  let tmpDir: string;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "box-daemon-conflict-"));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("blocks a scoped target-session runner when a global daemon pid is alive", async () => {
+    const globalPidFile = path.join(tmpDir, "daemon.pid.json");
+    await fs.writeFile(
+      globalPidFile,
+      JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), scope: "global" }),
+      "utf8",
+    );
+
+    const conflict = await findDaemonStartConflict({
+      paths: { stateDir: tmpDir },
+      targetSessionSelector: {
+        projectId: "target_atlas",
+        sessionId: "sess_123",
+      },
+    });
+
+    assert.deepEqual(conflict, {
+      scope: "global",
+      pid: process.pid,
+      reason: `global daemon already running pid=${process.pid}`,
+    });
+
+    await fs.rm(globalPidFile, { force: true });
+  });
+
+  it("blocks a scoped once/resume run when the same scoped target-session runner pid is alive", async () => {
+    const scopedConfig = {
+      paths: { stateDir: tmpDir },
+      targetSessionSelector: {
+        projectId: "target_atlas",
+        sessionId: "sess_same",
+      },
+    };
+    await writeDaemonPid(scopedConfig);
+
+    const conflict = await findDaemonStartConflict(scopedConfig);
+    assert.equal(conflict?.scope, "target-session");
+    assert.equal(conflict?.pid, process.pid);
+    assert.match(String(conflict?.reason || ""), /target session runner already running/i);
+    assert.match(String(conflict?.reason || ""), /project=target_atlas/i);
+    assert.match(String(conflict?.reason || ""), /session=sess_same/i);
+
+    await clearDaemonPid(scopedConfig);
+  });
+
+  it("blocks a scoped run even when the existing runner pid file was written under a fallback project key", async () => {
+    const fallbackPidFile = path.join(tmpDir, "session_runners", "project_sess_legacy.pid.json");
+    await fs.mkdir(path.dirname(fallbackPidFile), { recursive: true });
+    await fs.writeFile(
+      fallbackPidFile,
+      JSON.stringify({
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        projectId: null,
+        sessionId: "sess_legacy",
+        scope: "target-session",
+      }),
+      "utf8",
+    );
+
+    const conflict = await findDaemonStartConflict({
+      paths: { stateDir: tmpDir },
+      targetSessionSelector: {
+        projectId: "target_atlas",
+        sessionId: "sess_legacy",
+      },
+    });
+
+    assert.equal(conflict?.scope, "target-session");
+    assert.equal(conflict?.pid, process.pid);
+    assert.match(String(conflict?.reason || ""), /target session runner already running/i);
+    assert.match(String(conflict?.reason || ""), /session=sess_legacy/i);
+  });
+
+  it("blocks a global daemon when a scoped target-session runner pid is alive", async () => {
+    const scopedConfig = {
+      paths: { stateDir: tmpDir },
+      targetSessionSelector: {
+        projectId: "target_atlas",
+        sessionId: "sess_456",
+      },
+    };
+    await writeDaemonPid(scopedConfig);
+
+    const conflict = await findDaemonStartConflict(makeConfig(tmpDir));
+    assert.equal(conflict?.scope, "target-session");
+    assert.equal(conflict?.pid, process.pid);
+    assert.match(String(conflict?.reason || ""), /target session runner already running/i);
+    assert.match(String(conflict?.reason || ""), /project=target_atlas/i);
+    assert.match(String(conflict?.reason || ""), /session=sess_456/i);
+
+    await clearDaemonPid(scopedConfig);
+  });
+
+  it("ignores and clears a stale global daemon pid file", async () => {
+    const globalPidFile = path.join(tmpDir, "daemon.pid.json");
+    await fs.writeFile(
+      globalPidFile,
+      JSON.stringify({ pid: 9999999, startedAt: new Date().toISOString(), scope: "global" }),
+      "utf8",
+    );
+
+    const conflict = await findDaemonStartConflict({
+      paths: { stateDir: tmpDir },
+      targetSessionSelector: {
+        projectId: "target_atlas",
+        sessionId: "sess_789",
+      },
+    });
+
+    assert.equal(conflict, null);
+
+    let exists = true;
+    try {
+      await fs.access(globalPidFile);
+    } catch {
+      exists = false;
+    }
+    assert.equal(exists, false, "stale global daemon pid file must be cleared");
   });
 });
 

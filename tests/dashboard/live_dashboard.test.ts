@@ -17,6 +17,7 @@ import assert from "node:assert/strict";
 
 import {
   deriveSystemStatus,
+  deriveLeadershipPipelineState,
   DASHBOARD_PAYLOAD_MAX_BYTES,
   consumeTypedEvent,
   isTypedEventForDomain,
@@ -300,6 +301,44 @@ describe("deriveSystemStatus — fallback-heuristic paths", () => {
       result.statusSource === "event-driven" || result.statusSource === "fallback-heuristic",
       `statusSource must be a known value, got: ${result.statusSource}`
     );
+  });
+});
+
+// ── deriveLeadershipPipelineState ───────────────────────────────────────────
+
+describe("deriveLeadershipPipelineState", () => {
+  it("uses the fresh pipeline stage as the authoritative active leadership entity", () => {
+    const result = deriveLeadershipPipelineState(
+      {
+        stage: "prometheus_analyzing",
+        stageLabel: "Prometheus Analyzing",
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        Samuel: { status: "working" },
+      }
+    );
+
+    assert.equal(result.authoritative, true);
+    assert.equal(result.activeEntity, "prometheus");
+    assert.equal(result.stageLabel, "Prometheus Analyzing");
+  });
+
+  it("[NEGATIVE] falls back to live worker activity when the pipeline stage is stale", () => {
+    const result = deriveLeadershipPipelineState(
+      {
+        stage: "prometheus_analyzing",
+        stageLabel: "Prometheus Analyzing",
+        updatedAt: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+      },
+      {
+        Esther: { status: "working" },
+      }
+    );
+
+    assert.equal(result.authoritative, false);
+    assert.equal(result.activeEntity, "workers");
+    assert.deepEqual(result.workingWorkers, ["Esther"]);
   });
 });
 

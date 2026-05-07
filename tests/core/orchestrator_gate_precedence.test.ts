@@ -655,7 +655,7 @@ describe("evaluatePreDispatchGovernanceGate — ROLLING_COMPLETION_YIELD gate", 
 });
 
 describe("evaluatePreDispatchGovernanceGate — lane diversity pre-dispatch gate", () => {
-  it("blocks in pre-dispatch gate when active lane count is below minLanes", async () => {
+  it("does not block in pre-dispatch gate when active lane count is below minLanes", async () => {
     const config = passAllConfig({
       workerPool: { minLanes: 2 },
     });
@@ -678,12 +678,6 @@ describe("evaluatePreDispatchGovernanceGate — lane diversity pre-dispatch gate
       },
     ];
     const result = await evaluatePreDispatchGovernanceGate(config, plans, "lane-diversity-test");
-    assert.equal(result.blocked, true);
-    assert.ok(
-      String(result.reason || "").startsWith(BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT),
-      `reason must start with '${BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT}' — got: ${result.reason}`,
-    );
-    assert.equal(result.gateKey, "LANE_DIVERSITY");
-    assert.equal(result.gateIndex, GATE_PRECEDENCE.LANE_DIVERSITY);
+    assert.equal(result.blocked, false);
   });
 });

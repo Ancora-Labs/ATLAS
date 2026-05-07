@@ -1,92 +1,29 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { app } from "electron";
+import { resolvePackagedWorkingDirectory, resolveWindowIconPath } from "./packaged_runtime_paths.ts";
+
+export { resolvePackagedWorkingDirectory } from "./packaged_runtime_paths.ts";
 
 export interface AtlasDesktopResourcePaths {
   appRoot: string;
   mainModuleDir: string;
   preloadPath: string;
-  rendererHtmlPath: string;
-  rendererScriptPath: string;
-  rendererLayoutPath: string;
-  appIconPath: string;
+  onboardingHtmlPath: string;
+  windowIconPath: string | null;
 }
 
-export interface ResolveAtlasDesktopShellCommandOptions {
-  isPackaged?: boolean;
-  exePath?: string;
-}
-
-export interface ResolveAtlasDesktopResourcePathsOptions {
-  mainModuleUrl: string;
-  isPackaged?: boolean;
-  exePath?: string;
-}
-
-const ATLAS_DESKTOP_EXECUTABLE_NAME = "ATLAS.exe";
-const ATLAS_DESKTOP_DEVELOPMENT_LAUNCHER = "ATLAS.cmd";
-
-function normalizeResolveAtlasDesktopResourcePathsOptions(
-  options: ResolveAtlasDesktopResourcePathsOptions | string,
-): ResolveAtlasDesktopResourcePathsOptions {
-  if (typeof options === "string") {
-    return { mainModuleUrl: options };
-  }
-  return options;
-}
-
-export function resolvePackagedWorkingDirectory(exePath: string): string {
-  return path.dirname(exePath);
-}
-
-function formatAtlasDesktopShellCommand(fileName: string): string {
-  return path.normalize(`.${path.sep}${fileName}`);
-}
-
-export function resolveAtlasDesktopShellCommand(
-  options: ResolveAtlasDesktopShellCommandOptions = {},
-): string {
-  if (options.isPackaged === true) {
-    return formatAtlasDesktopShellCommand(
-      path.basename(String(options.exePath || "").trim() || ATLAS_DESKTOP_EXECUTABLE_NAME),
-    );
-  }
-
-  return formatAtlasDesktopShellCommand(ATLAS_DESKTOP_DEVELOPMENT_LAUNCHER);
-}
-
-function resolvePackagedAppRoot(exePath: string): string {
-  return path.join(resolvePackagedWorkingDirectory(exePath), "resources", "app.asar");
-}
-
-export function resolveAtlasDesktopResourcePaths(
-  options: ResolveAtlasDesktopResourcePathsOptions | string,
-): AtlasDesktopResourcePaths {
-  const normalizedOptions = normalizeResolveAtlasDesktopResourcePathsOptions(options);
-  const mainModulePath = fileURLToPath(normalizedOptions.mainModuleUrl);
-  const fallbackMainModuleDir = path.dirname(mainModulePath);
-  const packagedExePath = String(normalizedOptions.exePath || "").trim();
-  const isPackaged = normalizedOptions.isPackaged === true;
-
-  if (isPackaged && !packagedExePath) {
-    throw new Error("ATLAS packaged resource resolution requires the executable path.");
-  }
-
-  const appRoot = isPackaged
-    ? resolvePackagedAppRoot(packagedExePath)
-    : path.resolve(fallbackMainModuleDir, "..", "..");
-  const mainModuleDir = isPackaged
-    ? path.join(appRoot, ".electron-build", "electron")
-    : fallbackMainModuleDir;
+export function resolveAtlasDesktopResourcePaths(mainModuleUrl: string = import.meta.url): AtlasDesktopResourcePaths {
+  const mainModulePath = fileURLToPath(mainModuleUrl);
+  const mainModuleDir = path.dirname(mainModulePath);
+  const appRoot = path.resolve(mainModuleDir, "..");
+  const packagedRoot = process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(app.getPath("exe"));
 
   return {
     appRoot,
     mainModuleDir,
-    preloadPath: path.join(mainModuleDir, "preload.js"),
-    rendererHtmlPath: path.join(appRoot, "electron", "renderer", "index.html"),
-    rendererScriptPath: path.join(appRoot, "electron", "renderer", "app.js"),
-    rendererLayoutPath: path.join(appRoot, "electron", "renderer", "layout.js"),
-    appIconPath: isPackaged
-      ? path.join(resolvePackagedWorkingDirectory(packagedExePath), "atlas-logo.ico")
-      : path.join(appRoot, "atlas-logo.ico"),
+    preloadPath: path.join(mainModuleDir, "preload.mjs"),
+    onboardingHtmlPath: path.join(appRoot, "electron", "renderer", "index.html"),
+    windowIconPath: resolveWindowIconPath(appRoot, app.isPackaged ? packagedRoot : null, process.platform),
   };
 }

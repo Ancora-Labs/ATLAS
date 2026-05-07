@@ -3,138 +3,166 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ATLAS Desktop Workspace</title>
+  <title>ATLAS Desktop Onboarding</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #050505;
-      --panel: rgba(10, 10, 10, 0.96);
-      --line: rgba(255, 255, 255, 0.1);
-      --text: #f4f4f4;
-      --muted: #b8b8b8;
-      --accent: #4dd68a;
-      --danger: #ff6b6b;
+      --bg: #0a1017;
+      --panel: rgba(11, 18, 26, 0.94);
+      --line: rgba(132, 187, 255, 0.18);
+      --text: #f3f7fb;
+      --muted: #a5b5c8;
+      --accent: #88baff;
+      --danger: #ff9a9a;
     }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    html,
-    body {
-      min-height: 100%;
-    }
-
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
       color: var(--text);
-      font-family: "Segoe UI Variable Display", "Segoe UI", Inter, sans-serif;
+      font-family: "Segoe UI", Inter, sans-serif;
       background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 18%),
-        linear-gradient(180deg, #030303 0%, var(--bg) 38%, #0a0a0a 100%);
+        radial-gradient(circle at top left, rgba(74, 143, 255, 0.16), transparent 24%),
+        radial-gradient(circle at top right, rgba(141, 225, 177, 0.10), transparent 20%),
+        linear-gradient(180deg, #0a1017 0%, #101925 100%);
     }
-
     main {
       min-height: 100vh;
       display: grid;
       place-items: center;
       padding: 24px;
     }
-
-    .workspace-loader {
-      width: min(520px, 100%);
+    .panel {
+      width: min(1120px, 100%);
       display: grid;
-      gap: 18px;
-      padding: 24px;
-      border-radius: 28px;
+      gap: 24px;
+      padding: 28px;
+      border-radius: 24px;
       border: 1px solid var(--line);
-      background: linear-gradient(180deg, rgba(20, 20, 20, 0.96), rgba(11, 11, 11, 0.98));
+      background: var(--panel);
+      box-shadow: 0 26px 72px rgba(0, 0, 0, 0.28);
     }
-
+    body[data-layout="split"] .panel {
+      grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+      align-items: start;
+    }
     .eyebrow {
       color: var(--muted);
       font-size: 12px;
-      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 12px;
+    }
+    h1, h2, p { margin: 0; }
+    p { line-height: 1.55; color: #d6e1ee; }
+    .stack, form {
+      display: grid;
+      gap: 16px;
+    }
+    .card {
+      padding: 18px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(8, 14, 21, 0.52);
+    }
+    label span, .meta {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
     }
-
-    h1,
-    p,
-    code,
-    strong {
-      margin: 0;
+    textarea {
+      width: 100%;
+      min-height: 180px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(8, 14, 21, 0.82);
+      color: var(--text);
+      font: inherit;
+      resize: vertical;
     }
-
-    h1 {
-      font-size: clamp(30px, 5vw, 42px);
-      letter-spacing: -0.05em;
-      line-height: 1.02;
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      color: #08111d;
+      background: var(--accent);
     }
-
-    p,
+    button[disabled] {
+      cursor: wait;
+      opacity: 0.75;
+    }
     code {
-      color: var(--muted);
-      line-height: 1.6;
+      display: inline-block;
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(8, 14, 21, 0.62);
+      color: var(--text);
+      font-family: Consolas, "Cascadia Code", monospace;
       word-break: break-word;
     }
-
-    code {
-      display: block;
-      padding: 12px 14px;
-      border-radius: 16px;
-      border: 1px solid var(--line);
-      background: var(--panel);
-      font-family: "Cascadia Code", Consolas, monospace;
-    }
-
-    .status-row {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      min-height: 36px;
-      padding: 8px 14px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.04);
-    }
-
-    .status-light {
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
-      background: var(--accent);
-      animation: atlas-loader-pulse 1.8s ease-in-out infinite;
-    }
-
     .error {
-      min-height: 1.4em;
       color: var(--danger);
+      min-height: 1.4em;
     }
-
-    @keyframes atlas-loader-pulse {
-      0%,
-      100% {
-        box-shadow: 0 0 0 0 rgba(77, 214, 138, 0.12);
-      }
-      50% {
-        box-shadow: 0 0 0 6px rgba(77, 214, 138, 0.04);
+    @media (max-width: 959px) {
+      .panel {
+        padding: 20px;
       }
     }
   </style>
 </head>
 <body>
   <main>
-    <section class="workspace-loader" aria-label="ATLAS desktop workspace">
-      <div class="eyebrow">ATLAS Desktop</div>
-      <h1>Opening the workspace.</h1>
-      <div class="status-row" aria-live="polite" aria-atomic="true">
-        <span class="status-light" aria-hidden="true"></span>
-        <strong data-role="status">Reading the desktop bootstrap...</strong>
+    <section class="panel" aria-label="ATLAS desktop onboarding">
+      <div class="stack">
+        <div>
+          <div class="eyebrow">Native desktop shell</div>
+          <h1>Clarify the work before ATLAS starts planning</h1>
+        </div>
+        <div class="card">
+          <div class="meta">Target repo</div>
+          <strong data-role="repo">Loading target repository...</strong>
+        </div>
+        <div class="card">
+          <div class="meta">Desktop session</div>
+          <code data-role="session">Generating session...</code>
+        </div>
+        <div class="card">
+          <div class="meta">Launcher</div>
+          <code data-role="shell">.\\ATLAS.cmd</code>
+        </div>
       </div>
-      <p data-role="detail">ATLAS keeps the native window on the same desktop surface while it restores the current workspace route.</p>
-      <code data-role="workspace-url">Resolving workspace route...</code>
-      <p class="error" data-role="error"></p>
+
+      <div class="stack">
+        <div>
+          <div class="eyebrow">One real clarification pass</div>
+          <h2>Describe the outcome you want in English</h2>
+          <p data-role="status">Planning remains locked until this desktop session stores one clarification packet.</p>
+        </div>
+
+        <form data-role="form">
+          <label>
+            <span>Objective</span>
+            <textarea
+              data-role="objective"
+              name="objective"
+              required
+              placeholder="Explain the feature, bug fix, or delivery outcome you want ATLAS to drive."></textarea>
+          </label>
+          <button type="submit">Run clarification and open ATLAS</button>
+        </form>
+
+        <p class="error" data-role="error"></p>
+      </div>
     </section>
   </main>
   <script type="module" src="./app.js"></script>

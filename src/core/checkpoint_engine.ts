@@ -1,8 +1,9 @@
 import path from "node:path";
 import crypto from "node:crypto";
 import { readJsonSafe, READ_JSON_REASON, writeJsonAtomic } from "./fs_utils.js";
-import { unlink } from "node:fs/promises";
+import { unlink, mkdir } from "node:fs/promises";
 import type { CancellationToken } from "./daemon_control.js";
+import { resolveScopedStatePath } from "./target_session_state.js";
 import { normalizePromptLineageContract } from "./prompt_compiler.js";
 import {
   normalizeInterventionLineageContract,
@@ -386,11 +387,21 @@ export function validateCheckpointEnvelope(checkpoint) {
 }
 
 export async function readCheckpoint(config, opts = {}) {
-  const stateDir = config?.paths?.stateDir || "state";
   const options = opts as { fileName?: string };
   const fileName = String(options.fileName || "dispatch_checkpoint.json");
-  const filePath = path.join(stateDir, fileName);
-  const raw = await readJsonSafe(filePath);
+  // Prefer the per-session-scoped runtime path when an active target session is
+  // bound, but fall back to the legacy global state file when the scoped copy
+  // does not exist yet. This keeps resume flows compatible with artifacts that
+  // were persisted before session-scoped runtime paths were introduced.
+  const filePath = resolveScopedStatePath(config, fileName);
+  let raw = await readJsonSafe(filePath);
+  if (!raw.ok && raw.reason === READ_JSON_REASON.MISSING) {
+    const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+    const legacyPath = path.join(stateDir, fileName);
+    if (legacyPath !== filePath) {
+      raw = await readJsonSafe(legacyPath);
+    }
+  }
   if (!raw.ok) {
     if (raw.reason === READ_JSON_REASON.MISSING) return null;
     throw raw.error || new Error(`checkpoint_read_failed:${raw.reason}`);
@@ -406,7 +417,6 @@ export async function writeCheckpoint(config, checkpoint, opts = {}) {
   if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
     throw new Error("checkpoint must be a non-null object");
   }
-  const stateDir = config?.paths?.stateDir || "state";
   const options = opts as {
     fileName?: string;
     checkpointKind?: string;
@@ -419,7 +429,9 @@ export async function writeCheckpoint(config, checkpoint, opts = {}) {
     ? String(options.fileName)
     : `checkpoint-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
   const checkpointKind = String(options.checkpointKind || "dispatch");
-  const filePath = path.join(stateDir, fileName);
+  // Per-session-scoped when an active target session selector is bound on config.
+  const filePath = resolveScopedStatePath(config, fileName);
+  await mkdir(path.dirname(filePath), { recursive: true });
   const previousCheckpoint = options.fileName
     ? await readCheckpoint(config, { fileName }).catch(() => null)
     : null;
@@ -466,7 +478,6 @@ export async function writeBoundaryCheckpoint(
     token?: CancellationToken | null;
   },
 ): Promise<string> {
-  const stateDir = (config as any)?.paths?.stateDir || "state";
   const ns = String(opts.checkpoint_ns || CHECKPOINT_NS.DISPATCH);
   const seq = Math.max(1, Math.floor(Number(opts.sequence || 1)));
   const thread_id = String(opts.thread_id || "");
@@ -476,7 +487,9 @@ export async function writeBoundaryCheckpoint(
   const fileName = safeThread
     ? `boundary_checkpoint_${safeNs}_${safeThread}.json`
     : `boundary_checkpoint_${safeNs}.json`;
-  const filePath = path.join(stateDir, fileName);
+  // Per-session-scoped when an active target session selector is bound on config.
+  const filePath = resolveScopedStatePath(config, fileName);
+  await mkdir(path.dirname(filePath), { recursive: true });
 
   checkCancellationAtCheckpoint(opts.token);
 
@@ -507,7 +520,6 @@ export async function resetAttemptBoundary(
     checkpoint_ns?: typeof CHECKPOINT_NS[keyof typeof CHECKPOINT_NS] | string;
   },
 ): Promise<void> {
-  const stateDir = (config as any)?.paths?.stateDir || "state";
   const ns = String(opts.checkpoint_ns || CHECKPOINT_NS.ATTEMPT);
   const thread_id = String(opts.thread_id || "");
   const safeNs = ns.replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -515,7 +527,8 @@ export async function resetAttemptBoundary(
   const fileName = safeThread
     ? `boundary_checkpoint_${safeNs}_${safeThread}.json`
     : `boundary_checkpoint_${safeNs}.json`;
-  const filePath = path.join(stateDir, fileName);
+  // Per-session-scoped when an active target session selector is bound on config.
+  const filePath = resolveScopedStatePath(config, fileName);
   try {
     await unlink(filePath);
   } catch (err: any) {

@@ -22,6 +22,7 @@ import {
   PACKET_LANE,
   LANE_PACKET_SIZE_DEFAULTS,
   classifyPacketLane,
+  buildPacketAdmissionThresholds,
   getPacketThresholdsForLane,
   validateAndInjectRolePlans,
   ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX,
@@ -341,6 +342,55 @@ describe("plan_contract_validator", () => {
       assert.equal(result.valid, false);
       assert.ok(result.violations.some(v => v.field === "verification_commands[0]" && v.severity === PLAN_VIOLATION_SEVERITY.CRITICAL));
     });
+
+    it("accepts operator-authorized placeholder reservation behavior in target delivery plans", () => {
+      const plan = {
+        task: "Repair the OAK and STRIKE reservation module in place",
+        role: "evolution-worker",
+        wave: 1,
+        verification: "tests/core/site.test.ts — test: reservation module matches the target brief",
+        dependencies: [],
+        acceptance_criteria: [
+          "The reservation module remains a realistic custom UI flow with placeholder functionality only, matching the confirmed operator direction",
+        ],
+        before_state: "The page has a placeholder reservation interaction that needs clearer copy and grouping.",
+        after_state: "The repaired page keeps the operator-approved placeholder reservation functionality and documents it clearly.",
+        capacityDelta: 0.1,
+        requestROI: 1.5,
+      };
+      const activeTargetSession = {
+        intent: {
+          operatorIntentBrief: "Build a premium lodge landing page where the reservation UI may remain placeholder functionality only for the MVP.",
+          successCriteria: ["Reservation controls are explicit about placeholder functionality only."],
+        },
+      };
+      const result = validatePlanContract(plan, { activeTargetSession });
+      assert.equal(result.valid, true);
+      assert.ok(!result.violations.some(v => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED));
+    });
+
+    it("rejects visual downgrades when the target requires real imagery", () => {
+      const plan = {
+        task: "Replace the premium hero imagery with low-fidelity filler visuals",
+        role: "evolution-worker",
+        wave: 1,
+        verification: "tests/core/site.test.ts — test: hero imagery remains governed",
+        dependencies: [],
+        acceptance_criteria: ["Hero visuals can ship as generic filler imagery while the rest of the page is polished"],
+        capacityDelta: 0.1,
+        requestROI: 1.5,
+      };
+      const activeTargetSession = {
+        intent: {
+          operatorIntentBrief: "Build a premium restaurant conversion surface with authentic food photography and preserve requested source visuals.",
+          assetSourcingPolicy: "Real external assets allowed when needed; preserve requested source visuals.",
+          assetRequirements: ["Preserve requested visuals as source requirements."],
+        },
+      };
+      const result = validatePlanContract(plan, { activeTargetSession });
+      assert.equal(result.valid, false);
+      assert.ok(result.violations.some(v => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED));
+    });
   });
 
   describe("validatePlanContract — capacityDelta and requestROI (measurable packet scoring)", () => {
@@ -549,6 +599,8 @@ describe("PACKET_VIOLATION_CODE — deterministic violation taxonomy", () => {
       "MISSING_CAPACITY_DELTA", "INVALID_CAPACITY_DELTA",
       "MISSING_REQUEST_ROI", "INVALID_REQUEST_ROI",
       "MISSING_IMPLEMENTATION_EVIDENCE", "MISSING_CAPACITY_FIRST_JUSTIFICATION",
+      "INTENT_REQUIREMENT_SOFTENED",
+      "MEDIA_REQUIREMENT_SOFTENED",
     ];
     for (const key of expectedCodes) {
       assert.equal(typeof PACKET_VIOLATION_CODE[key], "string", `${key} must be a string`);
@@ -794,6 +846,94 @@ describe("PACKET_VIOLATION_CODE — deterministic violation taxonomy", () => {
       assert.equal(plan._rolePlanSkeletonInjected, true);
       assert.equal(plan._missingRoleMarker, `${ROLE_PLAN_COVERAGE_MISSING_MARKER_PREFIX}:api-worker:wave:2`);
       assert.equal(plan._rolePlanSkeletonSource, ROLE_PLAN_SKELETON_METADATA_SOURCE);
+    });
+
+    it("treats launcher-softened role coverage as invalid when target intent requires direct root executable launch", () => {
+      const payload = {
+        executionStrategy: {
+          waves: [
+            {
+              wave: 1,
+              tasks: [{ task: "Desktop packaging", role: "infrastructure-worker" }],
+            },
+          ],
+        },
+        plans: [
+          {
+            task: "Create resources/Launch ATLAS.bat launcher for Windows desktop packaging",
+            title: "Add BAT launcher for packaged desktop app",
+            role: "infrastructure-worker",
+            wave: 1,
+            scope: "Windows desktop packaging",
+            target_files: ["resources/Launch ATLAS.bat", "package.json"],
+            dependencies: [],
+            acceptance_criteria: ["A launcher script in resources opens ATLAS"],
+            verification: "tests/core/prometheus_parse.test.ts --test-name-pattern=desktop packaging",
+            capacityDelta: 0.02,
+            requestROI: 1.2,
+          },
+        ],
+      };
+
+      const result = validateAndInjectRolePlans(payload, {
+        injectMissing: false,
+        activeTargetSession: {
+          objective: {
+            summary: "Build ATLAS as a Windows desktop product with direct app launch from a clickable executable in the root resources folder.",
+            desiredOutcome: "A direct executable in the root resources folder opens the app",
+          },
+          intent: {
+            summary: "ATLAS must launch directly from a clickable executable in the root resources folder.",
+            mustHaveFlows: ["Direct app launch from a clickable executable in the root resources folder"],
+            scopeIn: ["Root resources executable that opens the GUI directly"],
+            successCriteria: ["The app launches directly from a clickable executable in the root resources folder"],
+          },
+        },
+      });
+
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.initialMissingRoles, ["infrastructure-worker"]);
+      assert.deepEqual(result.invalidRolePlans, ["infrastructure-worker"]);
+    });
+  });
+
+  describe("target-session forbidden action enforcement", () => {
+    it("rejects browser-wrapper downgrade when the active target session forbids desktop softening", () => {
+      const plan = {
+        task: "Wrap the app in a localhost dashboard page and open it in the browser",
+        role: "integration-worker",
+        wave: 1,
+        scope: "browser wrapper fallback",
+        target_files: ["src/dashboard/live_dashboard.ts"],
+        dependencies: [],
+        acceptance_criteria: ["The localhost dashboard opens the product in a browser tab"],
+        verification: "tests/core/prometheus_parse.test.ts --test-name-pattern=browser wrapper",
+        capacityDelta: 0.05,
+        requestROI: 1.1,
+      };
+
+      const result = validatePlanContract(plan, {
+        activeTargetSession: {
+          objective: {
+            summary: "Build the product as a native desktop GUI, not a browser-first shell.",
+            desiredOutcome: "The main product opens in its own native desktop window",
+          },
+          intent: {
+            summary: "Desktop-first native application",
+            mustHaveFlows: ["Native desktop window for the main product experience"],
+            scopeOut: ["Browser route", "Dashboard page", "Terminal wrapper"],
+            successCriteria: ["The product does not open as localhost plus browser launch"],
+          },
+          constraints: {
+            forbiddenActions: [
+              "Do not silently downgrade the requested desktop GUI into a browser route, dashboard page, or terminal wrapper.",
+            ],
+          },
+        },
+      });
+
+      assert.equal(result.valid, false);
+      assert.ok(result.violations.some((entry) => entry.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED));
     });
   });
 });
@@ -1367,7 +1507,7 @@ describe("validatePlanContract — decomposition caps and ambiguity", () => {
     assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.CRITICAL);
   });
 
-  it("rejects redundant packets without measurable capacity-first justification", () => {
+  it("warns on weak capacity-first justification when grounded evidence exists", () => {
     const result = validatePlanContract(baseValidPlan({
       implementationStatus: "implemented_correctly",
       implementationEvidence: ["src/core/prometheus.ts"],
@@ -1375,7 +1515,9 @@ describe("validatePlanContract — decomposition caps and ambiguity", () => {
       requestROI: 1,
     }));
     const v = result.violations.find(x => x.code === PACKET_VIOLATION_CODE.MISSING_CAPACITY_FIRST_JUSTIFICATION);
-    assert.ok(v, "must reject redundant packet without strong capacity-first justification");
+    assert.ok(v, "must flag weak capacity-first justification");
+    assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.WARNING);
+    assert.equal(result.valid, true, "grounded packet should remain reviewable instead of fail-closing the cycle");
   });
 
   it("MAX_ACCEPTANCE_CRITERIA_PER_TASK is 10", () => {
@@ -1384,6 +1526,386 @@ describe("validatePlanContract — decomposition caps and ambiguity", () => {
 
   it("MAX_FILES_IN_SCOPE_PER_TASK is 30", () => {
     assert.equal(MAX_FILES_IN_SCOPE_PER_TASK, 30);
+  });
+});
+
+describe("validatePlanContract — protected intent preservation", () => {
+  function baseIntentPlan(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      task: "Implement a premium production-grade customer experience with real integrations and polished trust signals",
+      role: "evolution-worker",
+      wave: 1,
+      verification: "tests/core/plan_contract_validator.test.ts — test: protected intent preservation",
+      dependencies: [],
+      acceptance_criteria: [
+        "The delivered surface preserves the operator's premium quality bar rather than a cheap fallback",
+        "User-facing trust and realism expectations remain intact in the shipped experience",
+      ],
+      capacityDelta: 0.2,
+      requestROI: 2.4,
+      ...overrides,
+    };
+  }
+
+  it("rejects silent downgrade from protected intent into placeholder/mock/demo output", () => {
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Build a premium onboarding flow with real GitHub integration and polished UX",
+      after_state: "Delivers a demo-only mock flow with placeholder data and simplified screens instead of the promised production experience",
+      acceptance_criteria: [
+        "A mocked demo looks acceptable for now",
+        "Placeholder content is enough to simulate the idea",
+      ],
+    }));
+
+    const v = result.violations.find(x => x.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED);
+    assert.ok(v, "silent downgrade must emit INTENT_REQUIREMENT_SOFTENED");
+    assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.CRITICAL);
+    assert.equal(result.valid, false, "silent downgrade must make the plan invalid");
+  });
+
+  it("allows the same downgrade shape when protected intent validation is explicitly disabled", () => {
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Build a premium onboarding flow with real GitHub integration and polished UX",
+      after_state: "Delivers a demo-only mock flow with placeholder data and simplified screens instead of the promised production experience",
+      acceptance_criteria: [
+        "A mocked demo looks acceptable for now",
+        "Placeholder content is enough to simulate the idea",
+      ],
+    }), {
+      disableProtectedIntentValidation: true,
+    });
+
+    assert.equal(
+      result.violations.find(v => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED),
+      undefined,
+      "protected intent violations should be skipped when the guard is disabled",
+    );
+    assert.equal(result.valid, true, "the downgrade shape should no longer fail-close when the guard is disabled");
+  });
+
+  it("allows greenfield UI contract reference artifacts without treating them as mock downgrades", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Ship a polished premium landing page with a cinematic hero and authentic editorial feel.",
+      },
+      intent: {
+        operatorIntentBrief: "Build a premium browser landing experience with real sourced imagery and preserved final visual quality.",
+      },
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Create the greenfield browser runtime and store desktop/mobile mockup references in-repo because the workspace has no existing landing implementation to repair.",
+      after_state: "The repo contains a runnable browser app scaffold and in-repo design reference artifacts that lock hero motion, tier hierarchy, and CTA placement for engineering.",
+      acceptance_criteria: [
+        "A runnable browser app shell exists for the premium landing experience with at least one targeted test case",
+        "Desktop and mobile reference comps preserve the intended premium editorial layout for engineering",
+      ],
+    }), {
+      activeTargetSession,
+    });
+
+    assert.equal(
+      result.violations.find(v => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED),
+      undefined,
+      "design reference artifacts must not be treated as silent placeholder/mock downgrades",
+    );
+  });
+
+  it("treats explicit real-asset guardrails in target intent as protected anti-placeholder requirements", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Ship a polished restaurant site with authentic food photography and premium trust signals.",
+      },
+      intent: {
+        assetSourcingPolicy: "Real external assets allowed when needed; preserve requested source visuals.",
+        assetRequirements: [
+          "Preserve requested visuals as source requirements.",
+        ],
+      },
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Deliver the restaurant landing experience",
+      after_state: "Ships placeholder dish art, mocked gallery cards, and generic illustration stand-ins instead of authentic imagery.",
+      acceptance_criteria: [
+        "Placeholder gallery is enough for now",
+        "Generic placeholder food art communicates the concept",
+      ],
+    }), {
+      activeTargetSession,
+    });
+
+    const violation = result.violations.find((entry) => entry.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED);
+    assert.ok(violation, "asset downgrade must emit INTENT_REQUIREMENT_SOFTENED");
+    assert.equal(violation!.severity, PLAN_VIOLATION_SEVERITY.CRITICAL);
+    assert.equal(result.valid, false, "asset downgrade must make the plan invalid");
+  });
+
+  it("treats operatorIntentBrief as protected anti-placeholder context even when that brief carries the strongest wording", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Ship a premium outdoor storefront.",
+      },
+      intent: {
+        operatorIntentBrief: "Build a premium outdoor storefront with authentic product photography and preserve requested source visuals.",
+        operatorIntentEvidence: [
+          "Authentic product photography is part of the requested quality bar.",
+        ],
+      },
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Deliver the outdoor storefront experience",
+      after_state: "Ships low-fidelity gallery cards and unsupported filler visuals instead of authentic product photography.",
+      acceptance_criteria: [
+        "Low-fidelity filler visuals are acceptable for the first pass",
+        "Generic illustration cards communicate the idea well enough",
+      ],
+    }), {
+      activeTargetSession,
+    });
+
+    const violation = result.violations.find((entry) => entry.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED);
+    assert.ok(violation, "operatorIntentBrief downgrade must emit INTENT_REQUIREMENT_SOFTENED");
+    assert.equal(violation!.severity, PLAN_VIOLATION_SEVERITY.CRITICAL);
+    assert.equal(result.valid, false, "operatorIntentBrief downgrade must make the plan invalid");
+  });
+
+  it("negative path: allows an explicitly temporary fallback when the limitation is disclosed and the contract is preserved", () => {
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Implement a premium onboarding flow while preserving the final production integration contract",
+      after_state: "Temporarily uses a documented mock token exchange only until external credentials arrive, while preserving the real API contract and shipping path",
+      acceptance_criteria: [
+        "The temporary fallback is explicitly disclosed with a blocker reason and follow-up path",
+        "The real integration contract and premium UX target remain preserved rather than silently downgraded",
+      ],
+    }));
+
+    assert.equal(
+      result.violations.find(v => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED),
+      undefined,
+      "explicit temporary fallback with preserved contract must not be treated as silent downgrade",
+    );
+  });
+
+  it("rejects launcher-script softening when target intent requires direct executable launch from root resources", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Build a Windows-first Electron desktop app with a root resources executable that opens the app directly.",
+      },
+      intent: {
+        mustHaveFlows: ["Direct app launch from a clickable executable in the root resources folder"],
+        scopeIn: ["Root resources executable that opens the GUI directly"],
+        successCriteria: ["The app launches directly from a clickable executable in the root resources folder"],
+      },
+      assumptions: [
+        "The root resources executable requirement refers to a user-facing launcher artifact placed in the repository's root resources location.",
+      ],
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Configure Windows packaging and create resources/Launch ATLAS.bat launcher for the packaged desktop app",
+      after_state: "Users click resources/Launch ATLAS.bat to open the packaged app instead of a direct root executable.",
+      target_files: ["resources/Launch ATLAS.bat", "electron-builder.yml"],
+      acceptance_criteria: [
+        "resources/Launch ATLAS.bat opens the packaged app",
+        "The desktop app remains launchable on Windows through the batch launcher",
+      ],
+    }), {
+      activeTargetSession,
+    });
+
+    const v = result.violations.find((x) => x.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED);
+    assert.ok(v, "launcher-script downgrade must emit INTENT_REQUIREMENT_SOFTENED");
+    assert.equal(v!.severity, PLAN_VIOLATION_SEVERITY.CRITICAL);
+    assert.equal(result.valid, false, "launcher-script downgrade must make the plan invalid");
+  });
+
+  it("allows a direct executable packaging plan when root executable launch is protected", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Build a Windows-first Electron desktop app with a root resources executable that opens the app directly.",
+      },
+      intent: {
+        mustHaveFlows: ["Direct app launch from a clickable executable in the root resources folder"],
+        scopeIn: ["Root resources executable that opens the GUI directly"],
+        successCriteria: ["The app launches directly from a clickable executable in the root resources folder"],
+      },
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Configure Windows packaging to emit resources/ATLAS.exe as the direct desktop launcher",
+      after_state: "Users click resources/ATLAS.exe and the desktop app opens directly without an intermediate script wrapper.",
+      target_files: ["resources/ATLAS.exe", "electron-builder.yml"],
+      acceptance_criteria: [
+        "resources/ATLAS.exe launches the packaged desktop app directly",
+        "No batch or script-based launcher is required for normal desktop use",
+      ],
+    }), {
+      activeTargetSession,
+    });
+
+    assert.equal(
+      result.violations.find((v) => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED),
+      undefined,
+      "direct executable packaging must remain dispatchable",
+    );
+  });
+
+  it("allows plans that explicitly remove cmd launcher dependence", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Build a Windows-first Electron desktop app with a root resources executable that opens the app directly.",
+      },
+      intent: {
+        mustHaveFlows: ["Direct app launch from a clickable executable in the root resources folder"],
+        scopeIn: ["Root resources executable that opens the GUI directly"],
+        successCriteria: ["The app launches directly from a clickable executable in the root resources folder"],
+      },
+      constraints: {
+        forbiddenActions: ["Do not replace the direct executable contract with a launcher script."],
+      },
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Lock Windows packaging so the shipped folder root contains ATLAS.exe and does not require ATLAS.cmd, Node.js, or npm.",
+      after_state: "ATLAS ships with a direct root executable and no cmd wrapper requirement for end users.",
+      target_files: ["package.json", "ATLAS.cmd", "electron/main.ts"],
+      acceptance_criteria: [
+        "The packaged folder root contains ATLAS.exe with 0 regressions",
+        "Launching ATLAS.exe does not require ATLAS.cmd, Node.js, or npm with >= 1 deterministic assertion",
+      ],
+    }), {
+      activeTargetSession,
+    });
+
+    assert.equal(
+      result.violations.find((v) => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED),
+      undefined,
+      "negated cmd references should not be treated as launcher softening",
+    );
+    assert.equal(result.valid, true, "direct executable plan should remain valid");
+  });
+
+  it("allows the real packaging-plan wording when cmd is described as a non-final dev surface", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Build a Windows-first Electron desktop app with a root resources executable that opens the app directly.",
+      },
+      intent: {
+        mustHaveFlows: ["Direct app launch from a clickable executable in the root resources folder"],
+        scopeIn: ["Root resources executable that opens the GUI directly"],
+        successCriteria: ["The app launches directly from a clickable executable in the root resources folder"],
+      },
+      constraints: {
+        forbiddenActions: [
+          "Do not silently downgrade the requested desktop GUI into a browser route, dashboard page, terminal wrapper, or launcher script.",
+        ],
+      },
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      title: "Productize the Windows portable packaging contract",
+      task: "Add explicit Electron Builder Windows packaging metadata and a deterministic portable-folder packaging flow so ATLAS ships as a user-facing Windows app folder with a root-level ATLAS.exe instead of an internal unpacked build artifact.",
+      scope: "Windows packaging identity and output layout",
+      target_files: ["package.json", "scripts/", "ATLAS.cmd", "README.md"],
+      before_state: "ATLAS can be launched in development via Electron, and an internal `electron-builder --dir --win` build exists, but there is no explicit productized Windows packaging contract for a portable folder with root-level `ATLAS.exe`. `ATLAS.cmd` still depends on Node/npm and is not the final delivery surface.",
+      after_state: "The repo defines an explicit Windows packaging contract for ATLAS with product identity, executable naming, and output layout that produces a portable packaged app folder whose root contains `ATLAS.exe` and does not require Node/npm for end-user launch.",
+      acceptance_criteria: [
+        "Packaging metadata names the product and executable as ATLAS for Windows output with >= 1 targeted test case",
+        "A deterministic packaging command emits a portable Windows app folder for a fresh session with 0 regressions",
+        "The packaged folder's root contains `ATLAS.exe` as the intended launch surface with >= 1 deterministic assertion",
+        "The final launch path does not depend on `ATLAS.cmd`, Node, or npm being present on the user's machine with >= 1 deterministic assertion",
+      ],
+      verification: "tests/core/plan_contract_validator.test.ts — test: packaging-plan wording stays dispatchable",
+    }), {
+      activeTargetSession,
+    });
+
+    assert.equal(
+      result.violations.find((v) => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED),
+      undefined,
+      "describing ATLAS.cmd as a dev-only/non-final surface should not be treated as softening",
+    );
+    assert.equal(result.valid, true, "real packaging-plan wording should remain dispatchable");
+  });
+
+  it("does not treat anti-fake UI constraints as a silent downgrade", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Ship a premium native desktop workspace with current live session data.",
+      },
+      intent: {
+        successCriteria: [
+          "The desktop UI keeps native product identity and current live session data without fabricated browser chrome.",
+        ],
+      },
+      constraints: {
+        forbiddenActions: [
+          "Do not ship fake browser chrome, faux macOS controls, or placeholder desktop framing.",
+        ],
+      },
+    };
+
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Reshape the renderer into a permanent sessions rail and single live detail pane",
+      after_state: "ATLAS uses one permanent desktop sidebar and one main pane while preserving premium desktop identity.",
+      acceptance_criteria: [
+        "The sidebar remains permanently visible with current session state indicators and no route-level mode switch.",
+        "The desktop shell stays readable without fake browser chrome or fabricated window controls.",
+      ],
+    }), {
+      activeTargetSession,
+    });
+
+    assert.equal(
+      result.violations.find((v) => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED),
+      undefined,
+      "anti-fake UI wording should not be classified as a downgrade",
+    );
+    assert.equal(result.valid, true, "native UI guardrails should remain dispatchable");
+  });
+
+  it("propagates protected launcher validation through validateAllPlans", () => {
+    const activeTargetSession = {
+      objective: {
+        summary: "Ship a root resources executable that opens the app directly.",
+      },
+      intent: {
+        mustHaveFlows: ["Direct app launch from a clickable executable in the root resources folder"],
+      },
+    };
+
+    const report = validateAllPlans([
+      baseIntentPlan({
+        task: "Create resources/Launch ATLAS.bat launcher for packaged Windows startup",
+        after_state: "Desktop launch goes through resources/Launch ATLAS.bat instead of a direct executable.",
+        target_files: ["resources/Launch ATLAS.bat"],
+        acceptance_criteria: [
+          "resources/Launch ATLAS.bat starts the app",
+          "Windows users use the batch launcher from resources",
+        ],
+      }),
+    ], {
+      activeTargetSession,
+    });
+
+    assert.equal(report.invalidCount, 1);
+    assert.ok(report.results[0]?.violations.some((v) => v.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED));
+  });
+
+  it("keeps media-specific regressions covered under the general protected-intent rule", () => {
+    const result = validatePlanContract(baseIntentPlan({
+      task: "Use high-quality placeholder imagery for the restaurant landing page hero and chef story",
+      after_state: "Landing page uses placeholder food imagery instead of licensed photography assets",
+      acceptance_criteria: [
+        "Placeholder hero art looks premium",
+        "Chef story uses placeholder imagery",
+      ],
+    }));
+
+    const v = result.violations.find(x => x.code === PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED);
+    assert.ok(v, "media drift must still be caught by the general intent guard");
   });
 });
 
@@ -1418,6 +1940,55 @@ describe("thin-packet density contract", () => {
 
   it("passes thin admission when estimatedExecutionTokens is above threshold", () => {
     const metrics = computePacketDensityMetrics(densePlan({ estimatedExecutionTokens: 5001 }));
+    assert.equal(isThinPacketForAdmission(metrics, thresholds), false);
+  });
+
+  it("admits small-lane product work scoped to one file when other density signals pass", () => {
+    const metrics = computePacketDensityMetrics({
+      task: "Implement task creation form validation and preserve due-date defaults for the to-do workflow",
+      target_files: ["src/app.js"],
+      acceptance_criteria: [
+        "Task creation rejects blank titles",
+        "Due-date defaults remain stable after save",
+      ],
+      estimatedExecutionTokens: 2000,
+    });
+    const thresholds = getPacketThresholdsForLane(1);
+    assert.equal(isThinPacketForAdmission(metrics, thresholds), false);
+  });
+
+  it("admits medium-lane product work at the calibrated 2k token floor", () => {
+    const metrics = computePacketDensityMetrics({
+      task: "Implement task editing, list filtering, and storage synchronization for the to-do application while keeping the UI state deterministic across refreshes",
+      target_files: ["src/app.js", "src/storage.js", "tests/app.test.js"],
+      acceptance_criteria: [
+        "Editing preserves existing tags and subtasks",
+        "Filters reflect saved state after reload",
+      ],
+      estimatedExecutionTokens: 2000,
+    });
+    const thresholds = getPacketThresholdsForLane(3);
+    assert.equal(isThinPacketForAdmission(metrics, thresholds), false);
+  });
+
+  it("builds admission thresholds from lane density instead of the 120-char prompt floor", () => {
+    const thresholds = buildPacketAdmissionThresholds(4, { strictnessMultiplier: 1 });
+    assert.deepEqual(thresholds, {
+      minTaskChars: 30,
+      minTargetFiles: 3,
+      minAcceptanceCriteria: 2,
+      minExecutionTokens: 2000,
+    });
+
+    const metrics = computePacketDensityMetrics({
+      task: "Implement deterministic session freshness gating across desktop views",
+      target_files: ["src/a.ts", "src/b.ts", "src/c.ts", "tests/a.test.ts"],
+      acceptance_criteria: [
+        "Current state hides stale detail",
+        "Desktop refresh preserves focused session",
+      ],
+      estimatedExecutionTokens: 2000,
+    });
     assert.equal(isThinPacketForAdmission(metrics, thresholds), false);
   });
 
@@ -1579,6 +2150,11 @@ describe("lane-aware packet-size defaults", () => {
   it("getPacketThresholdsForLane returns large thresholds for 5+ files", () => {
     const thresholds = getPacketThresholdsForLane(5);
     assert.equal(thresholds.minExecutionTokens, LANE_PACKET_SIZE_DEFAULTS[PACKET_LANE.LARGE].minExecutionTokens);
+  });
+
+  it("getPacketThresholdsForLane keeps medium token floor aligned with the calibrated base floor", () => {
+    const thresholds = getPacketThresholdsForLane(3);
+    assert.equal(thresholds.minExecutionTokens, 2000);
   });
 
   it("getPacketThresholdsForLane returns small thresholds for 1-2 files", () => {

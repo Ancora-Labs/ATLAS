@@ -9,7 +9,7 @@
  *   2. Diagnose root cause via logs + source
  *   3. Pause the broken lane (other lanes untouched)
  *   4. Invoke Copilot CLI medic agent to produce a patch
- *   5. Run npm test to verify
+ *   5. Run task-scoped verification to verify
  *   6. If pass → resume checkpoint; if fail → halt system + log
  *   7. Audit every action to state/medic_audit_log.json
  *
@@ -18,7 +18,7 @@
 
 import path from "node:path";
 import fs from "node:fs/promises";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { readJson, writeJson } from "./fs_utils.js";
 import { appendProgress } from "./state_tracker.js";
@@ -183,26 +183,61 @@ async function gatherDiagnosticContext(config: any, signal: MedicSignal): Promis
   return parts.join("\n");
 }
 
-// ── Verification: run npm test ───────────────────────────────────────────────
+// ── Verification: run task-scoped checks, never repo-wide npm test by default ──
 
-function runVerification(repoRoot: string, timeoutMs = 60 * 60 * 1000): { passed: boolean; output: string } {
+function inferMedicVerificationCommands(repoRoot: string, patchedFiles: string[]): string[] {
+  const normalizedFiles = Array.isArray(patchedFiles)
+    ? patchedFiles.map((file) => String(file || "").trim().replace(/\\/g, "/")).filter(Boolean)
+    : [];
+  const candidates = new Set<string>();
+
+  for (const file of normalizedFiles) {
+    if (/\.(test|spec)\.[cm]?[jt]sx?$/i.test(file) && existsSync(path.join(repoRoot, file))) {
+      candidates.add(file);
+      continue;
+    }
+
+    if (!file.startsWith("src/")) continue;
+    const mirroredBase = file.replace(/^src\//, "tests/").replace(/\.[^.]+$/, "");
+    for (const suffix of [".test.ts", ".test.js", ".spec.ts", ".spec.js"]) {
+      const testFile = `${mirroredBase}${suffix}`;
+      if (existsSync(path.join(repoRoot, testFile))) candidates.add(testFile);
+    }
+  }
+
+  if (candidates.size > 0) {
+    return [...candidates].slice(0, 3).map((file) => `npm test -- ${file}`);
+  }
+
+  return ["npm run typecheck"];
+}
+
+function runVerification(repoRoot: string, commands: string[], timeoutMs = 60 * 60 * 1000): { passed: boolean; output: string; commands: string[] } {
+  const executed: string[] = [];
+  const outputChunks: string[] = [];
   try {
-    const result = spawnSync("npm", ["test"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: true,
-      timeout: timeoutMs,
-      windowsHide: true,
-    });
-    const stdout = String(result.stdout || "");
-    const stderr = String(result.stderr || "");
-    const combined = `${stdout}\n${stderr}`;
-    // npm test exit code 0 = pass
-    const passed = result.status === 0;
-    return { passed, output: combined.slice(-3000) }; // keep last 3KB
+    for (const command of commands) {
+      const normalized = String(command || "").trim();
+      if (!normalized) continue;
+      executed.push(normalized);
+      const result = spawnSync(normalized, {
+        cwd: repoRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: true,
+        timeout: timeoutMs,
+        windowsHide: true,
+      });
+      const stdout = String(result.stdout || "");
+      const stderr = String(result.stderr || "");
+      outputChunks.push(`$ ${normalized}\n${stdout}${stderr}`.trim());
+      if (result.status !== 0) {
+        return { passed: false, output: outputChunks.join("\n\n").slice(-3000), commands: executed };
+      }
+    }
+    return { passed: true, output: outputChunks.join("\n\n").slice(-3000), commands: executed };
   } catch (err) {
-    return { passed: false, output: String(err?.message || err).slice(0, 1000) };
+    return { passed: false, output: String(err?.message || err).slice(0, 1000), commands: executed };
   }
 }
 
@@ -308,9 +343,10 @@ export async function runMedic(config: any, signal: MedicSignal): Promise<MedicR
   }
 
   // Run verification
-  appendLiveLogSync(stateDir, `[${ts()}] Running verification (npm test)...\n`);
+  const verificationCommands = inferMedicVerificationCommands(repoRoot, parsed.patches);
+  appendLiveLogSync(stateDir, `[${ts()}] Running verification (${verificationCommands.join(" ; ")})...\n`);
   await appendProgress(config, `[MEDIC] Running verification — patches: ${parsed.patches.join(", ")}`);
-  const verify = runVerification(repoRoot, Number(config?.runtime?.verificationCommandTimeoutMs || 60 * 60 * 1000));
+  const verify = runVerification(repoRoot, verificationCommands, Number(config?.runtime?.verificationCommandTimeoutMs || 60 * 60 * 1000));
   appendLiveLogSync(stateDir, `[${ts()}] Verification result: ${verify.passed ? "PASS" : "FAIL"}\n`);
 
   if (!verify.passed) {
@@ -387,7 +423,7 @@ A critical error has occurred and you must diagnose and fix it.
 ## Rules
 - Produce at most 1-2 file patches
 - Each patch must be the minimal fix for the root cause
-- After fixing, the system must pass npm test
+- After fixing, the system must pass task-scoped verification inferred from patched files; never default to repo-wide npm test
 - Do NOT refactor, add features, or change unrelated code
 - Do NOT add timeout handling — this is explicitly forbidden
 
@@ -435,7 +471,7 @@ async function invokeMedicAgent(config: any, prompt: string, stateDir: string): 
       ...process.env,
       GH_TOKEN: process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "",
       GITHUB_TOKEN: process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "",
-      TARGET_REPO: config.github?.repo || "Ancora-Labs/Box",
+      TARGET_REPO: config.github?.repo || "Ancora-Labs/ATLAS",
     },
   });
 

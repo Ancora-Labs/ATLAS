@@ -2,27 +2,31 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadConfig } from "../config.js";
-import { readDaemonPid, clearDaemonPid, clearStopRequest, isDaemonProcess, requestDaemonStop } from "../core/daemon_control.js";
+import { readDaemonPid, clearDaemonPid, clearStopRequest, isDaemonProcess, isProcessAlive, requestDaemonStop } from "../core/daemon_control.js";
 import { writeJson, readJsonSafe, READ_JSON_REASON } from "../core/fs_utils.js";
 import { pauseLane, resumeLane } from "../core/medic_agent.js";
 import { runResumeDispatch } from "../core/orchestrator.js";
 import { readPipelineProgress } from "../core/pipeline_progress.js";
 import { getLaneForWorkerName, normalizeWorkerName } from "../core/role_registry.js";
-import { readOpenTargetSessionState } from "../core/target_session_state.js";
 import { WORKER_CYCLE_ARTIFACTS_FILE, migrateWorkerCycleArtifacts, selectWorkerCycleRecord } from "../core/cycle_analytics.js";
+import { readAtlasBuildRequest, writeAtlasBuildRequest } from "./build_request_state.js";
+import { listAtlasDesktopSessions } from "./desktop_sessions.js";
+import { queueAtlasBuildForSession, resolveAtlasProjectBindingForSession } from "./build_runtime.js";
+import { applyAtlasRuntimeStateDirToConfig, resolveAtlasRuntimeStateDir } from "./runtime_state_root.js";
 
-export type AtlasLifecycleAction = "pause" | "resume" | "stop" | "archive";
+export type AtlasLifecycleAction = "pause" | "resume" | "stop" | "archive" | "stop-build" | "resume-build";
 
 export interface AtlasLifecycleRequest {
   action: AtlasLifecycleAction;
   role?: string | null;
+  sessionId?: string | null;
   returnTo?: string | null;
 }
 
 export interface AtlasLifecycleResult {
   ok: true;
   action: AtlasLifecycleAction;
-  scope: "runtime" | "session";
+  scope: "runtime" | "session" | "build";
   role: string | null;
   lane: string | null;
   message: string;
@@ -60,6 +64,52 @@ function normalizeReturnTo(value: string | null | undefined): string {
   const trimmed = String(value || "").trim();
   if (!trimmed.startsWith("/") || trimmed.startsWith("//")) return "/sessions";
   return trimmed;
+}
+
+function bindAtlasTargetSessionSelector(config: any, selection: { projectId?: string | null; sessionId?: string | null }) {
+  return {
+    ...config,
+    targetSessionSelector: {
+      projectId: selection.projectId || null,
+      sessionId: selection.sessionId || null,
+    },
+  };
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return !isProcessAlive(pid);
+}
+
+async function requestStopForControlScope(config: any, reason: string): Promise<number | null> {
+  const pidState = await readDaemonPid(config);
+  const pid = Number(pidState?.pid || 0);
+  if (pid > 0 && isProcessAlive(pid)) {
+    await clearStopRequest(config).catch(() => {});
+    await requestDaemonStop(config, reason).catch(() => {});
+    if (!(await waitForProcessExit(pid, 1200))) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+      await waitForProcessExit(pid, 300);
+    }
+    if (!isProcessAlive(pid)) {
+      await clearDaemonPid(config).catch(() => {});
+      await clearStopRequest(config).catch(() => {});
+      return pid;
+    }
+    return null;
+  }
+
+  await clearDaemonPid(config).catch(() => {});
+  await clearStopRequest(config).catch(() => {});
+  return null;
 }
 
 function resolveLifecycleLane(role: string): string | null {
@@ -118,6 +168,27 @@ function deleteRoleFromSessionContainer(raw: unknown, requestedRole: string): Se
   return {
     nextValue: raw,
     changed,
+  };
+}
+
+async function readOpenRuntimeSessionState(stateDir: string): Promise<{ sessions: Record<string, unknown> }> {
+  const result = await readJsonSafe(path.join(stateDir, "worker_sessions.json"));
+  if (!result.ok) {
+    if (result.reason === READ_JSON_REASON.MISSING) {
+      return { sessions: {} };
+    }
+    throw new AtlasLifecycleError("Failed to read open runtime session state.", 500, "session_state_read_failed");
+  }
+
+  const raw = result.data;
+  if (isRecord(raw.workerSessions)) {
+    return { sessions: raw.workerSessions as Record<string, unknown> };
+  }
+  if (isRecord(raw.sessions)) {
+    return { sessions: raw.sessions as Record<string, unknown> };
+  }
+  return {
+    sessions: isRecord(raw) ? raw : {},
   };
 }
 
@@ -200,7 +271,7 @@ async function writeArchiveSnapshot(stateDir: string, match: SessionMatch): Prom
 }
 
 async function archiveSession(stateDir: string, role: string): Promise<{ lane: string | null; archivePath: string }> {
-  const openState = await readOpenTargetSessionState({ stateDir });
+  const openState = await readOpenRuntimeSessionState(stateDir);
   const match = findMatchingSession(openState.sessions, role);
   if (!match) {
     throw new AtlasLifecycleError(`No open session exists for "${role}".`, 404, "session_not_found");
@@ -231,8 +302,8 @@ async function archiveSession(stateDir: string, role: string): Promise<{ lane: s
   };
 }
 
-async function stopRuntime(): Promise<{ message: string }> {
-  const config = await loadConfig();
+async function stopRuntime(stateDir: string): Promise<{ message: string }> {
+  const config = await loadAtlasRuntimeConfig(stateDir);
   const daemonPidState = await readDaemonPid(config);
   const daemonPid = Number(daemonPidState?.pid || 0);
   if (!daemonPid || !isDaemonProcess(daemonPid)) {
@@ -245,10 +316,117 @@ async function stopRuntime(): Promise<{ message: string }> {
   return { message: `Stop requested for BOX runtime pid=${daemonPid}.` };
 }
 
-async function resumeRuntime(): Promise<{ message: string }> {
-  const config = await loadConfig();
+async function loadAtlasRuntimeConfig(stateDir: string) {
+  const runtimeStateDir = await resolveAtlasRuntimeStateDir(stateDir);
+  return applyAtlasRuntimeStateDirToConfig(await loadConfig(), runtimeStateDir);
+}
+
+async function resumeRuntime(stateDir: string): Promise<{ message: string }> {
+  const config = await loadAtlasRuntimeConfig(stateDir);
   await runResumeDispatch(config);
   return { message: "BOX runtime resume dispatched from ATLAS." };
+}
+
+async function stopBuildSession(stateDir: string, sessionId: string): Promise<{ message: string }> {
+  const session = (await listAtlasDesktopSessions(stateDir)).find((entry) => entry.id === sessionId) || null;
+  if (!session) {
+    throw new AtlasLifecycleError("The selected ATLAS session no longer exists.", 404, "desktop_session_missing");
+  }
+
+  const buildRequest = await readAtlasBuildRequest(stateDir);
+  const binding = await resolveAtlasProjectBindingForSession(stateDir, session, buildRequest, {
+    allowHeuristicMatch: false,
+  });
+  const matchesBuildBySessionId = Boolean(buildRequest && buildRequest.sessionId === sessionId);
+  const matchesBuildByProjectBinding = Boolean(
+    buildRequest
+    && binding
+    && buildRequest.projectId === binding.projectId
+    && buildRequest.projectSessionId === binding.projectSessionId,
+  );
+  if (!buildRequest && !binding) {
+    throw new AtlasLifecycleError("This session does not own the current live build mission.", 409, "build_session_not_active");
+  }
+
+  if (!matchesBuildBySessionId && !matchesBuildByProjectBinding && !binding) {
+    throw new AtlasLifecycleError("This session does not own the current live build mission.", 409, "build_session_not_active");
+  }
+
+  const config = await loadAtlasRuntimeConfig(stateDir);
+  const selectedProjectId = String(binding?.projectId || buildRequest?.projectId || "").trim();
+  const selectedProjectSessionId = String(binding?.projectSessionId || buildRequest?.projectSessionId || "").trim();
+  const runnerConfig = selectedProjectSessionId
+    ? bindAtlasTargetSessionSelector(config, { projectId: selectedProjectId, sessionId: selectedProjectSessionId })
+    : config;
+  let stoppedPid: number | null = null;
+
+  if (selectedProjectSessionId) {
+    stoppedPid = await requestStopForControlScope(runnerConfig, `atlas-build-stop:${sessionId}`);
+  }
+
+  if (!stoppedPid && matchesBuildBySessionId) {
+    const daemonPidState = await readDaemonPid(config);
+    const daemonPid = Number(daemonPidState?.pid || 0);
+    if (daemonPid > 0 && isDaemonProcess(daemonPid)) {
+      await clearStopRequest(config).catch(() => {});
+      await requestDaemonStop(config, `atlas-build-stop:${sessionId}`).catch(() => {});
+      stoppedPid = daemonPid;
+    } else {
+      await clearDaemonPid(config).catch(() => {});
+      await clearStopRequest(config).catch(() => {});
+    }
+  }
+
+  if (!stoppedPid && buildRequest?.runnerPid && isProcessAlive(buildRequest.runnerPid)) {
+    try {
+      process.kill(buildRequest.runnerPid, "SIGKILL");
+      stoppedPid = buildRequest.runnerPid;
+    } catch {
+      stoppedPid = null;
+    }
+  }
+
+  if (buildRequest && (matchesBuildBySessionId || matchesBuildByProjectBinding)) {
+    const updatedAt = new Date().toISOString();
+    await writeAtlasBuildRequest(stateDir, {
+      ...buildRequest,
+      sessionId,
+      projectId: selectedProjectId || buildRequest.projectId,
+      projectSessionId: selectedProjectSessionId || buildRequest.projectSessionId,
+      updatedAt,
+      triggerState: "paused",
+      triggerLabel: stoppedPid
+        ? `ATLAS paused this build mission for the selected session (pid=${stoppedPid}).`
+        : "ATLAS paused this build mission for the selected session.",
+      runnerPid: null,
+    });
+  }
+
+  return {
+    message: stoppedPid
+      ? `Paused the live build for this session (pid=${stoppedPid}).`
+      : "Paused the live build for this session.",
+  };
+}
+
+async function resumeBuildSession(stateDir: string, sessionId: string): Promise<{ message: string }> {
+  const session = (await listAtlasDesktopSessions(stateDir)).find((entry) => entry.id === sessionId) || null;
+  if (!session) {
+    throw new AtlasLifecycleError("The selected ATLAS session no longer exists.", 404, "desktop_session_missing");
+  }
+  if (session.status !== "ready") {
+    throw new AtlasLifecycleError("Only ready sessions can be promoted into the live build mission.", 409, "desktop_session_not_ready");
+  }
+
+  const queued = await queueAtlasBuildForSession({
+    stateDir,
+    session,
+    force: true,
+  });
+
+  return {
+    message: queued.triggerLabel || "ATLAS continued this session's live build mission.",
+  };
 }
 
 export async function runAtlasLifecycleAction(
@@ -257,14 +435,35 @@ export async function runAtlasLifecycleAction(
 ): Promise<AtlasLifecycleResult> {
   const action = String(request.action || "").trim().toLowerCase() as AtlasLifecycleAction;
   const role = String(request.role || "").trim() || null;
+  const sessionId = String(request.sessionId || "").trim() || null;
   const redirectTo = normalizeReturnTo(request.returnTo);
 
-  if (!["pause", "resume", "stop", "archive"].includes(action)) {
+  if (!["pause", "resume", "stop", "archive", "stop-build", "resume-build"].includes(action)) {
     throw new AtlasLifecycleError(`Unsupported lifecycle action "${String(request.action || "")}".`, 400, "unsupported_action");
   }
 
+  if (action === "stop-build" || action === "resume-build") {
+    if (!sessionId) {
+      throw new AtlasLifecycleError(`Lifecycle action "${action}" requires a sessionId.`, 400, "missing_session_id");
+    }
+
+    const result = action === "stop-build"
+      ? await stopBuildSession(stateDir, sessionId)
+      : await resumeBuildSession(stateDir, sessionId);
+
+    return {
+      ok: true,
+      action,
+      scope: "build",
+      role: null,
+      lane: null,
+      message: result.message,
+      redirectTo,
+    };
+  }
+
   if (action === "stop") {
-    const stopped = await stopRuntime();
+    const stopped = await stopRuntime(stateDir);
     return {
       ok: true,
       action,
@@ -277,7 +476,7 @@ export async function runAtlasLifecycleAction(
   }
 
   if (action === "resume" && !role) {
-    const resumed = await resumeRuntime();
+    const resumed = await resumeRuntime(stateDir);
     return {
       ok: true,
       action,
@@ -336,15 +535,16 @@ export async function runAtlasLifecycleAction(
 }
 
 async function main(): Promise<void> {
-  const [actionArg, roleArg, returnToArg] = process.argv.slice(2);
+  const [actionArg, roleArg, sessionIdArg, returnToArg] = process.argv.slice(2);
   if (!actionArg) {
-    throw new AtlasLifecycleError("Usage: atlas lifecycle <pause|resume|stop|archive> [role] [returnTo]", 400, "usage");
+    throw new AtlasLifecycleError("Usage: atlas lifecycle <pause|resume|stop|archive|stop-build|resume-build> [role] [sessionId] [returnTo]", 400, "usage");
   }
 
   const config = await loadConfig();
   const result = await runAtlasLifecycleAction(String(config.paths?.stateDir || "state"), {
     action: actionArg as AtlasLifecycleAction,
     role: roleArg || null,
+    sessionId: sessionIdArg || null,
     returnTo: returnToArg || "/sessions",
   });
   console.log(result.message);

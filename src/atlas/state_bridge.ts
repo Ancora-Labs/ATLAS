@@ -5,6 +5,7 @@ import { getPausedLanes } from "../core/medic_agent.js";
 import { getLaneForWorkerName, normalizeWorkerName } from "../core/role_registry.js";
 import { readJsonSafe } from "../core/fs_utils.js";
 import { listOpenTargetSessions } from "../core/target_session_state.js";
+import { resolveAtlasRuntimeStateDir } from "./runtime_state_root.js";
 
 export interface BoxTargetSessionHistoryEntry {
   at?: string;
@@ -86,6 +87,14 @@ export type AtlasSessionFreshnessState =
   | "stale"
   | "unknown";
 
+export interface AtlasSessionActionDto {
+  at: string | null;
+  actor: string | null;
+  status: AtlasSessionStatus;
+  statusLabel: string;
+  summary: string;
+}
+
 export interface AtlasSessionDto {
   role: string;
   name: string;
@@ -129,14 +138,6 @@ export interface AtlasSessionDto {
   canArchive: boolean;
 }
 
-export interface AtlasSessionActionDto {
-  at: string | null;
-  actor: string | null;
-  status: AtlasSessionStatus;
-  statusLabel: string;
-  summary: string;
-}
-
 export interface AtlasArchivedSessionDto extends AtlasSessionDto {
   archivePath: string;
   archiveRoleKey: string;
@@ -161,28 +162,6 @@ const SESSION_STATUS_PRIORITY: Record<AtlasSessionStatus, number> = {
   offline: 5,
   done: 6,
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function toTitleCase(value: string): string {
-  return value
-    .split(/[\s_-]+/)
-    .filter(Boolean)
-    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
-    .join(" ");
-}
-
-function getAtlasSessionDisplayName(role: string): string {
-  const normalizedRole = normalizeWorkerName(role);
-  if (normalizedRole === "atlas") return "ATLAS control";
-  if (normalizedRole.endsWith("-worker")) {
-    const lane = getLaneForWorkerName(normalizedRole, normalizedRole.replace(/-worker$/, ""));
-    return `${toTitleCase(lane)} lane`;
-  }
-  return toTitleCase(role);
-}
 
 const STATUS_LABELS: Record<AtlasSessionStatus, string> = {
   idle: "Ready",
@@ -223,6 +202,28 @@ const INTERNAL_SESSION_STAGE_TO_STATUS: Record<string, AtlasSessionStatus> = {
   working: "working",
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toTitleCase(value: string): string {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
+}
+
+function getAtlasSessionDisplayName(role: string): string {
+  const normalizedRole = normalizeWorkerName(role);
+  if (normalizedRole === "atlas") return "ATLAS control";
+  if (normalizedRole.endsWith("-worker")) {
+    const lane = getLaneForWorkerName(normalizedRole, normalizedRole.replace(/-worker$/, ""));
+    return `${toTitleCase(lane)} lane`;
+  }
+  return toTitleCase(role);
+}
+
 function normalizeHistoryEntry(entry: unknown): BoxTargetSessionHistoryEntry | null {
   if (!entry || typeof entry !== "object") return null;
   return entry as BoxTargetSessionHistoryEntry;
@@ -238,12 +239,7 @@ function normalizeStringList(value: unknown): string[] {
     collected.push(...value.map((entry) => String(entry || "").trim()).filter(Boolean));
   }
   if (typeof value === "string" && value.trim()) {
-    collected.push(
-      ...value
-        .split(/\r?\n|,/)
-        .map((entry) => entry.trim())
-        .filter(Boolean),
-    );
+    collected.push(...value.split(/\r?\n|,/).map((entry) => entry.trim()).filter(Boolean));
   }
   const seen = new Set<string>();
   return collected.filter((entry) => {
@@ -264,15 +260,10 @@ function dedupeStrings(values: string[]): string[] {
 
 function normalizeLogLineList(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return value
-      .map((entry) => String(entry || "").trim())
-      .filter(Boolean);
+    return value.map((entry) => String(entry || "").trim()).filter(Boolean);
   }
   if (typeof value === "string" && value.trim()) {
-    return value
-      .split(/\r?\n/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    return value.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
   }
   return [];
 }
@@ -280,18 +271,14 @@ function normalizeLogLineList(value: unknown): string[] {
 function compareIsoTimestampDescending(left: string | null, right: string | null): number {
   const leftValue = left ? Date.parse(left) : Number.NaN;
   const rightValue = right ? Date.parse(right) : Number.NaN;
-  if (Number.isFinite(leftValue) && Number.isFinite(rightValue)) {
-    return rightValue - leftValue;
-  }
+  if (Number.isFinite(leftValue) && Number.isFinite(rightValue)) return rightValue - leftValue;
   if (Number.isFinite(leftValue)) return -1;
   if (Number.isFinite(rightValue)) return 1;
   return 0;
 }
 
 function pickFreshestTimestamp(...values: Array<string | null | undefined>): string | null {
-  return values
-    .map((value) => normalizeOptionalString(value))
-    .sort(compareIsoTimestampDescending)[0] || null;
+  return values.map((value) => normalizeOptionalString(value)).sort(compareIsoTimestampDescending)[0] || null;
 }
 
 function getSessionHistory(session: BoxTargetSessionRecord): BoxTargetSessionHistoryEntry[] {
@@ -306,9 +293,7 @@ function getSessionHistory(session: BoxTargetSessionRecord): BoxTargetSessionHis
 function getMeaningfulHistoryEntries(history: BoxTargetSessionHistoryEntry[]): BoxTargetSessionHistoryEntry[] {
   return history.filter((entry) => {
     const actor = normalizeWorkerName(String(entry.from || entry.role || ""));
-    if (actor && SYSTEM_HISTORY_ACTORS.has(actor)) {
-      return false;
-    }
+    if (actor && SYSTEM_HISTORY_ACTORS.has(actor)) return false;
     return Boolean(
       normalizeOptionalString(entry.task)
       || normalizeOptionalString(entry.summary)
@@ -330,29 +315,15 @@ function normalizeRawStatus(status: unknown): AtlasSessionStatus {
   return INTERNAL_SESSION_STAGE_TO_STATUS[normalized] || "idle";
 }
 
-function resolveWorkerIdentityLabel(
-  session: BoxTargetSessionRecord,
-  role: string,
-  resolvedRole: string | null,
-  logicalRole: string | null,
-): string {
+function resolveWorkerIdentityLabel(session: BoxTargetSessionRecord, role: string, resolvedRole: string | null, logicalRole: string | null): string {
   const explicitIdentity = normalizeOptionalString(session.workerIdentityLabel);
-  if (explicitIdentity) {
-    return explicitIdentity;
-  }
-  if (resolvedRole && normalizeWorkerName(resolvedRole) !== normalizeWorkerName(role)) {
-    return `${role} via ${resolvedRole}`;
-  }
-  if (logicalRole && normalizeWorkerName(logicalRole) !== normalizeWorkerName(role)) {
-    return `${role} for ${logicalRole}`;
-  }
+  if (explicitIdentity) return explicitIdentity;
+  if (resolvedRole && normalizeWorkerName(resolvedRole) !== normalizeWorkerName(role)) return `${role} via ${resolvedRole}`;
+  if (logicalRole && normalizeWorkerName(logicalRole) !== normalizeWorkerName(role)) return `${role} for ${logicalRole}`;
   return role;
 }
 
-function resolveSessionStage(
-  session: BoxTargetSessionRecord,
-  effectiveStatus: AtlasSessionStatus,
-): { currentStage: string; currentStageLabel: string } {
+function resolveSessionStage(session: BoxTargetSessionRecord, effectiveStatus: AtlasSessionStatus): { currentStage: string; currentStageLabel: string; } {
   const stageValue = normalizeOptionalString(session.currentStage)
     || normalizeOptionalString(session.stage)
     || normalizeOptionalString(session.phase)
@@ -361,10 +332,7 @@ function resolveSessionStage(
   const stageLabel = normalizeOptionalString(session.currentStageLabel)
     || normalizeOptionalString(session.stageLabel)
     || toTitleCase(stageValue.replace(/[\s_-]+/g, " "));
-  return {
-    currentStage: stageValue,
-    currentStageLabel: stageLabel,
-  };
+  return { currentStage: stageValue, currentStageLabel: stageLabel };
 }
 
 function resolveHistorySummary(entry: BoxTargetSessionHistoryEntry): string {
@@ -377,19 +345,16 @@ function resolveHistorySummary(entry: BoxTargetSessionHistoryEntry): string {
 }
 
 function buildRecentActions(history: BoxTargetSessionHistoryEntry[]): AtlasSessionActionDto[] {
-  return [...getMeaningfulHistoryEntries(history)]
-    .reverse()
-    .map((entry) => {
-      const status = normalizeRawStatus(entry.status);
-      return {
-        at: normalizeOptionalString(entry.at),
-        actor: normalizeOptionalString(entry.from) || normalizeOptionalString(entry.role),
-        status,
-        statusLabel: getAtlasSessionStatusLabel(status),
-        summary: resolveHistorySummary(entry),
-      };
-    })
-    .slice(0, RECENT_ACTION_LIMIT);
+  return [...getMeaningfulHistoryEntries(history)].reverse().map((entry) => {
+    const status = normalizeRawStatus(entry.status);
+    return {
+      at: normalizeOptionalString(entry.at),
+      actor: normalizeOptionalString(entry.from) || normalizeOptionalString(entry.role),
+      status,
+      statusLabel: getAtlasSessionStatusLabel(status),
+      summary: resolveHistorySummary(entry),
+    };
+  }).slice(0, RECENT_ACTION_LIMIT);
 }
 
 function normalizeCurrentBranch(session: BoxTargetSessionRecord): string | null {
@@ -418,13 +383,8 @@ function normalizeTouchedFiles(session: BoxTargetSessionRecord): string[] {
 }
 
 function sanitizeLogLine(line: string): string {
-  const normalized = line
-    .replace(ANSI_ESCAPE_SEQUENCE_PATTERN, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!normalized || LOG_CONTROL_LINE_PATTERN.test(normalized)) {
-    return "";
-  }
+  const normalized = line.replace(ANSI_ESCAPE_SEQUENCE_PATTERN, "").replace(/\s+/g, " ").trim();
+  if (!normalized || LOG_CONTROL_LINE_PATTERN.test(normalized)) return "";
   return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized;
 }
 
@@ -438,9 +398,7 @@ function buildInlineLogExcerpt(session: BoxTargetSessionRecord): string[] {
     .slice(-LOG_EXCERPT_LINE_LIMIT);
 }
 
-function resolveSessionFreshnessPolicy(
-  freshnessAt: string | null,
-): Pick<AtlasSessionDto, "freshnessState" | "freshnessLabel" | "freshnessPolicyDetail"> {
+function resolveSessionFreshnessPolicy(freshnessAt: string | null): Pick<AtlasSessionDto, "freshnessState" | "freshnessLabel" | "freshnessPolicyDetail"> {
   if (!freshnessAt) {
     return {
       freshnessState: "unknown",
@@ -448,7 +406,6 @@ function resolveSessionFreshnessPolicy(
       freshnessPolicyDetail: "ATLAS does not have a current live update timestamp for this session yet.",
     };
   }
-
   const freshnessTime = Date.parse(freshnessAt);
   if (!Number.isFinite(freshnessTime)) {
     return {
@@ -457,7 +414,6 @@ function resolveSessionFreshnessPolicy(
       freshnessPolicyDetail: "ATLAS could not verify the session freshness timestamp, so it is not presented as current live state.",
     };
   }
-
   const ageMs = Date.now() - freshnessTime;
   if (ageMs <= SESSION_LIVE_FRESHNESS_WINDOW_MS) {
     return {
@@ -466,7 +422,6 @@ function resolveSessionFreshnessPolicy(
       freshnessPolicyDetail: "ATLAS verified a session update within the last 5 minutes.",
     };
   }
-
   return {
     freshnessState: "stale",
     freshnessLabel: "Live update stale",
@@ -478,11 +433,7 @@ function getSessionLogStateLabel(logExcerpt: string[]): string {
   return logExcerpt.length > 0 ? "Readable log ready" : "Waiting for live log";
 }
 
-function resolveSessionLiveStatus(
-  sessionName: string,
-  status: AtlasSessionStatus,
-  freshnessState: AtlasSessionFreshnessState,
-): Pick<AtlasSessionDto, "liveStatusTone" | "liveStatusLabel" | "liveStatusAssistiveText" | "liveStatusPulse"> {
+function resolveSessionLiveStatus(sessionName: string, status: AtlasSessionStatus, freshnessState: AtlasSessionFreshnessState): Pick<AtlasSessionDto, "liveStatusTone" | "liveStatusLabel" | "liveStatusAssistiveText" | "liveStatusPulse"> {
   if (status === "working" && freshnessState !== "live") {
     return {
       liveStatusTone: "attention",
@@ -493,66 +444,26 @@ function resolveSessionLiveStatus(
       liveStatusPulse: false,
     };
   }
-
   switch (status) {
     case "working":
-      return {
-        liveStatusTone: "active",
-        liveStatusLabel: "Active",
-        liveStatusAssistiveText: `${sessionName} is actively running live work.`,
-        liveStatusPulse: true,
-      };
+      return { liveStatusTone: "active", liveStatusLabel: "Active", liveStatusAssistiveText: `${sessionName} is actively running live work.`, liveStatusPulse: true };
     case "blocked":
-      return {
-        liveStatusTone: "attention",
-        liveStatusLabel: "Needs attention",
-        liveStatusAssistiveText: `${sessionName} needs attention before it can continue.`,
-        liveStatusPulse: false,
-      };
+      return { liveStatusTone: "attention", liveStatusLabel: "Needs attention", liveStatusAssistiveText: `${sessionName} needs attention before it can continue.`, liveStatusPulse: false };
     case "error":
-      return {
-        liveStatusTone: "offline",
-        liveStatusLabel: "Error",
-        liveStatusAssistiveText: `${sessionName} hit an error and needs intervention before work can resume.`,
-        liveStatusPulse: false,
-      };
+      return { liveStatusTone: "offline", liveStatusLabel: "Error", liveStatusAssistiveText: `${sessionName} hit an error and needs intervention before work can resume.`, liveStatusPulse: false };
     case "done":
-      return {
-        liveStatusTone: "complete",
-        liveStatusLabel: "Complete",
-        liveStatusAssistiveText: `${sessionName} has completed its recorded work and is in a healthy state.`,
-        liveStatusPulse: false,
-      };
+      return { liveStatusTone: "complete", liveStatusLabel: "Complete", liveStatusAssistiveText: `${sessionName} has completed its recorded work and is in a healthy state.`, liveStatusPulse: false };
     case "offline":
-      return {
-        liveStatusTone: "offline",
-        liveStatusLabel: "Stopped",
-        liveStatusAssistiveText: `${sessionName} is currently offline.`,
-        liveStatusPulse: false,
-      };
+      return { liveStatusTone: "offline", liveStatusLabel: "Stopped", liveStatusAssistiveText: `${sessionName} is currently offline.`, liveStatusPulse: false };
     case "partial":
-      return {
-        liveStatusTone: "idle",
-        liveStatusLabel: "Ready to continue",
-        liveStatusAssistiveText: `${sessionName} is ready to continue from the latest recorded checkpoint.`,
-        liveStatusPulse: false,
-      };
+      return { liveStatusTone: "idle", liveStatusLabel: "Ready to continue", liveStatusAssistiveText: `${sessionName} is ready to continue from the latest recorded checkpoint.`, liveStatusPulse: false };
     case "idle":
     default:
-      return {
-        liveStatusTone: "idle",
-        liveStatusLabel: "Ready",
-        liveStatusAssistiveText: `${sessionName} is ready for the next live update.`,
-        liveStatusPulse: false,
-      };
+      return { liveStatusTone: "idle", liveStatusLabel: "Ready", liveStatusAssistiveText: `${sessionName} is ready for the next live update.`, liveStatusPulse: false };
   }
 }
 
-function resolveLatestMeaningfulAction(
-  session: BoxTargetSessionRecord,
-  recentActions: AtlasSessionActionDto[],
-  lastTask: string,
-): string {
+function resolveLatestMeaningfulAction(session: BoxTargetSessionRecord, recentActions: AtlasSessionActionDto[], lastTask: string): string {
   return normalizeOptionalString(session.latestMeaningfulAction)
     || recentActions[0]?.summary
     || lastTask
@@ -562,9 +473,7 @@ function resolveLatestMeaningfulAction(
 function resolveSessionLane(role: string): string | null {
   const normalizedRole = normalizeWorkerName(role);
   if (!normalizedRole || normalizedRole === "atlas") return null;
-  const fallbackLane = normalizedRole.endsWith("-worker")
-    ? normalizedRole.replace(/-worker$/, "")
-    : "";
+  const fallbackLane = normalizedRole.endsWith("-worker") ? normalizedRole.replace(/-worker$/, "") : "";
   const lane = String(getLaneForWorkerName(normalizedRole, fallbackLane) || "").trim();
   return lane || null;
 }
@@ -587,18 +496,14 @@ function extractSessionRecordMap(raw: unknown, fallbackPrefix: string): Record<s
     });
     return extracted;
   }
-
   if (!isRecord(raw)) return {};
-
   const candidate = isRecord(raw.sessions) ? raw.sessions : raw;
   if (!isRecord(candidate)) return {};
-
   const looksLikeSingleSession = ["role", "status", "lastTask", "lastActiveAt"].some((key) => key in candidate);
   if (looksLikeSingleSession) {
     const roleKey = resolveSessionRoleKey(candidate, fallbackPrefix);
     return { [roleKey]: candidate };
   }
-
   const extracted: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(candidate)) {
     if (!isRecord(value)) continue;
@@ -609,7 +514,8 @@ function extractSessionRecordMap(raw: unknown, fallbackPrefix: string): Record<s
 
 async function readCanonicalOpenSessionRecords(stateDir: string): Promise<Record<string, unknown>> {
   try {
-    return await listOpenTargetSessions({ stateDir });
+    const sessions = await listOpenTargetSessions({ stateDir });
+    return extractSessionRecordMap(sessions, "session");
   } catch (error) {
     console.error(`[atlas] failed to read canonical open sessions: ${String((error as Error)?.message || error)}`);
     return {};
@@ -621,9 +527,7 @@ async function collectArchiveJsonFiles(dirPath: string): Promise<string[]> {
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
     const nestedPaths = await Promise.all(entries.map(async (entry) => {
       const entryPath = path.join(dirPath, entry.name);
-      if (entry.isDirectory()) {
-        return collectArchiveJsonFiles(entryPath);
-      }
+      if (entry.isDirectory()) return collectArchiveJsonFiles(entryPath);
       return entry.isFile() && entry.name.endsWith(".json") ? [entryPath] : [];
     }));
     return nestedPaths.flat();
@@ -650,30 +554,20 @@ async function readArchivedSessionRecords(stateDir: string): Promise<AtlasArchiv
     const bridgedSessions = bridgeBoxTargetSessionState(
       extractSessionRecordMap(archiveResult.data, path.basename(archivePath, path.extname(archivePath))),
     );
-
     for (const [archiveRoleKey, session] of Object.entries(bridgedSessions)) {
-      archivedSessions.push({
-        ...session,
-        archivePath,
-        archiveRoleKey,
-      });
+      archivedSessions.push({ ...session, archivePath, archiveRoleKey });
     }
   }
 
   return archivedSessions;
 }
 
-function resolveEffectiveStatus(
-  rawStatus: AtlasSessionStatus,
-  history: BoxTargetSessionHistoryEntry[],
-): AtlasSessionStatus {
+function resolveEffectiveStatus(rawStatus: AtlasSessionStatus, history: BoxTargetSessionHistoryEntry[]): AtlasSessionStatus {
   if (rawStatus !== "working") return rawStatus;
-
   const lastRelevantEntry = [...history].reverse().find((entry) => {
     const actor = String(entry.from || entry.role || "").trim().toLowerCase();
     return !SYSTEM_HISTORY_ACTORS.has(actor);
   });
-
   const historyStatus = normalizeRawStatus(lastRelevantEntry?.status);
   return TERMINAL_HISTORY_STATUSES.has(historyStatus) ? historyStatus : rawStatus;
 }
@@ -685,89 +579,39 @@ export function getAtlasSessionStatusLabel(status: AtlasSessionStatus): string {
 function compareNullableTimestampsDescending(left: string | null, right: string | null): number {
   const leftValue = left ? Date.parse(left) : Number.NaN;
   const rightValue = right ? Date.parse(right) : Number.NaN;
-
-  if (Number.isFinite(leftValue) && Number.isFinite(rightValue)) {
-    return rightValue - leftValue;
-  }
+  if (Number.isFinite(leftValue) && Number.isFinite(rightValue)) return rightValue - leftValue;
   if (Number.isFinite(leftValue)) return -1;
   if (Number.isFinite(rightValue)) return 1;
   return 0;
 }
 
-function getAtlasSessionFreshnessSortPriority(state: AtlasSessionFreshnessState): number {
-  switch (state) {
-    case "live":
-      return 0;
-    case "stale":
-      return 1;
-    case "unknown":
-    default:
-      return 2;
-  }
-}
-
 export function compareAtlasSessionsForDesktop(left: AtlasSessionDto, right: AtlasSessionDto): number {
-  const freshnessOrder = getAtlasSessionFreshnessSortPriority(left.freshnessState)
-    - getAtlasSessionFreshnessSortPriority(right.freshnessState);
-  if (freshnessOrder !== 0) {
-    return freshnessOrder;
-  }
-
   const leftIsAtlas = normalizeWorkerName(left.role) === "atlas" ? 0 : 1;
   const rightIsAtlas = normalizeWorkerName(right.role) === "atlas" ? 0 : 1;
-  if (leftIsAtlas !== rightIsAtlas) {
-    return leftIsAtlas - rightIsAtlas;
-  }
-
-  if (left.needsInput !== right.needsInput) {
-    return left.needsInput ? -1 : 1;
-  }
-
+  if (leftIsAtlas !== rightIsAtlas) return leftIsAtlas - rightIsAtlas;
+  if (left.needsInput !== right.needsInput) return left.needsInput ? -1 : 1;
   const leftPriority = SESSION_STATUS_PRIORITY[left.status];
   const rightPriority = SESSION_STATUS_PRIORITY[right.status];
-  if (leftPriority !== rightPriority) {
-    return leftPriority - rightPriority;
-  }
-
-  if (left.isResumable !== right.isResumable) {
-    return left.isResumable ? -1 : 1;
-  }
-
+  if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+  if (left.isResumable !== right.isResumable) return left.isResumable ? -1 : 1;
   const timestampOrder = compareNullableTimestampsDescending(left.lastActiveAt, right.lastActiveAt);
-  if (timestampOrder !== 0) {
-    return timestampOrder;
-  }
-
+  if (timestampOrder !== 0) return timestampOrder;
   const nameOrder = left.name.localeCompare(right.name);
-  if (nameOrder !== 0) {
-    return nameOrder;
-  }
-
+  if (nameOrder !== 0) return nameOrder;
   return left.role.localeCompare(right.role);
 }
 
-export function getAtlasSessionReadiness(
-  status: AtlasSessionStatus,
-  lastTask: string,
-): { readiness: AtlasSessionReadiness; readinessLabel: string } {
+export function getAtlasSessionReadiness(status: AtlasSessionStatus, lastTask: string): { readiness: AtlasSessionReadiness; readinessLabel: string; } {
   switch (status) {
-    case "working":
-      return { readiness: "in_progress", readinessLabel: "In progress" };
+    case "working": return { readiness: "in_progress", readinessLabel: "In progress" };
     case "blocked":
-    case "error":
-      return { readiness: "action_needed", readinessLabel: "Needs your input" };
-    case "done":
-      return { readiness: "completed", readinessLabel: "Completed" };
-    case "offline":
-      return { readiness: "unavailable", readinessLabel: "Unavailable" };
-    case "partial":
-      return { readiness: "ready", readinessLabel: "Ready to continue" };
+    case "error": return { readiness: "action_needed", readinessLabel: "Needs your input" };
+    case "done": return { readiness: "completed", readinessLabel: "Completed" };
+    case "offline": return { readiness: "unavailable", readinessLabel: "Unavailable" };
+    case "partial": return { readiness: "ready", readinessLabel: "Ready to continue" };
     case "idle":
     default:
-      return {
-        readiness: "ready",
-        readinessLabel: lastTask.trim() ? "Ready to continue" : "Ready to start",
-      };
+      return { readiness: "ready", readinessLabel: lastTask.trim() ? "Ready to continue" : "Ready to start" };
   }
 }
 
@@ -781,10 +625,7 @@ function buildLiveWorkerLogCandidates(session: AtlasSessionDto): string[] {
   return [...candidates];
 }
 
-async function readSessionLogDetails(
-  stateDir: string,
-  session: AtlasSessionDto,
-): Promise<Pick<AtlasSessionDto, "logExcerpt" | "logSource" | "logUpdatedAt" | "freshnessAt">> {
+async function readSessionLogDetails(stateDir: string, session: AtlasSessionDto): Promise<Pick<AtlasSessionDto, "logExcerpt" | "logSource" | "logUpdatedAt" | "freshnessAt">> {
   const candidateNames = buildLiveWorkerLogCandidates(session);
   for (const candidateName of candidateNames) {
     const logPath = path.join(stateDir, candidateName);
@@ -792,14 +633,8 @@ async function readSessionLogDetails(
       const stats = await fs.stat(logPath);
       if (!stats.isFile()) continue;
       const raw = await fs.readFile(logPath, "utf8");
-      const excerpt = raw
-        .split(/\r?\n/)
-        .map(sanitizeLogLine)
-        .filter(Boolean)
-        .slice(-LOG_EXCERPT_LINE_LIMIT);
-      if (excerpt.length === 0) {
-        continue;
-      }
+      const excerpt = raw.split(/\r?\n/).map(sanitizeLogLine).filter(Boolean).slice(-LOG_EXCERPT_LINE_LIMIT);
+      if (excerpt.length === 0) continue;
       const logUpdatedAt = stats.mtime.toISOString();
       return {
         logExcerpt: excerpt,
@@ -813,64 +648,33 @@ async function readSessionLogDetails(
       }
     }
   }
-
   return {
     logExcerpt: session.logExcerpt,
     logSource: session.logSource,
     logUpdatedAt: session.logUpdatedAt,
-    freshnessAt: pickFreshestTimestamp(
-      session.freshnessAt,
-      session.logUpdatedAt,
-      session.lastActiveAt,
-      session.latestMeaningfulActionAt,
-    ),
+    freshnessAt: pickFreshestTimestamp(session.freshnessAt, session.logUpdatedAt, session.lastActiveAt, session.latestMeaningfulActionAt),
   };
 }
 
-async function hydrateSessionLogDetails(
-  stateDir: string,
-  sessions: Record<string, AtlasSessionDto>,
-): Promise<Record<string, AtlasSessionDto>> {
+async function hydrateSessionLogDetails(stateDir: string, sessions: Record<string, AtlasSessionDto>): Promise<Record<string, AtlasSessionDto>> {
   const hydratedEntries = await Promise.all(Object.entries(sessions).map(async ([roleKey, session]) => {
     const logDetails = await readSessionLogDetails(stateDir, session);
-    const freshnessPolicy = resolveSessionFreshnessPolicy(logDetails.freshnessAt);
-    return [roleKey, {
-      ...session,
-      ...logDetails,
-      ...freshnessPolicy,
-      logStateLabel: getSessionLogStateLabel(logDetails.logExcerpt),
-      ...resolveSessionLiveStatus(session.name, session.status, freshnessPolicy.freshnessState),
-    }] as const;
+    return [roleKey, { ...session, ...logDetails }] as const;
   }));
   return Object.fromEntries(hydratedEntries);
 }
 
-export function resolveAtlasSessionSnapshotContinuity(
-  sessions: AtlasSessionDto[],
-  focusedSessionRole: string | null,
-  missingFocusedSnapshotHint = false,
-): AtlasSessionSnapshotContinuity {
-  const hasLiveSessions = sessions.some((session) => session.freshnessState === "live");
+export function resolveAtlasSessionSnapshotContinuity(sessions: AtlasSessionDto[], focusedSessionRole: string | null, missingFocusedSnapshotHint = false): AtlasSessionSnapshotContinuity {
   if (missingFocusedSnapshotHint) {
-    return {
-      hasLiveSessions,
-      missingFocusedSnapshot: true,
-    };
+    return { hasLiveSessions: sessions.length > 0, missingFocusedSnapshot: true };
   }
-
   const normalizedFocus = String(focusedSessionRole || "").trim();
   if (!normalizedFocus) {
-    return {
-      hasLiveSessions,
-      missingFocusedSnapshot: false,
-    };
+    return { hasLiveSessions: sessions.length > 0, missingFocusedSnapshot: false };
   }
-
   return {
-    hasLiveSessions,
-    missingFocusedSnapshot: !sessions.some(
-      (session) => session.role === normalizedFocus && session.freshnessState === "live",
-    ),
+    hasLiveSessions: sessions.length > 0,
+    missingFocusedSnapshot: !sessions.some((session) => session.role === normalizedFocus),
   };
 }
 
@@ -880,13 +684,8 @@ function isResumable(status: AtlasSessionStatus, lastTask: string): boolean {
   return lastTask.trim().length > 0;
 }
 
-export function bridgeBoxTargetSessionState(
-  workerSessions: Record<string, unknown>,
-  thinkingMap: Record<string, string> = {},
-  pausedLanes: Record<string, unknown> = {},
-): Record<string, AtlasSessionDto> {
+export function bridgeBoxTargetSessionState(workerSessions: Record<string, unknown>, thinkingMap: Record<string, string> = {}, pausedLanes: Record<string, unknown> = {}): Record<string, AtlasSessionDto> {
   const cleaned: Record<string, AtlasSessionDto> = {};
-
   for (const [roleKey, rawSession] of Object.entries(workerSessions || {})) {
     if (roleKey === "schemaVersion") continue;
     if (!rawSession || typeof rawSession !== "object" || Array.isArray(rawSession)) continue;
@@ -914,10 +713,7 @@ export function bridgeBoxTargetSessionState(
     const pullRequests = normalizePullRequests(session);
     const touchedFiles = normalizeTouchedFiles(session);
     const logExcerpt = buildInlineLogExcerpt(session);
-    const logUpdatedAt = pickFreshestTimestamp(
-      normalizeOptionalString(session.logUpdatedAt),
-      normalizeOptionalString(session.updatedAt),
-    );
+    const logUpdatedAt = pickFreshestTimestamp(normalizeOptionalString(session.logUpdatedAt), normalizeOptionalString(session.updatedAt));
     const freshnessAt = pickFreshestTimestamp(
       normalizeOptionalString(session.freshnessAt),
       typeof session.lastActiveAt === "string" ? session.lastActiveAt : null,
@@ -965,7 +761,6 @@ export function bridgeBoxTargetSessionState(
       canArchive: normalizeWorkerName(role) !== "atlas" && status !== "working",
     };
   }
-
   return cleaned;
 }
 
@@ -974,32 +769,23 @@ export interface AtlasSessionStateBridgeOptions {
   thinkingMap?: Record<string, string>;
 }
 
-export async function readAtlasSessionReadModel(
-  options: AtlasSessionStateBridgeOptions,
-): Promise<AtlasSessionReadModel> {
+export async function readAtlasSessionReadModel(options: AtlasSessionStateBridgeOptions): Promise<AtlasSessionReadModel> {
+  const runtimeStateDir = await resolveAtlasRuntimeStateDir(options.stateDir);
   let pausedLanes: Record<string, unknown> = {};
   try {
-    pausedLanes = await getPausedLanes(options.stateDir);
+    pausedLanes = await getPausedLanes(runtimeStateDir);
   } catch (error) {
     console.error(`[atlas] failed to read paused lanes: ${String((error as Error)?.message || error)}`);
   }
-
-  const canonicalOpenSessions = await readCanonicalOpenSessionRecords(options.stateDir);
-  const openSessions = bridgeBoxTargetSessionState(
-    canonicalOpenSessions,
-    options.thinkingMap,
-    pausedLanes,
-  );
-
+  const canonicalOpenSessions = await readCanonicalOpenSessionRecords(runtimeStateDir);
+  const openSessions = bridgeBoxTargetSessionState(canonicalOpenSessions, options.thinkingMap, pausedLanes);
   return {
-    openSessions: await hydrateSessionLogDetails(options.stateDir, openSessions),
-    archivedSessions: await readArchivedSessionRecords(options.stateDir),
+    openSessions: await hydrateSessionLogDetails(runtimeStateDir, openSessions),
+    archivedSessions: await readArchivedSessionRecords(runtimeStateDir),
   };
 }
 
-export async function listAtlasSessions(
-  options: AtlasSessionStateBridgeOptions,
-): Promise<Record<string, AtlasSessionDto>> {
+export async function listAtlasSessions(options: AtlasSessionStateBridgeOptions): Promise<Record<string, AtlasSessionDto>> {
   const sessionReadModel = await readAtlasSessionReadModel(options);
   return sessionReadModel.openSessions;
 }

@@ -6,10 +6,15 @@ export default [
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ["src/**/*.{js,ts}"],
+    files: ["**/*.{js,cjs,mjs,ts}"],
     languageOptions: {
       ecmaVersion: 2022,
-      sourceType: "module",
+      sourceType: "module"
+    }
+  },
+  {
+    files: ["src/**/*.{js,ts}"],
+    languageOptions: {
       globals: {
         ...globals.node,
         fetch: "readonly"
@@ -29,6 +34,33 @@ export default [
     }
   },
   {
-    ignores: ["dist/", "node_modules/", "state/"]
+    files: ["scripts/**/*.{js,cjs,mjs,ts}", "tests/**/*.{js,cjs,mjs,ts}"],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+        fetch: "readonly"
+      }
+    },
+    rules: {
+      "no-console": "off"
+    }
+  },
+  {
+    files: ["src/dashboard/render.ts", "public/**/*.{js,cjs,mjs,ts}"],
+    languageOptions: {
+      globals: {
+        ...globals.browser
+      }
+    }
+  },
+  {
+    ignores: [
+      ".box-evolution-prompt-cache-lineage/",
+      "dist/",
+      "node_modules/",
+      "state/",
+      "tmp_evolution_worktree/",
+      "tmp_research/"
+    ]
   }
 ];

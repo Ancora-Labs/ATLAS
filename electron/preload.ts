@@ -1,74 +1,42 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-import type { AtlasClarificationPacket } from "../src/atlas/clarification.js";
-import type { AtlasDesktopAttachment, AtlasDesktopBootstrap, AtlasDesktopState } from "../src/atlas/desktop_state.js";
-import type {
-  AtlasSnapshotRequestPayload,
-  AtlasSnapshotResponse,
-} from "../src/atlas/routes/home.js";
-
-interface AtlasDesktopClarificationSuccess {
-  ok: true;
-  ready: true;
-  packet: AtlasClarificationPacket;
+interface AtlasDesktopBootstrap {
+  sessionId: string;
+  serverUrl: string;
+  targetRepo: string;
+  onboardingDraft: string;
+  repoContext: {
+    provider: "github";
+    targetRepo: string;
+    targetBaseBranch: string | null;
+    repoMode: "existing" | "new";
+    repoCreatedByAtlas: boolean;
+  } | null;
 }
 
-interface AtlasDesktopClarificationFailure {
-  ok: false;
-  error: string;
-  code: string;
-}
+async function submitClarification(objective: string): Promise<{ ok: boolean; packet?: unknown; error?: string }> {
+  const bootstrap = await ipcRenderer.invoke("atlas-desktop:get-bootstrap") as AtlasDesktopBootstrap;
+  const response = await fetch(new URL("/api/onboarding/clarify", bootstrap.serverUrl).toString(), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({ objective }),
+  });
 
-type AtlasDesktopClarificationResult = AtlasDesktopClarificationSuccess | AtlasDesktopClarificationFailure;
-
-async function invokeAtlasDesktop<T>(channel: string, payload?: unknown): Promise<T> {
   try {
-    return await ipcRenderer.invoke(channel, payload);
-  } catch (error) {
-    console.error(`[atlas] preload bridge invoke failed for ${channel}:`, error);
-    throw error;
+    return await response.json() as { ok: boolean; packet?: unknown; error?: string };
+  } catch {
+    return {
+      ok: false,
+      error: "ATLAS returned an invalid clarification response.",
+    };
   }
 }
 
 contextBridge.exposeInMainWorld("atlasDesktop", {
   getBootstrap(): Promise<AtlasDesktopBootstrap> {
-    return invokeAtlasDesktop<AtlasDesktopBootstrap>("atlas-desktop:get-bootstrap");
+    return ipcRenderer.invoke("atlas-desktop:get-bootstrap");
   },
-  getWorkspaceState(): Promise<AtlasDesktopState> {
-    return invokeAtlasDesktop<AtlasDesktopState>("atlas-desktop:get-workspace-state");
-  },
-  refreshSnapshot(request: AtlasSnapshotRequestPayload = {}): Promise<AtlasSnapshotResponse> {
-    return invokeAtlasDesktop<AtlasSnapshotResponse>("atlas-desktop:refresh-snapshot", request);
-  },
-  getSnapshot(request: AtlasSnapshotRequestPayload = {}): Promise<AtlasSnapshotResponse> {
-    return invokeAtlasDesktop<AtlasSnapshotResponse>("atlas-desktop:get-snapshot", request);
-  },
-  onWindowVisible(listener: () => void): () => void {
-    const wrappedListener = () => {
-      try {
-        listener();
-      } catch (error) {
-        console.error("[atlas] preload visibility listener failed:", error);
-      }
-    };
-    ipcRenderer.on("atlas-desktop:window-visible", wrappedListener);
-    return () => {
-      ipcRenderer.off("atlas-desktop:window-visible", wrappedListener);
-    };
-  },
-  setWorkspaceDraft(draft: string): Promise<{ ok: true }> {
-    return invokeAtlasDesktop<{ ok: true }>("atlas-desktop:set-workspace-draft", { draft });
-  },
-  setWorkspaceComposerFocus(focused: boolean): Promise<{ ok: true }> {
-    return invokeAtlasDesktop<{ ok: true }>("atlas-desktop:set-workspace-composer-focus", { focused });
-  },
-  pickWorkspaceAttachments(): Promise<{ ok: true; attachments: AtlasDesktopAttachment[]; }> {
-    return invokeAtlasDesktop<{ ok: true; attachments: AtlasDesktopAttachment[]; }>("atlas-desktop:pick-workspace-attachments");
-  },
-  removeWorkspaceAttachment(attachmentId: string): Promise<{ ok: true; attachments: AtlasDesktopAttachment[]; }> {
-    return invokeAtlasDesktop<{ ok: true; attachments: AtlasDesktopAttachment[]; }>("atlas-desktop:remove-workspace-attachment", { attachmentId });
-  },
-  startSession(objective: string): Promise<AtlasDesktopClarificationResult> {
-    return invokeAtlasDesktop<AtlasDesktopClarificationResult>("atlas-desktop:start-session", { objective });
-  },
+  submitClarification,
 });

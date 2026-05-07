@@ -102,6 +102,8 @@ export interface WorkerRunContract {
   workflowName: string;
   /** Group identifier for correlated dispatches within a cycle. */
   groupId: string;
+  /** Workspace where the Copilot CLI session will execute. */
+  executionCwd: string;
   /** Arbitrary trace metadata for observability integrations. */
   traceMetadata: Record<string, unknown>;
   /** When false (default), suppress PII/secrets from trace output. */
@@ -126,7 +128,7 @@ export interface Result<T = unknown> {
 }
 
 // ─── Worker ────────────────────────────────────────────────────────
-export type WorkerStatus = "done" | "partial" | "blocked" | "error";
+export type WorkerStatus = "done" | "partial" | "blocked" | "error" | "skipped";
 
 export interface WorkerInstruction {
   task: string;

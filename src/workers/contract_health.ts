@@ -4,7 +4,7 @@
  * Exported separately from run_task.ts so that orchestrator, runtime gates,
  * and tests can import these helpers without triggering the main() entry point.
  *
- * Format: WORKER_CONTRACT_HEALTH=env_vars:<pass|fail|n/a>;payload:<pass|fail|n/a>;role:<pass|fail|n/a>
+ * Format: WORKER_CONTRACT_HEALTH=env_vars:<pass|fail|n/a>;payload:<pass|fail|n/a>;role:<pass|fail|n/a>;ui_caps:<pass|fail|n/a>
  */
 
 export type ContractSlot = "pass" | "fail" | "n/a";
@@ -13,6 +13,7 @@ export interface ContractHealth {
   env_vars: ContractSlot;
   payload: ContractSlot;
   role: ContractSlot;
+  ui_caps: ContractSlot;
 }
 
 /**
@@ -20,7 +21,7 @@ export interface ContractHealth {
  * The line is deterministic and machine-parseable.
  */
 export function formatContractHealth(health: ContractHealth): string {
-  return `WORKER_CONTRACT_HEALTH=env_vars:${health.env_vars};payload:${health.payload};role:${health.role}`;
+  return `WORKER_CONTRACT_HEALTH=env_vars:${health.env_vars};payload:${health.payload};role:${health.role};ui_caps:${health.ui_caps}`;
 }
 
 /**
@@ -40,13 +41,24 @@ export function parseContractHealth(line: string): ContractHealth | null {
     if (idx === -1) continue;
     const key = part.slice(0, idx) as keyof ContractHealth;
     const val = part.slice(idx + 1) as ContractSlot;
-    if (key && (val === "pass" || val === "fail" || val === "n/a")) {
+    if (key !== "env_vars" && key !== "payload" && key !== "role" && key !== "ui_caps") {
+      continue;
+    }
+    if (val !== "pass" && val !== "fail" && val !== "n/a") {
+      return null;
+    }
+    if (key) {
       slots[key] = val;
     }
   }
 
   if (!slots.env_vars || !slots.payload || !slots.role) return null;
-  return slots as ContractHealth;
+  return {
+    env_vars: slots.env_vars,
+    payload: slots.payload,
+    role: slots.role,
+    ui_caps: slots.ui_caps ?? "n/a",
+  };
 }
 
 /**
@@ -54,7 +66,12 @@ export function parseContractHealth(line: string): ContractHealth | null {
  * Returns false for any "fail" or "n/a" slot.
  */
 export function isContractHealthy(health: ContractHealth): boolean {
-  return health.env_vars === "pass" && health.payload === "pass" && health.role === "pass";
+  return (
+    health.env_vars === "pass"
+    && health.payload === "pass"
+    && health.role === "pass"
+    && (health.ui_caps === "pass" || health.ui_caps === "n/a")
+  );
 }
 
 /**

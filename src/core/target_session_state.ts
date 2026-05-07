@@ -1,115 +1,2011 @@
+import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { readJson, spawnAsync, writeJson } from "./fs_utils.js";
+import { requestDaemonReload } from "./daemon_control.js";
+import {
+  getActiveTargetSessionPath,
+  PLATFORM_MODE,
+  updatePlatformModeState,
+} from "./mode_state.js";
+import { archiveAtlasDesktopSession } from "../atlas/desktop_sessions.js";
 
-import { WORKER_CYCLE_ARTIFACTS_FILE, extractSessionsFromCycleRecord, filterStaleWorkerSessions, migrateWorkerCycleArtifacts, selectWorkerCycleRecord } from "./cycle_analytics.js";
-import { readJsonSafe } from "./fs_utils.js";
-import { readPipelineProgress } from "./pipeline_progress.js";
+export const TARGET_SESSION_SCHEMA_VERSION = 1;
+export const TARGET_INTENT_STATUS = Object.freeze({
+  PENDING: "pending",
+  CLARIFYING: "clarifying",
+  READY_FOR_PLANNING: "ready_for_planning",
+});
 
-export interface OpenTargetSessionState {
-  sessions: Record<string, unknown>;
-  source: "canonical" | "legacy" | "empty";
-  cycleId: string | null;
-  canonicalSessionsAvailable: boolean;
-  legacySessionsAvailable: boolean;
-  workerSessionSourceConflict: boolean;
-  conflictReason: string | null;
-  staleSessionsFiltered: number;
-  filteredStaleRoles: string[];
+export const TARGET_FEEDBACK_CATEGORY = Object.freeze({
+  PLANNING: "planning",
+  RESEARCH: "research",
+  INTENT: "intent",
+});
+
+export const TARGET_SESSION_STAGE = Object.freeze({
+  ONBOARDING: "onboarding",
+  AWAITING_CREDENTIALS: "awaiting_credentials",
+  AWAITING_MANUAL_STEP: "awaiting_manual_step",
+  AWAITING_INTENT_CLARIFICATION: "awaiting_intent_clarification",
+  SHADOW: "shadow",
+  ACTIVE: "active",
+  COMPLETED: "completed",
+  COMPLETED_WITH_HANDOFF: "completed_with_handoff",
+  QUARANTINED: "quarantined",
+});
+
+const VALID_TARGET_SESSION_STAGES = new Set(Object.values(TARGET_SESSION_STAGE));
+
+type TargetSessionStage = typeof TARGET_SESSION_STAGE[keyof typeof TARGET_SESSION_STAGE];
+type TargetFeedbackCategory = typeof TARGET_FEEDBACK_CATEGORY[keyof typeof TARGET_FEEDBACK_CATEGORY];
+
+const CLOSED_TARGET_SESSION_STAGES = new Set<string>([
+  TARGET_SESSION_STAGE.COMPLETED,
+  TARGET_SESSION_STAGE.COMPLETED_WITH_HANDOFF,
+]);
+
+const STAGE_DEFAULT_NEXT_ACTION = Object.freeze({
+  [TARGET_SESSION_STAGE.ONBOARDING]: "run_onboarding",
+  [TARGET_SESSION_STAGE.AWAITING_CREDENTIALS]: "await_required_credentials",
+  [TARGET_SESSION_STAGE.AWAITING_MANUAL_STEP]: "await_manual_step",
+  [TARGET_SESSION_STAGE.AWAITING_INTENT_CLARIFICATION]: "run_onboarding_clarification",
+  [TARGET_SESSION_STAGE.SHADOW]: "run_shadow_planning",
+  [TARGET_SESSION_STAGE.ACTIVE]: "run_active_planning",
+  [TARGET_SESSION_STAGE.COMPLETED]: "archive_completed_session",
+  [TARGET_SESSION_STAGE.COMPLETED_WITH_HANDOFF]: "archive_completed_session",
+  [TARGET_SESSION_STAGE.QUARANTINED]: "await_human_review",
+});
+
+const TARGET_SESSION_EPHEMERAL_STATE_FILES = Object.freeze([
+  "approved_plan_set.json",
+  "athena_plan_rejection.json",
+  "athena_plan_review.json",
+  "dispatch_checkpoint.json",
+  "last_target_delivery_handoff.json",
+  "pipeline_progress.json",
+  "prometheus_topic_memory.json",
+  "prometheus_analysis.json",
+  "research_scout_output.json",
+  "research_scout_seen_urls.json",
+  "research_scout_topic_site_status.json",
+  "research_synthesis.json",
+  "synthesis_recovery_request.json",
+  "worker_cycle_artifacts.json",
+  "worker_sessions.json",
+]);
+
+const TARGET_SESSION_EPHEMERAL_STATE_PATTERNS = Object.freeze([
+  /^debug_worker_.+\.txt$/i,
+  /^debug_agent_.+\.txt$/i,
+]);
+
+function buildTargetSessionIdentity(session: any): string {
+  const projectId = String(session?.projectId || "").trim();
+  const sessionId = String(session?.sessionId || "").trim();
+  if (!projectId || !sessionId) return "";
+  return `${projectId}:${sessionId}`;
 }
 
-export interface TargetSessionStateOptions {
-  stateDir: string;
+function isSameTargetSession(left: any, right: any): boolean {
+  const leftIdentity = buildTargetSessionIdentity(left);
+  if (!leftIdentity) return false;
+  return leftIdentity === buildTargetSessionIdentity(right);
 }
 
-async function readPreferredCycleId(stateDir: string): Promise<string | null> {
+function shouldResetTargetSessionEphemeralState(previousSession: any, nextSession: any): boolean {
+  if (String(nextSession?.currentMode || "") !== PLATFORM_MODE.SINGLE_TARGET_DELIVERY) {
+    return false;
+  }
+
+  const nextIdentity = buildTargetSessionIdentity(nextSession);
+  if (!nextIdentity) return false;
+
+  const previousIdentity = buildTargetSessionIdentity(previousSession);
+  return !previousIdentity || previousIdentity !== nextIdentity;
+}
+
+async function clearTargetSessionEphemeralState(config: any): Promise<void> {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  await fs.mkdir(stateDir, { recursive: true });
+
+  await Promise.all(
+    TARGET_SESSION_EPHEMERAL_STATE_FILES.map((fileName) =>
+      fs.rm(path.join(stateDir, fileName), { force: true }).catch(() => {})
+    )
+  );
+
+  const entries = await fs.readdir(stateDir, { withFileTypes: true }).catch(() => [] as Array<{ isFile(): boolean; name: string }>);
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && TARGET_SESSION_EPHEMERAL_STATE_PATTERNS.some((pattern) => pattern.test(entry.name)))
+      .map((entry) => fs.rm(path.join(stateDir, entry.name), { force: true }).catch(() => {}))
+  );
+}
+
+function normalizeNullableString(value: unknown): string | null {
+  const normalized = String(value || "").trim();
+  return normalized ? normalized : null;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function resolveConfiguredTargetSessionSelector(config: any): { projectId: string | null; sessionId: string | null } {
+  const projectId = normalizeNullableString(
+    config?.targetSessionSelector?.projectId
+    || process.env.BOX_TARGET_PROJECT_ID
+  );
+  const sessionId = normalizeNullableString(
+    config?.targetSessionSelector?.sessionId
+    || process.env.BOX_TARGET_SESSION_ID
+  );
+  return { projectId, sessionId };
+}
+
+function hasConfiguredTargetSessionSelector(config: any): boolean {
+  const selector = resolveConfiguredTargetSessionSelector(config);
+  return Boolean(selector.sessionId);
+}
+
+function normalizeRepoIdentityValue(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .replace(/\.git$/i, "")
+    .replace(/^https?:\/\/github\.com\//i, "")
+    .replace(/^git@github\.com:/i, "")
+    .replace(/\\/g, "/")
+    .replace(/^\/+|\/+$/g, "")
+    .toLowerCase();
+}
+
+function buildSessionRepoIdentity(sessionOrManifest: any): string {
+  return normalizeRepoIdentityValue(
+    sessionOrManifest?.repo?.repoFullName
+    || sessionOrManifest?.target?.repoFullName
+    || sessionOrManifest?.repo?.repoUrl
+    || sessionOrManifest?.target?.repoUrl
+    || sessionOrManifest?.repoUrl,
+  );
+}
+
+function sanitizePathSegment(value: unknown, fallback: string): string {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized || fallback;
+}
+
+function normalizeStringArray(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  return values.map((entry) => String(entry || "").trim()).filter(Boolean);
+}
+
+async function pathExists(targetPath: string | null | undefined): Promise<boolean> {
+  if (!targetPath) return false;
   try {
-    const progress = await readPipelineProgress({ paths: { stateDir } });
-    return progress?.startedAt ?? null;
-  } catch (error) {
-    console.error(`[target_session_state] failed to read pipeline progress: ${String((error as Error)?.message || error)}`);
-    return null;
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
   }
 }
 
-export async function readOpenTargetSessionState(
-  options: TargetSessionStateOptions,
-): Promise<OpenTargetSessionState> {
-  const artifactsPath = path.join(options.stateDir, WORKER_CYCLE_ARTIFACTS_FILE);
-  const legacyPath = path.join(options.stateDir, "worker_sessions.json");
-  const [artifactsRaw, legacyRaw] = await Promise.all([
-    readJsonSafe(artifactsPath),
-    readJsonSafe(legacyPath),
-  ]);
+function normalizeWorkspaceBootstrap(rawBootstrap: any, session: any) {
+  return {
+    strategy: normalizeNullableString(rawBootstrap?.strategy) || "pending",
+    status: normalizeNullableString(rawBootstrap?.status) || "pending",
+    remoteOrigin: normalizeNullableString(rawBootstrap?.remoteOrigin) || normalizeNullableString(session?.repo?.repoUrl),
+    branch: normalizeNullableString(rawBootstrap?.branch) || normalizeNullableString(session?.repo?.defaultBranch) || "main",
+    lastAttemptAt: normalizeNullableString(rawBootstrap?.lastAttemptAt),
+    lastError: normalizeNullableString(rawBootstrap?.lastError),
+  };
+}
 
-  const legacySessions = legacyRaw.ok && legacyRaw.data && typeof legacyRaw.data === "object" && !Array.isArray(legacyRaw.data)
-    ? legacyRaw.data as Record<string, unknown>
-    : null;
-  const legacyAvailable = legacySessions !== null && Object.keys(legacySessions).length > 0;
+function buildGitEnv() {
+  return {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+    GCM_INTERACTIVE: "Never",
+  };
+}
 
-  if (artifactsRaw.ok && artifactsRaw.data && typeof artifactsRaw.data === "object") {
-    const migrated = migrateWorkerCycleArtifacts(artifactsRaw.data);
-    if (migrated.ok && migrated.data) {
-      const preferredCycleId = await readPreferredCycleId(options.stateDir);
-      const { cycleId, record } = selectWorkerCycleRecord(migrated.data, preferredCycleId ?? undefined);
-      const canonicalSessions = extractSessionsFromCycleRecord(record);
-      if (canonicalSessions && Object.keys(canonicalSessions).length > 0) {
-        const canonicalActive = Object.values(canonicalSessions).filter(
-          (session) => session && typeof session === "object" && (session as Record<string, unknown>).status === "working",
-        ).length;
-        const legacyActive = legacySessions
-          ? Object.values(legacySessions).filter(
-              (session) => session && typeof session === "object" && (session as Record<string, unknown>).status === "working",
-            ).length
-          : 0;
-        const workerSessionSourceConflict = legacyAvailable && canonicalActive !== legacyActive;
-        return {
-          sessions: canonicalSessions,
-          source: "canonical",
-          cycleId,
-          canonicalSessionsAvailable: true,
-          legacySessionsAvailable: legacyAvailable,
-          workerSessionSourceConflict,
-          conflictReason: workerSessionSourceConflict
-            ? `canonical_active=${canonicalActive} vs legacy_active=${legacyActive}`
-            : null,
-          staleSessionsFiltered: 0,
-          filteredStaleRoles: [],
-        };
-      }
+async function runGitCommand(args: string[], cwd?: string) {
+  const result = await spawnAsync("git", args, {
+    cwd,
+    env: buildGitEnv(),
+    timeoutMs: 120000,
+    autoConfirm: false,
+  }) as { status?: number; stdout?: string; stderr?: string };
+  return {
+    status: Number(result.status ?? 1),
+    stdout: String(result.stdout || ""),
+    stderr: String(result.stderr || ""),
+  };
+}
+
+function resolveProviderAccessToken(provider: string | null, config: any): string | null {
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  if (normalizedProvider === "github") {
+    return normalizeNullableString(
+      config?.env?.githubToken
+      || config?.env?.copilotGithubToken
+      || process.env.GITHUB_TOKEN
+      || process.env.COPILOT_GITHUB_TOKEN
+    );
+  }
+  return null;
+}
+
+function buildAuthenticatedRepoUrl(repoUrl: string | null, provider: string | null, token: string | null): string | null {
+  const normalizedRepoUrl = normalizeNullableString(repoUrl);
+  if (!normalizedRepoUrl || !token) return normalizedRepoUrl;
+  if (String(provider || "").trim().toLowerCase() !== "github") return normalizedRepoUrl;
+  try {
+    const url = new URL(normalizedRepoUrl);
+    if (url.protocol !== "https:") return normalizedRepoUrl;
+    url.username = "x-access-token";
+    url.password = token;
+    return url.toString();
+  } catch {
+    return normalizedRepoUrl;
+  }
+}
+
+function sanitizeGitOutput(output: string, token: string | null, authenticatedRepoUrl: string | null, repoUrl: string | null) {
+  let sanitized = String(output || "");
+  if (token) {
+    sanitized = sanitized.split(token).join("***");
+  }
+  if (authenticatedRepoUrl && repoUrl && authenticatedRepoUrl !== repoUrl) {
+    sanitized = sanitized.split(authenticatedRepoUrl).join(repoUrl);
+  }
+  return sanitized.trim();
+}
+
+function isAuthFailure(stderr: string) {
+  const message = String(stderr || "").toLowerCase();
+  return [
+    "authentication failed",
+    "could not read username",
+    "permission denied",
+    "repository not found",
+    "access denied",
+    "authentication required",
+    "http basic: access denied",
+  ].some((entry) => message.includes(entry));
+}
+
+async function ensureEmptyWorkspaceDir(workspacePath: string) {
+  await fs.rm(workspacePath, { recursive: true, force: true }).catch(() => {});
+  await fs.mkdir(workspacePath, { recursive: true });
+}
+
+function getWorkspaceDir(config: any): string {
+  const workspaceDir = normalizeNullableString(config?.paths?.workspaceDir);
+  return workspaceDir || path.join(process.cwd(), ".box-work");
+}
+
+function getRootDir(config: any): string {
+  const rootDir = normalizeNullableString(config?.rootDir);
+  if (rootDir) return rootDir;
+  return path.dirname(getWorkspaceDir(config));
+}
+
+function normalizeStage(value: unknown): string {
+  const normalized = String(value || "").trim().toLowerCase() as TargetSessionStage;
+  return VALID_TARGET_SESSION_STAGES.has(normalized) ? normalized : TARGET_SESSION_STAGE.ONBOARDING;
+}
+
+function extractRepoIdentity(manifest: any) {
+  const repoUrl = normalizeNullableString(manifest?.target?.repoUrl || manifest?.repoUrl || manifest?.repo?.repoUrl || manifest?.repo?.url);
+  const localPath = normalizeNullableString(manifest?.target?.localPathHint || manifest?.localPath || manifest?.repo?.localPath);
+  const explicitName = normalizeNullableString(manifest?.repo?.name || manifest?.repoName);
+  const source = repoUrl || localPath || explicitName || "target-project";
+  const leaf = String(source).split(/[\\/]/).filter(Boolean).pop() || source;
+  return {
+    repoUrl,
+    localPath,
+    explicitName,
+    displayName: leaf.replace(/\.git$/i, ""),
+  };
+}
+
+function detectRepoProvider(repoUrl: string | null, explicitProvider: unknown): string {
+  const normalizedExplicitProvider = normalizeNullableString(explicitProvider);
+  if (normalizedExplicitProvider) return normalizedExplicitProvider;
+  const source = String(repoUrl || "").toLowerCase();
+  if (source.includes("github.com")) return "github";
+  if (source.includes("gitlab")) return "gitlab";
+  if (source.includes("bitbucket")) return "bitbucket";
+  return "unknown";
+}
+
+function buildDefaultStageGates(stage: string) {
+  switch (stage) {
+    case TARGET_SESSION_STAGE.AWAITING_INTENT_CLARIFICATION:
+      return {
+        allowPlanning: false,
+        allowShadowExecution: false,
+        allowActiveExecution: false,
+        quarantine: false,
+        quarantineReason: null,
+      };
+    case TARGET_SESSION_STAGE.SHADOW:
+      return {
+        allowPlanning: true,
+        allowShadowExecution: true,
+        allowActiveExecution: false,
+        quarantine: false,
+        quarantineReason: null,
+      };
+    case TARGET_SESSION_STAGE.ACTIVE:
+      return {
+        allowPlanning: true,
+        allowShadowExecution: false,
+        allowActiveExecution: true,
+        quarantine: false,
+        quarantineReason: null,
+      };
+    case TARGET_SESSION_STAGE.QUARANTINED:
+      return {
+        allowPlanning: false,
+        allowShadowExecution: false,
+        allowActiveExecution: false,
+        quarantine: true,
+        quarantineReason: null,
+      };
+    default:
+      return {
+        allowPlanning: false,
+        allowShadowExecution: false,
+        allowActiveExecution: false,
+        quarantine: false,
+        quarantineReason: null,
+      };
+  }
+}
+
+function resolveStageNextAction(stage: string): string {
+  return STAGE_DEFAULT_NEXT_ACTION[stage as keyof typeof STAGE_DEFAULT_NEXT_ACTION] || "preserve_session_truth";
+}
+
+function normalizeBooleanOrFallback(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+export function buildTargetProjectId(manifest: any): string {
+  const explicitProjectId = normalizeNullableString(manifest?.projectId);
+  if (explicitProjectId) {
+    return sanitizePathSegment(explicitProjectId, "target_project");
+  }
+
+  const repo = extractRepoIdentity(manifest);
+  return sanitizePathSegment(`target_${repo.displayName}`, "target_project");
+}
+
+export function buildTargetSessionId(now: Date = new Date()): string {
+  const timestamp = now.toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+  const suffix = randomUUID().replace(/-/g, "").slice(0, 6).toLowerCase();
+  return `sess_${timestamp}_${suffix}`;
+}
+
+export function getProjectsRootPath(stateDir: string): string {
+  return path.join(stateDir, "projects");
+}
+
+export function getArchiveRootPath(stateDir: string): string {
+  return path.join(stateDir, "archive");
+}
+
+export function getTargetProjectPath(stateDir: string, projectId: string): string {
+  return path.join(getProjectsRootPath(stateDir), projectId);
+}
+
+export function getTargetSessionPath(stateDir: string, projectId: string, sessionId: string): string {
+  return path.join(getTargetProjectPath(stateDir, projectId), sessionId);
+}
+
+export function hasActiveTargetSessionScope(config: any): boolean {
+  return String(config?.platformModeState?.currentMode || "") === PLATFORM_MODE.SINGLE_TARGET_DELIVERY
+    && Boolean(config?.activeTargetSession?.projectId)
+    && Boolean(config?.activeTargetSession?.sessionId);
+}
+
+export function resolveTargetSessionArtifactPath(config: any, fileName: string): string | null {
+  if (!hasActiveTargetSessionScope(config)) return null;
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const projectId = String(config?.activeTargetSession?.projectId || "").trim();
+  const sessionId = String(config?.activeTargetSession?.sessionId || "").trim();
+  const normalizedFileName = String(fileName || "").trim();
+  if (!projectId || !sessionId || !normalizedFileName) return null;
+  return path.join(getTargetSessionPath(stateDir, projectId, sessionId), normalizedFileName);
+}
+
+/**
+ * Returns the per-session runtime path for a state file when an active target
+ * session selector is bound on `config`; otherwise returns the global
+ * `<stateDir>/<fileName>` path. This lets callers route reads/writes to a
+ * session-scoped location without forking call sites.
+ *
+ * Per-session layout: `state/projects/<projectId>/<sessionId>/runtime/<fileName>`.
+ * Falls back to `state/<fileName>` when no session is bound (legacy / global mode).
+ */
+export function resolveScopedStatePath(config: any, fileName: string): string {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const normalizedFileName = String(fileName || "").trim();
+  if (!normalizedFileName) return path.join(stateDir, "");
+  if (hasActiveTargetSessionScope(config)) {
+    const projectId = String(config?.activeTargetSession?.projectId || "").trim();
+    const sessionId = String(config?.activeTargetSession?.sessionId || "").trim();
+    if (projectId && sessionId) {
+      return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "runtime", normalizedFileName);
+    }
+  }
+  return path.join(stateDir, normalizedFileName);
+}
+
+/**
+ * Ensure the directory of a scoped path exists so write operations succeed when
+ * the per-session `runtime/` folder hasn't been created yet.
+ */
+export async function ensureScopedStateDir(scopedPath: string): Promise<void> {
+  await fs.mkdir(path.dirname(scopedPath), { recursive: true });
+}
+
+export async function readTargetSessionArtifactJson(config: any, fileName: string, fallbackValue: any = null): Promise<any> {
+  const artifactPath = resolveTargetSessionArtifactPath(config, fileName);
+  if (!artifactPath) return fallbackValue;
+  return readJson(artifactPath, fallbackValue);
+}
+
+export async function mirrorJsonArtifactToTargetSession(config: any, fileName: string, payload: any): Promise<string | null> {
+  const artifactPath = resolveTargetSessionArtifactPath(config, fileName);
+  if (!artifactPath) return null;
+  await fs.mkdir(path.dirname(artifactPath), { recursive: true });
+  await writeJson(artifactPath, payload);
+  return artifactPath;
+}
+
+export async function appendTargetSessionArtifactText(config: any, fileName: string, text: string): Promise<string | null> {
+  const artifactPath = resolveTargetSessionArtifactPath(config, fileName);
+  if (!artifactPath || !String(text || "")) return null;
+  await fs.mkdir(path.dirname(artifactPath), { recursive: true });
+  await fs.appendFile(artifactPath, text, "utf8");
+  return artifactPath;
+}
+
+export function getTargetSessionStateFilePath(stateDir: string, projectId: string, sessionId: string): string {
+  return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "target_session.json");
+}
+
+export function getLastArchivedTargetSessionPath(stateDir: string): string {
+  return path.join(stateDir, "last_archived_target_session.json");
+}
+
+export function getTargetIntakeManifestPath(stateDir: string, projectId: string, sessionId: string): string {
+  return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "intake_manifest.json");
+}
+
+export function getTargetOnboardingReportPath(stateDir: string, projectId: string, sessionId: string): string {
+  return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "onboarding_report.json");
+}
+
+export function getTargetPrerequisiteStatusPath(stateDir: string, projectId: string, sessionId: string): string {
+  return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "prerequisite_status.json");
+}
+
+export function getTargetBaselinePath(stateDir: string, projectId: string, sessionId: string): string {
+  return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "target_baseline.json");
+}
+
+export function getTargetRepoAnalysisPath(stateDir: string, projectId: string, sessionId: string): string {
+  return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "repo_analysis.json");
+}
+
+export function getTargetClarificationPacketPath(stateDir: string, projectId: string, sessionId: string): string {
+  return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "clarification_packet.json");
+}
+
+export function getTargetClarificationTranscriptPath(stateDir: string, projectId: string, sessionId: string): string {
+  return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "clarification_transcript.json");
+}
+
+export function getTargetIntentContractPath(stateDir: string, projectId: string, sessionId: string): string {
+  return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "target_intent_contract.json");
+}
+
+function parseTimestampOrZero(value: unknown): number {
+  const text = String(value || "").trim();
+  if (!text) return 0;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function preferNonEmptyStringArray(primary: unknown, fallback: unknown): string[] {
+  const primaryValues = normalizeStringArray(primary);
+  if (primaryValues.length > 0) {
+    return primaryValues;
+  }
+  return normalizeStringArray(fallback);
+}
+
+function preferNonEmptyString(primary: unknown, fallback: unknown): string | null {
+  return normalizeNullableString(primary) || normalizeNullableString(fallback);
+}
+
+function buildSessionIntentFromContract(contract: any, session: any, stateDir: string) {
+  const clarifiedIntent = contract?.clarifiedIntent && typeof contract.clarifiedIntent === "object"
+    ? contract.clarifiedIntent
+    : {};
+  const unresolvedOpenQuestions = (Array.isArray(contract?.openQuestions) ? contract.openQuestions : [])
+    .filter((question: any) => String(question?.status || "pending").trim().toLowerCase() !== "answered")
+    .map((question: any) => String(question?.title || question?.prompt || question?.id || "").trim())
+    .filter(Boolean);
+
+  return {
+    status: normalizeNullableString(contract?.status) || normalizeNullableString(session?.intent?.status) || TARGET_INTENT_STATUS.PENDING,
+    summary: normalizeNullableString(contract?.summary) || normalizeNullableString(session?.intent?.summary),
+    repoState: normalizeNullableString(contract?.repoState) || normalizeNullableString(session?.intent?.repoState) || normalizeNullableString(session?.repoProfile?.repoState) || "unknown",
+    planningMode: normalizeNullableString(contract?.planningMode) || normalizeNullableString(session?.intent?.planningMode),
+    productType: preferNonEmptyString(clarifiedIntent?.productType, session?.intent?.productType),
+    operatorIntentBrief: preferNonEmptyString(clarifiedIntent?.operatorIntentBrief, session?.intent?.operatorIntentBrief),
+    targetUsers: preferNonEmptyStringArray(clarifiedIntent?.targetUsers, session?.intent?.targetUsers),
+    mustHaveFlows: preferNonEmptyStringArray(clarifiedIntent?.mustHaveFlows, session?.intent?.mustHaveFlows),
+    scopeIn: preferNonEmptyStringArray(clarifiedIntent?.scopeIn, session?.intent?.scopeIn),
+    scopeOut: preferNonEmptyStringArray(clarifiedIntent?.scopeOut, session?.intent?.scopeOut),
+    protectedAreas: preferNonEmptyStringArray(clarifiedIntent?.protectedAreas, session?.intent?.protectedAreas),
+    preferredQualityBar: preferNonEmptyString(clarifiedIntent?.preferredQualityBar, session?.intent?.preferredQualityBar),
+    designDirection: preferNonEmptyString(clarifiedIntent?.designDirection, session?.intent?.designDirection),
+    deploymentExpectations: preferNonEmptyStringArray(clarifiedIntent?.deploymentExpectations, session?.intent?.deploymentExpectations),
+    successCriteria: preferNonEmptyStringArray(clarifiedIntent?.successCriteria, session?.intent?.successCriteria),
+    implementationFlexibility: preferNonEmptyString(clarifiedIntent?.implementationFlexibility, session?.intent?.implementationFlexibility),
+    operatorIntentEvidence: preferNonEmptyStringArray(clarifiedIntent?.operatorIntentEvidence, session?.intent?.operatorIntentEvidence),
+    assetSourcingPolicy: preferNonEmptyString(clarifiedIntent?.assetSourcingPolicy, session?.intent?.assetSourcingPolicy),
+    assetRequirements: preferNonEmptyStringArray(clarifiedIntent?.assetRequirements, session?.intent?.assetRequirements),
+    assumptions: preferNonEmptyStringArray(contract?.assumptions, session?.intent?.assumptions),
+    openQuestions: unresolvedOpenQuestions.length > 0 ? unresolvedOpenQuestions : normalizeStringArray(session?.intent?.openQuestions),
+    sourceIntentContractPath: normalizeNullableString(session?.clarification?.intentContractPath) || getTargetIntentContractPath(stateDir, session.projectId, session.sessionId),
+    updatedAt: normalizeNullableString(contract?.updatedAt) || normalizeNullableString(session?.intent?.updatedAt),
+  };
+}
+
+async function reconcileSessionWithIntentContract(session: any, config: any) {
+  if (!session?.projectId || !session?.sessionId) {
+    return { session, changed: false };
+  }
+
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const intentContractPath = normalizeNullableString(session?.clarification?.intentContractPath)
+    || getTargetIntentContractPath(stateDir, session.projectId, session.sessionId);
+  const contract = await readJson(intentContractPath, null).catch(() => null);
+  if (!contract || typeof contract !== "object") {
+    return { session, changed: false };
+  }
+
+  const contractUpdatedAt = Math.max(
+    parseTimestampOrZero(contract?.updatedAt),
+    parseTimestampOrZero(contract?.createdAt),
+  );
+  const sessionUpdatedAt = Math.max(
+    parseTimestampOrZero(session?.intent?.updatedAt),
+    parseTimestampOrZero(session?.clarification?.completedAt),
+    parseTimestampOrZero(session?.clarification?.lastAnsweredAt),
+    parseTimestampOrZero(session?.lifecycle?.updatedAt),
+  );
+  const readyForPlanning = contract?.readyForPlanning === true || String(contract?.status || "").trim() === TARGET_INTENT_STATUS.READY_FOR_PLANNING;
+  const planningMode = normalizeNullableString(contract?.planningMode)
+    || normalizeNullableString(contract?.deliveryModeDecision?.recommendation)
+    || normalizeNullableString(session?.intent?.planningMode)
+    || (readyForPlanning ? "active" : null);
+  const nextStage = readyForPlanning
+    ? (planningMode === TARGET_SESSION_STAGE.SHADOW ? TARGET_SESSION_STAGE.SHADOW : TARGET_SESSION_STAGE.ACTIVE)
+    : session.currentStage;
+  const hydratedIntent = buildSessionIntentFromContract(contract, session, stateDir);
+  const pendingQuestionTitles = hydratedIntent.openQuestions;
+  const shouldHydrate = contractUpdatedAt > sessionUpdatedAt
+    || readyForPlanning !== (session?.clarification?.readyForPlanning === true)
+    || normalizeNullableString(hydratedIntent.summary) !== normalizeNullableString(session?.intent?.summary)
+    || normalizeNullableString(hydratedIntent.planningMode) !== normalizeNullableString(session?.intent?.planningMode)
+    || pendingQuestionTitles.length !== normalizeStringArray(session?.clarification?.pendingQuestions).length;
+
+  if (!shouldHydrate) {
+    return { session, changed: false };
+  }
+
+  const reconciledSession = {
+    ...session,
+    currentStage: nextStage,
+    onboarding: {
+      ...session.onboarding,
+      recommendedNextStage: readyForPlanning ? nextStage : session.onboarding?.recommendedNextStage,
+    },
+    clarification: {
+      ...session.clarification,
+      status: readyForPlanning ? "completed" : session.clarification?.status,
+      pendingQuestions: readyForPlanning ? [] : pendingQuestionTitles,
+      questionCount: Array.isArray(contract?.openQuestions) ? contract.openQuestions.length : Number(session?.clarification?.questionCount || 0),
+      readyForPlanning,
+      completedAt: readyForPlanning
+        ? normalizeNullableString(session?.clarification?.completedAt) || normalizeNullableString(contract?.updatedAt) || session?.clarification?.completedAt || null
+        : session?.clarification?.completedAt || null,
+      lastAnsweredAt: normalizeNullableString(contract?.updatedAt) || normalizeNullableString(session?.clarification?.lastAnsweredAt),
+    },
+    intent: hydratedIntent,
+    prerequisites: {
+      ...session.prerequisites,
+      blockedReason: readyForPlanning ? null : session?.prerequisites?.blockedReason,
+      awaitingHumanInput: readyForPlanning ? false : session?.prerequisites?.awaitingHumanInput === true,
+    },
+    gates: readyForPlanning
+      ? {
+          ...session.gates,
+          allowPlanning: true,
+          allowShadowExecution: nextStage === TARGET_SESSION_STAGE.SHADOW,
+          allowActiveExecution: nextStage === TARGET_SESSION_STAGE.ACTIVE,
+        }
+      : session.gates,
+    handoff: {
+      ...session.handoff,
+      carriedContextSummary: normalizeNullableString(hydratedIntent.operatorIntentBrief)
+        || normalizeNullableString(hydratedIntent.summary)
+        || normalizeNullableString(session?.handoff?.carriedContextSummary),
+      requiredHumanInputs: readyForPlanning ? [] : normalizeStringArray(session?.handoff?.requiredHumanInputs),
+      nextAction: readyForPlanning ? resolveStageNextAction(nextStage) : normalizeNullableString(session?.handoff?.nextAction) || resolveStageNextAction(session.currentStage),
+    },
+    lifecycle: {
+      ...session.lifecycle,
+      updatedAt: normalizeNullableString(contract?.updatedAt) || normalizeNullableString(session?.lifecycle?.updatedAt) || new Date().toISOString(),
+    },
+    warnings: uniqueStrings([
+      ...normalizeStringArray(session?.warnings),
+      "normalized:hydrated_from_target_intent_contract",
+    ]),
+  };
+
+  return { session: reconciledSession, changed: true };
+}
+
+function normalizeTargetIntent(rawIntent: any, stateDir: string, projectId: string, sessionId: string) {
+  return {
+    status: normalizeNullableString(rawIntent?.status) || TARGET_INTENT_STATUS.PENDING,
+    summary: normalizeNullableString(rawIntent?.summary),
+    repoState: normalizeNullableString(rawIntent?.repoState) || "unknown",
+    planningMode: normalizeNullableString(rawIntent?.planningMode),
+    productType: normalizeNullableString(rawIntent?.productType),
+    operatorIntentBrief: normalizeNullableString(rawIntent?.operatorIntentBrief),
+    targetUsers: normalizeStringArray(rawIntent?.targetUsers),
+    mustHaveFlows: normalizeStringArray(rawIntent?.mustHaveFlows),
+    scopeIn: normalizeStringArray(rawIntent?.scopeIn),
+    scopeOut: normalizeStringArray(rawIntent?.scopeOut),
+    protectedAreas: normalizeStringArray(rawIntent?.protectedAreas),
+    preferredQualityBar: normalizeNullableString(rawIntent?.preferredQualityBar),
+    designDirection: normalizeNullableString(rawIntent?.designDirection),
+    deploymentExpectations: normalizeStringArray(rawIntent?.deploymentExpectations),
+    successCriteria: normalizeStringArray(rawIntent?.successCriteria),
+    implementationFlexibility: normalizeNullableString(rawIntent?.implementationFlexibility),
+    operatorIntentEvidence: normalizeStringArray(rawIntent?.operatorIntentEvidence),
+    assetSourcingPolicy: normalizeNullableString(rawIntent?.assetSourcingPolicy),
+    assetRequirements: normalizeStringArray(rawIntent?.assetRequirements),
+    assumptions: normalizeStringArray(rawIntent?.assumptions),
+    openQuestions: normalizeStringArray(rawIntent?.openQuestions),
+    sourceIntentContractPath: normalizeNullableString(rawIntent?.sourceIntentContractPath) || getTargetIntentContractPath(stateDir, projectId, sessionId),
+    updatedAt: normalizeNullableString(rawIntent?.updatedAt),
+  };
+}
+
+function normalizeTargetFeedback(rawFeedback: any) {
+  const review = rawFeedback?.lastAthenaReview && typeof rawFeedback.lastAthenaReview === "object"
+    ? rawFeedback.lastAthenaReview
+    : {};
+  const category = normalizeNullableString(review?.category) as TargetFeedbackCategory | null;
+  return {
+    pendingResearchRefresh: rawFeedback?.pendingResearchRefresh === true,
+    pendingIntentClarification: rawFeedback?.pendingIntentClarification === true,
+    lastAthenaReview: {
+      status: normalizeNullableString(review?.status) || "none",
+      category: category && Object.values(TARGET_FEEDBACK_CATEGORY).includes(category)
+        ? category
+        : null,
+      code: normalizeNullableString(review?.code),
+      message: normalizeNullableString(review?.message),
+      corrections: normalizeStringArray(review?.corrections),
+      updatedAt: normalizeNullableString(review?.updatedAt),
+    },
+  };
+}
+
+function normalizeTargetHints(rawHints: any) {
+  return {
+    stackHint: normalizeNullableString(rawHints?.stackHint),
+    knownBuildCommand: normalizeNullableString(rawHints?.knownBuildCommand),
+    knownTestCommand: normalizeNullableString(rawHints?.knownTestCommand),
+    knownRisks: normalizeStringArray(rawHints?.knownRisks),
+    expectedSecrets: normalizeStringArray(rawHints?.expectedSecrets),
+    notes: normalizeStringArray(rawHints?.notes),
+  };
+}
+
+export function getTargetCompletionPath(stateDir: string, projectId: string, sessionId: string): string {
+  return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "target_completion.json");
+}
+
+export function getTargetSessionProgressLogPath(stateDir: string, projectId: string, sessionId: string): string {
+  return path.join(getTargetSessionPath(stateDir, projectId, sessionId), "session_progress.log");
+}
+
+export function getOpenTargetSessionsPath(stateDir: string): string {
+  return path.join(stateDir, "open_target_sessions.json");
+}
+
+export function getLegacyTargetWorkspaceRootPath(workspaceDir: string): string {
+  return path.join(workspaceDir, "targets");
+}
+
+export function getLegacyTargetWorkspacePath(workspaceDir: string, projectId: string, sessionId: string): string {
+  return path.join(getLegacyTargetWorkspaceRootPath(workspaceDir), projectId, sessionId);
+}
+
+export function getTargetWorkspaceRootPath(workspaceDir: string, rootDir?: string | null): string {
+  const resolvedWorkspaceDir = path.resolve(workspaceDir);
+  const resolvedRootDir = rootDir
+    ? path.resolve(rootDir)
+    : path.dirname(resolvedWorkspaceDir);
+  const externalHostDir = path.dirname(resolvedRootDir);
+  const repoKey = sanitizePathSegment(path.basename(resolvedRootDir), "box");
+  return path.join(externalHostDir, ".box-target-workspaces", repoKey, "targets");
+}
+
+export function getTargetWorkspacePath(workspaceDir: string, projectId: string, sessionId: string, rootDir?: string | null): string {
+  return path.join(getTargetWorkspaceRootPath(workspaceDir, rootDir), projectId, sessionId);
+}
+
+async function moveWorkspaceDirectory(sourcePath: string, targetPath: string) {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  try {
+    await fs.rename(sourcePath, targetPath);
+    return;
+  } catch {
+    await fs.cp(sourcePath, targetPath, {
+      recursive: true,
+      force: true,
+      errorOnExist: false,
+    });
+    await fs.rm(sourcePath, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function ensureTargetWorkspaceLocation(session: any, config: any) {
+  if (!session || typeof session !== "object") return session;
+
+  const workspaceDir = getWorkspaceDir(config);
+  const rootDir = getRootDir(config);
+  const expectedWorkspacePath = getTargetWorkspacePath(workspaceDir, session.projectId, session.sessionId, rootDir);
+  const legacyWorkspacePath = getLegacyTargetWorkspacePath(workspaceDir, session.projectId, session.sessionId);
+
+  if (expectedWorkspacePath !== legacyWorkspacePath) {
+    const expectedExists = await pathExists(expectedWorkspacePath);
+    const legacyExists = await pathExists(legacyWorkspacePath);
+    if (!expectedExists && legacyExists) {
+      await moveWorkspaceDirectory(legacyWorkspacePath, expectedWorkspacePath);
     }
   }
 
-  if (legacySessions && Object.keys(legacySessions).length > 0) {
-    const preferredCycleId = await readPreferredCycleId(options.stateDir);
-    const { sessions, staleRoles } = filterStaleWorkerSessions(legacySessions, preferredCycleId);
+  const normalizedRepoLocalPath = normalizeNullableString(session?.repo?.localPath);
+  const rebaseRepoLocalPath = normalizedRepoLocalPath === legacyWorkspacePath
+    || normalizedRepoLocalPath === normalizeNullableString(session?.workspace?.path);
+
+  return {
+    ...session,
+    repo: {
+      ...session.repo,
+      localPath: rebaseRepoLocalPath ? expectedWorkspacePath : normalizedRepoLocalPath,
+    },
+    workspace: {
+      ...session.workspace,
+      rootDir: getTargetWorkspaceRootPath(workspaceDir, rootDir),
+      path: expectedWorkspacePath,
+    },
+  };
+}
+
+export async function prepareTargetWorkspaceForSession(session: any, config: any) {
+  const sourcePath = normalizeNullableString(session?.repo?.localPath);
+  const repoUrl = normalizeNullableString(session?.repo?.repoUrl);
+  const provider = normalizeNullableString(session?.repo?.provider);
+  const defaultBranch = normalizeNullableString(session?.repo?.defaultBranch) || "main";
+  const workspacePath = normalizeNullableString(session?.workspace?.path);
+  if (!workspacePath) {
+    return session;
+  }
+
+  await fs.mkdir(workspacePath, { recursive: true });
+
+  if (sourcePath && !(await pathExists(sourcePath))) {
+    return session;
+  }
+
+  if (sourcePath && await pathExists(sourcePath)) {
+    const sourceResolved = path.resolve(sourcePath);
+    const workspaceResolved = path.resolve(workspacePath);
+    if (sourceResolved !== workspaceResolved) {
+      const existingEntries = await fs.readdir(workspacePath).catch(() => []);
+      if (existingEntries.length === 0) {
+        await fs.cp(sourcePath, workspacePath, {
+          recursive: true,
+          force: true,
+          errorOnExist: false,
+        });
+      }
+    }
+
     return {
-      sessions,
-      source: "legacy",
-      cycleId: null,
-      canonicalSessionsAvailable: artifactsRaw.ok,
-      legacySessionsAvailable: true,
-      workerSessionSourceConflict: false,
-      conflictReason: null,
-      staleSessionsFiltered: staleRoles.length,
-      filteredStaleRoles: staleRoles,
+      ...session,
+      repo: {
+        ...session.repo,
+        localPath: workspacePath,
+      },
+      workspace: {
+        ...session.workspace,
+        path: workspacePath,
+        prepared: true,
+        preparedAt: normalizeNullableString(session?.workspace?.preparedAt) || new Date().toISOString(),
+        bootstrap: {
+          ...normalizeWorkspaceBootstrap(session?.workspace?.bootstrap, session),
+          strategy: "local_copy",
+          status: "ready",
+          branch: defaultBranch,
+          lastAttemptAt: new Date().toISOString(),
+          lastError: null,
+        },
+      },
+    };
+  }
+
+  const gitDir = path.join(workspacePath, ".git");
+  if (await pathExists(gitDir)) {
+    return {
+      ...session,
+      repo: {
+        ...session.repo,
+        localPath: workspacePath,
+      },
+      workspace: {
+        ...session.workspace,
+        path: workspacePath,
+        prepared: true,
+        preparedAt: normalizeNullableString(session?.workspace?.preparedAt) || new Date().toISOString(),
+        bootstrap: {
+          ...normalizeWorkspaceBootstrap(session?.workspace?.bootstrap, session),
+          strategy: "existing_checkout",
+          status: "ready",
+          branch: defaultBranch,
+          lastAttemptAt: new Date().toISOString(),
+          lastError: null,
+        },
+      },
+    };
+  }
+
+  if (!repoUrl) {
+    return session;
+  }
+
+  const token = resolveProviderAccessToken(provider, config);
+  if (provider === "github" && !token) {
+    return {
+      ...session,
+      workspace: {
+        ...session.workspace,
+        bootstrap: {
+          ...normalizeWorkspaceBootstrap(session?.workspace?.bootstrap, session),
+          strategy: "git_clone",
+          status: "awaiting_credentials",
+          branch: defaultBranch,
+          lastAttemptAt: new Date().toISOString(),
+          lastError: "Missing repository access credential required for remote bootstrap.",
+        },
+      },
+    };
+  }
+
+  const authenticatedRepoUrl = buildAuthenticatedRepoUrl(repoUrl, provider, token);
+  const probeResult = await runGitCommand(["ls-remote", "--heads", authenticatedRepoUrl || repoUrl]);
+  if (probeResult.status !== 0) {
+    const sanitizedError = sanitizeGitOutput(`${probeResult.stderr}\n${probeResult.stdout}`, token, authenticatedRepoUrl, repoUrl);
+    return {
+      ...session,
+      workspace: {
+        ...session.workspace,
+        bootstrap: {
+          ...normalizeWorkspaceBootstrap(session?.workspace?.bootstrap, session),
+          strategy: "git_clone",
+          status: isAuthFailure(sanitizedError) ? "awaiting_credentials" : "failed",
+          branch: defaultBranch,
+          lastAttemptAt: new Date().toISOString(),
+          lastError: sanitizedError || "git ls-remote failed during target bootstrap",
+        },
+      },
+    };
+  }
+
+  await ensureEmptyWorkspaceDir(workspacePath);
+  const branchProbeResult = await runGitCommand(["ls-remote", "--heads", authenticatedRepoUrl || repoUrl, defaultBranch]);
+  const cloneArgs = ["clone", "--depth", "1"];
+  if (branchProbeResult.status === 0 && String(branchProbeResult.stdout || "").trim()) {
+    cloneArgs.push("--branch", defaultBranch);
+  }
+  cloneArgs.push(authenticatedRepoUrl || repoUrl, workspacePath);
+  const cloneResult = await runGitCommand(cloneArgs);
+  if (cloneResult.status !== 0) {
+    const sanitizedError = sanitizeGitOutput(`${cloneResult.stderr}\n${cloneResult.stdout}`, token, authenticatedRepoUrl, repoUrl);
+    return {
+      ...session,
+      workspace: {
+        ...session.workspace,
+        bootstrap: {
+          ...normalizeWorkspaceBootstrap(session?.workspace?.bootstrap, session),
+          strategy: "git_clone",
+          status: isAuthFailure(sanitizedError) ? "awaiting_credentials" : "failed",
+          branch: defaultBranch,
+          lastAttemptAt: new Date().toISOString(),
+          lastError: sanitizedError || "git clone failed during target bootstrap",
+        },
+      },
     };
   }
 
   return {
-    sessions: {},
-    source: "empty",
-    cycleId: null,
-    canonicalSessionsAvailable: false,
-    legacySessionsAvailable: legacyAvailable,
-    workerSessionSourceConflict: false,
-    conflictReason: null,
-    staleSessionsFiltered: 0,
-    filteredStaleRoles: [],
+    ...session,
+    repo: {
+      ...session.repo,
+      localPath: workspacePath,
+    },
+    workspace: {
+      ...session.workspace,
+      path: workspacePath,
+      prepared: true,
+      preparedAt: normalizeNullableString(session?.workspace?.preparedAt) || new Date().toISOString(),
+      bootstrap: {
+        ...normalizeWorkspaceBootstrap(session?.workspace?.bootstrap, session),
+        strategy: "git_clone",
+        status: "ready",
+        branch: defaultBranch,
+        lastAttemptAt: new Date().toISOString(),
+        lastError: null,
+      },
+    },
   };
 }
 
-export async function listOpenTargetSessions(
-  options: TargetSessionStateOptions,
-): Promise<Record<string, unknown>> {
-  const openState = await readOpenTargetSessionState(options);
-  return openState.source === "canonical" ? openState.sessions : {};
+export function validateTargetIntakeManifest(manifest: any) {
+  const repo = extractRepoIdentity(manifest);
+  const requestedMode = normalizeNullableString(manifest?.mode) || PLATFORM_MODE.SINGLE_TARGET_DELIVERY;
+  const objectiveSummary = normalizeNullableString(manifest?.objective?.summary);
+
+  if (requestedMode !== PLATFORM_MODE.SINGLE_TARGET_DELIVERY) {
+    throw new Error("Target intake manifest mode must be single_target_delivery");
+  }
+  if (!repo.repoUrl) {
+    throw new Error("Target intake manifest requires repoUrl");
+  }
+  if (!objectiveSummary) {
+    throw new Error("Target intake manifest requires objective.summary");
+  }
+
+  return {
+    schemaVersion: Number.isFinite(Number(manifest?.schemaVersion)) ? Number(manifest.schemaVersion) : 1,
+    requestId: normalizeNullableString(manifest?.requestId),
+    mode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+    projectId: buildTargetProjectId(manifest),
+    target: {
+      repoUrl: repo.repoUrl,
+      localPathHint: repo.localPath,
+      defaultBranch: normalizeNullableString(manifest?.target?.defaultBranch || manifest?.repo?.defaultBranch || manifest?.defaultBranch) || "main",
+      provider: detectRepoProvider(repo.repoUrl, manifest?.target?.provider || manifest?.repo?.provider),
+      repoFullName: normalizeNullableString(manifest?.target?.repoFullName),
+      repoCreatedByBox: manifest?.target?.repoCreatedByBox === true,
+      deleteOnCancel: manifest?.target?.deleteOnCancel === true,
+    },
+    objective: {
+      summary: objectiveSummary,
+      desiredOutcome: normalizeNullableString(manifest?.objective?.desiredOutcome),
+      acceptanceCriteria: normalizeStringArray(manifest?.objective?.acceptanceCriteria),
+    },
+    constraints: {
+      protectedPaths: normalizeStringArray(manifest?.constraints?.protectedPaths),
+      forbiddenActions: normalizeStringArray(manifest?.constraints?.forbiddenActions),
+    },
+    operator: {
+      requestedBy: normalizeNullableString(manifest?.operator?.requestedBy) || "user",
+      approvalMode: normalizeNullableString(manifest?.operator?.approvalMode) || "human_required_for_high_risk",
+    },
+    hints: {
+      stackHint: normalizeNullableString(manifest?.stackHint),
+      knownBuildCommand: normalizeNullableString(manifest?.knownBuildCommand),
+      knownTestCommand: normalizeNullableString(manifest?.knownTestCommand),
+      knownRisks: normalizeStringArray(manifest?.knownRisks),
+      expectedSecrets: normalizeStringArray(manifest?.expectedSecrets),
+      notes: normalizeStringArray(manifest?.notes),
+    },
+  };
+}
+
+function buildTargetSessionRecord(manifest: any, config: any, opts: { projectId?: string; sessionId?: string; now?: string } = {}) {
+  const normalizedManifest = validateTargetIntakeManifest(manifest);
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const workspaceDir = getWorkspaceDir(config);
+  const rootDir = getRootDir(config);
+  const projectId = opts.projectId || normalizedManifest.projectId;
+  const sessionId = opts.sessionId || buildTargetSessionId(opts.now ? new Date(opts.now) : new Date());
+  const now = opts.now || new Date().toISOString();
+
+  return {
+    schemaVersion: TARGET_SESSION_SCHEMA_VERSION,
+    currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+    projectId,
+    sessionId,
+    currentStage: TARGET_SESSION_STAGE.ONBOARDING,
+    repo: {
+      repoUrl: normalizedManifest.target.repoUrl,
+      localPath: normalizedManifest.target.localPathHint,
+      name: extractRepoIdentity(manifest).displayName,
+      defaultBranch: normalizedManifest.target.defaultBranch,
+      provider: normalizedManifest.target.provider,
+      repoFullName: normalizedManifest.target.repoFullName,
+      repoCreatedByBox: normalizedManifest.target.repoCreatedByBox === true,
+      deleteOnCancel: normalizedManifest.target.deleteOnCancel === true,
+    },
+    objective: normalizedManifest.objective,
+    workspace: {
+      rootDir: getTargetWorkspaceRootPath(workspaceDir, rootDir),
+      path: getTargetWorkspacePath(workspaceDir, projectId, sessionId, rootDir),
+      kind: "isolated_target_workspace",
+      prepared: false,
+      preparedAt: null,
+      bootstrap: {
+        strategy: "pending",
+        status: "pending",
+        remoteOrigin: normalizedManifest.target.repoUrl,
+        branch: normalizedManifest.target.defaultBranch,
+        lastAttemptAt: null,
+        lastError: null,
+      },
+    },
+    onboarding: {
+      completed: false,
+      reportPath: getTargetOnboardingReportPath(stateDir, projectId, sessionId),
+      recommendedNextStage: null,
+      readiness: "pending",
+      readinessScore: 0,
+      baselineCaptured: false,
+    },
+    repoProfile: {
+      repoState: "unknown",
+      repoStateReason: null,
+      analysisPath: getTargetRepoAnalysisPath(stateDir, projectId, sessionId),
+      analyzedAt: null,
+      selectedOnboardingAgent: null,
+      meaningfulEntryPoints: [],
+      dominantSignals: [],
+    },
+    clarification: {
+      status: "pending",
+      mode: "unknown",
+      selectedAgentSlug: null,
+      packetPath: getTargetClarificationPacketPath(stateDir, projectId, sessionId),
+      transcriptPath: getTargetClarificationTranscriptPath(stateDir, projectId, sessionId),
+      intentContractPath: getTargetIntentContractPath(stateDir, projectId, sessionId),
+      questionCount: 0,
+      pendingQuestions: [],
+      loopCount: 0,
+      readyForPlanning: false,
+      lastAskedAt: null,
+      lastAnsweredAt: null,
+      completedAt: null,
+    },
+    intent: {
+      status: TARGET_INTENT_STATUS.PENDING,
+      summary: null,
+      repoState: "unknown",
+      planningMode: null,
+      productType: null,
+      targetUsers: [],
+      mustHaveFlows: [],
+      scopeIn: [],
+      scopeOut: [],
+      protectedAreas: [],
+      preferredQualityBar: null,
+      designDirection: null,
+      deploymentExpectations: [],
+      successCriteria: [],
+      implementationFlexibility: null,
+      assetSourcingPolicy: null,
+      assetRequirements: [],
+      assumptions: [],
+      openQuestions: [],
+      sourceIntentContractPath: getTargetIntentContractPath(stateDir, projectId, sessionId),
+      updatedAt: null,
+    },
+    feedback: {
+      pendingResearchRefresh: false,
+      pendingIntentClarification: false,
+      lastAthenaReview: {
+        status: "none",
+        category: null,
+        code: null,
+        message: null,
+        corrections: [],
+        updatedAt: null,
+      },
+    },
+    prerequisites: {
+      blockedReason: null,
+      missing: [],
+      requiredNow: [],
+      requiredLater: [],
+      optional: [],
+      blockingNow: false,
+      awaitingHumanInput: false,
+    },
+    gates: {
+      allowPlanning: false,
+      allowShadowExecution: false,
+      allowActiveExecution: false,
+      quarantine: false,
+      quarantineReason: null,
+    },
+    lifecycle: {
+      openedAt: now,
+      updatedAt: now,
+      closedAt: null,
+      archivedAt: null,
+      status: "open",
+      completionReason: null,
+    },
+    handoff: {
+      carriedContextSummary: null,
+      requiredHumanInputs: [],
+      lastAction: "session_opened",
+      nextAction: "run_onboarding",
+    },
+    constraints: normalizedManifest.constraints,
+    operator: normalizedManifest.operator,
+    hints: normalizeTargetHints(normalizedManifest.hints),
+    warnings: [],
+  };
+}
+
+export function normalizeActiveTargetSession(rawSession: any, config: any) {
+  if (!rawSession || typeof rawSession !== "object") {
+    return { session: null, warnings: [] as string[] };
+  }
+
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const workspaceDir = getWorkspaceDir(config);
+  const rootDir = getRootDir(config);
+  const projectId = normalizeNullableString(rawSession?.projectId);
+  const sessionId = normalizeNullableString(rawSession?.sessionId);
+  const warnings: string[] = [];
+
+  if (!projectId || !sessionId) {
+    return {
+      session: null,
+      warnings: ["active target session missing projectId or sessionId; ignoring invalid session file"],
+    };
+  }
+
+  const rawLifecycleStatus = normalizeNullableString(rawSession?.lifecycle?.status);
+  const hasArchivedLifecycleMarkers = Boolean(
+    normalizeNullableString(rawSession?.lifecycle?.archivedAt)
+    || normalizeNullableString(rawSession?.lifecycle?.closedAt)
+  );
+  const hasExplicitReactivation = Boolean(normalizeNullableString(rawSession?.lifecycle?.reactivatedAt));
+  const archivedHandoffIntent = normalizeNullableString(rawSession?.handoff?.lastAction) === "session_archived"
+    || normalizeNullableString(rawSession?.handoff?.nextAction) === "await_next_target";
+  let currentStage = normalizeStage(rawSession?.currentStage);
+  const hasExplicitOpenStage = !CLOSED_TARGET_SESSION_STAGES.has(currentStage as TargetSessionStage)
+    && currentStage !== TARGET_SESSION_STAGE.QUARANTINED;
+  if (rawSession?.currentMode !== PLATFORM_MODE.SINGLE_TARGET_DELIVERY) {
+    warnings.push("active target session currentMode was normalized to single_target_delivery");
+  }
+  if (currentStage !== rawSession?.currentStage) {
+    warnings.push("active target session stage was invalid and normalized to onboarding");
+  }
+  if (CLOSED_TARGET_SESSION_STAGES.has(String(rawLifecycleStatus || "") as TargetSessionStage) && currentStage !== rawLifecycleStatus) {
+    currentStage = String(rawLifecycleStatus);
+    warnings.push("active target session stage was reconciled from terminal lifecycle status");
+  } else if (hasArchivedLifecycleMarkers && archivedHandoffIntent && !hasExplicitReactivation) {
+    currentStage = TARGET_SESSION_STAGE.COMPLETED;
+    warnings.push("active target session stage was reconciled from archived session handoff intent");
+  } else if (hasArchivedLifecycleMarkers && !hasExplicitOpenStage && !isClosedTargetSession({ currentStage, lifecycle: { status: rawLifecycleStatus } })) {
+    currentStage = TARGET_SESSION_STAGE.COMPLETED;
+    warnings.push("active target session stage was reconciled from archived lifecycle markers");
+  }
+  if (normalizeNullableString(rawSession?.workspace?.path) !== getTargetWorkspacePath(workspaceDir, projectId, sessionId, rootDir)) {
+    warnings.push("active target session workspace path was rebased to the isolated target workspace root");
+  }
+
+  const updatedAt = normalizeNullableString(rawSession?.lifecycle?.updatedAt) || new Date().toISOString();
+  const session = {
+    schemaVersion: TARGET_SESSION_SCHEMA_VERSION,
+    currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+    projectId,
+    sessionId,
+    currentStage,
+    repo: {
+      repoUrl: normalizeNullableString(rawSession?.repo?.repoUrl),
+      localPath: normalizeNullableString(rawSession?.repo?.localPath),
+      name: normalizeNullableString(rawSession?.repo?.name) || projectId,
+      defaultBranch: normalizeNullableString(rawSession?.repo?.defaultBranch) || "main",
+      provider: normalizeNullableString(rawSession?.repo?.provider) || detectRepoProvider(normalizeNullableString(rawSession?.repo?.repoUrl), null),
+      repoFullName: normalizeNullableString(rawSession?.repo?.repoFullName),
+      repoCreatedByBox: rawSession?.repo?.repoCreatedByBox === true,
+      deleteOnCancel: rawSession?.repo?.deleteOnCancel === true,
+    },
+    objective: {
+      summary: normalizeNullableString(rawSession?.objective?.summary) || "Target objective pending",
+      desiredOutcome: normalizeNullableString(rawSession?.objective?.desiredOutcome),
+      acceptanceCriteria: normalizeStringArray(rawSession?.objective?.acceptanceCriteria),
+    },
+    workspace: {
+      rootDir: getTargetWorkspaceRootPath(workspaceDir, rootDir),
+      path: getTargetWorkspacePath(workspaceDir, projectId, sessionId, rootDir),
+      kind: "isolated_target_workspace",
+      prepared: rawSession?.workspace?.prepared === true,
+      preparedAt: rawSession?.workspace?.prepared === true
+        ? normalizeNullableString(rawSession?.workspace?.preparedAt) || updatedAt
+        : null,
+      bootstrap: normalizeWorkspaceBootstrap(rawSession?.workspace?.bootstrap, rawSession),
+    },
+    onboarding: {
+      completed: rawSession?.onboarding?.completed === true,
+      reportPath: normalizeNullableString(rawSession?.onboarding?.reportPath) || getTargetOnboardingReportPath(stateDir, projectId, sessionId),
+      recommendedNextStage: normalizeNullableString(rawSession?.onboarding?.recommendedNextStage),
+      readiness: normalizeNullableString(rawSession?.onboarding?.readiness) || "pending",
+      readinessScore: Number.isFinite(Number(rawSession?.onboarding?.readinessScore)) ? Number(rawSession.onboarding.readinessScore) : 0,
+      baselineCaptured: rawSession?.onboarding?.baselineCaptured === true,
+    },
+    repoProfile: {
+      repoState: normalizeNullableString(rawSession?.repoProfile?.repoState) || "unknown",
+      repoStateReason: normalizeNullableString(rawSession?.repoProfile?.repoStateReason),
+      analysisPath: normalizeNullableString(rawSession?.repoProfile?.analysisPath) || getTargetRepoAnalysisPath(stateDir, projectId, sessionId),
+      analyzedAt: normalizeNullableString(rawSession?.repoProfile?.analyzedAt),
+      selectedOnboardingAgent: normalizeNullableString(rawSession?.repoProfile?.selectedOnboardingAgent),
+      meaningfulEntryPoints: normalizeStringArray(rawSession?.repoProfile?.meaningfulEntryPoints),
+      dominantSignals: normalizeStringArray(rawSession?.repoProfile?.dominantSignals),
+    },
+    clarification: {
+      status: normalizeNullableString(rawSession?.clarification?.status) || "pending",
+      mode: normalizeNullableString(rawSession?.clarification?.mode) || "unknown",
+      selectedAgentSlug: normalizeNullableString(rawSession?.clarification?.selectedAgentSlug),
+      packetPath: normalizeNullableString(rawSession?.clarification?.packetPath) || getTargetClarificationPacketPath(stateDir, projectId, sessionId),
+      transcriptPath: normalizeNullableString(rawSession?.clarification?.transcriptPath) || getTargetClarificationTranscriptPath(stateDir, projectId, sessionId),
+      intentContractPath: normalizeNullableString(rawSession?.clarification?.intentContractPath) || getTargetIntentContractPath(stateDir, projectId, sessionId),
+      questionCount: Number.isFinite(Number(rawSession?.clarification?.questionCount)) ? Number(rawSession.clarification.questionCount) : 0,
+      pendingQuestions: normalizeStringArray(rawSession?.clarification?.pendingQuestions),
+      loopCount: Number.isFinite(Number(rawSession?.clarification?.loopCount)) ? Number(rawSession.clarification.loopCount) : 0,
+      singleCall: {
+        attempted: rawSession?.clarification?.singleCall?.attempted === true,
+        completed: rawSession?.clarification?.singleCall?.completed === true,
+        inProgress: rawSession?.clarification?.singleCall?.inProgress === true,
+        failed: rawSession?.clarification?.singleCall?.failed === true,
+        selectedAgentSlug: normalizeNullableString(rawSession?.clarification?.singleCall?.selectedAgentSlug),
+        startedAt: normalizeNullableString(rawSession?.clarification?.singleCall?.startedAt),
+        finishedAt: normalizeNullableString(rawSession?.clarification?.singleCall?.finishedAt),
+        failureReason: normalizeNullableString(rawSession?.clarification?.singleCall?.failureReason),
+        premiumRequests: Number.isFinite(Number(rawSession?.clarification?.singleCall?.premiumRequests))
+          ? Number(rawSession?.clarification?.singleCall?.premiumRequests)
+          : null,
+        maxPremiumRequests: Number.isFinite(Number(rawSession?.clarification?.singleCall?.maxPremiumRequests))
+          ? Number(rawSession?.clarification?.singleCall?.maxPremiumRequests)
+          : 1,
+        withinLimit: rawSession?.clarification?.singleCall?.withinLimit !== false,
+      },
+      readyForPlanning: rawSession?.clarification?.readyForPlanning === true,
+      lastAskedAt: normalizeNullableString(rawSession?.clarification?.lastAskedAt),
+      lastAnsweredAt: normalizeNullableString(rawSession?.clarification?.lastAnsweredAt),
+      completedAt: normalizeNullableString(rawSession?.clarification?.completedAt),
+    },
+    intent: normalizeTargetIntent(rawSession?.intent, stateDir, projectId, sessionId),
+    feedback: normalizeTargetFeedback(rawSession?.feedback),
+    prerequisites: {
+      blockedReason: normalizeNullableString(rawSession?.prerequisites?.blockedReason),
+      missing: normalizeStringArray(rawSession?.prerequisites?.missing),
+      requiredNow: normalizeStringArray(rawSession?.prerequisites?.requiredNow),
+      requiredLater: normalizeStringArray(rawSession?.prerequisites?.requiredLater),
+      optional: normalizeStringArray(rawSession?.prerequisites?.optional),
+      blockingNow: rawSession?.prerequisites?.blockingNow === true,
+      awaitingHumanInput: rawSession?.prerequisites?.awaitingHumanInput === true,
+    },
+    gates: {
+      allowPlanning: rawSession?.gates?.allowPlanning === true,
+      allowShadowExecution: rawSession?.gates?.allowShadowExecution === true,
+      allowActiveExecution: rawSession?.gates?.allowActiveExecution === true,
+      quarantine: rawSession?.gates?.quarantine === true,
+      quarantineReason: normalizeNullableString(rawSession?.gates?.quarantineReason),
+    },
+    lifecycle: {
+      openedAt: normalizeNullableString(rawSession?.lifecycle?.openedAt) || updatedAt,
+      reactivatedAt: hasExplicitOpenStage ? normalizeNullableString(rawSession?.lifecycle?.reactivatedAt) : null,
+      updatedAt,
+      closedAt: hasExplicitOpenStage ? null : normalizeNullableString(rawSession?.lifecycle?.closedAt),
+      archivedAt: hasExplicitOpenStage ? null : normalizeNullableString(rawSession?.lifecycle?.archivedAt),
+      status: CLOSED_TARGET_SESSION_STAGES.has(currentStage as TargetSessionStage)
+        ? currentStage
+        : currentStage === TARGET_SESSION_STAGE.QUARANTINED
+          ? "quarantined"
+          : "open",
+      completionReason: hasExplicitOpenStage ? null : normalizeNullableString(rawSession?.lifecycle?.completionReason),
+    },
+    handoff: {
+      carriedContextSummary: normalizeNullableString(rawSession?.handoff?.carriedContextSummary),
+      requiredHumanInputs: normalizeStringArray(rawSession?.handoff?.requiredHumanInputs),
+      lastAction: normalizeNullableString(rawSession?.handoff?.lastAction) || "session_loaded",
+      nextAction: normalizeNullableString(rawSession?.handoff?.nextAction) || "preserve_session_truth",
+    },
+    constraints: {
+      protectedPaths: normalizeStringArray(rawSession?.constraints?.protectedPaths),
+      forbiddenActions: normalizeStringArray(rawSession?.constraints?.forbiddenActions),
+    },
+    operator: {
+      requestedBy: normalizeNullableString(rawSession?.operator?.requestedBy) || "user",
+      approvalMode: normalizeNullableString(rawSession?.operator?.approvalMode) || "human_required_for_high_risk",
+    },
+    hints: normalizeTargetHints(rawSession?.hints),
+    warnings,
+  };
+
+  return { session, warnings };
+}
+
+export async function persistTargetSessionSnapshot(session: any, config: any) {
+  await persistTargetSessionArtifacts(session, config, { selectAsActive: true });
+}
+
+function isClosedTargetSession(session: any): boolean {
+  return CLOSED_TARGET_SESSION_STAGES.has(String(session?.currentStage || "") as TargetSessionStage)
+    || CLOSED_TARGET_SESSION_STAGES.has(String(session?.lifecycle?.status || "") as TargetSessionStage);
+}
+
+function buildOpenTargetSessionSummary(session: any, stateDir: string) {
+  const atlasDesktopSessionId = Array.isArray(session?.hints?.notes)
+    ? session.hints.notes.map((note: unknown) => String(note || "").trim()).find((note: string) => /^ATLAS desktop session id:\s*.+$/i.test(note))?.replace(/^ATLAS desktop session id:\s*/i, "").trim() || null
+    : null;
+
+  return {
+    projectId: String(session?.projectId || "").trim() || null,
+    sessionId: String(session?.sessionId || "").trim() || null,
+    currentStage: String(session?.currentStage || TARGET_SESSION_STAGE.ONBOARDING).trim(),
+    atlasDesktopSessionId,
+    repoUrl: normalizeNullableString(session?.repo?.repoUrl),
+    objectiveSummary: normalizeNullableString(session?.objective?.summary),
+    workspacePath: normalizeNullableString(session?.workspace?.path),
+    updatedAt: normalizeNullableString(session?.lifecycle?.updatedAt) || new Date().toISOString(),
+    statePath: getTargetSessionStateFilePath(stateDir, session.projectId, session.sessionId),
+    progressLogPath: getTargetSessionProgressLogPath(stateDir, session.projectId, session.sessionId),
+  };
+}
+
+async function writeOpenTargetSessions(config: any, sessions: any[]) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const registryPath = getOpenTargetSessionsPath(stateDir);
+  const summaries = sessions
+    .filter((session) => session && !isClosedTargetSession(session))
+    .map((session) => buildOpenTargetSessionSummary(session, stateDir));
+  await writeJson(registryPath, summaries);
+}
+
+async function loadSessionStateSnapshot(config: any, projectId: string, sessionId: string) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const rawSession = await readJson(getTargetSessionStateFilePath(stateDir, projectId, sessionId), null);
+  const normalized = normalizeActiveTargetSession(rawSession, config);
+  if (!normalized.session) return null;
+  const relocated = await ensureTargetWorkspaceLocation(normalized.session, config);
+  const reconciled = await reconcileSessionWithIntentContract(relocated, config);
+  if (reconciled.changed) {
+    await persistTargetSessionArtifacts(reconciled.session, config, { selectAsActive: false });
+  }
+  return reconciled.session;
+}
+
+async function loadSelectedTargetSessionSnapshot(config: any, options: { includeClosed?: boolean } = {}) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const rawSession = await readJson(getActiveTargetSessionPath(stateDir), null);
+  const normalized = normalizeActiveTargetSession(rawSession, config);
+  if (normalized.session) {
+    const relocatedSession = await ensureTargetWorkspaceLocation(normalized.session, config);
+    const reconciled = await reconcileSessionWithIntentContract(relocatedSession, config);
+    await persistTargetSessionArtifacts(reconciled.session, config, { selectAsActive: true });
+    if (isClosedTargetSession(reconciled.session) && options.includeClosed !== true) {
+      await fs.rm(getActiveTargetSessionPath(stateDir), { force: true }).catch(() => {});
+      return null;
+    }
+    return reconciled.session;
+  }
+  return normalized.session;
+}
+
+async function upsertOpenTargetSession(config: any, session: any) {
+  const existingSessions = await listOpenTargetSessions(config);
+  const retained = existingSessions.filter((entry) => !(entry.projectId === session.projectId && entry.sessionId === session.sessionId));
+  retained.push(session);
+  await writeOpenTargetSessions(config, retained);
+}
+
+async function removeOpenTargetSession(config: any, session: any) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const registryPath = getOpenTargetSessionsPath(stateDir);
+  const rawRegistry = await readJson(registryPath, []);
+  const registryEntries = Array.isArray(rawRegistry) ? rawRegistry : [];
+  const retainedRegistry = registryEntries.filter((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return true;
+    }
+    return !(
+      String((entry as any).projectId || "") === String(session?.projectId || "")
+      && String((entry as any).sessionId || "") === String(session?.sessionId || "")
+    );
+  });
+  await writeJson(registryPath, retainedRegistry);
+
+  const existingSessions = await listOpenTargetSessions(config);
+  const retained = existingSessions.filter((entry) => !(entry.projectId === session?.projectId && entry.sessionId === session?.sessionId));
+  await writeOpenTargetSessions(config, retained);
+}
+
+async function persistTargetSessionArtifacts(session: any, config: any, options: { selectAsActive?: boolean } = {}) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  await writeJson(getTargetSessionStateFilePath(stateDir, session.projectId, session.sessionId), session);
+  if (isClosedTargetSession(session)) {
+    await removeOpenTargetSession(config, session);
+  } else {
+    await upsertOpenTargetSession(config, session);
+  }
+  if (options.selectAsActive !== false) {
+    await writeJson(getActiveTargetSessionPath(stateDir), session);
+  }
+}
+
+export async function listOpenTargetSessions(config: any) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const registryPath = getOpenTargetSessionsPath(stateDir);
+  const rawRegistry = await readJson(registryPath, null);
+  const registryEntries = Array.isArray(rawRegistry) ? rawRegistry : [];
+  const sessions = await Promise.all(
+    registryEntries.map((entry) => loadSessionStateSnapshot(config, String(entry?.projectId || ""), String(entry?.sessionId || "")))
+  );
+  const normalizedSessions = sessions.filter((session) => session && !isClosedTargetSession(session));
+  if (normalizedSessions.length !== registryEntries.length) {
+    await writeOpenTargetSessions(config, normalizedSessions);
+  }
+  return normalizedSessions.sort((left: any, right: any) => {
+    const leftTime = Date.parse(String(left?.lifecycle?.updatedAt || left?.updatedAt || 0));
+    const rightTime = Date.parse(String(right?.lifecycle?.updatedAt || right?.updatedAt || 0));
+    return rightTime - leftTime;
+  });
+}
+
+export async function loadTargetSession(config: any, input: { sessionId?: string | null; projectId?: string | null }) {
+  const targetSessionId = normalizeNullableString(input?.sessionId);
+  const targetProjectId = normalizeNullableString(input?.projectId);
+  if (!targetSessionId) {
+    return null;
+  }
+
+  const openSessions = await listOpenTargetSessions(config);
+  const matchedOpenSession = openSessions.find((session) => {
+    const sameSessionId = String(session?.sessionId || "") === targetSessionId;
+    const sameProjectId = !targetProjectId || String(session?.projectId || "") === targetProjectId;
+    return sameSessionId && sameProjectId;
+  });
+  if (matchedOpenSession) {
+    return matchedOpenSession;
+  }
+
+  if (!targetProjectId) {
+    return null;
+  }
+
+  return loadSessionStateSnapshot(config, targetProjectId, targetSessionId);
+}
+
+export async function saveTargetSession(config: any, session: any, options: { selectAsActive?: boolean } = {}) {
+  const normalized = normalizeActiveTargetSession(session, config);
+  if (!normalized.session) {
+    throw new Error("Cannot save invalid target session");
+  }
+
+  const selectAsActive = options.selectAsActive === true;
+  const relocatedSession = await ensureTargetWorkspaceLocation(normalized.session, config);
+
+  if (selectAsActive) {
+    const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+    const previousRawSession = await readJson(getActiveTargetSessionPath(stateDir), null);
+    const previousSession = normalizeActiveTargetSession(previousRawSession, config).session;
+    if (shouldResetTargetSessionEphemeralState(previousSession, relocatedSession)) {
+      await clearTargetSessionEphemeralState(config);
+    }
+  }
+
+  await persistTargetSessionArtifacts(relocatedSession, config, { selectAsActive });
+  return relocatedSession;
+}
+
+export async function saveActiveTargetSession(config: any, session: any) {
+  return saveTargetSession(config, session, { selectAsActive: !hasConfiguredTargetSessionSelector(config) });
+}
+
+export async function loadActiveTargetSession(config: any) {
+  const configuredSelector = resolveConfiguredTargetSessionSelector(config);
+  if (configuredSelector.sessionId) {
+    return loadTargetSession(config, configuredSelector);
+  }
+  return loadSelectedTargetSessionSnapshot(config);
+}
+
+export async function loadActiveTargetSessionIncludingClosed(config: any) {
+  const configuredSelector = resolveConfiguredTargetSessionSelector(config);
+  if (configuredSelector.sessionId) {
+    return loadTargetSession(config, configuredSelector);
+  }
+  return loadSelectedTargetSessionSnapshot(config, { includeClosed: true });
+}
+
+export async function loadLastArchivedTargetSession(config: any) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const rawSession = await readJson(getLastArchivedTargetSessionPath(stateDir), null);
+  const normalized = normalizeActiveTargetSession(rawSession, config);
+  if (!normalized.session) return normalized.session;
+  return ensureTargetWorkspaceLocation(normalized.session, config);
+}
+
+export async function clearLastArchivedTargetSession(config: any) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  await fs.rm(getLastArchivedTargetSessionPath(stateDir), { force: true }).catch(() => {});
+}
+
+export async function createTargetSession(manifest: any, config: any, options: { selectAsActive?: boolean } = {}) {
+  const existingSession = await loadSelectedTargetSessionSnapshot(config);
+  const openSessions = await listOpenTargetSessions(config);
+  const requestedRepoIdentity = buildSessionRepoIdentity(manifest);
+  const duplicateRepoSession = openSessions.find((session) => {
+    if (isClosedTargetSession(session)) return false;
+    const existingRepoIdentity = buildSessionRepoIdentity(session);
+    return Boolean(requestedRepoIdentity && existingRepoIdentity && requestedRepoIdentity === existingRepoIdentity);
+  });
+  if (duplicateRepoSession) {
+    throw new Error(`Active target session for this repo already exists: ${duplicateRepoSession.sessionId}`);
+  }
+
+  let session = buildTargetSessionRecord(manifest, config);
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const shouldSelectAsActive = typeof options.selectAsActive === "boolean"
+    ? options.selectAsActive
+    : (!existingSession || isClosedTargetSession(existingSession));
+
+  if (shouldSelectAsActive) {
+    await clearTargetSessionEphemeralState(config);
+  }
+  await fs.mkdir(getTargetSessionPath(stateDir, session.projectId, session.sessionId), { recursive: true });
+  await fs.mkdir(session.workspace.path, { recursive: true });
+  session = await prepareTargetWorkspaceForSession(session, config);
+  await Promise.all([
+    writeJson(
+      getTargetIntakeManifestPath(stateDir, session.projectId, session.sessionId),
+      validateTargetIntakeManifest(manifest)
+    ),
+    persistTargetSessionArtifacts(session, config, { selectAsActive: shouldSelectAsActive }),
+  ]);
+  if (shouldSelectAsActive) {
+    await updatePlatformModeState(config, {
+      currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+      activeTargetSessionId: session.sessionId,
+      activeTargetProjectId: session.projectId,
+      fallbackModeAfterCompletion: PLATFORM_MODE.IDLE,
+      reason: `target_session_opened:${session.sessionId}`,
+    }, session);
+    await requestDaemonReload(config, "target-session-opened");
+  }
+
+  return session;
+}
+
+export async function transitionActiveTargetSession(config: any, input: {
+  nextStage: string;
+  reason?: string | null;
+  actor?: string | null;
+  nextAction?: string | null;
+  handoff?: Record<string, unknown>;
+  prerequisites?: Record<string, unknown>;
+  gates?: Record<string, unknown>;
+}): Promise<any> {
+  const activeSession = await loadActiveTargetSession(config);
+  if (!activeSession) {
+    throw new Error("No active target session to transition");
+  }
+
+  const nextStage = normalizeStage(input?.nextStage);
+  const now = new Date().toISOString();
+  const isTerminalStage = CLOSED_TARGET_SESSION_STAGES.has(nextStage as TargetSessionStage);
+  const stageDefaultGates = buildDefaultStageGates(nextStage);
+  const mergedPrerequisites = {
+    ...activeSession.prerequisites,
+    ...(input?.prerequisites && typeof input.prerequisites === "object" ? input.prerequisites : {}),
+  };
+  const mergedGates = {
+    ...activeSession.gates,
+    ...stageDefaultGates,
+    ...(input?.gates && typeof input.gates === "object" ? input.gates : {}),
+  };
+  if (nextStage === TARGET_SESSION_STAGE.QUARANTINED) {
+    mergedGates.quarantine = true;
+    mergedGates.allowPlanning = false;
+    mergedGates.allowShadowExecution = false;
+    mergedGates.allowActiveExecution = false;
+  }
+
+  const transitionedSession = {
+    ...activeSession,
+    currentStage: nextStage,
+    onboarding: {
+      ...activeSession.onboarding,
+      recommendedNextStage: nextStage,
+    },
+    prerequisites: {
+      ...mergedPrerequisites,
+      blockedReason: normalizeNullableString(mergedPrerequisites.blockedReason),
+      missing: normalizeStringArray(mergedPrerequisites.missing),
+      requiredNow: normalizeStringArray(mergedPrerequisites.requiredNow),
+      requiredLater: normalizeStringArray(mergedPrerequisites.requiredLater),
+      optional: normalizeStringArray(mergedPrerequisites.optional),
+      blockingNow: normalizeBooleanOrFallback(mergedPrerequisites.blockingNow, activeSession.prerequisites?.blockingNow === true),
+      awaitingHumanInput: normalizeBooleanOrFallback(mergedPrerequisites.awaitingHumanInput, activeSession.prerequisites?.awaitingHumanInput === true),
+    },
+    gates: {
+      ...mergedGates,
+      quarantineReason: normalizeNullableString(mergedGates.quarantineReason),
+    },
+    lifecycle: {
+      ...activeSession.lifecycle,
+      updatedAt: now,
+      reactivatedAt: isTerminalStage
+        ? null
+        : CLOSED_TARGET_SESSION_STAGES.has(String(activeSession?.currentStage || "") as TargetSessionStage)
+          ? now
+          : normalizeNullableString(activeSession.lifecycle?.reactivatedAt),
+      status: isTerminalStage
+        ? nextStage
+        : nextStage === TARGET_SESSION_STAGE.QUARANTINED
+          ? "quarantined"
+          : "open",
+      completionReason: isTerminalStage
+        ? normalizeNullableString(input?.reason) || activeSession.lifecycle?.completionReason || null
+        : null,
+      closedAt: isTerminalStage ? normalizeNullableString(activeSession.lifecycle?.closedAt) || now : null,
+      archivedAt: isTerminalStage ? normalizeNullableString(activeSession.lifecycle?.archivedAt) : null,
+    },
+    handoff: {
+      ...activeSession.handoff,
+      ...(input?.handoff && typeof input.handoff === "object" ? input.handoff : {}),
+      requiredHumanInputs: normalizeStringArray((input?.handoff as any)?.requiredHumanInputs ?? activeSession.handoff?.requiredHumanInputs),
+      lastAction: normalizeNullableString(input?.actor)
+        ? `${String(input.actor).trim()}:${nextStage}`
+        : `stage_transition:${nextStage}`,
+      nextAction: normalizeNullableString(input?.nextAction)
+        || normalizeNullableString((input?.handoff as any)?.nextAction)
+        || resolveStageNextAction(nextStage),
+    },
+    warnings: [],
+  };
+
+  return saveActiveTargetSession(config, transitionedSession);
+}
+
+export async function selectActiveTargetSession(config: any, input: { sessionId?: string | null; projectId?: string | null }) {
+  const session = await loadTargetSession(config, input);
+  if (!session) {
+    throw new Error(`Target session not found: ${String(input?.sessionId || "unknown")}`);
+  }
+
+  const persistedSession = await saveActiveTargetSession(config, session);
+  await updatePlatformModeState(config, {
+    currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+    activeTargetSessionId: persistedSession.sessionId,
+    activeTargetProjectId: persistedSession.projectId,
+    fallbackModeAfterCompletion: PLATFORM_MODE.IDLE,
+    reason: `target_session_selected:${persistedSession.sessionId}`,
+  }, persistedSession);
+  await requestDaemonReload(config, "target-session-selected");
+  return persistedSession;
+}
+
+function resolveArchiveLogPath(stateDir: string, stage: string): string {
+  if (stage === TARGET_SESSION_STAGE.QUARANTINED) {
+    return path.join(getArchiveRootPath(stateDir), "quarantined_sessions.jsonl");
+  }
+  if (stage === TARGET_SESSION_STAGE.COMPLETED_WITH_HANDOFF) {
+    return path.join(getArchiveRootPath(stateDir), "completed_with_handoff_sessions.jsonl");
+  }
+  return path.join(getArchiveRootPath(stateDir), "completed_sessions.jsonl");
+}
+
+export async function archiveTargetSession(config: any, input: { completionStage?: string; completionReason?: string | null; completionSummary?: string | null; unresolvedItems?: string[]; preserveWorkspace?: boolean; presentationHandoff?: any } = {}) {
+  const activeSession = await loadActiveTargetSessionIncludingClosed(config);
+  if (!activeSession) {
+    throw new Error("No active target session to archive");
+  }
+
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const selectedSession = await loadSelectedTargetSessionSnapshot(config).catch(() => null);
+  const selectorBound = hasConfiguredTargetSessionSelector(config);
+  const activePath = getActiveTargetSessionPath(stateDir);
+  const completionStage = VALID_TARGET_SESSION_STAGES.has(String(input.completionStage || "").trim() as TargetSessionStage)
+    ? String(input.completionStage)
+    : TARGET_SESSION_STAGE.COMPLETED;
+  const archivedAt = new Date().toISOString();
+  const inputPresentationHandoff = input.presentationHandoff && typeof input.presentationHandoff === "object"
+    ? input.presentationHandoff
+    : null;
+  const archivedSession = {
+    ...activeSession,
+    currentStage: completionStage,
+    lifecycle: {
+      ...activeSession.lifecycle,
+      status: completionStage,
+      closedAt: activeSession.lifecycle?.closedAt || archivedAt,
+      archivedAt,
+      updatedAt: archivedAt,
+      completionReason: normalizeNullableString(input.completionReason) || activeSession.lifecycle?.completionReason || null,
+    },
+    handoff: {
+      ...activeSession.handoff,
+      ...(inputPresentationHandoff ? { targetDeliveryHandoff: inputPresentationHandoff } : {}),
+      lastAction: "session_archived",
+      nextAction: "await_next_target",
+    },
+  };
+
+  let presentationHandoff = inputPresentationHandoff
+    || (archivedSession.handoff?.targetDeliveryHandoff && typeof archivedSession.handoff.targetDeliveryHandoff === "object"
+      ? archivedSession.handoff.targetDeliveryHandoff
+      : null);
+  if (!presentationHandoff) {
+    const persistedHandoff = await readJson(path.join(stateDir, "last_target_delivery_handoff.json"), null).catch(() => null);
+    if (
+      persistedHandoff
+      && persistedHandoff.projectId === archivedSession.projectId
+      && persistedHandoff.sessionId === archivedSession.sessionId
+    ) {
+      presentationHandoff = persistedHandoff;
+    }
+  }
+  const presentationDelivery = presentationHandoff?.delivery && typeof presentationHandoff.delivery === "object"
+    ? presentationHandoff.delivery
+    : null;
+  const presentationAutoOpen = presentationHandoff?.autoOpen && typeof presentationHandoff.autoOpen === "object"
+    ? presentationHandoff.autoOpen
+    : null;
+
+  const completionRecord = {
+    projectId: archivedSession.projectId,
+    sessionId: archivedSession.sessionId,
+    currentStage: archivedSession.currentStage,
+    finalStatus: archivedSession.currentStage,
+    repoUrl: archivedSession.repo?.repoUrl || null,
+    objective: archivedSession.objective?.summary || null,
+    workspacePath: archivedSession.workspace?.path || null,
+    archivedAt,
+    completionReason: archivedSession.lifecycle?.completionReason || null,
+    completionSummary: normalizeNullableString(input.completionSummary)
+      || normalizeNullableString(archivedSession.handoff?.carriedContextSummary)
+      || normalizeNullableString(archivedSession.objective?.desiredOutcome)
+      || normalizeNullableString(archivedSession.objective?.summary),
+    unresolvedItems: normalizeStringArray(input.unresolvedItems).length > 0
+      ? normalizeStringArray(input.unresolvedItems)
+      : [
+          ...normalizeStringArray(archivedSession.prerequisites?.requiredNow),
+          ...normalizeStringArray(archivedSession.handoff?.requiredHumanInputs),
+        ],
+    presentation: presentationDelivery,
+    presentationAutoOpen,
+  };
+  const archiveLogPath = resolveArchiveLogPath(stateDir, archivedSession.currentStage);
+  const archivedAtlasDesktopSessionId = Array.isArray(archivedSession?.hints?.notes)
+    ? archivedSession.hints.notes
+      .map((note: unknown) => String(note || "").trim())
+      .find((note: string) => /^ATLAS desktop session id:\s*.+$/i.test(note))
+      ?.replace(/^ATLAS desktop session id:\s*/i, "")
+      .trim() || null
+    : null;
+  const preserveWorkspace = input.preserveWorkspace === true
+    || (
+      Boolean(archivedAtlasDesktopSessionId)
+      && (
+        archivedSession.currentStage === TARGET_SESSION_STAGE.COMPLETED
+        || archivedSession.currentStage === TARGET_SESSION_STAGE.COMPLETED_WITH_HANDOFF
+      )
+    );
+
+  await fs.mkdir(path.dirname(archiveLogPath), { recursive: true });
+  await Promise.all([
+    writeJson(getTargetCompletionPath(stateDir, archivedSession.projectId, archivedSession.sessionId), completionRecord),
+    writeJson(getTargetSessionStateFilePath(stateDir, archivedSession.projectId, archivedSession.sessionId), archivedSession),
+    writeJson(getLastArchivedTargetSessionPath(stateDir), archivedSession),
+    fs.appendFile(archiveLogPath, `${JSON.stringify(completionRecord)}\n`, "utf8"),
+  ]);
+  await removeOpenTargetSession(config, archivedSession);
+  await archiveAtlasDesktopSession({
+    stateDir,
+    projectId: archivedSession.projectId,
+    projectSessionId: archivedSession.sessionId,
+    atlasDesktopSessionId: archivedAtlasDesktopSessionId,
+  });
+
+  const archivedWasSelected = isSameTargetSession(archivedSession, selectedSession);
+  if (!selectorBound || archivedWasSelected) {
+    await fs.rm(activePath, { force: true });
+  }
+  if (!preserveWorkspace) {
+    await fs.rm(archivedSession.workspace.path, { recursive: true, force: true }).catch(() => {});
+  }
+
+  if (!selectorBound || archivedWasSelected) {
+    const remainingSessions = await listOpenTargetSessions(config);
+    const replacementSession = remainingSessions[0] || null;
+    if (replacementSession) {
+      await persistTargetSessionArtifacts(replacementSession, config, { selectAsActive: true });
+      await updatePlatformModeState(config, {
+        currentMode: PLATFORM_MODE.SINGLE_TARGET_DELIVERY,
+        activeTargetSessionId: replacementSession.sessionId,
+        activeTargetProjectId: replacementSession.projectId,
+        fallbackModeAfterCompletion: PLATFORM_MODE.IDLE,
+        reason: `target_session_reselected:${replacementSession.sessionId}`,
+      }, replacementSession);
+    } else {
+      await updatePlatformModeState(config, {
+        currentMode: PLATFORM_MODE.IDLE,
+        activeTargetSessionId: null,
+        activeTargetProjectId: null,
+        fallbackModeAfterCompletion: PLATFORM_MODE.IDLE,
+        reason: `target_session_closed:${archivedSession.sessionId}`,
+      }, null);
+    }
+  }
+
+  return archivedSession;
+}
+
+export async function purgeArchivedTargetSessionArtifacts(config: any, session: any) {
+  const normalized = normalizeActiveTargetSession(session, config);
+  const archivedSession = normalized.session;
+  if (!archivedSession) {
+    throw new Error("Cannot purge invalid archived target session");
+  }
+
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const sessionPath = getTargetSessionPath(stateDir, archivedSession.projectId, archivedSession.sessionId);
+  const archiveLogPath = resolveArchiveLogPath(stateDir, archivedSession.currentStage);
+  const lastArchivedPath = getLastArchivedTargetSessionPath(stateDir);
+
+  const archiveLogRaw = await fs.readFile(archiveLogPath, "utf8").catch(() => "");
+  if (archiveLogRaw) {
+    const filteredLines = archiveLogRaw
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0)
+      .filter((line) => !line.includes(`"sessionId":"${archivedSession.sessionId}"`));
+    const nextRaw = filteredLines.length > 0 ? `${filteredLines.join("\n")}\n` : "";
+    await fs.writeFile(archiveLogPath, nextRaw, "utf8");
+  }
+
+  await fs.rm(sessionPath, { recursive: true, force: true }).catch(() => {});
+
+  const lastArchivedRaw = await readJson(lastArchivedPath, null);
+  if (String(lastArchivedRaw?.sessionId || "").trim() === archivedSession.sessionId) {
+    await fs.rm(lastArchivedPath, { force: true }).catch(() => {});
+  }
+}
+
+export async function purgeAllTargetSessionArtifacts(config: any) {
+  const stateDir = config?.paths?.stateDir || path.join(process.cwd(), "state");
+  const openSessions = await listOpenTargetSessions(config);
+  const archivedLogs = [
+    path.join(getArchiveRootPath(stateDir), "completed_sessions.jsonl"),
+    path.join(getArchiveRootPath(stateDir), "completed_with_handoff_sessions.jsonl"),
+    path.join(getArchiveRootPath(stateDir), "quarantined_sessions.jsonl"),
+  ];
+  const archivedSessionIds = new Set<string>();
+
+  for (const logPath of archivedLogs) {
+    const raw = await fs.readFile(logPath, "utf8").catch(() => "");
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line);
+        const projectId = normalizeNullableString(parsed?.projectId);
+        const sessionId = normalizeNullableString(parsed?.sessionId);
+        if (projectId && sessionId) {
+          archivedSessionIds.add(`${projectId}:${sessionId}`);
+        }
+      } catch {
+        // Ignore malformed archive lines during destructive cleanup.
+      }
+    }
+  }
+
+  const projectsRoot = getProjectsRootPath(stateDir);
+  const allProjectEntries = await fs.readdir(projectsRoot, { withFileTypes: true }).catch(() => [] as Array<{ isDirectory(): boolean; name: string }>);
+  const openKeys = new Set(openSessions.map((session: any) => `${String(session?.projectId || "").trim()}:${String(session?.sessionId || "").trim()}`));
+
+  for (const projectEntry of allProjectEntries) {
+    if (!projectEntry.isDirectory()) continue;
+    const projectPath = path.join(projectsRoot, projectEntry.name);
+    const sessionEntries = await fs.readdir(projectPath, { withFileTypes: true }).catch(() => [] as Array<{ isDirectory(): boolean; name: string }>);
+    for (const sessionEntry of sessionEntries) {
+      if (!sessionEntry.isDirectory()) continue;
+      const key = `${projectEntry.name}:${sessionEntry.name}`;
+      if (!openKeys.has(key) && !archivedSessionIds.has(key)) continue;
+      const sessionPath = path.join(projectPath, sessionEntry.name);
+      const snapshot = await readJson(path.join(sessionPath, "target_session.json"), null).catch(() => null);
+      const normalized = normalizeActiveTargetSession(snapshot, config).session;
+      if (normalized?.workspace?.path) {
+        await fs.rm(String(normalized.workspace.path), { recursive: true, force: true }).catch(() => {});
+      }
+      await fs.rm(sessionPath, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  const rootEntries = await fs.readdir(stateDir, { withFileTypes: true }).catch(() => [] as Array<{ isFile(): boolean; name: string }>);
+  const removableRootStatePatterns = [
+    /^onboarding_terminal_(manifest|transcript|done)_.+$/i,
+    /^prompt_onboarding-[^.]+_.+\.md$/i,
+    /^live_agent_onboarding-[^.]+\.log$/i,
+    /^last_target_project_readiness\.json$/i,
+  ];
+  await Promise.all(
+    rootEntries
+      .filter((entry) => entry.isFile() && removableRootStatePatterns.some((pattern) => pattern.test(entry.name)))
+      .map((entry) => fs.rm(path.join(stateDir, entry.name), { force: true }).catch(() => {}))
+  );
+
+  await Promise.all([
+    fs.rm(getOpenTargetSessionsPath(stateDir), { force: true }).catch(() => {}),
+    fs.rm(getActiveTargetSessionPath(stateDir), { force: true }).catch(() => {}),
+    fs.rm(getLastArchivedTargetSessionPath(stateDir), { force: true }).catch(() => {}),
+    clearTargetSessionEphemeralState(config),
+  ]);
+
+  for (const logPath of archivedLogs) {
+    await fs.rm(logPath, { force: true }).catch(() => {});
+  }
+
+  await updatePlatformModeState(config, {
+    currentMode: PLATFORM_MODE.IDLE,
+    activeTargetSessionId: null,
+    activeTargetProjectId: null,
+    fallbackModeAfterCompletion: PLATFORM_MODE.IDLE,
+    reason: "target_sessions_purged",
+  }, null);
+}
+
+export function summarizeActiveTargetSession(session: any): string {
+  if (!session) {
+    return "status=none";
+  }
+
+  return [
+    `projectId=${String(session.projectId || "unknown")}`,
+    `sessionId=${String(session.sessionId || "unknown")}`,
+    `stage=${String(session.currentStage || TARGET_SESSION_STAGE.ONBOARDING)}`,
+    `clarification=${String(session.clarification?.status || "pending")}`,
+    `intent=${String(session.intent?.status || TARGET_INTENT_STATUS.PENDING)}`,
+    `feedback=${String(session.feedback?.lastAthenaReview?.category || "none")}`,
+    `workspace=${String(session.workspace?.path || "none")}`,
+    `allowPlanning=${session.gates?.allowPlanning === true}`,
+    `allowShadowExecution=${session.gates?.allowShadowExecution === true}`,
+    `allowActiveExecution=${session.gates?.allowActiveExecution === true}`,
+  ].join(" | ");
 }

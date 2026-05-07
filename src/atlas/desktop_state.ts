@@ -9,30 +9,21 @@ export interface AtlasDesktopWindowBounds {
   y?: number;
 }
 
-export type AtlasDesktopProductSurface = "workspace";
+export type AtlasDesktopRepoMode = "existing" | "new";
 
-export interface AtlasDesktopLocation {
-  surface: AtlasDesktopProductSurface;
-  focusedSessionRole: string | null;
-}
-
-export interface AtlasDesktopAttachment {
-  id: string;
-  name: string;
-  sourcePath: string;
-  storedPath: string;
-  sizeBytes: number | null;
-  addedAt: string | null;
+export interface AtlasDesktopRepoContext {
+  provider: "github";
+  targetRepo: string;
+  targetBaseBranch: string | null;
+  repoMode: AtlasDesktopRepoMode;
+  repoCreatedByAtlas: boolean;
 }
 
 export interface AtlasDesktopState {
   sessionId: string | null;
-  workspaceDraft: string;
-  workspaceAttachments: AtlasDesktopAttachment[];
-  workspaceComposerFocused: boolean;
+  onboardingDraft: string;
   windowBounds: AtlasDesktopWindowBounds | null;
-  lastWorkspaceSurface: AtlasDesktopProductSurface;
-  focusedSessionRole: string | null;
+  repoContext: AtlasDesktopRepoContext | null;
   updatedAt: string | null;
 }
 
@@ -40,7 +31,8 @@ export interface AtlasDesktopBootstrap {
   sessionId: string;
   serverUrl: string;
   targetRepo: string;
-  workspaceDraft: string;
+  onboardingDraft: string;
+  repoContext: AtlasDesktopRepoContext | null;
 }
 
 interface AtlasDesktopStateRecord extends AtlasDesktopState {
@@ -53,35 +45,16 @@ export interface ResolveAtlasDesktopStateRootOptions {
   cwd: string;
 }
 
-const ATLAS_DESKTOP_STATE_SCHEMA_VERSION = 4;
+const ATLAS_DESKTOP_STATE_SCHEMA_VERSION = 1;
 
-export function createDefaultAtlasDesktopState(): AtlasDesktopState {
+function createDefaultAtlasDesktopState(): AtlasDesktopState {
   return {
     sessionId: null,
-    workspaceDraft: "",
-    workspaceAttachments: [],
-    workspaceComposerFocused: false,
+    onboardingDraft: "",
     windowBounds: null,
-    lastWorkspaceSurface: "workspace",
-    focusedSessionRole: null,
+    repoContext: null,
     updatedAt: null,
   };
-}
-
-export function createAtlasDesktopWorkspaceHandoffState(
-  objective: unknown,
-): Pick<AtlasDesktopState, "workspaceDraft" | "workspaceComposerFocused"> {
-  const normalizedObjective = typeof objective === "string" ? objective.trim() : "";
-  return {
-    workspaceDraft: normalizedObjective,
-    workspaceComposerFocused: normalizedObjective.length > 0,
-  };
-}
-
-export function createAtlasDesktopSessionStartHandoffState(
-  objective: unknown,
-): Pick<AtlasDesktopState, "workspaceDraft" | "workspaceComposerFocused"> {
-  return createAtlasDesktopWorkspaceHandoffState(objective);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -94,59 +67,6 @@ function normalizeOptionalNumber(value: unknown): number | undefined {
 
 function normalizeOptionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function normalizeBoolean(value: unknown): boolean {
-  return value === true;
-}
-
-function normalizeAtlasDesktopAttachment(value: unknown): AtlasDesktopAttachment | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-
-  const id = normalizeOptionalString(value.id);
-  const name = normalizeOptionalString(value.name);
-  const sourcePath = normalizeOptionalString(value.sourcePath);
-  const storedPath = normalizeOptionalString(value.storedPath);
-  if (!id || !name || !sourcePath || !storedPath) {
-    return null;
-  }
-
-  const sizeBytes = typeof value.sizeBytes === "number" && Number.isFinite(value.sizeBytes)
-    ? value.sizeBytes
-    : null;
-
-  return {
-    id,
-    name,
-    sourcePath,
-    storedPath,
-    sizeBytes,
-    addedAt: normalizeOptionalString(value.addedAt),
-  };
-}
-
-function normalizeAtlasDesktopAttachments(value: unknown): AtlasDesktopAttachment[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  const seen = new Set<string>();
-  const normalized: AtlasDesktopAttachment[] = [];
-  for (const entry of value) {
-    const attachment = normalizeAtlasDesktopAttachment(entry);
-    if (!attachment || seen.has(attachment.id)) {
-      continue;
-    }
-    seen.add(attachment.id);
-    normalized.push(attachment);
-  }
-  return normalized;
-}
-
-export function normalizeAtlasDesktopProductSurface(value: unknown): AtlasDesktopProductSurface {
-  return value === "workspace" ? "workspace" : "workspace";
 }
 
 export function normalizeAtlasDesktopWindowBounds(value: unknown): AtlasDesktopWindowBounds | null {
@@ -168,87 +88,56 @@ export function normalizeAtlasDesktopWindowBounds(value: unknown): AtlasDesktopW
   };
 }
 
-export function normalizeAtlasDesktopLocation(value: unknown): AtlasDesktopLocation {
+export function normalizeAtlasDesktopRepoContext(value: unknown): AtlasDesktopRepoContext | null {
   if (!isRecord(value)) {
-    return {
-      surface: "workspace",
-      focusedSessionRole: null,
-    };
+    return null;
+  }
+
+  const targetRepo = normalizeOptionalString(value.targetRepo);
+  const provider = normalizeOptionalString(value.provider);
+  const repoMode = normalizeOptionalString(value.repoMode);
+  if (!targetRepo || provider !== "github" || (repoMode !== "existing" && repoMode !== "new")) {
+    return null;
   }
 
   return {
-    surface: normalizeAtlasDesktopProductSurface(value.surface),
-    focusedSessionRole: normalizeOptionalString(value.focusedSessionRole),
+    provider,
+    targetRepo,
+    targetBaseBranch: normalizeOptionalString(value.targetBaseBranch),
+    repoMode,
+    repoCreatedByAtlas: value.repoCreatedByAtlas === true,
   };
-}
-
-export function buildAtlasDesktopLocationPath(location: Partial<AtlasDesktopLocation> = {}): string {
-  const normalizedLocation = normalizeAtlasDesktopLocation({
-    surface: location.surface,
-    focusedSessionRole: location.focusedSessionRole,
-  });
-  const params = new URLSearchParams();
-  if (normalizedLocation.focusedSessionRole) {
-    params.set("focusRole", normalizedLocation.focusedSessionRole);
-  }
-
-  const pathname = "/";
-  const query = params.toString();
-  return query ? `${pathname}?${query}` : pathname;
-}
-
-export function parseAtlasDesktopLocationFromUrl(input: string | URL): AtlasDesktopLocation | null {
-  try {
-    const parsedUrl = input instanceof URL
-      ? input
-      : new URL(String(input || "/"), "http://127.0.0.1");
-    if (parsedUrl.pathname !== "/") {
-      return null;
-    }
-
-    return {
-      surface: "workspace",
-      focusedSessionRole: normalizeOptionalString(parsedUrl.searchParams.get("focusRole")),
-    };
-  } catch {
-    return null;
-  }
 }
 
 function normalizeAtlasDesktopState(value: unknown): AtlasDesktopState | null {
   if (!isRecord(value)) return null;
 
   const sessionId = normalizeOptionalString(value.sessionId);
-  const workspaceDraft = typeof value.workspaceDraft === "string"
-    ? value.workspaceDraft
-    : (typeof value.productDraft === "string"
-        ? value.productDraft
-        : (typeof value.onboardingDraft === "string" ? value.onboardingDraft : ""));
+  const onboardingDraft = typeof value.onboardingDraft === "string" ? value.onboardingDraft : "";
   const updatedAt = normalizeOptionalString(value.updatedAt);
 
   return {
     sessionId,
-    workspaceDraft,
-    workspaceAttachments: normalizeAtlasDesktopAttachments(value.workspaceAttachments),
-    workspaceComposerFocused: typeof value.workspaceComposerFocused === "boolean"
-      ? value.workspaceComposerFocused
-      : normalizeBoolean(value.productComposerFocused),
+    onboardingDraft,
     windowBounds: normalizeAtlasDesktopWindowBounds(value.windowBounds),
-    lastWorkspaceSurface: normalizeAtlasDesktopProductSurface(value.lastWorkspaceSurface ?? value.lastProductSurface),
-    focusedSessionRole: normalizeOptionalString(value.focusedSessionRole),
+    repoContext: normalizeAtlasDesktopRepoContext(value.repoContext),
     updatedAt,
   };
 }
 
 export function resolveAtlasDesktopStateRoot(options: ResolveAtlasDesktopStateRootOptions): string {
   if (options.isPackaged) {
-    return path.dirname(options.exePath);
+    return path.resolve(options.cwd);
   }
   return options.cwd;
 }
 
 export function resolveAtlasDesktopStatePath(desktopRoot: string): string {
   return path.join(desktopRoot, "state", "atlas", "desktop_state.json");
+}
+
+export function resolveAtlasDesktopStatePathFromStateDir(stateDir: string): string {
+  return path.join(stateDir, "atlas", "desktop_state.json");
 }
 
 export async function readAtlasDesktopState(statePath: string): Promise<AtlasDesktopState> {

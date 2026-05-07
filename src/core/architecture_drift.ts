@@ -406,6 +406,31 @@ async function fileExists(filePath: string): Promise<boolean> {
     await fs.access(filePath);
     return true;
   } catch {
+    const ext = path.extname(filePath).toLowerCase();
+    const extensionFallbacks: Record<string, string[]> = {
+      ".js": [".ts"],
+      ".ts": [".js"],
+      ".mjs": [".mts"],
+      ".mts": [".mjs"],
+      ".cjs": [".cts"],
+      ".cts": [".cjs"],
+    };
+
+    const fallbacks = extensionFallbacks[ext];
+    if (!fallbacks || fallbacks.length === 0) {
+      return false;
+    }
+
+    const basePath = filePath.slice(0, -ext.length);
+    for (const fallbackExt of fallbacks) {
+      try {
+        await fs.access(`${basePath}${fallbackExt}`);
+        return true;
+      } catch {
+        // Try the next sibling extension.
+      }
+    }
+
     return false;
   }
 }
@@ -469,10 +494,13 @@ export async function persistDriftBacklog(
 export async function checkArchitectureDrift(options: {
   rootDir: string;
   docDirs?: string[];
+  docPaths?: string[];
 }): Promise<ArchitectureDriftReport> {
-  const { rootDir, docDirs = ["docs"] } = options;
+  const { rootDir, docDirs = ["docs"], docPaths = [] } = options;
 
-  const docFiles = await listDocFiles(rootDir, docDirs);
+  const docFiles = Array.isArray(docPaths) && docPaths.length > 0
+    ? [...new Set(docPaths.filter((docPath) => typeof docPath === "string" && docPath.trim().length > 0))]
+    : await listDocFiles(rootDir, docDirs);
   const staleReferences: StaleRef[] = [];
   const deprecatedTokenRefs: DeprecatedTokenRef[] = [];
   let presentCount = 0;

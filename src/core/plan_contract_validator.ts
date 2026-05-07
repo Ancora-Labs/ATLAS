@@ -127,6 +127,16 @@ export const PACKET_VIOLATION_CODE = Object.freeze({
   /** Low-leverage or redundant packets must include measurable capacity-first justification. */
   MISSING_CAPACITY_FIRST_JUSTIFICATION: "missing_capacity_first_justification",
   /**
+   * Plan silently softens an explicit operator requirement or quality bar into a
+   * cheaper substitute (placeholder, mock, demo-only flow, simplified stand-in).
+   */
+  INTENT_REQUIREMENT_SOFTENED: "intent_requirement_softened",
+  /**
+   * Backward-compatible alias for media-specific drift; kept because media is one
+   * concrete example of the broader intent-softening failure class.
+   */
+  MEDIA_REQUIREMENT_SOFTENED: "intent_requirement_softened",
+  /**
    * Plan is tagged as backed by stale diagnostics data and lacks independent
    * justification.  Stale-backed plans must be quarantined until diagnostics
    * are refreshed or the plan provides independent evidence.
@@ -924,11 +934,13 @@ export const PACKET_LANE = Object.freeze({
  * Per-lane minimum packet-density thresholds.
  *
  * System-learning: Prometheus consistently declares ~2 k tokens for plans covering
- * 5+ files.  The LARGE lane enforces a hard 8 k floor.
+ * 5+ files.  The LARGE lane enforces a hard 8 k floor. Small and medium lanes
+ * keep the base 2 k floor so single-feature and medium-scope product work does
+ * not get rejected purely because the token estimate is low-resolution.
  */
 export const LANE_PACKET_SIZE_DEFAULTS: Record<string, PacketDensityThresholds> = Object.freeze({
   [PACKET_LANE.SMALL]:   { minTargetFiles: 1, minAcceptanceCriteria: 1, minTaskChars: 20, minExecutionTokens: 2000 },
-  [PACKET_LANE.MEDIUM]:  { minTargetFiles: 3, minAcceptanceCriteria: 2, minTaskChars: 30, minExecutionTokens: 4000 },
+  [PACKET_LANE.MEDIUM]:  { minTargetFiles: 3, minAcceptanceCriteria: 2, minTaskChars: 30, minExecutionTokens: 2000 },
   [PACKET_LANE.LARGE]:   { minTargetFiles: 5, minAcceptanceCriteria: 3, minTaskChars: 40, minExecutionTokens: 8000 },
   [PACKET_LANE.DEFAULT]: { minTargetFiles: 1, minAcceptanceCriteria: 1, minTaskChars: 20, minExecutionTokens: 2000 },
 });
@@ -950,6 +962,27 @@ export function classifyPacketLane(targetFileCount: number): string {
 export function getPacketThresholdsForLane(targetFileCount: number): PacketDensityThresholds {
   const lane = classifyPacketLane(targetFileCount);
   return LANE_PACKET_SIZE_DEFAULTS[lane];
+}
+
+export function buildPacketAdmissionThresholds(
+  targetFileCount: number,
+  opts: { strictnessMultiplier?: number; laneDifficulty?: string | null } = {},
+): PacketDensityThresholds {
+  const laneThresholds = getPacketThresholdsForLane(targetFileCount);
+  const strictnessMultiplier = Number(opts.strictnessMultiplier);
+  const strictness = Number.isFinite(strictnessMultiplier) && strictnessMultiplier > 0
+    ? strictnessMultiplier
+    : 1;
+  const laneStrictness = opts.laneDifficulty === "hard" ? 1.2
+    : opts.laneDifficulty === "moderate" ? 1.1
+    : 1.0;
+  const multiplier = strictness * laneStrictness;
+  return {
+    minTaskChars: Math.max(1, Math.ceil(laneThresholds.minTaskChars * multiplier)),
+    minTargetFiles: laneThresholds.minTargetFiles,
+    minAcceptanceCriteria: Math.max(1, Math.ceil(laneThresholds.minAcceptanceCriteria * multiplier)),
+    minExecutionTokens: Math.max(1, Math.ceil(laneThresholds.minExecutionTokens * multiplier)),
+  };
 }
 
 
@@ -1019,6 +1052,269 @@ export function isAmbiguousTask(value: string): boolean {
  */
 export function isCycleSpecificExclusionJustification(value: string): boolean {
   return String(value || "").trim().length >= MANDATORY_EXCLUSION_JUSTIFICATION_MIN_LENGTH;
+}
+
+const PROTECTED_INTENT_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bpremium\b/i,
+  /\bproduction(?:-grade)?\b/i,
+  /\bpolished\b/i,
+  /\btrust(?:-building|\s+signals?)\b/i,
+  /\breal(?:-time)?\b/i,
+  /\breal\s+(?:api|integration|payment|auth|data|photo(?:s|graphy)?)\b/i,
+  /\b(?:stock\s+(?:image|images|photo|photos)|external\s+(?:image|images|imagery|assets)|authentic\s+(?:imagery|images)|food\s+photography|product\s+photography)\b/i,
+  /\bfull\s+(?:integration|experience|flow)\b/i,
+  /\b(?:native\s+desktop\s+window|desktop\s+gui|desktop-first|browser\s+route|dashboard\s+page|terminal\s+wrapper)\b/i,
+  /\b(?:launcher\s+script|root\s+resources\s+executable|direct\s+(?:executable|app\s+launch))\b/i,
+  /\b(?:food|dish|menu|restaurant|cafe|bakery|chef|checkout|payment|auth|onboarding)\b/i,
+  /\b(?:landing\s*page|hero|gallery|testimonial|story|brand)\b/i,
+]);
+
+const DOWNGRADE_SUBSTITUTE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bplaceholder(?:s)?\b/i,
+  /\bmock(?:ed|ing|s|up)?\b/i,
+  /\bstub(?:bed|s)?\b/i,
+  /\bdemo(?:-only)?\b/i,
+  /\bfake\b/i,
+  /\bdummy\b/i,
+  /\blorem(?:\s+ipsum|\s+picsum)?\b/i,
+  /\bsimplif(?:y|ied)\b/i,
+  /\bminimal\s+version\b/i,
+  /\bstand-?ins?\b/i,
+  /\bhardcoded\s+(?:sample|samples|data)\b/i,
+  /\blow-?fidelity\s+(?:visuals?|imagery|gallery|cards?)\b/i,
+  /\bfiller\s+(?:visuals?|imagery|gallery|cards?)\b/i,
+  /\bgeneric\s+filler\s+(?:visuals?|imagery|gallery|cards?)\b/i,
+  /\bgeneric\s+(?:illustration|illustrations|content|imagery)\b/i,
+]);
+
+const EXPLICIT_FALLBACK_DISCLOSURE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\btemporary\b/i,
+  /\btemporarily\b/i,
+  /\binterim\b/i,
+  /\bshort-?term\b/i,
+  /\buntil\b/i,
+  /\bblocked\s+by\b/i,
+  /\bexternal\s+(?:dependency|credentials|approval|token|service)\b/i,
+  /\bfollow-?up\b/i,
+  /\bunblock\b/i,
+  /\bphase\s*[0-9]+\b/i,
+  /\bpreserv(?:e|ing)\s+the\s+(?:real|final|production)\s+(?:contract|path|integration|experience)\b/i,
+  /\bdocumented\s+fallback\b/i,
+]);
+
+const OPERATOR_AUTHORIZED_PLACEHOLDER_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bplaceholder\s+functionality\s+only\b/i,
+  /\bplaceholder\s+(?:reservation|booking)\s+(?:interaction|flow|module|functionality|ui)\b[\s\S]{0,120}\b(?:confirmed|operator|approved|direction|intent)\b/i,
+  /\b(?:confirmed|operator|approved|direction|intent)\b[\s\S]{0,120}\bplaceholder\s+(?:reservation|booking|functionality)\b/i,
+  /\b(?:realistic\s+)?mvp\s+placeholders?\b[\s\S]{0,160}\b(?:explicitly\s+inventoried|inventoried\s+as\s+such|menu|contact(?:\s+info)?|hours|venue\s+notes?|business\s+data)\b/i,
+  /\b(?:menu|contact(?:\s+info)?|hours|venue\s+notes?|business\s+data)\b[\s\S]{0,160}\b(?:realistic\s+)?mvp\s+placeholders?\b/i,
+]);
+
+const OPERATOR_AUTHORIZED_PLACEHOLDER_STRIP_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bplaceholder\s+functionality\s+only\b/gi,
+  /\bplaceholder\s+(?:reservation|booking)\s+(?:interaction|flow|module|functionality|ui)\b/gi,
+  /\b(?:realistic\s+)?mvp\s+placeholders?\b/gi,
+  /\b(?:menu|contact(?:\s+info)?|hours|venue\s+notes?|business\s+data)\b[\s\S]{0,80}\bplaceholders?\b/gi,
+]);
+
+const NEGATED_LAUNCHER_SCRIPT_REFERENCE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bdoes\s+not\s+require\b[\s\S]{0,120}\.(?:bat|cmd|ps1)\b/gi,
+  /\bwithout\b[\s\S]{0,80}\.(?:bat|cmd|ps1)\b/gi,
+  /\bno\s+(?:need|requirement)\s+for\b[\s\S]{0,80}\.(?:bat|cmd|ps1)\b/gi,
+]);
+
+const NEGATED_DOWNGRADE_REFERENCE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\bwithout\b[\s\S]{0,80}\b(?:placeholder(?:s)?|mock(?:ed|ing|s|up)?|stub(?:bed|s)?|demo(?:-only)?|fake|dummy|simplif(?:y|ied)|stand-?ins?)\b/gi,
+  /\b(?:no|avoid|avoidance\s+of|ban(?:ned)?|forbid(?:den)?|prevent|exclude)\b[\s\S]{0,80}\b(?:placeholder(?:s)?|mock(?:ed|ing|s|up)?|stub(?:bed|s)?|demo(?:-only)?|fake|dummy|simplif(?:y|ied)|stand-?ins?)\b/gi,
+  /\bdo\s+not\s+(?:use|ship|add|introduce|render|show)\b[\s\S]{0,80}\b(?:placeholder(?:s)?|mock(?:ed|ing|s|up)?|stub(?:bed|s)?|demo(?:-only)?|fake|dummy|simplif(?:y|ied)|stand-?ins?)\b/gi,
+]);
+
+const DESIGN_REFERENCE_MOCKUP_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:desktop|mobile|responsive)(?:\s*\/\s*(?:desktop|mobile|responsive))?\s+mockup\s+references?\b/gi,
+  /\bmockup\s+references?\b/gi,
+  /\breference\s+comps?\b/gi,
+  /\bdesign\s+reference\s+artifacts?\b/gi,
+  /\bhigh-?fidelity\s+reference\s+(?:surfaces|artifacts|comps?)\b/gi,
+  /\bin-?repo\s+(?:design\s+)?reference\s+(?:surfaces|artifacts|comps?)\b/gi,
+]);
+
+function stripNegatedLauncherScriptReferences(text: string): string {
+  let sanitized = text;
+  for (const pattern of NEGATED_LAUNCHER_SCRIPT_REFERENCE_PATTERNS) {
+    sanitized = sanitized.replace(pattern, " ");
+  }
+  return sanitized;
+}
+
+function stripNegatedDowngradeReferences(text: string): string {
+  let sanitized = text;
+  for (const pattern of NEGATED_DOWNGRADE_REFERENCE_PATTERNS) {
+    sanitized = sanitized.replace(pattern, " ");
+  }
+  return sanitized;
+}
+
+function stripDesignReferenceMockupReferences(text: string): string {
+  let sanitized = text;
+  for (const pattern of DESIGN_REFERENCE_MOCKUP_PATTERNS) {
+    sanitized = sanitized.replace(pattern, " ");
+  }
+  return sanitized;
+}
+
+function stripOperatorAuthorizedPlaceholderReferences(text: string, protectedIntentText: string): string {
+  const corpus = [protectedIntentText, text].filter(Boolean).join("\n");
+  const hasOperatorAuthorizedPlaceholder = OPERATOR_AUTHORIZED_PLACEHOLDER_PATTERNS.some((pattern) => pattern.test(corpus));
+  if (!hasOperatorAuthorizedPlaceholder) return text;
+
+  let sanitized = text;
+  for (const pattern of OPERATOR_AUTHORIZED_PLACEHOLDER_STRIP_PATTERNS) {
+    sanitized = sanitized.replace(pattern, " ");
+  }
+  return sanitized;
+}
+
+function extractPlanIntentText(plan: any): string {
+  const values: string[] = [
+    plan?.title,
+    plan?.task,
+    plan?.scope,
+    plan?.before_state,
+    plan?.after_state,
+    plan?.verification,
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+
+  if (Array.isArray(plan?.acceptance_criteria)) {
+    for (const item of plan.acceptance_criteria) {
+      const text = String(item || "").trim();
+      if (text) values.push(text);
+    }
+  }
+
+  return values.join("\n");
+}
+
+export interface PlanValidationOptions {
+  activeTargetSession?: any;
+  disableProtectedIntentValidation?: boolean;
+  disableIntentDowngradeValidation?: boolean;
+}
+
+type ProtectedIntentContext = {
+  protectedIntentText: string;
+  requiresDirectRootExecutable: boolean;
+  forbiddenDowngradePatterns: RegExp[];
+};
+
+function normalizeIntentStringArray(values: unknown): string[] {
+  return Array.isArray(values)
+    ? values.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+}
+
+function extractProtectedIntentContext(activeTargetSession: any): ProtectedIntentContext {
+  if (!activeTargetSession || typeof activeTargetSession !== "object") {
+    return {
+      protectedIntentText: "",
+      requiresDirectRootExecutable: false,
+      forbiddenDowngradePatterns: [],
+    };
+  }
+
+  const intent = activeTargetSession?.intent && typeof activeTargetSession.intent === "object"
+    ? activeTargetSession.intent
+    : null;
+  const objective = activeTargetSession?.objective && typeof activeTargetSession.objective === "object"
+    ? activeTargetSession.objective
+    : null;
+  const constraints = activeTargetSession?.constraints && typeof activeTargetSession.constraints === "object"
+    ? activeTargetSession.constraints
+    : null;
+  const protectedIntentText = [
+    objective?.summary,
+    objective?.desiredOutcome,
+    intent?.summary,
+    intent?.operatorIntentBrief,
+    intent?.implementationFlexibility,
+    intent?.assetSourcingPolicy,
+    ...(normalizeIntentStringArray(intent?.operatorIntentEvidence)),
+    ...(normalizeIntentStringArray(intent?.mustHaveFlows)),
+    ...(normalizeIntentStringArray(intent?.scopeIn)),
+    ...(normalizeIntentStringArray(intent?.scopeOut)),
+    ...(normalizeIntentStringArray(intent?.successCriteria)),
+    ...(normalizeIntentStringArray(intent?.assetRequirements)),
+    ...(normalizeIntentStringArray(activeTargetSession?.assumptions)),
+    ...(normalizeIntentStringArray(constraints?.forbiddenActions)),
+  ].map((value) => String(value || "").trim()).filter(Boolean).join("\n");
+
+  const requiresDirectRootExecutable = /(?:clickable|direct)\s+(?:executable|app\s+launch)|root\s+resources\s+executable|root\s+resources\s+folder.*launch(?:es)?\s+the\s+app\s+directly|launch(?:es)?\s+directly.*root\s+resources\s+folder/i.test(protectedIntentText);
+
+  const forbiddenDowngradePatterns: RegExp[] = [];
+  const pushForbiddenPattern = (pattern: RegExp): void => {
+    if (!forbiddenDowngradePatterns.some((entry) => entry.source === pattern.source && entry.flags === pattern.flags)) {
+      forbiddenDowngradePatterns.push(pattern);
+    }
+  };
+
+  if (/browser\s+(?:route|tab|page)|localhost\s*\+\s*browser|native\s+desktop\s+window|desktop\s+gui|terminal\s+wrapper|dashboard\s+page/i.test(protectedIntentText)) {
+    pushForbiddenPattern(/\b(?:browser\s+(?:route|tab|page|shell|wrapper)|dashboard\s+page|terminal\s+wrapper|localhost\s*(?:plus|\+)\s*browser|open(?:ing)?\s+in\s+a?\s*browser)\b/i);
+  }
+
+  if (/launcher\s+script|\.bat|\.cmd|\.ps1|direct\s+(?:executable|app\s+launch)|root\s+resources\s+executable/i.test(protectedIntentText)) {
+    pushForbiddenPattern(/\b(?:launcher\s+script|launcher\s+wrapper)\b/i);
+  }
+
+  if (/cheap\s+ai\s+clone|ai-knockoff|not\s+look\s+like\s+.*(?:openai|claude)|original\s+high-end\s+experience|premium\s+original/i.test(protectedIntentText)) {
+    pushForbiddenPattern(/\b(?:cheap\s+ai\s+clone|ai-knockoff|copy\s+(?:openai|claude)|clone\s+of\s+(?:openai|claude)|generic\s+ai\s+chat\s+clone)\b/i);
+  }
+
+  return {
+    protectedIntentText,
+    requiresDirectRootExecutable,
+    forbiddenDowngradePatterns,
+  };
+}
+
+const LAUNCHER_SCRIPT_DOWNGRADE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:create|add|introduce|ship|provide|use|configure)\b[\s\S]{0,80}\b(?:launcher|wrapper|batch|script)\b[\s\S]{0,40}\.(?:bat|cmd|ps1)\b/i,
+  /\.(?:bat|cmd|ps1)\b[\s\S]{0,120}\b(?:launcher|launch|open|start|bootstrap|wrapper)\b/i,
+  /\b(?:batch|launcher|wrapper)\b[\s\S]{0,40}\.(?:bat|cmd|ps1)\b/i,
+]);
+
+function isLauncherScriptSoftening(plan: any, opts?: PlanValidationOptions): boolean {
+  const context = extractProtectedIntentContext(opts?.activeTargetSession);
+  if (!context.requiresDirectRootExecutable) return false;
+
+  const text = stripNegatedLauncherScriptReferences(extractPlanIntentText(plan));
+  if (!text) return false;
+
+  return LAUNCHER_SCRIPT_DOWNGRADE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function isSilentIntentDowngrade(plan: any, opts?: PlanValidationOptions): boolean {
+  const context = extractProtectedIntentContext(opts?.activeTargetSession);
+  const text = stripOperatorAuthorizedPlaceholderReferences(
+    stripDesignReferenceMockupReferences(
+      stripNegatedDowngradeReferences(
+        stripNegatedLauncherScriptReferences(extractPlanIntentText(plan))
+      )
+    ),
+    context.protectedIntentText,
+  );
+  if (!text) return false;
+
+  const protectedCorpus = [text, context.protectedIntentText].filter(Boolean).join("\n");
+  const hasProtectedIntent = PROTECTED_INTENT_PATTERNS.some((pattern) => pattern.test(protectedCorpus));
+  if (!hasProtectedIntent) return false;
+
+  const hasDowngradeSignal = DOWNGRADE_SUBSTITUTE_PATTERNS.some((pattern) => pattern.test(text)) ||
+    context.forbiddenDowngradePatterns.some((pattern) => pattern.test(text));
+  if (!hasDowngradeSignal) return false;
+
+  const disclosedTemporaryFallback = EXPLICIT_FALLBACK_DISCLOSURE_PATTERNS.some((pattern) => pattern.test(text));
+  if (disclosedTemporaryFallback) return false;
+
+  return true;
 }
 
 export function normalizeLeverageRank(values: unknown): string[] {
@@ -1146,9 +1442,10 @@ export interface PlanViolation {
  * Validate a single plan against the contract schema.
  *
  * @param {object} plan
+ * @param {PlanValidationOptions} [opts]
  * @returns {{ valid: boolean, violations: PlanViolation[] }}
  */
-export function validatePlanContract(plan): { valid: boolean; violations: PlanViolation[] } {
+export function validatePlanContract(plan, opts: PlanValidationOptions = {}): { valid: boolean; violations: PlanViolation[] } {
   if (!plan || typeof plan !== "object") {
     return {
       valid: false,
@@ -1315,6 +1612,26 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
     }
   }
 
+  if (opts.disableProtectedIntentValidation !== true && opts.disableIntentDowngradeValidation !== true && isSilentIntentDowngrade(plan, opts)) {
+    violations.push({
+      field: "protectedIntent",
+      message: "Plan silently downgrades an explicit operator requirement or quality bar into a cheaper substitute. Temporary fallbacks are allowed only when they are clearly disclosed with the blocker reason and preserve the promised outcome class.",
+      severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+      code: PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED,
+    });
+  }
+
+  if (opts.disableProtectedIntentValidation !== true) {
+    if (isLauncherScriptSoftening(plan, opts)) {
+      violations.push({
+        field: "protectedIntent",
+        message: "Target intent requires a direct user-facing executable launch path from the root resources surface. Replacing that contract with a .bat/.cmd/.ps1 launcher is a silent downgrade and is not dispatchable.",
+        severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+        code: PACKET_VIOLATION_CODE.INTENT_REQUIREMENT_SOFTENED,
+      });
+    }
+  }
+
   // Decomposition cap: files-in-scope ceiling.
   const inScopeFiles: unknown[] | null = Array.isArray(plan.filesInScope)
     ? plan.filesInScope
@@ -1404,8 +1721,8 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
     if (!hasCapacityFirstJustification) {
       violations.push({
         field: "capacityDelta/requestROI",
-        message: "Low-leverage or redundant packets require measurable capacity-first justification (capacityDelta>0 and requestROI>1).",
-        severity: PLAN_VIOLATION_SEVERITY.CRITICAL,
+        message: "Low-leverage or redundant packets should include measurable capacity-first justification (capacityDelta>0 and requestROI>1). When grounded evidence exists, keep the packet reviewable and surface this as a warning rather than fail-closing the cycle.",
+        severity: PLAN_VIOLATION_SEVERITY.WARNING,
         code: PACKET_VIOLATION_CODE.MISSING_CAPACITY_FIRST_JUSTIFICATION,
       });
     }
@@ -1462,15 +1779,16 @@ export function validatePlanContract(plan): { valid: boolean; violations: PlanVi
  * Validate all plans in a batch and compute aggregate pass rate.
  *
  * @param {object[]} plans
+ * @param {PlanValidationOptions} [opts]
  * @returns {{ passRate: number, totalPlans: number, validCount: number, invalidCount: number, results: Array<{ planIndex: number, task: string, valid: boolean, violations: object[] }> }}
  */
-export function validateAllPlans(plans) {
+export function validateAllPlans(plans, opts: PlanValidationOptions = {}) {
   if (!Array.isArray(plans) || plans.length === 0) {
     return { passRate: 1.0, totalPlans: 0, validCount: 0, invalidCount: 0, results: [] };
   }
 
   const results = plans.map((plan, i) => {
-    const r = validatePlanContract(plan);
+    const r = validatePlanContract(plan, opts);
     return {
       planIndex: i,
       task: String(plan?.task || "").slice(0, 80),
@@ -1690,6 +2008,54 @@ export const MAX_ACTIONABLE_STEPS_PER_PACKET = 3 as const;
 export const PACKET_OVERSIZE_REASON = "packet_exceeds_actionable_steps_cap" as const;
 
 /**
+ * Estimate dispatch complexity for a plan.
+ *
+ * Explicit ordered steps remain authoritative. When a plan only carries
+ * acceptance criteria, treat them as a bounded proxy rather than a literal
+ * execution-step count; otherwise detailed review checklists incorrectly trip
+ * the hard packet gate.
+ */
+export function estimatePlanOrderedStepComplexity(plan: any): number {
+  const explicitOrderedSteps = Array.isArray(plan?.orderedSteps)
+    ? plan.orderedSteps.length
+    : Array.isArray(plan?.ordered_steps)
+      ? plan.ordered_steps.length
+      : null;
+  if (Number.isFinite(explicitOrderedSteps) && explicitOrderedSteps! > 0) {
+    return Math.max(1, Math.floor(Number(explicitOrderedSteps)));
+  }
+
+  const acceptanceCriteriaCount = Array.isArray(plan?.acceptance_criteria)
+    ? plan.acceptance_criteria.filter(Boolean).length
+    : Array.isArray(plan?.acceptanceCriteria)
+      ? plan.acceptanceCriteria.filter(Boolean).length
+      : 0;
+  const fileCount = Array.isArray(plan?.target_files)
+    ? plan.target_files.filter(Boolean).length
+    : Array.isArray(plan?.targetFiles)
+      ? plan.targetFiles.filter(Boolean).length
+      : Array.isArray(plan?.filesInScope)
+        ? plan.filesInScope.filter(Boolean).length
+        : 0;
+  const verificationSurface = Array.isArray(plan?.verification_commands)
+    ? plan.verification_commands.filter(Boolean).length
+    : Array.isArray(plan?.verificationCommands)
+      ? plan.verificationCommands.filter(Boolean).length
+      : 0;
+  const fallbackSurface = Math.max(1, fileCount, verificationSurface);
+
+  if (acceptanceCriteriaCount > 0) {
+    return Math.max(1, Math.min(acceptanceCriteriaCount, fallbackSurface * 2));
+  }
+
+  if (Array.isArray(plan?.plans) && plan.plans.length > 0) {
+    return Math.max(1, plan.plans.length);
+  }
+
+  return fallbackSurface;
+}
+
+/**
  * Bounded packet-size policy defaults to prevent over-bundling.
  *
  * Over-bundling occurs when too many plans are packed into one worker batch,
@@ -1823,9 +2189,23 @@ export function validatePacketBatchAdmission(
     const batchIndex = hasBatchIndex ? Math.floor(rawBatchIndex) : null;
     const groupKey = hasBatchIndex ? `${role}#batch:${batchIndex}` : role;
     const label = hasBatchIndex ? `${role}[batch ${batchIndex}]` : role;
-    const orderedSteps = Array.isArray(plan?.orderedSteps) ? plan.orderedSteps.length
-      : Array.isArray(plan?.acceptance_criteria) ? plan.acceptance_criteria.length
-      : 1;
+    const explicitOrderedSteps = Array.isArray(plan?.orderedSteps)
+      ? plan.orderedSteps.filter(Boolean).length
+      : Array.isArray(plan?.ordered_steps)
+        ? plan.ordered_steps.filter(Boolean).length
+        : 0;
+    const acceptanceCriteriaCount = explicitOrderedSteps === 0
+      ? Array.isArray(plan?.acceptance_criteria)
+        ? plan.acceptance_criteria.filter(Boolean).length
+        : Array.isArray(plan?.acceptanceCriteria)
+          ? plan.acceptanceCriteria.filter(Boolean).length
+          : 0
+      : 0;
+    const orderedSteps = explicitOrderedSteps > 0
+      ? explicitOrderedSteps
+      : acceptanceCriteriaCount > 0
+        ? acceptanceCriteriaCount
+        : estimatePlanOrderedStepComplexity(plan);
     roleGroups.set(groupKey, (roleGroups.get(groupKey) ?? 0) + Math.max(1, orderedSteps));
     if (!groupLabels.has(groupKey)) {
       groupLabels.set(groupKey, label);
@@ -2033,7 +2413,7 @@ function buildRoleCoverageSkeleton(role: string, wave: number): any {
 
 export function validateAndInjectRolePlans(
   payload: any,
-  opts: { injectMissing?: boolean } = {},
+  opts: { injectMissing?: boolean; activeTargetSession?: any } = {},
 ): RolePlanCoverageValidationResult {
   const source = (payload && typeof payload === "object") ? payload : {};
   const plans = Array.isArray(source.plans) ? source.plans.slice() : [];
@@ -2061,7 +2441,7 @@ export function validateAndInjectRolePlans(
     const role = normalizeRoleValue(plan?.role);
     if (!role || !firstWaveByRole.has(role)) continue;
     const candidate = toRoleCoverageContractCandidate(plan, role, firstWaveByRole.get(role) || 1);
-    if (validatePlanContract(candidate).valid) {
+    if (validatePlanContract(candidate, { activeTargetSession: opts.activeTargetSession }).valid) {
       validRoles.add(role);
     } else {
       invalidRolePlans.add(role);
@@ -2086,7 +2466,7 @@ export function validateAndInjectRolePlans(
     for (const role of initialMissingRoles) {
       const wave = firstWaveByRole.get(role) || 1;
       const skeleton = buildRoleCoverageSkeleton(role, wave);
-      if (validatePlanContract(skeleton).valid) {
+      if (validatePlanContract(skeleton, { activeTargetSession: opts.activeTargetSession }).valid) {
         plans.push(skeleton);
         validRoles.add(role);
         injectedRoles.push(role);

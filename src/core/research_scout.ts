@@ -17,6 +17,12 @@ import { buildAgentArgs } from "./agent_loader.js";
 import { section, compilePrompt, estimateTokens } from "./prompt_compiler.js";
 import { appendAgentContextUsage, resolveMaxPromptBudget } from "./context_usage.js";
 import { appendAggregateLiveLogSync } from "./live_log.js";
+import { buildPromptAssemblySections, resolvePromptRuntimeContext } from "./prompt_overlay.js";
+import {
+  mirrorJsonArtifactToTargetSession,
+  readTargetSessionArtifactJson,
+  resolveTargetSessionArtifactPath,
+} from "./target_session_state.js";
 
 const SCOUT_SEEN_URLS_FILE = "research_scout_seen_urls.json";
 const SCOUT_TOPIC_SITE_STATUS_FILE = "research_scout_topic_site_status.json";
@@ -34,6 +40,362 @@ type TopicSiteState = {
   updatedAt: string;
   entries: TopicSiteEntry[];
 };
+
+export interface TargetResearchCoveragePlan {
+  adaptive: boolean;
+  repoState: string;
+  obligations: string[];
+  optionalInvestigations: string[];
+  recommendedSourceTypes: string[];
+  targetSourceCount: number;
+  rationale: string[];
+  intentDecision: TargetResearchIntentDecision;
+}
+
+export type TargetExperienceType =
+  | "marketing"
+  | "product_interface"
+  | "admin_interface"
+  | "content_site"
+  | "ecommerce"
+  | "portfolio"
+  | "unknown";
+
+export type TargetAssetNeedLevel = "required" | "optional" | "none";
+
+export interface TargetResearchIntentDecision {
+  repoState: string;
+  experienceType: TargetExperienceType;
+  assetNeeds: {
+    media: TargetAssetNeedLevel;
+    branding: TargetAssetNeedLevel;
+    motion: TargetAssetNeedLevel;
+  };
+  rationale: string[];
+}
+
+const REQUIRED_MEDIA_PRODUCT_RULES = Object.freeze([
+  /\bfood\b/i,
+  /\brestaurant\b/i,
+  /\bmenu\b/i,
+  /\bcatalog\b/i,
+  /\bportfolio\b/i,
+  /\bshowcase\b/i,
+  /\bgallery\b/i,
+  /\be-?commerce\b/i,
+  /\bstorefront\b/i,
+  /\bproduct\s+(?:gallery|card|detail|listing)\b/i,
+  /\bbrand\s+site\b/i,
+  /\blanding\s+page\b/i,
+  /\btravel\b/i,
+  /\bhotel\b/i,
+]);
+
+
+const EXPERIENCE_TYPE_RULES: ReadonlyArray<{ type: TargetExperienceType; patterns: readonly RegExp[] }> = Object.freeze([
+  {
+    type: "ecommerce",
+    patterns: [/\be-?commerce\b/i, /\bstorefront\b/i, /\bcatalog\b/i, /\bproduct(?:\b|\s+(?:gallery|listing|detail|card))\b/i, /\bcheckout\b/i, /\bcart\b/i],
+  },
+  {
+    type: "portfolio",
+    patterns: [/\bportfolio\b/i, /\bshowcase\b/i, /\bgallery\b/i, /\bcase study\b/i],
+  },
+  {
+    type: "marketing",
+    patterns: [/\blanding page\b/i, /\bbrand site\b/i, /\bmarketing\b/i, /\bcampaign\b/i, /\bhero\b/i],
+  },
+  {
+    type: "admin_interface",
+    patterns: [/\badmin\b/i, /\bdashboard\b/i, /\bbackoffice\b/i, /\bcontrol(?:\b|\s+panel)\b/i, /\bstaff\b/i, /\boperator\b/i],
+  },
+  {
+    type: "content_site",
+    patterns: [/\bblog\b/i, /\bdocs?\b/i, /\bdocumentation\b/i, /\bknowledge base\b/i, /\bcontent site\b/i, /\beditorial\b/i],
+  },
+  {
+    type: "product_interface",
+    patterns: [/\bapp\b/i, /\bapplication\b/i, /\binterface\b/i, /\bworkspace\b/i, /\bportal\b/i, /\bsession control\b/i],
+  },
+]);
+
+const EXPLICIT_BRANDING_RULES = Object.freeze([
+  /\bbrand(?:ed|ing)?\b/i,
+  /\blogo\b/i,
+  /\bidentity\b/i,
+  /\bvisual identity\b/i,
+]);
+
+const EXPLICIT_MOTION_RULES = Object.freeze([
+  /\bmotion\b/i,
+  /\banimation\b/i,
+  /\banimated\b/i,
+  /\btransition\b/i,
+  /\bmicro-?interaction\b/i,
+]);
+
+const COVERAGE_SIGNAL_RULES = Object.freeze({
+  visual_design: [/\blanding\b/i, /\bhero\b/i, /\bvisual\b/i, /\bbrand(?:ed|ing)?\b/i, /\bshowcase\b/i, /\bpremium\b/i, /\bmarketing\b/i, /\bportfolio\b/i],
+  media_surfaces: [/\bimage\b/i, /\bimages\b/i, /\bphoto(?:graphy)?\b/i, /\bgallery\b/i, /\bvideo\b/i, /\billustration\b/i, /\basset\b/i],
+  responsive_experience: [/\bresponsive\b/i, /\bmobile\b/i, /\bbreakpoint\b/i, /\bviewport\b/i, /\badaptive\b/i, /\bdesktop\b/i],
+  trust_signals: [/\btrust\b/i, /\btestimonial\b/i, /\breview\b/i, /\brating\b/i, /\bfaq\b/i, /\bsocial\s+proof\b/i, /\breservation\b/i, /\bbooking\b/i, /\bcheckout\b/i, /\bpricing\b/i],
+  user_flow_clarity: [/\bflow\b/i, /\bcta\b/i, /\bjourney\b/i, /\bnavigation\b/i, /\bform\b/i, /\bbooking\b/i, /\bcheckout\b/i, /\breservation\b/i, /\bdashboard\b/i, /\bworkflow\b/i],
+  accessibility_clarity: [/\baccessibility\b/i, /\ba11y\b/i, /\bkeyboard\b/i, /\bcontrast\b/i, /\bsemantic\b/i, /\baria\b/i],
+});
+
+const EXPLICIT_MEDIA_RULES = Object.freeze([
+  ...COVERAGE_SIGNAL_RULES.media_surfaces,
+  /\bimage-heavy\b/i,
+  /\blogo-driven\b/i,
+]);
+
+const EXPLICIT_MEDIA_EXCLUSION_RULES = Object.freeze([
+  /\bwithout\s+(?:depending\s+on\s+)?(?:real\s+)?(?:image|images|photo(?:graphy)?|gallery|video)s?\b/i,
+  /\bno\s+(?:real\s+)?(?:image|images|photo(?:graphy)?|gallery|video)s?\b/i,
+  /\bwithout\s+raw\s+logs\b/i,
+]);
+
+const GENERIC_PUBLIC_WEBSITE_RULES = Object.freeze([
+  /\bwebsite\b/i,
+  /\bweb\s*site\b/i,
+  /\bweb\s?page\b/i,
+  /\bhomepage\b/i,
+]);
+
+function pushUnique(list: string[], value: string): void {
+  if (!value || list.includes(value)) return;
+  list.push(value);
+}
+
+function textMatchesAny(text: string, patterns: readonly RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function collectTargetIntentText(activeTargetSession: any): string {
+  const intent = activeTargetSession?.intent || {};
+  const parts = [
+    intent.summary,
+    intent.productType,
+    ...(Array.isArray(intent.targetUsers) ? intent.targetUsers : []),
+    ...(Array.isArray(intent.mustHaveFlows) ? intent.mustHaveFlows : []),
+    ...(Array.isArray(intent.scopeIn) ? intent.scopeIn : []),
+    ...(Array.isArray(intent.successCriteria) ? intent.successCriteria : []),
+  ];
+  return parts
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function shouldRequireMediaSurfaces(text: string): boolean {
+  return textMatchesAny(text, EXPLICIT_MEDIA_RULES)
+    || textMatchesAny(text, REQUIRED_MEDIA_PRODUCT_RULES);
+}
+
+function resolveExperienceTypeDecision(text: string): { type: TargetExperienceType; usedGenericWebsiteFallback: boolean } {
+  for (const rule of EXPERIENCE_TYPE_RULES) {
+    if (textMatchesAny(text, rule.patterns)) {
+      return {
+        type: rule.type,
+        usedGenericWebsiteFallback: false,
+      };
+    }
+  }
+
+  if (textMatchesAny(text, GENERIC_PUBLIC_WEBSITE_RULES)) {
+    return {
+      type: "marketing",
+      usedGenericWebsiteFallback: true,
+    };
+  }
+
+  return {
+    type: "unknown",
+    usedGenericWebsiteFallback: false,
+  };
+}
+
+function resolveMediaNeed(text: string, experienceType: TargetExperienceType): TargetAssetNeedLevel {
+  if (textMatchesAny(text, EXPLICIT_MEDIA_EXCLUSION_RULES)) {
+    return textMatchesAny(text, EXPLICIT_BRANDING_RULES) || experienceType === "marketing" || experienceType === "portfolio"
+      ? "optional"
+      : "none";
+  }
+  if (shouldRequireMediaSurfaces(text)) {
+    return "required";
+  }
+  if (experienceType === "marketing" || experienceType === "portfolio") {
+    return "optional";
+  }
+  return "none";
+}
+
+function resolveBrandingNeed(text: string, experienceType: TargetExperienceType): TargetAssetNeedLevel {
+  if (textMatchesAny(text, EXPLICIT_BRANDING_RULES) || /\bbrand site\b/i.test(text)) {
+    return "required";
+  }
+  if (experienceType === "marketing" || experienceType === "portfolio") {
+    return "optional";
+  }
+  return "none";
+}
+
+function resolveMotionNeed(text: string, experienceType: TargetExperienceType): TargetAssetNeedLevel {
+  if (textMatchesAny(text, EXPLICIT_MOTION_RULES)) {
+    return "required";
+  }
+  if (experienceType === "marketing" || experienceType === "portfolio" || experienceType === "product_interface") {
+    return "optional";
+  }
+  return "none";
+}
+
+export function interpretTargetResearchIntent(activeTargetSession: any): TargetResearchIntentDecision {
+  const repoState = String(activeTargetSession?.intent?.repoState || activeTargetSession?.repoProfile?.repoState || "unknown").trim() || "unknown";
+  const text = collectTargetIntentText(activeTargetSession);
+  const experienceTypeDecision = resolveExperienceTypeDecision(text);
+  const experienceType = experienceTypeDecision.type;
+  const assetNeeds = {
+    media: resolveMediaNeed(text, experienceType),
+    branding: resolveBrandingNeed(text, experienceType),
+    motion: resolveMotionNeed(text, experienceType),
+  };
+  const rationale: string[] = [];
+
+  if (experienceType !== "unknown") {
+    rationale.push(`experience type resolved as ${experienceType}`);
+  }
+  if (experienceTypeDecision.usedGenericWebsiteFallback) {
+    rationale.push("generic website phrasing defaults to a public-facing marketing surface until a narrower product class is stated");
+  }
+  if (assetNeeds.media === "required") {
+    rationale.push("product intent explicitly depends on media-bearing surfaces");
+  } else if (assetNeeds.media === "optional") {
+    rationale.push("media can improve the experience but is not a delivery gate");
+  }
+  if (assetNeeds.branding === "required") {
+    rationale.push("brand identity is part of the declared product requirement");
+  } else if (assetNeeds.branding === "optional") {
+    rationale.push("brand sensitivity matters even if a full identity system is not mandatory");
+  }
+  if (assetNeeds.motion === "required") {
+    rationale.push("motion is explicitly part of the requested interaction model");
+  } else if (assetNeeds.motion === "optional") {
+    rationale.push("interaction motion can be researched without becoming a hard coverage gate");
+  }
+
+  return {
+    repoState,
+    experienceType,
+    assetNeeds,
+    rationale,
+  };
+}
+
+export function deriveTargetResearchCoveragePlan(activeTargetSession: any): TargetResearchCoveragePlan {
+  const intentDecision = interpretTargetResearchIntent(activeTargetSession);
+  const repoState = intentDecision.repoState;
+  const text = collectTargetIntentText(activeTargetSession);
+  const obligations: string[] = [];
+  const optionalInvestigations: string[] = [];
+  const recommendedSourceTypes: string[] = [];
+  const rationale: string[] = [...intentDecision.rationale];
+
+  pushUnique(obligations, "implementation_patterns");
+  pushUnique(obligations, "user_flow_clarity");
+  pushUnique(recommendedSourceTypes, "implementation docs");
+  pushUnique(recommendedSourceTypes, "reference implementations");
+  pushUnique(recommendedSourceTypes, "failure-mode notes");
+
+  if (repoState === "empty") {
+    pushUnique(obligations, "architecture_foundation");
+    pushUnique(recommendedSourceTypes, "stack selection references");
+    rationale.push("repo is empty so initial build-direction evidence matters");
+  }
+
+  if (
+    textMatchesAny(text, COVERAGE_SIGNAL_RULES.visual_design)
+    || intentDecision.assetNeeds.branding !== "none"
+    || intentDecision.experienceType === "marketing"
+    || intentDecision.experienceType === "portfolio"
+  ) {
+    pushUnique(obligations, "visual_design");
+    pushUnique(recommendedSourceTypes, "visual exemplars");
+    rationale.push("intent decision indicates a visual-first or brand-sensitive surface");
+  }
+
+  if (intentDecision.assetNeeds.media === "required") {
+    pushUnique(obligations, "media_surfaces");
+    pushUnique(recommendedSourceTypes, "asset and media patterns");
+    rationale.push("media is a hard delivery requirement for this product shape");
+  } else if (intentDecision.assetNeeds.media === "optional") {
+    pushUnique(optionalInvestigations, "media_surfaces");
+    pushUnique(recommendedSourceTypes, "asset and media patterns");
+    rationale.push("media should be explored opportunistically without becoming a coverage gate");
+  }
+
+  if (
+    textMatchesAny(text, COVERAGE_SIGNAL_RULES.responsive_experience)
+    || intentDecision.experienceType === "marketing"
+    || intentDecision.experienceType === "ecommerce"
+    || intentDecision.experienceType === "content_site"
+    || textMatchesAny(text, COVERAGE_SIGNAL_RULES.visual_design)
+  ) {
+    pushUnique(obligations, "responsive_experience");
+    pushUnique(recommendedSourceTypes, "responsive UX guidance");
+    rationale.push("the experience needs to hold across mobile and desktop");
+  }
+
+  if (
+    textMatchesAny(text, COVERAGE_SIGNAL_RULES.trust_signals)
+    || intentDecision.experienceType === "marketing"
+    || /\bpremium\b|\bconversion\b|\blanding\b/i.test(text)
+  ) {
+    pushUnique(obligations, "trust_signals");
+    pushUnique(recommendedSourceTypes, "trust/conversion UX examples");
+    rationale.push("user confidence and conversion clarity are part of success");
+  }
+
+  if (textMatchesAny(text, COVERAGE_SIGNAL_RULES.accessibility_clarity) || /\buser\b|\bcustomer\b|\bpublic\b|\blanding\b|\bdashboard\b/i.test(text)) {
+    pushUnique(obligations, "accessibility_clarity");
+    pushUnique(recommendedSourceTypes, "accessibility and usability guidance");
+    rationale.push("user-facing delivery benefits from usability evidence");
+  }
+
+  if (intentDecision.assetNeeds.motion !== "none") {
+    pushUnique(optionalInvestigations, "motion_guidance");
+    pushUnique(recommendedSourceTypes, "motion and interaction references");
+  }
+
+  const targetSourceCount = Math.max(8, Math.min(24, 6 + (obligations.length * 2) + (repoState === "empty" ? 2 : 0)));
+
+  return {
+    adaptive: true,
+    repoState,
+    obligations,
+    optionalInvestigations,
+    recommendedSourceTypes,
+    targetSourceCount,
+    rationale,
+    intentDecision,
+  };
+}
+
+export function buildTargetResearchCoverageSection(activeTargetSession: any): string {
+  const plan = deriveTargetResearchCoveragePlan(activeTargetSession);
+  const { intentDecision } = plan;
+  return `## TARGET RESEARCH COVERAGE PLAN
+Adaptive coverage: enabled
+Experience type: ${intentDecision.experienceType}
+Asset needs: media=${intentDecision.assetNeeds.media}, branding=${intentDecision.assetNeeds.branding}, motion=${intentDecision.assetNeeds.motion}
+Coverage obligations: ${plan.obligations.join(", ") || "implementation_patterns"}
+Optional investigations: ${plan.optionalInvestigations.join(", ") || "none"}
+Preferred source mix: ${plan.recommendedSourceTypes.join(", ") || "implementation docs"}
+Adaptive source target: ${plan.targetSourceCount}
+Stop condition: do not stop once only stack docs are found; continue until the obligation list is materially represented in the evidence set.
+Why these obligations: ${plan.rationale.join("; ") || "keep the research aligned to the declared target intent"}`;
+}
 
 function normalizeUrl(raw: string): string {
   const s = String(raw || "").trim();
@@ -69,6 +431,41 @@ async function loadSeenScoutUrls(stateDir: string): Promise<Set<string>> {
   return seen;
 }
 
+async function loadSeenScoutUrlsForConfig(config: any, stateDir: string): Promise<Set<string>> {
+  const scopedScoutPath = resolveTargetSessionArtifactPath(config, "research_scout_output.json");
+  if (!scopedScoutPath) {
+    return loadSeenScoutUrls(stateDir);
+  }
+
+  const seen = new Set<string>();
+  const [memoryRaw, prevScout] = await Promise.all([
+    readTargetSessionArtifactJson(config, SCOUT_SEEN_URLS_FILE, { urls: [] }),
+    readTargetSessionArtifactJson(config, "research_scout_output.json", null),
+  ]);
+
+  const memoryUrls = Array.isArray(memoryRaw?.urls) ? memoryRaw.urls : [];
+  for (const item of memoryUrls) {
+    const normalized = normalizeUrl(String(item || ""));
+    if (normalized) seen.add(normalized);
+  }
+
+  const prevSources = Array.isArray(prevScout?.sources) ? prevScout.sources : [];
+  for (const source of prevSources) {
+    const normalized = normalizeUrl(String((source as any)?.url || ""));
+    if (normalized) seen.add(normalized);
+  }
+
+  return seen;
+}
+
+async function loadTopicSiteStateForConfig(config: any, stateDir: string): Promise<TopicSiteState> {
+  const scopedTopicStatePath = resolveTargetSessionArtifactPath(config, SCOUT_TOPIC_SITE_STATUS_FILE);
+  if (!scopedTopicStatePath) {
+    return loadTopicSiteState(stateDir);
+  }
+  return readTargetSessionArtifactJson(config, SCOUT_TOPIC_SITE_STATUS_FILE, { updatedAt: null, entries: [] });
+}
+
 async function saveSeenScoutUrls(stateDir: string, seenUrls: Set<string>): Promise<void> {
   const cap = 5000;
   const urls = Array.from(seenUrls).slice(-cap);
@@ -77,6 +474,18 @@ async function saveSeenScoutUrls(stateDir: string, seenUrls: Set<string>): Promi
     count: urls.length,
     urls,
   });
+}
+
+async function saveSeenScoutUrlsForConfig(config: any, stateDir: string, seenUrls: Set<string>): Promise<void> {
+  const cap = 5000;
+  const urls = Array.from(seenUrls).slice(-cap);
+  const payload = {
+    updatedAt: new Date().toISOString(),
+    count: urls.length,
+    urls,
+  };
+  await writeJson(path.join(stateDir, SCOUT_SEEN_URLS_FILE), payload);
+  await mirrorJsonArtifactToTargetSession(config, SCOUT_SEEN_URLS_FILE, payload).catch(() => {});
 }
 
 function normalizeTopic(raw: string): string {
@@ -150,6 +559,17 @@ async function saveTopicSiteState(stateDir: string, map: Map<string, TopicSiteEn
     updatedAt: new Date().toISOString(),
     entries,
   });
+}
+
+async function saveTopicSiteStateForConfig(config: any, stateDir: string, map: Map<string, TopicSiteEntry>): Promise<void> {
+  const entries = Array.from(map.values())
+    .sort((a, b) => (a.site + a.topic).localeCompare(b.site + b.topic));
+  const payload = {
+    updatedAt: new Date().toISOString(),
+    entries,
+  };
+  await writeJson(path.join(stateDir, SCOUT_TOPIC_SITE_STATUS_FILE), payload);
+  await mirrorJsonArtifactToTargetSession(config, SCOUT_TOPIC_SITE_STATUS_FILE, payload).catch(() => {});
 }
 
 function buildBlockedSourcesSection(
@@ -235,15 +655,19 @@ async function buildScoutContext(config: any): Promise<string> {
     seenUrls,
     topicSiteState,
   ] = await Promise.all([
-    readJson(path.join(stateDir, "prometheus_analysis.json"), null),
-    readJson(path.join(stateDir, "jesus_directive.json"), null),
-    readJson(path.join(stateDir, "capacity_scoreboard.json"), null),
-    readJson(path.join(stateDir, "research_scout_output.json"), null),
-    loadSeenScoutUrls(stateDir),
-    loadTopicSiteState(stateDir),
+    readTargetSessionArtifactJson(config, "prometheus_analysis.json", null),
+    readTargetSessionArtifactJson(config, "jesus_directive.json", null),
+    resolveTargetSessionArtifactPath(config, "prometheus_analysis.json")
+      ? Promise.resolve(null)
+      : readJson(path.join(stateDir, "capacity_scoreboard.json"), null),
+    readTargetSessionArtifactJson(config, "research_scout_output.json", null),
+    loadSeenScoutUrlsForConfig(config, stateDir),
+    loadTopicSiteStateForConfig(config, stateDir),
   ]);
 
   const sections: Array<{ name: string; content: string }> = [];
+  const promptRuntime = resolvePromptRuntimeContext(config);
+  const activeTargetSession = promptRuntime.activeTargetSession;
 
   if (seenUrls.size > 0 || topicSiteState.entries.length > 0) {
     sections.push(section("blocked-sources", buildBlockedSourcesSection(seenUrls, topicSiteState)));
@@ -253,14 +677,35 @@ async function buildScoutContext(config: any): Promise<string> {
   }
 
   // System identity and purpose
-  sections.push(section("system-identity", `## SYSTEM CONTEXT
+  if (promptRuntime.mode.effectiveMode === "single_target_delivery" && activeTargetSession) {
+    sections.push(section("system-identity", `## SYSTEM CONTEXT
+You are searching for knowledge for the active target repo while BOX remains the control plane.
+BOX still runs the same loop: Jesus (strategy) → Prometheus (planning) → Athena (review) → Workers (execution) → postmortem → repeat.
+Your job is to find external knowledge that helps BOX deliver against the current target objective without rediscovering facts already held in session state.
+Do NOT spend tokens producing repository file inventories; focus on external research evidence for the target repo's stack, integrations, blockers, and objective.`));
+
+    sections.push(section("repo-goals-static", `## TARGET DELIVERY GOALS (CURRENT SESSION)
+Active target repo: ${promptRuntime.targetRepo}
+Objective: ${String(activeTargetSession.objective?.summary || "unknown")}
+Current stage: ${String(activeTargetSession.currentStage || "unknown")}
+Readiness: ${String(activeTargetSession.onboarding?.readiness || "pending")} (score=${String(activeTargetSession.onboarding?.readinessScore ?? 0)})
+Recommended next stage: ${String(activeTargetSession.onboarding?.recommendedNextStage || "unknown")}
+Required human inputs: ${(Array.isArray(activeTargetSession.handoff?.requiredHumanInputs) ? activeTargetSession.handoff.requiredHumanInputs : []).join(", ") || "none"}
+Carried context: ${String(activeTargetSession.handoff?.carriedContextSummary || "none")}
+Research should improve target delivery readiness and planning quality for this session, not BOX self-improvement in general.`));
+
+    sections.push(section("target-intent-contract", buildTargetIntentResearchSection(activeTargetSession)));
+    sections.push(section("target-research-mode", buildTargetResearchModeSection(activeTargetSession)));
+    sections.push(section("target-research-coverage", buildTargetResearchCoverageSection(activeTargetSession)));
+  } else {
+    sections.push(section("system-identity", `## SYSTEM CONTEXT
 You are searching for knowledge to improve BOX — an autonomous software delivery system.
 BOX runs a continuous loop: Jesus (strategy) → Prometheus (planning) → Athena (review) → Workers (execution) → postmortem → repeat.
 The system evolves itself: it reads its own code, plans improvements, executes them, and measures results.
 Your job is finding external knowledge that makes this system significantly better.
 Do NOT spend tokens producing repository file inventories; focus on external research evidence.`));
 
-  sections.push(section("repo-goals-static", `## REPOSITORY GOALS (STATIC)
+    sections.push(section("repo-goals-static", `## REPOSITORY GOALS (STATIC)
 This repository is the BOX orchestrator and worker runtime for autonomous software delivery.
 Primary goal: increase end-to-end autonomous delivery capacity with production-oriented, minimal, reversible changes.
 Key behavior targets for research relevance:
@@ -269,6 +714,9 @@ Key behavior targets for research relevance:
 - Better model utilization (quality-per-request, token efficiency, context strategy).
 - Better governance and deterministic control loops without slowing delivery.
 Treat these goals as fixed context. Do not generate file lists or repository inventories.`));
+  }
+
+  sections.push(...buildPromptAssemblySections({ agentName: "research-scout", config }));
 
   // Current system health and direction (lightweight — don't overload Scout)
   if (jesusDirective?.thinking) {
@@ -302,6 +750,79 @@ ${String(previousResearch.researchGaps).slice(0, 1000)}`));
   return compilePrompt(sections, {
     tokenBudget: promptTokenBudget > 0 ? promptTokenBudget : undefined,
   });
+}
+
+export function buildTargetResearchSessionStamp(activeTargetSession: any): Record<string, unknown> | null {
+  if (!activeTargetSession || typeof activeTargetSession !== "object") {
+    return null;
+  }
+
+  const repoState = String(activeTargetSession?.intent?.repoState || activeTargetSession?.repoProfile?.repoState || "unknown").trim() || "unknown";
+  const researchMode = repoState === "empty"
+    ? "empty_repo_discovery"
+    : repoState === "existing"
+      ? "existing_repo_support"
+      : "generic_target_research";
+
+  return {
+    projectId: activeTargetSession.projectId || null,
+    sessionId: activeTargetSession.sessionId || null,
+    currentStage: activeTargetSession.currentStage || null,
+    repoState,
+    intentStatus: activeTargetSession?.intent?.status || null,
+    planningMode: activeTargetSession?.intent?.planningMode || null,
+    researchMode,
+  };
+}
+
+function buildTargetResearchModeSection(activeTargetSession: any): string {
+  const stamp = buildTargetResearchSessionStamp(activeTargetSession);
+  const researchMode = String(stamp?.researchMode || "generic_target_research");
+  if (researchMode === "empty_repo_discovery") {
+    return `## TARGET RESEARCH MODE
+Mode: empty_repo_discovery
+The target repository is effectively empty. Do NOT waste effort inferring a current stack from the repo.
+Your job is to reduce build-direction uncertainty from the clarified product intent.
+Prioritize a balanced evidence mix across:
+- best-fit stack choices for this product type
+- initial architecture shape and hosting/deployment for v1
+- implementation and integration patterns that reduce delivery risk
+- product-facing UX references, exemplars, and flow patterns when the target is user-visible
+- media, responsive, trust, or accessibility evidence when those obligations are implied by the target intent
+After research, BOX must move forward into planning in the same cycle. Do not behave as if research itself is the final stop.`;
+  }
+
+  if (researchMode === "existing_repo_support") {
+    return `## TARGET RESEARCH MODE
+Mode: existing_repo_support
+The target repository already contains product material.
+Prioritize:
+- current stack constraints
+- known integration behavior
+- safe change patterns
+- migration or extension risks
+- evidence that helps BOX modify the repo without breaking protected areas`;
+  }
+
+  return `## TARGET RESEARCH MODE
+Mode: generic_target_research
+Use the target intent contract as the boundary. Reduce planning uncertainty directly and avoid unrelated exploration.`;
+}
+
+export function buildTargetIntentResearchSection(activeTargetSession: any): string {
+  return `## TARGET INTENT CONTRACT
+Intent status: ${String(activeTargetSession?.intent?.status || "pending")}
+Intent summary: ${String(activeTargetSession?.intent?.summary || "none")}
+Planning mode: ${String(activeTargetSession?.intent?.planningMode || "none")}
+Product type: ${String(activeTargetSession?.intent?.productType || "none")}
+Target users: ${(Array.isArray(activeTargetSession?.intent?.targetUsers) ? activeTargetSession.intent.targetUsers : []).join(", ") || "none"}
+Must-have flows: ${(Array.isArray(activeTargetSession?.intent?.mustHaveFlows) ? activeTargetSession.intent.mustHaveFlows : []).join(", ") || "none"}
+Scope in: ${(Array.isArray(activeTargetSession?.intent?.scopeIn) ? activeTargetSession.intent.scopeIn : []).join(", ") || "none"}
+Scope out: ${(Array.isArray(activeTargetSession?.intent?.scopeOut) ? activeTargetSession.intent.scopeOut : []).join(", ") || "none"}
+Protected areas: ${(Array.isArray(activeTargetSession?.intent?.protectedAreas) ? activeTargetSession.intent.protectedAreas : []).join(", ") || "none"}
+Success criteria: ${(Array.isArray(activeTargetSession?.intent?.successCriteria) ? activeTargetSession.intent.successCriteria : []).join(", ") || "none"}
+Open questions: ${(Array.isArray(activeTargetSession?.intent?.openQuestions) ? activeTargetSession.intent.openQuestions : []).join(", ") || "none"}
+Research should directly reduce uncertainty around this contract. Do not broaden scope beyond the declared target intent.`;
 }
 
 /**
@@ -378,6 +899,8 @@ export interface ResearchScoutResult {
   rawText: string;
   scoutedAt: string;
   model: string;
+  targetSession?: Record<string, unknown> | null;
+  coveragePlan?: TargetResearchCoveragePlan | null;
   error?: string;
 }
 
@@ -395,9 +918,17 @@ export async function runResearchScout(config: any): Promise<ResearchScoutResult
   const runNonce = disablePromptCache
     ? `research-scout-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
     : "research-scout";
-  const targetSourceCount = Number.isFinite(Number(config?.runtime?.researchScoutTargetSources))
+  const promptRuntime = resolvePromptRuntimeContext(config);
+  const targetResearchPlan = promptRuntime.mode.effectiveMode === "single_target_delivery"
+    ? deriveTargetResearchCoveragePlan(promptRuntime.activeTargetSession)
+    : null;
+  const configuredTargetSourceCount = Number.isFinite(Number(config?.runtime?.researchScoutTargetSources))
     ? Math.max(1, Number(config.runtime.researchScoutTargetSources))
-    : 20;
+    : null;
+  const derivedTargetSourceCount = targetResearchPlan?.targetSourceCount ?? 20;
+  const targetSourceCount = configuredTargetSourceCount !== null
+    ? Math.min(configuredTargetSourceCount, derivedTargetSourceCount)
+    : derivedTargetSourceCount;
   const topicSiteCompletionThreshold = Number.isFinite(Number(config?.runtime?.researchScoutTopicSiteCompletionThreshold))
     ? Math.max(2, Number(config.runtime.researchScoutTopicSiteCompletionThreshold))
     : 8;
@@ -411,17 +942,31 @@ export async function runResearchScout(config: any): Promise<ResearchScoutResult
 
   await appendProgress(config, "[RESEARCH_SCOUT] Starting internet knowledge acquisition");
   await appendProgress(config, `[RESEARCH_SCOUT][CACHE_POLICY] promptCache=${disablePromptCache ? "disabled(via nonce)" : "enabled"}`);
+  if (targetResearchPlan) {
+    await appendProgress(
+      config,
+      `[RESEARCH_SCOUT][COVERAGE_PLAN] obligations=${targetResearchPlan.obligations.join(",") || "none"} sourceTypes=${targetResearchPlan.recommendedSourceTypes.join(",") || "none"} targetSources=${targetSourceCount}`
+    );
+  }
 
   // Build context prompt
   const contextPrompt = await buildScoutContext(config);
   await appendProgress(config, `[RESEARCH_SCOUT][CONTEXT_BUDGET] prompt~${estimateTokens(contextPrompt)} tokens maxCapacityMode=${config?.runtime?.maxCapacityMode === true}`);
 
+  const taskObjective = targetResearchPlan
+    ? `Search for the most valuable external evidence that helps BOX deliver the active target repo successfully.
+Do NOT stop after collecting only stack or framework docs.
+Materially cover these obligation areas: ${targetResearchPlan.obligations.join(", ")}.
+Prefer a balanced mix of ${targetResearchPlan.recommendedSourceTypes.join(", ")}.
+Target at least ${targetSourceCount} high-quality sources when evidence allows; only return fewer if genuinely no additional strong sources are accessible.`
+    : `Search the internet for the most valuable technical knowledge that can advance this autonomous agent system.
+Use your full capacity — search as many different angles as you can.
+Target at least ${targetSourceCount} high-quality sources when evidence allows; only return fewer if genuinely no additional strong sources are accessible.`;
+
   const fullPrompt = `${contextPrompt}
 
 ## YOUR TASK
-Search the internet for the most valuable technical knowledge that can advance this autonomous agent system.
-Use your full capacity — search as many different angles as you can.
-Target at least ${targetSourceCount} high-quality sources when evidence allows; only return fewer if genuinely no additional strong sources are accessible.
+${taskObjective}
 Rank your findings by importance — most valuable first.
 If native web search/fetch tools are unavailable, use execute tool with shell HTTP commands (curl/Invoke-WebRequest) to retrieve web pages and continue.
 Follow the output format specified in your agent definition exactly.`;
@@ -475,6 +1020,8 @@ Follow the output format specified in your agent definition exactly.`;
       rawText: raw,
       scoutedAt: new Date().toISOString(),
       model,
+      targetSession: buildTargetResearchSessionStamp(config?.activeTargetSession),
+      coveragePlan: targetResearchPlan,
       error,
     };
   }
@@ -537,8 +1084,8 @@ Follow the output format specified in your agent definition exactly.`;
       });
     }
   }
-  await saveSeenScoutUrls(stateDir, seenUrls);
-  await saveTopicSiteState(stateDir, topicSiteMap);
+  await saveSeenScoutUrlsForConfig(config, stateDir, seenUrls);
+  await saveTopicSiteStateForConfig(config, stateDir, topicSiteMap);
 
   await appendProgress(
     config,
@@ -559,10 +1106,13 @@ Follow the output format specified in your agent definition exactly.`;
     rawText: raw,
     scoutedAt: new Date().toISOString(),
     model,
+    targetSession: buildTargetResearchSessionStamp(config?.activeTargetSession),
+    coveragePlan: targetResearchPlan,
   };
 
   // Persist raw research package
   await writeJson(path.join(stateDir, "research_scout_output.json"), output);
+  await mirrorJsonArtifactToTargetSession(config, "research_scout_output.json", output).catch(() => {});
 
   if (filteredRepeatCount > 0) {
     await appendProgress(config, `[RESEARCH_SCOUT][DEDUPE] Filtered ${filteredRepeatCount} previously-seen source(s)`);

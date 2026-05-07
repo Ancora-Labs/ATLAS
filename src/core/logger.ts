@@ -1,5 +1,5 @@
 import path from "node:path";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { buildEvent, EVENT_ERROR_CODE } from "./event_schema.js";
 
 export function info(message, data = undefined) {
@@ -26,15 +26,28 @@ export function error(message, data = undefined) {
   console.error(`[box][error] ${message}`, data);
 }
 
+function inferLiveLogMode(stateDir) {
+  try {
+    const sessionPath = path.join(stateDir, "active_target_session.json");
+    if (!existsSync(sessionPath)) return "self";
+    const raw = JSON.parse(readFileSync(sessionPath, "utf8"));
+    return raw?.sessionId ? "target" : "self";
+  } catch {
+    return "self";
+  }
+}
+
 export function chatLog(stateDir, speaker, message) {
   try {
-    const ts = new Date().toISOString().replace("T", " ").slice(0, 19);
-    const line = `[${ts}] ${speaker.padEnd(20)} ${message}\n`;
-    // Mirror to leadership_live.txt (combined view)
-    appendFileSync(path.join(stateDir, "leadership_live.txt"), line, "utf8");
-    // Mirror to per-role live file so each agent's log shows its own messages
-    const slug = String(speaker).trim().toLowerCase().replace(/\s+/g, "-");
-    appendFileSync(path.join(stateDir, `live_worker_${slug}.log`), line, "utf8");
+    const normalizedSpeaker = String(speaker || "worker").trim();
+    const body = String(message || "").trimEnd();
+    if (!body.trim()) return;
+    const mode = inferLiveLogMode(stateDir);
+    const roleLine = `${body} [mode=${mode}]\n`;
+    const combinedLine = `[${normalizedSpeaker}] ${body} [mode=${mode}]\n`;
+    appendFileSync(path.join(stateDir, "leadership_live.txt"), combinedLine, "utf8");
+    const slug = normalizedSpeaker.toLowerCase().replace(/\s+/g, "-");
+    appendFileSync(path.join(stateDir, `live_worker_${slug}.log`), roleLine, "utf8");
   } catch { /* non-critical */ }
 }
 

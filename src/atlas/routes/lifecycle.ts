@@ -10,6 +10,7 @@ export interface AtlasLifecycleRouteOptions {
 interface LifecyclePayload {
   action: AtlasLifecycleAction;
   role?: string | null;
+  sessionId?: string | null;
   returnTo?: string | null;
 }
 
@@ -56,6 +57,7 @@ function parseLifecyclePayload(body: string, req: IncomingMessage): LifecyclePay
   return {
     action: String(params.get("action") || "") as AtlasLifecycleAction,
     role: params.get("role"),
+    sessionId: params.get("sessionId"),
     returnTo: params.get("returnTo"),
   };
 }

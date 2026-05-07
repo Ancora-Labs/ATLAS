@@ -1,26 +1,57 @@
-import { timingSafeEqual } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { readAtlasClarificationStatus } from "../clarification.js";
+import { buildAtlasRuntimeSnapshot } from "../build_runtime.js";
+import { readAtlasBuildRequest } from "../build_request_state.js";
+import { listAtlasCompletedSessions } from "../completed_sessions.js";
+import { resolveAtlasGitHubBootstrap } from "../github_auth.js";
+import { renderAtlasHomeHtml, type AtlasPageData } from "../renderer.js";
+import { readJsonSafe } from "../../core/fs_utils.js";
+import { getActiveTargetSessionPath, getPlatformModeStatePath } from "../../core/mode_state.js";
 import {
-  parseAtlasDesktopLocationFromUrl,
-  type AtlasDesktopLocation,
-  type AtlasDesktopProductSurface,
-} from "../desktop_state.js";
+  getTargetClarificationPacketPath,
+  getTargetIntentContractPath,
+  getTargetSessionStateFilePath,
+  listOpenTargetSessions,
+} from "../../core/target_session_state.js";
 import {
-  renderAtlasWorkspaceHtml,
-  type AtlasMainPaneMode,
-  type AtlasPageData,
-} from "../renderer.js";
-import {
-  compareAtlasSessionsForDesktop,
-  listAtlasSessions,
-  type AtlasSessionDto,
-} from "../state_bridge.js";
-import { readPipelineProgress } from "../../core/pipeline_progress.js";
-import { normalizeWorkerName } from "../../core/role_registry.js";
+  archiveAtlasDesktopSession,
+  getAtlasDesktopSessionStatusLabel,
+  linkAtlasDesktopSessionToProjectSession,
+  listAtlasDesktopSessions,
+  MAX_ATLAS_DESKTOP_SESSIONS,
+  upsertAtlasResolvedOnboardingSession,
+  type AtlasDesktopSessionRecord,
+} from "../desktop_sessions.js";
+import { readAtlasDesktopRepoContext } from "../repository_context.js";
+import type { AtlasDesktopRepoContext } from "../desktop_state.js";
+
+type RuntimeSessionState = "active" | "stopped" | "onboarding" | "complete" | "attention";
+
+function summarizeRuntimeStatus(
+  session: AtlasDesktopSessionRecord,
+  snapshot: Awaited<ReturnType<typeof buildAtlasRuntimeSnapshot>>,
+  canonicalStage: string | null,
+): { state: RuntimeSessionState; label: string; tone: "active" | "idle" | "complete" | "attention" } {
+  if (session.status !== "ready") {
+    return { state: "onboarding", label: getAtlasDesktopSessionStatusLabel(session.status), tone: "idle" };
+  }
+  const normalizedStage = String(canonicalStage || "").trim().toLowerCase();
+  if (!snapshot) {
+    return normalizedStage === "active"
+      ? { state: "active", label: "Active", tone: "active" }
+      : { state: "stopped", label: "Stopped", tone: "idle" };
+  }
+  if (snapshot.request.state === "error") {
+    return { state: "attention", label: "Needs attention", tone: "attention" };
+  }
+  if (snapshot.request.state === "completed" || snapshot.pipeline.stage === "cycle_complete") {
+    return { state: "complete", label: "Complete", tone: "complete" };
+  }
+  if (snapshot.request.state === "running" || normalizedStage === "active") {
+    return { state: "active", label: "Active", tone: "active" };
+  }
+  return { state: "stopped", label: "Stopped", tone: "idle" };
+}
 
 export interface AtlasHomeRouteOptions {
   stateDir: string;
@@ -28,177 +59,316 @@ export interface AtlasHomeRouteOptions {
   hostLabel?: string;
   shellCommand?: string;
   desktopSessionId?: string;
-  desktopSnapshotToken?: string;
 }
 
-export const ATLAS_SNAPSHOT_PATH = "/api/atlas/snapshot";
-export const ATLAS_LEGACY_SNAPSHOT_PATH = "/api/snapshot";
-export const ATLAS_SNAPSHOT_TOKEN_HEADER = "x-atlas-desktop-snapshot-token";
-
-export interface AtlasSnapshotRequestPayload {
-  focusRole?: string | null;
+function normalizeRepoLabel(repoContext: AtlasDesktopRepoContext | null, targetRepo?: string): string {
+  return repoContext?.targetRepo || String(targetRepo || "").trim() || "No repo selected";
 }
 
-export interface AtlasSnapshotResponse {
-  ok: true;
-  pageData: AtlasPageData;
-  snapshotAt: string;
-  continuitySource: "live";
-  continuityDetail: string;
+function sortSessions(sessions: AtlasDesktopSessionRecord[]): AtlasDesktopSessionRecord[] {
+  return [...sessions].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
 }
 
-interface AtlasDesktopBuildInfo {
-  sessionId?: unknown;
-  builtAt?: unknown;
-}
-
-function normalizeRepoLabel(targetRepo?: string): string {
-  const repo = String(targetRepo || "").trim();
-  return repo || "Target repo not configured";
-}
-
-function sortSessions(sessions: AtlasSessionDto[]): AtlasSessionDto[] {
-  return [...sessions].sort(compareAtlasSessionsForDesktop);
-}
-
-function hasLiveAtlasSessions(sessions: AtlasSessionDto[]): boolean {
-  return sessions.some((session) => session.freshnessState === "live");
-}
-
-function summarizeAtlasFreshnessPolicy(
-  sessions: AtlasSessionDto[],
-): Pick<AtlasPageData, "continuityStatusLabel" | "continuityStatusDetail"> {
-  if (sessions.length === 0) {
-    return {
-      continuityStatusLabel: "Waiting for live detail",
-      continuityStatusDetail: "ATLAS keeps the workspace root ready and opens selected-session detail as soon as the next tracked session snapshot is written.",
-    };
+function resolveFocusedSessionId(sessions: AtlasDesktopSessionRecord[], requestedSessionId: string | null): string | null {
+  const normalizedRequestedSessionId = String(requestedSessionId || "").trim();
+  if (!normalizedRequestedSessionId) {
+    return null;
   }
-
-  const liveCount = sessions.filter((session) => session.freshnessState === "live").length;
-  const staleCount = sessions.filter((session) => session.freshnessState === "stale").length;
-  const unknownCount = sessions.filter((session) => session.freshnessState === "unknown").length;
-
-  if (liveCount === sessions.length) {
-    return {
-      continuityStatusLabel: "Live detail verified",
-      continuityStatusDetail: "Every visible session has a verified live update within the current freshness policy window.",
-    };
-  }
-
-  if (liveCount === 0 && staleCount > 0) {
-    return {
-      continuityStatusLabel: "Live detail stale",
-      continuityStatusDetail: "ATLAS is showing recorded session context, but none of the tracked sessions have refreshed within the live freshness policy window.",
-    };
-  }
-
-  return {
-    continuityStatusLabel: "Mixed freshness policy",
-    continuityStatusDetail: `ATLAS verified ${String(liveCount)} live session${liveCount === 1 ? "" : "s"}, while ${String(staleCount + unknownCount)} row${staleCount + unknownCount === 1 ? "" : "s"} remain stale or unverified.`,
-  };
+  return sessions.some((session) => session.id === normalizedRequestedSessionId)
+    ? normalizedRequestedSessionId
+    : null;
 }
 
-async function deriveAtlasWorkspaceRuntimeState(
-  options: AtlasHomeRouteOptions,
-  sessions: AtlasSessionDto[],
-  focusedSessionRole: string | null,
-  missingFocusedSnapshot: boolean,
-): Promise<Pick<AtlasPageData, "sessionStartStatusLabel" | "sessionStartStatusDetail" | "sessionStartUpdatedAt" | "continuityStatusLabel" | "continuityStatusDetail">> {
-  const hasLiveSessions = hasLiveAtlasSessions(sessions);
-  const desktopSessionId = String(options.desktopSessionId || "").trim();
-  const freshnessSummary = summarizeAtlasFreshnessPolicy(sessions);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
-  let sessionStartStatusLabel = hasLiveSessions ? "New session available" : "Ready for first session";
-  let sessionStartStatusDetail = hasLiveSessions
-    ? "The left rail is showing live tracked sessions, and the main pane can switch back to the clean new-session workspace at any time."
-    : "Start a session from the workspace composer to seed the first live workflow.";
-  let sessionStartUpdatedAt: string | null = null;
+function normalizeOptionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
 
-  if (desktopSessionId) {
-    try {
-      const packetStatus = await readAtlasClarificationStatus(options.stateDir, desktopSessionId);
-      if (packetStatus.ready && packetStatus.packet) {
-        sessionStartUpdatedAt = packetStatus.packet.createdAt;
-        sessionStartStatusLabel = "Stored session brief";
-        sessionStartStatusDetail = hasLiveSessions
-          ? "ATLAS keeps the most recent desktop brief for recovery, but the brief is never treated as current live worker state."
-          : "ATLAS stored the last desktop brief for recovery, and the workspace stays on the new-session canvas until a live session snapshot is written.";
-      }
-    } catch (error) {
-      console.error(`[atlas] failed to read desktop session brief status: ${String((error as Error)?.message || error)}`);
-      sessionStartStatusLabel = "Session brief unavailable";
-      sessionStartStatusDetail = "ATLAS could not read the last desktop session brief, but the workspace stays available on the new-session canvas.";
+function extractAtlasDesktopSessionIdFromNotes(notes: unknown): string | null {
+  if (!Array.isArray(notes)) {
+    return null;
+  }
+  for (const note of notes) {
+    const match = /^ATLAS desktop session id:\s*(.+)$/i.exec(String(note || "").trim());
+    if (match?.[1]?.trim()) {
+      return match[1].trim();
+    }
+  }
+  return null;
+}
+
+async function readAtlasRecoveryPacket(
+  stateDir: string,
+  targetSession: any,
+  atlasDesktopSessionId: string,
+): Promise<Record<string, unknown>> {
+  const projectId = normalizeOptionalString(targetSession?.projectId);
+  const sessionId = normalizeOptionalString(targetSession?.sessionId);
+
+  if (projectId && sessionId) {
+    const intentContract = await readJsonSafe(getTargetIntentContractPath(stateDir, projectId, sessionId));
+    if (intentContract.ok && isRecord(intentContract.data) && isRecord(intentContract.data.resolvedPacket)) {
+      return {
+        ...intentContract.data.resolvedPacket,
+        sessionId: atlasDesktopSessionId || intentContract.data.resolvedPacket.sessionId,
+      };
+    }
+
+    const clarificationPacket = await readJsonSafe(getTargetClarificationPacketPath(stateDir, projectId, sessionId));
+    if (clarificationPacket.ok && isRecord(clarificationPacket.data)) {
+      return {
+        ...clarificationPacket.data,
+        sessionId: atlasDesktopSessionId || clarificationPacket.data.sessionId,
+      };
     }
   }
 
-  if (missingFocusedSnapshot) {
-    return {
-      sessionStartStatusLabel,
-      sessionStartStatusDetail,
-      sessionStartUpdatedAt,
-      continuityStatusLabel: "Selected detail unavailable",
-      continuityStatusDetail: "The saved focus is not present in the current live snapshot, so ATLAS clears the selection and falls back to the blank new-session view instead of showing stale detail.",
-    };
-  }
-
+  const objective = normalizeOptionalString(targetSession?.objective?.summary) || "Recovered ATLAS session";
+  const operatorIntentBrief = normalizeOptionalString(targetSession?.intent?.operatorIntentBrief)
+    || normalizeOptionalString(targetSession?.objective?.desiredOutcome)
+    || objective;
   return {
-    sessionStartStatusLabel,
-    sessionStartStatusDetail,
-    sessionStartUpdatedAt,
-    continuityStatusLabel: freshnessSummary.continuityStatusLabel,
-    continuityStatusDetail: freshnessSummary.continuityStatusDetail,
+    sessionId: atlasDesktopSessionId,
+    targetRepo: normalizeOptionalString(targetSession?.repo?.repoFullName)
+      || normalizeOptionalString(targetSession?.repo?.name)
+      || process.cwd(),
+    repoMode: targetSession?.repo?.repoCreatedByBox === true ? "new" : "existing",
+    objective,
+    summary: objective,
+    operatorIntentBrief,
+    openQuestions: [],
+    executionNotes: [],
+    attachments: [],
+    attachmentPlans: [],
+    provider: "atlas-home-recovery",
+    rawResponse: "",
+    createdAt: normalizeOptionalString(targetSession?.lifecycle?.updatedAt) || new Date().toISOString(),
   };
 }
 
-export function resolveAtlasDesktopPageLocation(
-  requestUrl: string | undefined,
-  fallbackSurface: AtlasDesktopProductSurface,
-): AtlasDesktopLocation {
-  void fallbackSurface;
-  const fallbackPath = "/";
-  return parseAtlasDesktopLocationFromUrl(String(requestUrl || fallbackPath))
-    || {
-      surface: "workspace",
-      focusedSessionRole: null,
-    };
+function buildAtlasRepoContextFromTargetSession(targetSession: any): AtlasDesktopRepoContext {
+  return {
+    provider: "github",
+    targetRepo: normalizeOptionalString(targetSession?.repo?.repoFullName)
+      || normalizeOptionalString(targetSession?.repo?.name)
+      || process.cwd(),
+    targetBaseBranch: normalizeOptionalString(targetSession?.repo?.defaultBranch),
+    repoMode: targetSession?.repo?.repoCreatedByBox === true ? "new" : "existing",
+    repoCreatedByAtlas: targetSession?.repo?.repoCreatedByBox === true,
+  };
 }
 
-function resolveFocusedSessionRole(
-  sessions: AtlasSessionDto[],
-  requestedRole: string | null,
-): string | null {
-  const normalizedRequestedRole = normalizeWorkerName(String(requestedRole || ""));
-  if (!normalizedRequestedRole) {
-    return null;
+async function rehydrateAtlasDesktopSessionsFromOpenTargets(
+  stateDir: string,
+  sessions: AtlasDesktopSessionRecord[],
+): Promise<AtlasDesktopSessionRecord[]> {
+  const openTargetSessions = await listOpenTargetSessions({ paths: { stateDir } });
+  const [activeTargetPointer, platformModeState] = await Promise.all([
+    readJsonSafe(getActiveTargetSessionPath(stateDir)),
+    readJsonSafe(getPlatformModeStatePath(stateDir)),
+  ]);
+  const activeTargetSession = activeTargetPointer.ok && isRecord(activeTargetPointer.data)
+    ? activeTargetPointer.data
+    : null;
+  const modeStateProjectId = platformModeState.ok && isRecord(platformModeState.data)
+    ? normalizeOptionalString(platformModeState.data.activeTargetProjectId)
+    : null;
+  const modeStateSessionId = platformModeState.ok && isRecord(platformModeState.data)
+    ? normalizeOptionalString(platformModeState.data.activeTargetSessionId)
+    : null;
+  const modeStateTargetSession = modeStateProjectId && modeStateSessionId
+    ? await readJsonSafe(getTargetSessionStateFilePath(stateDir, modeStateProjectId, modeStateSessionId))
+    : null;
+  const resolvedModeStateTargetSession = modeStateTargetSession?.ok && isRecord(modeStateTargetSession.data)
+    ? modeStateTargetSession.data
+    : null;
+
+  const candidateTargetSessions = [
+    activeTargetSession,
+    resolvedModeStateTargetSession,
+    ...openTargetSessions,
+  ].filter((session, index, all): session is Record<string, unknown> => {
+    if (!isRecord(session)) {
+      return false;
+    }
+    const projectId = normalizeOptionalString(session.projectId);
+    const sessionId = normalizeOptionalString(session.sessionId);
+    if (!projectId || !sessionId) {
+      return false;
+    }
+    return all.findIndex((candidate) => (
+      isRecord(candidate)
+      && normalizeOptionalString(candidate.projectId) === projectId
+      && normalizeOptionalString(candidate.sessionId) === sessionId
+    )) === index;
+  });
+  const existingSessionIds = new Set(sessions.map((session) => session.id));
+  const existingProjectBindings = new Set(
+    sessions
+      .map((session) => {
+        const projectId = normalizeOptionalString(session.projectId);
+        const projectSessionId = normalizeOptionalString(session.projectSessionId);
+        return projectId && projectSessionId ? `${projectId}:${projectSessionId}` : null;
+      })
+      .filter((value): value is string => Boolean(value)),
+  );
+
+  let recoveredAny = false;
+  for (const targetSession of candidateTargetSessions) {
+    const projectId = normalizeOptionalString(targetSession?.projectId);
+    const projectSessionId = normalizeOptionalString(targetSession?.sessionId);
+    if (!projectId || !projectSessionId) {
+      continue;
+    }
+    const projectKey = `${projectId}:${projectSessionId}`;
+    if (existingProjectBindings.has(projectKey)) {
+      continue;
+    }
+
+    const hints = isRecord(targetSession.hints) ? targetSession.hints : null;
+    const objective = isRecord(targetSession.objective) ? targetSession.objective : null;
+    const workspace = isRecord(targetSession.workspace) ? targetSession.workspace : null;
+    const atlasDesktopSessionId = extractAtlasDesktopSessionIdFromNotes(hints?.notes)
+      || normalizeOptionalString(targetSession?.atlasDesktopSessionId)
+      || normalizeOptionalString((await readAtlasRecoveryPacket(stateDir, targetSession, "")).sessionId);
+    if (!atlasDesktopSessionId || existingSessionIds.has(atlasDesktopSessionId)) {
+      continue;
+    }
+
+    try {
+      const packet = await readAtlasRecoveryPacket(stateDir, targetSession, atlasDesktopSessionId);
+      const session = await upsertAtlasResolvedOnboardingSession({
+        stateDir,
+        sessionId: atlasDesktopSessionId,
+        objective: normalizeOptionalString(objective?.summary) || normalizeOptionalString(packet.objective) || projectId,
+        repoContext: buildAtlasRepoContextFromTargetSession(targetSession),
+        packet: packet as any,
+      });
+      await linkAtlasDesktopSessionToProjectSession({
+        stateDir,
+        sessionId: session.id,
+        projectId,
+        projectSessionId,
+        projectWorkspacePath: normalizeOptionalString(workspace?.path),
+      });
+      existingSessionIds.add(session.id);
+      existingProjectBindings.add(projectKey);
+      recoveredAny = true;
+    } catch (error) {
+      console.error(`[atlas] failed to recover desktop session for ${projectKey}: ${String((error as Error)?.message || error)}`);
+    }
   }
 
-  const match = sessions.find(
-    (session) => normalizeWorkerName(session.role) === normalizedRequestedRole && session.freshnessState === "live",
+  return recoveredAny
+    ? sortSessions(await listAtlasDesktopSessions(stateDir))
+    : sessions;
+}
+
+async function reconcileCompletedDesktopSessions(
+  stateDir: string,
+  sessions: AtlasDesktopSessionRecord[],
+  completedSessions: Awaited<ReturnType<typeof listAtlasCompletedSessions>>,
+): Promise<AtlasDesktopSessionRecord[]> {
+  const openTargetSessions = await listOpenTargetSessions({ paths: { stateDir } });
+  const [activeTargetPointer, platformModeState, activeBuildRequest] = await Promise.all([
+    readJsonSafe(getActiveTargetSessionPath(stateDir)),
+    readJsonSafe(getPlatformModeStatePath(stateDir)),
+    readAtlasBuildRequest(stateDir),
+  ]);
+  const completedKeys = new Set(completedSessions.map((session) => `${session.projectId}:${session.sessionId}`));
+  const protectedKeys = new Set(
+    openTargetSessions
+      .map((session) => {
+        const projectId = normalizeOptionalString(session?.projectId);
+        const projectSessionId = normalizeOptionalString(session?.sessionId);
+        return projectId && projectSessionId ? `${projectId}:${projectSessionId}` : null;
+      })
+      .filter((value): value is string => Boolean(value)),
   );
-  return match?.role || null;
+  const activePointerProjectId = normalizeOptionalString(activeTargetPointer.ok && isRecord(activeTargetPointer.data)
+    ? activeTargetPointer.data.projectId
+    : null);
+  const activePointerSessionId = normalizeOptionalString(activeTargetPointer.ok && isRecord(activeTargetPointer.data)
+    ? activeTargetPointer.data.sessionId
+    : null);
+  if (activePointerProjectId && activePointerSessionId) {
+    protectedKeys.add(`${activePointerProjectId}:${activePointerSessionId}`);
+  }
+
+  const modeStateProjectId = normalizeOptionalString(platformModeState.ok && isRecord(platformModeState.data)
+    ? platformModeState.data.activeTargetProjectId
+    : null);
+  const modeStateSessionId = normalizeOptionalString(platformModeState.ok && isRecord(platformModeState.data)
+    ? platformModeState.data.activeTargetSessionId
+    : null);
+  if (modeStateProjectId && modeStateSessionId) {
+    protectedKeys.add(`${modeStateProjectId}:${modeStateSessionId}`);
+  }
+
+  const activeBuildSessionId = normalizeOptionalString(activeBuildRequest?.sessionId);
+  const activeBuildProjectId = normalizeOptionalString(activeBuildRequest?.projectId);
+  const activeBuildProjectSessionId = normalizeOptionalString(activeBuildRequest?.projectSessionId);
+  const activeBuildProtectsSession = activeBuildRequest && activeBuildRequest.triggerState !== "completed";
+  if (activeBuildProtectsSession && activeBuildProjectId && activeBuildProjectSessionId) {
+    protectedKeys.add(`${activeBuildProjectId}:${activeBuildProjectSessionId}`);
+  }
+
+  const archiveCandidates = sessions.filter((session) => {
+    if (activeBuildProtectsSession && activeBuildSessionId && session.id === activeBuildSessionId) {
+      return false;
+    }
+    const projectId = String(session.projectId || "").trim();
+    const projectSessionId = String(session.projectSessionId || "").trim();
+    if (!projectId || !projectSessionId) {
+      return false;
+    }
+    const projectKey = `${projectId}:${projectSessionId}`;
+    return completedKeys.has(projectKey) && !protectedKeys.has(projectKey);
+  });
+
+  if (archiveCandidates.length === 0) {
+    return sessions;
+  }
+
+  for (const session of archiveCandidates) {
+    await archiveAtlasDesktopSession({
+      stateDir,
+      atlasDesktopSessionId: session.id,
+      projectId: session.projectId,
+      projectSessionId: session.projectSessionId,
+    });
+  }
+
+  return sortSessions(await listAtlasDesktopSessions(stateDir));
 }
 
-function resolveAtlasMainPaneMode(focusedSessionRole: string | null): AtlasMainPaneMode {
-  return focusedSessionRole ? "selected-session" : "new-session";
+function getLatestSessionTimestamp(sessions: AtlasDesktopSessionRecord[]): string | null {
+  const timestamps = sessions
+    .map((session) => session.updatedAt)
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .sort((left, right) => Date.parse(right) - Date.parse(left));
+  return timestamps[0] || null;
 }
 
-export function deriveAtlasHomeReadiness(
-  sessions: AtlasSessionDto[],
+function deriveAtlasHomeReadiness(
+  sessions: AtlasDesktopSessionRecord[],
+  repoContext: AtlasDesktopRepoContext | null,
 ): Pick<AtlasPageData, "homePrimaryActionLabel" | "homeReadinessHeading" | "homeReadinessDetail"> {
-  const hasResumableSessions = sessions.some(
-    (session) => session.isResumable && session.freshnessState === "live",
-  );
-  return hasResumableSessions
+  return sessions.length > 0
     ? {
         homePrimaryActionLabel: "New Session",
-        homeReadinessHeading: "Live sessions available",
-        homeReadinessDetail: "Pick a tracked session from the left rail to inspect it, or stay on the blank start screen and write the next objective.",
+        homeReadinessHeading: "Ready to continue",
+        homeReadinessDetail: "Pick any tracked session from the left rail or open a fresh one from the same window.",
       }
     : {
         homePrimaryActionLabel: "New Session",
         homeReadinessHeading: "Ready to start",
-        homeReadinessDetail: "Write one outcome in the blank start screen composer to start the next session from the main workspace.",
+        homeReadinessDetail: repoContext?.targetRepo
+          ? `Selected project: ${repoContext.targetRepo}. Your next message will open ${repoContext.repoMode === "existing" ? "existing-project" : "new-project"} onboarding.`
+            : "Write one concrete request. If you do not choose an existing project first, Atlas will ask for a new project name and description before it creates the repo.",
       };
 }
 
@@ -207,110 +377,106 @@ export function writeAtlasHtmlResponse(res: ServerResponse, html: string): void 
   res.end(html);
 }
 
-export function writeAtlasJsonResponse(res: ServerResponse, payload: unknown): void {
-  res.writeHead(200, {
-    "cache-control": "no-store",
-    "content-type": "application/json; charset=utf-8",
-  });
-  res.end(JSON.stringify(payload));
-}
-
-function isAuthorizedSnapshotToken(providedToken: string, expectedToken: string): boolean {
-  const provided = Buffer.from(providedToken, "utf8");
-  const expected = Buffer.from(expectedToken, "utf8");
-  if (provided.length !== expected.length) {
-    return false;
-  }
-  return timingSafeEqual(provided, expected);
-}
-
-function isAtlasSnapshotRequestAuthorized(
-  req: IncomingMessage,
-  options: AtlasHomeRouteOptions,
-): boolean {
-  const expectedToken = String(options.desktopSnapshotToken || "").trim();
-  if (!expectedToken) {
-    return true;
-  }
-
-  const headerValue = req.headers[ATLAS_SNAPSHOT_TOKEN_HEADER];
-  const providedToken = Array.isArray(headerValue)
-    ? String(headerValue[0] || "").trim()
-    : String(headerValue || "").trim();
-  if (!providedToken) {
-    return false;
-  }
-
-  return isAuthorizedSnapshotToken(providedToken, expectedToken);
-}
-
-async function readDesktopBuildInfo(): Promise<{ sessionId: string; builtAt: string | null; }> {
-  const buildInfoPath = path.join(process.cwd(), "desktop-build-info.json");
+function resolveRequestFocusSessionId(requestUrl: string | undefined): string | null {
   try {
-    const raw = await fs.readFile(buildInfoPath, "utf8");
-    const parsed = JSON.parse(raw) as AtlasDesktopBuildInfo;
-    return {
-      sessionId: String(parsed?.sessionId || "unknown-session").trim() || "unknown-session",
-      builtAt: typeof parsed?.builtAt === "string" && parsed.builtAt.trim() ? parsed.builtAt.trim() : null,
-    };
-  } catch (error) {
-    console.error(`[atlas] failed to read desktop build info: ${String((error as Error)?.message || error)}`);
-    return {
-      sessionId: "unknown-session",
-      builtAt: null,
-    };
+    const parsedUrl = new URL(String(requestUrl || "/"), "http://127.0.0.1");
+    return String(parsedUrl.searchParams.get("focusSession") || "").trim() || null;
+  } catch {
+    return null;
   }
 }
 
-export async function buildAtlasPageData(
-  options: AtlasHomeRouteOptions,
-  location: AtlasDesktopLocation = {
-    surface: "workspace",
-    focusedSessionRole: null,
-  },
-): Promise<AtlasPageData> {
-  const pipelineProgress = await readPipelineProgress({ paths: { stateDir: options.stateDir } });
-  const sessions = await listAtlasSessions({ stateDir: options.stateDir });
-  const sortedSessions = sortSessions(Object.values(sessions));
-  const buildInfo = await readDesktopBuildInfo();
-  const requestedFocusedSessionRole = String(location.focusedSessionRole || "").trim() || null;
-  const focusedSessionRole = resolveFocusedSessionRole(sortedSessions, requestedFocusedSessionRole);
-  const missingFocusedSnapshot = Boolean(requestedFocusedSessionRole && !focusedSessionRole);
-  const runtimeState = await deriveAtlasWorkspaceRuntimeState(
-    options,
-    sortedSessions,
-    requestedFocusedSessionRole,
-    missingFocusedSnapshot,
+export async function buildAtlasPageData(options: AtlasHomeRouteOptions, requestUrl?: string): Promise<AtlasPageData> {
+  const authBootstrap = await resolveAtlasGitHubBootstrap(options.stateDir);
+  const repoContext = await readAtlasDesktopRepoContext(options.stateDir);
+  const completedSessions = await listAtlasCompletedSessions(options.stateDir);
+  const liveSessions = await rehydrateAtlasDesktopSessionsFromOpenTargets(
+    options.stateDir,
+    sortSessions(await listAtlasDesktopSessions(options.stateDir)),
   );
+  const sortedSessions = await reconcileCompletedDesktopSessions(
+    options.stateDir,
+    liveSessions,
+    completedSessions,
+  );
+  const requestedFocusedSessionId = resolveRequestFocusSessionId(requestUrl);
+  const focusedSessionId = resolveFocusedSessionId(sortedSessions, requestedFocusedSessionId);
+  const focusedSession = focusedSessionId
+    ? (sortedSessions.find((session) => session.id === focusedSessionId) || null)
+    : null;
+  const canonicalOpenTargetSessions = await listOpenTargetSessions({ paths: { stateDir: options.stateDir } });
+  const canonicalSessionStages = Object.fromEntries(sortedSessions.flatMap((session) => {
+    const match = canonicalOpenTargetSessions.find((entry) => (
+      normalizeOptionalString(entry?.atlasDesktopSessionId) === session.id
+    ) || (
+      normalizeOptionalString(entry?.projectId) === normalizeOptionalString(session.projectId)
+      && normalizeOptionalString(entry?.sessionId) === normalizeOptionalString(session.projectSessionId)
+    ));
+    const stage = normalizeOptionalString(match?.currentStage);
+    return stage ? [[session.id, stage]] : [];
+  }));
+  const missingFocusedSnapshot = Boolean(requestedFocusedSessionId && !focusedSessionId);
+  const latestSessionTimestamp = getLatestSessionTimestamp(sortedSessions);
+  const hasLiveSessions = sortedSessions.length > 0;
+  const readySessionSnapshots = await Promise.all(sortedSessions.map(async (session) => ({
+    session,
+    snapshot: session.status === "ready"
+      ? await buildAtlasRuntimeSnapshot({ stateDir: options.stateDir, session })
+      : null,
+  })));
+  const focusedSnapshot = focusedSession
+    ? (readySessionSnapshots.find((entry) => entry.session.id === focusedSession.id)?.snapshot || null)
+    : null;
+  const runtimeSnapshot = focusedSession
+    ? focusedSnapshot
+    : null;
+  const sessionRuntimeStatuses = Object.fromEntries(readySessionSnapshots.map((entry) => [
+    entry.session.id,
+    summarizeRuntimeStatus(entry.session, entry.snapshot, canonicalSessionStages[entry.session.id] || null),
+  ]));
+  const activeSessionCount = Object.values(sessionRuntimeStatuses).filter((entry) => entry.state === "active").length;
 
   const pageData = {
-    title: "ATLAS Workspace",
-    repoLabel: normalizeRepoLabel(options.targetRepo),
+    title: "ATLAS Home",
+    repoLabel: normalizeRepoLabel(repoContext, options.targetRepo),
+    repoContext,
     hostLabel: String(options.hostLabel || "Windows host").trim() || "Windows host",
     shellCommand: String(options.shellCommand || ".\\ATLAS.cmd").trim() || ".\\ATLAS.cmd",
-    pipelineStageLabel: String(pipelineProgress?.stageLabel || "Idle"),
-    pipelineDetail: String(pipelineProgress?.detail || "System ready"),
-    pipelinePercent: Number(pipelineProgress?.percent || 0),
-    updatedAt: typeof pipelineProgress?.updatedAt === "string" ? pipelineProgress.updatedAt : null,
-    buildSessionId: buildInfo.sessionId,
-    buildTimestamp: buildInfo.builtAt,
-    mainPaneMode: resolveAtlasMainPaneMode(focusedSessionRole),
-    focusedSessionRole,
+    updatedAt: latestSessionTimestamp,
+    buildSessionId: options.desktopSessionId || "atlas-desktop",
+    buildTimestamp: latestSessionTimestamp,
+    sessionStartStatusLabel: hasLiveSessions ? "Tracked sessions available" : "Waiting for the first session",
+    sessionStartStatusDetail: hasLiveSessions
+      ? `Continue any tracked session from the left rail or open a fresh one. ATLAS keeps up to ${MAX_ATLAS_DESKTOP_SESSIONS} sessions active in this shell.`
+      : (repoContext?.targetRepo
+          ? `ATLAS will use ${repoContext.targetRepo} for the next session and switch into ${repoContext.repoMode === "existing" ? "existing-project" : "new-project"} onboarding.`
+          : "No session has been created yet. Send a message and Atlas will ask for the new project name and description before it creates a fresh repo, or choose an existing repo first."),
+    sessionStartUpdatedAt: latestSessionTimestamp,
+    continuityStatusLabel: missingFocusedSnapshot ? "Focus target missing" : (hasLiveSessions ? "Session rail ready" : "No live sessions yet"),
+    continuityStatusDetail: missingFocusedSnapshot
+      ? "The previously focused session no longer exists in the current live rail, so ATLAS returned to the blank workspace."
+      : (hasLiveSessions
+          ? "The desktop shell keeps all tracked sessions in one responsive window without dropping older rows."
+          : "The desktop shell is ready and will show tracked sessions here as soon as the first request is sent."),
+    mainPaneMode: focusedSessionId ? "selected-session" : "new-session",
+    focusedSessionId,
     missingFocusedSnapshot,
-    ...runtimeState,
-    ...deriveAtlasHomeReadiness(sortedSessions),
+    runtimeSnapshot,
+    githubAuth: authBootstrap.auth,
+    copilotUsage: authBootstrap.copilotUsage,
+    authRequired: authBootstrap.authRequired,
+    maxTrackedSessions: MAX_ATLAS_DESKTOP_SESSIONS,
+    activeSessionCount,
+    canonicalSessionStages,
+    sessionRuntimeStatuses,
+    completedSessionCount: completedSessions.length,
+    completedSessions,
+    completedSession: null,
+    focusedCompletedSessionKey: null,
+    ...deriveAtlasHomeReadiness(sortedSessions, repoContext),
     sessions: sortedSessions,
   };
   return pageData as AtlasPageData;
-}
-
-function resolveAtlasSnapshotLocation(requestUrl: string | undefined): AtlasDesktopLocation {
-  const parsedUrl = new URL(String(requestUrl || "/api/snapshot"), "http://127.0.0.1");
-  const focusedSessionRole = String(parsedUrl.searchParams.get("focusRole") || "").trim() || null;
-  return {
-    surface: "workspace",
-    focusedSessionRole,
-  };
 }
 
 export async function handleAtlasHomeRequest(
@@ -325,48 +491,11 @@ export async function handleAtlasHomeRequest(
   }
 
   try {
-    const pageData = await buildAtlasPageData(options, resolveAtlasDesktopPageLocation(req.url, "workspace"));
-    writeAtlasHtmlResponse(res, renderAtlasWorkspaceHtml(pageData));
+    const pageData = await buildAtlasPageData(options, req.url);
+    writeAtlasHtmlResponse(res, renderAtlasHomeHtml(pageData));
   } catch (error) {
     console.error(`[atlas] home route failed: ${String((error as Error)?.message || error)}`);
     res.writeHead(500, { "content-type": "text/html; charset=utf-8" });
-    res.end("<!doctype html><html><body><h1>ATLAS workspace unavailable</h1><p>Review the route logs and try again.</p></body></html>");
-  }
-}
-
-export async function handleAtlasSnapshotRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  options: AtlasHomeRouteOptions,
-): Promise<void> {
-  if (String(req.method || "GET").toUpperCase() !== "GET") {
-    res.writeHead(405, { "content-type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: false, error: "Method Not Allowed" }));
-    return;
-  }
-
-  if (!isAtlasSnapshotRequestAuthorized(req, options)) {
-    res.writeHead(403, {
-      "cache-control": "no-store",
-      "content-type": "application/json; charset=utf-8",
-    });
-    res.end(JSON.stringify({ ok: false, error: "ATLAS snapshot access denied" }));
-    return;
-  }
-
-  try {
-    const pageData = await buildAtlasPageData(options, resolveAtlasSnapshotLocation(req.url));
-    const payload: AtlasSnapshotResponse = {
-      ok: true,
-      pageData,
-      snapshotAt: new Date().toISOString(),
-      continuitySource: "live",
-      continuityDetail: pageData.continuityStatusDetail,
-    };
-    writeAtlasJsonResponse(res, payload);
-  } catch (error) {
-    console.error(`[atlas] snapshot route failed: ${String((error as Error)?.message || error)}`);
-    res.writeHead(500, { "content-type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: false, error: "ATLAS snapshot unavailable" }));
+    res.end("<!doctype html><html><body><h1>ATLAS Home unavailable</h1><p>Review the route logs and try again.</p></body></html>");
   }
 }

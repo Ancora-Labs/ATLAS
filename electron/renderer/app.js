@@ -1,64 +1,66 @@
 import { getDesktopLayoutMode } from "./layout.js";
 
 const statusEl = document.querySelector("[data-role='status']");
-const detailEl = document.querySelector("[data-role='detail']");
+const formEl = document.querySelector("[data-role='form']");
+const objectiveEl = document.querySelector("[data-role='objective']");
 const errorEl = document.querySelector("[data-role='error']");
-const workspaceUrlEl = document.querySelector("[data-role='workspace-url']");
+const repoEl = document.querySelector("[data-role='repo']");
+const sessionEl = document.querySelector("[data-role='session']");
+const shellEl = document.querySelector("[data-role='shell']");
 
-function setLayoutMode() {
+function setBusy(isBusy) {
+  if (!formEl) return;
+  formEl.querySelector("button")?.toggleAttribute("disabled", isBusy);
+  if (objectiveEl) {
+    objectiveEl.toggleAttribute("disabled", isBusy);
+  }
+}
+
+function updateLayout() {
   document.body.dataset.layout = getDesktopLayoutMode(window.innerWidth);
 }
 
-function setStatus(message, detail = "") {
-  if (statusEl) {
-    statusEl.textContent = message;
-  }
-  if (detailEl) {
-    detailEl.textContent = detail;
-  }
-}
-
-function buildWorkspaceUrl(bootstrapData, workspaceState) {
-  const workspaceUrl = new URL("/", bootstrapData.serverUrl);
-  const focusedSessionRole = String(workspaceState?.focusedSessionRole || "").trim();
-  if (focusedSessionRole) {
-    workspaceUrl.searchParams.set("focusRole", focusedSessionRole);
-  }
-  return workspaceUrl.toString();
-}
-
 async function bootstrap() {
-  if (!window.atlasDesktop?.getBootstrap) {
-    throw new Error("ATLAS desktop bridge is unavailable.");
+  if (!window.atlasDesktop) {
+    return;
   }
 
   const bootstrapData = await window.atlasDesktop.getBootstrap();
-  const workspaceState = window.atlasDesktop?.getWorkspaceState
-    ? await window.atlasDesktop.getWorkspaceState()
-    : null;
-  const workspaceUrl = buildWorkspaceUrl(bootstrapData, workspaceState);
-
-  if (workspaceUrlEl) {
-    workspaceUrlEl.textContent = workspaceUrl;
+  if (repoEl) repoEl.textContent = bootstrapData.targetRepo || "Target repo";
+  if (sessionEl) sessionEl.textContent = bootstrapData.sessionId;
+  if (shellEl) shellEl.textContent = ".\\ATLAS.cmd";
+  if (statusEl) {
+    statusEl.textContent = "Planning remains locked until this desktop session stores one clarification packet.";
   }
-
-  setStatus(
-    "Opening the ATLAS workspace.",
-    "ATLAS restores the current desktop route and keeps the native shell on the same workspace surface.",
-  );
-  window.location.replace(workspaceUrl);
 }
 
-window.addEventListener("resize", setLayoutMode);
-setLayoutMode();
-
-bootstrap().catch((error) => {
-  console.error("[atlas] workspace bootstrap failed:", error);
-  if (errorEl) {
-    errorEl.textContent = String(error?.message || error || "ATLAS desktop workspace startup failed.");
+formEl?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!window.atlasDesktop || !objectiveEl || !errorEl || !statusEl) {
+    return;
   }
-  setStatus(
-    "Workspace startup failed.",
-    "ATLAS could not restore the workspace route from the desktop bridge.",
-  );
+
+  const objective = String(objectiveEl.value || "").trim();
+  errorEl.textContent = "";
+  statusEl.textContent = "Requesting one clarification pass from the configured AI provider...";
+
+  setBusy(true);
+  const result = await window.atlasDesktop.submitClarification(objective);
+  setBusy(false);
+
+  if (!result.ok) {
+    errorEl.textContent = result.error || "ATLAS could not complete the clarification request.";
+    statusEl.textContent = "The desktop handoff is still blocked. Fix the clarification error and try again.";
+    return;
+  }
+
+  statusEl.textContent = "Clarification stored. ATLAS is opening the planning surface inside the desktop window.";
+});
+
+window.addEventListener("resize", updateLayout);
+updateLayout();
+bootstrap().catch((error) => {
+  if (errorEl) {
+    errorEl.textContent = String(error?.message || error);
+  }
 });

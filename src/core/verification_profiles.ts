@@ -203,6 +203,36 @@ const DEFAULT_PROFILE = {
   description: "Unknown role. Build required, everything else optional."
 };
 
+const PROFILE_KIND_ALIASES = Object.freeze({
+  quality: "qa",
+  governance: "security",
+  infrastructure: "devops",
+  observation: "scanB",
+  "quality-worker": "qa",
+  "governance-worker": "security",
+  "infrastructure-worker": "devops",
+  "observation-worker": "scanB",
+  "integration-worker": "integration",
+  frontend: "frontend",
+  backend: "backend",
+  api: "api",
+  integration: "integration",
+  qa: "qa",
+  security: "security",
+  devops: "devops",
+  scana: "scanA",
+  scanb: "scanB",
+});
+
+export function resolveVerificationProfileKind(workerKind) {
+  const normalizedKind = String(workerKind || "")
+    .trim()
+    .toLowerCase();
+  if (!normalizedKind) return "unknown";
+  if (PROFILES[normalizedKind]) return normalizedKind;
+  return PROFILE_KIND_ALIASES[normalizedKind] || normalizedKind;
+}
+
 export const CANONICAL_VERIFICATION_REPORT_TEMPLATE = Object.freeze([
   "===VERIFICATION_REPORT===",
   "BUILD=<pass|fail|n/a>",
@@ -215,7 +245,8 @@ export const CANONICAL_VERIFICATION_REPORT_TEMPLATE = Object.freeze([
 ].join("\n"));
 
 export function getVerificationProfile(workerKind) {
-  return PROFILES[workerKind] || DEFAULT_PROFILE;
+  const resolvedKind = resolveVerificationProfileKind(workerKind);
+  return PROFILES[resolvedKind] || DEFAULT_PROFILE;
 }
 
 export function getAllProfiles() {
@@ -286,10 +317,10 @@ export function buildVerificationChecklist(workerKind) {
   lines.push("   CLEAN_TREE_STATUS=dirty-other-tasks-only");
   lines.push("   TASK_SCOPED_CLEAN_STATUS=clean");
   lines.push("   TASK_SCOPED_CLEAN_TARGETS=<comma-separated task files>   — prove with: git status --porcelain -- <task files>");
-  lines.push("3. A raw npm test block using these exact markers:");
+  lines.push("3. A raw targeted test block using these exact markers:");
   lines.push("");
   lines.push("===NPM TEST OUTPUT START===");
-  lines.push("<paste full raw npm test stdout here>");
+  lines.push("<paste full raw targeted test stdout here>");
   lines.push("===NPM TEST OUTPUT END===");
   lines.push("");
   lines.push("⚠️ Do NOT use the old POST_MERGE_TEST_OUTPUT format — use the markers above or the gate will reject the artifact.");

@@ -52,6 +52,8 @@ import {
   OVERBUNDLE_STEPS_THRESHOLD,
   INTERVENTION_ACCOUNTING_CATEGORY,
 } from "../../src/core/intervention_optimizer.js";
+import { assignWorkersToPlans } from "../../src/core/capability_pool.js";
+import { buildDeterministicRequestBudget } from "../../src/core/prometheus.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1052,6 +1054,91 @@ describe("buildBudgetFromConfig", () => {
     const budget = buildBudgetFromConfig(requestBudget, {});
     assert.ok(!budget.byRole || !budget.byRole["evolution-worker"],
       "zero estimatedRequests should not produce a byRole entry");
+  });
+});
+
+describe("dispatch budget realignment regression", () => {
+  it("admits all approved plans once the budget reflects final rerouted worker roles", () => {
+    const approvedPlans = [
+      {
+        id: "plan-1",
+        task_id: "plan-1",
+        task: "Add tests for provider contracts",
+        role: "evolution-worker",
+        wave: 2,
+        target_files: ["tests/api/provider_contracts.test.ts"],
+        verification_commands: ["npm test -- tests/api/provider_contracts.test.ts"],
+      },
+      {
+        id: "plan-2",
+        task_id: "plan-2",
+        task: "Add tests for weather presentation states",
+        role: "evolution-worker",
+        wave: 3,
+        target_files: ["tests/components/weather_states.test.tsx"],
+        verification_commands: ["npm test -- tests/components/weather_states.test.tsx"],
+      },
+      {
+        id: "plan-3",
+        task_id: "plan-3",
+        task: "Build debounced geocoding search",
+        role: "integration-worker",
+        wave: 3,
+      },
+      {
+        id: "plan-4",
+        task_id: "plan-4",
+        task: "Wire App.tsx into the weather experience",
+        role: "integration-worker",
+        wave: 4,
+      },
+      {
+        id: "plan-5",
+        task_id: "plan-5",
+        task: "Create the Vitest and RTL quality gate",
+        role: "quality-worker",
+        wave: 5,
+        target_files: ["tests/app/app_shell.test.tsx"],
+        verification_commands: ["npm test -- tests/app/app_shell.test.tsx"],
+      },
+    ];
+
+    const reroutedPlans = approvedPlans.map((plan) => ({ ...plan }));
+    const pool = assignWorkersToPlans(reroutedPlans, {}, {}, {});
+    for (const { plan, selection } of pool.assignments) {
+      if (!selection.isFallback && selection.role !== plan.role) {
+        plan.role = selection.role;
+      }
+    }
+
+    const executionStrategy = {
+      waves: [{ wave: 2 }, { wave: 3 }, { wave: 4 }, { wave: 5 }],
+    };
+    const staleBudget = buildBudgetFromConfig(
+      buildDeterministicRequestBudget(approvedPlans, executionStrategy),
+      {},
+    );
+    const freshBudget = buildBudgetFromConfig(
+      buildDeterministicRequestBudget(reroutedPlans, executionStrategy),
+      {},
+    );
+    const interventions = buildInterventionsFromPlan(reroutedPlans, {});
+
+    const staleResult = runInterventionOptimizer(interventions, staleBudget, {});
+    assert.equal(staleResult.status, OPTIMIZER_STATUS.BUDGET_EXCEEDED);
+    assert.equal(staleResult.reasonCode, OPTIMIZER_REASON_CODE.BUDGET_ROLE_EXCEEDED);
+    assert.equal(staleResult.selected.length, 3);
+    assert.equal(staleResult.rejected.length, 2);
+
+    const freshResult = runInterventionOptimizer(interventions, freshBudget, {});
+    assert.equal(freshResult.status, OPTIMIZER_STATUS.OK);
+    assert.equal(freshResult.reasonCode, OPTIMIZER_REASON_CODE.VALID);
+    assert.equal(freshResult.selected.length, 5);
+    assert.equal(freshResult.rejected.length, 0);
+    assert.deepEqual(freshBudget.byRole, {
+      "quality-worker": 3,
+      "integration-worker": 2,
+    });
   });
 });
 

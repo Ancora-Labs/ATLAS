@@ -1330,7 +1330,7 @@ describe("CI-class retirement contract", () => {
     assert.equal(ledger[0].closedAt, null);
   });
 
-  it("auto-closes CI-class debt only when merged PR and associated main CI success are present", () => {
+  it("auto-closes CI-class debt only when merged PR and associated main CI success on main are present", () => {
     const lesson = "Fix CI workflow dispatch flake on main branch";
     const ledger = [makeCiDebt(lesson)];
 
@@ -1345,6 +1345,72 @@ describe("CI-class retirement contract", () => {
     assert.match(String(ledger[0].closureEvidence || ""), /main-ci-conclusion=success/);
     assert.equal(ledger[0].mergedPrUrl, "https://github.com/owner/repo/pull/42");
     assert.equal(ledger[0].associatedMainCiConclusion, "success");
+    assert.equal(ledger[0].associatedMainCiBranch, "main");
+    assert.equal(ledger[0].associatedMainCiRunUrl, "https://github.com/owner/repo/actions/runs/4242");
+  });
+
+  it("does not auto-close CI-class debt when the associated CI success lacks a main-run URL", () => {
+    const lesson = "Fix CI workflow dispatch flake on main branch";
+    const ledger = [makeCiDebt(lesson)];
+
+    const count = autoCloseVerifiedDebt(ledger, [{
+      taskText: lesson,
+      verificationEvidence: makeCiReplayContractEvidence({
+        workerContract: {
+          passed: true,
+          prUrl: "https://github.com/owner/repo/pull/42",
+          associatedMainCiConclusion: "success",
+          associatedMainCiBranch: "main",
+          associatedMainCiHeadSha: "abc1234",
+          artifactDetail: {
+            hasSha: true,
+            hasTestOutput: true,
+            hasCleanTreeEvidence: true,
+            hasUnfilledPlaceholder: false,
+          },
+        },
+        replayClosure: {
+          contractSatisfied: true,
+          executedCommands: ["git rev-parse HEAD", "git status --porcelain", "npm test"],
+          rawArtifactEvidenceLinks: [
+            "inline://post-merge-sha/abc1234",
+            "inline://clean-tree-status",
+            "inline://npm-test-output-block",
+          ],
+        },
+      }),
+    }]);
+
+    assert.equal(count, 0);
+    assert.equal(ledger[0].closedAt, null);
+  });
+
+  it("does not auto-close CI-class debt when the associated CI run is not on main", () => {
+    const lesson = "Fix CI workflow dispatch flake on main branch";
+    const ledger = [makeCiDebt(lesson)];
+
+    const count = autoCloseVerifiedDebt(ledger, [{
+      taskText: lesson,
+      verificationEvidence: makeCiReplayContractEvidence({
+        workerContract: {
+          passed: true,
+          prUrl: "https://github.com/owner/repo/pull/42",
+          associatedMainCiConclusion: "success",
+          associatedMainCiBranch: "feature/retry-fix",
+          associatedMainCiRunUrl: "https://github.com/owner/repo/actions/runs/4242",
+          associatedMainCiHeadSha: "abc1234",
+          artifactDetail: {
+            hasSha: true,
+            hasTestOutput: true,
+            hasCleanTreeEvidence: true,
+            hasUnfilledPlaceholder: false,
+          },
+        },
+      }),
+    }]);
+
+    assert.equal(count, 0);
+    assert.equal(ledger[0].closedAt, null);
   });
 
   it("keeps CI-class carry-forward items on the hot shortlist until ledger retirement is CI-backed", () => {

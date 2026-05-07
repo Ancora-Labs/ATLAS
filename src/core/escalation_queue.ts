@@ -20,6 +20,56 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { readJson, writeJson } from "./fs_utils.js";
 
+function normalizeNullableScopeValue(value) {
+  const normalized = String(value || "").trim();
+  return normalized ? normalized : null;
+}
+
+function resolveEscalationScope(config) {
+  const mode = String(config?.platformModeState?.currentMode || "").trim().toLowerCase();
+  const activeProjectId = normalizeNullableScopeValue(config?.activeTargetSession?.projectId);
+  const activeSessionId = normalizeNullableScopeValue(config?.activeTargetSession?.sessionId);
+  const selectedProjectId = normalizeNullableScopeValue(config?.targetSessionSelector?.projectId);
+  const selectedSessionId = normalizeNullableScopeValue(config?.targetSessionSelector?.sessionId);
+  return {
+    mode,
+    projectId: activeProjectId || selectedProjectId,
+    sessionId: activeSessionId || selectedSessionId,
+  };
+}
+
+function isSingleTargetScopedConfig(config) {
+  const scope = resolveEscalationScope(config);
+  return scope.mode === "single_target_delivery" && Boolean(scope.projectId && scope.sessionId);
+}
+
+function attachEscalationScope(payload, config) {
+  if (!isSingleTargetScopedConfig(config)) {
+    return payload;
+  }
+  const scope = resolveEscalationScope(config);
+  return {
+    ...payload,
+    projectId: scope.projectId,
+    sessionId: scope.sessionId,
+  };
+}
+
+function isEscalationVisibleToConfig(entry, config) {
+  if (!isSingleTargetScopedConfig(config)) {
+    return true;
+  }
+
+  const scope = resolveEscalationScope(config);
+  const entryProjectId = normalizeNullableScopeValue(entry?.projectId);
+  const entrySessionId = normalizeNullableScopeValue(entry?.sessionId);
+  if (!entryProjectId || !entrySessionId) {
+    return false;
+  }
+
+  return entryProjectId === scope.projectId && entrySessionId === scope.sessionId;
+}
+
 // ── Deterministic enums ───────────────────────────────────────────────────────
 
 /**
@@ -152,7 +202,8 @@ export function buildEscalationPayload({ role, task, blockingReasonClass, attemp
 export async function loadEscalationQueue(config) {
   const filePath = path.join(config?.paths?.stateDir || "state", "escalation_queue.json");
   const state = await readJson(filePath, { entries: [], updatedAt: null });
-  return Array.isArray(state?.entries) ? state.entries : [];
+  const entries = Array.isArray(state?.entries) ? state.entries : [];
+  return entries.filter((entry) => isEscalationVisibleToConfig(entry, config));
 }
 
 /**
@@ -199,7 +250,7 @@ export async function appendEscalation(config, params) {
   const built = buildEscalationPayload(params);
   if (!built.ok) return { appended: false, ...built };
 
-  const { payload } = built;
+  const payload = attachEscalationScope(built.payload, config);
   const cooldownMs = Number(config?.runtime?.escalationCooldownMs ?? DEFAULT_ESCALATION_COOLDOWN_MS);
   const filePath = path.join(config?.paths?.stateDir || "state", "escalation_queue.json");
 
@@ -267,6 +318,7 @@ export async function resolveEscalationsForTask(config, params = {}) {
     if (entry?.resolved) return entry;
     if (entry?.taskFingerprint !== fingerprint) return entry;
     if (blockingReasonClass && entry?.blockingReasonClass !== blockingReasonClass) return entry;
+    if (!isEscalationVisibleToConfig(entry, config)) return entry;
 
     resolvedCount += 1;
     return {

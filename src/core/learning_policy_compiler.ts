@@ -309,20 +309,47 @@ export async function collectPromptTruthSignals(
   const errors: string[] = [];
   const athenaReviewerPath = path.join(repoRoot, "src", "core", "athena_reviewer.ts");
   const orchestratorPath = path.join(repoRoot, "src", "core", "orchestrator.ts");
+  const [athenaReviewerExists, orchestratorExists] = await Promise.all([
+    fs.access(athenaReviewerPath).then(() => true).catch(() => false),
+    fs.access(orchestratorPath).then(() => true).catch(() => false),
+  ]);
+  // Active target workspaces do not carry BOX's self-dev core sources.
+  // Treat that case as a neutral truth snapshot instead of surfacing ENOENT.
+  if (!athenaReviewerExists && !orchestratorExists) {
+    const latestMainCiConclusion = String(opts.latestMainCiConclusion || "").trim().toLowerCase() || null;
+    return {
+      signals: {
+        latestMainCiConclusion,
+        latestMainCiHealthy: latestMainCiConclusion === "success",
+        athenaTrackedFieldsDeepEquality: false,
+        preDispatchGovernanceGate: false,
+        preDispatchLaneDiversityGate: false,
+      },
+      errors,
+    };
+  }
 
   let athenaReviewerSource = "";
   let orchestratorSource = "";
 
-  try {
-    athenaReviewerSource = await fs.readFile(athenaReviewerPath, "utf8");
-  } catch (error) {
-    errors.push(`athena_reviewer:${String((error as any)?.message || error)}`);
+  if (athenaReviewerExists) {
+    try {
+      athenaReviewerSource = await fs.readFile(athenaReviewerPath, "utf8");
+    } catch (error) {
+      errors.push(`athena_reviewer:${String((error as any)?.message || error)}`);
+    }
+  } else {
+    errors.push(`athena_reviewer:missing truth source at ${athenaReviewerPath}`);
   }
 
-  try {
-    orchestratorSource = await fs.readFile(orchestratorPath, "utf8");
-  } catch (error) {
-    errors.push(`orchestrator:${String((error as any)?.message || error)}`);
+  if (orchestratorExists) {
+    try {
+      orchestratorSource = await fs.readFile(orchestratorPath, "utf8");
+    } catch (error) {
+      errors.push(`orchestrator:${String((error as any)?.message || error)}`);
+    }
+  } else {
+    errors.push(`orchestrator:missing truth source at ${orchestratorPath}`);
   }
 
   const latestMainCiConclusion = String(opts.latestMainCiConclusion || "").trim().toLowerCase() || null;

@@ -47,11 +47,19 @@ import {
   resolveAutonomyExecutionGateBlockReason,
 } from "./governance_contract.js";
 import {
+  getTargetSessionPath,
+  mirrorJsonArtifactToTargetSession,
+  readTargetSessionArtifactJson,
+} from "./target_session_state.js";
+import {
   buildPromptTruthMaintenanceSection,
   buildPromptTruthMaintenanceSnapshot,
   collectPromptTruthSignals,
   resolveStructuredTruthRetirement,
 } from "./learning_policy_compiler.js";
+import { buildPromptAssemblyPrompt, resolvePromptTargetRepo } from "./prompt_overlay.js";
+import { PLATFORM_MODE } from "./mode_state.js";
+import { buildStrongestPlausibleFallbackGuidance } from "./target_intent_guidance.js";
 
 // ── CI system-learning debt detection ────────────────────────────────────────
 
@@ -99,6 +107,71 @@ function normalizeDirectiveStringList(value: unknown): string[] {
   return [];
 }
 
+const OBJECTIVE_REAL_ASSET_NEED_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:real|authentic|premium|stock|external)\s+(?:images?|photos?|photography|imagery|assets?)\b/i,
+  /\b(?:food|product|restaurant|dish|menu|hero|gallery|brand)\b[\s\S]{0,40}\b(?:photos?|photography|images?|imagery)\b/i,
+  /\b(?:use|needs?|want|include|allow)\b[\s\S]{0,40}\b(?:stock\s+(?:images?|photos?)|images?\s+from\s+the\s+internet|external\s+images?|real\s+photos?)\b/i,
+  /\bdo\s+not\b[\s\S]{0,40}\b(?:placeholder(?:s)?|generic\s+illustration)\b/i,
+]);
+
+const OBJECTIVE_EXTERNAL_ASSET_AVOIDANCE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /\b(?:do\s+not|avoid|no)\b[\s\S]{0,40}\b(?:stock\s+(?:images?|photos?)|external\s+images?|internet\s+images?)\b/i,
+]);
+
+function buildObjectiveBackedTargetPlanningBrief(activeTargetSession: any): { brief: string; source: string; immutableFields: string[] } | null {
+  if (!activeTargetSession || typeof activeTargetSession !== "object") {
+    return null;
+  }
+
+  const objectiveSummary = String(activeTargetSession?.objective?.summary || "").trim();
+  const desiredOutcome = String(activeTargetSession?.objective?.desiredOutcome || "").trim();
+  const acceptanceCriteria = normalizeDirectiveStringList(activeTargetSession?.objective?.acceptanceCriteria);
+  const handoffSummary = String(activeTargetSession?.handoff?.carriedContextSummary || "").trim();
+  const notes = normalizeDirectiveStringList(activeTargetSession?.hints?.notes);
+  const repoUrl = String(activeTargetSession?.repo?.repoUrl || "").trim();
+  const workspacePath = String(activeTargetSession?.workspace?.path || activeTargetSession?.repo?.localPath || "").trim();
+  const evidenceText = [objectiveSummary, desiredOutcome, handoffSummary, ...acceptanceCriteria, ...notes]
+    .filter(Boolean)
+    .join("\n");
+
+  if (!evidenceText) {
+    return null;
+  }
+
+  const preserveVisualFidelity = /\b(hero|gallery|visual|imagery|image|photo|photography|brand|logo|restaurant|food|menu|premium)\b/i.test(evidenceText);
+  const needsRealAssets = OBJECTIVE_REAL_ASSET_NEED_PATTERNS.some((pattern) => pattern.test(evidenceText));
+  const avoidExternalAssets = OBJECTIVE_EXTERNAL_ASSET_AVOIDANCE_PATTERNS.some((pattern) => pattern.test(evidenceText));
+  const allowRealAssetSourcing = needsRealAssets && !avoidExternalAssets;
+
+  return {
+    brief: [
+      "Authoritative planning brief source: ACTIVE TARGET SESSION OBJECTIVE AND MANIFEST NOTES.",
+      "This single-target session is already selected. Do not replace it with generic repo triage, self-improvement work, or a cheaper adjacent outcome.",
+      objectiveSummary ? `Objective summary: ${objectiveSummary}` : null,
+      desiredOutcome && desiredOutcome !== objectiveSummary ? `Desired outcome: ${desiredOutcome}` : null,
+      handoffSummary && handoffSummary !== objectiveSummary ? `Handoff summary: ${handoffSummary}` : null,
+      repoUrl ? `Target repo: ${repoUrl}` : null,
+      workspacePath ? `Locked workspace: ${workspacePath}` : null,
+      acceptanceCriteria.length > 0 ? `Acceptance criteria: ${acceptanceCriteria.join(" | ")}` : null,
+      notes.length > 0 ? `Mission notes: ${notes.join(" | ")}` : null,
+      allowRealAssetSourcing
+        ? "Asset sourcing guardrail: when the mission calls for premium or real imagery, real external assets are allowed when needed; preserve the source requirement and surface blockers before planning."
+        : null,
+      preserveVisualFidelity
+        ? "Visual fidelity guardrail: when the mission calls for premium presentation, hero imagery, menu or food visuals, or brand assets, preserve the requested visual medium and source strategy as planning constraints."
+        : null,
+    ].filter(Boolean).join("\n"),
+    source: "active_target_session_objective",
+    immutableFields: [
+      "objective.summary",
+      "objective.desiredOutcome",
+      "objective.acceptanceCriteria",
+      "handoff.carriedContextSummary",
+      "hints.notes",
+    ],
+  };
+}
+
 function extractKnowledgeMemoryLessons(knowledgeMemory: unknown): unknown[] {
   if (!knowledgeMemory || typeof knowledgeMemory !== "object" || Array.isArray(knowledgeMemory)) return [];
   const record = knowledgeMemory as Record<string, unknown>;
@@ -112,6 +185,219 @@ function extractKnowledgeMemoryLessons(knowledgeMemory: unknown): unknown[] {
   return Number(record.schemaVersion) >= 2
     ? [...workingLessons, ...episodicLessons]
     : flatLessons;
+}
+
+function isSingleTargetLeadershipIsolationActive(config: any): boolean {
+  return config?.platformModeState?.currentMode === PLATFORM_MODE.SINGLE_TARGET_DELIVERY
+    && Boolean(config?.activeTargetSession?.sessionId);
+}
+
+export function resolveDirectiveTargetSessionStamp(config: any): Record<string, unknown> | null {
+  if (!isSingleTargetLeadershipIsolationActive(config)) {
+    return null;
+  }
+
+  return {
+    projectId: config.activeTargetSession.projectId,
+    sessionId: config.activeTargetSession.sessionId,
+    currentStage: config.activeTargetSession.currentStage,
+    repoUrl: config.activeTargetSession.repo?.repoUrl || null,
+  };
+}
+
+export function isDirectiveAlignedToTargetSession(config: any, directive: any): boolean {
+  const runtimeTargetSession = resolveDirectiveTargetSessionStamp(config);
+  const directiveTargetSession = directive?.targetSession && typeof directive.targetSession === "object"
+    ? directive.targetSession
+    : null;
+
+  if (!runtimeTargetSession) {
+    return !directiveTargetSession;
+  }
+  if (!directiveTargetSession) {
+    return false;
+  }
+
+  return String(directiveTargetSession.projectId || "") === String(runtimeTargetSession.projectId || "")
+    && String(directiveTargetSession.sessionId || "") === String(runtimeTargetSession.sessionId || "");
+}
+
+export function stampDirectiveTargetSession(config: any, directive: any): any {
+  if (!directive || typeof directive !== "object") return directive;
+  const runtimeTargetSession = resolveDirectiveTargetSessionStamp(config);
+  if (!runtimeTargetSession) {
+    if (directive.targetSession) {
+      delete directive.targetSession;
+    }
+    return directive;
+  }
+
+  directive.targetSession = runtimeTargetSession;
+  return directive;
+}
+
+export function buildProtectedTargetPlanningBrief(config: any): { brief: string; source: string; immutableFields: string[] } | null {
+  if (!isSingleTargetLeadershipIsolationActive(config)) {
+    return null;
+  }
+
+  const activeTargetSession = config?.activeTargetSession && typeof config.activeTargetSession === "object"
+    ? config.activeTargetSession
+    : null;
+  if (!activeTargetSession) {
+    return null;
+  }
+
+  const clarificationReady = activeTargetSession?.clarification?.readyForPlanning === true
+    || String(activeTargetSession?.intent?.status || "").trim() === "ready_for_planning";
+  if (!clarificationReady) {
+    return buildObjectiveBackedTargetPlanningBrief(activeTargetSession);
+  }
+
+  const intent = activeTargetSession?.intent && typeof activeTargetSession.intent === "object"
+    ? activeTargetSession.intent
+    : {};
+  const constraints = activeTargetSession?.constraints && typeof activeTargetSession.constraints === "object"
+    ? activeTargetSession.constraints
+    : {};
+  const mustHaveFlows = normalizeDirectiveStringList(intent?.mustHaveFlows);
+  const scopeIn = normalizeDirectiveStringList(intent?.scopeIn);
+  const scopeOut = normalizeDirectiveStringList(intent?.scopeOut);
+  const protectedAreas = normalizeDirectiveStringList(intent?.protectedAreas);
+  const successCriteria = normalizeDirectiveStringList(intent?.successCriteria);
+  const assetRequirements = normalizeDirectiveStringList(intent?.assetRequirements);
+  const operatorIntentEvidence = normalizeDirectiveStringList(intent?.operatorIntentEvidence);
+  const protectedPaths = normalizeDirectiveStringList(constraints?.protectedPaths);
+  const forbiddenActions = normalizeDirectiveStringList(constraints?.forbiddenActions);
+  const objectiveSummary = String(activeTargetSession?.objective?.summary || intent?.productType || intent?.summary || "Target objective pending").trim() || "Target objective pending";
+  const intentSummary = String(intent?.summary || "").trim();
+  const operatorIntentBrief = String(intent?.operatorIntentBrief || "").trim();
+  const preferredQualityBar = String(intent?.preferredQualityBar || "").trim();
+  const designDirection = String(intent?.designDirection || "").trim();
+  const implementationFlexibility = String(intent?.implementationFlexibility || "").trim();
+  const assetSourcingPolicy = String(intent?.assetSourcingPolicy || "").trim();
+  const workspacePath = String(activeTargetSession?.workspace?.path || activeTargetSession?.repo?.localPath || "").trim();
+  const repoUrl = String(activeTargetSession?.repo?.repoUrl || "").trim();
+  const fallbackAmbitionGuidance = buildStrongestPlausibleFallbackGuidance({
+    preferredQualityBar,
+    implementationFlexibility,
+  });
+
+  return {
+    brief: [
+      "Authoritative planning brief source: ACTIVE TARGET SESSION CONTRACT.",
+      "Do not rewrite the requested product, quality bar, or delivery surface into a cheaper adjacent outcome.",
+      `Objective summary: ${objectiveSummary}`,
+      intentSummary ? `Intent summary: ${intentSummary}` : null,
+      operatorIntentBrief ? `Detailed operator intent brief:\n${operatorIntentBrief}` : null,
+      repoUrl ? `Target repo: ${repoUrl}` : null,
+      workspacePath ? `Locked workspace: ${workspacePath}` : null,
+      mustHaveFlows.length > 0 ? `Must-have flows: ${mustHaveFlows.join(" | ")}` : null,
+      scopeIn.length > 0 ? `Scope in: ${scopeIn.join(" | ")}` : null,
+      scopeOut.length > 0 ? `Scope out: ${scopeOut.join(" | ")}` : null,
+      protectedAreas.length > 0 ? `Protected areas: ${protectedAreas.join(" | ")}` : null,
+      preferredQualityBar ? `Preferred quality bar: ${preferredQualityBar}` : null,
+      designDirection ? `Design direction: ${designDirection}` : null,
+      implementationFlexibility ? `Implementation latitude: ${implementationFlexibility}` : null,
+      assetSourcingPolicy ? `Asset sourcing policy: ${assetSourcingPolicy}` : null,
+      operatorIntentEvidence.length > 0 ? `Operator intent evidence: ${operatorIntentEvidence.join(" | ")}` : null,
+      ...fallbackAmbitionGuidance,
+      assetRequirements.length > 0 ? `Asset requirements: ${assetRequirements.join(" | ")}` : null,
+      successCriteria.length > 0 ? `Success criteria: ${successCriteria.join(" | ")}` : null,
+      protectedPaths.length > 0 ? `Protected paths: ${protectedPaths.join(" | ")}` : null,
+      forbiddenActions.length > 0 ? `Forbidden actions: ${forbiddenActions.join(" | ")}` : null,
+    ].filter(Boolean).join("\n"),
+    source: "active_target_session_contract",
+    immutableFields: [
+      "objective.summary",
+      "intent.summary",
+      "intent.operatorIntentBrief",
+      "intent.operatorIntentEvidence",
+      "intent.mustHaveFlows",
+      "intent.scopeIn",
+      "intent.scopeOut",
+      "intent.preferredQualityBar",
+      "intent.designDirection",
+      "intent.implementationFlexibility",
+      "intent.assetSourcingPolicy",
+      "intent.assetRequirements",
+      "intent.successCriteria",
+    ],
+  };
+}
+
+export function applySingleTargetIntentAuthorityToDirective(config: any, directive: any): any {
+  if (!directive || typeof directive !== "object") {
+    return directive;
+  }
+
+  const protectedBrief = buildProtectedTargetPlanningBrief(config);
+  if (!protectedBrief) {
+    if (directive.intentAuthority) {
+      delete directive.intentAuthority;
+    }
+    return directive;
+  }
+
+  directive.briefForPrometheus = protectedBrief.brief;
+  directive.intentAuthority = {
+    source: protectedBrief.source,
+    locked: true,
+    immutableFields: protectedBrief.immutableFields,
+  };
+  directive.priorities = prependDirectivePriority(
+    { priorities: directive.priorities },
+    "Honor the active target session contract exactly; do not substitute cheaper adjacent outcomes.",
+  ).priorities;
+  return directive;
+}
+
+function isPrometheusAnalysisAlignedToTargetSession(config: any, analysis: any): boolean {
+  const runtimeTargetSession = resolveDirectiveTargetSessionStamp(config);
+  const analysisTargetSession = analysis?.targetSession && typeof analysis.targetSession === "object"
+    ? analysis.targetSession
+    : null;
+
+  if (!runtimeTargetSession) {
+    return true;
+  }
+  if (!analysisTargetSession) {
+    return false;
+  }
+
+  return String(analysisTargetSession.projectId || "") === String(runtimeTargetSession.projectId || "")
+    && String(analysisTargetSession.sessionId || "") === String(runtimeTargetSession.sessionId || "");
+}
+
+async function loadPrometheusAnalysisForJesus(config: any, stateDir: string): Promise<any> {
+  const globalAnalysis = await readJson(path.join(stateDir, "prometheus_analysis.json"), {});
+
+  if (!isSingleTargetLeadershipIsolationActive(config)) {
+    return globalAnalysis;
+  }
+
+  const projectId = String(config?.activeTargetSession?.projectId || "").trim();
+  const sessionId = String(config?.activeTargetSession?.sessionId || "").trim();
+  if (!projectId || !sessionId) {
+    return {};
+  }
+
+  const sessionStateDir = getTargetSessionPath(stateDir, projectId, sessionId);
+  const sessionScopedAnalysis = await readJson(path.join(sessionStateDir, "prometheus_analysis.json"), null);
+  if (sessionScopedAnalysis && typeof sessionScopedAnalysis === "object" && !Array.isArray(sessionScopedAnalysis)) {
+    return sessionScopedAnalysis;
+  }
+
+  return {};
+}
+
+function normalizeGitHubRepoIdentifier(repo: unknown): string | null {
+  const raw = String(repo || "").trim();
+  if (!raw) return null;
+  if (/^[^/\s]+\/[^/\s]+$/.test(raw)) return raw;
+  const match = raw.match(/github\.com[/:]([^/\s]+)\/([^/\s#?]+?)(?:\.git)?$/i);
+  if (!match) return null;
+  return `${match[1]}/${match[2]}`;
 }
 
 function buildAutonomyDebtPriority(reasonCode: string, blockReason: string | null): string {
@@ -570,52 +856,54 @@ export async function runSystemHealthAudit(
   }
 
   // 6. Knowledge memory — check if self-improvement detected critical issues
-  try {
-    const stateDir = config.paths?.stateDir || "state";
-    const km = await readJson(path.join(stateDir, "knowledge_memory.json"), {});
-    // Support v1 (flat .lessons) and v2 (partitioned .working.lessons + .episodic.lessons)
-    const workingLessons  = Array.isArray(km.working?.lessons)  ? km.working.lessons  : [];
-    const episodicLessons = Array.isArray(km.episodic?.lessons) ? km.episodic.lessons : [];
-    const flatLessons     = Array.isArray(km.lessons)           ? km.lessons          : [];
-    const allLessons = km.schemaVersion >= 2
-      ? [...workingLessons, ...episodicLessons]
-      : flatLessons;
-    const criticalLessons = allLessons.filter(l => l.severity === "critical").slice(-3);
-    const capGaps = Array.isArray(km.capabilityGaps) ? km.capabilityGaps.slice(-5) : [];
-    const sourceIndex = await loadSourceEvidenceIndex(process.cwd());
-    const capabilityExecutionSummary = await loadCapabilityExecutionSummary(config);
+  if (!isSingleTargetLeadershipIsolationActive(config)) {
+    try {
+      const stateDir = config.paths?.stateDir || "state";
+      const km = await readJson(path.join(stateDir, "knowledge_memory.json"), {});
+      // Support v1 (flat .lessons) and v2 (partitioned .working.lessons + .episodic.lessons)
+      const workingLessons  = Array.isArray(km.working?.lessons)  ? km.working.lessons  : [];
+      const episodicLessons = Array.isArray(km.episodic?.lessons) ? km.episodic.lessons : [];
+      const flatLessons     = Array.isArray(km.lessons)           ? km.lessons          : [];
+      const allLessons = km.schemaVersion >= 2
+        ? [...workingLessons, ...episodicLessons]
+        : flatLessons;
+      const criticalLessons = allLessons.filter(l => l.severity === "critical").slice(-3);
+      const capGaps = Array.isArray(km.capabilityGaps) ? km.capabilityGaps.slice(-5) : [];
+      const sourceIndex = await loadSourceEvidenceIndex(process.cwd());
+      const capabilityExecutionSummary = await loadCapabilityExecutionSummary(config);
 
-    if (criticalLessons.length > 0) {
-      // Annotate with the live CI conclusion so hasCiSystemLearningDebt (and downstream
-      // consumers) can distinguish stale CI-break debt from active failures.
-      const liveMainCiConclusion = String(githubState?.latestMainCi?.conclusion || "").trim().toLowerCase();
-      findings.push({
-        area: "system-learning",
-        severity: "warning",
-        finding: `Self-improvement flagged ${criticalLessons.length} critical lesson(s): ${criticalLessons.map(l => l.lesson).join("; ").slice(0, 300)}`,
-        remediation: "Address critical lessons in next cycle planning",
-        capabilityNeeded: "system-improvement",
-        ...(liveMainCiConclusion ? { latestMainCiConclusion: liveMainCiConclusion } : {}),
-      });
-    }
-
-    if (capGaps.length > 0) {
-      for (const gap of capGaps.slice(0, 3)) {
-        const originalSeverity = String(gap?.severity || "warning").toLowerCase();
-        const verifiedPresent = isCapabilityGapVerifiedPresentAndExecuted(sourceIndex, capabilityExecutionSummary, gap);
-        const shouldDowngrade =
-          verifiedPresent && (originalSeverity === "critical" || originalSeverity === "warning" || originalSeverity === "important");
+      if (criticalLessons.length > 0) {
+        const liveMainCiConclusion = String(githubState?.latestMainCi?.conclusion || "").trim().toLowerCase();
         findings.push({
-          area: "capability-gap",
-          severity: shouldDowngrade ? "info" : (gap.severity || "warning"),
-          finding: `Missing capability: ${gap.gap}`,
-          remediation: gap.proposedFix || "Add missing capability to system",
-          capabilityNeeded: gap.capability || "unknown",
-          ...(shouldDowngrade ? { note: "verified_present_in_source_and_executed" } : {})
+          area: "system-learning",
+          severity: "warning",
+          finding: `Self-improvement flagged ${criticalLessons.length} critical lesson(s): ${criticalLessons.map(l => l.lesson).join("; ").slice(0, 300)}`,
+          remediation: "Address critical lessons in next cycle planning",
+          capabilityNeeded: "system-improvement",
+          ...(liveMainCiConclusion ? { latestMainCiConclusion: liveMainCiConclusion } : {}),
         });
       }
+
+      if (capGaps.length > 0) {
+        for (const gap of capGaps.slice(0, 3)) {
+          const originalSeverity = String(gap?.severity || "warning").toLowerCase();
+          const verifiedPresent = isCapabilityGapVerifiedPresentAndExecuted(sourceIndex, capabilityExecutionSummary, gap);
+          const shouldDowngrade =
+            verifiedPresent && (originalSeverity === "critical" || originalSeverity === "warning" || originalSeverity === "important");
+          findings.push({
+            area: "capability-gap",
+            severity: shouldDowngrade ? "info" : (gap.severity || "warning"),
+            finding: `Missing capability: ${gap.gap}`,
+            remediation: gap.proposedFix || "Add missing capability to system",
+            capabilityNeeded: gap.capability || "unknown",
+            ...(shouldDowngrade ? { note: "verified_present_in_source_and_executed" } : {})
+          });
+        }
+      }
+    } catch {
+      // Non-fatal: knowledge memory is advisory only.
     }
-  } catch { /* knowledge memory not available — no-op */ }
+  }
 
   return findings;
 }
@@ -633,8 +921,17 @@ function formatHealthAuditFindings(findings) {
 
 async function fetchGitHubState(config) {
   const token = config?.env?.githubToken;
-  const repo = config?.env?.targetRepo;
-  if (!token || !repo) return { issues: [], pullRequests: [], repoInfo: null };
+  const repo = normalizeGitHubRepoIdentifier(resolvePromptTargetRepo(config));
+  if (!token || !repo) {
+    return {
+      issues: [],
+      pullRequests: [],
+      repoInfo: null,
+      failedCiRuns: [],
+      recentlyMergedPrs: [],
+      latestMainCi: null,
+    };
+  }
 
   const headers = {
     Authorization: `Bearer ${token}`,
@@ -718,7 +1015,7 @@ async function fetchGitHubState(config) {
  * Required string fields in a valid Jesus directive payload.
  * These fields must be present and non-empty for the directive to be actionable.
  */
-const REQUIRED_DIRECTIVE_STRING_FIELDS = ["decision", "systemHealth", "briefForPrometheus"] as const;
+const REQUIRED_DIRECTIVE_STRING_FIELDS = ["decision", "systemHealth"] as const;
 
 /**
  * Required boolean fields in a valid Jesus directive payload.
@@ -769,6 +1066,12 @@ export function sanitizeDirectiveFieldForPersistence(text: string): string {
     if (/^(tool_call|tool_result|function_call|assistant:|system:|user:)/i.test(norm)) return false;
     if (/^copilot>/i.test(norm)) return false;
     if (/^\[?(synthesizer_start|synthesizer_end|research_synthesizer_live)\]/i.test(norm)) return false;
+    // Drop brittle source-access mandates that can deadlock planning when tooling context changes.
+    if (/^═══\s*CRITICAL READ CONSTRAINT/i.test(norm)) return false;
+    if (/\.box-target-workspaces/i.test(norm)) return false;
+    if (/github api/i.test(norm) && /\b(instead|must|only|verify|required|read all)\b/i.test(norm)) return false;
+    if (/^If a specific file cannot be found at its expected path, state that explicitly/i.test(norm)) return false;
+    if (/^════════+$/i.test(norm)) return false;
     return true;
   });
   return filtered.join("\n").trim();
@@ -779,12 +1082,20 @@ export function validateDirectivePayload(
   expectedOutcome: Record<string, unknown>
 ): { valid: boolean; gaps: string[]; hasMeasurableOutcome: boolean } {
   const gaps: string[] = [];
+  const shouldRequirePrometheusBrief = directive.callPrometheus === true;
 
   // Check required string fields
   for (const field of REQUIRED_DIRECTIVE_STRING_FIELDS) {
     const value = directive[field];
     if (value === null || value === undefined || String(value).trim() === "") {
       gaps.push(`directive.${field} is required but missing or empty`);
+    }
+  }
+
+  if (shouldRequirePrometheusBrief) {
+    const briefForPrometheus = directive.briefForPrometheus;
+    if (briefForPrometheus === null || briefForPrometheus === undefined || String(briefForPrometheus).trim() === "") {
+      gaps.push("directive.briefForPrometheus is required but missing or empty when callPrometheus=true");
     }
   }
 
@@ -1033,20 +1344,39 @@ export async function runJesusCycle(config) {
   chatLog(stateDir, jesusName, "Awakening — reading system state...");
   chatLog(stateDir, jesusName, "[LIVE] loading state snapshots (directive, coordination, prometheus, github, sessions)");
 
+  const leadershipIsolationActive = isSingleTargetLeadershipIsolationActive(config);
+
   // Read all state (no budget)
   const [
-    lastDirective,
+    lastDirectiveRaw,
     AthenaCoordination,
     prometheusAnalysis,
     githubState,
     sessionLoadResult
   ] = await Promise.all([
-    readJson(path.join(stateDir, "jesus_directive.json"), {}),
+    leadershipIsolationActive
+      ? readTargetSessionArtifactJson(config, "jesus_directive.json", {})
+      : readJson(path.join(stateDir, "jesus_directive.json"), {}),
     readJson(path.join(stateDir, "athena_coordination.json"), {}),
-    readJson(path.join(stateDir, "prometheus_analysis.json"), {}),
+    loadPrometheusAnalysisForJesus(config, stateDir),
     fetchGitHubState(config),
-    loadWorkerSessionsForHealthAudit(config, stateDir)
+    leadershipIsolationActive
+      ? Promise.resolve({
+        sessions: {},
+        source: "empty" as const,
+        cycleId: null,
+        canonicalSessionsAvailable: false,
+        legacySessionsAvailable: false,
+        workerSessionSourceConflict: false,
+        conflictReason: null,
+        staleSessionsFiltered: 0,
+        filteredStaleRoles: [],
+      })
+      : loadWorkerSessionsForHealthAudit(config, stateDir)
   ]);
+  const lastDirective = isDirectiveAlignedToTargetSession(config, lastDirectiveRaw)
+    ? lastDirectiveRaw
+    : {};
 
   const sessions = sessionLoadResult.sessions;
 
@@ -1071,7 +1401,7 @@ export async function runJesusCycle(config) {
     const { activeFindings, resolvedLineage } = reconcileLeadershipHealthFindings(healthFindings, {
       latestMainCiConclusion: githubState.latestMainCi?.conclusion,
     });
-    promptHealthFindings = activeFindings;
+    promptHealthFindings = leadershipIsolationActive ? [] : activeFindings;
 
     const healthFindingsPayload: Record<string, unknown> = {
       findings: activeFindings,
@@ -1208,35 +1538,38 @@ export async function runJesusCycle(config) {
 
   // ── Capacity trends from scoreboard ────────────────────────────────────────
   let capacityTrendBlock = "";
-  try {
-    const recentEntries = await getRecentCapacity(config, 10);
-    if (recentEntries.length >= 3) {
-      const confTrend = computeTrend(recentEntries, "parserConfidence");
-      const planTrend = computeTrend(recentEntries, "planCount");
-      const budgetTrend = computeTrend(recentEntries, "budgetUsed");
-      const workerTrend = computeTrend(recentEntries, "workersDone");
-      capacityTrendBlock = `\n**Capacity Trends (last ${recentEntries.length} cycles):**
+  if (!leadershipIsolationActive) {
+    try {
+      const recentEntries = await getRecentCapacity(config, 10);
+      if (recentEntries.length >= 3) {
+        const confTrend = computeTrend(recentEntries, "parserConfidence");
+        const planTrend = computeTrend(recentEntries, "planCount");
+        const budgetTrend = computeTrend(recentEntries, "budgetUsed");
+        const workerTrend = computeTrend(recentEntries, "workersDone");
+        capacityTrendBlock = `\n**Capacity Trends (last ${recentEntries.length} cycles):**
   Parser confidence trend: ${confTrend}
   Plan count trend: ${planTrend}
   Budget usage trend: ${budgetTrend}
   Worker completion trend: ${workerTrend}`;
-    }
-  } catch { /* non-critical */ }
+      }
+    } catch { /* non-critical */ }
+  }
 
   let realizedExecutionBlock = "";
-  try {
-    const [cycleAnalyticsState, governanceBlockSummary, agentControlSummary] = await Promise.all([
-      readCycleAnalytics(config),
-      loadGovernanceBlockSummary(config, 20),
-      summarizeAgentControlPlane(config, 20),
-    ]);
-    const lastCycle = cycleAnalyticsState?.lastCycle;
-    const workerTopology = lastCycle?.workerTopology;
-    const routingSummary = lastCycle?.routingROISummary;
-    const modelRoutingTelemetry = lastCycle?.modelRoutingTelemetry?.byTaskKind || {};
-    const topTaskKindEntry = Object.entries(modelRoutingTelemetry)
-      .sort((a: any, b: any) => Number((b?.[1] as any)?.default?.outcomeScore || 0) - Number((a?.[1] as any)?.default?.outcomeScore || 0))[0];
-    realizedExecutionBlock = `\n**Realized Execution Signals (last recorded cycle):**
+  if (!leadershipIsolationActive) {
+    try {
+      const [cycleAnalyticsState, governanceBlockSummary, agentControlSummary] = await Promise.all([
+        readCycleAnalytics(config),
+        loadGovernanceBlockSummary(config, 20),
+        summarizeAgentControlPlane(config, 20),
+      ]);
+      const lastCycle = cycleAnalyticsState?.lastCycle;
+      const workerTopology = lastCycle?.workerTopology;
+      const routingSummary = lastCycle?.routingROISummary;
+      const modelRoutingTelemetry = lastCycle?.modelRoutingTelemetry?.byTaskKind || {};
+      const topTaskKindEntry = Object.entries(modelRoutingTelemetry)
+        .sort((a: any, b: any) => Number((b?.[1] as any)?.default?.outcomeScore || 0) - Number((a?.[1] as any)?.default?.outcomeScore || 0))[0];
+      realizedExecutionBlock = `\n**Realized Execution Signals (last recorded cycle):**
   Outcome status: ${String(lastCycle?.outcomes?.status || "unknown")}
   Dispatch block: ${String(lastCycle?.outcomes?.dispatchBlockReason || governanceBlockSummary.latestBlockReason || "none")}
   Worker topology: effectiveLanes=${Number(workerTopology?.effectiveLaneCount || 0)} nominalLanes=${Number(workerTopology?.nominalLaneCount || 0)} reservedSpecialistLanes=${Number(workerTopology?.reservedSpecialistLaneCount || 0)} collapseRate=${Number(workerTopology?.fallbackCollapseRate || 0)}
@@ -1245,9 +1578,11 @@ export async function runJesusCycle(config) {
   Strongest realized taskKind: ${topTaskKindEntry ? `${topTaskKindEntry[0]} score=${Number((topTaskKindEntry[1] as any)?.default?.outcomeScore || 0).toFixed(3)}` : "n/a"}
   Recent governance blocks: ${governanceBlockSummary.recentBlockCount} (${Object.entries(governanceBlockSummary.byReasonCode).map(([code, count]) => `${code}=${count}`).join(", ") || "none"})
   Agent control plane: active=${agentControlSummary.activeAgents.join(", ") || "none"} completed=${agentControlSummary.completionCount} failed=${agentControlSummary.failureCount} handoffs=${agentControlSummary.handoffCount}`;
-  } catch { /* advisory only */ }
+    } catch { /* advisory only */ }
+  }
 
   let truthMaintenanceSection = "";
+  if (!leadershipIsolationActive) {
   try {
     const [knowledgeMemory, researchSynthesis, benchmarkData] = await Promise.all([
       readJson(path.join(stateDir, "knowledge_memory.json"), null),
@@ -1289,16 +1624,61 @@ export async function runJesusCycle(config) {
       `[JESUS][WARN] Failed to assemble truth-maintenance prompt context: ${String((truthErr as Error)?.message || truthErr)}`,
     );
   }
+  }
 
-  const contextPrompt = `TARGET REPO: ${config.env?.targetRepo || "unknown"}
+  const jesusLayerPrompt = buildPromptAssemblyPrompt({ agentName: "jesus", config });
+  const effectivePromptTargetRepo = resolvePromptTargetRepo(config);
+  const activeTargetSession = config?.activeTargetSession && typeof config.activeTargetSession === "object"
+    ? config.activeTargetSession
+    : null;
 
-## CURRENT SYSTEM STATE
+  const runtimeStateSection = leadershipIsolationActive
+    ? `## CURRENT TARGET DELIVERY STATE
+
+**Target Session:** ${String(activeTargetSession?.projectId || "unknown")} / ${String(activeTargetSession?.sessionId || "unknown")}
+**Target Stage:** ${String(activeTargetSession?.currentStage || "unknown")}
+**Objective:** ${String(activeTargetSession?.objective?.summary || "unknown")}
+**Planning Gates:** planning=${Boolean(activeTargetSession?.gates?.allowPlanning)} shadow=${Boolean(activeTargetSession?.gates?.allowShadowExecution)} active=${Boolean(activeTargetSession?.gates?.allowActiveExecution)} quarantine=${Boolean(activeTargetSession?.gates?.quarantine)}
+**Repo State:** ${String(activeTargetSession?.repoProfile?.repoState || activeTargetSession?.intent?.repoState || "unknown")}
+**Clarification Status:** ${String(activeTargetSession?.clarification?.status || "unknown")}
+**Intent Status:** ${String(activeTargetSession?.intent?.status || "unknown")}
+**Intent Summary:** ${String(activeTargetSession?.intent?.summary || "unknown")}
+**Required Human Inputs:** ${Array.isArray(activeTargetSession?.handoff?.requiredHumanInputs) && activeTargetSession.handoff.requiredHumanInputs.length > 0 ? activeTargetSession.handoff.requiredHumanInputs.join("; ") : "none"}
+**Protected Paths:** ${Array.isArray(activeTargetSession?.constraints?.protectedPaths) && activeTargetSession.constraints.protectedPaths.length > 0 ? activeTargetSession.constraints.protectedPaths.join(", ") : "none"}
+**Forbidden Actions:** ${Array.isArray(activeTargetSession?.constraints?.forbiddenActions) && activeTargetSession.constraints.forbiddenActions.length > 0 ? activeTargetSession.constraints.forbiddenActions.join(", ") : "none"}
+
+**GitHub State — ${effectivePromptTargetRepo}:**
+Open Issues (${githubState.issues.length}):
+${githubState.issues.length > 0
+  ? githubState.issues.map(i => `  #${i.number}: ${i.title} [${i.labels.join(", ") || "no labels"}]`).join("\n")
+  : "  No open issues"}
+
+Open PRs (${githubState.pullRequests.length}):
+${githubState.pullRequests.length > 0
+  ? githubState.pullRequests.map(p => `  #${p.number}: ${p.title} [${p.draft ? "draft" : "open"}]`).join("\n")
+  : "  No open PRs"}
+
+**Latest CI on default branch (${githubState.latestMainCi?.branch || "main"}):**
+${githubState.latestMainCi
+  ? `  ${githubState.latestMainCi.conclusion} (${githubState.latestMainCi.commit}) [${githubState.latestMainCi.updatedAt}]`
+  : "  No CI runs found"}
+
+**Recent CI Failures (last 24h): ${githubState.failedCiRuns.length}**
+${githubState.failedCiRuns.length > 0
+  ? githubState.failedCiRuns.map(r => `  ${r.name} on ${r.branch} (${r.commit}) — ${r.conclusion} [${r.updatedAt}]`).join("\n")
+  : "  No recent failures"}
+
+**Leadership Rule For Single-Target Mode:**
+  - Treat the active target session as the only planning authority.
+  - Do not inject BOX self-dev health audit, postmortem debt, trusted memory, or architecture drift pressure into the directive.
+  - If target clarification is incomplete or planning gates are closed, direct Prometheus to resolve target-session blockers only.`
+    : `## CURRENT SYSTEM STATE
 
 **Active Worker Sessions:** ${activeSessions}
 **Last Cycle:** ${lastCycleAt}
 **Prometheus Last Analysis:** ${prometheusLastRunAt}${prometheusAgeHours < 6 ? ` (${prometheusAgeHours.toFixed(1)}h ago — FRESH, only set callPrometheus=true if health is critical)` : ""}
 
-**GitHub State — ${config.env?.targetRepo}:**
+**GitHub State — ${effectivePromptTargetRepo}:**
 Open Issues (${githubState.issues.length}):
 ${githubState.issues.length > 0
   ? githubState.issues.map(i => `  #${i.number}: ${i.title} [${i.labels.join(", ") || "no labels"}]`).join("\n")
@@ -1345,7 +1725,13 @@ ${realizedExecutionBlock}
 ${formatHealthAuditFindings(promptHealthFindings)}
 ${promptHealthFindings.filter(f => f.severity === "critical").length > 0 ? "\n⚠️ CRITICAL FINDINGS ABOVE — these MUST be addressed. Workers and Athena missed them." : ""}
 ${promptHealthFindings.filter(f => f.area === "capability-gap").length > 0 ? "\n⚠️ CAPABILITY GAPS DETECTED — the system is missing abilities that caused failures. Consider requesting Prometheus to plan fixes." : ""}
-${truthMaintenanceSection ? `\n\n${truthMaintenanceSection}` : ""}
+${truthMaintenanceSection ? `\n\n${truthMaintenanceSection}` : ""}`;
+
+  const contextPrompt = `TARGET REPO: ${effectivePromptTargetRepo}
+
+${jesusLayerPrompt}
+
+${runtimeStateSection}
 
 **Leadership Fast Path Rules:**
   - Use the supplied state artifacts, health findings, GitHub state, and prior analysis as the source of truth.
@@ -1402,9 +1788,22 @@ ${workersList}`;
   const aiCallStartedAt = Date.now();
   const latencyWarningCorrelationId = `jesus-latency-${aiCallStartedAt}`;
   const heartbeatIntervalMs = Math.max(30_000, Number(config?.runtime?.jesusHeartbeatIntervalMs || 30_000));
+  const progressHeartbeatIntervalMs = Math.max(
+    heartbeatIntervalMs,
+    Number(config?.runtime?.jesusProgressHeartbeatIntervalMs || 60_000),
+  );
+  let lastProgressHeartbeatAt = 0;
   const heartbeatTimer = setInterval(() => {
     const elapsedSec = Math.floor((Date.now() - aiCallStartedAt) / 1000);
     chatLog(stateDir, jesusName, `[LIVE] AI analysis in progress elapsed=${elapsedSec}s`);
+    const nowMs = Date.now();
+    if ((nowMs - lastProgressHeartbeatAt) >= progressHeartbeatIntervalMs) {
+      lastProgressHeartbeatAt = nowMs;
+      void appendProgress(
+        config,
+        `[JESUS] AI analysis in progress elapsed=${elapsedSec}s tier=${finalTierLabel}`,
+      ).catch(() => {});
+    }
   }, heartbeatIntervalMs);
 
   chatLog(stateDir, jesusName, "Calling AI for strategic analysis...");
@@ -1570,7 +1969,7 @@ ${workersList}`;
     await appendProgress(config, `[JESUS] AI call failed — ${(aiResult as any).error || "no JSON"}`);
     chatLog(stateDir, jesusName, `AI failed: ${(aiResult as any).error || "no JSON"}`);
     const needsPrometheus = prometheusAgeHours > 6;
-    return {
+    return applySingleTargetIntentAuthorityToDirective(config, {
       wait: false,
       wakeAthena: true,
       callPrometheus: needsPrometheus,
@@ -1579,10 +1978,10 @@ ${workersList}`;
       systemHealth: "unknown",
       thinking: "",
       fullOutput: (aiResult as any).raw || "",
-      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${config.env?.targetRepo}`,
+      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${effectivePromptTargetRepo}`,
       priorities: [],
       workerSuggestions: []
-    };
+    });
   }
 
   logAgentThinking(stateDir, jesusName, aiResult.thinking);
@@ -1605,7 +2004,7 @@ ${workersList}`;
     } catch { /* non-fatal */ }
     // Degrade to safe fallback directive; never silently pass invalid output
     const needsPrometheus = prometheusAgeHours > 6;
-    return {
+    return applySingleTargetIntentAuthorityToDirective(config, {
       wait: false,
       wakeAthena: true,
       callPrometheus: needsPrometheus,
@@ -1614,12 +2013,12 @@ ${workersList}`;
       systemHealth: "unknown",
       thinking: aiResult.thinking,
       fullOutput: (aiResult as any).raw || "",
-      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${config.env?.targetRepo}`,
+      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${effectivePromptTargetRepo}`,
       priorities: [],
       workerSuggestions: [],
       _trustBoundaryViolation: true,
       _trustBoundaryErrors: tbErrors
-    };
+    });
   }
   if (trustCheck.errors.length > 0 && tbMode === "warn") {
     const tbErrors = trustCheck.errors.map(e => `${e.payloadPath}: ${e.message}`).join(" | ");
@@ -1672,6 +2071,14 @@ ${workersList}`;
     } catch { /* non-fatal: if athena_plan_rejection doesn't exist or is malformed, continue */ }
   }
 
+  if (d.callPrometheus && String(d.briefForPrometheus || "").trim() === "") {
+    d.briefForPrometheus = `Check GitHub issues and activate appropriate workers. Target repo: ${effectivePromptTargetRepo}`;
+    await appendProgress(
+      config,
+      "[JESUS] briefForPrometheus backfilled after override — using safe fallback directive for Prometheus"
+    );
+  }
+
   chatLog(stateDir, jesusName,
     `Decision: ${d.decision || "?"} | Health: ${d.systemHealth || "?"} | callPrometheus: ${d.callPrometheus} | wakeAthena: ${d.wakeAthena}`
   );
@@ -1715,13 +2122,13 @@ ${workersList}`;
       systemHealth: "unknown",
       wakeAthena: true,
       callPrometheus: needsPrometheus,
-      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${config.env?.targetRepo}`,
+      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${effectivePromptTargetRepo}`,
       priorities: [],
       workerSuggestions: [],
     }, expectedOutcome as unknown as Record<string, unknown>, {
-      repo: config.env?.targetRepo || null,
+      repo: effectivePromptTargetRepo || null,
     });
-    return {
+    return applySingleTargetIntentAuthorityToDirective(config, {
       wait: false,
       wakeAthena: true,
       callPrometheus: needsPrometheus,
@@ -1731,12 +2138,12 @@ ${workersList}`;
       systemHealth: "unknown",
       thinking: aiResult.thinking,
       fullOutput: (aiResult as any).raw || "",
-      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${config.env?.targetRepo}`,
+      briefForPrometheus: `Check GitHub issues and activate appropriate workers. Target repo: ${effectivePromptTargetRepo}`,
       priorities: [],
       workerSuggestions: [],
       _directivePayloadGaps: payloadValidation.gaps,
       strategyBrief: fallbackStrategyBrief,
-    };
+    });
   }
 
   const ciFastlaneRequired = hasCiSystemLearningDebt(promptHealthFindings);
@@ -1762,7 +2169,7 @@ ${workersList}`;
   const strategyBrief = buildDirectiveStrategyBrief(d as Record<string, unknown>, expectedOutcome as unknown as Record<string, unknown>, {
     repo: config.env?.targetRepo || null,
   });
-  const directive = {
+  const directive = applySingleTargetIntentAuthorityToDirective(config, stampDirectiveTargetSession(config, {
     ...d,
     briefForPrometheus: sanitizeDirectiveFieldForPersistence(String((d as any).briefForPrometheus || "")),
     thinking: aiResult.thinking,
@@ -1779,7 +2186,7 @@ ${workersList}`;
     expectedOutcome,
     strategyBrief,
     ciFastlaneRequired,
-  };
+  }));
 
   if (ciFastlaneRequired) {
     await appendProgress(config,
@@ -1788,6 +2195,7 @@ ${workersList}`;
   }
 
   await writeJson(path.join(stateDir, "jesus_directive.json"), directive);
+  await mirrorJsonArtifactToTargetSession(config, "jesus_directive.json", directive).catch(() => {});
 
   return directive;
 }

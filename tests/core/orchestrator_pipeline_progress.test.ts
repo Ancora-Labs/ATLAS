@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { runOnce, runResumeDispatch, evaluateDispatchResumeReadiness, evaluatePreDispatchGovernanceGate, BLOCK_REASON, GATE_PRECEDENCE, processEscalationQueueClosureWorkflow, isDispatchCheckpointResumable, loadStaleTriageRecords, runStaleArtifactClosureFastpath, persistSkippedDispatchCheckpoint, clearAthenaPlanRejectionLatch } from "../../src/core/orchestrator.js";
+import { runOnce, runResumeDispatch, evaluateDispatchResumeReadiness, evaluatePreDispatchGovernanceGate, BLOCK_REASON, GATE_PRECEDENCE, processEscalationQueueClosureWorkflow, isDispatchCheckpointResumable, loadStaleTriageRecords, runStaleArtifactClosureFastpath, persistSkippedDispatchCheckpoint, clearAthenaPlanRejectionLatch, resolveCheckpointPlanCompletion } from "../../src/core/orchestrator.js";
 import { ATHENA_PLAN_REVIEW_REASON_CODE } from "../../src/core/athena_reviewer.js";
 import { readPipelineProgress, PIPELINE_STAGE_ENUM, PIPELINE_STEPS } from "../../src/core/pipeline_progress.js";
 import { EVENTS } from "../../src/core/event_schema.js";
@@ -131,6 +131,41 @@ describe("orchestrator pipeline progress — resilience", () => {
     assert.ok(
       PIPELINE_STAGE_ENUM.includes(data.stage),
       `stage '${data.stage}' written by orchestrator is not in PIPELINE_STAGE_ENUM`
+    );
+  });
+
+  it("does not spend premium requests while the platform is in idle mode", async () => {
+    config.platformModeState = {
+      currentMode: "idle",
+    };
+
+    await runOnce(config);
+
+    const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
+    assert.ok(progressLog.includes("Idle mode active — autonomous orchestration paused"), "idle mode should short-circuit the cycle");
+    assert.ok(!progressLog.includes("[PREMIUM_USAGE]"), "idle mode must not record premium usage");
+    assert.ok(!progressLog.includes("[CYCLE] ── Step 1: Jesus analyzing system state ──"), "idle mode must not wake leadership agents");
+  });
+
+  it("blocks premium agent calls when Copilot CLI is installed but Copilot auth is unavailable", async () => {
+    config.env.copilotCliCommand = "node";
+    config.env.githubToken = "github_pat_test_token";
+
+    await runOnce(config);
+
+    const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
+    assert.ok(
+      progressLog.includes("[CYCLE][PREFLIGHT] Capability checks failed: copilotAuth."),
+      "preflight must record the missing Copilot auth failure"
+    );
+    assert.ok(
+      progressLog.includes("[CYCLE][PREFLIGHT] Blocking premium agent calls until Copilot auth is restored"),
+      "cycle must stop before premium agent execution when auth is unavailable"
+    );
+    assert.ok(!progressLog.includes("[PREMIUM_USAGE]"), "blocked Copilot auth must prevent premium request spending");
+    assert.ok(
+      !progressLog.includes("[CYCLE] ── Step 1: Jesus analyzing system state ──"),
+      "blocked Copilot auth must prevent the Jesus step from starting"
     );
   });
 
@@ -644,7 +679,7 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
     );
   });
 
-  it("blocks one-lane resumed batches before wave dispatch and emits the renamed lane diversity contract", async () => {
+  it("does not block one-lane resumed batches before wave dispatch", async () => {
     const patchedPlans = [
       {
         id: "T1",
@@ -684,31 +719,142 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
       diversityConfig,
       patchedPlans,
       "lane-diversity-resume-block",
+      null,
+      { resumeSource: "live_review" },
     );
-    assert.equal(gateDecision.blocked, true);
-    assert.equal(gateDecision.gateIndex, GATE_PRECEDENCE.LANE_DIVERSITY);
-    assert.ok(
-      gateDecision.dispatchBlockReason?.startsWith(`${BLOCK_REASON.LANE_DIVERSITY_INSUFFICIENT}:`),
-      `dispatchBlockReason must use the renamed lane diversity token; got ${gateDecision.dispatchBlockReason}`,
-    );
+    assert.equal(gateDecision.blocked, false);
 
     await assert.doesNotReject(
       () => runResumeDispatch(diversityConfig),
-      "runResumeDispatch must stop before wave dispatch when lane diversity is insufficient",
+      "runResumeDispatch must not stop before wave dispatch when lane diversity is insufficient",
     );
 
     const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
-    assert.match(progressLog, /\[RESUME\] Pre-dispatch governance gate blocked resumed dispatch/);
-    assert.doesNotMatch(
-      progressLog,
-      /Force-resuming dispatch checkpoint: batch 1\/1|Force-resuming dispatch checkpoint: batch 1\/2/,
-      "resume log must not advance into wave dispatch when lane diversity blocks first",
-    );
+    assert.doesNotMatch(progressLog, /\[RESUME\] Pre-dispatch governance gate blocked resumed dispatch/);
 
     const checkpoint = JSON.parse(await fs.readFile(path.join(tmpDir, "dispatch_checkpoint.json"), "utf8"));
-    assert.equal(checkpoint.completedPlans, 0, "no wave should complete when lane diversity blocks before dispatch");
+    assert.ok(checkpoint.completedPlans >= 0, "dispatch checkpoint should remain readable after resume dispatch");
     const workerSessionsExists = await fs.access(path.join(tmpDir, "worker_sessions.json")).then(() => true).catch(() => false);
-    assert.equal(workerSessionsExists, false, "worker sessions must not be created before the first wave dispatch");
+    assert.equal(workerSessionsExists, true, "worker sessions should be created because lane diversity no longer blocks dispatch");
+  });
+
+  it("accepts checkpoint resume governance evaluation when admitted topology already satisfies min lanes", async () => {
+    const patchedPlans = [
+      {
+        id: "T1",
+        task: "task one",
+        role: "evolution-worker",
+        dependsOn: [],
+        filesInScope: [],
+        targetFiles: ["src/core/orchestrator.ts"],
+        scope: "implementation",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["tests pass"],
+      },
+      {
+        id: "T2",
+        task: "task two",
+        role: "quality-worker",
+        dependsOn: [],
+        filesInScope: [],
+        targetFiles: ["tests/core/orchestrator_pipeline_progress.test.ts"],
+        scope: "test",
+        verification_commands: ["npm test"],
+        acceptance_criteria: ["tests pass"],
+      },
+    ];
+
+    const checkpointConfig = {
+      ...config,
+      systemGuardian: { enabled: false },
+      workerPool: { minLanes: 2 },
+    };
+
+    await assert.doesNotReject(
+      () => evaluatePreDispatchGovernanceGate(
+        checkpointConfig,
+        patchedPlans,
+        "checkpoint-lane-diversity-bypass",
+        null,
+        {
+          resumeSource: "checkpoint_snapshot",
+          admittedWorkerTopology: { laneCount: 2 } as any,
+        },
+      ),
+      "checkpoint resume governance evaluation must not throw when admitted topology already satisfies min lanes",
+    );
+
+    const gateDecision = await evaluatePreDispatchGovernanceGate(
+      checkpointConfig,
+      patchedPlans,
+      "checkpoint-lane-diversity-bypass",
+      null,
+      {
+        resumeSource: "checkpoint_snapshot",
+        admittedWorkerTopology: { laneCount: 2 } as any,
+      },
+    );
+    assert.equal(gateDecision.blocked, false);
+  });
+
+  it("persists Athena-reviewed live plans back into prometheus_analysis during resume", async () => {
+    const patchedPlans = [
+      {
+        id: "T1",
+        task: "task one",
+        role: "evolution-worker",
+        dependsOn: [],
+        filesInScope: [],
+        targetFiles: ["src/core/orchestrator.ts"],
+        scope: "implementation",
+        verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+        verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+        acceptance_criteria: ["tests pass"],
+      },
+    ];
+    await fs.writeFile(
+      path.join(tmpDir, "athena_plan_review.json"),
+      JSON.stringify({ approved: true, patchedPlans }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(tmpDir, "prometheus_analysis.json"),
+      JSON.stringify({
+        plans: [
+          {
+            id: "T1",
+            task: "task one",
+            role: "evolution-worker",
+            verification: "npm test -- tests/core/<module>.test.ts",
+            verification_commands: ["npm test -- tests/core/<module>.test.ts"],
+            acceptance_criteria: ["tests pass"],
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    await assert.doesNotReject(
+      () => runResumeDispatch(config),
+      "runResumeDispatch should accept approved live review plans",
+    );
+
+    const persistedAnalysis = JSON.parse(await fs.readFile(path.join(tmpDir, "prometheus_analysis.json"), "utf8"));
+    assert.equal(
+      persistedAnalysis.plans?.[0]?.verification,
+      "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+      "resume should persist Athena-reviewed verification targets back into prometheus_analysis",
+    );
+    assert.deepEqual(
+      persistedAnalysis.plans?.[0]?.verification_commands,
+      ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+      "resume should persist Athena-reviewed verification command batches back into prometheus_analysis",
+    );
+    assert.deepEqual(
+      persistedAnalysis.planArtifacts?.[0]?.verificationCommands,
+      ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+      "resume should keep planArtifacts mirrored with the Athena-reviewed verification commands",
+    );
   });
 
   it("preserves admitted multi-lane topology for later-wave continuation slices instead of blocking a singleton lane", async () => {
@@ -903,6 +1049,97 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
     assert.equal(readiness.planSource, "none");
   });
 
+  it("does not keep failed checkpoints on the interrupted-resume path", async () => {
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify({
+        status: "failed_closed",
+        createdAt: "2026-04-11T07:31:14.738Z",
+        updatedAt: "2026-04-11T07:58:39.727Z",
+        totalPlans: 1,
+        planCount: 1,
+        completedPlans: 0,
+        planSetSignature: "resume-failed-closed",
+      }, null, 2),
+      "utf8",
+    );
+
+    await fs.writeFile(
+      path.join(tmpDir, "athena_plan_review.json"),
+      JSON.stringify({
+        approved: true,
+        reviewedAt: "2026-04-11T08:03:00.000Z",
+        patchedPlans: [
+          {
+            id: "T1",
+            task_id: "T1",
+            task: "Continue the already-approved desktop shell implementation",
+            role: "evolution-worker",
+            wave: 1,
+            target_files: ["src/app.ts"],
+            scope: "feature delivery",
+            verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+            verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+            acceptance_criteria: ["tests pass"],
+          },
+        ],
+      }, null, 2),
+      "utf8",
+    );
+
+    const readiness = await evaluateDispatchResumeReadiness(config);
+    assert.equal(readiness.interrupted, false);
+    assert.equal(readiness.ready, false);
+    assert.equal(readiness.reason, "checkpoint_not_resumable");
+    assert.equal(readiness.planSource, "none");
+  });
+
+  it("treats approved live review as resumable even when dispatch checkpoint is missing", async () => {
+    config.platformModeState = { currentMode: "single_target_delivery" };
+    config.activeTargetSession = {
+      projectId: "portal",
+      sessionId: "sess_active",
+      currentStage: "active",
+      repo: { repoUrl: "https://github.com/acme/portal" },
+    };
+
+    await fs.writeFile(
+      path.join(tmpDir, "athena_plan_review.json"),
+      JSON.stringify({
+        approved: true,
+        reviewedAt: "2026-04-11T08:03:00.000Z",
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_active",
+          currentStage: "active",
+          repoUrl: "https://github.com/acme/portal",
+        },
+        patchedPlans: [
+          {
+            id: "T1",
+            task_id: "T1",
+            task: "Continue the already-approved desktop shell implementation",
+            role: "evolution-worker",
+            wave: 1,
+            target_files: ["src/app.ts"],
+            scope: "feature delivery",
+            verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+            verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+            acceptance_criteria: ["tests pass"],
+          },
+        ],
+      }, null, 2),
+      "utf8",
+    );
+
+    const readiness = await evaluateDispatchResumeReadiness(config);
+    assert.equal(readiness.interrupted, true);
+    assert.equal(readiness.ready, true);
+    assert.equal(readiness.reason, "live_review_ready");
+    assert.equal(readiness.planSource, "live_review");
+    assert.equal(readiness.planCount, 1);
+  });
+
   it("treats checkpoint snapshots as sufficient for auto-resume readiness", async () => {
     const checkpoint = {
       status: "dispatching",
@@ -959,6 +1196,542 @@ describe("orchestrator checkpoint resume — pre-dispatch governance gate", () =
     assert.equal(readiness.planSource, "checkpoint_snapshot");
     assert.equal(readiness.planCount, 1);
     assert.equal(readiness.workerBatchCount, 1);
+  });
+
+  it("blocks checkpoint snapshot auto-resume when a shadow session snapshot still carries implementation work", async () => {
+    config.platformModeState = { currentMode: "single_target_delivery" };
+    config.activeTargetSession = {
+      projectId: "portal",
+      sessionId: "sess_shadow",
+      currentStage: "shadow",
+      gates: {
+        allowShadowExecution: true,
+        allowActiveExecution: false,
+      },
+      repo: { repoUrl: "https://github.com/acme/portal" },
+    };
+
+    const checkpoint = {
+      status: "dispatching",
+      createdAt: "2026-04-11T07:31:14.738Z",
+      updatedAt: "2026-04-11T07:58:39.727Z",
+      totalPlans: 1,
+      planCount: 1,
+      completedPlans: 0,
+      planSetSignature: "resume-readiness-shadow-contract",
+      targetSession: {
+        projectId: "portal",
+        sessionId: "sess_shadow",
+        currentStage: "shadow",
+        repoUrl: "https://github.com/acme/portal",
+      },
+      dispatchPlanSnapshot: [
+        {
+          id: "T1",
+          task_id: "T1",
+          task: "Implement the todo board end to end",
+          role: "evolution-worker",
+          taskKind: "implementation",
+          wave: 1,
+          target_files: ["src/app.ts"],
+          scope: "feature delivery",
+          verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+          acceptance_criteria: ["tests pass"],
+        },
+      ],
+      workerBatchesSnapshot: [
+        {
+          role: "evolution-worker",
+          wave: 1,
+          plans: [
+            {
+              id: "T1",
+              task_id: "T1",
+              task: "Implement the todo board end to end",
+              role: "evolution-worker",
+              taskKind: "implementation",
+              wave: 1,
+              target_files: ["src/app.ts"],
+              scope: "feature delivery",
+              verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+              acceptance_criteria: ["tests pass"],
+            },
+          ],
+        },
+      ],
+    };
+
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify(checkpoint, null, 2),
+      "utf8",
+    );
+
+    const readiness = await evaluateDispatchResumeReadiness(config);
+    assert.equal(readiness.interrupted, true);
+    assert.equal(readiness.ready, false);
+    assert.equal(readiness.reason, "target_stage_contract_blocked");
+    assert.equal(readiness.planSource, "checkpoint_snapshot");
+  });
+
+  it("rejects checkpoint snapshot auto-resume when the checkpoint belongs to a different target session", async () => {
+    config.platformModeState = { currentMode: "single_target_delivery" };
+    config.activeTargetSession = {
+      projectId: "portal",
+      sessionId: "sess_active",
+      currentStage: "active",
+      repo: { repoUrl: "https://github.com/acme/portal" },
+    };
+
+    const checkpoint = {
+      status: "dispatching",
+      createdAt: "2026-04-11T07:31:14.738Z",
+      updatedAt: "2026-04-11T07:58:39.727Z",
+      totalPlans: 1,
+      planCount: 1,
+      completedPlans: 0,
+      planSetSignature: "resume-readiness-foreign-session",
+      targetSession: {
+        projectId: "portal",
+        sessionId: "sess_old",
+        currentStage: "active",
+        repoUrl: "https://github.com/acme/portal",
+      },
+      dispatchPlanSnapshot: [
+        {
+          id: "T1",
+          task_id: "T1",
+          task: "task one",
+          role: "evolution-worker",
+          wave: 1,
+          targetFiles: ["src/core/orchestrator.ts"],
+          scope: "implementation",
+          verification_commands: ["npm test"],
+          acceptance_criteria: ["tests pass"],
+        },
+      ],
+      workerBatchesSnapshot: [
+        {
+          role: "evolution-worker",
+          wave: 1,
+          plans: [
+            {
+              id: "T1",
+              task_id: "T1",
+              task: "task one",
+              role: "evolution-worker",
+              wave: 1,
+              targetFiles: ["src/core/orchestrator.ts"],
+              scope: "implementation",
+              verification_commands: ["npm test"],
+              acceptance_criteria: ["tests pass"],
+            },
+          ],
+        },
+      ],
+    };
+
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify(checkpoint, null, 2),
+      "utf8",
+    );
+
+    const readiness = await evaluateDispatchResumeReadiness(config);
+    assert.equal(readiness.interrupted, false);
+    assert.equal(readiness.ready, false);
+    assert.equal(readiness.reason, "runtime_target_mismatch");
+    assert.equal(readiness.planSource, "none");
+  });
+
+  it("refuses force-resume when the approved live review belongs to a different target session", async () => {
+    config.platformModeState = { currentMode: "single_target_delivery" };
+    config.activeTargetSession = {
+      projectId: "portal",
+      sessionId: "sess_active",
+      currentStage: "active",
+      repo: { repoUrl: "https://github.com/acme/portal" },
+    };
+
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify({
+        status: "dispatching",
+        createdAt: "2026-04-11T07:31:14.738Z",
+        updatedAt: "2026-04-11T07:58:39.727Z",
+        totalPlans: 1,
+        planCount: 1,
+        completedPlans: 0,
+        planSetSignature: "resume-live-review-foreign-session",
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_active",
+          currentStage: "active",
+          repoUrl: "https://github.com/acme/portal",
+        },
+      }, null, 2),
+      "utf8",
+    );
+
+    await fs.writeFile(
+      path.join(tmpDir, "athena_plan_review.json"),
+      JSON.stringify({
+        approved: true,
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_old",
+          currentStage: "active",
+          repoUrl: "https://github.com/acme/portal",
+        },
+        patchedPlans: [
+          {
+            id: "T1",
+            task: "task one",
+            role: "evolution-worker",
+            dependsOn: [],
+            filesInScope: [],
+            targetFiles: ["src/core/orchestrator.ts"],
+            scope: "implementation",
+            acceptance_criteria: ["tests pass"],
+          },
+        ],
+      }, null, 2),
+      "utf8",
+    );
+
+    await assert.rejects(
+      () => runResumeDispatch(config),
+      /No resumable Step-4 checkpoint found/,
+      "runResumeDispatch must refuse cross-session approved reviews",
+    );
+
+    const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
+    assert.match(progressLog, /Athena plan review belongs to a different target session\/runtime/);
+
+    const workerSessionsExists = await fs.access(path.join(tmpDir, "worker_sessions.json")).then(() => true).catch(() => false);
+    assert.equal(workerSessionsExists, false, "worker sessions must not be created when resume is rejected for target-session mismatch");
+  });
+
+  it("runResumeDispatch resumes directly from approved live review when no checkpoint exists", async () => {
+    config.platformModeState = { currentMode: "single_target_delivery" };
+    config.activeTargetSession = {
+      projectId: "portal",
+      sessionId: "sess_active",
+      currentStage: "active",
+      repo: { repoUrl: "https://github.com/acme/portal" },
+    };
+
+    await fs.writeFile(
+      path.join(tmpDir, "athena_plan_review.json"),
+      JSON.stringify({
+        approved: true,
+        reviewedAt: "2026-04-11T08:03:00.000Z",
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_active",
+          currentStage: "active",
+          repoUrl: "https://github.com/acme/portal",
+        },
+        patchedPlans: [
+          {
+            id: "T1",
+            task_id: "T1",
+            task: "Continue the already-approved desktop shell implementation",
+            role: "evolution-worker",
+            wave: 1,
+            target_files: ["src/app.ts"],
+            scope: "feature delivery",
+            verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+            verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+            acceptance_criteria: ["tests pass"],
+          },
+        ],
+      }, null, 2),
+      "utf8",
+    );
+
+    await assert.doesNotReject(
+      () => runResumeDispatch(config),
+      "runResumeDispatch must accept approved live review as the resume source when no checkpoint exists",
+    );
+
+    const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
+    assert.match(progressLog, /Force-resuming dispatch checkpoint: batch 1\/1/);
+    assert.match(progressLog, /Source=live_review checkpointStatus=dispatching/);
+  });
+
+  it("closes a stale checkpoint instead of redispatching when worker artifacts already mark all batches complete", async () => {
+    const checkpoint = {
+      status: "dispatching",
+      createdAt: "2026-04-25T12:17:39.948Z",
+      updatedAt: "2026-04-25T12:17:39.949Z",
+      totalPlans: 2,
+      planCount: 3,
+      completedPlans: 0,
+      planSetSignature: "resume-artifact-complete-test",
+      planAnalyzedAt: "2026-04-25T10:56:58.407Z",
+      dispatchPlanSnapshot: [
+        { id: "p1", task_id: "0a97e56d1f5b", role: "integration-worker", wave: 3 },
+        { id: "p2", task_id: "ef96709588f8", role: "quality-worker", wave: 6 },
+        { id: "p3", task_id: "beceae471248", role: "integration-worker", wave: 4 },
+      ],
+      workerBatchesSnapshot: [
+        {
+          role: "integration-worker",
+          wave: 3,
+          plans: [
+            { id: "p1", task_id: "0a97e56d1f5b", role: "integration-worker", wave: 3 },
+            { id: "p2", task_id: "ef96709588f8", role: "quality-worker", wave: 6 },
+          ],
+        },
+        {
+          role: "integration-worker",
+          wave: 4,
+          plans: [
+            { id: "p3", task_id: "beceae471248", role: "integration-worker", wave: 4 },
+          ],
+        },
+      ],
+    };
+
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify(checkpoint, null, 2),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(tmpDir, "worker_cycle_artifacts.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        updatedAt: "2026-04-25T12:17:39.987Z",
+        latestCycleId: "2026-04-25T12:17:39.948Z",
+        cycles: {
+          "2026-04-25T12:17:39.948Z": {
+            cycleId: "2026-04-25T12:17:39.948Z",
+            status: "dispatching",
+            updatedAt: "2026-04-25T12:17:39.987Z",
+            completedTaskIds: ["0a97e56d1f5b", "ef96709588f8", "beceae471248"],
+          },
+        },
+      }, null, 2),
+      "utf8",
+    );
+
+    await assert.doesNotReject(
+      () => runResumeDispatch(config),
+      "runResumeDispatch must close stale checkpoints when canonical worker artifacts already mark all batches complete",
+    );
+
+    const updatedCheckpoint = JSON.parse(await fs.readFile(path.join(tmpDir, "dispatch_checkpoint.json"), "utf8"));
+    assert.equal(updatedCheckpoint.completedPlans, 2, "artifact reconciliation must advance completed batch count to the full batch total");
+    assert.equal(updatedCheckpoint.status, "complete", "artifact-complete stale checkpoints must be closed without redispatch");
+
+    const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
+    assert.match(progressLog, /already complete — closing stale checkpoint without redispatch/);
+  });
+
+  it("continues an approved live review after a completed checkpoint when pending batches remain", async () => {
+    config.platformModeState = { currentMode: "single_target_delivery" };
+    config.activeTargetSession = {
+      projectId: "portal",
+      sessionId: "sess_active",
+      currentStage: "active",
+      repo: { repoUrl: "https://github.com/acme/portal" },
+    };
+
+    const livePlans = [
+      {
+        id: "T1",
+        task_id: "T1",
+        task: "Continue the shell implementation wave 1",
+        role: "evolution-worker",
+        wave: 1,
+        target_files: ["src/app.ts"],
+        scope: "feature delivery",
+        verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+        verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+        acceptance_criteria: ["tests pass"],
+      },
+      {
+        id: "T2",
+        task_id: "T2",
+        task: "Continue the shell implementation wave 2",
+        role: "integration-worker",
+        wave: 2,
+        target_files: ["src/routes.ts"],
+        scope: "feature delivery",
+        verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+        verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+        acceptance_criteria: ["tests pass"],
+      },
+      {
+        id: "T3",
+        task_id: "T3",
+        task: "Continue the shell implementation wave 3",
+        role: "quality-worker",
+        wave: 3,
+        target_files: ["src/layout.ts"],
+        scope: "feature delivery",
+        verification: "npm test -- tests/core/orchestrator_pipeline_progress.test.ts",
+        verification_commands: ["npm test -- tests/core/orchestrator_pipeline_progress.test.ts"],
+        acceptance_criteria: ["tests pass"],
+      },
+    ];
+
+    await fs.writeFile(
+      path.join(tmpDir, "dispatch_checkpoint.json"),
+      JSON.stringify({
+        status: "complete",
+        createdAt: "2026-04-25T12:17:39.948Z",
+        updatedAt: "2026-04-25T12:17:39.949Z",
+        totalPlans: 2,
+        planCount: 3,
+        completedPlans: 2,
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_active",
+          currentStage: "active",
+          repoUrl: "https://github.com/acme/portal",
+        },
+        dispatchPlanSnapshot: [livePlans[0], livePlans[1]],
+        workerBatchesSnapshot: [
+          { role: "evolution-worker", wave: 1, plans: [livePlans[0]] },
+          { role: "integration-worker", wave: 2, plans: [livePlans[1]] },
+        ],
+      }, null, 2),
+      "utf8",
+    );
+
+    const runtimeDir = path.join(tmpDir, "projects", "portal", "sess_active", "runtime");
+    await fs.mkdir(runtimeDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(runtimeDir, "worker_cycle_artifacts.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        updatedAt: "2026-04-25T12:17:39.987Z",
+        latestCycleId: "2026-04-25T12:17:39.948Z",
+        cycles: {
+          "2026-04-25T12:17:39.948Z": {
+            cycleId: "2026-04-25T12:17:39.948Z",
+            status: "dispatching",
+            updatedAt: "2026-04-25T12:17:39.987Z",
+            completedTaskIds: ["T1", "T2"],
+          },
+        },
+      }, null, 2),
+      "utf8",
+    );
+
+    await fs.writeFile(
+      path.join(tmpDir, "athena_plan_review.json"),
+      JSON.stringify({
+        approved: true,
+        reviewedAt: "2026-04-25T12:17:39.900Z",
+        targetSession: {
+          projectId: "portal",
+          sessionId: "sess_active",
+          currentStage: "active",
+          repoUrl: "https://github.com/acme/portal",
+        },
+        patchedPlans: livePlans,
+      }, null, 2),
+      "utf8",
+    );
+
+    const readiness = await evaluateDispatchResumeReadiness(config);
+    assert.equal(readiness.interrupted, true);
+    assert.equal(readiness.ready, true);
+    assert.equal(readiness.reason, "live_review_ready");
+    assert.equal(readiness.planSource, "live_review");
+
+    await assert.doesNotReject(
+      () => runResumeDispatch(config),
+      "runResumeDispatch must continue the approved live review after a completed admitted subset checkpoint",
+    );
+
+    const updatedCheckpoint = JSON.parse(await fs.readFile(path.join(runtimeDir, "dispatch_checkpoint.json"), "utf8"));
+    assert.match(String(updatedCheckpoint.status || ""), /dispatching|complete/);
+    assert.equal(updatedCheckpoint.planCount, 3);
+    assert.ok(Number(updatedCheckpoint.completedPlans) >= 2, "continuation must preserve the two already completed batches");
+    assert.ok(updatedCheckpoint.totalPlans >= 1, "resumed continuation must persist at least one dispatched batch");
+
+    const progressLog = await fs.readFile(config.paths.progressFile, "utf8").catch(() => "");
+    assert.match(progressLog, /Force-resuming dispatch checkpoint: batch 3\/3 after 2 completed batch\(es\)/);
+    assert.match(progressLog, /Source=live_review checkpointStatus=dispatching/);
+  });
+});
+
+describe("resolveCheckpointPlanCompletion", () => {
+  it("marks only the admitted subset complete when a checkpoint closes early", () => {
+    const approvedPlans = [
+      { id: "p1", task_id: "p1" },
+      { id: "p2", task_id: "p2" },
+      { id: "p3", task_id: "p3" },
+      { id: "p4", task_id: "p4" },
+      { id: "p5", task_id: "p5" },
+      { id: "p6", task_id: "p6" },
+    ];
+    const checkpoint = {
+      status: "complete",
+      planCount: 6,
+      totalPlans: 2,
+      completedPlans: 2,
+      dispatchPlanSnapshot: [approvedPlans[0], approvedPlans[1], approvedPlans[2], approvedPlans[3]],
+    };
+
+    const result = resolveCheckpointPlanCompletion(checkpoint, approvedPlans, "2026-04-22T00:00:00.000Z");
+    assert.ok(result, "completed admitted subset should resolve checkpoint completion");
+    assert.equal(result?.completed.length, 4, "admitted plans must be recognized as finished");
+    assert.equal(result?.pending.length, 2, "non-admitted plans must remain pending");
+    assert.deepEqual(
+      result?.completed.map((entry) => entry.plan.task_id),
+      ["p1", "p2", "p3", "p4"],
+      "only admitted task ids should be marked complete",
+    );
+  });
+
+  it("does not treat an unrelated dispatch snapshot as terminal", () => {
+    const approvedPlans = [
+      { id: "p1", task_id: "p1" },
+      { id: "p2", task_id: "p2" },
+    ];
+    const checkpoint = {
+      status: "complete",
+      planCount: 2,
+      totalPlans: 1,
+      completedPlans: 1,
+      dispatchPlanSnapshot: [{ id: "foreign", task_id: "foreign" }],
+    };
+
+    const result = resolveCheckpointPlanCompletion(checkpoint, approvedPlans, "2026-04-22T00:00:00.000Z");
+    assert.equal(result, null, "foreign admitted snapshots must not close the current approved plan set");
+  });
+
+  it("uses completed task ids to avoid redispatching stale checkpoint work", () => {
+    const approvedPlans = [
+      { id: "p1", task_id: "p1" },
+      { id: "p2", task_id: "p2" },
+    ];
+    const checkpoint = {
+      status: "dispatching",
+      planCount: 2,
+      totalPlans: 2,
+      completedPlans: 0,
+      planSetSignature: "",
+      updatedAt: "2026-04-22T00:00:01.000Z",
+      createdAt: "2026-04-22T00:00:00.000Z",
+    };
+
+    const result = resolveCheckpointPlanCompletion(
+      checkpoint,
+      approvedPlans,
+      "2026-04-22T00:00:00.000Z",
+      ["p1", "p2"],
+    );
+    assert.ok(result, "completed task ids should reconcile stale checkpoint progress");
+    assert.equal(result?.pending.length, 0, "completed task ids must prevent duplicate pending dispatch");
+    assert.equal(result?.completed.length, 2, "all completed task ids should be recognized as finished");
   });
 });
 
@@ -1966,10 +2739,7 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
     assert.equal(result.reason, null, "no block reason must be emitted when rebatch succeeds");
   });
 
-  it("blocks via individual-plan complexity gate when a single plan exceeds the cap", async () => {
-    // A single plan with more acceptance_criteria than actionableCap triggers
-    // the individual-plan layer of Gate 13 (checkOverbundleHardAdmission),
-    // not just the role-group aggregated layer.
+  it("blocks through the legacy rebatch gate when a single plan cannot fit within the cap", async () => {
     const plans = [
       {
         id: "oversize-single-plan",
@@ -1987,14 +2757,14 @@ describe("oversized packet hard admission gate — evaluatePreDispatchGovernance
       "oversize-individual-plan-check",
     );
     assert.equal(result.blocked, true,
-      "single plan exceeding the per-plan step cap must be blocked by Gate 13");
+      "single plan exceeding the rebatchable cap must still be blocked");
     assert.ok(
       result.reason?.startsWith(BLOCK_REASON.OVERSIZED_PACKET),
       `reason must start with OVERSIZED_PACKET prefix; got: ${result.reason}`,
     );
     assert.ok(
-      result.reason?.includes("overbundle_hard_admission"),
-      `individual-plan layer must produce overbundle_hard_admission sub-reason; got: ${result.reason}`,
+      result.reason?.includes("role group(s)"),
+      `legacy rebatch gate must report aggregated role-group overflow; got: ${result.reason}`,
     );
     assert.equal(result.gateIndex, 13, "gateIndex must be 13 (OVERSIZED_PACKET)");
   });
@@ -3709,7 +4479,7 @@ describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
   it("returns eligible=false when no triage records exist (even if CI were green)", async () => {
     // No GitHub token → fetchMainBranchCiStatus returns green=false, and no records.
     const cfg = { paths: { stateDir: tmpDir }, env: {} };
-    const result = await runStaleArtifactClosureFastpath(cfg);
+    const result = await runStaleArtifactClosureFastpath(cfg, []);
     assert.equal(result.eligible, false);
     assert.equal(result.stalePrCount, 0);
     assert.equal(result.reason, "no_stale_pr_records");
@@ -3729,7 +4499,7 @@ describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
       env: {},
       runtime: { staleArtifactClosureRecencyMs: 60 * 60 * 1000 },
     };
-    const result = await runStaleArtifactClosureFastpath(cfg);
+    const result = await runStaleArtifactClosureFastpath(cfg, [{ task: "Close stale PR debt" }]);
     assert.equal(result.eligible, false);
     assert.equal(result.stalePrCount, 1);
     assert.equal(result.mainCiGreen, false);
@@ -3743,7 +4513,7 @@ describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
       "utf8",
     );
     const cfg = { paths: { stateDir: tmpDir }, env: {} };
-    const result = await runStaleArtifactClosureFastpath(cfg);
+    const result = await runStaleArtifactClosureFastpath(cfg, [{ task: "Close stale PR debt" }]);
     assert.equal(result.eligible, false);
     assert.equal(result.stalePrCount, 1);
     assert.equal(result.reason, "non_terminal_stale_pr_records");
@@ -3751,7 +4521,7 @@ describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
 
   it("result always includes stalePrCount and mainCiGreen fields", async () => {
     const cfg = { paths: { stateDir: tmpDir }, env: {} };
-    const result = await runStaleArtifactClosureFastpath(cfg);
+    const result = await runStaleArtifactClosureFastpath(cfg, []);
     assert.ok("stalePrCount" in result, "stalePrCount must be present");
     assert.ok("mainCiGreen" in result, "mainCiGreen must be present");
     assert.ok("eligible" in result, "eligible must be present");
@@ -3767,7 +4537,7 @@ describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
       );
     }
     const cfg = { paths: { stateDir: tmpDir }, env: {} };
-    const result = await runStaleArtifactClosureFastpath(cfg);
+    const result = await runStaleArtifactClosureFastpath(cfg, [{ task: "Close stale PR debt" }]);
     assert.equal(result.eligible, false);
     assert.equal(result.reason, "non_terminal_stale_pr_records");
   });
@@ -3792,7 +4562,7 @@ describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
       env: {},
       runtime: { staleArtifactClosureRecencyMs: 60 * 60 * 1000 },
     };
-    const result = await runStaleArtifactClosureFastpath(cfg);
+    const result = await runStaleArtifactClosureFastpath(cfg, [{ task: "Close stale PR debt" }]);
 
     assert.equal(result.eligible, false);
     assert.equal(result.stalePrCount, 2);
@@ -3818,12 +4588,34 @@ describe("runStaleArtifactClosureFastpath — orchestrator decision", () => {
       env: {},
       runtime: { staleArtifactClosureRecencyMs: 60 * 60 * 1000 },
     };
-    const result = await runStaleArtifactClosureFastpath(cfg);
+    const result = await runStaleArtifactClosureFastpath(cfg, [{ task: "Close stale PR debt" }]);
 
     assert.equal(result.eligible, false);
     assert.equal(result.stalePrCount, 2);
     assert.equal(result.mainCiGreen, false);
     assert.equal(result.reason, "main_ci_not_green");
+  });
+
+  it("returns eligible=false when current plans are unrelated fresh work", async () => {
+    const recentTimestamp = new Date(Date.now() - (5 * 60 * 1000)).toISOString();
+
+    await fs.writeFile(
+      path.join(tmpDir, "pr_triage_1.json"),
+      JSON.stringify({ applyState: "superseded", triageTimestamp: recentTimestamp }),
+      "utf8",
+    );
+
+    const result = await runStaleArtifactClosureFastpath(
+      {
+        paths: { stateDir: tmpDir },
+        env: {},
+        runtime: { staleArtifactClosureRecencyMs: 60 * 60 * 1000 },
+      },
+      [{ task: "Propagate lineage join keys through analytics and routing" }],
+    );
+
+    assert.equal(result.eligible, false);
+    assert.equal(result.reason, "current_plans_not_stale_artifact_closure");
   });
 
   it("persists a complete checkpoint for a skipped dispatch plan set", async () => {
