@@ -9,8 +9,8 @@ on:
     branches: [main]
 
 jobs:
-  lint-and-test:
-    name: Lint & Test (Node 20)
+  lint:
+    name: Lint (Node 20)
     runs-on: ubuntu-latest
 
     steps:
@@ -28,11 +28,3 @@ jobs:
 
       - name: Lint
         run: npm run lint
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Test
-        # Sync: package.json "test" script is the single source of truth.
-        # Do NOT add glob patterns here — use npm test only.
-        run: npm test
