@@ -2,18 +2,46 @@
 
 # ATLAS
 
-ATLAS is an orchestration runtime framework for autonomous software delivery operations.
-It should not be interpreted as a single-command automation utility; rather, it is a
-multi-role operational system that performs state interpretation, planning, execution,
-observability, and iterative self-optimization within a governed cycle model.
+ATLAS is a desktop app that lets you describe a software product in plain language and then turns that request into a working delivery flow. Instead of manually setting up a repo, picking tools, writing every first draft, and coordinating each implementation step yourself, you open ATLAS, describe what you want, and let the system plan and build it for you.
 
-At its operational core, ATLAS performs the following functions:
+## What It Does
 
-- Ingests and normalizes system state.
-- Routes work packages to role-appropriate execution units.
-- Assesses outcome quality against explicit evaluation criteria.
-- Persists execution artifacts and decision traces.
-- Applies cycle-over-cycle corrective and optimization logic.
+ATLAS is built for people who want to go from an idea to a usable product with less setup friction.
+
+- You describe one concrete request.
+- ATLAS creates or selects the project context.
+- The system plans the work, runs the build flow, and tracks progress.
+- You monitor the session from the desktop interface instead of stitching everything together by hand.
+
+## How To Use It
+
+1. Launch the desktop app with `ATLAS.cmd start` or `npm run atlas:open`.
+2. Start a new session from the home screen.
+3. Type a direct request for the product you want ATLAS to deliver.
+4. If you already have a project, attach it from the picker. If not, ATLAS will ask for the new project name and description before it creates the repository.
+5. Watch the live build row and completed sessions area as the system works through the request.
+
+### Dark Desktop View
+
+<p align="center">
+	<img src="blackgui.png" alt="ATLAS desktop home screen in dark mode" width="100%" />
+</p>
+
+### Light Desktop View
+
+<p align="center">
+	<img src="whitegui.png" alt="ATLAS desktop home screen in light mode" width="100%" />
+</p>
+
+## Example Delivery
+
+One example request was to create a site experience inspired by the General Assembly Pizza style. ATLAS took that prompt and produced a working restaurant landing page with a bold hero image, simple primary navigation, and mobile-first action links for menus, reservations, location, and ordering.
+
+<p align="center">
+	<img src="example.png" alt="Example pizza website generated through ATLAS" width="65%" />
+</p>
+
+This is the core promise of ATLAS: you ask for a concrete outcome, and the system turns that request into a real build artifact you can inspect, refine, and ship.
 
 ## Development Status
 
@@ -27,6 +55,10 @@ This implies the following:
 
 In practical terms, this repository should be viewed less as a finalized product showcase
 and more as a continuously operating R&D environment.
+
+## How ATLAS Works Internally
+
+Behind the desktop UI, ATLAS runs as a governed multi-agent delivery system. Different roles handle planning, execution, review, observability, and iterative improvement so the product request can move through a controlled build cycle instead of a one-shot script.
 
 ## The Agent Roster
 
