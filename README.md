@@ -1,4 +1,6 @@
-
+<p align="center">
+	<img src="atlas.png" alt="ATLAS autonomous agent system" width="100%" />
+</p>
 
 # ATLAS
 
@@ -134,6 +136,4 @@ robustness, intelligence, and autonomy across successive operational cycles.
 ATLAS now launches inside a native Electron window instead of opening a localhost page in the default browser. The desktop shell keeps the root workspace route authoritative, stores a session-bound workspace brief under `state\atlas\desktop_sessions\`, and reopens the same live workspace window instead of presenting a separate startup product mode. Repeat launches reuse the same desktop instance, restore the existing window, and keep the last session, workspace draft, and window bounds beside the packaged app.
 
 Use `ATLAS.cmd start` or `npm run atlas:open` to launch the desktop shell, `npm run atlas:desktop:build` to transpile the Electron entrypoints, and `ATLAS.cmd package` or `npm run atlas:desktop:package` to emit a portable Windows app folder with the root executable at `dist\ATLAS\ATLAS.exe`.
-<p align="center">
-	<img src="atlas.png" alt="ATLAS autonomous agent system" width="100%" />
-</p>
+
