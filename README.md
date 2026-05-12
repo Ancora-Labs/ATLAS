@@ -1,6 +1,4 @@
-<p align="center">
-	<img src="atlas.png" alt="ATLAS autonomous agent system" width="100%" />
-</p>
+
 
 # ATLAS
 
@@ -137,3 +135,6 @@ ATLAS now launches inside a native Electron window instead of opening a localhos
 
 Use `ATLAS.cmd start` or `npm run atlas:open` to launch the desktop shell, `npm run atlas:desktop:build` to transpile the Electron entrypoints, and `ATLAS.cmd package` or `npm run atlas:desktop:package` to emit a portable Windows app folder with the root executable at `dist\ATLAS\ATLAS.exe`.
 
+<p align="center">
+	<img src="atlas.png" alt="ATLAS autonomous agent system" width="100%" />
+</p>
