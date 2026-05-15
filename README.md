@@ -15,7 +15,7 @@ ATLAS is built for people who want to go from an idea to a usable product with l
 
 ## How To Use It
 
-1. Launch the desktop app with `ATLAS.cmd start` or `npm run atlas:open`.
+1. Download the latest release.
 2. Start a new session from the home screen.
 3. Type a direct request for the product you want ATLAS to deliver.
 4. If you already have a project, attach it from the picker. If not, ATLAS will ask for the new project name and description before it creates the repository.
