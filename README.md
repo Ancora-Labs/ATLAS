@@ -15,7 +15,7 @@ ATLAS is built for people who want to go from an idea to a usable product with l
 
 ## How To Use It
 
-1. Download the latest release.
+1. Download the latest ATLAS release, extract it, and launch the desktop app from the included `ATLAS.exe`.
 2. Start a new session from the home screen.
 3. Type a direct request for the product you want ATLAS to deliver.
 4. If you already have a project, attach it from the picker. If not, ATLAS will ask for the new project name and description before it creates the repository.
@@ -35,7 +35,9 @@ ATLAS is built for people who want to go from an idea to a usable product with l
 
 ## Example Delivery
 
-One example request was to create a site experience inspired by the General Assembly Pizza style. ATLAS took that prompt and produced a working restaurant landing page with a bold hero image, simple primary navigation, and mobile-first action links for menus, reservations, location, and ordering.
+One example request asked ATLAS to use the real General Assembly Pizza website as the design reference: [gapizza.com](https://gapizza.com/).
+ATLAS followed that reference and produced a working restaurant landing page that closely recreates the requested visual design,
+showing how the system can build faithful web designs from a supplied reference or similar designs in the same direction.
 
 <p align="center">
 	<img src="example.png" alt="Example pizza website generated through ATLAS" width="65%" />
@@ -64,7 +66,7 @@ Behind the desktop UI, ATLAS runs as a governed multi-agent delivery system. Dif
 
 ### Leadership Layer
 
-**Jesus** — CEO Supervisor  
+**Janus** — CEO Supervisor  
 Maintains strategic direction and adjudicates high-impact prioritization decisions.
 Interprets cycle state, constrains escalation growth, and enforces directional coherence
 to prevent strategic drift across autonomous cycles.
@@ -133,7 +135,9 @@ robustness, intelligence, and autonomy across successive operational cycles.
 
 ATLAS now launches inside a native Electron window instead of opening a localhost page in the default browser. The desktop shell keeps the root workspace route authoritative, stores a session-bound workspace brief under `state\atlas\desktop_sessions\`, and reopens the same live workspace window instead of presenting a separate startup product mode. Repeat launches reuse the same desktop instance, restore the existing window, and keep the last session, workspace draft, and window bounds beside the packaged app.
 
-Use `ATLAS.cmd start` or `npm run atlas:open` to launch the desktop shell, `npm run atlas:desktop:build` to transpile the Electron entrypoints, and `ATLAS.cmd package` or `npm run atlas:desktop:package` to emit a portable Windows app folder with the root executable at `dist\ATLAS\ATLAS.exe`.
+For normal use, download the latest ATLAS release, extract the release archive, and open the included `ATLAS.exe`.
+Development commands such as `ATLAS.cmd start`, `npm run atlas:open`, and `npm run atlas:desktop:package` are intended for local development and packaging from source.
+If you are building the portable app yourself, use `ATLAS.cmd package` to emit the Windows app folder with the root executable at `dist\ATLAS\ATLAS.exe`.
 
 <p align="center">
 	<img src="atlas.png" alt="ATLAS autonomous agent system" width="100%" />
